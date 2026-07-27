@@ -14,6 +14,7 @@ Usage::
 from __future__ import annotations
 
 import hashlib
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from importlib import import_module
@@ -28,14 +29,24 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     KEYBOARD_DURATION_BOUNDS,
     PARAM_INDEX,
 )
+from synth_setter.data.vst.surgepy_runtime import (
+    SurgePyModule,
+    SurgePyNamedParam,
+    SurgePySynth,
+    import_surgepy,
+    iter_surgepy_named_params,
+)
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import FAUST_PLUGIN_NAME
+from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
 
 # Both DawDreamer hosts pin the engine block size as a runtime invariant.
 DAWDREAMER_BLOCK_SIZE = 2048
+# Surge's legacy automation scale is load-bearing for saved host parameter values.
+_SURGE_INT_NORMALIZED_OFFSET = 0.005
+_SURGE_INT_NORMALIZED_SCALE = 0.99
 
 
 class _DawDreamerParameterDescription(TypedDict):
@@ -284,6 +295,276 @@ class PedalboardRenderer(AudioRenderer):
             channels=self.channels,
             samples=int(self.sample_rate * self.signal_duration_seconds),
         )
+
+
+@dataclass(kw_only=True)
+class SurgePyRenderer(AudioRenderer):
+    """Render Surge patches directly through the in-process Surge engine.
+
+    .. attribute :: parameter_map
+        :type: SynthParamMap
+
+        Verified cross-host parameter identities and patch provenance.
+
+    .. attribute :: synth
+        :type: SurgePySynth
+
+        Fresh native engine used by the current render.
+    """
+
+    parameter_map: SynthParamMap = field(kw_only=True)
+    synth: SurgePySynth = field(init=False, repr=False)
+    _parameter_ids: dict[str, SurgePyNamedParam] = field(init=False, repr=False)
+    _surgepy: SurgePyModule = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate immutable resources before the first native render.
+
+        :raises ValueError: If the backend identity, channels, or patch provenance is invalid.
+        """
+        if self.plugin_path != SURGEPY_PLUGIN_NAME:
+            raise ValueError('SurgePy renderer requires plugin_path="surgepy"')
+        if self.channels not in (1, 2):
+            raise ValueError("SurgePy renderer supports one or two output channels")
+        if not self.plugin_state_path:
+            raise ValueError("SurgePy renderer requires an .fxp patch")
+        patch_path = Path(self.plugin_state_path).expanduser().resolve()
+        if patch_path.suffix.casefold() != ".fxp":
+            raise ValueError("SurgePy renderer requires an .fxp patch")
+        if not self.parameter_map.surgepy_preset_sha256:
+            raise ValueError("parameter map has no SurgePy patch provenance")
+        self.plugin_state_path = str(patch_path)
+        self._verify_patch_digest()
+        self._surgepy = import_surgepy()
+
+    def _verify_patch_digest(self) -> None:
+        """Reject patch bytes that differ from the mapped baseline.
+
+        :raises ValueError: If the patch changed after map generation.
+        """
+        expected_digest = cast(str, self.parameter_map.surgepy_preset_sha256)
+        patch_path = Path(cast(str, self.plugin_state_path))
+        actual_digest = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+        if actual_digest != expected_digest:
+            raise ValueError("SurgePy patch SHA-256 does not match the parameter map")
+
+    def _initialize_synth(self) -> None:
+        """Create a fresh preset-loaded synth and validate mapped native identities.
+
+        :raises RuntimeError: If the patch cannot be loaded.
+        :raises ValueError: If the live engine, patch, or parameter identities drifted.
+        """
+        self._verify_patch_digest()
+        self.synth = self._surgepy.createSurge(self.sample_rate)
+        if not self.synth.loadPatch(cast(str, self.plugin_state_path)):
+            raise RuntimeError(f"SurgePy could not load patch {self.plugin_state_path!r}")
+        snapshot = self.parameter_map.surgepy
+        if snapshot is None:
+            raise ValueError("parameter map has no SurgePy snapshot")
+        version = self._surgepy.getVersion()
+        if version != snapshot.plugin_version:
+            raise ValueError(f"SurgePy version {version!r} != map {snapshot.plugin_version!r}")
+        by_id: dict[int, SurgePyNamedParam] = {}
+        for parameter in iter_surgepy_named_params(self.synth.getPatch()):
+            synth_side_id = parameter.getId().getSynthSideId()
+            if synth_side_id not in by_id:
+                by_id[synth_side_id] = parameter
+        if len(by_id) != snapshot.parameter_count:
+            raise ValueError(
+                f"SurgePy parameter count {len(by_id)} != map {snapshot.parameter_count}"
+            )
+        self._parameter_ids = {}
+        for name, reference in self.parameter_map.surgepy_params().items():
+            parameter = by_id.get(reference.synth_side_id)
+            if parameter is None or parameter.getName() != reference.name:
+                raise ValueError(
+                    f"stale SurgePy identity for {name!r} at ID {reference.synth_side_id}"
+                )
+            self._parameter_ids[name] = parameter
+
+    def _native_parameter_value(
+        self,
+        parameter: SurgePyNamedParam,
+        normalized_value: float,
+    ) -> float:
+        """Convert one normalized host value to the Surge-native parameter range.
+
+        :param parameter: Live native parameter handle.
+        :param normalized_value: VST-normalized value in the inclusive range ``[0, 1]``.
+        :returns: Native float, rounded for integer and Boolean parameters.
+        :raises ValueError: If the normalized value or native type is invalid.
+        """
+        if not math.isfinite(normalized_value) or not 0.0 <= normalized_value <= 1.0:
+            raise ValueError("SurgePy parameter values must be finite and in [0, 1]")
+        minimum = self.synth.getParamMin(parameter)
+        maximum = self.synth.getParamMax(parameter)
+        native_value = minimum + normalized_value * (maximum - minimum)
+        value_type = self.synth.getParamValType(parameter)
+        if value_type == "float":
+            return native_value
+        if value_type == "bool":
+            return float(normalized_value > 0.5)
+        if value_type == "int":
+            span = maximum - minimum
+            surge_scaled = (
+                int(
+                    (normalized_value - _SURGE_INT_NORMALIZED_OFFSET)
+                    * span
+                    / _SURGE_INT_NORMALIZED_SCALE
+                    + 0.5
+                )
+                + int(minimum)
+            )
+            return float(min(max(surge_scaled, int(minimum)), int(maximum)))
+        raise ValueError(f"unsupported SurgePy parameter type {value_type!r}")
+
+    def _apply_parameters(self, params: dict[str, float]) -> None:
+        """Apply repository-normalized values to the fresh native synth.
+
+        Unmapped keys raise ``KeyError`` and invalid values ``ValueError``,
+        both before any native write.
+
+        :param params: Normalized values keyed by repository parameter name.
+        """
+        self._reject_unknown_parameters(params)
+        for name, value in params.items():
+            parameter = self._parameter_ids[name]
+            self.synth.setParamVal(parameter, self._native_parameter_value(parameter, value))
+
+    def _reject_unknown_parameters(self, params: dict[str, float]) -> None:
+        """Fail before writing to the engine when a key has no mapped identity.
+
+        :param params: Normalized values keyed by repository parameter name.
+        :raises KeyError: If a requested parameter has no mapped native identity.
+        """
+        unknown = sorted(params.keys() - self._parameter_ids.keys())
+        if unknown:
+            raise KeyError(f"unknown SurgePy parameter key(s): {', '.join(unknown)}")
+
+    def native_parameter_values(self, params: dict[str, float]) -> dict[str, float]:
+        """Resolve normalized values on a fresh verified engine, without rendering.
+
+        Shares the render path's validation: unmapped keys raise ``KeyError``,
+        out-of-range or non-finite values ``ValueError``.
+
+        :param params: Normalized values keyed by repository parameter name.
+        :returns: Surge-native values keyed by repository parameter name.
+        """
+        self._initialize_synth()
+        self._reject_unknown_parameters(params)
+        return {
+            name: self._native_parameter_value(self._parameter_ids[name], value)
+            for name, value in params.items()
+        }
+
+    def _render_note_blocks(
+        self,
+        *,
+        midi_note: int,
+        velocity: int,
+        samples: int,
+        start: float,
+        end: float,
+    ) -> np.ndarray:
+        """Render one note over complete native processing blocks.
+
+        :param midi_note: MIDI pitch of the note.
+        :param velocity: MIDI velocity in the inclusive range ``[0, 127]``.
+        :param samples: Exact output sample count after block trimming.
+        :param start: Requested note start in seconds.
+        :param end: Requested note end in seconds.
+        :returns: Native stereo output trimmed to ``samples``.
+        """
+        block_size = self.synth.getBlockSize()
+        num_blocks = math.ceil(samples / block_size)
+        start_block = math.floor(start * self.sample_rate / block_size)
+        end_block = min(
+            num_blocks,
+            max(start_block + 1, math.ceil(end * self.sample_rate / block_size)),
+        )
+        audio = self.synth.createMultiBlock(num_blocks)
+        try:
+            self._process_blocks(audio, start_block=0, num_blocks=start_block)
+            self.synth.playNote(0, midi_note, velocity)
+            self._process_blocks(
+                audio,
+                start_block=start_block,
+                num_blocks=end_block - start_block,
+            )
+            self.synth.releaseNote(0, midi_note)
+            self._process_blocks(
+                audio,
+                start_block=end_block,
+                num_blocks=num_blocks - end_block,
+            )
+        finally:
+            self.synth.allNotesOff()
+        return np.asarray(audio[:, :samples], dtype=np.float32)
+
+    def render(
+        self,
+        params: dict[str, float],
+        midi_note: int,
+        velocity: int,
+        note_start_and_end: tuple[float, float],
+        *,
+        warmup: bool = False,
+    ) -> np.ndarray:
+        """Render one isolated note through a fresh SurgePy synth.
+
+        :param params: Normalized values keyed by repository parameter name.
+        :param midi_note: MIDI pitch of the note.
+        :param velocity: MIDI velocity in the inclusive range ``[0, 127]``.
+        :param note_start_and_end: Note start and end times in seconds, expanded to
+            cover complete native processing blocks.
+        :param warmup: Unused; SurgePy has no plugin editor.
+        :returns: Rendered channel-leading float32 audio.
+        :raises ValueError: If note timing is invalid.
+        """
+        del warmup
+        self._initialize_synth()
+        self._apply_parameters(params)
+        start, end = note_start_and_end
+        if not 0.0 <= start < end <= self.signal_duration_seconds:
+            raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
+        samples = int(self.sample_rate * self.signal_duration_seconds)
+        trimmed = self._render_note_blocks(
+            midi_note=midi_note,
+            velocity=velocity,
+            samples=samples,
+            start=start,
+            end=end,
+        )
+        matched = trimmed if self.channels == 2 else trimmed.mean(axis=0, keepdims=True)
+        return _validate_rendered_audio(matched, channels=self.channels, samples=samples)
+
+    def _process_blocks(
+        self,
+        audio: np.ndarray,
+        *,
+        start_block: int,
+        num_blocks: int,
+    ) -> None:
+        """Process a valid block interval into the shared stereo output buffer.
+
+        :param audio: Two-dimensional SurgePy buffer with two channels and enough samples for the
+            requested block interval.
+        :param start_block: Non-negative first output block to populate.
+        :param num_blocks: Non-negative number of synth blocks to process.
+        :raises ValueError: If the buffer cannot contain the requested interval.
+        """
+        block_size = self.synth.getBlockSize()
+        required_samples = (start_block + num_blocks) * block_size
+        if (
+            audio.ndim != 2
+            or audio.shape[0] != 2
+            or start_block < 0
+            or num_blocks < 0
+            or audio.shape[1] < required_samples
+        ):
+            raise ValueError("invalid SurgePy output buffer or block interval")
+        if num_blocks > 0:
+            self.synth.processMultiBlock(audio, start_block, num_blocks)
 
 
 @dataclass(kw_only=True)

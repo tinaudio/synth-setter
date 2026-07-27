@@ -181,6 +181,7 @@ audio = [
   "pedalboard",
   "pyloudnorm",
   "scipy>=1.14,<1.15",
+  "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "torchsynth==1.0.2",
 ]
 metrics = [
@@ -239,6 +240,7 @@ dev = [
 ]
 
 [tool.uv]
+build-constraint-dependencies = ["cmake<4"]
 # Bare `uv sync` installs `dev`, which transitively includes `runtime` (the full
 # heavy stack), so local onboarding and the ~15 full-install sites are unchanged
 # by the #1139 base trim. pip never installs PEP 735 groups and `uv pip` only
@@ -359,6 +361,7 @@ markers = [
   "benchmark: performance benchmarks",
   "dataloader_multiprocess: exercises real DataLoader child processes and must share one xdist resource group",
   "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
+  "requires_surgepy: requires the pinned surgepy native extension (auto-skipped off Linux x86_64)",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",
   "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",

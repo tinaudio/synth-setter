@@ -15,8 +15,11 @@ parameters.
 The pipeline is **synth-agnostic**: rendering, storage, features, distributed
 workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
 `RenderConfig` (backend and synth identity) looked up from a registry by name.
-Surge XT is the default, OB-Xf is registered as a second VST3 synth, and Faust
-identities compile checked-in source through DawDreamer. VST3 plugins can be
+Surge XT is the default and can render through Pedalboard, DawDreamer, or the
+pinned in-process SurgePy engine; OB-Xf is registered as a second VST3 synth,
+and Faust identities compile checked-in source through DawDreamer. SurgePy
+recreates the native synth for every row and accepts only
+`plugin_reload_cadence: render`. VST3 plugins can be
 onboarded with **no edits to core pipeline, storage, or model code**. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 

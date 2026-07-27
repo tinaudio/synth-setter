@@ -1,6 +1,7 @@
 """Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -117,6 +118,9 @@ def _scaled_vst_subprocess_timeout(num_samples: int = NUM_FIXTURE_SAMPLES) -> fl
 
 
 _R2_AVAILABLE = r2_io.is_r2_reachable()
+# The pinned surgepy wheel builds only on Linux x86_64 (see pyproject markers), so
+# every real-engine test is dependency-gated the way ``requires_vst`` gates plugins.
+_SURGEPY_AVAILABLE = importlib.util.find_spec("surgepy") is not None
 
 
 @pytest.hookimpl(trylast=True)
@@ -140,11 +144,16 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         f"(set SYNTH_SETTER_PLUGIN_PATH or place plugin at that path)"
     )
     skip_r2 = pytest.mark.skip(reason="R2 remote is not reachable; run `rclone lsd r2:` to verify")
+    skip_surgepy = pytest.mark.skip(
+        reason="surgepy native extension is unavailable (pinned for Linux x86_64 only)"
+    )
     for item in items:
         if "requires_vst" in item.keywords and not VST_AVAILABLE:
             item.add_marker(skip_vst)
         if "integration_r2" in item.keywords and not _R2_AVAILABLE:
             item.add_marker(skip_r2)
+        if "requires_surgepy" in item.keywords and not _SURGEPY_AVAILABLE:
+            item.add_marker(skip_surgepy)
 
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; ships inside
