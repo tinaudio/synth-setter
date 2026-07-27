@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785112063633,
+  "lastUpdate": 1785130926861,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -10998,6 +10998,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.054239511489868164,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4f99caa2aa93bf2fe429d6ebe335038ef7d4aa48",
+          "message": "refactor(data-pipeline): remove Oracle Cloud Infrastructure support (#2555)\n\n* refactor(data-pipeline): remove OCI launch support\n\nDelete the OCI compute option, nested-Docker path, credential writer,\nand SDK dependency. Stale OCI inputs now fail instead of falling back.\n\n* refactor(ci-automation): remove OCI workflow support\n\n* docs(pipeline): remove OCI provider guidance\n\n* refactor(ci-automation): reject unsupported providers\n\nValidate reusable and manual provider inputs explicitly. Removed or\nunknown providers can no longer fall through to a successful no-op.\n\n* internal-fix(data-pipeline): address OCI removal review\n\nCover Vast credential checks, execute provider validation in Bash, and\nexercise the removed compute option through the real generation CLI.\n\n* internal-fix(data-pipeline): address final OCI removal review",
+          "timestamp": "2026-07-26T21:47:22-07:00",
+          "tree_id": "f32f0c5d71a30bdd0125066656e373c6c742ab6a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4f99caa2aa93bf2fe429d6ebe335038ef7d4aa48"
+        },
+        "date": 1785130925065,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.581178665161133,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.734679375911364,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.019411614164710045,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.00929945707321167,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.735590934753418,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.52271757733333,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.076452255249023,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.219351268960163,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.029196809977293015,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.02336728572845459,
             "unit": "1-cos"
           },
           {
