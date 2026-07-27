@@ -1,0 +1,45 @@
+defaults:
+  - encoder: mlp
+  - _self_
+
+_target_: synth_setter.models.ksin_flow_matching_module.KSinFlowMatchingModule
+
+optimizer:
+  _target_: torch.optim.Adam
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.0
+
+scheduler: null
+
+vector_field:
+  _target_: synth_setter.models.components.vector_field.VectorField
+  # Amplitude and frequency per partial.
+  field_dim: ${mul:${datamodule.k},2}
+  hidden_dim: 1024
+  conditioning_dim: ${model.encoder.out_dim}
+  num_blocks: 4
+
+# training
+cfg_dropout_rate: 0.1
+
+p_time: uniform
+w_time: none
+
+coupling: uniform
+oversample_ot: 2.0
+
+probability_path: rectified
+
+cfm_sigma: 1e-5
+fm_sigma: 1e-5
+rectified_sigma_min: 0.0
+
+# sampling
+sample_schedule: linear
+validation_sample_steps: 50
+validation_cfg_strength: 4.0
+test_sample_steps: 100
+test_cfg_strength: 4.0
+
+compile: false

@@ -28,7 +28,7 @@ model:
     lr: 5e-5
   encoder:
     out_dim: 256
-  cfm_variance: 0.0
+  cfm_sigma: 0.0
 
 datamodule:
   k: 8

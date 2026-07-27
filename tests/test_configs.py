@@ -13,6 +13,8 @@ from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
+from synth_setter.models.ksin_ff_module import KSinFeedForwardModule
+from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.resources import configs_dir
 from synth_setter.utils import extras
@@ -986,3 +988,75 @@ def test_extras_validates_synth_before_missing_extras_early_return() -> None:
 
     with pytest.raises(ValueError, match="surge_4"):
         extras(cfg)
+# Every k-sinusoid experiment and the module its `model` group must build; the two
+# groups were dropped in a4dfabbe7 while these experiments kept selecting them (#2572).
+_KSIN_EXPERIMENT_MODULES = {
+    "flow_size/base": KSinFlowMatchingModule,
+    "flow_size/bigenc": KSinFlowMatchingModule,
+    "flow_size/medenc": KSinFlowMatchingModule,
+    "flow_size/smallenc": KSinFlowMatchingModule,
+    "flow_size/tinyenc": KSinFlowMatchingModule,
+    "flow_size/vbigenc": KSinFlowMatchingModule,
+    "ksin_ood/flow": KSinFlowMatchingModule,
+    "ksin_ood/mlp_chamfer": KSinFeedForwardModule,
+    "ksin_ood/mlp_mse": KSinFeedForwardModule,
+    "ksin_ood/mlp_sort": KSinFeedForwardModule,
+}
+
+
+@pytest.mark.parametrize(
+    ("experiment", "module_cls"),
+    [
+        pytest.param(experiment, cls, id=experiment.replace("/", "-"))
+        for experiment, cls in _KSIN_EXPERIMENT_MODULES.items()
+    ],
+)
+def test_ksin_experiment_composes_and_instantiates_its_module(
+    experiment: str, module_cls: type
+) -> None:
+    """Regression guard for #2572: each k-sinusoid experiment builds a real module.
+
+    ``model/ksin_flow`` and ``model/ksin_ff`` were deleted in the move to
+    ``src/synth_setter/configs``, leaving these ten experiments uncomposable.
+    Composition alone is too weak a guard — a config naming an absent class or a
+    stale keyword composes fine and fails at ``instantiate`` — so this also builds
+    the LightningModule on CPU.
+
+    :param experiment: ``experiment=`` value under test.
+    :param module_cls: LightningModule the experiment's ``model`` group must build.
+    """
+    cfg = _compose("train.yaml", [f"experiment={experiment}"])
+
+    assert isinstance(hydra.utils.instantiate(cfg.model), module_cls)
+
+
+def test_ksin_ff_experiment_predicts_two_parameters_per_partial() -> None:
+    """``ksin_ood/mlp_mse`` maps a waveform batch to the k-sinusoid parameter width.
+
+    Pins the interpolations the restored ``model/ksin_ff`` carries: the net reads
+    ``datamodule.signal_length`` samples and emits amplitude and frequency per partial.
+    """
+    cfg = _compose("train.yaml", ["experiment=ksin_ood/mlp_mse"])
+    model = hydra.utils.instantiate(cfg.model)
+
+    predictions = model(torch.randn(2, cfg.datamodule.signal_length))
+
+    assert predictions.shape == (2, 2 * cfg.datamodule.k)
+
+
+def test_ksin_flow_experiment_couples_vector_field_to_encoder_and_partial_count() -> None:
+    """``flow_size/base`` conditions its vector field on the encoder's own output width.
+
+    Pins the two interpolations that make the restored ``model/ksin_flow`` coherent:
+    ``field_dim`` tracks ``datamodule.k`` and ``conditioning_dim`` tracks
+    ``model.encoder.out_dim``, so a mismatch surfaces as a shape error here.
+    """
+    cfg = _compose("train.yaml", ["experiment=flow_size/base"])
+    model = hydra.utils.instantiate(cfg.model)
+
+    conditioning = model.encoder(torch.randn(2, cfg.datamodule.signal_length))
+    noisy_params = torch.randn(2, 2 * cfg.datamodule.k)
+    velocity = model.vector_field(noisy_params, torch.rand(2, 1), conditioning)
+
+    assert conditioning.shape == (2, cfg.model.encoder.out_dim)
+    assert velocity.shape == noisy_params.shape
