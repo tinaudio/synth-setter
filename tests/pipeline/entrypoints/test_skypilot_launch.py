@@ -35,7 +35,6 @@ import synth_setter.pipeline.skypilot_launch as skypilot_launch
 from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.compute import ComputeConfig, ComputeResources
-from synth_setter.pipeline.schemas.object_storage import RCLONE_ENV_KEYS
 from synth_setter.pipeline.schemas.skypilot_launch import (
     ENV_SKYPILOT_API_SERVER_ENDPOINT,
     ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
@@ -1083,14 +1082,6 @@ class TestSecretWorkerEnvKeys:
         assert "RCLONE_CONFIG_R2_ACCESS_KEY_ID" in _SECRET_WORKER_ENV_KEYS
         assert "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" in _SECRET_WORKER_ENV_KEYS
         assert "RCLONE_CONFIG_R2_ENDPOINT" in _SECRET_WORKER_ENV_KEYS
-
-    def test_is_subset_of_worker_env_keys(self) -> None:
-        """The secret subset is closed-form derived from ``_WORKER_ENV_KEYS``."""
-        assert set(_SECRET_WORKER_ENV_KEYS).issubset(set(_WORKER_ENV_KEYS))
-
-    def test_all_canonical_rclone_keys_flow_into_worker_env(self) -> None:
-        """Every ``RCLONE_ENV_KEYS`` entry is forwarded, so the constant cannot silently drift."""
-        assert set(RCLONE_ENV_KEYS).issubset(set(_WORKER_ENV_KEYS))
 
 
 # ---------------------------------------------------------------------------

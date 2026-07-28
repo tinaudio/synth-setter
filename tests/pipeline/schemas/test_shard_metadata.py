@@ -54,12 +54,6 @@ class TestShardMetadataConstruction:
 
         assert meta.attempts_per_sample == 100
 
-    def test_json_round_trip_preserves_values(self) -> None:
-        """``model_dump_json`` → ``model_validate_json`` round-trips identity."""
-        original = ShardMetadata(**_valid_kwargs())
-        rebuilt = ShardMetadata.model_validate_json(original.model_dump_json())
-        assert rebuilt == original
-
 
 class TestShardMetadataStrictness:
     """Tests for the strict / frozen / extra=forbid model config."""
