@@ -18,6 +18,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
+    TINYMU_FRONTEND,
 )
 
 if TYPE_CHECKING:
@@ -35,7 +36,11 @@ class AddEmbeddingsConfig(BaseModel):
 
     .. attribute :: lance_uri
 
-        Finalized Lance dataset to augment.
+        One finalized Lance split to augment.
+
+    .. attribute :: dataset_root_uri
+
+        Finalized root whose canonical splits are augmented.
 
     .. attribute :: embeddings
 
@@ -88,7 +93,12 @@ class AddEmbeddingsConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    lance_uri: str = Field(description="Finalized Lance dataset to augment.")
+    lance_uri: str | None = Field(
+        default=None, description="One finalized Lance split to augment."
+    )
+    dataset_root_uri: str | None = Field(
+        default=None, description="Finalized dataset root whose non-empty splits are augmented."
+    )
     embeddings: tuple[str, ...] = Field(
         default=("clap", "m2l"), description="Ordered embedding registry keys to write."
     )
@@ -162,10 +172,10 @@ class AddEmbeddingsConfig(BaseModel):
 
     @field_validator("resume_cache", mode="before")
     @classmethod
-    def _coerce_resume_cache(cls, value: object) -> object:
-        """Coerce a Hydra string override to ``Path`` under strict validation.
+    def _coerce_paths(cls, value: object) -> object:
+        """Coerce Hydra string overrides to ``Path`` under strict validation.
 
-        :param value: Raw resume-cache value.
+        :param value: Raw path value.
         :returns: Path for a string input, otherwise the original value.
         """
         return Path(value) if isinstance(value, str) else value
@@ -213,6 +223,28 @@ class AddEmbeddingsConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
+    def _exactly_one_dataset_target(self) -> Self:
+        """Require one single-split or dataset-root target.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: Both targets or neither target are configured.
+        """
+        if (self.lance_uri is None) == (self.dataset_root_uri is None):
+            raise ValueError("exactly one of lance_uri or dataset_root_uri must be set")
+        return self
+
+    @model_validator(mode="after")
+    def _dataset_root_is_limited_to_strongly_pinned_tinymu(self) -> Self:
+        """Keep resumable root transactions on the immutable MATPAC artifact.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: Root mode selects a policy without strong artifact provenance.
+        """
+        if self.dataset_root_uri is not None and self.embeddings != ("tinymu",):
+            raise ValueError("dataset_root_uri requires embeddings=[tinymu]")
+        return self
+
+    @model_validator(mode="after")
     def _param_sourced_embeddings_need_a_param_spec(self) -> Self:
         """Require a param spec whenever a selected embedding reads param rows.
 
@@ -229,21 +261,24 @@ class AddEmbeddingsConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _num_sub_vectors_divides_selected_clap_dim(self) -> Self:
-        """Reject incompatible PQ splits only when CLAP is selected.
+    def _num_sub_vectors_divides_selected_fixed_widths(self) -> Self:
+        """Reject PQ splits incompatible with selected fixed-width vectors.
 
         :returns: Validated config unchanged.
-        :raises ValueError: The count cannot evenly split selected CLAP vectors.
+        :raises ValueError: The count cannot evenly split a selected known vector width.
         """
-        if (
-            "clap" in self.embeddings
-            and self.num_sub_vectors is not None
-            and CLAP_EMBEDDING_DIM % self.num_sub_vectors != 0
-        ):
-            raise ValueError(
-                f"num_sub_vectors ({self.num_sub_vectors}) must divide the clap dim "
-                f"({CLAP_EMBEDDING_DIM})"
-            )
+        if self.num_sub_vectors is None:
+            return self
+        fixed_widths = {
+            "clap": CLAP_EMBEDDING_DIM,
+            "tinymu": TINYMU_FRONTEND.embedding_dim,
+        }
+        for name in self.embeddings:
+            width = fixed_widths.get(name)
+            if width is not None and width % self.num_sub_vectors != 0:
+                raise ValueError(
+                    f"num_sub_vectors ({self.num_sub_vectors}) must divide the {name} dim ({width})"
+                )
         return self
 
     @classmethod
