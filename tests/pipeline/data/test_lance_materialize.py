@@ -322,6 +322,77 @@ def test_materialize_file_uri_source_resolves_local_path(
     assert out.to_table().column("a").to_pylist() == [1, 2, 3]
 
 
+def test_materialize_splits_missing_local_completion_marker_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """An incomplete local source is rejected before any split is published.
+
+    :param tmp_path: Pytest fixture providing fresh source and destination roots.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    lance.write_dataset(pa.table({"a": [1]}), source_root / "train.lance")
+    destination = tmp_path / "destination"
+
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        materialize_splits(
+            str(source_root),
+            destination,
+            txids=None,
+            projection={"train": ("a",)},
+            row_limit=None,
+            shard_suffix=".lance",
+        )
+
+    assert not destination.exists()
+
+
+def test_materialize_splits_missing_file_uri_completion_marker_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """An incomplete file-URI source is rejected before local publication.
+
+    :param tmp_path: Pytest fixture providing fresh source and destination roots.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    destination = tmp_path / "destination"
+
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        materialize_splits(
+            source_root.as_uri(),
+            destination,
+            txids=None,
+            projection={},
+            row_limit=None,
+            shard_suffix=".lance",
+        )
+
+    assert not destination.exists()
+
+
+def test_materialize_splits_missing_r2_completion_marker_writes_nothing(
+    fake_r2_remote: Path,
+) -> None:
+    """An incomplete R2 source is rejected before local publication.
+
+    :param fake_r2_remote: Real rclone local backend and destination parent.
+    """
+    destination = fake_r2_remote / "destination"
+
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        materialize_splits(
+            "r2://bucket/incomplete",
+            destination,
+            txids=None,
+            projection={},
+            row_limit=None,
+            shard_suffix=".lance",
+        )
+
+    assert not destination.exists()
+
+
 def test_materialize_splits_builds_projected_capped_splits_per_txid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -332,6 +403,7 @@ def test_materialize_splits_builds_projected_capped_splits_per_txid(
     """
     source_root = tmp_path / "source"
     source_root.mkdir()
+    (source_root / "dataset.complete").touch()
     txids: dict[str, str] = {}
     for split in ("train", "val", "test"):
         dataset = lance.write_dataset(
@@ -378,7 +450,10 @@ def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
         calls.append((source_uri, dest_path, exclude))
 
     monkeypatch.setattr(r2_io, "download_dir_no_overwrite", download_spy)
-    source_root = str(tmp_path / "source")
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    (source_path / "dataset.complete").touch()
+    source_root = str(source_path)
     dest_root = tmp_path / "dest"
     materialize_splits(
         source_root,
@@ -559,6 +634,10 @@ def test_materialize_writes_sidecar_manifest_fields_match_request(
     assert manifest.source_uri == source
     assert manifest.txid == txid
     assert manifest.resolved_version == 1
+    destination = lance.dataset(str(dest))
+    transaction = destination.read_transaction(destination.version)
+    assert transaction is not None
+    assert manifest.materialized_txid == transaction.uuid
     assert manifest.columns == ("a",)
     assert manifest.limit == 2
 
@@ -578,6 +657,60 @@ def test_materialize_cache_hit_same_request_returns_without_rewrite(
     result = materialize_lance_subset(source, dest, txid=txid, columns=("a",))
     assert result == dest
     assert lance.dataset(str(dest)).version == version_after_first
+
+
+def test_materialize_cache_replaced_destination_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A valid but replaced local dataset is not accepted as a cache hit.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    shutil.rmtree(dest)
+    lance.write_dataset(pa.table({"a": [999]}), dest)
+
+    with pytest.raises(ValueError, match="identity"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+
+def test_materialize_cache_missing_data_file_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A structurally corrupt local dataset is not accepted as a cache hit.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    next((dest / "data").glob("*.lance")).unlink()
+
+    with pytest.raises(ValueError, match="validation"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+
+def test_materialize_legacy_manifest_without_destination_identity_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A legacy sidecar cannot retroactively trust an unknown destination.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    payload = json.loads(sidecar_path(dest).read_text(encoding="utf-8"))
+    del payload["materialized_txid"]
+    sidecar_path(dest).write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="destination identity"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
 
 
 def test_materialize_rerun_different_limit_raises(

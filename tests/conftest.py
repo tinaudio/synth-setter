@@ -2205,6 +2205,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
         mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
         std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
     )
+    (dataset_root / "dataset.complete").touch()
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
