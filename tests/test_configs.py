@@ -988,6 +988,8 @@ def test_extras_validates_synth_before_missing_extras_early_return() -> None:
 
     with pytest.raises(ValueError, match="surge_4"):
         extras(cfg)
+
+
 # Every k-sinusoid experiment and the module its `model` group must build; the two
 # groups were dropped in a4dfabbe7 while these experiments kept selecting them (#2572).
 _KSIN_EXPERIMENT_MODULES = {
