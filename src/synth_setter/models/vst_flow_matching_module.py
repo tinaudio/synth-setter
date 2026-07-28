@@ -7,6 +7,8 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import torch
+from beartype import beartype
+from jaxtyping import jaxtyped
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
@@ -181,6 +183,7 @@ class VSTFlowMatchingModule(LightningModule):
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return select_conditioning(batch, self._embedding_conditioning, self._raw_conditioning_key)
 
+    @jaxtyped(typechecker=beartype)
     def _should_probe_gradient_balance(self) -> bool:
         """Whether this step pays for the probe's extra backward through the renderer.
 

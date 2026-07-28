@@ -155,7 +155,9 @@ def test_latent_loss_with_all_zero_weights_skips_render_and_preserves_scalar_con
     )
     theta = torch.zeros(_BATCH, _NUM_PARAMS, dtype=torch.float64, requires_grad=True)
 
-    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+    value = _loss()(
+        theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
+    )
 
     assert value.shape == torch.Size([])
     assert value.device == theta.device
@@ -200,7 +202,9 @@ def test_latent_loss_with_zero_weights_still_rejects_wrong_parameter_width() -> 
     theta = torch.zeros(_BATCH, _NUM_PARAMS - 1, requires_grad=True)
 
     with pytest.raises(ValueError, match="Expected"):
-        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+        _loss()(
+            theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
+        )
 
 
 def test_latent_loss_with_zero_weights_still_rejects_non_finite_parameters() -> None:
@@ -210,14 +214,18 @@ def test_latent_loss_with_zero_weights_still_rejects_non_finite_parameters() -> 
         theta[0, 0] = float("nan")
 
     with pytest.raises(ValueError, match="non-finite"):
-        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+        _loss()(
+            theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
+        )
 
 
 def test_latent_loss_with_all_zero_weights_backprops_zero_theta_gradients() -> None:
     """The skipped render keeps a zero autograd path to every estimate row."""
     theta = torch.zeros(_BATCH, _NUM_PARAMS, requires_grad=True)
 
-    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+    value = _loss()(
+        theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
+    )
     (gradient,) = torch.autograd.grad(value, theta)
 
     assert torch.equal(gradient, torch.zeros_like(theta))
@@ -230,7 +238,7 @@ def test_gradient_balance_with_all_zero_audio_weights_is_finite_zero() -> None:
     audio_term = _loss()(
         prediction,
         torch.zeros(_BATCH, 1),
-        torch.empty(0),
+        torch.empty(_BATCH, _SIGNAL_LENGTH),
         _linear_encoder(),
     )
 

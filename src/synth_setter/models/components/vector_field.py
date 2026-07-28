@@ -2,6 +2,11 @@
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float, Shaped
+from torch import Tensor
+
+_BATCH_ANY_SHAPE = "batch ..."
+_BATCH_SHAPE = "batch"
 
 
 class AdaptiveLayerNorm(nn.LayerNorm):
@@ -89,8 +94,11 @@ class VectorField(nn.Module):
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
     def apply_dropout(
-        self, z: torch.Tensor, rate: float = 0.1, keep_mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
+        self,
+        z: Float[Tensor, _BATCH_ANY_SHAPE],
+        rate: float = 0.1,
+        keep_mask: Shaped[Tensor, _BATCH_SHAPE] | None = None,
+    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
         if rate == 0.0:
             return z
 

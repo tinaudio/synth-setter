@@ -9,14 +9,14 @@ Typical usage:
     )
 """
 
-from __future__ import annotations
-
 import math
 from collections.abc import Mapping
 
 import torch
+from beartype import beartype
+from jaxtyping import Float, Shaped, jaxtyped
 from lightning.pytorch.utilities.combined_loader import CombinedLoader
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import functional
 
 from synth_setter.data.torchsynth_grad_render import (
@@ -27,8 +27,15 @@ from synth_setter.data.torchsynth_grad_render import (
 
 # Guards the gradient-ratio denominator when the flow loss contributes no gradient.
 _GRAD_NORM_EPS = 1e-12
+_ANY_SHAPE = "..."
+_BATCH_AUDIO_SHAPE = "batch samples"
+_BATCH_PARAMS_SHAPE = "batch params"
+_BATCH_SHAPE = "batch"
+_BATCH_TIME_SHAPE = "batch 1"
+_SCALAR_SHAPE = ""
 
 
+@jaxtyped(typechecker=beartype)
 def _drop_last_metadata(train_dataloader: object) -> tuple[bool | None, ...]:
     """Collect drop-last metadata from every loader leaf.
 
@@ -51,6 +58,7 @@ def _drop_last_metadata(train_dataloader: object) -> tuple[bool | None, ...]:
     return (drop_last if isinstance(drop_last, bool) else None,)
 
 
+@jaxtyped(typechecker=beartype)
 def validate_audio_feedback_runtime(
     *, train_dataloader: object | None = None, compiled: bool, world_size: int
 ) -> None:
@@ -93,9 +101,13 @@ def validate_audio_feedback_runtime(
         )
 
 
+@jaxtyped(typechecker=beartype)
 def gradient_balance(
-    *, flow_loss: torch.Tensor, audio_term: torch.Tensor, shared: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
+    *,
+    flow_loss: Float[Tensor, _SCALAR_SHAPE],
+    audio_term: Float[Tensor, _SCALAR_SHAPE],
+    shared: Float[Tensor, _ANY_SHAPE],
+) -> tuple[Float[Tensor, _SCALAR_SHAPE], Float[Tensor, _SCALAR_SHAPE]]:
     """Measure how two loss terms contribute gradient at a tensor they both reach.
 
     Loss magnitude is a poor proxy for gradient magnitude, so a weight tuned against loss curves
@@ -116,9 +128,12 @@ def gradient_balance(
     return ratio, cosine
 
 
+@jaxtyped(typechecker=beartype)
 def _frozen_latent_distance(
-    encoder: nn.Module, rendered: torch.Tensor, target_audio: torch.Tensor
-) -> torch.Tensor:
+    encoder: nn.Module,
+    rendered: Float[Tensor, _BATCH_AUDIO_SHAPE],
+    target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+) -> Float[Tensor, _BATCH_SHAPE]:
     """Per-sample cosine distance in an encoder's embedding space, holding the space fixed.
 
     The encoder's parameters are detached via ``functional_call`` and it runs in eval mode,
@@ -155,6 +170,7 @@ def _frozen_latent_distance(
 class AudioFeedbackLoss(nn.Module):
     """Weighted latent-space audio distance on the flow's rendered one-step estimate."""
 
+    @jaxtyped(typechecker=beartype)
     def __init__(
         self,
         *,
@@ -187,7 +203,10 @@ class AudioFeedbackLoss(nn.Module):
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
 
-    def audio_weight(self, t: torch.Tensor) -> torch.Tensor:
+    @jaxtyped(typechecker=beartype)
+    def audio_weight(
+        self, t: Float[Tensor, _BATCH_TIME_SHAPE]
+    ) -> Float[Tensor, _BATCH_TIME_SHAPE]:
         """Ramp the weight from zero at ``t_min`` to ``lambda_audio`` at t=1.
 
         :param t: Flow time shaped ``(batch, 1)``.
@@ -195,14 +214,15 @@ class AudioFeedbackLoss(nn.Module):
         """
         return self.lambda_audio * ((t - self.t_min) / (1 - self.t_min)).clamp(min=0.0)
 
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
-        theta_hat: torch.Tensor,
-        t: torch.Tensor,
-        target_audio: torch.Tensor,
+        theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
+        t: Float[Tensor, _BATCH_TIME_SHAPE],
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
         encoder: nn.Module,
-        keep: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        keep: Shaped[Tensor, _BATCH_SHAPE] | None = None,
+    ) -> Float[Tensor, _SCALAR_SHAPE]:
         """Render the estimate and return the weighted latent distance to the target.
 
         :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.

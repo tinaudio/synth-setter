@@ -5,6 +5,11 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float, Shaped
+from torch import Tensor
+
+_BATCH_ANY_SHAPE = "batch ..."
+_BATCH_SHAPE = "batch"
 
 
 class PositionalEncoding(nn.Module):
@@ -409,8 +414,11 @@ class ApproxEquivTransformer(nn.Module):
         self.outer_residual = outer_residual
 
     def apply_dropout(
-        self, z: torch.Tensor, rate: float = 0.1, keep_mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
+        self,
+        z: Float[Tensor, _BATCH_ANY_SHAPE],
+        rate: float = 0.1,
+        keep_mask: Shaped[Tensor, _BATCH_SHAPE] | None = None,
+    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
         if rate == 0.0:
             return z
 

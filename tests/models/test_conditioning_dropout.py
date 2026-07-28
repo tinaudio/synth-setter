@@ -45,17 +45,19 @@ def _approx_equiv_transformer() -> ApproxEquivTransformer:
     "model_type",
     [ConditionalResidualMLP, ApproxEquivTransformer, VectorField],
 )
-def test_apply_dropout_signature_uses_tensor_input_and_return(
+def test_apply_dropout_signature_uses_jaxtyping_tensor_input_and_return(
     model_type: type[ConditionalResidualMLP] | type[ApproxEquivTransformer] | type[VectorField],
 ) -> None:
-    """Every caller-facing dropout method exposes the Tensor contract.
+    """Every caller-facing dropout method exposes a shaped Tensor contract.
 
     :param model_type: Backbone class whose public annotations are inspected.
     """
     annotations = get_type_hints(model_type.apply_dropout)
 
-    assert annotations["z"] is torch.Tensor
-    assert annotations["return"] is torch.Tensor
+    assert annotations["z"].array_type is torch.Tensor
+    assert annotations["z"].dim_str == "batch ..."
+    assert annotations["return"].array_type is torch.Tensor
+    assert annotations["return"].dim_str == "batch ..."
 
 
 @pytest.mark.parametrize(
