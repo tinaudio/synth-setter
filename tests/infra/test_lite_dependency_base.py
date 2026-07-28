@@ -87,15 +87,6 @@ def test_project_dependencies_equal_lite_closure(project_dependency_names: set[s
     assert project_dependency_names == LITE_CLOSURE
 
 
-def test_project_dependencies_exclude_heavy_runtime(project_dependency_names: set[str]) -> None:
-    """No heavy runtime dep leaks into the base lite install.
-
-    :param project_dependency_names: Declared base dependency names (fixture).
-    """
-    leaked = project_dependency_names & HEAVY_DEPS
-    assert not leaked, f"heavy deps leaked into [project.dependencies]: {sorted(leaked)}"
-
-
 def test_smoosense_viewer_deps_are_notebook_only(project_root: Path) -> None:
     """SmooSense viewer deps stay out of the pipeline runtime and base install.
 
