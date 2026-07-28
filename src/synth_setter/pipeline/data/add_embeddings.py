@@ -32,7 +32,10 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    NUM_SKETCH_CONTROLS,
+    SKETCH_CTRL_FIELD,
     T5GEMMA_FIELD,
+    mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
@@ -76,10 +79,12 @@ SAME_ENCODE_MAX_BATCH: int = 16
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
+# Structurally = ClapEncodeFn; the name documents the (B, C, T) input contract.
+type SketchEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn | SketchEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 
@@ -444,6 +449,54 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
     return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
 
 
+def _sketch_encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Extract sketch controls for one audio batch.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate deciding the control frame grid.
+    :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
+    """
+    import torch
+
+    from synth_setter.features.sketch_controls import extract_sketch_controls_batch
+
+    batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
+    return extract_sketch_controls_batch(batch, sample_rate).cpu().numpy()
+
+
+def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Bind the sketch-control extractor to the registry's uniform factory signature.
+
+    :param checkpoint: Unused; PESTO ships its bundled mir-1k_g7 weights.
+    :param config: Unused run config; PESTO runs on CPU, device is not plumbed.
+    :returns: Encoder over the original audio batch.
+    """
+    del checkpoint, config
+    return _sketch_encode
+
+
+def _encode_sketch_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as a fixed-shape sketch-control tensor column.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate deciding the control frame grid.
+    :param encoder: Sketch extractor over the original audio batch.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder output is off the frame grid or non-finite.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    encode = cast("SketchEncodeFn", encoder)
+    controls = _finite_embedding(SKETCH_CTRL_FIELD, encode(audio, sample_rate))
+    frames = mel_n_frames_from_samples(audio.shape[-1], sample_rate)
+    expected = (len(audio), NUM_SKETCH_CONTROLS, frames)
+    if controls.shape != expected:
+        raise ValueError(
+            f"{SKETCH_CTRL_FIELD} encoder produced shape {controls.shape}, expected {expected}"
+        )
+    return tensor_array(controls, np.dtype("float32"), controls.shape[1:])
+
+
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "clap": EmbeddingSpec(
         name="clap",
@@ -480,6 +533,21 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
+    ),
+    # num_sub_vectors: PQ sub-vectors must divide the pooled (loudness, centroid,
+    # pitch) vector's width, so the CLAP-oriented default of 16 cannot apply.
+    "sketch": EmbeddingSpec(
+        name="sketch",
+        column=SKETCH_CTRL_FIELD,
+        default_checkpoint="",
+        co_resident=True,
+        index=IndexSpec(
+            pool="mean",
+            num_sub_vectors=NUM_SKETCH_CONTROLS,
+            vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+        ),
+        load_encoder=_load_sketch_spec_encoder,
+        encode_column=_encode_sketch_column,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.

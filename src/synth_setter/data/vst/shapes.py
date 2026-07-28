@@ -37,6 +37,8 @@ CLAP_FIELD: str = "clap"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 T5GEMMA_FIELD: str = "t5gemma"
+SKETCH_CTRL_FIELD: str = "sketch_ctrl"
+NUM_SKETCH_CONTROLS: int = 3
 
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.
@@ -103,7 +105,18 @@ def mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
     :rtype: int
     """
     audio_length = int(sample_rate * signal_duration_seconds)
-    return 1 + audio_length // mel_hop_length(sample_rate)
+    return mel_n_frames_from_samples(audio_length, sample_rate)
+
+
+def mel_n_frames_from_samples(num_samples: int, sample_rate: float) -> int:
+    """Return the mel-grid frame count for a waveform length in samples.
+
+    :param num_samples: Waveform length in samples.
+    :param sample_rate: Audio sample rate in Hz.
+    :returns: ``1 + num_samples // hop_length`` frames.
+    :rtype: int
+    """
+    return 1 + num_samples // mel_hop_length(sample_rate)
 
 
 def audio_dataset_shape(
