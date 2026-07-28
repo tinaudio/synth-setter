@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785232197077,
+  "lastUpdate": 1785235406659,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11334,6 +11334,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.051127493381500244,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "08dceda28ed52febcc648ed92bb08fd958d4ac04",
+          "message": "internal-fix(training): preserve absolute file URI hydration paths (#2597)",
+          "timestamp": "2026-07-28T02:45:08-07:00",
+          "tree_id": "ccf650940d9376dd2ee66877769d979383e7c296",
+          "url": "https://github.com/tinaudio/synth-setter/commit/08dceda28ed52febcc648ed92bb08fd958d4ac04"
+        },
+        "date": 1785235404710,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.655546188354492,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.179607891985215,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.021664652973413467,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.017301619052886963,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.972360610961914,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.495526060166677,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.573761463165283,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.544503633007407,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03935818374156952,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04241299629211426,
             "unit": "1-cos"
           },
           {
