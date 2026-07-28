@@ -148,7 +148,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
         covers: "Registry-driven Lance embedding augmentation, including strict Stable Audio 3 SAME checkpoint loading."
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
-        covers: "S-SONDO embedding adapter."
+        covers: "Implements §13's pinned model boundary."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
       - pattern: "tests/pipeline/data/test_same_encoder_e2e.py"

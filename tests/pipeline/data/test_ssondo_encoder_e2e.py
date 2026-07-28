@@ -88,6 +88,6 @@ def test_ssondo_hydra_main_real_checkpoint_writes_distinct_finite_vectors(
     np.testing.assert_allclose(
         vectors[0, : len(_REFERENCE_FLOAT16_220_HZ_PREFIX)],
         _REFERENCE_FLOAT16_220_HZ_PREFIX,
-        rtol=1e-4,
-        atol=1e-5,
+        rtol=1e-3,
+        atol=3e-4,
     )

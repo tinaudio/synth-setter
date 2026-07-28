@@ -74,6 +74,7 @@ def test_ssondo_encoder_input_half_rate_resamples_to_target_window() -> None:
         (np.zeros((1, 1, 0), dtype=np.float32), 32_000, "non-empty"),
         (np.full((1, 1, 32_000), np.nan, dtype=np.float32), 32_000, "non-finite"),
         (np.full((1, 1, 32_000), 1.01, dtype=np.float32), 32_000, r"\[-1, 1\]"),
+        (np.full((1, 1, 32_000), -32_768, dtype=np.int16), 32_000, r"\[-1, 1\]"),
         (np.zeros((1, 1, 320_001), dtype=np.float32), 32_000, "at most 10 seconds"),
     ],
 )
@@ -132,6 +133,34 @@ def test_ssondo_registry_encoder_invalid_output_raises(
         EMBEDDING_REGISTRY["ssondo"].encode_column(
             audio, SSONDO_SAMPLE_RATE, encode
         )
+
+
+def test_ssondo_encoder_input_exact_ten_seconds_preserves_window() -> None:
+    """An exact model window succeeds without padding or truncation."""
+    audio = np.zeros((1, 1, SSONDO_INPUT_SAMPLES), dtype=np.float32)
+
+    prepared = ssondo_encoder_input(audio, SSONDO_SAMPLE_RATE)
+
+    assert prepared.shape == (1, SSONDO_INPUT_SAMPLES)
+    np.testing.assert_array_equal(prepared, audio[:, 0])
+
+
+def test_ssondo_encoder_input_resample_overshoot_clips_to_model_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resampler ringing is clipped back into the model range.
+
+    :param monkeypatch: Fixture replacing resampling with an overshooting result.
+    """
+    monkeypatch.setattr(
+        "torchaudio.functional.resample",
+        lambda waveform, source_rate, target_rate: torch.full((1, 64_000), 1.01),
+    )
+    audio = np.zeros((1, 1, 32_000), dtype=np.float32)
+
+    prepared = ssondo_encoder_input(audio, 16_000)
+
+    assert prepared.max() == 1.0
 
 
 def test_load_ssondo_audio_encoder_more_than_one_chunk_preserves_row_order(

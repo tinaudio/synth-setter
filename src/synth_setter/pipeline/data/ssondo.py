@@ -1,4 +1,4 @@
-"""Pinned-checkpoint adapter for S-SONDO audio embeddings."""
+"""Pin and adapt S-SONDO for ``embeddings=[ssondo]`` CLI runs."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ DEFAULT_SSONDO_CHECKPOINT = "mohammedali2501/ssondo"
 SSONDO_CHECKPOINT_REVISION = "afc946ee816eb2287b62c7cadadd59e507996b23"
 SSONDO_CHECKPOINT_NAME = "matpac_mobilenetv3.ckpt"
 SSONDO_CHECKPOINT_SHA256 = "87cff558a9a442e97d630a79f391bce8663d31a3adcbbf0b0a8cc41cb41854fc"
-SSONDO_PACKAGE_VERSION = "0.3.1"
+SSONDO_SOURCE_REVISION = "231d260cc1be2eb93b060accc8bfa218feff3a74"
 SSONDO_EMBEDDING_DIM = 960
 SSONDO_SAMPLE_RATE = 32_000
 SSONDO_WINDOW_SECONDS = 10
@@ -79,6 +79,7 @@ def resolve_ssondo_checkpoint(checkpoint: str = DEFAULT_SSONDO_CHECKPOINT) -> Pa
     from huggingface_hub import hf_hub_download
 
     cache_dir = embedding_model_dir(f"ssondo-{SSONDO_CHECKPOINT_REVISION}")
+    # Hugging Face Hub owns 429/5xx/network backoff and atomic cache writes.
     path = hf_hub_download(
         repo_id=DEFAULT_SSONDO_CHECKPOINT,
         filename=SSONDO_CHECKPOINT_NAME,
@@ -86,6 +87,17 @@ def resolve_ssondo_checkpoint(checkpoint: str = DEFAULT_SSONDO_CHECKPOINT) -> Pa
         local_dir=cache_dir,
     )
     return _verified_checkpoint(Path(path))
+
+
+def _require_normalized(audio: np.ndarray) -> None:
+    """Reject waveforms outside S-SONDO's normalized input range.
+
+    :param audio: Candidate waveform values.
+    :raises ValueError: Any value falls outside ``[-1, 1]``.
+    """
+    float_audio = np.asarray(audio, dtype=np.float32)
+    if np.abs(float_audio).max() > 1.0:
+        raise ValueError("S-SONDO input audio must be normalized to [-1, 1]")
 
 
 def ssondo_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -106,8 +118,7 @@ def ssondo_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
         raise ValueError("S-SONDO input audio must be non-empty")
     if not np.isfinite(audio).all():
         raise ValueError("S-SONDO input audio contains non-finite values")
-    if np.abs(audio).max() > 1.0:
-        raise ValueError("S-SONDO input audio must be normalized to [-1, 1]")
+    _require_normalized(audio)
 
     source_exceeds_window = (
         audio.shape[-1] * SSONDO_SAMPLE_RATE > SSONDO_INPUT_SAMPLES * sample_rate
@@ -121,6 +132,7 @@ def ssondo_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
         import torchaudio.functional as audio_fn
 
         mono = audio_fn.resample(torch.from_numpy(mono), sample_rate, SSONDO_SAMPLE_RATE).numpy()
+        np.clip(mono, -1.0, 1.0, out=mono)
     padding = SSONDO_INPUT_SAMPLES - mono.shape[-1]
     return np.ascontiguousarray(np.pad(mono, ((0, 0), (0, padding))), dtype=np.float32)
 
@@ -136,6 +148,7 @@ def load_ssondo_audio_encoder(
     :returns: Encoder producing ``(B, 960)`` float32 vectors.
     """
     import torch
+    from importlib.metadata import version
     from ssondo import get_ssondo
 
     checkpoint_path = resolve_ssondo_checkpoint(checkpoint)
@@ -146,7 +159,8 @@ def load_ssondo_audio_encoder(
         checkpoint_repo=DEFAULT_SSONDO_CHECKPOINT,
         checkpoint_revision=SSONDO_CHECKPOINT_REVISION,
         checkpoint_sha256=SSONDO_CHECKPOINT_SHA256,
-        package_version=SSONDO_PACKAGE_VERSION,
+        package_version=version("ssondo"),
+        source_revision=SSONDO_SOURCE_REVISION,
         device=device,
     )
 

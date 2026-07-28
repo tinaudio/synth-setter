@@ -237,7 +237,7 @@ jobs:
               uv pip install --no-deps -e .
               read -ra targets <<< "${PYTEST_TARGETS}"
               if [ "${RUN_EMBEDDING_E2E}" = "true" ]; then
-                targets+=(tests/test_train.py::test_train_all_embedding_conditioning_real_e2e)
+                targets+=(tests/test_train.py::test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e)
               fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \

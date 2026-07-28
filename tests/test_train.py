@@ -2015,7 +2015,7 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_train_all_embedding_conditioning_real_e2e(
+def test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e(
     local_embedding_checkpoints: dict[str, str],
     tmp_path: Path,
     surge_xt_embedding_smoke_datasets: Path,
