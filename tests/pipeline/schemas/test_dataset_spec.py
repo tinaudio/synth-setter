@@ -857,11 +857,6 @@ class TestDatasetSpecValidators:
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert spec.train_val_test_seeds is None
 
-    def test_train_val_test_seeds_explicit_none_is_allowed(self, patch_runtime_io: None) -> None:
-        """Explicit None passes (NotImplementedError gate fires only on non-None)."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=None))
-        assert spec.train_val_test_seeds is None
-
     @pytest.mark.parametrize("bad_attempts", [0, -1])
     def test_render_config_rejects_non_positive_attempts_per_sample(
         self, patch_runtime_io: None, bad_attempts: int

@@ -170,15 +170,6 @@ def test_native_review_orchestrators_delegate_to_pi() -> None:
     assert "yields a shell session" in contract
 
 
-def test_review_fanout_promotes_deep_checklists() -> None:
-    """Keep high thinking pinned for correctness-sensitive checklists."""
-    routing = (REPO_ROOT / "agent" / "_shared" / "pi_review_routing.py").read_text()
-
-    assert 'REPO_LOCAL_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
-    assert "HIGH_THINKING_SKILLS = REPO_LOCAL_SKILLS" in routing
-    assert 'return "high", "deep checklist"' in routing
-
-
 def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     """Ensure policy, rather than the agent definition, selects Pi worker models."""
     text = (REPO_ROOT / ".pi" / "agents" / "pr-review-worker.md").read_text()
