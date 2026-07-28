@@ -50,7 +50,8 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
-# cpu/cu128 route backend wheels. Heavy runtime lives in [dependency-groups] (#1139).
+# Only the cpu/cu128 backend-routing extras remain here — [tool.uv.sources] keys
+# on extras, not groups. Heavy runtime lives in [dependency-groups] (#1139).
 
 [project.scripts]
 synth-setter-train = "synth_setter.cli.train:main"
@@ -139,8 +140,6 @@ torch = [
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
-  # Commit-pinned until TinyMU publishes a package release.
-  "tinymu @ git+https://github.com/ktinubu/TinyMU@fef8564593fceb5625c10f56a46b256216e7173d",
   # Commit-pinned: upstream has no PyPI release or Git tags. Package-scoped metadata
   # below relaxes its torch pins without changing cpu/cu128 wheel routing.
   "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",

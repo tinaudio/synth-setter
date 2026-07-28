@@ -5,21 +5,17 @@ The registry keeps checkpoint loading, Arrow encoding, residency, optional depen
 index policy together for each embedding. Co-resident encoders share one Lance UDF pass; large
 SAME encoders run in separate load-write-release passes.
 
-CLI: ``synth-setter-add-embeddings dataset_root_uri=ROOT embeddings=[clap,m2l]``.
+CLI: ``synth-setter-add-embeddings lance_uri=DATASET.lance embeddings=[clap,m2l]``.
 """
 
 from __future__ import annotations
 
-import hashlib
 import math
 import os
-import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -37,22 +33,9 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     T5GEMMA_FIELD,
-    TINYMU_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.constants import DATASET_CARD_FILENAME, DATASET_COMPLETE_FILENAME
-from synth_setter.pipeline.data.tinymu import (
-    DEFAULT_TINYMU_CHECKPOINT,
-    TINYMU_CHECKPOINT_REVISION,
-    TINYMU_CHECKPOINT_SHA256,
-    TINYMU_FRONTEND,
-    TINYMU_PACKAGE_COMMIT,
-    TinyMUEncodeFn,
-    load_tinymu_audio_encoder,
-    tinymu_num_latent_frames,
-)
-from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -60,11 +43,6 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
-    from synth_setter.pipeline.schemas.lance_attempt import (
-        EmbeddingProvenance,
-        EmbeddingSplitProvenance,
-        LanceDatasetCard,
-    )
 
 logger = structlog.get_logger(__name__)
 operator_workspace()
@@ -89,8 +67,6 @@ DEFAULT_NUM_SUB_VECTORS: int = 16
 DEFAULT_INDEX_METRIC: str = "cosine"
 DEFAULT_LANCE_LOG: str = "warn"
 PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
-type DatasetSplit = Literal["train", "val", "test"]
-CANONICAL_SPLITS: tuple[DatasetSplit, ...] = ("train", "val", "test")
 SAME_EMBEDDING_DIM: int = 256
 SAME_SAMPLE_RATE: int = 44100
 SAME_DOWNSAMPLING_RATIO: int = 4096
@@ -103,7 +79,7 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn | TinyMUEncodeFn
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 
@@ -416,19 +392,6 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_same_audio_encoder(checkpoint, config.device)
 
 
-def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
-    """Load TinyMU through its managed package dependency.
-
-    :param checkpoint: Exact pinned URI or a hash-identical local artifact.
-    :param config: Run config supplying the device.
-    :returns: Frozen MATPAC encoder.
-    """
-    return load_tinymu_audio_encoder(
-        checkpoint,
-        device=_resolve_torch_device(config.device),
-    )
-
-
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -457,31 +420,6 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
         return encode_text(normalize(spec, params))
 
     return encode
-
-
-def _encode_tinymu_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
-    """Encode one audio batch as a fixed-shape TinyMU MATPAC tensor column.
-
-    :param audio: ``(B, C, T)`` source audio.
-    :param sample_rate: Source sample rate in Hz.
-    :param encoder: Frozen MATPAC encoder over source audio.
-    :returns: ``(B, 3840, T_tokens)`` fixed-shape tensor array.
-    :raises ValueError: The encoder returns the wrong shape or non-finite values.
-    """
-    from synth_setter.pipeline.data.lance_shard import tensor_array
-
-    encode = cast("TinyMUEncodeFn", encoder)
-    embeddings = _finite_embedding(TINYMU_FIELD, encode(audio, sample_rate))
-    expected_shape = (
-        len(audio),
-        TINYMU_FRONTEND.embedding_dim,
-        tinymu_num_latent_frames(audio.shape[-1], sample_rate),
-    )
-    if embeddings.shape != expected_shape:
-        raise ValueError(
-            f"{TINYMU_FIELD} encoder produced shape {embeddings.shape}, expected {expected_shape}"
-        )
-    return tensor_array(embeddings, np.dtype("float32"), expected_shape[1:])
 
 
 def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
@@ -554,15 +492,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_t5gemma_spec_encoder,
         encode_column=_encode_t5gemma_column,
         input_field=PARAM_ARRAY_FIELD,
-    ),
-    "tinymu": EmbeddingSpec(
-        name="tinymu",
-        column=TINYMU_FIELD,
-        default_checkpoint=DEFAULT_TINYMU_CHECKPOINT,
-        co_resident=False,
-        index=IndexSpec(pool="mean", vector_column=f"{TINYMU_FIELD}_vec"),
-        load_encoder=_load_tinymu_spec_encoder,
-        encode_column=_encode_tinymu_column,
     ),
 }
 
@@ -889,19 +818,15 @@ def build_index(
     return True
 
 
-def _add_embeddings_to_lance_uri(
-    config: AddEmbeddingsConfig, uri: str
-) -> tuple[lance.LanceDataset, dict[str, bool]]:
-    """Append selected embeddings to one Lance split.
+def add_embeddings(config: AddEmbeddingsConfig) -> None:
+    """Append the registry entries selected by ``config.embeddings``.
 
-    :param config: Validated embedding, checkpoint, and write settings.
-    :param uri: Local or remote Lance split URI.
-    :returns: Updated dataset and index-built status by registry key.
+    :param config: Validated dataset, embedding, checkpoint, and write settings.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
-    dataset = _open_lance_dataset(uri)
+    dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
     _guard_existing_columns(dataset, specs)
     _validate_write_source(dataset, config.batch_size)
@@ -909,7 +834,7 @@ def _add_embeddings_to_lance_uri(
 
     logger.info(
         "adding_embeddings",
-        uri=uri,
+        uri=config.lance_uri,
         columns=output_columns,
         sample_rate=sample_rate,
         rows=dataset.count_rows(),
@@ -922,404 +847,12 @@ def _add_embeddings_to_lance_uri(
     for spec in solo:
         _write_columns(dataset, [spec], sample_rate, config)
 
-    index_results = {spec.name: False for spec in specs}
     if config.build_index:
         for spec in specs:
             if spec.index is not None:
                 vector_column = spec.index.vector_column or spec.column
-                index_results[spec.name] = build_index(
-                    dataset, vector_column, index=spec.index, config=config
-                )
-    logger.info("added_embeddings", uri=uri, columns=output_columns)
-    return dataset, index_results
-
-
-def _dataset_root_child(root: str, name: str) -> str:
-    """Join one dataset-root child without changing its URI scheme.
-
-    :param root: Local path or dataset-root URI.
-    :param name: Child name.
-    :returns: Child path or URI.
-    """
-    from synth_setter.pipeline.spec_io import join_uri
-
-    return join_uri(root, name)
-
-
-def _local_uri_path(uri: str) -> Path | None:
-    """Resolve local paths and ``file://`` URIs, leaving remote URIs unresolved.
-
-    :param uri: Candidate path or URI.
-    :returns: Local path, or ``None`` for R2/S3.
-    """
-    if r2_io.is_r2_uri(uri) or uri.startswith("s3://"):
-        return None
-    return file_uri_to_path(uri) if is_file_uri(uri) else Path(uri)
-
-
-def _root_child_exists(uri: str) -> bool:
-    """Return whether one local or remote dataset-root child exists.
-
-    :param uri: Child path or URI.
-    :returns: Whether a local path or remote directory exists.
-    """
-    local = _local_uri_path(uri)
-    if local is not None:
-        return local.exists()
-    remote = r2_io.from_s3_uri(uri) if uri.startswith("s3://") else uri
-    return r2_io.r2_directory_exists(remote)
-
-
-def _read_dataset_card(root: str) -> LanceDatasetCard:
-    """Read the strict dataset card from a finalized root.
-
-    :param root: Local or remote dataset root.
-    :returns: Parsed dataset card.
-    """
-    from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
-    from synth_setter.pipeline.spec_io import localized_uri
-
-    card_uri = _dataset_root_child(root, DATASET_CARD_FILENAME)
-    with localized_uri(card_uri) as card_path:
-        return LanceDatasetCard.model_validate_json(card_path.read_bytes())
-
-
-def _write_dataset_card(root: str, card: LanceDatasetCard) -> None:
-    """Atomically replace a local card or upload a complete remote card.
-
-    :param root: Local or remote dataset root.
-    :param card: Strict Pydantic card with ``model_dump_json``.
-    """
-    card_uri = _dataset_root_child(root, DATASET_CARD_FILENAME)
-    local = _local_uri_path(card_uri)
-    if local is not None:
-        local.parent.mkdir(parents=True, exist_ok=True)
-        temporary = local.with_name(f".{local.name}.tmp")
-        temporary.write_text(card.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(temporary, local)
-        return
-    remote = r2_io.from_s3_uri(card_uri) if card_uri.startswith("s3://") else card_uri
-    with tempfile.TemporaryDirectory() as directory:
-        temporary = Path(directory) / DATASET_CARD_FILENAME
-        temporary.write_text(card.model_dump_json(indent=2), encoding="utf-8")
-        r2_io.upload_to_uri(temporary, remote)
-
-
-@cache
-def _producer_identity() -> tuple[str, str]:
-    """Resolve the checkout commit and hash the MATPAC transform implementation.
-
-    :returns: Producer Git SHA and transform-module SHA-256.
-    :raises ValueError: The installed source cannot be tied to its owning checkout.
-    """
-    source = Path(__file__).resolve()
-    workspace = next(
-        (parent for parent in source.parents if (parent / ".project-root").is_file()), None
-    )
-    if workspace is None:
-        raise ValueError(f"cannot locate embedding producer checkout for {source}")
-    try:
-        git_sha = subprocess.check_output(  # noqa: S603 — fixed checkout identity probe
-            ["git", "-C", str(workspace), "rev-parse", "HEAD"],  # noqa: S607
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        raise ValueError(f"cannot resolve embedding producer Git SHA from {workspace}") from exc
-    digest = hashlib.sha256()
-    for module_path in (source, source.with_name("tinymu.py")):
-        digest.update(module_path.name.encode())
-        digest.update(b"\0")
-        digest.update(module_path.read_bytes())
-    return git_sha, digest.hexdigest()
-
-
-def _embedding_provenance(
-    name: str,
-    config: AddEmbeddingsConfig,
-    splits: tuple[EmbeddingSplitProvenance, ...],
-) -> EmbeddingProvenance:
-    """Build persisted output identity for one selected registry entry.
-
-    :param name: Registry key.
-    :param config: Output-defining augmentation settings.
-    :param splits: Intended or committed split provenance entries.
-    :returns: Strict embedding provenance.
-    """
-    from synth_setter.pipeline.schemas.lance_attempt import EmbeddingProvenance
-
-    spec = EMBEDDING_REGISTRY[name]
-    tinymu = name == "tinymu"
-    producer_git_sha, producer_transform_sha256 = _producer_identity()
-    param_sourced = spec.input_field == PARAM_ARRAY_FIELD
-    indexed = spec.index is not None
-    return EmbeddingProvenance(
-        name=name,
-        columns=_output_columns(spec),
-        checkpoint=config.checkpoints.get(name, spec.default_checkpoint),
-        producer_git_sha=producer_git_sha,
-        producer_transform_sha256=producer_transform_sha256,
-        source_commit=TINYMU_PACKAGE_COMMIT if tinymu else None,
-        checkpoint_revision=TINYMU_CHECKPOINT_REVISION if tinymu else None,
-        checkpoint_sha256=TINYMU_CHECKPOINT_SHA256 if tinymu else None,
-        param_spec_name=config.param_spec_name if param_sourced else None,
-        param_text_normalizer=config.param_text_normalizer if param_sourced else None,
-        index_requested=config.build_index if indexed else None,
-        num_partitions=config.num_partitions if indexed else None,
-        num_sub_vectors=config.num_sub_vectors if indexed else None,
-        metric=config.metric if indexed else None,
-        splits=splits,
-    )
-
-
-def _replace_embedding_split(
-    provenance: EmbeddingProvenance, result: EmbeddingSplitProvenance
-) -> EmbeddingProvenance:
-    """Replace one canonical split result under an embedding identity.
-
-    :param provenance: Existing embedding identity and split records.
-    :param result: New state for one split.
-    :returns: Revalidated provenance with exactly one record for the split.
-    """
-    from synth_setter.pipeline.schemas.lance_attempt import EmbeddingProvenance
-
-    splits = tuple(item for item in provenance.splits if item.split != result.split) + (result,)
-    return EmbeddingProvenance.model_validate({**provenance.model_dump(), "splits": splits})
-
-
-def _replace_card_embeddings(
-    card: LanceDatasetCard, embeddings: Mapping[str, EmbeddingProvenance]
-) -> LanceDatasetCard:
-    """Revalidate a card after replacing its embedding records.
-
-    :param card: Existing v1 or v2 dataset card.
-    :param embeddings: Provenance keyed by unique registry name.
-    :returns: Schema-v2 card preserving finalize-owned fields.
-    """
-    from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
-
-    return LanceDatasetCard.model_validate(
-        {**card.model_dump(), "schema_version": 2, "embeddings": tuple(embeddings.values())}
-    )
-
-
-def _completion_marker_exists(root: str) -> bool:
-    """Return whether the dataset root currently advertises readiness.
-
-    :param root: Local or remote dataset root.
-    :returns: Whether ``dataset.complete`` exists.
-    """
-    marker_uri = _dataset_root_child(root, DATASET_COMPLETE_FILENAME)
-    local = _local_uri_path(marker_uri)
-    if local is not None:
-        return local.is_file()
-    remote = r2_io.from_s3_uri(marker_uri) if marker_uri.startswith("s3://") else marker_uri
-    return r2_io.object_size(remote) is not None
-
-
-def _remove_completion_marker(root: str) -> None:
-    """Remove readiness before the first split mutation.
-
-    :param root: Local or remote dataset root.
-    """
-    marker_uri = _dataset_root_child(root, DATASET_COMPLETE_FILENAME)
-    local = _local_uri_path(marker_uri)
-    if local is not None:
-        local.unlink(missing_ok=True)
-        return
-    remote = r2_io.from_s3_uri(marker_uri) if marker_uri.startswith("s3://") else marker_uri
-    r2_io.delete_object(remote)
-
-
-def _write_completion_marker(root: str) -> None:
-    """Publish readiness after every intended embedding operation completes.
-
-    :param root: Local or remote dataset root.
-    """
-    marker_uri = _dataset_root_child(root, DATASET_COMPLETE_FILENAME)
-    local = _local_uri_path(marker_uri)
-    if local is not None:
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.touch()
-        return
-    remote = r2_io.from_s3_uri(marker_uri) if marker_uri.startswith("s3://") else marker_uri
-    with tempfile.TemporaryDirectory() as directory:
-        marker = Path(directory) / DATASET_COMPLETE_FILENAME
-        marker.touch()
-        r2_io.upload_to_uri(marker, remote)
-
-
-def _index_exists(dataset: lance.LanceDataset, spec: EmbeddingSpec) -> bool:
-    """Return whether the registry policy's target column has an index.
-
-    :param dataset: Open split dataset.
-    :param spec: Registry policy whose target is checked.
-    :returns: Whether Lance reports an index over the target column.
-    """
-    if spec.index is None:
-        return False
-    target = spec.index.vector_column or spec.column
-    indices = cast("list[dict[str, object]]", dataset.list_indices())
-    return any(entry.get("fields") == [target] for entry in indices)
-
-
-def _complete_root_embedding(
-    config: AddEmbeddingsConfig,
-    uri: str,
-    name: str,
-) -> tuple[lance.LanceDataset, bool]:
-    """Write or resume one embedding policy on one split.
-
-    :param config: Output and index settings.
-    :param uri: Split URI.
-    :param name: Registry key.
-    :returns: Updated dataset and whether its declared index exists.
-    :raises ValueError: Only a subset of the policy's columns is present.
-    """
-    spec = EMBEDDING_REGISTRY[name]
-    dataset = _open_lance_dataset(uri)
-    expected = set(_output_columns(spec))
-    present = expected & set(dataset.schema.names)
-    if present and present != expected:
-        raise ValueError(f"split {uri} has partial {name} columns: {sorted(present)}")
-    if not present:
-        split_config = config.model_copy(update={"embeddings": (name,)})
-        dataset, indexes = _add_embeddings_to_lance_uri(split_config, uri)
-        return dataset, indexes[name]
-    if not config.build_index or spec.index is None:
-        return dataset, False
-    if _index_exists(dataset, spec):
-        return dataset, True
-    target = spec.index.vector_column or spec.column
-    return dataset, build_index(dataset, target, index=spec.index, config=config)
-
-
-def _incomplete_embedding_work(
-    embeddings: Mapping[str, EmbeddingProvenance],
-) -> list[str]:
-    """Name every embedding split that has not committed.
-
-    :param embeddings: Persisted provenance keyed by registry name.
-    :returns: ``name:split`` identifiers for incomplete work.
-    """
-    return [
-        f"{entry.name}:{result.split}"
-        for entry in embeddings.values()
-        for result in entry.splits
-        if not result.complete
-    ]
-
-
-def _add_embeddings_to_dataset_root(config: AddEmbeddingsConfig, root: str) -> None:
-    """Augment every canonical split under a resumable readiness protocol.
-
-    :param config: Validated root augmentation settings.
-    :param root: Finalized dataset root.
-    :raises FileNotFoundError: The root has no dataset card or no Lance splits.
-    :raises ValueError: Finalization is incomplete or persisted state conflicts with the request.
-    """
-    from synth_setter.pipeline.schemas.lance_attempt import EmbeddingSplitProvenance
-
-    if r2_io.is_r2_uri(root) or root.startswith("s3://"):
-        r2_io.ensure_r2_env_loaded()
-    card = _read_dataset_card(root)
-    existing = {entry.name: entry for entry in card.embeddings}
-    for name in config.embeddings:
-        prior = existing.get(name)
-        if prior is not None and prior != _embedding_provenance(name, config, prior.splits):
-            raise ValueError(f"stored {name} provenance does not match this augmentation config")
-
-    split_uris: list[tuple[DatasetSplit, str]] = [
-        (split, uri)
-        for split in CANONICAL_SPLITS
-        if _root_child_exists(uri := _dataset_root_child(root, f"{split}.lance"))
-    ]
-    if not split_uris:
-        raise FileNotFoundError(f"dataset root has no train/val/test Lance splits: {root}")
-
-    marker_exists = _completion_marker_exists(root)
-    resumable = any(not result.complete for entry in existing.values() for result in entry.splits)
-    if not marker_exists and not resumable and card.schema_version == 1:
-        raise ValueError(f"dataset root is not finalized; missing {DATASET_COMPLETE_FILENAME}: {root}")
-
-    pending: list[tuple[DatasetSplit, str, str]] = []
-    for split, uri in split_uris:
-        dataset = _open_lance_dataset(uri)
-        for name in config.embeddings:
-            prior = existing.get(name)
-            result = None if prior is None else next(
-                (item for item in prior.splits if item.split == split), None
-            )
-            if result is not None and result.complete:
-                expected = set(_output_columns(EMBEDDING_REGISTRY[name]))
-                if not expected <= set(dataset.schema.names):
-                    raise ValueError(f"stored {name} provenance disagrees with split {uri}")
-                continue
-            if result is None:
-                expected = set(_output_columns(EMBEDDING_REGISTRY[name]))
-                present = expected & set(dataset.schema.names)
-                if present:
-                    raise ValueError(f"split {uri} has untracked {name} columns: {sorted(present)}")
-                result = EmbeddingSplitProvenance(
-                    split=split,
-                    dataset_version=dataset.version,
-                    row_count=dataset.count_rows(),
-                    index_built=False,
-                    complete=False,
-                )
-                identity = prior or _embedding_provenance(name, config, ())
-                existing[name] = _replace_embedding_split(identity, result)
-            pending.append((split, uri, name))
-
-    if not pending:
-        incomplete = _incomplete_embedding_work(existing)
-        if incomplete:
-            raise ValueError(f"dataset root still has incomplete embedding work: {incomplete}")
-        if not marker_exists:
-            _write_completion_marker(root)
-        return
-
-    card = _replace_card_embeddings(card, existing)
-    _write_dataset_card(root, card)
-    if marker_exists:
-        _remove_completion_marker(root)
-
-    for split, uri, name in pending:
-        prior = existing[name]
-        pending_result = next(item for item in prior.splits if item.split == split)
-        dataset, index_built = _complete_root_embedding(config, uri, name)
-        if dataset.count_rows() != pending_result.row_count:
-            raise ValueError(
-                f"split {uri} row count changed from {pending_result.row_count} "
-                f"to {dataset.count_rows()}"
-            )
-        complete = EmbeddingSplitProvenance(
-            split=split,
-            dataset_version=dataset.version,
-            row_count=dataset.count_rows(),
-            index_built=index_built,
-            complete=True,
-        )
-        existing[name] = _replace_embedding_split(existing[name], complete)
-        card = _replace_card_embeddings(card, existing)
-        _write_dataset_card(root, card)
-
-    incomplete = _incomplete_embedding_work(existing)
-    if incomplete:
-        raise ValueError(f"dataset root still has incomplete embedding work: {incomplete}")
-    _write_completion_marker(root)
-
-
-def add_embeddings(config: AddEmbeddingsConfig) -> None:
-    """Append registry entries to one Lance split or every split in a dataset root.
-
-    :param config: Validated dataset, embedding, checkpoint, and write settings.
-    """
-    if config.dataset_root_uri is not None:
-        _add_embeddings_to_dataset_root(config, config.dataset_root_uri)
-        return
-    assert config.lance_uri is not None
-    _add_embeddings_to_lance_uri(config, config.lance_uri)
+                build_index(dataset, vector_column, index=spec.index, config=config)
+    logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
 
 
 def _configure_lance_logging(*, debug: bool) -> None:
@@ -1533,8 +1066,7 @@ def _hydra_main(cfg: DictConfig) -> None:
     try:
         add_embeddings(config)
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        target = config.dataset_root_uri or config.lance_uri
-        logger.error("add_embeddings_failed", uri=target, error=str(exc))
+        logger.error("add_embeddings_failed", uri=config.lance_uri, error=str(exc))
         sys.exit(1)
 
 

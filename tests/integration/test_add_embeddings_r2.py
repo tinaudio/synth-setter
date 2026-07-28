@@ -36,25 +36,17 @@ from synth_setter.data.vst.shapes import (
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
     T5GEMMA_FIELD,
-    TINYMU_FIELD,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     MIN_ROWS_FOR_INDEX,
 )
-from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.data.t5gemma import (
     T5GEMMA_EMBEDDING_DIM,
     T5GEMMA_MAX_LENGTH,
 )
-from synth_setter.pipeline.data.tinymu import (
-    TINYMU_CHECKPOINT_SHA256,
-    TINYMU_PACKAGE_COMMIT,
-)
-from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
-from synth_setter.pipeline.spec_io import upload_spec
 from synth_setter.resources import as_file, vst_headless_wrapper
 from tests._vst import (
     PLUGIN_PATH,
@@ -107,21 +99,19 @@ def _unique_test_prefix() -> str:
     return f"ci-add-embeddings/{run_id}/{run_attempt}/{nonce}/"
 
 
-def _lance_embed_spec(
-    prefix: str, rows: int = _SAMPLES_PER_SHARD, *, all_splits: bool = False
-) -> DatasetSpec:
+def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpec:
     """Build a 1-shard Lance ``DatasetSpec`` pinned to the real test synth + R2 prefix.
 
     :param prefix: Unique R2 prefix the shard is rendered + uploaded under.
-    :param rows: Samples per populated split; ``>= MIN_ROWS_FOR_INDEX`` makes indexing run.
-    :param all_splits: Whether validation and test are populated alongside train.
+    :param rows: Samples in the single train shard; ``>= MIN_ROWS_FOR_INDEX`` makes
+        the downstream IVF_PQ build train rather than skip.
     :returns: A frozen Lance spec whose single train shard is renderable by the
         real VST and whose ``r2`` layout is safe to ``purge_prefix`` on teardown.
     """
     spec_kwargs: dict[str, Any] = {
         "task_name": "it-add-embeddings",
         "output_format": "lance",
-        "train_val_test_sizes": [rows, rows, rows] if all_splits else [rows, 0, 0],
+        "train_val_test_sizes": [rows, 0, 0],
         "base_seed": 42,
         # Constant mel bins over so few samples; mask so the spec stays valid.
         "mask_degenerate_bins": True,
@@ -230,47 +220,6 @@ def remote_indexed_lance_dataset_uri() -> Iterator[str]:
     yield from _render_and_upload(MIN_ROWS_FOR_INDEX)
 
 
-@pytest.fixture()
-def remote_tinymu_dataset_root_uri() -> Iterator[str]:
-    """Yield a real-R2 finalized root carrying all three canonical splits.
-
-    :yields str: Root URI containing train, validation, test, and dataset card artifacts.
-    """
-    if not r2_io.is_r2_reachable():
-        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
-    r2_io.ensure_r2_env_loaded()
-    prefix = _unique_test_prefix()
-    spec = _lance_embed_spec(prefix, all_splits=True)
-    root_uri = f"r2://{spec.r2.bucket}/{prefix}"
-    try:
-        with tempfile.TemporaryDirectory() as raw_work_dir:
-            work_dir = Path(raw_work_dir)
-            for shard in spec.shards:
-                local_shard = _render_shard_locally(spec, shard, work_dir)
-                stage_lance_shard_attempt(
-                    spec,
-                    shard,
-                    local_shard,
-                    worker_id="integration",
-                    attempt_uuid=f"shard-{shard.shard_id}",
-                )
-            upload_spec(spec)
-            finalize_command = Path(sys.executable).with_name("synth-setter-finalize-dataset")
-            subprocess.run(  # noqa: S603 — installed public CLI with test-owned arguments
-                [
-                    str(finalize_command),
-                    f"dataset_root_uri={root_uri}",
-                    f"paths.output_dir={work_dir / 'finalize'}",
-                    f"hydra.run.dir={work_dir / 'finalize-run'}",
-                ],
-                check=True,
-                timeout=_EMBED_SUBPROCESS_TIMEOUT_SECONDS,
-            )
-        yield root_uri
-    finally:
-        r2_io.purge_prefix(spec.r2.bucket, prefix)
-
-
 def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     """Open a Lance dataset on R2, mirroring ``add_embeddings._open_lance_dataset``.
 
@@ -278,49 +227,6 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     :returns: The credentialed, opened dataset.
     """
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
-
-
-def test_add_embeddings_tinymu_root_against_real_r2_persists_every_split(
-    remote_tinymu_dataset_root_uri: str,
-) -> None:
-    """The public CLI persists real MATPAC columns and provenance across an R2 root.
-
-    :param remote_tinymu_dataset_root_uri: Fixture-provided finalized R2 dataset root.
-    """
-    result = subprocess.run(  # noqa: S603 — literal command and validated root URI
-        [
-            _ADD_EMBEDDINGS_CMD,
-            f"dataset_root_uri={remote_tinymu_dataset_root_uri}",
-            "embeddings=[tinymu]",
-            "build_index=false",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=_EMBED_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-    assert result.returncode == 0, (
-        f"{_ADD_EMBEDDINGS_CMD} exited {result.returncode}\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-
-    for split in ("train", "val", "test"):
-        dataset = _open_remote_dataset(f"{remote_tinymu_dataset_root_uri}{split}.lance")
-        assert dataset.count_rows() == _SAMPLES_PER_SHARD
-        assert {TINYMU_FIELD, f"{TINYMU_FIELD}_vec"} <= set(dataset.schema.names)
-        values = dataset.to_table(columns=[TINYMU_FIELD]).column(TINYMU_FIELD)
-        assert np.isfinite(values.combine_chunks().to_numpy_ndarray()).all()
-
-    with r2_io.downloaded_to_tempfile(
-        f"{remote_tinymu_dataset_root_uri}dataset.json"
-    ) as card_path:
-        card = LanceDatasetCard.model_validate_json(card_path.read_bytes())
-    provenance = card.embeddings[0]
-    assert r2_io.object_size(f"{remote_tinymu_dataset_root_uri}dataset.complete") == 0
-    assert card.schema_version == 2
-    assert provenance.source_commit == TINYMU_PACKAGE_COMMIT
-    assert provenance.checkpoint_sha256 == TINYMU_CHECKPOINT_SHA256
-    assert tuple(result.split for result in provenance.splits) == ("train", "val", "test")
 
 
 def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
