@@ -1937,6 +1937,32 @@ _ALL_EMBEDDING_CONDITIONING_PROFILES = (
 )
 
 
+def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
+    """Validate a trained embedding-conditioned checkpoint.
+
+    :param cfg: Training config that produced the checkpoint.
+    :param output_dir: Training output directory containing ``last.ckpt``.
+    """
+    checkpoint_path = output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    eval_cfg = cfg.copy()
+    eval_output_dir = output_dir / "evaluation"
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(eval_output_dir)
+        eval_cfg.paths.log_dir = str(eval_output_dir)
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+        eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(eval_cfg)
+    try:
+        eval_metric_dict, _ = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
+
+
 def _assert_t5gemma_feed_forward_checkpoint_validates(
     output_dir: Path, dataset_root: Path, param_spec_name: str
 ) -> None:
@@ -1995,7 +2021,7 @@ def test_train_all_embedding_conditioning_real_e2e(
     surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
-    """Train every profile, then load a real T5Gemma FF checkpoint for validation.
+    """Train every profile and validate S-SONDO and T5Gemma checkpoints.
 
     :param local_embedding_checkpoints: Preflighted real model directories.
     :param tmp_path: Per-profile training output parent.
@@ -2027,6 +2053,8 @@ def test_train_all_embedding_conditioning_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
+        if conditioning == "ssondo":
+            _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(
         tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name

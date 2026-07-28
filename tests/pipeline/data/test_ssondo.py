@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import cast
 
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import torch
 
 from synth_setter.data.vst.shapes import SSONDO_FIELD
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, IndexSpec, build_index
@@ -17,6 +20,7 @@ from synth_setter.pipeline.data.ssondo import (
     SSONDO_EMBEDDING_DIM,
     SSONDO_INPUT_SAMPLES,
     SSONDO_SAMPLE_RATE,
+    load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
     ssondo_encoder_input,
 )
@@ -35,27 +39,30 @@ def test_ssondo_config_incompatible_pq_subvectors_raises() -> None:
 
 def test_ssondo_encoder_input_stereo_short_clip_downmixes_and_pads() -> None:
     """A short stereo clip becomes one float32 ten-second model window."""
-    left = np.ones(32_000, dtype=np.float32)
-    right = np.full(32_000, 3.0, dtype=np.float32)
+    left = np.zeros(32_000, dtype=np.float32)
+    right = np.ones(32_000, dtype=np.float32)
     audio = np.stack((left, right))[None]
 
     prepared = ssondo_encoder_input(audio, SSONDO_SAMPLE_RATE)
 
     assert prepared.shape == (1, SSONDO_INPUT_SAMPLES)
     assert prepared.dtype == np.float32
-    np.testing.assert_array_equal(prepared[0, :32_000], 2.0)
+    np.testing.assert_array_equal(prepared[0, :32_000], 0.5)
     np.testing.assert_array_equal(prepared[0, 32_000:], 0.0)
 
 
 def test_ssondo_encoder_input_half_rate_resamples_to_target_window() -> None:
     """Source audio is resampled to 32 kHz before right-padding."""
-    audio = np.zeros((2, 1, 16_000), dtype=np.float32)
+    time = np.arange(16_000, dtype=np.float32) / 16_000
+    tone = np.sin(2 * np.pi * 220.0 * time)
+    audio = np.repeat(tone[None, None, :], 2, axis=0)
 
     prepared = ssondo_encoder_input(audio, 16_000)
 
     assert prepared.shape == (2, SSONDO_INPUT_SAMPLES)
     assert prepared.dtype == np.float32
     assert np.isfinite(prepared).all()
+    assert np.abs(prepared[:, :32_000]).max() > 0.5
 
 
 @pytest.mark.parametrize(
@@ -66,6 +73,7 @@ def test_ssondo_encoder_input_half_rate_resamples_to_target_window() -> None:
         (np.zeros((1, 1, 32_000), dtype=np.float32), 0, "positive sample_rate"),
         (np.zeros((1, 1, 0), dtype=np.float32), 32_000, "non-empty"),
         (np.full((1, 1, 32_000), np.nan, dtype=np.float32), 32_000, "non-finite"),
+        (np.full((1, 1, 32_000), 1.01, dtype=np.float32), 32_000, r"\[-1, 1\]"),
         (np.zeros((1, 1, 320_001), dtype=np.float32), 32_000, "at most 10 seconds"),
     ],
 )
@@ -126,6 +134,48 @@ def test_ssondo_registry_encoder_invalid_output_raises(
         )
 
 
+def test_load_ssondo_audio_encoder_more_than_one_chunk_preserves_row_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batches larger than the inference cap retain every row in order.
+
+    :param tmp_path: Temporary path returned by the checkpoint resolver fake.
+    :param monkeypatch: Fixture replacing external package and artifact boundaries.
+    """
+    seen_batch_sizes: list[int] = []
+
+    class _FakeModel:
+        def eval(self) -> _FakeModel:
+            return self
+
+        def requires_grad_(self, requires_grad: bool) -> _FakeModel:
+            assert requires_grad is False
+            return self
+
+        def get_embeddings(self, inputs: torch.Tensor) -> torch.Tensor:
+            seen_batch_sizes.append(len(inputs))
+            row_mean = inputs.mean(dim=1, keepdim=True)
+            return row_mean.repeat(1, SSONDO_EMBEDDING_DIM)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "ssondo",
+        SimpleNamespace(get_ssondo=lambda checkpoint, device: _FakeModel()),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.ssondo.resolve_ssondo_checkpoint",
+        lambda checkpoint: tmp_path / "matpac_mobilenetv3.ckpt",
+    )
+    row_values = np.arange(17, dtype=np.float32) / 16
+    audio = np.broadcast_to(row_values[:, None, None], (17, 1, 32_000)).copy()
+
+    vectors = load_ssondo_audio_encoder(device="cpu")(audio, SSONDO_SAMPLE_RATE)
+
+    assert vectors.shape == (17, SSONDO_EMBEDDING_DIM)
+    assert seen_batch_sizes == [16, 1]
+    assert np.all(np.diff(vectors[:, 0]) > 0)
+
+
 def test_resolve_ssondo_checkpoint_wrong_hash_raises(tmp_path: Path) -> None:
     """A local override cannot weaken the pinned checkpoint identity.
 
@@ -179,7 +229,9 @@ def test_ssondo_index_builds_and_returns_stored_query_row(tmp_path: Path) -> Non
         config=config,
     )
 
-    indices = cast("list[dict[str, Any]]", lance.dataset(str(uri)).list_indices())
+    indices = cast(
+        "list[dict[str, list[str]]]", lance.dataset(str(uri)).list_indices()
+    )
     assert built is True
     assert [entry["fields"] for entry in indices] == [[SSONDO_FIELD]]
     hits = lance.dataset(str(uri)).to_table(
