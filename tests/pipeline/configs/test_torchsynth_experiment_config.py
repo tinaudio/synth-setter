@@ -21,6 +21,10 @@ def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
         cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/ffn"])
 
     assert cfg.callbacks.model_checkpoint.monitor == "val/lsd"
+    assert (
+        cfg.model._target_
+        == "synth_setter.models.torchsynth_ff_module.TorchSynthFeedForwardModule"
+    )
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.model.net.in_dim == 176_400
     assert (

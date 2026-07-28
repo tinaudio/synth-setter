@@ -262,10 +262,9 @@ def _apply_common_train_eval_overrides(cfg: DictConfig) -> None:
     cfg.trainer.log_every_n_steps = 1
     cfg.trainer.devices = 1
     cfg.trainer.deterministic = True
-    cfg.datamodule.pin_memory = False
     cfg.datamodule.batch_size = 1
+    cfg.datamodule.signal_length = 4_410
     cfg.datamodule.train_val_test_sizes = [2, 2, 2]
-    cfg.datamodule.break_symmetry = True
     cfg.model.compile = False
     cfg.logger = None
     _set_workspace_root(cfg)
@@ -281,7 +280,7 @@ def cfg_train_global() -> DictConfig:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=ksin", "model=ffn", "trainer=cpu"],
+            overrides=["datamodule=torchsynth", "model=ffn", "trainer=cpu"],
         )
 
         # set defaults for all tests
@@ -308,7 +307,7 @@ def cfg_eval_global() -> DictConfig:
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "datamodule=ksin",
+                "datamodule=torchsynth",
                 "model=ffn",
                 "trainer=cpu",
                 "ckpt_path=.",

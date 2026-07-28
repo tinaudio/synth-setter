@@ -1,4 +1,4 @@
-"""CLI for visualising param-to-token projections of a trained KSin model."""
+"""CLI for visualising param-to-token projections of a trained model."""
 
 import os
 from pathlib import Path
@@ -153,17 +153,7 @@ RENAMES = {
 }
 
 
-def kosc_intervals(spec: str):
-    _, k = spec.rsplit("_", 1)
-    k = int(k)
-
-    return [("Frequency", k), ("Amplitude", k), ("Waveform", k)]
-
-
 def get_labels(spec: str):
-    if spec.startswith("k_"):
-        return kosc_intervals(spec)
-
     param_spec = param_specs[spec]
 
     intervals = [

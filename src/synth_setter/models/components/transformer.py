@@ -5,7 +5,6 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
-from einops import rearrange
 
 
 class PositionalEncoding(nn.Module):
@@ -28,32 +27,6 @@ class PositionalEncoding(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         pe = self.pe[:, : x.shape[1], :]
         return x + pe
-
-
-class KSinParamToTokenProjection(nn.Module):
-    """Linear forward/backward projection between parameter chunks and per-token vectors."""
-
-    def __init__(self, d_model: int, params_per_token: int = 2):
-        super().__init__()
-        self.forward_proj = nn.Linear(params_per_token, d_model)
-        self.backward_proj = nn.Linear(d_model, params_per_token)
-        self.params_per_token = params_per_token
-
-    def param_to_token(self, x: torch.Tensor) -> torch.Tensor:
-        k = x.shape[-1] // self.params_per_token
-        x = rearrange(x, "b (d k) -> b k d", k=k)
-
-        x = self.forward_proj(x)
-
-        return x
-
-    def token_to_param(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.backward_proj(x)
-        x = rearrange(x, "b k d -> b (d k)", d=self.params_per_token)
-        return x
-
-    def penalty(self) -> torch.Tensor:
-        return 0.0
 
 
 class LearntProjection(nn.Module):

@@ -397,7 +397,7 @@ def test_eval_ckpt_path_wandb_override_resolves_to_cached_checkpoint(
             cfg = compose(
                 config_name="eval.yaml",
                 overrides=[
-                    "datamodule=ksin",
+                    "datamodule=torchsynth",
                     "model=ffn",
                     "trainer=cpu",
                     "ckpt_path=${wandb:entity/project/model-x:latest}",

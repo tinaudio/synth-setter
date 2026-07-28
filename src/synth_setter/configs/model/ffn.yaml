@@ -1,4 +1,4 @@
-_target_: synth_setter.models.ksin_ff_module.KSinFeedForwardModule
+_target_: synth_setter.models.torchsynth_ff_module.TorchSynthFeedForwardModule
 
 optimizer:
   _target_: torch.optim.Adam
@@ -15,11 +15,9 @@ net:
   encoder_blocks: 4
   trunk_blocks: 4
   hidden_dim: 384
-  out_dim: ${mul:${datamodule.k},2}
+  out_dim: ${datamodule.num_params}
   kernel_size: 7
   norm: bn
-
-loss_fn: mse
 
 # compile model for faster training with pytorch 2.0
 compile: true

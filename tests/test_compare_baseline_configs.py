@@ -15,8 +15,8 @@ and assert the two YAMLs match modulo invocation/deployment-volatile keys
 (``INVOCATION_PATH_KEYS``, ``ACCEPTED_DIFFS``, ``ACCEPTED_DIFF_LEAVES``).
 
 Two pinned constants below: ``FIXTURE_BASELINE`` covers the synthetic-fixture
-sanity tests, and ``MODEL_BASELINE`` pins the ``jobs/train/{kosc,surge}/train.sh``
-**and** ``jobs/predict/*.sh`` configs against a known-good model snapshot.
+sanity tests, and ``MODEL_BASELINE`` pins the Surge training and prediction
+configs against a known-good model snapshot.
 ``MODEL_BASELINE`` is a stable "published-results known-good" anchor — bump it
 only when the snapshot itself is regenerated. Mechanical migrations
 (e.g. ``_target_:`` renames) get absorbed through ``ACCEPTED_DIFFS`` /
@@ -52,7 +52,6 @@ FIXTURE_TASKS = 4
 # experiments.txt without bumping these intentionally surfaces as a failed
 # sanity test. Compare against the constant, not against `get_num_experiments`,
 # so the assertion isn't tautological.
-EXPECTED_KOSC_TASKS = 44
 EXPECTED_SURGE_TASKS = 8
 
 # Predict scripts under ``jobs/predict/``. These are single-shot (no SGE_TASK_ID
@@ -99,15 +98,8 @@ PREDICT_SCRIPTS: tuple[str, ...] = (
     "jobs/predict/vae-simple.sh",
 )
 
-# Baseline refs for ref-comparison tests. Prefer tags over raw SHAs when
-# possible: they're more stable/discoverable for humans, and the harness
-# fetches the requested ref itself when needed (see `try_fetch_ref`).
-# FIXTURE_BASELINE pins the synthetic-fixture equality + inequality tests.
-# MODEL_BASELINE pins the K-OSC + SURGE train.sh tests AND the
-# jobs/predict/*.sh predict-script tests against the published-results
-# model-config snapshot. Keep it stable — only bump when the snapshot itself
-# is regenerated. Mechanical migrations go through ACCEPTED_DIFFS /
-# ACCEPTED_DIFF_LEAVES instead.
+# Prefer tags for fetchable, human-readable baselines; FIXTURE_BASELINE covers fixtures.
+# MODEL_BASELINE covers published Surge configs and changes only with regenerated snapshots.
 FIXTURE_BASELINE = "1bfa7ea9c4b237a4561a9ac546a3e241ecff5951"  # PR #679 merge commit on main
 # Mechanical migrations (e.g. Phase 2's `src.X` → `synth_setter.X` `_target_:` rewrite,
 # #989) are absorbed via ACCEPTED_DIFF_LEAVES / #993, not by bumping this anchor.
@@ -713,15 +705,6 @@ def _build_train_cases(
     ]
 
 
-def _build_kosc_train_cases(baseline_ref: str) -> list[RefCompareCase]:
-    """Build the K-OSC train fixture's case list against ``baseline_ref``."""
-    return _build_train_cases(
-        baseline_ref,
-        "jobs/train/kosc/train.sh",
-        REPO_ROOT / "jobs" / "train" / "kosc" / "experiments.txt",
-    )
-
-
 def _build_surge_train_cases(baseline_ref: str) -> list[RefCompareCase]:
     """Build the SURGE train fixture's case list against ``baseline_ref``."""
     return _build_train_cases(
@@ -747,7 +730,6 @@ def _build_predict_cases(baseline_ref: str) -> list[RefCompareCase]:
 
 EQUAL_CASES = _build_equal_cases(FIXTURE_BASELINE)
 DIFF_CASES = _build_diff_cases(FIXTURE_BASELINE)
-KOSC_CASES = _build_kosc_train_cases(MODEL_BASELINE)
 SURGE_CASES = _build_surge_train_cases(MODEL_BASELINE)
 PREDICT_CASES = _build_predict_cases(MODEL_BASELINE)
 
@@ -765,32 +747,6 @@ def test_baseline_and_current_resolved_hydra_configs_are_equal(
     baseline_cfg, current_cfg = _resolve_pair(
         baseline_path,
         current_path,
-        case.baseline_script_rel,
-        case.current_script_rel,
-        case.task_id,
-        shim_factory,
-    )
-    _assert_resolved_configs_equal(baseline_cfg, current_cfg)
-
-
-def test_k_osc_train_cases() -> None:
-    """Sanity-check K-OSC train case fan-out matches experiments.txt line count."""
-    assert len(KOSC_CASES) == EXPECTED_KOSC_TASKS
-
-
-@pytest.mark.slow
-@pytest.mark.network
-@pytest.mark.parametrize("case", KOSC_CASES, ids=[c.slug() for c in KOSC_CASES])
-def test_kosc_train_configs_are_equal(
-    shim_factory: Callable[[], tuple[Path, Path]],
-    worktree_for_ref: Callable[[str], Path],
-    case: RefCompareCase,
-) -> None:
-    """Resolved K-OSC train Hydra config at ``baseline_ref`` must match the live tree."""
-    baseline_path = worktree_for_ref(case.baseline_ref)
-    baseline_cfg, current_cfg = _resolve_pair(
-        baseline_path,
-        REPO_ROOT,
         case.baseline_script_rel,
         case.current_script_rel,
         case.task_id,

@@ -85,7 +85,7 @@ def test_eval_faust_render_group_resolves_production_renderer_contract() -> None
             cfg = compose(
                 config_name="eval.yaml",
                 overrides=[
-                    "datamodule=ksin",
+                    "datamodule=torchsynth",
                     "model=ffn",
                     "trainer=cpu",
                     "ckpt_path=.",
@@ -680,12 +680,12 @@ def test_evaluate_loads_compiled_cpu_training_checkpoint(
     """Uncompiled CPU evaluation loads a checkpoint written by compiled training.
 
     :param tmp_path: Shared training and evaluation output directory.
-    :param cfg_train: Tiny KSin CPU training configuration.
-    :param cfg_eval: Matching KSin CPU evaluation configuration.
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
     """
     for cfg in (cfg_train, cfg_eval):
         with open_dict(cfg):
-            cfg.datamodule.signal_length = 64
+            cfg.datamodule.signal_length = 512
             cfg.model.net.channels = 2
             cfg.model.net.encoder_blocks = 1
             cfg.model.net.hidden_dim = 8
@@ -719,12 +719,12 @@ def test_evaluate_legacy_wrapped_checkpoint_hints_migration_cli_which_recovers(
     """A legacy ``_orig_mod`` checkpoint fails with the migration command, which fixes it.
 
     :param tmp_path: Shared training and evaluation output directory.
-    :param cfg_train: Tiny KSin CPU training configuration.
-    :param cfg_eval: Matching KSin CPU evaluation configuration.
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
     """
     for cfg in (cfg_train, cfg_eval):
         with open_dict(cfg):
-            cfg.datamodule.signal_length = 64
+            cfg.datamodule.signal_length = 512
             cfg.model.net.channels = 2
             cfg.model.net.encoder_blocks = 1
             cfg.model.net.hidden_dim = 8

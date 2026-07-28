@@ -51,9 +51,9 @@ class TestDataModuleConfigAcceptsEveryConfig:
 
     def test_target_field_typed(self) -> None:
         """``_target_`` lands on ``target_`` with the expected datamodule path."""
-        datamodule_subtree = compose_subtree("datamodule", "ksin")
+        datamodule_subtree = compose_subtree("datamodule", "torchsynth")
         parsed = DataModuleConfig.model_validate(datamodule_subtree)
-        assert parsed.target_.endswith("KSinDataModule")
+        assert parsed.target_.endswith("TorchSynthDataModule")
 
 
 class TestSurgeDatamoduleOverlays:
@@ -115,7 +115,7 @@ class TestPathsConfigResolvedInterpolation:
                 config_name="train.yaml",
                 return_hydra_config=True,
                 overrides=[
-                    "datamodule=ksin",
+                    "datamodule=torchsynth",
                     "model=ffn",
                     "trainer=cpu",
                     "paths.output_dir=/tmp/x/out",  # noqa: S108

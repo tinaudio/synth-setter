@@ -36,8 +36,3 @@ def test_get_labels_widths_are_positive() -> None:
     intervals = get_labels("surge_simple")
 
     assert all(width > 0 for _, width in intervals)
-
-
-def test_get_labels_for_a_kosc_spec_uses_the_oscillator_layout() -> None:
-    """A ``k_<n>`` spec bypasses the registry and reports three per-oscillator bands."""
-    assert get_labels("k_4") == [("Frequency", 4), ("Amplitude", 4), ("Waveform", 4)]

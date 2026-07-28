@@ -254,10 +254,10 @@ def test_train_cpu_compile_writes_clean_checkpoint(
     """Compiled training persists uncompiled-layout keys evaluation loads strictly.
 
     :param tmp_path: Training output directory containing the checkpoint.
-    :param cfg_train: Tiny KSin CPU training configuration.
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
     """
     with open_dict(cfg_train):
-        cfg_train.datamodule.signal_length = 64
+        cfg_train.datamodule.signal_length = 512
         cfg_train.model.net.channels = 2
         cfg_train.model.net.encoder_blocks = 1
         cfg_train.model.net.hidden_dim = 8
@@ -1253,7 +1253,7 @@ def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
 ) -> None:
     """Prove a periodic upload precedes the final flush and preserves checkpoint bytes.
 
-    :param cfg_train: Tiny CPU training cfg (ksin/ffn, ``save_last``).
+    :param cfg_train: Tiny CPU TorchSynth config with ``save_last`` enabled.
     :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
     :param monkeypatch: Stubs the R2 auth-ping and wraps the upload to record URIs.
     """

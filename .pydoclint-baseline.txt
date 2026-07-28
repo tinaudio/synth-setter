@@ -11,33 +11,6 @@ src/synth_setter/data/audio_datamodule.py
     DOC103: Function `make_spectrogram`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [audio: np.ndarray, sample_rate: float].
     DOC201: Function `make_spectrogram` does not have a return section in docstring
 --------------------
-src/synth_setter/data/fm_datamodule.py
-    DOC101: Function `_sample_freqs_symmetry_broken`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_sample_freqs_symmetry_broken`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [device: Union[str, torch.device], generator: Optional[torch.Generator], k: int, num_samples: int].
-    DOC201: Function `_sample_freqs_symmetry_broken` does not have a return section in docstring
-    DOC101: Function `fm_conditional_symmetry`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `fm_conditional_symmetry`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [break_symmetry: bool, length: int, params: torch.Tensor].
-    DOC201: Function `fm_conditional_symmetry` does not have a return section in docstring
-    DOC101: Function `fm_mixed_symmetry`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `fm_mixed_symmetry`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [break_symmetry: bool, length: int, params: torch.Tensor].
-    DOC201: Function `fm_mixed_symmetry` does not have a return section in docstring
-    DOC101: Function `fm_hierarchical_symmetry`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `fm_hierarchical_symmetry`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [break_symmetry: bool, length: int, params: torch.Tensor].
-    DOC201: Function `fm_hierarchical_symmetry` does not have a return section in docstring
-    DOC101: Method `FMDataModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `FMDataModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [algorithm: Literal['conditional', 'mixed', 'hierarchical'], batch_size: int, break_symmetry: bool, num_workers: int, ot: bool, signal_length: int, train_val_test_seeds: Tuple[int, int, int], train_val_test_sizes: Tuple[int, int, int]].
---------------------
-src/synth_setter/data/kosc_datamodule.py
-    DOC101: Method `KOscDataModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `KOscDataModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_size: int, break_symmetry: bool, debug_num_samples: Optional[int], k: int, num_workers: int, ot: bool, signal_length: int, sort_frequencies: bool, train_val_test_seeds: Tuple[int, int, int], train_val_test_sizes: Tuple[int, int, int]].
---------------------
-src/synth_setter/data/ksin_datamodule.py
-    DOC101: Function `_sample_freqs_shifted`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_sample_freqs_shifted`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [device: Union[str, torch.device], generator: Optional[torch.Generator], is_test: bool, k: int, num_samples: int].
-    DOC201: Function `_sample_freqs_shifted` does not have a return section in docstring
-    DOC101: Method `KSinDataModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `KSinDataModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [batch_size: int, break_symmetry: bool, k: int, num_workers: int, ot: bool, pin_memory: bool, shift_test_distribution: bool, signal_length: int, sort_frequencies: bool, train_val_test_seeds: Tuple[int, int, int], train_val_test_sizes: Tuple[int, int, int]].
---------------------
 src/synth_setter/data/vst/core.py
     DOC101: Function `extract_renderer_version`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `extract_renderer_version`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [plugin_path: Path].
@@ -66,10 +39,6 @@ src/synth_setter/metrics.py
     DOC103: Method `LogSpectralDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , eps: float].
     DOC101: Method `SpectralDistance.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SpectralDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , eps: float].
-    DOC101: Method `ChamferDistance.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `ChamferDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , params_per_token: int].
-    DOC101: Method `LinearAssignmentDistance.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `LinearAssignmentDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , params_per_token: int].
 --------------------
 src/synth_setter/models/components/cnn.py
     DOC101: Method `ResidualMLPBlock.__init__`: Docstring contains fewer arguments than in function signature.
@@ -83,15 +52,6 @@ src/synth_setter/models/components/cnn.py
     DOC103: Method `ConvDownsampler.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [in_dim: int, norm: Literal['bn', 'ln'], out_dim: int, stride: int].
     DOC101: Method `ResidualEncoder.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `ResidualEncoder.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [hidden_dim: int, in_dim: int, kernel_size: int, norm: Literal['bn', 'ln'], num_blocks: int, out_dim: int].
---------------------
-src/synth_setter/models/components/loss.py
-    DOC101: Function `params_to_tokens`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `params_to_tokens`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [params: torch.Tensor, params_per_token: int].
-    DOC201: Function `params_to_tokens` does not have a return section in docstring
-    DOC101: Method `ChamferLoss.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `ChamferLoss.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [params_per_token: int].
-    DOC101: Method `MSESortLoss.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `MSESortLoss.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [params_per_token: int].
 --------------------
 src/synth_setter/models/components/residual_mlp.py
     DOC101: Method `ResidualMLPBlock.__init__`: Docstring contains fewer arguments than in function signature.
@@ -112,8 +72,6 @@ src/synth_setter/models/components/sinkhorn.py
 src/synth_setter/models/components/transformer.py
     DOC101: Method `PositionalEncoding.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `PositionalEncoding.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [init: Literal['zeros', 'norm0.02'], num_pos: int, size: int].
-    DOC101: Method `KSinParamToTokenProjection.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `KSinParamToTokenProjection.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [d_model: int, params_per_token: int].
     DOC101: Method `LearntProjection.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `LearntProjection.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [d_model: int, d_token: int, final_ffn: bool, initial_ffn: bool, num_params: int, num_tokens: int].
     DOC101: Method `AdaptiveLayerNorm.__init__`: Docstring contains fewer arguments than in function signature.
@@ -162,21 +120,6 @@ src/synth_setter/models/components/vector_field.py
     DOC103: Method `VectorFieldBlock.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [conditioning_dim: int | None, hidden_dim: int | None, in_dim: int, out_dim: int | None].
     DOC101: Method `VectorField.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `VectorField.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [conditioning_dim: int, field_dim: int, hidden_dim: int, num_blocks: int].
---------------------
-src/synth_setter/models/ksin_ff_module.py
-    DOC101: Method `KSinFeedForwardModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `KSinFeedForwardModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [compile: bool, loss_fn: str, net: torch.nn.Module, optimizer: torch.optim.Optimizer, params_per_token: int, scheduler: torch.optim.lr_scheduler].
-    DOC501: Method `KSinFeedForwardModule.__init__` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Method `KSinFeedForwardModule.__init__` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['NotImplementedError'].
---------------------
-src/synth_setter/models/ksin_flow_matching_module.py
-    DOC101: Method `KSinFlowMatchingModule.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `KSinFlowMatchingModule.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [cfg_dropout_rate: float, cfm_sigma: float, compile: bool, coupling: Literal['uniform', 'ot', 'eot', 'kabsch', 'procrustes'], encoder: torch.nn.Module, fm_sigma: float, freeze_for_first_n_steps: int, late_sample_schedule_curve: float, optimizer: torch.optim.Optimizer, ot_replace: bool, oversample_ot: float, p_time: Literal['uniform', 'bias_later', 'lognormal', 'beta'], params_per_token: int, probability_path: Literal['rectified', 'cfm', 'fm'], rectified_sigma_min: float, sample_schedule: Literal['linear', 'cosine', 'late'], scheduler: torch.optim.lr_scheduler, sinkhorn_reg: float, sinkhorn_thresh: float, test_cfg_strength: float, test_sample_steps: int, validation_cfg_strength: float, validation_sample_steps: int, vector_field: torch.nn.Module, w_time: Literal['none', 'flatten', 'reverse']].
-    DOC101: Method `KSinFlowMatchingModule._sample_x0_and_x1`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `KSinFlowMatchingModule._sample_x0_and_x1`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [params: torch.Tensor, z: torch.Tensor].
-    DOC201: Method `KSinFlowMatchingModule._sample_x0_and_x1` does not have a return section in docstring
-    DOC501: Method `KSinFlowMatchingModule._sample_x0_and_x1` has raise statements, but the docstring does not have a "Raises" section
-    DOC503: Method `KSinFlowMatchingModule._sample_x0_and_x1` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['NotImplementedError'].
 --------------------
 src/synth_setter/pipeline/ci/load_image_config.py
     DOC501: Function `main` has raise statements, but the docstring does not have a "Raises" section
@@ -894,9 +837,6 @@ tests/test_compare_baseline_configs.py
     DOC101: Function `_build_train_cases`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_build_train_cases`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [baseline_ref: str, experiments_path: Path, script_rel: str].
     DOC201: Function `_build_train_cases` does not have a return section in docstring
-    DOC101: Function `_build_kosc_train_cases`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_build_kosc_train_cases`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [baseline_ref: str].
-    DOC201: Function `_build_kosc_train_cases` does not have a return section in docstring
     DOC101: Function `_build_surge_train_cases`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `_build_surge_train_cases`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [baseline_ref: str].
     DOC201: Function `_build_surge_train_cases` does not have a return section in docstring
@@ -905,8 +845,6 @@ tests/test_compare_baseline_configs.py
     DOC201: Function `_build_predict_cases` does not have a return section in docstring
     DOC101: Function `test_baseline_and_current_resolved_hydra_configs_are_equal`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_baseline_and_current_resolved_hydra_configs_are_equal`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [case: RefCompareCase, shim_factory: Callable[[], tuple[Path, Path]], worktree_for_ref: Callable[[str], Path]].
-    DOC101: Function `test_kosc_train_configs_are_equal`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `test_kosc_train_configs_are_equal`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [case: RefCompareCase, shim_factory: Callable[[], tuple[Path, Path]], worktree_for_ref: Callable[[str], Path]].
     DOC101: Function `test_surge_train_configs_are_equal`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_surge_train_configs_are_equal`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [case: RefCompareCase, shim_factory: Callable[[], tuple[Path, Path]], worktree_for_ref: Callable[[str], Path]].
     DOC101: Function `test_predict_configs_are_equal`: Docstring contains fewer arguments than in function signature.
@@ -955,4 +893,3 @@ tests/test_logging_utils.py
 tests/test_properties.py
     DOC101: Function `test_arbitrary_dict_does_not_crash_omegaconf`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `test_arbitrary_dict_does_not_crash_omegaconf`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [random_dict: dict[str, int | str | None | float]].
---------------------
