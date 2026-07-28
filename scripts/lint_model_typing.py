@@ -89,7 +89,7 @@ class ModelTypingVisitor(ast.NodeVisitor):
         self._relative_path = relative_path.as_posix()
         self._tree = tree
         self._scope: list[str] = []
-        self._class_bodies: list[list[ast.stmt]] = []
+        self._enclosing_bodies: list[list[ast.stmt]] = []
         self.diagnostics: list[Diagnostic] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
@@ -98,9 +98,9 @@ class ModelTypingVisitor(ast.NodeVisitor):
         :param node: Class definition whose scope contains callables.
         """
         self._scope.append(node.name)
-        self._class_bodies.append(node.body)
+        self._enclosing_bodies.append(node.body)
         self.generic_visit(node)
-        self._class_bodies.pop()
+        self._enclosing_bodies.pop()
         self._scope.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
@@ -127,7 +127,7 @@ class ModelTypingVisitor(ast.NodeVisitor):
         imports = _collect_import_names(
             self._tree,
             before_line=node.lineno,
-            class_bodies=self._class_bodies,
+            enclosing_bodies=self._enclosing_bodies,
         )
         if not _has_runtime_typecheck(node, imports):
             self.diagnostics.append(
@@ -147,7 +147,9 @@ class ModelTypingVisitor(ast.NodeVisitor):
             )
 
         self._scope.append(node.name)
+        self._enclosing_bodies.append(node.body)
         self.generic_visit(node)
+        self._enclosing_bodies.pop()
         self._scope.pop()
 
 
@@ -155,19 +157,19 @@ def _collect_import_names(
     tree: ast.Module,
     *,
     before_line: int,
-    class_bodies: list[list[ast.stmt]],
+    enclosing_bodies: list[list[ast.stmt]],
 ) -> ImportNames:
     """Resolve module and class bindings active before a callable definition.
 
     :param tree: Module syntax tree to inspect.
     :param before_line: Ignore statements at or after this source line.
-    :param class_bodies: Enclosing class bodies whose bindings are in scope.
+    :param enclosing_bodies: Enclosing class or function bodies in lexical scope.
     :returns: Immutable local-name groups for lint matching.
     """
     bindings: dict[str, str] = {}
     _apply_bindings_before_line(bindings, tree.body, before_line)
-    for class_body in class_bodies:
-        _apply_bindings_before_line(bindings, class_body, before_line)
+    for enclosing_body in enclosing_bodies:
+        _apply_bindings_before_line(bindings, enclosing_body, before_line)
     return _import_names_from_bindings(bindings)
 
 
@@ -204,8 +206,37 @@ def _apply_module_binding(bindings: dict[str, str], statement: ast.stmt) -> None
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         bindings[statement.name] = "other"
         return
+    if isinstance(statement, ast.Assign):
+        assigned_kind = _expression_binding_kind(statement.value, bindings)
+        for target in statement.targets:
+            for name in _target_names(target):
+                bindings[name] = assigned_kind
+        return
     for name in _potential_binding_names(statement):
         bindings[name] = "other"
+
+
+def _expression_binding_kind(node: ast.expr, bindings: dict[str, str]) -> str:
+    """Resolve a symbol alias assigned from an active canonical binding.
+
+    :param node: Assignment value expression.
+    :param bindings: Active lexical bindings before the assignment.
+    :returns: Canonical symbol kind or ``other``.
+    """
+    name = _name(node)
+    if name is None:
+        return "other"
+    if "." not in name:
+        return bindings.get(name, "other")
+    module_name, attribute = name.rsplit(".", maxsplit=1)
+    module_kind = bindings.get(module_name)
+    if module_kind == "beartype_module" and attribute == "beartype":
+        return "beartype_function"
+    if module_kind == "jaxtyping_module":
+        return "jaxtyped_function" if attribute == "jaxtyped" else "jaxtyping_wrapper"
+    if module_kind == "torch_module" and attribute == "Tensor":
+        return "torch_tensor"
+    return "other"
 
 
 def _module_import_kind(alias: ast.alias) -> str:
@@ -422,7 +453,7 @@ def _string_mentions_torch_tensor(value: str, imports: ImportNames) -> bool:
     candidates = {*imports.torch_tensors}
     candidates.update(f"{module}.Tensor" for module in imports.torch_modules)
     return any(
-        re.search(rf"(?<![\\w.]){re.escape(candidate)}(?!\\w)", value) is not None
+        re.search(rf"(?<![\w.]){re.escape(candidate)}(?!\w)", value) is not None
         for candidate in candidates
     )
 

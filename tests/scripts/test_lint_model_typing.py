@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -53,6 +54,45 @@ def _run_linter(
         env=env,
         text=True,
     )
+
+
+def _commit_all(repo: Path) -> None:
+    """Initialize a test repository and commit its current files.
+
+    :param repo: Temporary repository root.
+    """
+    subprocess.run([GIT, "init", "-q"], cwd=repo, check=True)  # noqa: S603
+    subprocess.run([GIT, "add", "."], cwd=repo, check=True)  # noqa: S603
+    subprocess.run(  # noqa: S603
+        [
+            GIT,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=repo,
+        check=True,
+    )
+
+
+def _configured_model_hook() -> dict[str, Any]:
+    """Return the model-typing hook from the repository configuration.
+
+    :returns: Parsed local hook configuration.
+    :raises AssertionError: If the hook is absent.
+    """
+    config = yaml.safe_load((PROJECT_ROOT / ".pre-commit-config.yaml").read_text())
+    for repo in config["repos"]:
+        if repo["repo"] != "local":
+            continue
+        for hook in repo["hooks"]:
+            if hook["id"] == "model-typing":
+                return hook
+    raise AssertionError("model-typing hook is not configured")
 
 
 def test_linter_compliant_jaxtyping_callable_passes(tmp_path: Path) -> None:
@@ -292,6 +332,37 @@ def test_linter_class_scope_typing_imports_pass(tmp_path: Path) -> None:
     assert "scoped_class.py:Encoder:JAX001" not in result.stdout
 
 
+def test_linter_enclosing_function_typing_imports_pass(tmp_path: Path) -> None:
+    """Accept typing imports active in an enclosing function scope.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "nested_valid.py").write_text(
+        """from beartype import beartype
+from jaxtyping import jaxtyped
+
+@jaxtyped(typechecker=beartype)
+def outer():
+    from beartype import beartype as bt
+    from jaxtyping import jaxtyped as jt
+
+    @jt(typechecker=bt)
+    def inner(value):
+        return value
+
+    return inner
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_linter_new_modeling_callable_reports_missing_runtime_check(tmp_path: Path) -> None:
     """Reject a callable without the beartype-backed decorator.
 
@@ -342,6 +413,31 @@ def decode(latent: torch.Tensor) -> torch.Tensor:
     assert "decoder.py:decode:JAX001" in result.stdout
     assert "decoder.py:decode:JAX002" in result.stdout
     assert "jaxtyping annotation" in result.stdout
+
+
+def test_linter_assigned_torch_tensor_alias_reports_shape_annotation(tmp_path: Path) -> None:
+    """Reject aliases assigned from torch.Tensor.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "assigned.py").write_text(
+        """import torch
+
+TorchTensor = torch.Tensor
+
+def encode(value: TorchTensor):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "assigned.py:encode:JAX002" in result.stdout
 
 
 def test_linter_aliased_torch_tensor_reports_shape_annotation(tmp_path: Path) -> None:
@@ -466,6 +562,30 @@ def encode(value: \"torch.Tensor[\"):
     assert "malformed.py:encode:JAX002" in result.stdout
 
 
+def test_linter_malformed_forward_reference_respects_identifier_boundary(tmp_path: Path) -> None:
+    """Do not mistake TensorLike for an imported Tensor name.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "tensor_like.py").write_text(
+        """from torch import Tensor
+
+def encode(value: \"TensorLike[\"):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "tensor_like.py:encode:JAX001" in result.stdout
+    assert "tensor_like.py:encode:JAX002" not in result.stdout
+
+
 def test_linter_starred_torch_tensor_reports_shape_annotation(tmp_path: Path) -> None:
     """Reject bare tensors nested beneath starred annotation syntax.
 
@@ -566,36 +686,13 @@ def test_precommit_model_typing_hook_rejects_violating_model(tmp_path: Path) -> 
 
     :param tmp_path: Isolated git repository for the real pre-commit invocation.
     """
-    config = yaml.safe_load((PROJECT_ROOT / ".pre-commit-config.yaml").read_text())
-    model_hook = next(
-        hook
-        for repo in config["repos"]
-        if repo["repo"] == "local"
-        for hook in repo["hooks"]
-        if hook["id"] == "model-typing"
-    )
     (tmp_path / ".pre-commit-config.yaml").write_text(
-        yaml.safe_dump({"repos": [{"repo": "local", "hooks": [model_hook]}]})
+        yaml.safe_dump({"repos": [{"repo": "local", "hooks": [_configured_model_hook()]}]})
     )
     (tmp_path / "scripts").mkdir()
     shutil.copy2(LINTER, tmp_path / "scripts" / LINTER.name)
     (tmp_path / ".model-typing-baseline.txt").write_text("")
-    subprocess.run([GIT, "init", "-q"], cwd=tmp_path, check=True)  # noqa: S603
-    subprocess.run([GIT, "add", "."], cwd=tmp_path, check=True)  # noqa: S603
-    subprocess.run(  # noqa: S603
-        [
-            GIT,
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-qm",
-            "baseline",
-        ],
-        cwd=tmp_path,
-        check=True,
-    )
+    _commit_all(tmp_path)
     model = tmp_path / "src" / "synth_setter" / "models" / "new.py"
     model.parent.mkdir(parents=True)
     model.write_text("def new(value):\n    return value\n")
@@ -625,26 +722,9 @@ def test_linter_baseline_addition_against_git_ref_fails(
     :param monkeypatch: Environment isolation for the base-ref override.
     """
     monkeypatch.setenv("GITHUB_BASE_REF", "wrong-ci-base")
-    subprocess.run([GIT, "init", "-q"], cwd=tmp_path, check=True)  # noqa: S603
     baseline = tmp_path / "baseline.txt"
     baseline.write_text("")
-    subprocess.run(  # noqa: S603
-        [GIT, "add", "baseline.txt"], cwd=tmp_path, check=True
-    )
-    subprocess.run(  # noqa: S603
-        [
-            GIT,
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-qm",
-            "baseline",
-        ],
-        cwd=tmp_path,
-        check=True,
-    )
+    _commit_all(tmp_path)
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     (models_dir / "new.py").write_text(
