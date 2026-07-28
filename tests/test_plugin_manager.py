@@ -185,6 +185,63 @@ def test_link_plugin_existing_real_bundle_refuses_to_overwrite(tmp_path: Path) -
         )
 
 
+def test_plugins_cli_adopt_records_source_fallback(tmp_path: Path) -> None:
+    """The adopt command records a pinned source build for later linking.
+
+    :param tmp_path: Scratch root for the manifest and fallback bundle.
+    """
+    manifest_path = _manifest(tmp_path / "studiorack.json")
+    bundle = tmp_path / "source/Example Synth.vst3"
+    bundle.mkdir(parents=True)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--manifest",
+            str(manifest_path),
+            "--plugins-dir",
+            str(tmp_path / "managed"),
+            "adopt",
+            "--plugin",
+            "example/synth",
+            "--bundle-path",
+            str(bundle),
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    managed = tmp_path / "managed/VST3/example/synth/1.2.3/Example Synth.vst3"
+    assert managed.is_symlink()
+    assert managed.resolve() == bundle.resolve()
+
+
+def test_plugins_cli_resolve_prints_managed_bundle(tmp_path: Path) -> None:
+    """The resolve command prints the exact managed bundle path.
+
+    :param tmp_path: Scratch root for the manifest and managed bundle.
+    """
+    manifest_path = _manifest(tmp_path / "studiorack.json")
+    bundle = tmp_path / "managed/VST3/example/synth/1.2.3/Example Synth.vst3"
+    bundle.mkdir(parents=True)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--manifest",
+            str(manifest_path),
+            "--plugins-dir",
+            str(tmp_path / "managed"),
+            "resolve",
+            "example/synth",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == str(bundle)
+
+
 def test_plugins_cli_link_without_selection_links_only_installed_packages(tmp_path: Path) -> None:
     """Bulk linking skips manifest packages absent from the host.
 
