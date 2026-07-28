@@ -874,57 +874,81 @@ def build_index(
     return True
 
 
-def _add_embeddings_to_lance_uri(
-    config: AddEmbeddingsConfig, uri: str
-) -> tuple[lance.LanceDataset, dict[str, bool]]:
-    """Append selected embeddings to one Lance split.
+def _missing_embedding_specs(
+    dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]
+) -> list[EmbeddingSpec]:
+    """Return policies with no output columns while rejecting partial commits.
 
-    :param config: Validated embedding, checkpoint, and write settings.
-    :param uri: Local or remote Lance split URI.
-    :returns: Updated dataset and index-built status by registry key.
+    :param dataset: Open Lance dataset.
+    :param specs: Selected embedding policies.
+    :returns: Policies whose complete output schema is absent.
+    :raises ValueError: Only part of a policy's output schema exists.
+    """
+    names = set(dataset.schema.names)
+    missing = []
+    for spec in specs:
+        expected = set(_output_columns(spec))
+        present = expected & names
+        if present and present != expected:
+            raise ValueError(
+                f"dataset has partial {spec.name} columns: {sorted(present)}; "
+                f"expected {sorted(expected)}"
+            )
+        if not present:
+            missing.append(spec)
+    return missing
+
+
+def _index_exists(dataset: lance.LanceDataset, column: str) -> bool:
+    """Return whether Lance reports an index over one column.
+
+    :param dataset: Open Lance dataset.
+    :param column: Vector column selected by registry policy.
+    :returns: Whether an index targets the column.
+    """
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    return any(entry.get("fields") == [column] for entry in indices)
+
+
+def add_embeddings(config: AddEmbeddingsConfig) -> None:
+    """Append registry entries to one Lance dataset and resume missing index work.
+
+    :param config: Validated dataset, embedding, checkpoint, and write settings.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
-    dataset = _open_lance_dataset(uri)
+    dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
-    _guard_existing_columns(dataset, specs)
-    _validate_write_source(dataset, config.batch_size)
+    pending = _missing_embedding_specs(dataset, specs)
+    if pending:
+        _validate_write_source(dataset, config.batch_size)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info(
         "adding_embeddings",
-        uri=uri,
+        uri=config.lance_uri,
         columns=output_columns,
         sample_rate=sample_rate,
         rows=dataset.count_rows(),
         batch_size=config.batch_size,
     )
-    co_resident = [spec for spec in specs if spec.co_resident]
-    solo = [spec for spec in specs if not spec.co_resident]
+    co_resident = [spec for spec in pending if spec.co_resident]
+    solo = [spec for spec in pending if not spec.co_resident]
     if co_resident:
         _write_columns(dataset, co_resident, sample_rate, config)
     for spec in solo:
         _write_columns(dataset, [spec], sample_rate, config)
 
-    index_results = {spec.name: False for spec in specs}
     if config.build_index:
         for spec in specs:
-            if spec.index is not None:
-                vector_column = spec.index.vector_column or spec.column
-                index_results[spec.name] = build_index(
-                    dataset, vector_column, index=spec.index, config=config
-                )
-    logger.info("added_embeddings", uri=uri, columns=output_columns)
-    return dataset, index_results
+            if spec.index is None:
+                continue
+            vector_column = spec.index.vector_column or spec.column
+            if not _index_exists(dataset, vector_column):
+                build_index(dataset, vector_column, index=spec.index, config=config)
+    logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
 
-
-def add_embeddings(config: AddEmbeddingsConfig) -> None:
-    """Append registry entries to one Lance dataset.
-
-    :param config: Validated dataset, embedding, checkpoint, and write settings.
-    """
-    _add_embeddings_to_lance_uri(config, config.lance_uri)
 
 def _configure_lance_logging(*, debug: bool) -> None:
     """Set native Lance logging before its first import.

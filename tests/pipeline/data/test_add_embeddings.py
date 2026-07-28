@@ -33,7 +33,6 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     T5GEMMA_FIELD,
-    TINYMU_FIELD,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
@@ -1146,6 +1145,42 @@ def test_add_embeddings_with_two_same_specs_releases_first_before_second_load(
     assert {SAME_S_FIELD, SAME_L_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
+def test_add_embeddings_after_index_failure_resumes_without_reencoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry skips committed columns and resumes the missing index.
+
+    :param tmp_path: Scratch directory for the Lance dataset.
+    :param monkeypatch: Fixture replacing the encoder and index boundary.
+    """
+    uri = tmp_path / "index-resume.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec(), num_rows=2)
+    loads: list[str] = []
+    monkeypatch.setitem(EMBEDDING_REGISTRY, "m2l", _fake_spec("m2l", loads))
+    config = AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",))
+
+    def fail_index(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.build_index", fail_index)
+    with pytest.raises(RuntimeError, match="index unavailable"):
+        add_embeddings(config)
+
+    committed_version = lance.dataset(uri).version
+    def finish_index(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        return True
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.build_index", finish_index
+    )
+    add_embeddings(config)
+
+    assert loads == ["load:m2l"]
+    assert lance.dataset(uri).version == committed_version
+
+
 def test_add_embeddings_with_index_disabled_writes_companions_without_building(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1233,10 +1268,10 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     ]
 
 
-def test_add_embeddings_existing_mixed_target_guards_all_loads(
+def test_add_embeddings_existing_mixed_target_writes_only_missing_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Any existing selected column blocks every model download.
+    """A retry skips a committed policy and writes the remaining selection.
 
     :param tmp_path: Scratch directory for the finalized shard.
     :param monkeypatch: Fixture installing dependency-free recording specs.
@@ -1252,14 +1287,14 @@ def test_add_embeddings_existing_mixed_target_guards_all_loads(
     loads: list[str] = []
     _install_fake_specs(monkeypatch, ("clap", "same_s"), loads)
 
-    with pytest.raises(ValueError, match="same_s"):
-        add_embeddings(
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=False
-            )
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=False
         )
+    )
 
-    assert loads == []
+    assert loads == ["load:clap"]
+    assert CLAP_FIELD in lance.dataset(uri).schema.names
 
 
 def test_build_index_with_too_few_rows_skips(tmp_path: Path) -> None:
