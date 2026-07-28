@@ -100,21 +100,18 @@ def _unique_test_prefix() -> str:
     return f"ci-add-embeddings/{run_id}/{run_attempt}/{nonce}/"
 
 
-def _lance_embed_spec(
-    prefix: str, rows: int = _SAMPLES_PER_SHARD, *, all_splits: bool = False
-) -> DatasetSpec:
+def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpec:
     """Build a 1-shard Lance ``DatasetSpec`` pinned to the real test synth + R2 prefix.
 
     :param prefix: Unique R2 prefix the shard is rendered + uploaded under.
-    :param rows: Samples per populated split; ``>= MIN_ROWS_FOR_INDEX`` makes indexing run.
-    :param all_splits: Whether validation and test are populated alongside train.
+    :param rows: Train samples; ``>= MIN_ROWS_FOR_INDEX`` makes indexing run.
     :returns: A frozen Lance spec whose single train shard is renderable by the
         real VST and whose ``r2`` layout is safe to ``purge_prefix`` on teardown.
     """
     spec_kwargs: dict[str, Any] = {
         "task_name": "it-add-embeddings",
         "output_format": "lance",
-        "train_val_test_sizes": [rows, rows, rows] if all_splits else [rows, 0, 0],
+        "train_val_test_sizes": [rows, 0, 0],
         "base_seed": 42,
         # Constant mel bins over so few samples; mask so the spec stays valid.
         "mask_degenerate_bins": True,

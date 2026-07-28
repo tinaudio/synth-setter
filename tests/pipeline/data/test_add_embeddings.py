@@ -57,6 +57,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
+    _matching_index_exists,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _write_columns,
@@ -194,7 +195,11 @@ def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
             events.append(f"load:{name}")
         return _encoder_for(name)
 
-    return replace(EMBEDDING_REGISTRY[name], load_encoder=load)
+    return replace(
+        EMBEDDING_REGISTRY[name],
+        load_encoder=load,
+        artifact_identity=f"fake:{name}:v1",
+    )
 
 
 def _install_fake_specs(
@@ -386,6 +391,12 @@ def test_add_embeddings_config_with_empty_embedding_selection_raises() -> None:
     """An empty registry selection is rejected instead of becoming a silent no-op."""
     with pytest.raises(ValueError, match="embeddings must select at least one registry key"):
         AddEmbeddingsConfig(lance_uri=_LANCE_URI, embeddings=())
+
+
+def test_add_embeddings_config_with_m2l_checkpoint_override_raises() -> None:
+    """M2L cannot label package-owned weights as a caller-selected checkpoint."""
+    with pytest.raises(ValidationError, match="does not support checkpoint overrides"):
+        AddEmbeddingsConfig(lance_uri="dataset", checkpoints={"m2l": "replacement"})
 
 
 def test_add_embeddings_config_with_unknown_checkpoint_key_raises() -> None:
@@ -1183,11 +1194,11 @@ def test_add_embeddings_after_index_failure_resumes_without_reencoding(
     dataset = lance.dataset(uri)
     assert loads == ["load:m2l"]
     assert dataset.version > committed_version
-    indices = cast("list[dict[str, Any]]", dataset.list_indices())
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
     assert [entry["fields"] for entry in indices] == [[f"{M2L_FIELD}_vec"]]
 
 
-def test_add_embeddings_existing_checkpoint_mismatch_raises(
+def test_add_embeddings_existing_artifact_identity_mismatch_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A completed column cannot masquerade as a different checkpoint output.
@@ -1204,15 +1215,38 @@ def test_add_embeddings_existing_checkpoint_mismatch_raises(
         )
     )
 
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(_fake_spec("clap"), artifact_identity="fake:clap:v2"),
+    )
     with pytest.raises(ValueError, match="checkpoint identity"):
         add_embeddings(
             AddEmbeddingsConfig(
-                lance_uri=str(uri),
-                embeddings=("clap",),
-                checkpoints={"clap": "replacement/checkpoint"},
-                build_index=False,
+                lance_uri=str(uri), embeddings=("clap",), build_index=False
             )
         )
+
+
+def test_add_embeddings_partial_policy_columns_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A policy with only its sequence output cannot be treated as complete.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a dependency-free M2L policy.
+    """
+    uri = tmp_path / "partial-policy.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("m2l",))
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri), embeddings=("m2l",), build_index=False
+    )
+    add_embeddings(config)
+    lance.dataset(uri).drop_columns([f"{M2L_FIELD}_vec"])
+
+    with pytest.raises(ValueError, match="partial m2l columns"):
+        add_embeddings(config)
 
 
 def test_add_embeddings_with_index_disabled_writes_companions_without_building(
@@ -1361,6 +1395,36 @@ def test_add_embeddings_existing_index_config_mismatch_raises(
                 metric="cosine",
             )
         )
+
+
+def test_matching_index_exists_when_matching_entry_follows_stale_entry() -> None:
+    """Index selection checks every same-column entry before rejecting stale policy."""
+    dataset = SimpleNamespace(
+        count_rows=lambda: 256,
+        list_indices=lambda: [
+            {"name": "stale", "fields": [CLAP_FIELD]},
+            {"name": "current", "fields": [CLAP_FIELD]},
+        ],
+        index_statistics=lambda name: {
+            "indices": [
+                {
+                    "metric_type": "cosine" if name == "stale" else "l2",
+                    "num_partitions": 2,
+                    "sub_index": {"num_sub_vectors": 16},
+                }
+            ]
+        },
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri="dataset", num_partitions=2, num_sub_vectors=16, metric="l2"
+    )
+
+    assert _matching_index_exists(
+        cast("lance.LanceDataset", dataset),
+        CLAP_FIELD,
+        index=IndexSpec(),
+        config=config,
+    )
 
 
 def test_build_index_with_too_few_rows_skips(tmp_path: Path) -> None:

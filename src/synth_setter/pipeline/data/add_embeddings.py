@@ -40,7 +40,9 @@ from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.tinymu import (
     DEFAULT_TINYMU_CHECKPOINT,
+    TINYMU_CHECKPOINT_SHA256,
     TINYMU_FRONTEND,
+    TINYMU_PACKAGE_COMMIT,
     TinyMUEncodeFn,
     load_tinymu_audio_encoder,
     tinymu_num_latent_frames,
@@ -77,7 +79,7 @@ DEFAULT_INDEX_METRIC: str = "cosine"
 DEFAULT_LANCE_LOG: str = "warn"
 PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 _EMBEDDING_NAME_METADATA = b"synth_setter.embedding.name"
-_EMBEDDING_CHECKPOINT_METADATA = b"synth_setter.embedding.checkpoint"
+_EMBEDDING_ARTIFACT_METADATA = b"synth_setter.embedding.artifact"
 SAME_EMBEDDING_DIM: int = 256
 SAME_SAMPLE_RATE: int = 44100
 SAME_DOWNSAMPLING_RATIO: int = 4096
@@ -154,6 +156,10 @@ class EmbeddingSpec:
 
         Source batch, sample rate, and encoder to Arrow array transform.
 
+    .. attribute :: artifact_identity
+
+        Immutable encoder/checkpoint identity enabling safe resume, or ``None``.
+
     .. attribute :: input_field
 
         Dataset column supplying this embedding's encoder input.
@@ -166,6 +172,7 @@ class EmbeddingSpec:
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
     encode_column: EncodeColumnFn
+    artifact_identity: str | None = None
     input_field: str = AUDIO_FIELD
 
 
@@ -550,6 +557,9 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{TINYMU_FIELD}_vec"),
         load_encoder=_load_tinymu_spec_encoder,
         encode_column=_encode_tinymu_column,
+        artifact_identity=(
+            f"package:{TINYMU_PACKAGE_COMMIT};checkpoint:sha256:{TINYMU_CHECKPOINT_SHA256}"
+        ),
     ),
 }
 
@@ -756,7 +766,7 @@ def _write_columns(
         sample_output = _encode_columns(
             _decoded_sources(sample, input_fields), sample_rate, specs, encoders
         )
-    output_schema = _embedding_output_schema(sample_output.schema, specs, config)
+    output_schema = _embedding_output_schema(sample_output.schema, specs)
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
@@ -878,22 +888,19 @@ def build_index(
 
 
 def _embedding_output_schema(
-    schema: pa.Schema, specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
+    schema: pa.Schema, specs: Sequence[EmbeddingSpec]
 ) -> pa.Schema:
     """Attach policy identity to every generated field.
 
     :param schema: Inferred encoder output schema.
     :param specs: Policies producing the output fields.
-    :param config: Checkpoint overrides for this write.
     :returns: Schema carrying resumable embedding identity metadata.
     """
     fields = []
     for spec in specs:
-        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
-        metadata = {
-            _EMBEDDING_NAME_METADATA: spec.name.encode(),
-            _EMBEDDING_CHECKPOINT_METADATA: checkpoint.encode(),
-        }
+        metadata = {_EMBEDDING_NAME_METADATA: spec.name.encode()}
+        if spec.artifact_identity is not None:
+            metadata[_EMBEDDING_ARTIFACT_METADATA] = spec.artifact_identity.encode()
         fields.extend(
             schema.field(column).with_metadata(metadata) for column in _output_columns(spec)
         )
@@ -926,12 +933,17 @@ def _missing_embedding_specs(
         if not present:
             missing.append(spec)
             continue
-        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint).encode()
+        if spec.artifact_identity is None:
+            raise ValueError(
+                f"dataset {spec.name} columns have no immutable checkpoint identity; "
+                "remove them before rewriting"
+            )
+        artifact_identity = spec.artifact_identity.encode()
         for column in expected:
             metadata = dataset.schema.field(column).metadata or {}
             if (
                 metadata.get(_EMBEDDING_NAME_METADATA) != spec.name.encode()
-                or metadata.get(_EMBEDDING_CHECKPOINT_METADATA) != checkpoint
+                or metadata.get(_EMBEDDING_ARTIFACT_METADATA) != artifact_identity
             ):
                 raise ValueError(
                     f"dataset {column} checkpoint identity does not match requested "
@@ -997,9 +1009,8 @@ def _matching_index_exists(
     num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
     metric = config.metric or index.metric
     indices = cast("list[dict[str, object]]", dataset.list_indices())
-    for entry in indices:
-        if entry.get("fields") != [column]:
-            continue
+    column_indices = [entry for entry in indices if entry.get("fields") == [column]]
+    for entry in column_indices:
         index_name = entry.get("name")
         if isinstance(index_name, str) and _index_config_matches(
             dataset,
@@ -1009,6 +1020,7 @@ def _matching_index_exists(
             metric=metric,
         ):
             return True
+    if column_indices:
         raise ValueError(f"dataset {column} index configuration does not match requested policy")
     return False
 

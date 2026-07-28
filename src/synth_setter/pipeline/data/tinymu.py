@@ -1,8 +1,12 @@
 """TinyMU MATPAC audio-encoder integration.
 
 TinyMU is installed at a pinned package commit; synth-setter owns checkpoint verification, input
-preparation, inference validation, and output orientation. Call
-``load_tinymu_audio_encoder(device="cpu")`` to construct the frozen encoder.
+preparation, inference validation, and output orientation.
+
+Example::
+
+    encode = load_tinymu_audio_encoder(device="cpu")
+    embeddings = encode(audio_batch, sample_rate=44_100)
 """
 
 from __future__ import annotations

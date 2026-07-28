@@ -45,7 +45,7 @@ class AddEmbeddingsConfig(BaseModel):
 
     .. attribute :: checkpoints
 
-        Per-registry-key checkpoint overrides.
+        Per-registry-key checkpoint overrides; unsupported for music2latent.
 
     .. attribute :: device
 
@@ -95,7 +95,8 @@ class AddEmbeddingsConfig(BaseModel):
         default=("clap", "m2l"), description="Ordered embedding registry keys to write."
     )
     checkpoints: dict[str, str] = Field(
-        default_factory=dict, description="Checkpoint overrides keyed by registry name."
+        default_factory=dict,
+        description="Checkpoint overrides keyed by registry name; m2l is unsupported.",
     )
     device: str | None = Field(default=None, description="Torch device; null auto-selects.")
     batch_size: int = Field(
@@ -160,6 +161,8 @@ class AddEmbeddingsConfig(BaseModel):
             raise ValueError(
                 f"checkpoints keys {unknown} must each be one of {sorted(EMBEDDING_REGISTRY)}"
             )
+        if "m2l" in value:
+            raise ValueError("music2latent does not support checkpoint overrides")
         return value
 
     @field_validator("resume_cache", mode="before")

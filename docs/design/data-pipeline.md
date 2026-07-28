@@ -1146,8 +1146,8 @@ interrupted run can resume without re-encoding already-processed rows (see
 
 `tinymu` runs TinyMU's frozen MATPAC encoder through its public package API,
 installed from an exact Git commit in the normal heavy runtime. The pinned R2
-checkpoint is verified by SHA-256, and root-mode provenance records both identities
-after every split commit. The integration rejects incompatible model state,
+checkpoint is verified by SHA-256, and each generated Lance field records that
+immutable checkpoint digest for safe retry. The integration rejects incompatible model state,
 malformed audio, shape drift, and non-finite output. The measured preprocessing,
 sequence shape, cache identity, package boundary, and `conditioning=tinymu` profile are documented
 in [TinyMU audio embeddings](../reference/tinymu-embeddings.md).
