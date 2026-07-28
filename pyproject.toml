@@ -67,6 +67,7 @@ synth-setter-plugins = "synth_setter.cli.plugins:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
+synth-setter-bbc-sfx = "synth_setter.cli.bbc_sfx:main"
 
 
 
@@ -182,6 +183,7 @@ audio = [
   "mido",
   "pedalboard",
   "pyloudnorm",
+  "soundfile>=0.13.1",
   "scipy>=1.14,<1.15",
   "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "torchsynth==1.0.2",
@@ -198,6 +200,7 @@ notebooks = [
 ]
 util = [
   "click<8.2",
+  "internetarchive>=5.7.1",
   "structlog",
   "tenacity",
   "loguru==0.7.3",

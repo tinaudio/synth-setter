@@ -60,6 +60,9 @@ jobs:
           - name: tools
             patterns:
               - synth_setter.tools.*
+          - name: pipeline-bbc-sfx
+            patterns:
+              - synth_setter.pipeline.data.bbc_sfx.*
           - name: pipeline-add-public
             patterns:
               - synth_setter.pipeline.data.add_*.x_[!_]*

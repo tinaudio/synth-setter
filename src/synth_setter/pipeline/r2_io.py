@@ -50,7 +50,9 @@ __all__ = [
     "to_s3_uri",
     "upload",
     "upload_dir",
+    "upload_dir_immutable",
     "upload_to_uri",
+    "upload_to_uri_immutable",
 ]
 
 _CHECKOUT_MARKER = ".project-root"
@@ -535,6 +537,23 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
+def upload_to_uri_immutable(local_path: Path, r2_uri: str) -> None:
+    """Upload one file while refusing to replace different remote bytes.
+
+    :param local_path: Local file whose bytes must remain immutable remotely.
+    :param r2_uri: Destination object URI, including its filename.
+    :raises ValueError: ``r2_uri`` does not include a destination filename.
+    """
+    destination = _to_rclone_path(r2_uri)
+    parent, separator, filename = destination.rpartition("/")
+    if not separator or not filename:
+        raise ValueError(f"immutable file destination must include a filename: {r2_uri!r}")
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        staged = Path(temporary_dir) / filename
+        shutil.copyfile(local_path, staged)
+        _upload_dir_immutable(staged.parent, parent)
+
+
 def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None:
     """Copy a local directory tree into an R2 prefix (upload mirror of the dir download).
 
@@ -557,6 +576,40 @@ def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None
     operands += [str(local_dir), _to_rclone_path(r2_uri)]
     args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def _upload_dir_immutable(local_dir: Path, destination: str, exclude: str | None = None) -> None:
+    """Copy missing files, then prove every source file matches its destination.
+
+    :param local_dir: Local source tree.
+    :param destination: Rclone-form destination prefix.
+    :param exclude: Optional rclone exclusion glob.
+    """
+    filters = [f"--exclude={exclude}"] if exclude is not None else []
+    copy_args = _rclone_argv(
+        "copy",
+        "--immutable",
+        "--ignore-existing",
+        *filters,
+        str(local_dir),
+        destination,
+        timeout=_UPLOAD_DIR_TIMEOUT,
+    )
+    subprocess.check_call(copy_args)  # noqa: S603 — args from validated URI
+    check_args = _rclone_argv(
+        "check", "--one-way", *filters, str(local_dir), destination, timeout=_UPLOAD_DIR_TIMEOUT
+    )
+    subprocess.check_call(check_args)  # noqa: S603 — args from validated URI
+
+
+def upload_dir_immutable(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None:
+    """Upload a directory without replacing objects and verify idempotent matches.
+
+    :param local_dir: Directory whose contents land below ``r2_uri``.
+    :param r2_uri: Destination R2 prefix.
+    :param exclude: Optional rclone exclusion glob.
+    """
+    _upload_dir_immutable(local_dir, _to_rclone_path(r2_uri), exclude)
 
 
 def upload(source: str | Path, destination_uri: str) -> None:

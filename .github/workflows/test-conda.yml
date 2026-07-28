@@ -43,6 +43,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install rclone
+        uses: ./.github/actions/install-rclone
+
       - name: Set up conda env from environment.yaml
         uses: mamba-org/setup-micromamba@v2
         with:

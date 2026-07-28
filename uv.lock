@@ -1525,6 +1525,21 @@ wheels = [
 ]
 
 [[package]]
+name = "internetarchive"
+version = "5.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jsonpatch" },
+    { name = "requests" },
+    { name = "tqdm" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c8/ec/0418239bf633729e87465298767c244752fd882e09b09bf94d5a9c4f39be/internetarchive-5.11.0.tar.gz", hash = "sha256:58366050a46255d689f82bcc996710adb56a0f6876b0a6c781332c1eefdb96f0", size = 157483, upload-time = "2026-07-22T19:52:16.639Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c2/30/7f867a8963cfed550e802ab673756c02a3f9aa79084ad38b1910af5a9aa8/internetarchive-5.11.0-py3-none-any.whl", hash = "sha256:d45ad066a75750d9bd99720a7e1f3e40c2fc78b8f166461bb3d8a6cf6c46cb77", size = 129636, upload-time = "2026-07-22T19:52:15.116Z" },
+]
+
+[[package]]
 name = "invoke"
 version = "3.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1669,6 +1684,27 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d4/c6/b1cac0280f8efc57626ea8804866b37099f23cae11b1485a42b213245e31/joserfc-1.7.3.tar.gz", hash = "sha256:116955c2587139dba20621fd0bd7fc9255fa960c9fe7f43c43ebef2e801dcfcf", size = 233821, upload-time = "2026-07-08T12:41:42.66Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7d/f5/650b59d1b74f5befb7a7a7e7d7c92a26b94256df3541e2b4914152cd177a/joserfc-1.7.3-py3-none-any.whl", hash = "sha256:7c39f3f2c943dbc03122747fa8ebbd8e156e54904cf25651b452f4d2634a6075", size = 70982, upload-time = "2026-07-08T12:41:41.521Z" },
+]
+
+[[package]]
+name = "jsonpatch"
+version = "1.33"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jsonpointer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/78/18813351fe5d63acad16aec57f94ec2b70a09e53ca98145589e185423873/jsonpatch-1.33.tar.gz", hash = "sha256:9fcd4009c41e6d12348b4a0ff2563ba56a2923a7dfee731d004e212e1ee5030c", size = 21699, upload-time = "2023-06-26T12:07:29.144Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/07/02e16ed01e04a374e644b575638ec7987ae846d25ad97bcc9945a3ee4b0e/jsonpatch-1.33-py2.py3-none-any.whl", hash = "sha256:0ae28c0cd062bbd8b8ecc26d7d164fbbea9652a1a3693f3b956c1eae5145dade", size = 12898, upload-time = "2023-06-16T21:01:28.466Z" },
+]
+
+[[package]]
+name = "jsonpointer"
+version = "3.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/c7/af399a2e7a67fd18d63c40c5e62d3af4e67b836a2107468b6a5ea24c4304/jsonpointer-3.1.1.tar.gz", hash = "sha256:0b801c7db33a904024f6004d526dcc53bbb8a4a0f4e32bfd10beadf60adf1900", size = 9068, upload-time = "2026-03-23T22:32:32.458Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/6a/a83720e953b1682d2d109d3c2dbb0bc9bf28cc1cbc205be4ef4be5da709d/jsonpointer-3.1.1-py3-none-any.whl", hash = "sha256:8ff8b95779d071ba472cf5bc913028df06031797532f08a7d5b602d8b2a488ca", size = 7659, upload-time = "2026-03-23T22:32:31.568Z" },
 ]
 
 [[package]]
@@ -4408,6 +4444,7 @@ audio = [
     { name = "pedalboard" },
     { name = "pyloudnorm" },
     { name = "scipy" },
+    { name = "soundfile" },
     { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "torchsynth" },
 ]
@@ -4441,6 +4478,7 @@ dev = [
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
     { name = "hypothesis" },
+    { name = "internetarchive" },
     { name = "jaxtyping" },
     { name = "kubernetes" },
     { name = "kymatio" },
@@ -4480,6 +4518,7 @@ dev = [
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "smoosense", extra = ["jupyter"] },
+    { name = "soundfile" },
     { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "structlog" },
@@ -4528,6 +4567,7 @@ runtime = [
     { name = "hydra-colorlog" },
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
+    { name = "internetarchive" },
     { name = "jaxtyping" },
     { name = "kubernetes" },
     { name = "kymatio" },
@@ -4550,6 +4590,7 @@ runtime = [
     { name = "scipy" },
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
+    { name = "soundfile" },
     { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "structlog" },
@@ -4595,6 +4636,7 @@ torch = [
 ]
 util = [
     { name = "click" },
+    { name = "internetarchive" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "rich" },
@@ -4635,6 +4677,7 @@ audio = [
     { name = "pedalboard" },
     { name = "pyloudnorm" },
     { name = "scipy", specifier = ">=1.14,<1.15" },
+    { name = "soundfile", specifier = ">=0.13.1" },
     { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
     { name = "torchsynth", specifier = "==1.0.2" },
 ]
@@ -4668,6 +4711,7 @@ dev = [
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "hydra-optuna-sweeper", specifier = "==1.2.0" },
     { name = "hypothesis" },
+    { name = "internetarchive", specifier = ">=5.7.1" },
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },
@@ -4707,6 +4751,7 @@ dev = [
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "smoosense", extras = ["jupyter"] },
+    { name = "soundfile", specifier = ">=0.13.1" },
     { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "structlog" },
@@ -4749,6 +4794,7 @@ runtime = [
     { name = "hydra-colorlog", specifier = "==1.2.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "hydra-optuna-sweeper", specifier = "==1.2.0" },
+    { name = "internetarchive", specifier = ">=5.7.1" },
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },
@@ -4771,6 +4817,7 @@ runtime = [
     { name = "scipy", specifier = ">=1.14,<1.15" },
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
+    { name = "soundfile", specifier = ">=0.13.1" },
     { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "structlog" },
@@ -4804,6 +4851,7 @@ torch = [
 ]
 util = [
     { name = "click", specifier = "<8.2" },
+    { name = "internetarchive", specifier = ">=5.7.1" },
     { name = "loguru", specifier = "==0.7.3" },
     { name = "matplotlib" },
     { name = "rich" },
