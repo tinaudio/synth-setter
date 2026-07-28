@@ -88,6 +88,10 @@ full rules in the `comment-hygiene` skill.
 
 - `make test-fast` is the default CPU loop; `@pytest.mark.slow` for slow.
 - Test names: `test_<what>_<condition>_<expected>`.
+- A test must be able to fail for exactly one interesting reason. Don't test
+  helpers defined in the test file, freeze config into literals, or assert that
+  a mock returned its own `return_value` —
+  [docs/testing/test-quality.md](docs/testing/test-quality.md).
 - Mutation testing: [docs/testing/mutmut.md](docs/testing/mutmut.md).
 
 ## Design defaults
