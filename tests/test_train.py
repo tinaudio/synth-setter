@@ -14,7 +14,7 @@ import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
@@ -2013,6 +2013,31 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
+def _assert_model_predictions_depend_on_cached_conditioning(
+    object_dict: dict[str, Any],
+) -> None:
+    """Assert the trained model keeps a gradient path from cached vectors.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch["conditioning"].detach().requires_grad_(True)
+    predictions = model._sample(
+        conditioning,
+        torch.zeros_like(batch["params"]),
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    gradient = torch.autograd.grad(predictions.square().sum(), conditioning)[0]
+
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e(
@@ -2054,6 +2079,7 @@ def test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e(
         )
         assert_finite_train_loss(metric_dict)
         if conditioning == "ssondo":
+            _assert_model_predictions_depend_on_cached_conditioning(object_dict)
             _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(

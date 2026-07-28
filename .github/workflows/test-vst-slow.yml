@@ -47,10 +47,12 @@ on:
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
       - "tests/conftest.py"
+      - "tests/test_eval.py"
       - "tests/test_train.py"
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/ssondo.py"
       - "src/synth_setter/pipeline/data/t5gemma.py"
       # Cadence cross-field coverage the retired render-matrix gated — the
       # parallel-render cells below now cover it under real Surge (#1354).
@@ -75,10 +77,12 @@ on:
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
       - "tests/conftest.py"
+      - "tests/test_eval.py"
       - "tests/test_train.py"
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/ssondo.py"
       - "src/synth_setter/pipeline/data/t5gemma.py"
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
@@ -237,6 +241,7 @@ jobs:
               uv pip install --no-deps -e .
               read -ra targets <<< "${PYTEST_TARGETS}"
               if [ "${RUN_EMBEDDING_E2E}" = "true" ]; then
+                targets+=(tests/test_eval.py::test_evaluate_ssondo_conditioning_real_e2e)
                 targets+=(tests/test_train.py::test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e)
               fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \

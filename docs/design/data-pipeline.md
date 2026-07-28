@@ -1142,10 +1142,11 @@ search. S-SONDO audio is downmixed, resampled to 32 kHz, and right-padded to its
 10-second input window; longer clips fail instead of silently losing a partial
 tail. Its PyPI runtime is pinned to `ssondo==0.3.1`, and the MIT checkpoint is
 pinned by Hugging Face revision and SHA-256 before the package's pickle-based
-Lightning loader runs. An
-optional `resume_cache=<path>` caches per-batch encoder outputs so an
-interrupted run can resume without re-encoding already-processed rows (see
-`add_embeddings.py`). The default CLAP, SAME, and S-SONDO sources hydrate under
+Lightning loader runs. If index creation fails after vectors commit, rerunning
+the same split builds only missing indexes without re-encoding complete
+columns. An optional `resume_cache=<path>` caches per-batch encoder outputs so
+an interrupted write can resume without re-encoding already-processed rows
+(see `add_embeddings.py`). The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 

@@ -868,6 +868,57 @@ def build_index(
     return True
 
 
+def _index_exists(dataset: lance.LanceDataset, spec: EmbeddingSpec) -> bool:
+    """Return whether Lance reports an index over the policy's vector column.
+
+    :param dataset: Open dataset.
+    :param spec: Registry policy whose index is checked.
+    :returns: Whether the target column has an index.
+    """
+    if spec.index is None:
+        return False
+    target = spec.index.vector_column or spec.column
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    return any(entry.get("fields") == [target] for entry in indices)
+
+
+def _resume_missing_indexes(
+    dataset: lance.LanceDataset,
+    specs: Sequence[EmbeddingSpec],
+    config: AddEmbeddingsConfig,
+) -> bool:
+    """Build missing indexes when every selected output column already exists.
+
+    :param dataset: Open dataset that may contain a completed embedding write.
+    :param specs: Selected registry policies.
+    :param config: Index settings for the rerun.
+    :returns: Whether index-only recovery completed.
+    """
+    expected = {column for spec in specs for column in _output_columns(spec)}
+    present = expected & set(dataset.schema.names)
+    if not present:
+        return False
+    if present != expected or not config.build_index or dataset.count_rows() < MIN_ROWS_FOR_INDEX:
+        _guard_existing_columns(dataset, specs)
+
+    missing = [
+        (spec, index)
+        for spec in specs
+        if (index := spec.index) is not None and not _index_exists(dataset, spec)
+    ]
+    if not missing:
+        _guard_existing_columns(dataset, specs)
+
+    logger.info(
+        "embedding_index_resume_started",
+        columns=[index.vector_column or spec.column for spec, index in missing],
+    )
+    for spec, index in missing:
+        target = index.vector_column or spec.column
+        build_index(dataset, target, index=index, config=config)
+    return True
+
+
 def add_embeddings(config: AddEmbeddingsConfig) -> None:
     """Append the registry entries selected by ``config.embeddings``.
 
@@ -878,10 +929,13 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    output_columns = [column for spec in specs for column in _output_columns(spec)]
+    if _resume_missing_indexes(dataset, specs, config):
+        logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
+        return
+
     _guard_existing_columns(dataset, specs)
     _validate_write_source(dataset, config.batch_size)
-    output_columns = [column for spec in specs for column in _output_columns(spec)]
-
     logger.info(
         "adding_embeddings",
         uri=config.lance_uri,

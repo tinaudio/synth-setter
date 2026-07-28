@@ -1213,13 +1213,75 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     ]
 
 
-def test_add_embeddings_existing_mixed_target_guards_all_loads(
+def test_add_embeddings_after_index_failure_rerun_builds_index_without_reencoding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A split rerun resumes a missing index from committed vectors.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a fake encoder and one index failure.
+    """
+    uri = tmp_path / "index-resume.lance"
+    audio = np.random.default_rng(0).uniform(-1, 1, (300, 2, 3_200)).astype(np.float32)
+    write_minimal_lance_shard(
+        uri,
+        build_lance_smoke_spec(train_val_test_sizes=(300, 0, 0)),
+        num_rows=300,
+        audio=audio,
+    )
+    loads: list[str] = []
+    _install_fake_specs(monkeypatch, ("clap",), loads)
+    real_build_index = build_index
+    attempts = 0
+
+    def fail_first_index(
+        dataset: lance.LanceDataset,
+        column: str,
+        *,
+        index: IndexSpec,
+        config: AddEmbeddingsConfig,
+    ) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient index failure")
+        return real_build_index(dataset, column, index=index, config=config)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.build_index", fail_first_index
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("clap",),
+        num_partitions=4,
+        num_sub_vectors=16,
+    )
+
+    with pytest.raises(RuntimeError, match="transient index failure"):
+        add_embeddings(config)
+    vectors_before = lance.dataset(str(uri)).to_table(columns=[CLAP_FIELD])
+
+    add_embeddings(config)
+
+    dataset = lance.dataset(str(uri))
+    assert loads == ["load:clap"]
+    assert dataset.to_table(columns=[CLAP_FIELD]).equals(vectors_before)
+    indices = cast("list[dict[str, Any]]", dataset.list_indices())
+    assert any(entry["fields"] == [CLAP_FIELD] for entry in indices)
+    with pytest.raises(ValueError, match="already has embedding"):
+        add_embeddings(config)
+    assert loads == ["load:clap"]
+
+
+@pytest.mark.parametrize("build_index", [False, True])
+def test_add_embeddings_existing_mixed_target_guards_all_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build_index: bool
 ) -> None:
     """Any existing selected column blocks every model download.
 
     :param tmp_path: Scratch directory for the finalized shard.
     :param monkeypatch: Fixture installing dependency-free recording specs.
+    :param build_index: Whether a rerun requests index creation.
     """
     uri = tmp_path / "guard.lance"
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
@@ -1235,7 +1297,7 @@ def test_add_embeddings_existing_mixed_target_guards_all_loads(
     with pytest.raises(ValueError, match="same_s"):
         add_embeddings(
             AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=False
+                lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=build_index
             )
         )
 

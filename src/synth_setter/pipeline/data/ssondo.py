@@ -1,4 +1,9 @@
-"""Pin and adapt S-SONDO for ``embeddings=[ssondo]`` CLI runs."""
+"""Pin and adapt S-SONDO for ``embeddings=[ssondo]`` CLI runs.
+
+Typical usage::
+
+    synth-setter-add-embeddings lance_uri=DATASET.lance embeddings=[ssondo]
+"""
 
 from __future__ import annotations
 

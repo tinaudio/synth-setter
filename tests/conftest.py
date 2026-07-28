@@ -1525,6 +1525,34 @@ def augment_lance_splits_with_all_embeddings(
     return dataset_root
 
 
+def augment_lance_splits_with_ssondo(dataset_root: Path, checkpoint: str) -> Path:
+    """Append real S-SONDO vectors to identical smoke-dataset splits.
+
+    :param dataset_root: Directory holding finalized local Lance splits.
+    :param checkpoint: Verified local S-SONDO checkpoint path.
+    :returns: Augmented dataset root.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    train_uri = dataset_root / "train.lance"
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(train_uri),
+            embeddings=("ssondo",),
+            checkpoints={"ssondo": checkpoint},
+            device="cpu",
+            batch_size=1,
+            build_index=False,
+        )
+    )
+    for split in ("val", "test"):
+        destination = dataset_root / f"{split}.lance"
+        shutil.rmtree(destination)
+        shutil.copytree(train_uri, destination)
+    return dataset_root
+
+
 def assert_all_embedding_columns(dataset_root: Path) -> None:
     """Assert every real embedding is finite and follows its row semantics.
 
