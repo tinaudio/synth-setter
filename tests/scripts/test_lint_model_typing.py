@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LINTER = PROJECT_ROOT / "scripts" / "lint_model_typing.py"
 GIT = shutil.which("git") or "git"
@@ -93,6 +95,60 @@ def encode(samples: jaxtyping.Float[Tensor, \"batch samples\"]):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_linter_nested_fake_imports_do_not_satisfy_runtime_check(tmp_path: Path) -> None:
+    """Ignore imports that do not establish module-level decorator names.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "nested.py").write_text(
+        """def configure():
+    from beartype import beartype
+    from jaxtyping import jaxtyped
+
+@jaxtyped(typechecker=beartype)
+def encode(value):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "nested.py:encode:JAX001" in result.stdout
+
+
+def test_linter_rebound_imports_do_not_satisfy_runtime_check(tmp_path: Path) -> None:
+    """Reject decorator names rebound after canonical imports.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "rebound.py").write_text(
+        """from beartype import beartype
+from jaxtyping import jaxtyped
+
+def jaxtyped(*args, **kwargs):
+    return lambda function: function
+
+@jaxtyped(typechecker=beartype)
+def encode(value):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "rebound.py:encode:JAX001" in result.stdout
+
+
 def test_linter_new_modeling_callable_reports_missing_runtime_check(tmp_path: Path) -> None:
     """Reject a callable without the beartype-backed decorator.
 
@@ -169,6 +225,29 @@ def encode(value: TorchTensor) -> th.Tensor:
     assert "aliased.py:encode:JAX002" in result.stdout
 
 
+def test_linter_import_torch_submodule_still_resolves_torch_binding(tmp_path: Path) -> None:
+    """Recognize the torch binding established by a submodule import.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "submodule.py").write_text(
+        """import torch.nn
+
+def encode(value: torch.Tensor):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "submodule.py:encode:JAX002" in result.stdout
+
+
 def test_linter_quoted_torch_tensor_reports_shape_annotation(tmp_path: Path) -> None:
     """Reject bare tensors encoded as forward-reference strings.
 
@@ -193,6 +272,29 @@ def encode(value: \"torch.Tensor\"):
 
     assert result.returncode == 1
     assert "quoted.py:encode:JAX002" in result.stdout
+
+
+def test_linter_malformed_quoted_torch_tensor_reports_shape_annotation(tmp_path: Path) -> None:
+    """Reject a tensor forward reference even when its expression is malformed.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "malformed.py").write_text(
+        """import torch
+
+def encode(value: \"torch.Tensor[\"):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "malformed.py:encode:JAX002" in result.stdout
 
 
 def test_linter_starred_torch_tensor_reports_shape_annotation(tmp_path: Path) -> None:
@@ -300,11 +402,15 @@ def test_precommit_runs_model_typing_lint_for_models_and_baseline() -> None:
     assert "src/synth_setter/models/" in config
 
 
-def test_linter_baseline_addition_against_git_ref_fails(tmp_path: Path) -> None:
-    """Reject additions to a baseline committed on the base ref.
+def test_linter_baseline_addition_against_git_ref_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject additions to a baseline committed on the explicit base ref.
 
     :param tmp_path: Isolated lint fixture directory.
+    :param monkeypatch: Environment isolation for the base-ref override.
     """
+    monkeypatch.setenv("GITHUB_BASE_REF", "wrong-ci-base")
     subprocess.run([GIT, "init", "-q"], cwd=tmp_path, check=True)  # noqa: S603
     baseline = tmp_path / "baseline.txt"
     baseline.write_text("")

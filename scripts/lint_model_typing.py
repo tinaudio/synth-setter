@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -157,15 +158,17 @@ def _collect_import_names(tree: ast.Module) -> ImportNames:
     torch_modules: set[str] = set()
     torch_tensors: set[str] = set()
 
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                local_name = alias.asname or alias.name
+                local_name = alias.asname or alias.name.split(".", maxsplit=1)[0]
                 if alias.name == "beartype":
                     beartype_modules.add(local_name)
                 elif alias.name == "jaxtyping":
                     jaxtyping_modules.add(local_name)
-                elif alias.name == "torch":
+                elif alias.name == "torch" or (
+                    alias.asname is None and alias.name.startswith("torch.")
+                ):
                     torch_modules.add(local_name)
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
@@ -179,15 +182,36 @@ def _collect_import_names(tree: ast.Module) -> ImportNames:
                 elif node.module == "torch" and alias.name == "Tensor":
                     torch_tensors.add(local_name)
 
+    rebound_names = _collect_rebound_names(tree)
     return ImportNames(
-        beartype_functions=frozenset(beartype_functions),
-        beartype_modules=frozenset(beartype_modules),
-        jaxtyped_functions=frozenset(jaxtyped_functions),
-        jaxtyping_modules=frozenset(jaxtyping_modules),
-        jaxtyping_wrappers=frozenset(jaxtyping_wrappers),
-        torch_modules=frozenset(torch_modules),
-        torch_tensors=frozenset(torch_tensors),
+        beartype_functions=frozenset(beartype_functions - rebound_names),
+        beartype_modules=frozenset(beartype_modules - rebound_names),
+        jaxtyped_functions=frozenset(jaxtyped_functions - rebound_names),
+        jaxtyping_modules=frozenset(jaxtyping_modules - rebound_names),
+        jaxtyping_wrappers=frozenset(jaxtyping_wrappers - rebound_names),
+        torch_modules=frozenset(torch_modules - rebound_names),
+        torch_tensors=frozenset(torch_tensors - rebound_names),
     )
+
+
+def _collect_rebound_names(tree: ast.Module) -> set[str]:
+    """Find names whose assignments can shadow imported lint symbols.
+
+    :param tree: Module syntax tree to inspect.
+    :returns: Names bound by syntax other than imports.
+    """
+    names = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+    names.update(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    )
+    names.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
+    return names
 
 
 def _annotations(node: FunctionNode) -> list[ast.expr]:
@@ -252,7 +276,7 @@ def _contains_bare_torch_tensor(
         try:
             parsed = ast.parse(annotation.value, mode="eval").body
         except SyntaxError:
-            return False
+            return _string_mentions_torch_tensor(annotation.value, imports)
         return _contains_bare_torch_tensor(
             parsed,
             imports,
@@ -280,6 +304,21 @@ def _contains_bare_torch_tensor(
         _contains_bare_torch_tensor(child, imports, in_jaxtyping=in_jaxtyping)
         for child in ast.iter_child_nodes(annotation)
         if isinstance(child, ast.expr)
+    )
+
+
+def _string_mentions_torch_tensor(value: str, imports: ImportNames) -> bool:
+    """Detect an imported Tensor spelling in malformed annotation text.
+
+    :param value: Forward-reference text that failed expression parsing.
+    :param imports: Local torch names.
+    :returns: Whether the text contains a resolved Tensor spelling.
+    """
+    candidates = {*imports.torch_tensors}
+    candidates.update(f"{module}.Tensor" for module in imports.torch_modules)
+    return any(
+        re.search(rf"(?<![\\w.]){re.escape(candidate)}(?!\\w)", value) is not None
+        for candidate in candidates
     )
 
 
@@ -379,12 +418,9 @@ def _read_base_baseline(path: Path) -> set[str] | None:
 
     root = Path(root_result.stdout.strip())
     relative_path = path.resolve().relative_to(root.resolve()).as_posix()
+    explicit_base = os.environ.get("MODEL_TYPING_BASE_REF")
     github_base = os.environ.get("GITHUB_BASE_REF")
-    base_ref = (
-        f"origin/{github_base}"
-        if github_base
-        else os.environ.get("MODEL_TYPING_BASE_REF", "origin/main")
-    )
+    base_ref = explicit_base or (f"origin/{github_base}" if github_base else "origin/main")
     ref_result = subprocess.run(  # noqa: S603 - fixed git inspection command.
         [GIT, "-C", str(root), "rev-parse", "--verify", f"{base_ref}^{{commit}}"],
         capture_output=True,
