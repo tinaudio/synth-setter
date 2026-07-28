@@ -6,8 +6,11 @@ from typing import Literal
 import torch
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
-ConditioningMode = Literal["mel", "m2l"]
+ConditioningMode = Literal["mel", "m2l", "audio"]
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
+# Batch key each non-embedding mode observes. "audio" serves online-render synths, which
+# have no stored mel column because their audio only exists at training time.
+_RAW_CONDITIONING_KEYS: dict[str, str] = {"mel": "mel_spec", "audio": "audio"}
 
 
 class EmbeddingConditioningSpec(BaseModel):
@@ -35,17 +38,31 @@ class EmbeddingConditioningSpec(BaseModel):
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]
 
 
+def raw_conditioning_key(conditioning: Conditioning) -> str:
+    """Return the batch key a non-embedding conditioning mode observes.
+
+    :param conditioning: Configured conditioning mode or embedding spec.
+    :returns: Batch key; ``"mel_spec"`` for embeddings, which ignore it.
+    """
+    if isinstance(conditioning, str):
+        return _RAW_CONDITIONING_KEYS.get(conditioning, "mel_spec")
+    return "mel_spec"
+
+
 def select_conditioning(
-    batch: Mapping[str, torch.Tensor], embedding: EmbeddingConditioningSpec | None
+    batch: Mapping[str, torch.Tensor],
+    embedding: EmbeddingConditioningSpec | None,
+    raw_key: str = "mel_spec",
 ) -> torch.Tensor:
-    """Select the legacy mel or canonical cached-conditioning tensor.
+    """Select the raw-observation or canonical cached-conditioning tensor.
 
     :param batch: Model batch containing the configured conditioning tensor.
-    :param embedding: Resolved cached-embedding spec, or ``None`` for legacy mel.
+    :param embedding: Resolved cached-embedding spec, or ``None`` for a raw observation.
+    :param raw_key: Batch key for the raw observation; see :func:`raw_conditioning_key`.
     :returns: The tensor selected for model conditioning.
     """
     if embedding is None:
-        return batch["mel_spec"]
+        return batch[raw_key]
     return batch["conditioning"]
 
 
@@ -60,7 +77,7 @@ def resolve_embedding_conditioning(
     :raises ValueError: If an unsupported string literal is provided.
     """
     if isinstance(conditioning, str):
-        if conditioning == "mel":
+        if conditioning in _RAW_CONDITIONING_KEYS:
             return None
         if conditioning == "m2l":
             return EmbeddingConditioningSpec(
@@ -70,7 +87,9 @@ def resolve_embedding_conditioning(
     if isinstance(conditioning, EmbeddingConditioningSpec):
         return conditioning
     if not isinstance(conditioning, Mapping):
-        raise TypeError(f"conditioning must be 'mel', 'm2l', or a mapping, got {conditioning!r}")
+        raise TypeError(
+            f"conditioning must be 'mel', 'm2l', 'audio', or a mapping, got {conditioning!r}"
+        )
 
     values = dict(conditioning)
     input_shape = values.get("input_shape")

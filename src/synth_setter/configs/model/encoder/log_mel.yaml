@@ -1,0 +1,17 @@
+# Waveform-in encoder for online-render synths: computes log-mel inside the model, so
+# no stored mel column is needed. Mel settings mirror experiment/torchsynth/ffn.yaml.
+_target_: synth_setter.models.components.cnn.LogMelEncoder
+in_dim: ${datamodule.signal_length}
+hidden_dim: 16
+out_dim: ${model.vector_field.d_model}
+sample_rate: ${datamodule.sample_rate}
+n_mels: 128
+mel_norm: slaney
+mel_scale: slaney
+window: hamming
+power: 2.0
+top_db: 80.0
+amin: 1.0e-10
+num_blocks: 4
+kernel_size: 7
+norm: bn

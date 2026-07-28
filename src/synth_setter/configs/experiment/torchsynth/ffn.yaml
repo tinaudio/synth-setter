@@ -2,6 +2,8 @@
 
 defaults:
   - override /datamodule: torchsynth
+  - override /synth: torchsynth_full
+  - override /render: torchsynth_full
   - override /model: ffn
   - override /callbacks: default
   - override /trainer: gpu
@@ -11,12 +13,19 @@ experiment_name: torchsynth
 run_name: ffn
 tags: [torchsynth]
 
-# val/loss has a high irreducible floor (near-inaudible params); the audio-domain
-# metric reflects actual inversion quality — see PR #1810 experiment log.
+# val/loss has a high irreducible floor (near-inaudible params), so the audio-domain
+# signal is what reflects inversion quality (PR #1810). That signal now comes from the
+# val-audio probe rather than an in-module val/lsd; the checkpoint monitor tracks
+# val/param_mse because probe metrics arrive a validation late and can be skipped.
 callbacks:
   model_checkpoint:
-    monitor: val/lsd
+    monitor: val/param_mse
   early_stopping: null
+
+# The probe renders predictions off-loop for audio metrics; it needs both a render
+# group and the root synth identity.
+training:
+  val_audio_probe: auto
 
 # Fresh train rows each epoch: E2 vs E5 in the PR #1810 log show the fixed split
 # memorizes (val rises past the 0.0833 prior) while resampling crosses below it.

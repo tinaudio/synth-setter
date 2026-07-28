@@ -20,11 +20,8 @@ def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/ffn"])
 
-    assert cfg.callbacks.model_checkpoint.monitor == "val/lsd"
-    assert (
-        cfg.model._target_
-        == "synth_setter.models.torchsynth_ff_module.TorchSynthFeedForwardModule"
-    )
+    assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse"
+    assert cfg.model._target_ == "synth_setter.models.vst_ff_module.VSTFeedForwardModule"
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.model.net.in_dim == 176_400
     assert (
@@ -68,3 +65,37 @@ def test_torchsynth_ffn_four_second_model_has_bounded_parameter_count() -> None:
     network = instantiate(cfg.model.net)
 
     assert sum(parameter.numel() for parameter in network.parameters()) < 3_000_000
+
+
+def _flow_cfg():
+    """Compose the torchsynth flow experiment.
+
+    :returns: The composed Hydra config.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow"])
+
+
+def test_torchsynth_flow_experiment_uses_the_vst_flow_module() -> None:
+    """Torchsynth trains through the same flow module as every VST synth."""
+    cfg = _flow_cfg()
+    assert (
+        cfg.model._target_ == "synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule"
+    )
+    assert (
+        cfg.datamodule._target_ == "synth_setter.data.torchsynth_datamodule.TorchSynthDataModule"
+    )
+
+
+def test_torchsynth_flow_experiment_observes_raw_audio() -> None:
+    """Online rendering has no stored mel column, so the encoder takes the waveform."""
+    cfg = _flow_cfg()
+    assert cfg.model.conditioning == "audio"
+    assert cfg.model.encoder._target_ == "synth_setter.models.components.cnn.LogMelEncoder"
+
+
+def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() -> None:
+    """The val-audio probe needs both a render group and the root synth identity."""
+    cfg = _flow_cfg()
+    assert cfg.synth.param_spec_name == "torchsynth_full"
+    assert cfg.training.val_audio_probe == "auto"

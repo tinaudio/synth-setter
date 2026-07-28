@@ -18,7 +18,6 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from synth_setter.data.ot import regular_collate_fn
 from synth_setter.data.sample_seed import derive_sample_seed
 
 # Re-exported for backward compat: training code imports these names from this module.
@@ -44,10 +43,6 @@ TorchSynthItem: TypeAlias = tuple[
 TorchSynthBatch: TypeAlias = tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
 ]
-# The VST module family consumes dict batches; "tuple" is the legacy shape the ksin
-# feed-forward module needs and is removed once experiment/torchsynth/ffn.yaml migrates
-# to vst_ff_module. See https://github.com/tinaudio/synth-setter/issues/2585.
-BatchFormat: TypeAlias = Literal["tuple", "dict"]
 # Finite params clamp into the open interval (0, 1) because model predictions are unconstrained.
 # NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
@@ -300,7 +295,6 @@ class TorchSynthDataModule(LightningDataModule):
         signal_length: int = 4_410,
         midi_pitch: int = 60,
         num_params: int = NUM_PARAMS,
-        batch_format: BatchFormat = "tuple",
         train_val_test_sizes: tuple[int, int, int] = (100_000, 10_000, 10_000),
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
@@ -313,8 +307,6 @@ class TorchSynthDataModule(LightningDataModule):
         :param signal_length: Number of output samples per rendered row.
         :param midi_pitch: Fixed MIDI note rendered for every parameter row.
         :param num_params: Expected parameter width, validated against TorchSynth in ``setup``.
-        :param batch_format: ``dict`` for the VST module family, ``tuple`` for the legacy
-            ksin feed-forward module.
         :param train_val_test_sizes: Row counts for the train, validation, and test splits.
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
@@ -327,7 +319,6 @@ class TorchSynthDataModule(LightningDataModule):
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
         self.num_params = num_params
-        self.batch_format = batch_format
         self.train_val_test_sizes = train_val_test_sizes
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
@@ -372,12 +363,16 @@ class TorchSynthDataModule(LightningDataModule):
         *,
         shuffle: bool = False,
         sampler: Sampler[int] | None = None,
+        drop_last: bool = False,
     ) -> DataLoader[TorchSynthBatch]:
         """Wrap one online split with the shared tuple collator.
 
         :param dataset: Online split to load.
         :param shuffle: Whether to shuffle logical row indices; exclusive with ``sampler``.
         :param sampler: Index sampler overriding the default order.
+        :param drop_last: Whether to drop a trailing partial batch. Set on training only:
+            the renderer caches per batch size, and a partial final batch misses that
+            cache. Evaluation keeps its remainder rather than silently losing rows.
         :returns: Batched online data loader.
         """
         # persistent_workers / pin_memory are unset — per-epoch worker Voice rebuilds
@@ -390,12 +385,8 @@ class TorchSynthDataModule(LightningDataModule):
                 shuffle=shuffle,
                 sampler=sampler,
                 num_workers=self.num_workers,
-                drop_last=self.batch_format == "dict",
-                collate_fn=(
-                    partial(collate_vst_dict, sample_rate=self.sample_rate)
-                    if self.batch_format == "dict"
-                    else regular_collate_fn
-                ),
+                drop_last=drop_last,
+                collate_fn=partial(collate_vst_dict, sample_rate=self.sample_rate),
             ),
         )
 
@@ -405,8 +396,10 @@ class TorchSynthDataModule(LightningDataModule):
         :returns: Batched online training data.
         """
         if self.resample_train_per_epoch:
-            return self._loader(self.train, sampler=_FreshEpochSampler(len(self.train)))
-        return self._loader(self.train, shuffle=True)
+            return self._loader(
+                self.train, sampler=_FreshEpochSampler(len(self.train)), drop_last=True
+            )
+        return self._loader(self.train, shuffle=True, drop_last=True)
 
     def val_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online validation loader.

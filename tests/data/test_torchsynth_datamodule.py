@@ -109,7 +109,8 @@ def test_datamodule_test_dataloader_yields_finite_batch() -> None:
         num_workers=0,
     )
     datamodule.setup("test")
-    audio, params, *_ = next(iter(datamodule.test_dataloader()))
+    batch = next(iter(datamodule.test_dataloader()))
+    audio, params = batch["audio"], batch["params"]
     assert audio.shape[0] == params.shape[0] == 2
     assert params.shape[1] == datamodule.num_params
     assert torch.isfinite(audio).all()
@@ -127,7 +128,7 @@ def test_datamodule_validate_stage_builds_only_validation_split() -> None:
     assert hasattr(datamodule, "val")
     assert not hasattr(datamodule, "train")
     assert not hasattr(datamodule, "test")
-    audio, *_ = next(iter(datamodule.val_dataloader()))
+    audio = next(iter(datamodule.val_dataloader()))["audio"]
     assert torch.isfinite(audio).all()
 
 
@@ -151,7 +152,7 @@ def _epoch_param_rows(loader: DataLoader[TorchSynthBatch]) -> list[tuple[float, 
     :param loader: Batched loader over one online split.
     :returns: One flattened parameter tuple per batch, in iteration order.
     """
-    return [tuple(params.flatten().tolist()) for _, params, *_ in loader]
+    return [tuple(batch["params"].flatten().tolist()) for batch in loader]
 
 
 def test_datamodule_resample_train_per_epoch_yields_fresh_rows_each_epoch() -> None:
@@ -242,7 +243,8 @@ def test_datamodule_multiprocessing_workers_render_finite_batches() -> None:
     batches = list(datamodule.train_dataloader())
 
     assert len(batches) == 2
-    for audio, params, *_ in batches:
+    for batch in batches:
+        audio, params = batch["audio"], batch["params"]
         assert audio.shape[0] == params.shape[0] == 2
         assert params.shape[1] == datamodule.num_params
         assert torch.isfinite(audio).all()

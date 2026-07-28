@@ -10,6 +10,7 @@ from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import (
     Conditioning,
+    raw_conditioning_key,
     resolve_embedding_conditioning,
     select_conditioning,
 )
@@ -97,6 +98,7 @@ class VSTFlowMatchingModule(LightningModule):
         self.encoder = encoder
         self.vector_field = vector_field
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
+        self._raw_conditioning_key = raw_conditioning_key(conditioning)
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
@@ -141,7 +143,7 @@ class VSTFlowMatchingModule(LightningModule):
         return target
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return select_conditioning(batch, self._embedding_conditioning)
+        return select_conditioning(batch, self._embedding_conditioning, self._raw_conditioning_key)
 
     def _train_step(self, batch: dict[str, torch.Tensor]):
         conditioning = self._get_conditioning_from_batch(batch)

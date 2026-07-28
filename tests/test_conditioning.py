@@ -1,11 +1,14 @@
 """Tests for conditioning configuration contracts."""
 
 import pytest
+import torch
 from pydantic import ValidationError
 
 from synth_setter.conditioning import (
     EmbeddingConditioningSpec,
+    raw_conditioning_key,
     resolve_embedding_conditioning,
+    select_conditioning,
 )
 
 
@@ -64,3 +67,22 @@ def test_resolve_embedding_conditioning_unknown_literal_raises() -> None:
     """Unsupported legacy literals fail at the strict routing boundary."""
     with pytest.raises(ValueError, match="unknown conditioning mode 'clap'"):
         resolve_embedding_conditioning("clap")  # type: ignore[arg-type]
+
+
+def test_audio_mode_selects_the_raw_waveform_batch_key():
+    """Online-render synths have no stored mel; their observation is the waveform."""
+    batch = {"mel_spec": torch.zeros(2, 1, 4, 4), "audio": torch.ones(2, 128)}
+    key = raw_conditioning_key("audio")
+    assert torch.equal(select_conditioning(batch, None, raw_key=key), batch["audio"])
+
+
+def test_mel_mode_still_selects_the_mel_batch_key():
+    """The default observation stays the stored mel spectrogram."""
+    batch = {"mel_spec": torch.zeros(2, 1, 4, 4), "audio": torch.ones(2, 128)}
+    key = raw_conditioning_key("mel")
+    assert torch.equal(select_conditioning(batch, None, raw_key=key), batch["mel_spec"])
+
+
+def test_audio_mode_resolves_to_no_embedding_spec():
+    """Raw audio is not a Lance embedding column."""
+    assert resolve_embedding_conditioning("audio") is None
