@@ -452,7 +452,7 @@ docs:
       - pattern: ".github/workflows/test.yml"
         covers: "Default PR CI — runs make test-ci-unit (marker filter centralized in the Makefile, #1353)"
       - pattern: ".github/workflows/cpu-slow.yml"
-        covers: "Post-merge slow CPU-only lane — runs make test-ci-slow (#1353); runner sized to avoid PyTorch CPU OOM; auto-files a ci-automation Bug on post-merge failure"
+        covers: "Slow CPU lanes: full test-ci-slow with R2 after merge/dispatch; R2-excluded test-ci-slow-pr on qualifying PRs"
       - pattern: ".github/workflows/test-mps.yml"
         covers: "Pre-submit MPS lane on macos-latest (-m mps), triggered on src/synth_setter/configs/ PRs"
       - pattern: ".github/workflows/test-gpu.yml"
