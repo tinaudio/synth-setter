@@ -749,6 +749,50 @@ def new(value: torch.Tensor):
     assert "new.py:new:JAX002" in result.stdout
 
 
+def test_linter_github_checkout_without_remote_uses_first_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use the checkout commit's first parent when the base remote is absent.
+
+    :param tmp_path: Isolated git repository.
+    :param monkeypatch: GitHub Actions environment fixture.
+    """
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+    _commit_all(tmp_path)
+    (tmp_path / "dummy.txt").write_text("merge checkout\n")
+    subprocess.run([GIT, "add", "dummy.txt"], cwd=tmp_path, check=True)  # noqa: S603
+    subprocess.run(  # noqa: S603
+        [
+            GIT,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "merge checkout",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "new.py").write_text("def new(value):\n    return value\n")
+    baseline.write_text("new.py:new:JAX001\n")
+    monkeypatch.setenv("GITHUB_BASE_REF", "main")
+    monkeypatch.delenv("MODEL_TYPING_BASE_REF", raising=False)
+
+    result = _run_linter(
+        models_dir,
+        baseline,
+        allow_missing_git_base=False,
+    )
+
+    assert result.returncode == 1
+    assert "baseline additions are forbidden: new.py:new:JAX001" in result.stdout
+
+
 def test_linter_missing_git_base_fails_closed(tmp_path: Path) -> None:
     """Reject baseline validation outside a git repository by default.
 

@@ -551,6 +551,28 @@ def _run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _resolve_base_ref(root: Path) -> str:
+    """Resolve the frozen baseline ref in local and GitHub checkouts.
+
+    :param root: Git repository root.
+    :returns: First resolvable explicit, remote-base, or merge-parent ref.
+    :raises RuntimeError: If no expected base ref resolves.
+    """
+    explicit_base = os.environ.get("MODEL_TYPING_BASE_REF")
+    github_base = os.environ.get("GITHUB_BASE_REF")
+    if explicit_base:
+        candidates = [explicit_base]
+    elif github_base:
+        candidates = [f"origin/{github_base}", "HEAD^1"]
+    else:
+        candidates = ["origin/main"]
+    for candidate in candidates:
+        result = _run_git(root, ["rev-parse", "--verify", f"{candidate}^{{commit}}"])
+        if result.returncode == 0:
+            return candidate
+    raise RuntimeError(f"cannot resolve model typing base ref from {candidates!r}")
+
+
 def _read_base_baseline(path: Path, *, allow_missing_git_base: bool) -> set[str] | None:
     """Read the frozen baseline from the pull request's git base.
 
@@ -567,13 +589,7 @@ def _read_base_baseline(path: Path, *, allow_missing_git_base: bool) -> set[str]
 
     root = Path(root_result.stdout.strip())
     relative_path = path.resolve().relative_to(root.resolve()).as_posix()
-    explicit_base = os.environ.get("MODEL_TYPING_BASE_REF")
-    github_base = os.environ.get("GITHUB_BASE_REF")
-    base_ref = explicit_base or (f"origin/{github_base}" if github_base else "origin/main")
-    ref_result = _run_git(root, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"])
-    if ref_result.returncode != 0:
-        raise RuntimeError(f"cannot resolve model typing base ref {base_ref!r}")
-
+    base_ref = _resolve_base_ref(root)
     show_result = _run_git(root, ["show", f"{base_ref}:{relative_path}"])
     if show_result.returncode != 0:
         return None
