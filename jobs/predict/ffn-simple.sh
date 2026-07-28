@@ -21,9 +21,10 @@
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
+experiment=ffn_simple
 python -m synth_setter.cli.eval \
-    experiment=surge/ffn_simple \
-    ckpt_path='${wandb:tinaudio/synth-setter/model-ffn_simple:latest}' \
+    experiment="surge/${experiment}" \
+    ckpt_path="\${wandb:tinaudio/synth-setter/model-${experiment}:latest}" \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/ffn_simple/ \
     datamodule=surge_simple \
     callbacks=eval_surge \

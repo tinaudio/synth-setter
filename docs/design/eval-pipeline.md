@@ -579,22 +579,22 @@ hands Lightning a resolved local path transparently.
 
 **What this replaces:**
 
-- `get-ckpt-from-wandb.sh` — replaced by `${wandb:...}` resolver in experiment configs (same data source, cleaner interface)
-- Per-script W&B run IDs — replaced by pinned W&B artifact references in experiment YAML
+- `get-ckpt-from-wandb.sh` — replaced by explicit `${wandb:...}` overrides (same data source, cleaner interface)
+- Per-script W&B run IDs — replaced by W&B artifact references at evaluation call sites
 - 19 SGE scripts — deprecated, not maintained
 
 #### Proposed design outcomes
 
-| Config value                                                                             | What happens                                                                       | Portable? | Reproducible?                 |
-| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------- | ----------------------------- |
-| `ckpt_path: ???` (base eval.yaml)                                                        | Hydra errors — forces user to specify                                              | —         | —                             |
-| `ckpt_path: ./local/best.ckpt` (CLI)                                                     | Uses local file directly                                                           | No        | No (path is machine-specific) |
-| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (experiment config) | OmegaConf resolves lazily → downloads from W&B, caches locally, returns local path | Yes       | Yes (artifact ref is stable)  |
-| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (CLI override)      | Same as above, but ad-hoc                                                          | Yes       | No (not pinned in config)     |
-| `ckpt_path: null` (train.yaml)                                                           | Start training from scratch                                                        | Yes       | Yes                           |
-| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (training resume)   | Resolves lazily → downloads latest checkpoint, resumes optimizer/epoch state       | Yes       | Yes                           |
+| Config value                                                                           | What happens                                                                       | Portable? | Reproducible?                 |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------- | ----------------------------- |
+| `ckpt_path: ???` (base eval.yaml)                                                      | Hydra errors — forces user to specify                                              | —         | —                             |
+| `ckpt_path: ./local/best.ckpt` (CLI)                                                   | Uses local file directly                                                           | No        | No (path is machine-specific) |
+| `ckpt_path=${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (CLI or launcher)  | OmegaConf resolves lazily → downloads from W&B, caches locally, returns local path | Yes       | Yes (artifact ref is stable)  |
+| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (CLI override)    | Same as above, but ad-hoc                                                          | Yes       | No (not pinned in config)     |
+| `ckpt_path: null` (train.yaml)                                                         | Start training from scratch                                                        | Yes       | Yes                           |
+| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (training resume) | Resolves lazily → downloads latest checkpoint, resumes optimizer/epoch state       | Yes       | Yes                           |
 
-**Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `${wandb:...}` OmegaConf resolver makes pinned values portable across machines — resolution is lazy and cached. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§10](#10-alternatives-considered) for the full cost/benefit analysis vs R2.
+**Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). Evaluation call sites pass either a local path or a reproducible W&B artifact reference. The `${wandb:...}` OmegaConf resolver makes artifact references portable across machines through lazy, cached resolution. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§10](#10-alternatives-considered) for the full cost/benefit analysis vs R2.
 
 **Legacy compiled checkpoints:** checkpoints written by `compile: true` runs before in-place compilation (#2241) carry `_orig_mod` key parts and fail strict loading. `evaluate()` wraps every `trainer.{test,validate,predict}` call in `checkpoint_migration_hint`, re-raising such failures with the fix: `synth-setter-migrate-checkpoint <ckpt> <output>` rewrites the state dict to the uncompiled layout (#2259).
 
@@ -702,7 +702,7 @@ Cloud evaluation runs as `MODE=eval` (planned — [#410](https://github.com/tina
 
 |                            | Current                                     | Proposed                                                                                   |
 | -------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **Eval checkpoint**        | Shell script finds local file by W&B run ID | Pinned `${wandb:...}` resolver in experiment config or CLI arg                             |
+| **Eval checkpoint**        | Shell script finds local file by W&B run ID | Explicit `${wandb:...}` override in the launcher or CLI                                    |
 | **Training checkpoint**    | `ckpt_path: null` (start fresh)             | Same — no change                                                                           |
 | **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (portable)             |
 | **Upload during training** | W&B `log_model: "all"` (every checkpoint)   | Best ckpt → R2 at train end, referenced by the model artifact (`log_model: False`)         |
@@ -855,7 +855,7 @@ ______________________________________________________________________
 **Key behaviors:**
 
 - `dataset_root` has a sensible Hydra default; override via CLI when needed
-- `ckpt_path` resolved per [§7.2](#72-checkpoint-resolution) — CLI arg or experiment config, supports `${wandb:...}` resolver
+- `ckpt_path` resolved per [§7.2](#72-checkpoint-resolution) — explicit CLI or launcher override, including `${wandb:...}` references
 - `paths.log_dir` keeps the existing default (`${paths.root_dir}/logs/`)
 - Fails fast with clear error if dataset not found
 
