@@ -7,6 +7,10 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 ConditioningMode = Literal["mel", "m2l"]
+# Mirrors shapes.SKETCH_CONTROL_FIELD / NUM_SKETCH_CONTROLS; importing the
+# data.vst package here would break the model modules' thin import contract.
+SKETCH_CONTROL_FIELD = "sketch_ctrl"
+NUM_SKETCH_CONTROLS = 3
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
 
 
@@ -30,6 +34,52 @@ class EmbeddingConditioningSpec(BaseModel):
 
     column: str = Field(min_length=1)
     input_shape: tuple[PositiveInt, ...] = Field(min_length=1)
+
+
+class SketchControlSpec(BaseModel):
+    """Select the stored time-varying sketch control column for conditioning.
+
+    .. attribute :: model_config
+
+        Strict immutable Pydantic model configuration.
+
+    .. attribute :: column
+
+        Stored Lance column name.
+
+    .. attribute :: num_controls
+
+        Control tracks per row (loudness, spectral centroid, pitch).
+
+    .. attribute :: num_frames
+
+        Mel-grid frames per control track.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    column: str = SKETCH_CONTROL_FIELD
+    num_controls: PositiveInt = NUM_SKETCH_CONTROLS
+    num_frames: PositiveInt
+
+
+SketchControls = SketchControlSpec | Mapping[str, object] | None
+
+
+def resolve_sketch_controls(sketch: SketchControls) -> SketchControlSpec | None:
+    """Resolve optional sketch-control configuration from Hydra or code.
+
+    :param sketch: ``None``, a parsed spec, or a Hydra mapping.
+    :returns: Parsed spec, or ``None`` when sketch conditioning is off.
+    :raises TypeError: If ``sketch`` is neither ``None``, a spec, nor a mapping.
+    """
+    if sketch is None:
+        return None
+    if isinstance(sketch, SketchControlSpec):
+        return sketch
+    if not isinstance(sketch, Mapping):
+        raise TypeError(f"sketch must be None, a spec, or a mapping, got {sketch!r}")
+    return SketchControlSpec.model_validate(dict(sketch))
 
 
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]

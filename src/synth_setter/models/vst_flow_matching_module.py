@@ -10,7 +10,9 @@ from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import (
     Conditioning,
+    SketchControls,
     resolve_embedding_conditioning,
+    resolve_sketch_controls,
     select_conditioning,
 )
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
@@ -59,6 +61,7 @@ class VSTFlowMatchingModule(LightningModule):
         *,
         num_params: int,
         conditioning: Conditioning = "mel",
+        sketch: SketchControls = None,
         encoder_num_heads: int | None = None,
         encoder_output_dim: int | None = None,
         warmup_steps: int = 5000,
@@ -79,6 +82,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
+        :param sketch: Optional sketch-control spec routing ``sketch_ctrl`` batches
+            into a fused encoder; requires an encoder accepting both modalities.
         :param encoder_num_heads: Model-owned attention head count for sequence encoders.
         :param encoder_output_dim: Configured encoder width consumed by the vector field.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
@@ -97,6 +102,7 @@ class VSTFlowMatchingModule(LightningModule):
         self.encoder = encoder
         self.vector_field = vector_field
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
+        self._sketch_controls = resolve_sketch_controls(sketch)
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
@@ -143,13 +149,27 @@ class VSTFlowMatchingModule(LightningModule):
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return select_conditioning(batch, self._embedding_conditioning)
 
-    def _train_step(self, batch: dict[str, torch.Tensor]):
+    def _encoder_inputs(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, ...]:
+        """Collect the encoder's positional inputs for one batch.
+
+        :param batch: Model batch holding conditioning and optional sketch controls.
+        :returns: ``(conditioning,)`` or ``(conditioning, sketch_ctrl)``.
+        """
         conditioning = self._get_conditioning_from_batch(batch)
+        if self._sketch_controls is None:
+            return (conditioning,)
+        return (conditioning, batch["sketch_ctrl"])
+
+    def _train_step(self, batch: dict[str, torch.Tensor]):
         params = batch["params"]
         noise = batch["noise"]
 
-        conditioning = self.encoder(conditioning)
-        z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
+        conditioning = self.encoder(*self._encoder_inputs(batch))
+        if getattr(self.encoder, "applies_cfg_dropout", False):
+            # Fused encoders own per-modality CFG dropout in training mode.
+            z = conditioning
+        else:
+            z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
 
         with torch.no_grad():
             t = self._sample_time(params.shape[0], params.device)
@@ -190,13 +210,24 @@ class VSTFlowMatchingModule(LightningModule):
 
     def _sample(
         self,
-        conditioning: torch.Tensor | None,
+        conditioning: torch.Tensor | tuple[torch.Tensor, ...] | None,
         noise: torch.Tensor,
         steps: int,
         cfg_strength: float,
     ):
+        vector_field = self.vector_field
         if conditioning is not None:
-            conditioning = self.encoder(conditioning)
+            inputs = conditioning if isinstance(conditioning, tuple) else (conditioning,)
+            conditioning = self.encoder(*inputs)
+            null_conditioning = getattr(self.encoder, "null_conditioning", None)
+            if null_conditioning is not None:
+                # Route the CFG unconditional branch through the encoder's own
+                # all-null rank-3 conditioning instead of the field's rank-2 token.
+                uncond = null_conditioning(noise.shape[0], noise.device)
+                base_field = self.vector_field
+
+                def vector_field(x, t, z, base_field=base_field, uncond=uncond):
+                    return base_field(x, t, uncond if z is None else z)
 
         t = torch.zeros(noise.shape[0], 1, device=noise.device)
         dt = 1.0 / steps
@@ -209,7 +240,7 @@ class VSTFlowMatchingModule(LightningModule):
             warped_dt = warped_t_plus_dt - warped_t
 
             sample = rk4_with_cfg(
-                self.vector_field,
+                vector_field,
                 sample,
                 warped_t,
                 warped_dt,
@@ -221,7 +252,7 @@ class VSTFlowMatchingModule(LightningModule):
         return sample
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
+        conditioning = self._encoder_inputs(batch)
         pred_params = self._sample(
             conditioning,
             torch.randn_like(batch["params"]),
@@ -253,7 +284,7 @@ class VSTFlowMatchingModule(LightningModule):
         pass
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
+        conditioning = self._encoder_inputs(batch)
         pred_params = self._sample(
             conditioning,
             torch.randn_like(batch["params"]),
@@ -278,14 +309,14 @@ class VSTFlowMatchingModule(LightningModule):
         pass
 
     def predict_step(self, batch: dict[str, Any], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
+        conditioning = self._encoder_inputs(batch)
         return (
             self._sample(
                 conditioning,
                 torch.randn(
-                    conditioning.shape[0],
+                    conditioning[0].shape[0],
                     self.hparams.num_params,
-                    device=conditioning.device,
+                    device=conditioning[0].device,
                 ),
                 self.hparams.test_sample_steps,
                 self.hparams.test_cfg_strength,

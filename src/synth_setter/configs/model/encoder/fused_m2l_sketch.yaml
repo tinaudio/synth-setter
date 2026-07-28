@@ -1,0 +1,22 @@
+_target_: synth_setter.models.components.fused_conditioning.FusedConditioningEncoder
+m2l_encoder:
+  _target_: synth_setter.models.components.embed_pool.EmbeddingPool
+  embed_dim: 128
+  d_model: ${model.encoder.d_m2l}
+  num_heads: ${model.encoder_num_heads}
+  pos_enc: sin
+  max_seq_len: 42
+sketch_encoder:
+  _target_: synth_setter.models.components.fused_conditioning.SketchLayerwiseEncoder
+  num_controls: 3
+  # 4 s @ 44.1 kHz on the 100 fps mel grid.
+  num_frames: 401
+  d_model: ${model.encoder.d_sketch}
+  num_layers: ${model.vector_field.num_layers}
+  num_heads: 4
+  patch_size: 25
+d_m2l: 384
+d_sketch: 128
+num_layers: ${model.vector_field.num_layers}
+modality_dropout_rate: 0.2
+joint_dropout_rate: 0.2

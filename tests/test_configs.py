@@ -250,6 +250,41 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     assert cfg.model.conditioning.column == profile
 
 
+def test_m2l_sketch_adaln_profile_fake_batch_fuses_through_encoder() -> None:
+    """The sketch-adaLN profile yields sketch batches that fuse to rank-3 conditioning."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "conditioning=m2l_sketch_adaln",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.column == "sketch_ctrl"
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["conditioning"].shape == (2, 128, 42)
+    assert batch["sketch_ctrl"].shape == (2, 3, 401)
+    fused = encoder.eval()(batch["conditioning"], batch["sketch_ctrl"])
+    assert fused.shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.vector_field.conditioning_dim,
+    )
+
+
 def _compose_t5gemma_cached_train_cfg(
     model_name: str, model_overrides: Sequence[str]
 ) -> DictConfig:
@@ -384,6 +419,11 @@ def test_embedding_conditioning_profile_encoder_matches_model_output(
     :param profile: Conditioning profile under test.
     :param model_name: VST architecture consuming the profile.
     """
+    if profile == "m2l_sketch_adaln":
+        pytest.skip(
+            "fused two-input encoder is vst_flow-specific; covered by "
+            "test_m2l_sketch_adaln_profile_fake_batch_fuses_through_encoder"
+        )
     cfg = _compose(
         "train.yaml",
         [

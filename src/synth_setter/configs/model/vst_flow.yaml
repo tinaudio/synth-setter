@@ -5,6 +5,8 @@ defaults:
 _target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
 
 conditioning: mel
+# Optional sketch-control spec routing sketch_ctrl batches into a fused encoder.
+sketch: null
 encoder_num_heads: ${model.vector_field.num_heads}
 encoder_output_dim: ${model.vector_field.d_model}
 warmup_steps: 0

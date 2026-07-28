@@ -1,0 +1,28 @@
+# @package _global_
+
+# Experiment: layerwise adaLN injection fusing m2l content conditioning with
+# time-varying sketch controls (loudness, spectral centroid, pitch). The fused
+# encoder emits rank-3 (batch, num_layers, d_m2l + d_sketch) conditioning, so
+# the vector field's conditioning_dim must equal d_m2l + d_sketch.
+defaults:
+  - override /model/encoder: fused_m2l_sketch
+
+model:
+  conditioning:
+    column: m2l
+    input_shape: [128, 42]
+  sketch:
+    column: sketch_ctrl
+    num_controls: 3
+    num_frames: 401
+  vector_field:
+    conditioning_dim: 512
+
+datamodule:
+  conditioning:
+    column: m2l
+    input_shape: [128, 42]
+  sketch:
+    column: sketch_ctrl
+    num_controls: 3
+    num_frames: 401
