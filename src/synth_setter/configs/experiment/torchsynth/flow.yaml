@@ -7,7 +7,8 @@ defaults:
   - override /model: vst_flow
   - override /model/encoder: log_mel
   - override /callbacks: default
-  - override /trainer: gpu
+  # vst_flow's cosine scheduler interpolates ${trainer.max_steps}.
+  - override /trainer: gpu_400k_steps
   - _self_
 
 experiment_name: torchsynth
@@ -21,9 +22,13 @@ model:
   # torch.compile traces through the renderer for audio-loss runs and graph-breaks;
   # keeping it off here keeps this config swappable with flow_audio.
   compile: false
-  encoder_output_dim: ${model.vector_field.d_model}
+  encoder_output_dim: ${model.encoder.out_dim}
   vector_field:
-    n_params: ${datamodule.num_params}
+    # LogMelEncoder emits a flat embedding, so conditioning width is its out_dim
+    # rather than the AST's d_model.
+    conditioning_dim: ${model.encoder.out_dim}
+    projection:
+      num_params: ${datamodule.num_params}
 
 callbacks:
   model_checkpoint:
