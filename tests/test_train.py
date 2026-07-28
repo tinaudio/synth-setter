@@ -14,6 +14,7 @@ import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import ANY, patch
 from typing import Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
@@ -144,6 +145,28 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+def test_train_debug_logs_resolved_cfg_before_datamodule(cfg_train: DictConfig) -> None:
+    """Train() emits the fully-resolved Hydra config via log.debug before any object is instantiated.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        cfg_train.trainer.fast_dev_run = True
+
+    fake_yaml = "model:\n  _target_: fake\n"
+
+    with (
+        patch("synth_setter.cli.train.OmegaConf.to_yaml", return_value=fake_yaml) as mock_yaml,
+        patch("synth_setter.cli.train.log.debug") as mock_debug,
+    ):
+        train(cfg_train)
+
+    mock_yaml.assert_called_once_with(ANY, resolve=True)
+    assert mock_debug.call_count >= 1, "log.debug was never called in train()"
+    first_call = mock_debug.call_args_list[0]
+    assert "Resolved Hydra config" in first_call.args[0]
+    assert first_call.args[1] == fake_yaml
 @pytest.mark.parametrize(
     ("received_sigterm", "expected_exit_code"),
     [(True, 143), (False, 7)],

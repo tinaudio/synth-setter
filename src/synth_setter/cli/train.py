@@ -461,6 +461,11 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
+    try:
+        _cfg_yaml = OmegaConf.to_yaml(cfg, resolve=True)
+    except Exception:  # noqa: BLE001 — resolution failures must not abort training
+        _cfg_yaml = OmegaConf.to_yaml(cfg)
+    log.debug("Resolved Hydra config:\n%s", _cfg_yaml)
     # Before any instantiation work: a require-mode miss or a resume/ckpt_path
     # config error must fail the launch fast.
     config_id = resolve_run_config_id(cfg)
