@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785232193754,
+  "lastUpdate": 1785232197077,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -19483,6 +19483,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.992061171800003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38211270ac6ae9bf0851b1f688bf6339982be3fc",
+          "message": "refactor(code-health): remove obsolete KSin, kOsc, and FM paths (#2594)\n\n* refactor(code-health): remove obsolete synthetic synth paths\n\n* refactor(code-health): remove legacy token losses\n\n* chore(lint): remove deleted synthetic loss exemptions",
+          "timestamp": "2026-07-28T01:55:15-07:00",
+          "tree_id": "47fb097d149130a8ef3f223a8df20d39ef484608",
+          "url": "https://github.com/tinaudio/synth-setter/commit/38211270ac6ae9bf0851b1f688bf6339982be3fc"
+        },
+        "date": 1785232196395,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.929444313049316,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.83355984941125,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.11823149770498276,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006345570087432861,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2788853645324707,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.903537501199981,
             "unit": "seconds"
           }
         ]
