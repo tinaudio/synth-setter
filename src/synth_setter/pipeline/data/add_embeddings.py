@@ -32,10 +32,17 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    SSONDO_FIELD,
     T5GEMMA_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.ssondo import (
+    DEFAULT_SSONDO_CHECKPOINT,
+    SSONDO_EMBEDDING_DIM,
+    SSONDOEncodeFn,
+    load_ssondo_audio_encoder,
+)
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -79,7 +86,7 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 
@@ -103,12 +110,17 @@ class IndexSpec:
     .. attribute :: vector_column
 
         Companion vector column, or ``None`` to index the embedding column.
+
+    .. attribute :: vector_dim
+
+        Static vector width for config validation, or ``None`` when output-derived.
     """
 
     metric: str = DEFAULT_INDEX_METRIC
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS
     pool: Literal["none", "mean", "attention"] = "none"
     vector_column: str | None = None
+    vector_dim: int | None = None
 
 
 @dataclass(frozen=True)
@@ -392,6 +404,16 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_same_audio_encoder(checkpoint, config.device)
 
 
+def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load S-SONDO through its pinned checkpoint adapter.
+
+    :param checkpoint: Pinned Hugging Face repo id or hash-identical local artifact.
+    :param config: Run config supplying the device.
+    :returns: S-SONDO encoder over source audio.
+    """
+    return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
+
+
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -422,6 +444,25 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
+def _encode_ssondo_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as fixed-width S-SONDO vectors.
+
+    :param audio: ``(B, C, T)`` source audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: S-SONDO encoder over source audio.
+    :returns: Fixed-size-list float32 array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    encode = cast("SSONDOEncodeFn", encoder)
+    vectors = _finite_embedding(SSONDO_FIELD, encode(audio, sample_rate))
+    expected_shape = (len(audio), SSONDO_EMBEDDING_DIM)
+    if vectors.shape != expected_shape:
+        raise ValueError(
+            f"{SSONDO_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
+        )
+    return _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)
+
+
 def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
     """Encode one param batch as a fixed-shape text-embedding tensor column.
 
@@ -450,7 +491,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         column=CLAP_FIELD,
         default_checkpoint=DEFAULT_CLAP_CHECKPOINT,
         co_resident=True,
-        index=IndexSpec(pool="none"),
+        index=IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM),
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
     ),
@@ -480,6 +521,15 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
+    ),
+    "ssondo": EmbeddingSpec(
+        name="ssondo",
+        column=SSONDO_FIELD,
+        default_checkpoint=DEFAULT_SSONDO_CHECKPOINT,
+        co_resident=True,
+        index=IndexSpec(pool="none", vector_dim=SSONDO_EMBEDDING_DIM),
+        load_encoder=_load_ssondo_spec_encoder,
+        encode_column=_encode_ssondo_column,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.

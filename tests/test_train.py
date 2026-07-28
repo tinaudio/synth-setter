@@ -1927,7 +1927,14 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
+_ALL_EMBEDDING_CONDITIONING_PROFILES = (
+    "clap",
+    "m2l",
+    "same_s",
+    "same_l",
+    "ssondo",
+    "t5gemma",
+)
 
 
 def _assert_t5gemma_feed_forward_checkpoint_validates(

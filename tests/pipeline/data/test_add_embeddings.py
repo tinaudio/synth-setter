@@ -278,8 +278,15 @@ def test_downmix_to_mono_with_any_channel_count_averages_to_float32(
 
 def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None:
     """The registry is the single source of truth for all supported embeddings."""
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
-    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "ssondo",
+        "t5gemma",
+    }
+    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none", vector_dim=512)
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
     )
@@ -289,12 +296,14 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_l"].index == IndexSpec(
         pool="mean", vector_column=f"{SAME_L_FIELD}_vec"
     )
+    assert EMBEDDING_REGISTRY["ssondo"].index == IndexSpec(pool="none", vector_dim=960)
     assert EMBEDDING_REGISTRY["t5gemma"].index is None
     assert EMBEDDING_REGISTRY["t5gemma"].input_field == PARAM_ARRAY_FIELD
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
+    assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
 
 
@@ -1193,7 +1202,7 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
             8,
             "l2",
         ),
-        (CLAP_FIELD, IndexSpec(pool="none"), 4, 8, "l2"),
+        (CLAP_FIELD, IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM), 4, 8, "l2"),
         (
             f"{M2L_FIELD}_vec",
             IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),

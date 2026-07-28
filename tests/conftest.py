@@ -1082,6 +1082,8 @@ def local_embedding_checkpoints() -> dict[str, str]:
     from huggingface_hub import snapshot_download
     from music2latent.inference import download_model, load_path_inference_default
 
+    from synth_setter.pipeline.data.ssondo import resolve_ssondo_checkpoint
+
     download_model()
     snapshot_download(
         "laion/clap-htsat-unfused",
@@ -1118,7 +1120,9 @@ def local_embedding_checkpoints() -> dict[str, str]:
         if os.environ.get("SYNTH_SETTER_REQUIRE_EMBEDDING_E2E") == "true":
             pytest.fail(message)
         pytest.skip(message)
-    return {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints = {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints["ssondo"] = str(resolve_ssondo_checkpoint())
+    return checkpoints
 
 
 @pytest.fixture(scope="function")
@@ -1505,7 +1509,7 @@ def augment_lance_splits_with_all_embeddings(
         "-m",
         "synth_setter.pipeline.data.add_embeddings",
         f"lance_uri={train_uri}",
-        "embeddings=[clap,m2l,same_s,same_l,t5gemma]",
+        "embeddings=[clap,m2l,same_s,same_l,ssondo,t5gemma]",
         f"param_spec_name={param_spec_name}",
         "device=cpu",
         "build_index=false",
@@ -1536,6 +1540,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         PARAM_ARRAY_FIELD,
         SAME_L_FIELD,
         SAME_S_FIELD,
+        SSONDO_FIELD,
         T5GEMMA_FIELD,
     )
     from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
@@ -1544,7 +1549,14 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "ssondo",
+        "t5gemma",
+    }
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
@@ -1553,12 +1565,21 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         M2L_FIELD,
         SAME_S_FIELD,
         SAME_L_FIELD,
+        SSONDO_FIELD,
         T5GEMMA_FIELD,
     } <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
     table = dataset.to_table(
-        columns=[AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD, T5GEMMA_FIELD]
+        columns=[
+            AUDIO_FIELD,
+            CLAP_FIELD,
+            M2L_FIELD,
+            SAME_S_FIELD,
+            SAME_L_FIELD,
+            SSONDO_FIELD,
+            T5GEMMA_FIELD,
+        ]
     )
     for column in table.columns:
         assert column.null_count == 0
@@ -1568,6 +1589,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
     same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
     same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
+    ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
     t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
 
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
@@ -1577,6 +1599,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         ("m2l", m2l, (_EMBEDDING_E2E_ROWS, 128, 42)),
         ("same_s", same_s, (_EMBEDDING_E2E_ROWS, 256, 44)),
         ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
+        ("ssondo", ssondo, (_EMBEDDING_E2E_ROWS, 960)),
     ):
         assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
         assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"
