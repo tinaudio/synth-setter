@@ -1145,13 +1145,12 @@ interrupted run can resume without re-encoding already-processed rows (see
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 
-`tinymu` runs TinyMU's frozen MATPAC encoder through an external, exact-commit
-source checkout because upstream has no detected license file; synth-setter does
-not redistribute that source. The pinned R2 checkpoint is verified by SHA-256,
-and root-mode provenance records both identities after every split commit. The adapter rejects
-source drift, incompatible model state, malformed audio,
-shape drift, and non-finite output. The measured preprocessing, sequence shape,
-cache identity, source boundary, and `conditioning=tinymu` profile are documented
+`tinymu` runs TinyMU's frozen MATPAC encoder through its public package API,
+installed from an exact Git commit in the normal heavy runtime. The pinned R2
+checkpoint is verified by SHA-256, and root-mode provenance records both identities
+after every split commit. The integration rejects incompatible model state,
+malformed audio, shape drift, and non-finite output. The measured preprocessing,
+sequence shape, cache identity, package boundary, and `conditioning=tinymu` profile are documented
 in [TinyMU audio embeddings](../reference/tinymu-embeddings.md).
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.

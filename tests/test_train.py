@@ -2010,19 +2010,17 @@ def test_train_all_embedding_conditioning_real_e2e(
 @pytest.mark.integration_r2
 @pytest.mark.r2
 def test_train_tinymu_conditioning_real_lance_uses_generic_pooler(
-    tinymu_source_dir: Path,
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
     """Real TinyMU Lance tensors train through the generic conditioning pooler.
 
-    :param tinymu_source_dir: Pinned external TinyMU checkout.
     :param tmp_path: Training output directory.
     :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
     :param param_spec_name: Parameter specification driving model width.
     """
-    dataset_root = augment_lance_splits_with_tinymu(surge_xt_smoke_datasets, tinymu_source_dir)
+    dataset_root = augment_lance_splits_with_tinymu(surge_xt_smoke_datasets)
     cfg = build_surge_xt_embedding_train_cfg(
         tmp_path,
         dataset_root,

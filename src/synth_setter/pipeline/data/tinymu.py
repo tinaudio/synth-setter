@@ -1,26 +1,18 @@
-"""Pinned-source adapter for TinyMU's frozen MATPAC audio encoder.
+"""TinyMU MATPAC audio-encoder integration.
 
-TinyMU has no detected license file, so this module does not redistribute its source. Runtime
-loading requires an external checkout at the exact recorded commit plus the hash-pinned checkpoint.
-Usage::
-
-    encoder = load_tinymu_audio_encoder(source_dir=Path(os.environ["TINYMU_SOURCE_DIR"]))
-    embeddings = encoder(audio_batch, sample_rate)
+TinyMU is installed at a pinned package commit; synth-setter owns checkpoint verification, input
+preparation, inference validation, and output orientation.
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import math
 import os
-import subprocess
-import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Protocol, Self, cast
 
 import numpy as np
@@ -35,9 +27,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-TINYMU_SOURCE_COMMIT = "eadbe2fc96cbbb5cdb9f91604c7a4e63782e6e7b"
-TINYMU_SOURCE_MODEL_PATH = Path("src/models/matpac/model.py")
-TINYMU_SOURCE_DIR_ENV = "TINYMU_SOURCE_DIR"
+TINYMU_PACKAGE_COMMIT = "fef8564593fceb5625c10f56a46b256216e7173d"
 TINYMU_CHECKPOINT_REVISION = "0735fc50bc8b881d687dedccdd48b742927611b3"
 TINYMU_CHECKPOINT_NAME = "matpac_plus_as_48_1_map_enconly.pt"
 TINYMU_CHECKPOINT_SHA256 = "e8cec6847b2d918c8f77f82d79d90adf7dd82f99e80fa12eb3444f87f24bb998"
@@ -47,7 +37,6 @@ DEFAULT_TINYMU_CHECKPOINT = (
 )
 
 TINYMU_ENCODE_MAX_BATCH = 16
-TINYMU_GIT_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -118,7 +107,6 @@ TINYMU_FRONTEND = _TinyMUFrontendConfig(
     encoder_depth=12,
 )
 
-_TINYMU_MODULE_NAME = "_synth_setter_external_tinymu_matpac"
 _EXPECTED_UNPERSISTED_BUFFERS = frozenset(
     {
         "log_mel.MelSpectrogram.mel_scale.fb",
@@ -146,7 +134,7 @@ class _EncoderConfig(Protocol):
 
 
 class _MatpacConfig(Protocol):
-    """Measured subset of the external MATPAC configuration.
+    """Measured subset of TinyMU's MATPAC configuration.
 
     .. attribute :: encoder
 
@@ -177,7 +165,7 @@ class _MatpacConfig(Protocol):
 
 
 class _IncompatibleState(Protocol):
-    """State-loading result inspected by the adapter.
+    """State-loading result inspected by the integration.
 
     .. attribute :: missing_keys
 
@@ -193,7 +181,7 @@ class _IncompatibleState(Protocol):
 
 
 class _MatpacModel(Protocol):
-    """Narrow runtime surface required from external MATPAC.
+    """Narrow runtime surface required from TinyMU's MATPAC model.
 
     .. attribute :: cfg
 
@@ -215,10 +203,10 @@ class _MatpacModel(Protocol):
     def to(self, device: str) -> Self: ...
 
 
-class _MatpacModule(Protocol):
-    """Constructor exported by the pinned external module."""
+class _MatpacFactory(Protocol):
+    """Public TinyMU constructor used by the integration."""
 
-    def matpac_wrapper(
+    def __call__(
         self, *, inference_type: str, pull_time_dimension: bool
     ) -> _MatpacModel: ...
 
@@ -292,105 +280,10 @@ def resolve_tinymu_checkpoint(checkpoint: str = DEFAULT_TINYMU_CHECKPOINT) -> Pa
     return _verified_checkpoint(destination)
 
 
-def _git_output(source_dir: Path, *arguments: str) -> str:
-    r"""Run a read-only git identity query in the external checkout.
-
-    :param source_dir: TinyMU repository root.
-    :param \*arguments: Git arguments after ``-C <root>``.
-    :returns: Stripped stdout.
-    :raises ValueError: Git cannot resolve the requested identity.
-    """
-    try:
-        result = subprocess.run(  # noqa: S603 — fixed git identity probe
-            ["git", "-C", str(source_dir), *arguments],  # noqa: S607
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=TINYMU_GIT_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise ValueError(
-            f"TinyMU source identity probe timed out after {TINYMU_GIT_TIMEOUT_SECONDS} "
-            f"seconds in {source_dir}"
-        ) from exc
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise ValueError(f"TinyMU source identity probe failed in {source_dir}: {detail}")
-    return result.stdout.strip()
-
-
-def resolve_tinymu_source_model(source_dir: Path) -> Path:
-    """Validate the external TinyMU checkout and return its MATPAC model module.
-
-    :param source_dir: External TinyMU repository root.
-    :returns: Source model path whose bytes match the pinned commit blob.
-    :raises FileNotFoundError: The checkout or model module is absent.
-    :raises ValueError: HEAD or the working-tree model differs from the pinned source.
-    """
-    root = source_dir.expanduser().resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"TinyMU source checkout does not exist: {root}")
-    model_path = root / TINYMU_SOURCE_MODEL_PATH
-    if not model_path.is_file():
-        raise FileNotFoundError(f"TinyMU MATPAC source does not exist: {model_path}")
-
-    head = _git_output(root, "rev-parse", "HEAD")
-    if head != TINYMU_SOURCE_COMMIT:
-        raise ValueError(f"TinyMU source HEAD is {head}, expected {TINYMU_SOURCE_COMMIT}: {root}")
-    expected_blob = _git_output(root, "rev-parse", f"{TINYMU_SOURCE_COMMIT}:{TINYMU_SOURCE_MODEL_PATH}")
-    actual_blob = _git_output(root, "hash-object", str(model_path))
-    if actual_blob != expected_blob:
-        raise ValueError(f"TinyMU MATPAC source differs from pinned commit: {model_path}")
-    return model_path
-
-
-def configured_tinymu_source_model(source_dir: Path | None) -> Path:
-    """Resolve the explicit config path or documented environment fallback.
-
-    :param source_dir: Configured checkout root, or ``None`` to read ``TINYMU_SOURCE_DIR``.
-    :returns: Validated MATPAC source module path.
-    :raises FileNotFoundError: No source boundary is configured.
-    """
-    configured = source_dir
-    if configured is None:
-        environment_path = os.environ.get(TINYMU_SOURCE_DIR_ENV)
-        configured = Path(environment_path) if environment_path else None
-    if configured is None:
-        raise FileNotFoundError(
-            "TinyMU source is not redistributed because upstream has no detected license file; "
-            f"set tinymu_source_dir or {TINYMU_SOURCE_DIR_ENV} to the checkout at "
-            f"{TINYMU_SOURCE_COMMIT}"
-        )
-    return resolve_tinymu_source_model(configured)
-
-
-def _load_source_module(model_path: Path) -> ModuleType:
-    """Load only the pinned upstream MATPAC module from its external checkout.
-
-    :param model_path: Path returned by :func:`resolve_tinymu_source_model`.
-    :returns: Executed upstream module.
-    :raises ImportError: Python cannot construct or execute the module.
-    """
-    spec = importlib.util.spec_from_file_location(_TINYMU_MODULE_NAME, model_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load TinyMU MATPAC source module: {model_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[_TINYMU_MODULE_NAME] = module
-    try:
-        spec.loader.exec_module(module)
-    except ImportError as exc:
-        sys.modules.pop(_TINYMU_MODULE_NAME, None)
-        raise ImportError(
-            "loading TinyMU requires the optional `tinymu` extra — "
-            "install the standard runtime with `uv sync`"
-        ) from exc
-    return module
-
-
 def _validate_model_contract(model: _MatpacModel) -> None:
-    """Reject upstream source whose runtime architecture differs from the measured contract.
+    """Reject a MATPAC architecture that differs from the measured contract.
 
-    :param model: Instantiated external MATPAC module.
+    :param model: Instantiated TinyMU MATPAC model.
     :raises ValueError: A shape-defining model setting has changed.
     """
     cfg = model.cfg
@@ -475,11 +368,11 @@ def tinymu_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 
 
 def _load_tinymu_model(
-    module: _MatpacModule, checkpoint_path: Path, device: str
+    factory: _MatpacFactory, checkpoint_path: Path, device: str
 ) -> _MatpacModel:
     """Construct and freeze the pinned MATPAC architecture and state.
 
-    :param module: Verified external module constructor.
+    :param factory: Public TinyMU MATPAC constructor.
     :param checkpoint_path: SHA-256-verified model state.
     :param device: Torch inference device.
     :returns: Frozen eval-mode MATPAC model.
@@ -487,7 +380,7 @@ def _load_tinymu_model(
     """
     import torch
 
-    model = module.matpac_wrapper(inference_type="precise", pull_time_dimension=False)
+    model = factory(inference_type="precise", pull_time_dimension=False)
     _validate_model_contract(model)
     state = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=True)
     incompatible = model.load_state_dict(state, strict=False)
@@ -532,27 +425,27 @@ def _encode_tinymu_chunk(
 def load_tinymu_audio_encoder(
     checkpoint: str = DEFAULT_TINYMU_CHECKPOINT,
     *,
-    source_dir: Path | None = None,
     device: str = "cpu",
 ) -> TinyMUEncodeFn:
-    """Load frozen MATPAC weights through the pinned external TinyMU source boundary.
+    """Load frozen MATPAC weights through TinyMU's public package API.
 
     :param checkpoint: Exact pinned R2 URI or a hash-identical local file.
-    :param source_dir: External TinyMU checkout root, or ``None`` for the env fallback.
     :param device: Explicit Torch device.
     :returns: Encoder accepting finite normalized ``(B, C, T)`` audio and returning
         ``(B, 3840, T_tokens)`` float32 sequences.
     """
-    model_path = configured_tinymu_source_model(source_dir)
+    from tinymu.matpac import matpac_wrapper
+
     checkpoint_path = resolve_tinymu_checkpoint(checkpoint)
-    module = cast("_MatpacModule", _load_source_module(model_path))
-    model = _load_tinymu_model(module, checkpoint_path, device)
+    model = _load_tinymu_model(
+        cast("_MatpacFactory", matpac_wrapper), checkpoint_path, device
+    )
     logger.info(
         "loaded_tinymu_checkpoint",
         checkpoint_revision=TINYMU_CHECKPOINT_REVISION,
         checkpoint_sha256=TINYMU_CHECKPOINT_SHA256,
         device=device,
-        source_commit=TINYMU_SOURCE_COMMIT,
+        source_commit=TINYMU_PACKAGE_COMMIT,
         synth_setter_git_sha=resolve_git_sha(),
     )
 

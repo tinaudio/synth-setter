@@ -30,11 +30,11 @@ docs:
     description: TinyMU MATPAC embedding contract
     sources:
       - pattern: "src/synth_setter/pipeline/data/tinymu.py"
-        covers: "TinyMU MATPAC adapter"
+        covers: "TinyMU MATPAC package integration"
       - pattern: "src/synth_setter/configs/conditioning/tinymu.yaml"
         covers: "Four-second TinyMU generic conditioning profile"
       - pattern: "pyproject.toml"
-        covers: "The source-free `tinymu` optional dependency"
+        covers: "The commit-pinned `tinymu` runtime dependency"
 
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference

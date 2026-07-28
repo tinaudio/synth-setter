@@ -32,9 +32,6 @@ debug: false
 param_spec_name: null
 # Strategy rendering param rows as conditioning text for param-sourced embeddings.
 param_text_normalizer: param_names
-# External TinyMU checkout at the pinned source commit; null reads TINYMU_SOURCE_DIR.
-tinymu_source_dir: null
-
 # hydra/default interpolates ${task_name}; run.dir is overridden below since
 # its group default also references ${run_name}, absent here.
 task_name: add_embeddings

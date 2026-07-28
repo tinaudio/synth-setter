@@ -14,8 +14,7 @@ command differs by hardware, and how to keep the committed `uv.lock` honest.
 | Verify the lock is in sync           | `uv lock --check`                                              |
 | Regenerate the lock after a dep edit | `uv lock` (then commit the diff)                               |
 
-The standard runtime includes TinyMU's measured `timm` dependency; only its unlicensed external
-source checkout must be supplied separately.
+The standard runtime installs TinyMU's public MATPAC package from an immutable Git commit.
 
 `--frozen` errors instead of silently re-resolving when the lock and
 `pyproject.toml` disagree. CI uses it for the main project install everywhere
@@ -120,11 +119,10 @@ hand-picked deps) plus an import smoke-guard. Full installs that cannot honor
 - `.github/workflows/test-dataset-finalization.yml` (oracle smoke) → `uv pip install --group dev -e .`.
 
 `cpu`/`cu128` remain backend-routing extras because `[tool.uv.sources]` keys on
-extras. The commit-pinned `stable-audio-3` runtime belongs to the `torch` group,
-so normal heavy installs support SAME audio and T5Gemma encoders. `tinymu`
-remains opt-in because the adapter requires an external TinyMU source checkout;
-its extra installs only MATPAC's pinned third-party runtime dependency. The
-package-scoped Stable Audio 3 metadata override relaxes upstream's torch and
+extras. The commit-pinned `stable-audio-3` and `tinymu` runtimes belong to the `torch`
+group, so normal heavy installs support SAME, T5Gemma, and TinyMU encoders. TinyMU
+exposes MATPAC through its public package API and declares its own third-party runtime
+dependencies. The package-scoped Stable Audio 3 metadata override relaxes upstream's torch and
 torchaudio pins while retaining the numpy floor and backend index routing.
 
 ## Adding a new extra or dependency group

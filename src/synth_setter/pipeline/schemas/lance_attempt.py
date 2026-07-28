@@ -65,7 +65,7 @@ class EmbeddingProvenance(BaseModel):
 
     .. attribute :: producer_git_sha
 
-        synth-setter revision defining preprocessing, pooling, and adapter behavior.
+        synth-setter revision defining preprocessing, pooling, and integration behavior.
 
     .. attribute :: producer_transform_sha256
 
@@ -73,7 +73,7 @@ class EmbeddingProvenance(BaseModel):
 
     .. attribute :: source_commit
 
-        Pinned external source commit, when applicable.
+        Pinned upstream package or source commit, when applicable.
 
     .. attribute :: checkpoint_revision
 

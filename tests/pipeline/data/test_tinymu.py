@@ -1,9 +1,8 @@
-"""Behavioral tests for the pinned TinyMU MATPAC adapter."""
+"""Behavioral tests for the TinyMU MATPAC integration."""
 
 from __future__ import annotations
 
 import hashlib
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -22,11 +21,7 @@ from synth_setter.pipeline.data.tinymu import (
     DEFAULT_TINYMU_CHECKPOINT,
     TINYMU_CHECKPOINT_SHA256,
     TINYMU_FRONTEND,
-    TINYMU_SOURCE_COMMIT,
-    TINYMU_SOURCE_DIR_ENV,
-    TINYMU_SOURCE_MODEL_PATH,
     resolve_tinymu_checkpoint,
-    resolve_tinymu_source_model,
     tinymu_encoder_input,
     tinymu_num_latent_frames,
 )
@@ -322,215 +317,8 @@ def test_resolve_tinymu_checkpoint_unpinned_r2_uri_raises() -> None:
         resolve_tinymu_checkpoint("r2://intermediate-data/tinymu/main/model.pt")
 
 
-def _write_test_source_checkout(tmp_path: Path) -> tuple[Path, str]:
-    """Create a real Git checkout carrying the expected source-relative model path.
-
-    :param tmp_path: Temporary Git checkout parent.
-    :returns: Checkout root and its commit identity.
-    """
-    source = tmp_path / "TinyMU"
-    model = source / TINYMU_SOURCE_MODEL_PATH
-    model.parent.mkdir(parents=True)
-    model.write_text("class matpac_wrapper: pass\n")
-    subprocess.run(["git", "init", "-q", str(source)], check=True)
-    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source),
-            "-c",
-            "user.name=TinyMU test",
-            "-c",
-            "user.email=tinymu@example.invalid",
-            "commit",
-            "-qm",
-            "fixture",
-        ],
-        check=True,
-    )
-    commit = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    return source, commit
-
-
-def test_tinymu_git_identity_probe_timeout_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A stalled source checkout fails within the adapter's bounded probe.
-
-    :param monkeypatch: Fixture simulating a stalled Git process.
-    :param tmp_path: Candidate checkout location.
-    """
-    seen_timeout: list[float] = []
-
-    def timeout(*_args: object, timeout: float, **_kwargs: object) -> None:
-        seen_timeout.append(timeout)
-        raise subprocess.TimeoutExpired(cmd=["git"], timeout=timeout)
-
-    monkeypatch.setattr(tinymu_module.subprocess, "run", timeout)
-
-    with pytest.raises(ValueError, match="source identity probe timed out"):
-        tinymu_module._git_output(tmp_path, "rev-parse", "HEAD")
-
-    assert seen_timeout == [30]
-
-
-def test_tinymu_git_identity_probe_non_repository_raises(tmp_path: Path) -> None:
-    """A directory without Git identity reports the source-probe failure.
-
-    :param tmp_path: Non-repository source directory.
-    """
-    with pytest.raises(ValueError, match="source identity probe failed"):
-        tinymu_module._git_output(tmp_path, "rev-parse", "HEAD")
-
-
-def test_resolve_tinymu_source_model_missing_checkout_raises(tmp_path: Path) -> None:
-    """A missing external checkout fails with its resolved location.
-
-    :param tmp_path: Temporary source parent.
-    """
-    missing = tmp_path / "TinyMU"
-
-    with pytest.raises(FileNotFoundError, match=str(missing)):
-        resolve_tinymu_source_model(missing)
-
-
-def test_resolve_tinymu_source_model_missing_module_raises(tmp_path: Path) -> None:
-    """A checkout without the pinned model module fails before Git probing.
-
-    :param tmp_path: Temporary source parent.
-    """
-    source = tmp_path / "TinyMU"
-    source.mkdir()
-
-    with pytest.raises(FileNotFoundError, match=str(TINYMU_SOURCE_MODEL_PATH)):
-        resolve_tinymu_source_model(source)
-
-
-def test_resolve_tinymu_source_model_matching_checkout_returns_model(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Exact commit and source blob identity accepts the external checkout.
-
-    :param monkeypatch: Fixture setting the test source identity.
-    :param tmp_path: Temporary Git checkout location.
-    """
-    source, commit = _write_test_source_checkout(tmp_path)
-    monkeypatch.setattr(tinymu_module, "TINYMU_SOURCE_COMMIT", commit)
-
-    assert resolve_tinymu_source_model(source) == source / TINYMU_SOURCE_MODEL_PATH
-
-
-def test_resolve_tinymu_source_model_modified_blob_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A dirty MATPAC model file fails even when checkout HEAD is pinned.
-
-    :param monkeypatch: Fixture setting the test source identity.
-    :param tmp_path: Temporary Git checkout location.
-    """
-    source, commit = _write_test_source_checkout(tmp_path)
-    monkeypatch.setattr(tinymu_module, "TINYMU_SOURCE_COMMIT", commit)
-    (source / TINYMU_SOURCE_MODEL_PATH).write_text("modified = True\n")
-
-    with pytest.raises(ValueError, match="differs from pinned commit"):
-        resolve_tinymu_source_model(source)
-
-
-def test_configured_tinymu_source_model_explicit_checkout_resolves(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An explicit source path takes precedence over the environment fallback.
-
-    :param monkeypatch: Fixture setting source identities and a conflicting environment value.
-    :param tmp_path: Temporary Git checkout location.
-    """
-    source, commit = _write_test_source_checkout(tmp_path)
-    monkeypatch.setattr(tinymu_module, "TINYMU_SOURCE_COMMIT", commit)
-    monkeypatch.setenv(TINYMU_SOURCE_DIR_ENV, str(tmp_path / "wrong-source"))
-
-    assert tinymu_module.configured_tinymu_source_model(source) == (
-        source / TINYMU_SOURCE_MODEL_PATH
-    )
-
-
-def test_configured_tinymu_source_model_environment_checkout_resolves(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The documented environment fallback validates and returns the source module.
-
-    :param monkeypatch: Fixture setting the source identity and environment.
-    :param tmp_path: Temporary Git checkout location.
-    """
-    source, commit = _write_test_source_checkout(tmp_path)
-    monkeypatch.setattr(tinymu_module, "TINYMU_SOURCE_COMMIT", commit)
-    monkeypatch.setenv(TINYMU_SOURCE_DIR_ENV, str(source))
-
-    assert tinymu_module.configured_tinymu_source_model(None) == (
-        source / TINYMU_SOURCE_MODEL_PATH
-    )
-
-
-def test_configured_tinymu_source_model_without_boundary_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Missing config and environment source paths fail with setup guidance.
-
-    :param monkeypatch: Fixture clearing the source environment variable.
-    """
-    monkeypatch.delenv(TINYMU_SOURCE_DIR_ENV, raising=False)
-
-    with pytest.raises(FileNotFoundError, match=TINYMU_SOURCE_DIR_ENV):
-        tinymu_module.configured_tinymu_source_model(None)
-
-
-def test_load_tinymu_source_module_without_import_spec_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An unsupported source path reports that Python cannot load it.
-
-    :param monkeypatch: Fixture simulating an unavailable import specification.
-    :param tmp_path: Temporary source module location.
-    """
-    model_path = tmp_path / "model.py"
-    monkeypatch.setattr(tinymu_module.importlib.util, "spec_from_file_location", lambda *_: None)
-
-    with pytest.raises(ImportError, match="cannot load TinyMU MATPAC source module"):
-        tinymu_module._load_source_module(model_path)
-
-
-def test_load_tinymu_source_module_valid_python_exports_constructor(tmp_path: Path) -> None:
-    """A verified Python module executes under the isolated adapter namespace.
-
-    :param tmp_path: Temporary source module location.
-    """
-    model_path = tmp_path / "model.py"
-    model_path.write_text("matpac_wrapper = object()\n")
-
-    module = tinymu_module._load_source_module(model_path)
-
-    assert module.matpac_wrapper is not None
-
-
-def test_load_tinymu_source_module_missing_dependency_names_extra(tmp_path: Path) -> None:
-    """An unavailable upstream dependency reports the optional installation command.
-
-    :param tmp_path: Temporary source module location.
-    """
-    model_path = tmp_path / "model.py"
-    model_path.write_text("import dependency_that_does_not_exist_for_tinymu\n")
-
-    with pytest.raises(ImportError, match="uv sync"):
-        tinymu_module._load_source_module(model_path)
-
-
 def _model_contract(*, depth: int = 12) -> tinymu_module._MatpacModel:
-    """Build the narrow external config surface used by contract tests.
+    """Build the narrow MATPAC config surface used by contract tests.
 
     :param depth: Candidate upstream transformer depth.
     :returns: Structurally typed MATPAC model placeholder.
@@ -546,7 +334,7 @@ def _model_contract(*, depth: int = 12) -> tinymu_module._MatpacModel:
 
 
 def test_validate_tinymu_model_contract_matching_architecture_returns() -> None:
-    """The measured upstream architecture satisfies the narrow adapter protocol."""
+    """The measured upstream architecture satisfies the narrow package protocol."""
     tinymu_module._validate_model_contract(_model_contract())
 
 
@@ -613,18 +401,18 @@ class _StateLoadingModel:
         return self
 
 
-class _StateLoadingModule:
-    """Expose one recording model through the external constructor contract."""
+class _StateLoadingFactory:
+    """Expose one recording model through the package constructor contract."""
 
     def __init__(self, model: _StateLoadingModel) -> None:
-        """Initialize the model returned by the external constructor.
+        """Initialize the model returned by the public constructor.
 
         :param model: Recording model to return.
         """
         self.model = model
         self.constructor_args: tuple[str, bool] | None = None
 
-    def matpac_wrapper(
+    def __call__(
         self, *, inference_type: str, pull_time_dimension: bool
     ) -> _StateLoadingModel:
         self.constructor_args = inference_type, pull_time_dimension
@@ -642,14 +430,14 @@ def test_load_tinymu_model_valid_state_returns_frozen_eval_model(tmp_path: Path)
         missing_keys=sorted(tinymu_module._EXPECTED_UNPERSISTED_BUFFERS),
         unexpected_keys=[],
     )
-    module = _StateLoadingModule(model)
+    factory = _StateLoadingFactory(model)
 
     loaded = tinymu_module._load_tinymu_model(
-        cast("tinymu_module._MatpacModule", module), checkpoint, "cpu"
+        cast("tinymu_module._MatpacFactory", factory), checkpoint, "cpu"
     )
 
     assert loaded is model
-    assert module.constructor_args == ("precise", False)
+    assert factory.constructor_args == ("precise", False)
     assert model.loaded_state is not None
     torch.testing.assert_close(model.loaded_state["encoder.weight"], torch.tensor([1.5]))
     assert model.strict is False
@@ -680,7 +468,7 @@ def test_load_tinymu_model_incompatible_state_raises(
 
     with pytest.raises(ValueError, match="checkpoint state is incompatible"):
         tinymu_module._load_tinymu_model(
-            cast("tinymu_module._MatpacModule", _StateLoadingModule(model)),
+            cast("tinymu_module._MatpacFactory", _StateLoadingFactory(model)),
             checkpoint,
             "cpu",
         )
@@ -761,36 +549,27 @@ def test_load_tinymu_audio_encoder_batches_and_preserves_row_order(
 ) -> None:
     """The loaded encoder bounds inference chunks and concatenates every row in order.
 
-    :param monkeypatch: Fixture isolating verified source and checkpoint boundaries.
-    :param tmp_path: Temporary source and checkpoint paths.
+    :param monkeypatch: Fixture isolating verified package and checkpoint boundaries.
+    :param tmp_path: Temporary checkpoint path.
     """
     model = _ChunkModel()
-    source_model = tmp_path / "model.py"
     checkpoint = tmp_path / "matpac.pt"
-    monkeypatch.setattr(
-        tinymu_module,
-        "configured_tinymu_source_model",
-        lambda source_dir: source_model,
-    )
     monkeypatch.setattr(
         tinymu_module,
         "resolve_tinymu_checkpoint",
         lambda checkpoint_uri: checkpoint,
     )
-    monkeypatch.setattr(tinymu_module, "_load_source_module", lambda _path: object())
     monkeypatch.setattr(
         tinymu_module,
         "_load_tinymu_model",
-        lambda _module, _checkpoint, _device: model,
+        lambda _factory, _checkpoint, _device: model,
     )
     monkeypatch.setattr(tinymu_module, "resolve_git_sha", lambda: "test-sha")
     audio = np.stack(
         [np.full((1, 16_000), row / 20, dtype=np.float32) for row in range(17)]
     )
 
-    encode = tinymu_module.load_tinymu_audio_encoder(
-        "local-checkpoint", source_dir=tmp_path, device="cpu"
-    )
+    encode = tinymu_module.load_tinymu_audio_encoder("local-checkpoint", device="cpu")
     encoded = encode(audio, 16_000)
 
     assert model.batch_sizes == [16, 1]
@@ -798,20 +577,17 @@ def test_load_tinymu_audio_encoder_batches_and_preserves_row_order(
     np.testing.assert_allclose(encoded[:, 0, 0], np.arange(17) / 20)
 
 
-def test_tinymu_registry_loader_returns_adapter_encoder(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_tinymu_registry_loader_returns_package_encoder(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The registry threads config into TinyMU and returns its usable encoder.
+    """The registry loads TinyMU like other managed embedding packages.
 
-    :param monkeypatch: Fixture replacing the already-tested external adapter boundary.
-    :param tmp_path: Configured external checkout path.
+    :param monkeypatch: Fixture replacing the already-tested package loader boundary.
     """
-    seen: list[tuple[str, Path | None, str]] = []
+    seen: list[tuple[str, str]] = []
 
-    def load(
-        checkpoint: str, *, source_dir: Path | None, device: str
-    ) -> tinymu_module.TinyMUEncodeFn:
-        seen.append((checkpoint, source_dir, device))
+    def load(checkpoint: str, *, device: str) -> tinymu_module.TinyMUEncodeFn:
+        seen.append((checkpoint, device))
 
         def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
             del sample_rate
@@ -827,7 +603,6 @@ def test_tinymu_registry_loader_returns_adapter_encoder(
     config = AddEmbeddingsConfig(
         lance_uri="dataset.lance",
         embeddings=("tinymu",),
-        tinymu_source_dir=tmp_path,
         device="cpu",
     )
 
@@ -837,20 +612,9 @@ def test_tinymu_registry_loader_returns_adapter_encoder(
     )
     encoded = encoder(np.zeros((2, 1, 16_000), dtype=np.float32), 16_000)
 
-    assert seen == [("checkpoint.pt", tmp_path, "cpu")]
+    assert seen == [("checkpoint.pt", "cpu")]
     assert encoded.shape == (2, TINYMU_FRONTEND.embedding_dim, 7)
     assert np.all(encoded == 0.5)
-
-
-def test_resolve_tinymu_source_model_wrong_commit_raises(tmp_path: Path) -> None:
-    """The adapter refuses a checkout whose source does not match the pinned commit.
-
-    :param tmp_path: Temporary Git checkout location.
-    """
-    source, _ = _write_test_source_checkout(tmp_path)
-
-    with pytest.raises(ValueError, match=TINYMU_SOURCE_COMMIT):
-        resolve_tinymu_source_model(source)
 
 
 def test_add_embeddings_config_tinymu_incompatible_pq_split_raises() -> None:
@@ -866,18 +630,6 @@ def test_add_embeddings_config_tinymu_incompatible_pq_split_raises() -> None:
         )
 
 
-def test_add_embeddings_config_tinymu_source_string_coerces_path() -> None:
-    """Hydra source-directory strings remain strict Path values."""
-    config = AddEmbeddingsConfig(
-        lance_uri="dataset.lance",
-        embeddings=("tinymu",),
-        tinymu_source_dir="/opt/TinyMU",  # type: ignore[arg-type]
-    )
-
-    assert config.tinymu_source_dir == Path("/opt/TinyMU")
-
-
-def test_add_embeddings_config_tinymu_source_env_name_is_stable() -> None:
-    """The documented environment fallback remains a single explicit boundary."""
-    assert TINYMU_SOURCE_DIR_ENV == "TINYMU_SOURCE_DIR"
+def test_tinymu_frontend_embedding_dim_matches_package_contract() -> None:
+    """The integration preserves the published MATPAC embedding width."""
     assert TINYMU_FRONTEND.embedding_dim == 3_840

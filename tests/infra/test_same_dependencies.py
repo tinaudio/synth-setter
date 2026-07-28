@@ -1,4 +1,4 @@
-"""Dependency-placement contracts for the Stable Audio 3 runtime."""
+"""Dependency-placement contracts for embedding model runtimes."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ from typing import TypedDict, cast
 
 import pytest
 
-_TINYMU_RUNTIME_REQUIREMENT = "timm==0.4.12"
+from synth_setter.pipeline.data.tinymu import TINYMU_PACKAGE_COMMIT
+
+_TINYMU_REQUIREMENT = f"tinymu @ git+https://github.com/ktinubu/TinyMU@{TINYMU_PACKAGE_COMMIT}"
 _SA3_REQUIREMENT = (
     "stable-audio-3 @ "
     "git+https://github.com/Stability-AI/stable-audio-3@"
@@ -75,12 +77,21 @@ def test_sa3_requirement_is_in_torch_group_not_project_or_extras(
     assert set(pyproject["project"]["optional-dependencies"]) == {"cpu", "cu128"}
 
 
-def test_tinymu_runtime_is_in_normal_torch_group(pyproject: _Pyproject) -> None:
-    """MATPAC works in the standard runtime without a hidden feature extra.
+def test_tinymu_package_is_pinned_in_normal_torch_runtime(
+    project_root: Path, pyproject: _Pyproject
+) -> None:
+    """MATPAC installs from one immutable package commit in the standard runtime.
 
+    :param project_root: Repository root containing ``uv.lock``.
     :param pyproject: Parsed project metadata.
     """
-    assert _TINYMU_RUNTIME_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    assert _TINYMU_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    lock_text = (project_root / "uv.lock").read_text()
+    assert (
+        'source = { git = "https://github.com/ktinubu/TinyMU?rev='
+        f"{TINYMU_PACKAGE_COMMIT}#{TINYMU_PACKAGE_COMMIT}"
+        '" }'
+    ) in lock_text
 
 
 def test_legacy_same_runtime_is_absent_from_metadata_and_lock(

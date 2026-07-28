@@ -13,71 +13,60 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
-import soundfile as sf
 import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 
-pytest.importorskip("timm")
-
-from synth_setter.data.vst.shapes import AUDIO_FIELD, TINYMU_FIELD  # noqa: E402
-from synth_setter.pipeline.data.add_embeddings import MIN_ROWS_FOR_INDEX  # noqa: E402
-from synth_setter.pipeline.data.lance_shard import (  # noqa: E402
+from synth_setter.data.vst.shapes import AUDIO_FIELD, TINYMU_FIELD
+from synth_setter.pipeline.data.add_embeddings import MIN_ROWS_FOR_INDEX
+from synth_setter.pipeline.data.lance_shard import (
     SHARD_METADATA_SCHEMA_KEY,
     tensor_array,
     write_lance_dataset,
 )
-from synth_setter.pipeline.data.tinymu import (  # noqa: E402
+from synth_setter.pipeline.data.tinymu import (
     TINYMU_CHECKPOINT_REVISION,
     TINYMU_CHECKPOINT_SHA256,
     TINYMU_FRONTEND,
-    TINYMU_SOURCE_COMMIT,
-    TINYMU_SOURCE_DIR_ENV,
+    TINYMU_PACKAGE_COMMIT,
     load_tinymu_audio_encoder,
     tinymu_num_latent_frames,
 )
-from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard  # noqa: E402
-from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata  # noqa: E402
+from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration_r2, pytest.mark.r2]
 
-_SOURCE_AUDIO_RELATIVE_PATH = Path("resource/example1.wav")
 _CLIP_SECONDS = 4
+_SAMPLE_RATE = 16_000
 
 
-def _tinymu_source_dir() -> Path:
-    """Resolve the explicitly supplied unlicensed TinyMU checkout for this E2E test.
+def _distinct_audio_clips() -> np.ndarray:
+    """Return two deterministic normalized clips for real MATPAC inference.
 
-    :returns: Pinned local TinyMU checkout.
+    :returns: ``(2, 1, 64000)`` float32 audio with distinct spectra.
     """
-    configured = os.environ.get(TINYMU_SOURCE_DIR_ENV)
-    if configured is None:
-        pytest.skip(f"set {TINYMU_SOURCE_DIR_ENV} to the pinned TinyMU checkout")
-    assert configured is not None
-    return Path(configured)
-
-
-def _write_real_audio_lance(
-    source_dir: Path, destination: Path, rows: int = 2
-) -> tuple[int, int]:
-    """Persist two distinct real four-second clips as production Lance tensors.
-
-    :param source_dir: Pinned TinyMU checkout containing the example WAV.
-    :param destination: Local Lance dataset destination.
-    :param rows: Number of alternating real clips to persist.
-    :returns: Source sample rate and sample count.
-    :raises ValueError: The real audio is shorter than four seconds.
-    """
-    audio, sample_rate = sf.read(
-        source_dir / _SOURCE_AUDIO_RELATIVE_PATH,
-        always_2d=True,
-        dtype="float32",
+    time = np.arange(_SAMPLE_RATE * _CLIP_SECONDS, dtype=np.float32) / _SAMPLE_RATE
+    clips = np.stack(
+        [
+            0.5 * np.sin(2 * np.pi * 220 * time),
+            0.5 * np.sin(2 * np.pi * 880 * time),
+        ]
     )
-    clip_samples = sample_rate * _CLIP_SECONDS
-    if len(audio) < clip_samples:
-        raise ValueError(f"real TinyMU audio has only {len(audio)} samples, need {clip_samples}")
-    clips = np.stack([audio[:clip_samples].T, audio[-clip_samples:].T])
+    return np.ascontiguousarray(clips[:, None, :], dtype=np.float32)
+
+
+def _write_audio_lance(destination: Path, rows: int = 2) -> tuple[int, int]:
+    """Persist distinct four-second clips as production Lance tensors.
+
+    :param destination: Local Lance dataset destination.
+    :param rows: Number of alternating clips to persist.
+    :returns: Source sample rate and sample count.
+    """
+    clips = _distinct_audio_clips()
     batch = np.ascontiguousarray(clips[np.arange(rows) % len(clips)], dtype=np.float16)
+    clip_samples = batch.shape[-1]
+    sample_rate = _SAMPLE_RATE
     tensor = tensor_array(batch, np.dtype("float16"), batch.shape[1:])
     metadata = ShardMetadata(
         velocity=100,
@@ -120,21 +109,11 @@ def _tinymu_conditioning_encoder() -> torch.nn.Module:
 
 def test_tinymu_real_encoder_distinct_audio_is_distinct_and_deterministic() -> None:
     """MATPAC distinguishes two real clips while repeated inference stays bitwise stable."""
-    source_dir = _tinymu_source_dir()
-    audio, sample_rate = sf.read(
-        source_dir / _SOURCE_AUDIO_RELATIVE_PATH,
-        always_2d=True,
-        dtype="float32",
-    )
-    clip_samples = sample_rate * _CLIP_SECONDS
-    clips = np.ascontiguousarray(
-        np.stack([audio[:clip_samples].T, audio[-clip_samples:].T]),
-        dtype=np.float32,
-    )
-    encode = load_tinymu_audio_encoder(source_dir=source_dir, device="cpu")
+    clips = _distinct_audio_clips()
+    encode = load_tinymu_audio_encoder(device="cpu")
 
-    first = encode(clips, sample_rate)
-    second = encode(clips, sample_rate)
+    first = encode(clips, _SAMPLE_RATE)
+    second = encode(clips, _SAMPLE_RATE)
 
     assert np.isfinite(first).all()
     assert not np.allclose(first[0], first[1])
@@ -148,15 +127,14 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
 
     :param tmp_path: Isolated cache and Lance location.
     """
-    source_dir = _tinymu_source_dir()
     dataset_root = tmp_path / "tinymu-real"
     dataset_root.mkdir()
     split_paths = {
         split: dataset_root / f"{split}.lance" for split in ("train", "val", "test")
     }
-    sample_rate, clip_samples = _write_real_audio_lance(source_dir, split_paths["train"])
+    sample_rate, clip_samples = _write_audio_lance(split_paths["train"])
     for split in ("val", "test"):
-        _write_real_audio_lance(source_dir, split_paths[split])
+        _write_audio_lance(split_paths[split])
     card = LanceDatasetCard(
         schema_version=1,
         run_id="tinymu-real-e2e",
@@ -176,7 +154,6 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
             str(command),
             f"dataset_root_uri={dataset_root}",
             "embeddings=[tinymu]",
-            f"tinymu_source_dir={source_dir}",
             "device=cpu",
             "batch_size=1",
             "build_index=false",
@@ -200,7 +177,7 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
     assert provenance.name == "tinymu"
     assert len(provenance.producer_git_sha) == 40
     assert len(provenance.producer_transform_sha256) == 64
-    assert provenance.source_commit == TINYMU_SOURCE_COMMIT
+    assert provenance.source_commit == TINYMU_PACKAGE_COMMIT
     assert provenance.checkpoint_revision == TINYMU_CHECKPOINT_REVISION
     assert provenance.checkpoint_sha256 == TINYMU_CHECKPOINT_SHA256
     assert tuple(result.split for result in provenance.splits) == ("train", "val", "test")
@@ -230,9 +207,8 @@ def test_tinymu_real_embeddings_build_searchable_ivf_pq_index(tmp_path: Path) ->
 
     :param tmp_path: Isolated dataset and Hydra output root.
     """
-    source_dir = _tinymu_source_dir()
     dataset_path = tmp_path / "tinymu-indexed.lance"
-    _write_real_audio_lance(source_dir, dataset_path, rows=MIN_ROWS_FOR_INDEX)
+    _write_audio_lance(dataset_path, rows=MIN_ROWS_FOR_INDEX)
     command = Path(sys.executable).with_name("synth-setter-add-embeddings")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     subprocess.run(  # noqa: S603 — installed public CLI with test-owned arguments
@@ -240,7 +216,6 @@ def test_tinymu_real_embeddings_build_searchable_ivf_pq_index(tmp_path: Path) ->
             str(command),
             f"lance_uri={dataset_path}",
             "embeddings=[tinymu]",
-            f"tinymu_source_dir={source_dir}",
             f"device={device}",
             "batch_size=16",
             "build_index=true",

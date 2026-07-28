@@ -90,10 +90,6 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: param_text_normalizer
 
         Strategy rendering param rows as conditioning text.
-
-    .. attribute :: tinymu_source_dir
-
-        External pinned TinyMU checkout, or ``None`` for the environment fallback.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -135,10 +131,6 @@ class AddEmbeddingsConfig(BaseModel):
         default=DEFAULT_PARAM_TEXT_NORMALIZER,
         description="Strategy rendering param rows as conditioning text.",
     )
-    tinymu_source_dir: Path | None = Field(
-        default=None,
-        description="External pinned TinyMU checkout; null reads TINYMU_SOURCE_DIR.",
-    )
 
     @field_validator("embeddings", mode="before")
     @classmethod
@@ -179,7 +171,7 @@ class AddEmbeddingsConfig(BaseModel):
             )
         return value
 
-    @field_validator("resume_cache", "tinymu_source_dir", mode="before")
+    @field_validator("resume_cache", mode="before")
     @classmethod
     def _coerce_paths(cls, value: object) -> object:
         """Coerce Hydra string overrides to ``Path`` under strict validation.

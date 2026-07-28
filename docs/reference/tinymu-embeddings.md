@@ -4,19 +4,14 @@
 `embeddings=[tinymu]`. This integration runs only the audio encoder; it does not load TinyMU's
 language decoder or implement TinyMU training.
 
-## Source and checkpoint identity
+## Package and checkpoint identity
 
-TinyMU currently has no detected license file. synth-setter therefore does not copy, package, or
-redistribute TinyMU source. The adapter loads only `src/models/matpac/model.py` from an external
-checkout and requires both its Git HEAD and model-file blob to match:
-
-- repository: `ktinubu/TinyMU`
-- commit: `eadbe2fc96cbbb5cdb9f91604c7a4e63782e6e7b`
-
-Set `tinymu_source_dir=/path/to/TinyMU` in the Hydra command or export
-`TINYMU_SOURCE_DIR=/path/to/TinyMU`. A missing checkout, a different commit, or a modified model
-file is an error. `uv sync` installs the measured `timm==0.4.12` dependency as part of the
-standard embedding runtime; it does not install TinyMU source.
+TinyMU exposes MATPAC through the public `tinymu.matpac` package API. The normal synth-setter
+runtime installs that package from the immutable `ktinubu/TinyMU` commit
+`fef8564593fceb5625c10f56a46b256216e7173d`; operators do not need a separate source checkout.
+TinyMU source is MIT-licensed, while its MATPAC implementation and pretrained encoder weights are
+Apache-2.0 licensed. The VCS requirement and resolved commit are recorded in `pyproject.toml` and
+`uv.lock`.
 
 The default checkpoint is the immutable R2 object:
 
@@ -25,7 +20,7 @@ r2://intermediate-data/tinymu/source/pretrained/AndreasXi/TinyMU/0735fc50bc8b881
 ```
 
 Its required SHA-256 is
-`e8cec6847b2d918c8f77f82d79d90adf7dd82f99e80fa12eb3444f87f24bb998`. The adapter downloads it
+`e8cec6847b2d918c8f77f82d79d90adf7dd82f99e80fa12eb3444f87f24bb998`. The integration downloads it
 through the canonical rclone path into
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/tinymu-0735fc50bc8b881d687dedccdd48b742927611b3/`,
 then verifies the digest before moving it into place. A local `checkpoints.tinymu=/path/to/file`
@@ -50,8 +45,8 @@ the pinned source commit:
 
 Measured token counts are 1 for 175 ms, 7 for one second, 25 for four seconds, and 63 for ten
 seconds. Output width 3,840 is five frequency patches times the checkpoint's 768-dimensional ViT
-width. Runtime validation pins these shape-defining settings and rejects incompatible source,
-state dictionaries, output shapes, dtypes, NaN, or infinity.
+width. Runtime validation pins these shape-defining settings and rejects incompatible
+architectures, state dictionaries, output shapes, dtypes, NaN, or infinity.
 
 ## Usage and conditioning
 
@@ -59,8 +54,7 @@ For a finalized four-second dataset root:
 
 ```bash
 uv sync
-TINYMU_SOURCE_DIR=/path/to/TinyMU \
-  synth-setter-add-embeddings \
+synth-setter-add-embeddings \
   dataset_root_uri=/path/to/dataset \
   embeddings=[tinymu]
 ```

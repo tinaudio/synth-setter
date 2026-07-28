@@ -47,7 +47,7 @@ from synth_setter.pipeline.data.tinymu import (
     TINYMU_CHECKPOINT_REVISION,
     TINYMU_CHECKPOINT_SHA256,
     TINYMU_FRONTEND,
-    TINYMU_SOURCE_COMMIT,
+    TINYMU_PACKAGE_COMMIT,
     TinyMUEncodeFn,
     load_tinymu_audio_encoder,
     tinymu_num_latent_frames,
@@ -417,15 +417,14 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
 
 
 def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
-    """Load TinyMU through the pinned external-source adapter.
+    """Load TinyMU through its managed package dependency.
 
     :param checkpoint: Exact pinned URI or a hash-identical local artifact.
-    :param config: Run config supplying the source checkout and device.
+    :param config: Run config supplying the device.
     :returns: Frozen MATPAC encoder.
     """
     return load_tinymu_audio_encoder(
         checkpoint,
-        source_dir=config.tinymu_source_dir,
         device=_resolve_torch_device(config.device),
     )
 
@@ -1060,7 +1059,7 @@ def _embedding_provenance(
         checkpoint=config.checkpoints.get(name, spec.default_checkpoint),
         producer_git_sha=producer_git_sha,
         producer_transform_sha256=producer_transform_sha256,
-        source_commit=TINYMU_SOURCE_COMMIT if tinymu else None,
+        source_commit=TINYMU_PACKAGE_COMMIT if tinymu else None,
         checkpoint_revision=TINYMU_CHECKPOINT_REVISION if tinymu else None,
         checkpoint_sha256=TINYMU_CHECKPOINT_SHA256 if tinymu else None,
         param_spec_name=config.param_spec_name if param_sourced else None,

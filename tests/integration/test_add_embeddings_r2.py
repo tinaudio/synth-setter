@@ -50,8 +50,7 @@ from synth_setter.pipeline.data.t5gemma import (
 )
 from synth_setter.pipeline.data.tinymu import (
     TINYMU_CHECKPOINT_SHA256,
-    TINYMU_SOURCE_COMMIT,
-    TINYMU_SOURCE_DIR_ENV,
+    TINYMU_PACKAGE_COMMIT,
 )
 from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
@@ -239,8 +238,6 @@ def remote_tinymu_dataset_root_uri() -> Iterator[str]:
     """
     if not r2_io.is_r2_reachable():
         pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
-    if os.environ.get(TINYMU_SOURCE_DIR_ENV) is None:
-        pytest.skip(f"set {TINYMU_SOURCE_DIR_ENV} to the pinned TinyMU checkout")
     r2_io.ensure_r2_env_loaded()
     prefix = _unique_test_prefix()
     spec = _lance_embed_spec(prefix, all_splits=True)
@@ -290,13 +287,11 @@ def test_add_embeddings_tinymu_root_against_real_r2_persists_every_split(
 
     :param remote_tinymu_dataset_root_uri: Fixture-provided finalized R2 dataset root.
     """
-    source_dir = os.environ[TINYMU_SOURCE_DIR_ENV]
     result = subprocess.run(  # noqa: S603 — literal command and validated root URI
         [
             _ADD_EMBEDDINGS_CMD,
             f"dataset_root_uri={remote_tinymu_dataset_root_uri}",
             "embeddings=[tinymu]",
-            f"tinymu_source_dir={source_dir}",
             "build_index=false",
         ],
         check=False,
@@ -323,7 +318,7 @@ def test_add_embeddings_tinymu_root_against_real_r2_persists_every_split(
     provenance = card.embeddings[0]
     assert r2_io.object_size(f"{remote_tinymu_dataset_root_uri}dataset.complete") == 0
     assert card.schema_version == 2
-    assert provenance.source_commit == TINYMU_SOURCE_COMMIT
+    assert provenance.source_commit == TINYMU_PACKAGE_COMMIT
     assert provenance.checkpoint_sha256 == TINYMU_CHECKPOINT_SHA256
     assert tuple(result.split for result in provenance.splits) == ("train", "val", "test")
 

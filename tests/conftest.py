@@ -63,21 +63,6 @@ _EMBEDDING_E2E_CHECKPOINTS = {
 }
 
 
-@pytest.fixture
-def tinymu_source_dir() -> Path:
-    """Skip before expensive fixtures unless the pinned TinyMU checkout is configured.
-
-    :returns: Configured external TinyMU checkout.
-    """
-    from synth_setter.pipeline.data.tinymu import TINYMU_SOURCE_DIR_ENV
-
-    configured_source = os.environ.get(TINYMU_SOURCE_DIR_ENV)
-    if configured_source is None:
-        pytest.skip(f"set {TINYMU_SOURCE_DIR_ENV} to the pinned TinyMU checkout")
-    assert configured_source is not None
-    return Path(configured_source)
-
-
 def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
     """Assert that a trainer's per-parameter MSE callback uses its active VST spec.
 
@@ -1538,11 +1523,10 @@ def augment_lance_splits_with_licensed_embeddings(
     return dataset_root
 
 
-def augment_lance_splits_with_tinymu(dataset_root: Path, source_dir: Path) -> Path:
+def augment_lance_splits_with_tinymu(dataset_root: Path) -> Path:
     """Append real TinyMU embeddings to every split for train/eval entrypoint tests.
 
     :param dataset_root: Directory holding finalized local Lance splits.
-    :param source_dir: Pinned external TinyMU checkout.
     :returns: Augmented dataset root.
     """
     from synth_setter.pipeline.data.add_embeddings import add_embeddings
@@ -1553,7 +1537,6 @@ def augment_lance_splits_with_tinymu(dataset_root: Path, source_dir: Path) -> Pa
             AddEmbeddingsConfig(
                 lance_uri=str(dataset_root / f"{split}.lance"),
                 embeddings=("tinymu",),
-                tinymu_source_dir=source_dir,
                 device="cpu",
                 batch_size=1,
                 build_index=False,
