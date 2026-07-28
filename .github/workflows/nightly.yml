@@ -15,10 +15,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Pinned image: the floating binfmt:latest rolled to qemu v10.2.x, whose
+      # user-mode emulation segfaults in dpkg's libc-bin configure step. Refs #2577.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+          image: docker.io/tonistiigi/binfmt:qemu-v9.2.2
 
       - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
