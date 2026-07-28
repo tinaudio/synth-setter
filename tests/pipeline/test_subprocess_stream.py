@@ -831,10 +831,11 @@ class TestScaledTimeout:
         assert scaled_timeout(3, workers=8, overhead_seconds=5.0, per_sample_seconds=2.0) == 7.0
 
     def test_growing_dataset_increases_budget_monotonically(self) -> None:
-        """A larger sample count yields a strictly larger budget."""
+        """The budget is overhead plus per-sample cost at both ends of the range."""
         small = scaled_timeout(100, overhead_seconds=30.0, per_sample_seconds=1.0)
         large = scaled_timeout(1000, overhead_seconds=30.0, per_sample_seconds=1.0)
-        assert large > small
+
+        assert (small, large) == (130.0, 1030.0)
 
     def test_negative_samples_raises_value_error(self) -> None:
         """A negative sample count is rejected."""
