@@ -89,7 +89,7 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
   (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
 - VST configs set `datamodule.persistent_workers=true`; it is effective only when
   `num_workers > 0`, so CPU debugging with `num_workers=0` needs no extra override
-- `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
+- `render:` defaults to `null`; a render group (e.g. `render=vst`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one
 - `synth:` defaults to `null`; VST runs select the root identity group
@@ -111,7 +111,7 @@ eval.yaml + experiment config (pins model + data + checkpoint)
 
 - Experiment config pins everything: model checkpoint (W&B artifact ref), data config, eval settings
 - `evaluation:` block (in `src/synth_setter/configs/eval.yaml`) gates the in-process render and metrics phases — both default off so `mode=test`/`mode=validate` runs are unchanged
-- `render:` composes a backend-knob group and the root `synth:` group supplies the VST plugin/preset/param-spec (`render=surge_xt synth=surge_xt`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess
+- `render:` composes a backend-knob group and the root `synth:` group supplies the VST plugin/preset/param-spec (`synth=surge_xt render=vst`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess
 - No eval spec — configs are the source of truth
 - Full provenance in R2 path: `eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/`
 

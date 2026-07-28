@@ -56,7 +56,7 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    count, shard size, parameter spec). The synth is selected by the root
    `synth` group (`synth=surge_xt`, `synth=obxf`, ...), which carries the
    registered parameter spec, preset, plugin path, and version; the paired
-   `render` group override (e.g. `render=surge_xt`) names the backend and
+   `render` group override (e.g. `render=vst`) names the backend and
    declares backend-specific knobs only. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in

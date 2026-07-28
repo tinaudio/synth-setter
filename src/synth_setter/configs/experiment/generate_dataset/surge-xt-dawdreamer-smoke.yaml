@@ -6,7 +6,7 @@
 defaults:
   - override /datamodule: surge
   - override /synth: surge_xt
-  - override /render: surge_xt
+  - override /render: vst
   - _self_
 
 task_name: surge-xt-dawdreamer-smoke

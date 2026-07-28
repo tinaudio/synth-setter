@@ -1,6 +1,6 @@
-# Generic render knobs inherit from faust_bright_organ; identity comes from `synth=faust_filter_osc`.
+# Generic render knobs inherit from faust; identity comes from `synth=faust_filter_osc`.
 defaults:
-  - faust_bright_organ
+  - faust
   - _self_
 
 channels: 1

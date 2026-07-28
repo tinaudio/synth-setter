@@ -25,23 +25,11 @@ from synth_setter.data.vst.registration import (
     preset_repo_path,
     registration_paths,
     registry_with_spec,
-    render_config_yaml,
     synths_with_spec,
 )
 from tests.data.vst._introspect_fakes import assert_ruff_format_clean
 
 REGISTRY_SOURCE = Path(param_spec_registry.__file__).read_text(encoding="utf-8")
-_RESERVED_RENDER_CONFIG_NAMES = (
-    "obxf",
-    "surge_4",
-    "surge_simple",
-    "surge_xt",
-    "torchsynth_adsr",
-    "torchsynth_full",
-    "torchsynth_simple",
-    "vst",
-    "VST",
-)
 
 
 def _dict_keys(source: str, name: str) -> list[str]:
@@ -322,13 +310,6 @@ def test_registry_with_spec_unrecognized_source_raises() -> None:
         registry_with_spec("print('not the registry')\n", "fake_synth")
 
 
-def test_render_config_yaml_inherits_vst_defaults_without_identity() -> None:
-    """The emitted config inherits generic VST knobs; identity lives in the root synth group."""
-    cfg = yaml.safe_load(render_config_yaml("fake_synth"))
-
-    assert cfg == {"defaults": ["vst"]}
-
-
 def test_identity_group_yaml_quotes_arbitrary_plugin_path() -> None:
     """A plugin path with YAML-hostile characters round-trips through safe_load."""
     hostile = '/tmp/odd: "name" #1.vst3'  # noqa: S108 — literal fixture path, never opened
@@ -350,16 +331,6 @@ def test_identity_group_yaml_preserves_reserved_word_spec_name_as_string() -> No
     text = identity_group_yaml(_fake_spec(name="on", param_spec_name="on"))
 
     assert yaml.safe_load(text)["param_spec_name"] == "on"
-
-
-@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
-def test_render_config_yaml_reserved_render_name_raises_value_error(spec_name: str) -> None:
-    """A shipped render-group name cannot compose itself.
-
-    :param spec_name: Exact or case-variant reserved group name.
-    """
-    with pytest.raises(ValueError, match="reserved for a render config"):
-        render_config_yaml(spec_name)
 
 
 def test_checkout_relative_path_inside_checkout_is_relative(tmp_path: Path) -> None:
@@ -423,21 +394,8 @@ def test_checkout_relative_path_relative_input_resolves_against_cwd(
     assert checkout_relative_path("plugins/Dexed.vst3", tmp_path) == "plugins/Dexed.vst3"
 
 
-@pytest.mark.parametrize("spec_name", _RESERVED_RENDER_CONFIG_NAMES)
-def test_registration_paths_reserved_render_name_raises_value_error(
-    tmp_path: Path, spec_name: str
-) -> None:
-    """A shipped render-group name cannot become synth artifacts.
-
-    :param tmp_path: Stands in for the checkout root.
-    :param spec_name: Exact or case-variant reserved group name.
-    """
-    with pytest.raises(ValueError, match="reserved for a render config"):
-        registration_paths(tmp_path, spec_name)
-
-
 def test_registration_paths_lay_out_the_repo_convention(tmp_path: Path) -> None:
-    """Destinations follow the spec-module / preset / csv / render-config convention.
+    """Destinations follow the spec-module / preset / csv convention.
 
     :param tmp_path: Stands in for the checkout root.
     """
@@ -446,7 +404,6 @@ def test_registration_paths_lay_out_the_repo_convention(tmp_path: Path) -> None:
     assert paths.spec_module == tmp_path / "src/synth_setter/data/vst/fake_synth_param_spec.py"
     assert paths.preset == tmp_path / "presets/fake_synth-base.vstpreset"
     assert paths.csv == tmp_path / "fake_synth_params.csv"
-    assert paths.render_config == tmp_path / "src/synth_setter/configs/render/fake_synth.yaml"
     assert paths.registry == tmp_path / "src/synth_setter/data/vst/param_spec_registry.py"
 
 

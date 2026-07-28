@@ -10,7 +10,7 @@ audio_dtype: float16
 mel_spec_dtype: float32
 samples_per_shard: 10000
 
-# Surfaced at their RenderConfig defaults (mirroring surge_xt.yaml) so plain
+# Surfaced at their RenderConfig defaults (mirroring vst.yaml) so plain
 # ``render.<field>=...`` overrides compose without ``+``.
 samples_per_render_batch: 32
 max_retries: 0

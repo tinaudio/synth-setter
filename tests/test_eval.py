@@ -90,7 +90,7 @@ def test_eval_faust_render_group_resolves_production_renderer_contract() -> None
                     "trainer=cpu",
                     "ckpt_path=.",
                     "synth=faust_bright_organ",
-                    "render=faust_bright_organ",
+                    "render=faust",
                 ],
             )
         render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
@@ -1295,7 +1295,7 @@ def test_eval_synth_group_exposes_postprocessing_keys(synth_group: str) -> None:
             overrides=[
                 "experiment=surge/fake_oracle",
                 f"synth={synth_group}",
-                f"render={synth_group}",
+                "render=vst",
             ],
         )
     try:

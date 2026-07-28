@@ -9,7 +9,7 @@ defaults:
   # eval.yaml defaults logger to null; base.yaml's logger.wandb fragment needs
   # the full wandb group underneath it.
   - override /logger: wandb
-  - override /render: surge_4
+  - override /render: vst
   - _self_
 
 run_name: ffn_eval
