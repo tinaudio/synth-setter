@@ -67,6 +67,7 @@ Logged via `self.log()` in each LightningModule:
 | Module                  | Metric                                              | Step | Epoch |
 | ----------------------- | --------------------------------------------------- | ---- | ----- |
 | `VSTFlowMatchingModule` | `train/loss`                                        | yes  | yes   |
+|                         | `train/audio_loss` (when `model/audio_loss` is set) | yes  | yes   |
 |                         | `train/penalty`                                     | yes  | yes   |
 |                         | `val/param_mse`                                     | —    | yes   |
 |                         | `test/param_mse`                                    | —    | yes   |
@@ -81,8 +82,6 @@ Logged via `self.log()` in each LightningModule:
 |                         | `net/*` gradient norms                              | yes  | —     |
 | `VSTFeedForwardModule`  | `train/loss`                                        | yes  | yes   |
 |                         | `val/param_mse`, `test/param_mse`                   | —    | yes   |
-|                         | `val/lsd`, `val/loss`                               | —    | yes   |
-|                         | `test/lsd`, `test/loss`, `test/param_mse`           | —    | yes   |
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 

@@ -78,7 +78,7 @@ def test_vst_flow_matching_module_trains_on_an_online_torchsynth_batch():
         conditioning="mel",
     )
 
-    loss, _ = module._train_step(batch)
+    loss, _, _ = module._train_step(batch)
     gradients = torch.autograd.grad(loss, [p for p in vector_field.parameters()])
 
     assert torch.isfinite(loss)

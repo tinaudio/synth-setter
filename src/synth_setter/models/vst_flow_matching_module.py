@@ -1,8 +1,10 @@
 """Lightning module for flow-matching VST parameter prediction."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from lightning import LightningModule
@@ -15,6 +17,9 @@ from synth_setter.conditioning import (
     select_conditioning,
 )
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
+
+if TYPE_CHECKING:
+    from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 
 
 def call_with_cfg(
@@ -60,6 +65,7 @@ class VSTFlowMatchingModule(LightningModule):
         *,
         num_params: int,
         conditioning: Conditioning = "mel",
+        audio_loss: AudioFeedbackLoss | None = None,
         encoder_num_heads: int | None = None,
         encoder_output_dim: int | None = None,
         warmup_steps: int = 5000,
@@ -80,6 +86,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
+        :param audio_loss: Optional audio-feedback term on the rendered one-step
+            estimate; requires an uncompiled, single-device, drop-last run (#2585).
         :param encoder_num_heads: Model-owned attention head count for sequence encoders.
         :param encoder_output_dim: Configured encoder width consumed by the vector field.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
@@ -97,6 +105,15 @@ class VSTFlowMatchingModule(LightningModule):
 
         self.encoder = encoder
         self.vector_field = vector_field
+        self.audio_loss = audio_loss
+        if audio_loss is not None and compile:
+            from synth_setter.models.components.audio_feedback import (
+                validate_audio_feedback_runtime,
+            )
+
+            # Only `compiled` is known here; drop_last/world_size are re-checked against
+            # the real trainer in on_train_start. Must fail before setup() compiles (#2585).
+            validate_audio_feedback_runtime(drop_last=True, compiled=True, world_size=1)
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
         self._raw_conditioning_key = raw_conditioning_key(conditioning)
 
@@ -104,7 +121,18 @@ class VSTFlowMatchingModule(LightningModule):
         self.test_param_mse_best_swap = BestSwapParamMSE()
 
     def on_train_start(self):
-        pass
+        if self.audio_loss is None:
+            return
+
+        from synth_setter.models.components.audio_feedback import (
+            validate_audio_feedback_runtime,
+        )
+
+        validate_audio_feedback_runtime(
+            drop_last=getattr(self.trainer.train_dataloader, "drop_last", False),
+            compiled=self.hparams.compile,
+            world_size=self.trainer.world_size,
+        )
 
     def _sample_time(self, n: int, device: torch.device) -> torch.Tensor:
         return torch.rand(n, 1, device=device)
@@ -169,20 +197,33 @@ class VSTFlowMatchingModule(LightningModule):
         loss = loss * w
         loss = loss.mean()
 
+        audio_term = None
+        if self.audio_loss is not None:
+            # One-step estimate of x1 from the current field; rendering it keeps
+            # autograd connected so spectral error reaches the field's weights.
+            theta_hat = x_t + (1 - t) * prediction
+            audio_term = self.audio_loss(theta_hat, t, batch["audio"], encoder=self.encoder)
+
         penalty = None
         if hasattr(self.vector_field, "penalty"):
             penalty = self.vector_field.penalty()
 
-        return loss, penalty
+        return loss, audio_term, penalty
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        loss, penalty = self._train_step(batch)
+        loss, audio_term, penalty = self._train_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+
+        total = loss
+        if audio_term is not None:
+            self.log("train/audio_loss", audio_term, on_step=True, on_epoch=True, prog_bar=True)
+            total = total + audio_term
 
         if penalty is not None:
             self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
+            total = total + penalty
 
-        return loss + penalty
+        return total
 
     def on_train_epoch_end(self) -> None:
         pass
