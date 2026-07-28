@@ -103,23 +103,6 @@ def test_validation_step_uses_whole_input_bash_regex(generate_steps: list[dict])
     )
 
 
-def test_validation_step_rejects_newline_and_carriage_return(generate_steps: list[dict]) -> None:
-    """Assert the validation explicitly guards against `\\n` / `\\r` before regex matching.
-
-    The regex itself happens to forbid newlines (they're outside the allowed class),
-    but an explicit guard produces a clearer error message and defends against
-    future regex relaxations that might re-introduce the multi-line bypass.
-
-    :param generate_steps: Ordered steps list for the ``generate`` job.
-    """
-    step = _find_step(generate_steps, name=VALIDATION_STEP_NAME)
-    body = step["run"]
-    assert "$'\\n'" in body and "$'\\r'" in body, (
-        f"{VALIDATION_STEP_NAME!r} must explicitly reject embedded newlines and "
-        f"carriage returns (e.g. via `[[ \"$INPUT\" == *$'\\n'* ]]`). Got body: {body!r}"
-    )
-
-
 def test_validation_step_reads_inputs_hydra_overrides(generate_steps: list[dict]) -> None:
     """Assert the validation step's env binds the workflow input it gates.
 

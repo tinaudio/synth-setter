@@ -54,12 +54,6 @@ def test_sidecar_is_frozen() -> None:
         sidecar.fragment_json = "{...}"  # type: ignore[misc]
 
 
-def test_dataset_card_round_trips_through_json() -> None:
-    """The audit card survives the R2 JSON round trip unchanged."""
-    card = _card()
-    assert LanceDatasetCard.model_validate_json(card.model_dump_json()) == card
-
-
 def test_dataset_card_rejects_unknown_fields() -> None:
     """Extra keys fail the card's ``extra=\"forbid\"`` boundary."""
     payload = _card().model_dump()

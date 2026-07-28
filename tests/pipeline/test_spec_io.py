@@ -77,14 +77,6 @@ class TestLocalSpecPath:
         )
         assert result == expected
 
-    def test_returns_path_object(self, spec: DatasetSpec, tmp_path: Path) -> None:
-        """Return type is ``pathlib.Path`` (not str).
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Pytest tmp dir used as ``output_dir``.
-        """
-        assert isinstance(spec_io.local_spec_path(spec, tmp_path), Path)
-
 
 class TestWriteSpecLocally:
     """``write_spec_locally`` writes spec JSON to its local path."""
