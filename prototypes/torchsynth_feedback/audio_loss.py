@@ -293,8 +293,10 @@ def finetune_audio_loss(
         params, target_audio = sample_batch(
             config.batch_size, device, generator, config.signal_length
         )
-        # Train only inside the feedback window; below t_min the estimate is still noise.
-        t = config.t_min + (1 - config.t_min) * torch.rand(config.batch_size, 1, device=device)
+        # Sample the FULL t range: the vector field is shared across t, so training only
+        # on [t_min, 1] starves — and degrades — the [0, t_min) region the sampler
+        # integrates through first. audio_weight() gates the audio term on its own.
+        t = torch.rand(config.batch_size, 1, device=device)
         batch = FlowBatch(params, target_audio, torch.randn_like(params), t)
         loss, metrics = combined_loss(encoder, vector_field, batch, loss_config)
         optimizer.zero_grad()

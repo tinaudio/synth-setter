@@ -1,0 +1,157 @@
+"""Behaviour tests for the torchsynth audio-feedback loss and its runtime guards."""
+
+import pytest
+import torch
+
+from synth_setter.data.torchsynth_grad_render import (
+    differentiable_decode,
+    render_torchsynth_grad,
+)
+from synth_setter.models.components.audio_feedback import (
+    AudioDistance,
+    AudioFeedbackLoss,
+    validate_audio_feedback_runtime,
+)
+
+_SAMPLE_RATE = 44_100
+_SIGNAL_LENGTH = 4_410
+_MIDI_PITCH = 60
+_BATCH = 4
+_NUM_PARAMS = 76
+
+
+def _render(params01: torch.Tensor) -> torch.Tensor:
+    """Render a parameter batch without gradients.
+
+    :param params01: Parameters in ``[0, 1]``.
+    :returns: Rendered audio.
+    """
+    with torch.no_grad():
+        return render_torchsynth_grad(
+            params01,
+            sample_rate=_SAMPLE_RATE,
+            signal_length=_SIGNAL_LENGTH,
+            midi_pitch=_MIDI_PITCH,
+        )
+
+
+def _loss(**kwargs: object) -> AudioFeedbackLoss:
+    """Build an audio-feedback loss with test-sized render settings.
+
+    :param **kwargs: Overrides forwarded to :class:`AudioFeedbackLoss`.
+    :returns: Configured loss module.
+    """
+    settings = {
+        "lambda_audio": 1.0,
+        "t_min": 0.8,
+        "distance": AudioDistance.MSLM,
+        "sample_rate": _SAMPLE_RATE,
+        "signal_length": _SIGNAL_LENGTH,
+        "midi_pitch": _MIDI_PITCH,
+    }
+    return AudioFeedbackLoss(**(settings | kwargs))
+
+
+def test_differentiable_decode_in_range_input_matches_affine_map():
+    """An in-range model-space value maps to ``(theta + 1) / 2``."""
+    decoded = differentiable_decode(torch.tensor([[-0.5, 0.0, 0.5]]))
+    assert torch.allclose(decoded, torch.tensor([[0.25, 0.5, 0.75]]))
+
+
+def test_differentiable_decode_saturated_input_keeps_gradient():
+    """Saturated entries keep gradient so the loss can pull them back into range."""
+    theta = torch.tensor([[-4.0, 4.0]], requires_grad=True)
+    (gradient,) = torch.autograd.grad(differentiable_decode(theta).sum(), theta)
+    assert torch.allclose(gradient, torch.tensor([[0.5, 0.5]]))
+
+
+def test_differentiable_decode_saturated_input_clamps_forward_value():
+    """The rendered value stays strictly inside the renderer's open interval."""
+    decoded = differentiable_decode(torch.tensor([[-4.0, 4.0]]))
+    assert (decoded > 0.0).all()
+    assert (decoded < 1.0).all()
+
+
+def test_audio_weight_below_t_min_is_zero():
+    """The audio term is inactive before the feedback window opens."""
+    weight = _loss().audio_weight(torch.tensor([[0.0], [0.5], [0.79]]))
+    assert torch.all(weight == 0.0)
+
+
+def test_audio_weight_at_final_time_equals_lambda():
+    """The ramp reaches the configured weight at t=1."""
+    weight = _loss(lambda_audio=0.25).audio_weight(torch.tensor([[1.0]]))
+    assert torch.allclose(weight, torch.tensor([[0.25]]))
+
+
+@pytest.mark.slow
+def test_mslm_loss_backprops_finite_gradient_through_the_renderer():
+    """A real render sends finite, non-zero gradient back to the parameter estimate."""
+    torch.manual_seed(0)
+    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
+    theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
+
+    value = _loss().forward(theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=None)
+    (gradient,) = torch.autograd.grad(value, theta)
+
+    assert value.item() > 0.0
+    assert torch.isfinite(gradient).all()
+    assert (gradient != 0).any()
+
+
+@pytest.mark.slow
+def test_latent_loss_backprops_gradient_through_the_encoder():
+    """The latent distance differentiates through both the render and the encoder."""
+    torch.manual_seed(0)
+    encoder = torch.nn.Sequential(torch.nn.Linear(_SIGNAL_LENGTH, 8), torch.nn.GELU())
+    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
+    theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
+
+    value = _loss(distance=AudioDistance.LATENT).forward(
+        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=encoder
+    )
+    (gradient,) = torch.autograd.grad(value, theta)
+
+    assert value.item() > 0.0
+    assert torch.isfinite(gradient).all()
+    assert (gradient != 0).any()
+
+
+def test_latent_loss_without_an_encoder_raises():
+    """The latent distance is unusable without the encoder that defines the space."""
+    with pytest.raises(ValueError, match="encoder"):
+        _loss(distance=AudioDistance.LATENT).forward(
+            torch.zeros(_BATCH, _NUM_PARAMS),
+            torch.full((_BATCH, 1), 0.9),
+            torch.zeros(_BATCH, _SIGNAL_LENGTH),
+            encoder=None,
+        )
+
+
+def test_zero_lambda_is_rejected_rather_than_silently_rendering():
+    """A zero weight means the control arm, which must not pay for renders."""
+    with pytest.raises(ValueError, match="lambda_audio"):
+        _loss(lambda_audio=0.0)
+
+
+def test_validate_runtime_without_drop_last_raises():
+    """A trailing partial batch would silently miss the renderer's batch-keyed cache."""
+    with pytest.raises(ValueError, match="drop_last"):
+        validate_audio_feedback_runtime(drop_last=False, compiled=False, world_size=1)
+
+
+def test_validate_runtime_with_torch_compile_raises():
+    """Compiling over the functional_call render graph-breaks or miscompiles."""
+    with pytest.raises(ValueError, match="compile"):
+        validate_audio_feedback_runtime(drop_last=True, compiled=True, world_size=1)
+
+
+def test_validate_runtime_with_multiple_devices_raises():
+    """The renderer is process-local and single-device only."""
+    with pytest.raises(ValueError, match="world_size"):
+        validate_audio_feedback_runtime(drop_last=True, compiled=False, world_size=2)
+
+
+def test_validate_runtime_accepts_a_supported_configuration():
+    """A single-device, uncompiled, drop-last run is the supported configuration."""
+    validate_audio_feedback_runtime(drop_last=True, compiled=False, world_size=1)
