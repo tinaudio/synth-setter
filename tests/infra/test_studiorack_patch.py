@@ -83,6 +83,7 @@ def test_patch_core_adds_linux_vst3_bundle_detection(tmp_path: Path) -> None:
     assert "dirCreate(dirPath)" in patched
     manager_text = manager.read_text()
     assert "files.every(file => file.type === FileType.Archive)" in manager_text
+    assert "if (files.some(file => file.type === FileType.Archive))" in manager_text
     assert "files = files.filter(file => file.type === FileType.Archive)" in manager_text
 
 

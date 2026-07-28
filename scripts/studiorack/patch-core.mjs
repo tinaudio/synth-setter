@@ -30,7 +30,7 @@ const filesDeclarationMarker = 'let files = packageCompatibleFiles(';
 const elevationBefore = 'if (!isAdmin() && !isTests()) {';
 const elevationMarker = 'files.every(file => file.type === FileType.Archive)';
 const elevationAfter =
-  'if (!isAdmin() && files.some(file => file.type === FileType.Archive)) {\n' +
+  'if (files.some(file => file.type === FileType.Archive)) {\n' +
   '            files = files.filter(file => file.type === FileType.Archive);\n' +
   '        }\n' +
   '        if (!isAdmin() && !isTests() && ' +
@@ -65,7 +65,7 @@ const tarPatched = bundlePatched.includes(tarMarker)
 const patchedHelper = tarPatched.includes(dmgMarker)
   ? tarPatched
   : tarPatched.replace(dmgBefore, dmgAfter);
-// User-owned archives bypass elevation until open-audio-stack-core#83 ships.
+// Archive alternatives bypass native installers until open-audio-stack-core#83 ships.
 const declarationPatched = managerSource.includes(filesDeclarationMarker)
   ? managerSource
   : managerSource.replace(filesDeclarationBefore, filesDeclarationMarker);
