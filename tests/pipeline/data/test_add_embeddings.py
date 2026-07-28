@@ -1154,10 +1154,17 @@ def test_add_embeddings_after_index_failure_resumes_without_reencoding(
     :param monkeypatch: Fixture replacing the encoder and index boundary.
     """
     uri = tmp_path / "index-resume.lance"
-    write_minimal_lance_shard(uri, build_lance_smoke_spec(), num_rows=2)
+    write_minimal_lance_shard(uri, build_lance_smoke_spec(), num_rows=256)
     loads: list[str] = []
     monkeypatch.setitem(EMBEDDING_REGISTRY, "m2l", _fake_spec("m2l", loads))
-    config = AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",))
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("m2l",),
+        num_partitions=1,
+        num_sub_vectors=4,
+        metric="l2",
+    )
+    real_build_index = build_index
 
     def fail_index(*args: object, **kwargs: object) -> bool:
         del args, kwargs
@@ -1168,17 +1175,44 @@ def test_add_embeddings_after_index_failure_resumes_without_reencoding(
         add_embeddings(config)
 
     committed_version = lance.dataset(uri).version
-    def finish_index(*args: object, **kwargs: object) -> bool:
-        del args, kwargs
-        return True
-
     monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.build_index", finish_index
+        "synth_setter.pipeline.data.add_embeddings.build_index", real_build_index
     )
     add_embeddings(config)
 
+    dataset = lance.dataset(uri)
     assert loads == ["load:m2l"]
-    assert lance.dataset(uri).version == committed_version
+    assert dataset.version > committed_version
+    indices = cast("list[dict[str, Any]]", dataset.list_indices())
+    assert [entry["fields"] for entry in indices] == [[f"{M2L_FIELD}_vec"]]
+
+
+def test_add_embeddings_existing_checkpoint_mismatch_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed column cannot masquerade as a different checkpoint output.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a dependency-free CLAP policy.
+    """
+    uri = tmp_path / "checkpoint-mismatch.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("clap",))
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri), embeddings=("clap",), build_index=False
+        )
+    )
+
+    with pytest.raises(ValueError, match="checkpoint identity"):
+        add_embeddings(
+            AddEmbeddingsConfig(
+                lance_uri=str(uri),
+                embeddings=("clap",),
+                checkpoints={"clap": "replacement/checkpoint"},
+                build_index=False,
+            )
+        )
 
 
 def test_add_embeddings_with_index_disabled_writes_companions_without_building(
@@ -1295,6 +1329,38 @@ def test_add_embeddings_existing_mixed_target_writes_only_missing_policy(
 
     assert loads == ["load:clap"]
     assert CLAP_FIELD in lance.dataset(uri).schema.names
+
+
+@pytest.mark.slow
+def test_add_embeddings_existing_index_config_mismatch_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed index cannot satisfy a request for different search semantics.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a dependency-free CLAP policy.
+    """
+    uri = tmp_path / "index-config-mismatch.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec(), num_rows=256)
+    _install_fake_specs(monkeypatch, ("clap",))
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri),
+            embeddings=("clap",),
+            num_partitions=2,
+            metric="l2",
+        )
+    )
+
+    with pytest.raises(ValueError, match="index configuration"):
+        add_embeddings(
+            AddEmbeddingsConfig(
+                lance_uri=str(uri),
+                embeddings=("clap",),
+                num_partitions=2,
+                metric="cosine",
+            )
+        )
 
 
 def test_build_index_with_too_few_rows_skips(tmp_path: Path) -> None:

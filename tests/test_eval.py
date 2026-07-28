@@ -38,6 +38,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
@@ -1645,13 +1646,23 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     param_spec_name: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Train and validate real TinyMU tensors through the generic pooler.
 
     :param tmp_path: Shared train/eval output directory.
     :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
     :param param_spec_name: Parameter specification driving model width.
+    :param monkeypatch: Fixture recording tensors consumed by the conditioning pooler.
     """
+    pooled_inputs: list[torch.Tensor] = []
+    original_forward = EmbeddingPool.forward
+
+    def record_forward(pool: EmbeddingPool, embed: torch.Tensor) -> torch.Tensor:
+        pooled_inputs.append(embed.detach().cpu())
+        return original_forward(pool, embed)
+
+    monkeypatch.setattr(EmbeddingPool, "forward", record_forward)
     dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "tinymu")
     _assert_conditioning_train_validate_finite(
         tmp_path,
@@ -1659,6 +1670,9 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
         param_spec_name,
         "tinymu",
     )
+    assert pooled_inputs
+    assert all(embed.shape[1] == TINYMU_FRONTEND.embedding_dim for embed in pooled_inputs)
+    assert any(torch.count_nonzero(embed).item() > 0 for embed in pooled_inputs)
 
 
 _SAME_CONDITIONING_PROFILES = ("same_s", "same_l")

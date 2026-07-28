@@ -76,6 +76,8 @@ DEFAULT_NUM_SUB_VECTORS: int = 16
 DEFAULT_INDEX_METRIC: str = "cosine"
 DEFAULT_LANCE_LOG: str = "warn"
 PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
+_EMBEDDING_NAME_METADATA = b"synth_setter.embedding.name"
+_EMBEDDING_CHECKPOINT_METADATA = b"synth_setter.embedding.checkpoint"
 SAME_EMBEDDING_DIM: int = 256
 SAME_SAMPLE_RATE: int = 44100
 SAME_DOWNSAMPLING_RATIO: int = 4096
@@ -754,6 +756,7 @@ def _write_columns(
         sample_output = _encode_columns(
             _decoded_sources(sample, input_fields), sample_rate, specs, encoders
         )
+    output_schema = _embedding_output_schema(sample_output.schema, specs, config)
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
@@ -767,7 +770,7 @@ def _write_columns(
     stage_ms: dict[str, float] = {}
 
     @lance.batch_udf(
-        output_schema=sample_output.schema,
+        output_schema=output_schema,
         checkpoint_file=None if resume_cache is None else str(resume_cache),
     )
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -874,15 +877,41 @@ def build_index(
     return True
 
 
+def _embedding_output_schema(
+    schema: pa.Schema, specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
+) -> pa.Schema:
+    """Attach policy identity to every generated field.
+
+    :param schema: Inferred encoder output schema.
+    :param specs: Policies producing the output fields.
+    :param config: Checkpoint overrides for this write.
+    :returns: Schema carrying resumable embedding identity metadata.
+    """
+    fields = []
+    for spec in specs:
+        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
+        metadata = {
+            _EMBEDDING_NAME_METADATA: spec.name.encode(),
+            _EMBEDDING_CHECKPOINT_METADATA: checkpoint.encode(),
+        }
+        fields.extend(
+            schema.field(column).with_metadata(metadata) for column in _output_columns(spec)
+        )
+    return pa.schema(fields)
+
+
 def _missing_embedding_specs(
-    dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]
+    dataset: lance.LanceDataset,
+    specs: Sequence[EmbeddingSpec],
+    config: AddEmbeddingsConfig,
 ) -> list[EmbeddingSpec]:
-    """Return policies with no output columns while rejecting partial commits.
+    """Return absent policies while rejecting partial or incompatible commits.
 
     :param dataset: Open Lance dataset.
     :param specs: Selected embedding policies.
+    :param config: Checkpoint overrides for this run.
     :returns: Policies whose complete output schema is absent.
-    :raises ValueError: Only part of a policy's output schema exists.
+    :raises ValueError: A policy is partial or has a different checkpoint identity.
     """
     names = set(dataset.schema.names)
     missing = []
@@ -896,18 +925,92 @@ def _missing_embedding_specs(
             )
         if not present:
             missing.append(spec)
+            continue
+        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint).encode()
+        for column in expected:
+            metadata = dataset.schema.field(column).metadata or {}
+            if (
+                metadata.get(_EMBEDDING_NAME_METADATA) != spec.name.encode()
+                or metadata.get(_EMBEDDING_CHECKPOINT_METADATA) != checkpoint
+            ):
+                raise ValueError(
+                    f"dataset {column} checkpoint identity does not match requested "
+                    f"{spec.name} policy"
+                )
     return missing
 
 
-def _index_exists(dataset: lance.LanceDataset, column: str) -> bool:
-    """Return whether Lance reports an index over one column.
+def _index_config_matches(
+    dataset: lance.LanceDataset,
+    index_name: str,
+    *,
+    num_partitions: int,
+    num_sub_vectors: int,
+    metric: str,
+) -> bool:
+    """Compare persisted Lance index statistics with requested search policy.
+
+    :param dataset: Open Lance dataset.
+    :param index_name: Persisted index name.
+    :param num_partitions: Requested IVF partition count.
+    :param num_sub_vectors: Requested PQ sub-vector count.
+    :param metric: Requested distance metric.
+    :returns: Whether every persisted index segment has the requested policy.
+    """
+    stats = dataset.index_statistics(index_name)
+    segments = stats.get("indices")
+    if not isinstance(segments, list) or not segments:
+        return False
+    for segment in segments:
+        if not isinstance(segment, dict):
+            return False
+        sub_index = segment.get("sub_index")
+        if not isinstance(sub_index, dict):
+            return False
+        if (
+            segment.get("metric_type") != metric
+            or segment.get("num_partitions") != num_partitions
+            or sub_index.get("num_sub_vectors") != num_sub_vectors
+        ):
+            return False
+    return True
+
+
+def _matching_index_exists(
+    dataset: lance.LanceDataset,
+    column: str,
+    *,
+    index: IndexSpec,
+    config: AddEmbeddingsConfig,
+) -> bool:
+    """Return whether a column index exactly matches the requested policy.
 
     :param dataset: Open Lance dataset.
     :param column: Vector column selected by registry policy.
-    :returns: Whether an index targets the column.
+    :param index: Registry index defaults.
+    :param config: Per-run index overrides.
+    :returns: Whether a matching index targets the column.
+    :raises ValueError: An index exists with incompatible search semantics.
     """
+    rows = dataset.count_rows()
+    num_partitions = config.num_partitions or max(1, round(rows**0.5))
+    num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
+    metric = config.metric or index.metric
     indices = cast("list[dict[str, object]]", dataset.list_indices())
-    return any(entry.get("fields") == [column] for entry in indices)
+    for entry in indices:
+        if entry.get("fields") != [column]:
+            continue
+        index_name = entry.get("name")
+        if isinstance(index_name, str) and _index_config_matches(
+            dataset,
+            index_name,
+            num_partitions=num_partitions,
+            num_sub_vectors=num_sub_vectors,
+            metric=metric,
+        ):
+            return True
+        raise ValueError(f"dataset {column} index configuration does not match requested policy")
+    return False
 
 
 def add_embeddings(config: AddEmbeddingsConfig) -> None:
@@ -920,7 +1023,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
-    pending = _missing_embedding_specs(dataset, specs)
+    pending = _missing_embedding_specs(dataset, specs, config)
     if pending:
         _validate_write_source(dataset, config.batch_size)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
@@ -945,7 +1048,9 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if spec.index is None:
                 continue
             vector_column = spec.index.vector_column or spec.column
-            if not _index_exists(dataset, vector_column):
+            if not _matching_index_exists(
+                dataset, vector_column, index=spec.index, config=config
+            ):
                 build_index(dataset, vector_column, index=spec.index, config=config)
     logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
 
