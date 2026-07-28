@@ -12,7 +12,7 @@ import types
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import cache, partial
-from typing import TYPE_CHECKING, TypeAlias, cast
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 
 import torch
 from lightning import LightningDataModule
@@ -44,6 +44,10 @@ TorchSynthItem: TypeAlias = tuple[
 TorchSynthBatch: TypeAlias = tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
 ]
+# The VST module family consumes dict batches; "tuple" is the legacy shape the ksin
+# feed-forward module needs and is removed once experiment/torchsynth/ffn.yaml migrates
+# to vst_ff_module. See https://github.com/tinaudio/synth-setter/issues/2585.
+BatchFormat: TypeAlias = Literal["tuple", "dict"]
 # Finite params clamp into the open interval (0, 1) because model predictions are unconstrained.
 # NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
@@ -177,6 +181,33 @@ def render_torchsynth(
     return audio.as_subclass(torch.Tensor).clamp(-1, 1)
 
 
+def collate_vst_dict(batch: list[TorchSynthItem], sample_rate: float) -> dict[str, torch.Tensor]:
+    """Collate online rows into the VST module family's dict contract.
+
+    ``mel_spec`` goes through the same ``make_spectrogram`` the dataset generator uses, so
+    an online torchsynth batch is byte-identical in shape and scaling to a Lance-hydrated
+    one. ``params`` convert to the ``[-1, 1]`` model space VST batches carry.
+
+    :param batch: Rows from :class:`TorchSynthDataset`.
+    :param sample_rate: Audio sample rate in Hz, for the mel front-end.
+    :returns: Batch keyed ``params``, ``noise``, ``mel_spec`` and ``audio``.
+    """
+    from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
+
+    audio = torch.cat([row[0] for row in batch], dim=0)
+    params01 = torch.cat([row[1] for row in batch], dim=0)
+    mel = torch.stack(
+        [torch.from_numpy(make_spectrogram(row.numpy(), sample_rate)) for row in audio]
+    ).unsqueeze(1)
+    params = params01 * 2 - 1
+    return {
+        "params": params,
+        "noise": torch.randn_like(params),
+        "mel_spec": mel.to(torch.float32),
+        "audio": audio,
+    }
+
+
 class TorchSynthDataset(Dataset[TorchSynthItem]):
     """Deterministic parameters rendered on demand instead of stored as audio."""
 
@@ -269,6 +300,7 @@ class TorchSynthDataModule(LightningDataModule):
         signal_length: int = 4_410,
         midi_pitch: int = 60,
         num_params: int = NUM_PARAMS,
+        batch_format: BatchFormat = "tuple",
         train_val_test_sizes: tuple[int, int, int] = (100_000, 10_000, 10_000),
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
@@ -281,6 +313,8 @@ class TorchSynthDataModule(LightningDataModule):
         :param signal_length: Number of output samples per rendered row.
         :param midi_pitch: Fixed MIDI note rendered for every parameter row.
         :param num_params: Expected parameter width, validated against TorchSynth in ``setup``.
+        :param batch_format: ``dict`` for the VST module family, ``tuple`` for the legacy
+            ksin feed-forward module.
         :param train_val_test_sizes: Row counts for the train, validation, and test splits.
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
@@ -293,6 +327,7 @@ class TorchSynthDataModule(LightningDataModule):
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
         self.num_params = num_params
+        self.batch_format = batch_format
         self.train_val_test_sizes = train_val_test_sizes
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
@@ -355,7 +390,12 @@ class TorchSynthDataModule(LightningDataModule):
                 shuffle=shuffle,
                 sampler=sampler,
                 num_workers=self.num_workers,
-                collate_fn=regular_collate_fn,
+                drop_last=self.batch_format == "dict",
+                collate_fn=(
+                    partial(collate_vst_dict, sample_rate=self.sample_rate)
+                    if self.batch_format == "dict"
+                    else regular_collate_fn
+                ),
             ),
         )
 
