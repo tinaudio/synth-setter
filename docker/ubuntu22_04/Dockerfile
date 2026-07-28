@@ -84,8 +84,10 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
   g++-12 \
   git \
   ninja-build \
-  flex
-
+  flex \
+  wget
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12 && \
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 
 # ==========================================
 # Source build: installs CMake 3.28 and JUCE prerequisites, clones
@@ -146,8 +148,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
               rpm
 
 # Finally, pick gcc12
-RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
-RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 
 RUN chmod 777 /home/build
 RUN mkdir /home/build/dev

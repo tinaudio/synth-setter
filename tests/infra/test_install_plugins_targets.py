@@ -80,6 +80,7 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
     assert "COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json" in stage
     assert "npm ci" in stage
     assert "python -m synth_setter.cli.plugins" in stage
+    assert "update-alternatives --install /usr/bin/gcc" in DOCKERFILE.read_text()
     assert "studiorack.json" in stage
 
 
@@ -99,6 +100,7 @@ def test_macos_provisioners_install_surge_through_studiorack() -> None:
     tart = TART_TEMPLATE.read_text()
 
     assert "npm ci" in action
+    assert '"CI="' in action
     assert "synth-setter-plugins" in action
     assert "brew install --cask surge-xt" not in action
     assert "npm ci" in tart
