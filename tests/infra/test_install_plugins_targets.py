@@ -88,7 +88,8 @@ def test_docker_alias_restore_runs_from_mounted_source() -> None:
     """Snapshot images restore aliases without requiring the new console script."""
     helper = (PROJECT_ROOT / "docker/ubuntu22_04/ensure_plugin_symlinks.sh").read_text()
 
-    assert 'PYTHONPATH="${repo_root}/src" python -m synth_setter.cli.plugins' in helper
+    assert '"PYTHONPATH=${repo_root}/src" python -m synth_setter.cli.plugins' in helper
+    assert "adopt \\\n    --plugin surge-synthesizer/surge" in helper
 
 
 def test_docker_fetched_plugins_have_no_manual_download_stage() -> None:

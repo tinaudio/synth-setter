@@ -25,6 +25,7 @@ def _helper_source(path: Path) -> None:
     :param path: Destination for the JavaScript fixture.
     """
     path.write_text(
+        "const pkgs = dirRead(path.join(mountPoint, '**', '*.pkg'));\n"
         "if (dirIs(f)) {\n"
         "    // Check if this is a macOS application bundle or plugin bundle\n"
         "    if (fileExists(path.join(f, 'Contents', 'Info.plist'))) {\n"
@@ -75,6 +76,7 @@ def test_patch_core_adds_linux_vst3_bundle_detection(tmp_path: Path) -> None:
     patched = helper.read_text()
     assert "path.extname(f).toLowerCase() === '.vst3'" in patched
     assert "Contents', 'Info.plist'" in patched
+    assert "dirRead(path.join(mountPoint, '*.pkg'))" in patched
     assert "files.every(file => file.type === FileType.Archive)" in manager.read_text()
 
 

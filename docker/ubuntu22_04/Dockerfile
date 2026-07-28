@@ -393,7 +393,7 @@ RUN case "${TARGETARCH:-}" in \
 # /opt/studiorack; stable /usr/lib/vst3 aliases keep serialized render specs portable.
 # The core patch recognizes Linux VST3 bundles without a macOS Info.plist; remove it
 # when https://github.com/open-audio-stack/open-audio-stack-core/issues/82 and
-# https://github.com/open-audio-stack/open-audio-stack-core/issues/83 ship.
+# https://github.com/open-audio-stack/open-audio-stack-core/issues/83 and #84 ship.
 # Surge source mode and KR-106 retain source fallbacks because the registry has no
 # Surge arm64 artifact and KR-106 binaries require newer glibc than Ubuntu 22.04.
 # ==========================================
