@@ -201,13 +201,20 @@ def _audio_prediction_cli_args(
     :param output_dir: Directory where PredictionWriter emits artifacts.
     :returns: Complete subprocess argv.
     """
+    # Mirrors the shipped jobs/predict scripts: non-VAE checkpoints select the
+    # per-param MSE callback group alongside eval_surge; the VAE lane omits it.
+    callbacks = (
+        "callbacks=eval_surge"
+        if case.experiment == "vae_full"
+        else "callbacks=[eval_surge,log_per_param_mse]"
+    )
     return [
         sys.executable,
         "-m",
         "synth_setter.cli.eval",
         f"experiment=surge/wandb_checkpoint/{case.experiment}",
         f"datamodule={case.datamodule}",
-        "callbacks=eval_surge",
+        callbacks,
         "mode=predict",
         "trainer=cpu",
         "logger=wandb",

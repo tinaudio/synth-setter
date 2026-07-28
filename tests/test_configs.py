@@ -939,7 +939,7 @@ def test_checkpoint_overlay_resolves_identity_with_audio_datamodule(
         [
             f"experiment={experiment}",
             "datamodule=fsd",
-            "callbacks=eval_surge",
+            "callbacks=[eval_surge,log_per_param_mse]",
             "mode=predict",
             "ckpt_path=fake.ckpt",
         ],

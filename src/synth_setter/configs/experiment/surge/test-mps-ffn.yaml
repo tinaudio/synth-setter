@@ -8,7 +8,7 @@ defaults:
   - override /datamodule: surge
   - override /synth: surge_xt
   - override /trainer: mps
-  - override /callbacks: [default_vst, eval_vst]
+  - override /callbacks: [default_vst, eval_vst, log_per_param_mse]
   - _self_
 
 run_name: ffn
@@ -44,9 +44,6 @@ trainer:
   deterministic: true
 
 callbacks:
-  log_per_param_mse:
-    _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: ${synth.param_spec_name}
   plot_proj_ii: null
   model_checkpoint:
     save_last: true
