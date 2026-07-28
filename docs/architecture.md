@@ -53,11 +53,11 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
 ## Data Flow
 
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
-   count, shard size, parameter spec). The synth is selected by a `render`
-   group override (e.g. `render=surge_xt`, `render=obxf`, or
-   `render=faust_bright_organ`); each render config names the backend, selects
-   its `synth` group, and declares any backend-specific resources. The synth
-   group carries the registered parameter spec, preset, and plugin path. Hydra
+   count, shard size, parameter spec). The synth is selected by the root
+   `synth` group (`synth=surge_xt`, `synth=obxf`, ...), which carries the
+   registered parameter spec, preset, plugin path, and version; the paired
+   `render` group override (e.g. `render=surge_xt`) names the backend and
+   declares backend-specific knobs only. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
@@ -143,13 +143,12 @@ synth-setter/
 
 **Synth-agnostic core, registry as the contract.** A synth's identity — which
 `ParamSpec`, which plugin, which baseline preset — is authored once in
-`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths`,
-`src/synth_setter/configs/render/synth/<name>.yaml`, and the root identity
-group `src/synth_setter/configs/synth/<name>.yaml` are projections of it,
-pinned against the table by `tests/test_synth_spec.py` and
+`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and the
+root identity group `src/synth_setter/configs/synth/<name>.yaml` are
+projections of it, pinned against the table by `tests/test_synth_spec.py` and
 `tests/schemas/test_synth_config.py`. Render configs in
-`src/synth_setter/configs/render/<name>.yaml` select an identity and declare
-backend-specific settings. The `ParamSpec` objects themselves live in
+`src/synth_setter/configs/render/<name>.yaml` declare backend-specific
+settings only and are paired with a `synth=<name>` selection. The `ParamSpec` objects themselves live in
 `src/synth_setter/data/vst/param_spec_registry.py`. The rendering, Lance
 storage, mel features, distributed workers, and models all read width and
 behavior from the resolved spec, never from a synth literal. Faust entries use

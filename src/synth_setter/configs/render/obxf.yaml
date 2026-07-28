@@ -1,5 +1,3 @@
-# Pin OB-Xf identity while generic knobs come from ``vst``.
+# Generic VST knobs; identity comes from the root synth group (`synth=obxf`, #2565).
 defaults:
   - vst
-  - synth: obxf
-  - _self_

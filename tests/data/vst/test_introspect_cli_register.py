@@ -123,7 +123,13 @@ def test_register_writes_all_artifacts_into_the_checkout_layout(
     assert (checkout / "fake_synth_params.csv").exists()
     assert (checkout / "src/synth_setter/configs/render/fake_synth.yaml").exists()
     identity = OmegaConf.load(checkout / "src/synth_setter/configs/synth/fake_synth.yaml")
-    assert identity == {"name": "fake_synth", "param_spec_name": "fake_synth"}
+    assert identity == {
+        "name": "fake_synth",
+        "param_spec_name": "fake_synth",
+        "plugin_path": "plugins/fake.vst3",
+        "plugin_state_path": "presets/fake_synth-base.vstpreset",
+        "synth_version": "9.9.9",
+    }
 
 
 def test_register_adds_spec_to_the_registry_module(
@@ -162,8 +168,8 @@ def test_register_synth_config_pins_relative_plugin_path_and_version(
     _register(checkout)
 
     cfg = OmegaConf.load(checkout / "src/synth_setter/configs/render/fake_synth.yaml")
-    synth = OmegaConf.load(checkout / "src/synth_setter/configs/render/synth/fake_synth.yaml")
-    assert cfg.defaults == ["vst", {"synth": "fake_synth"}, "_self_"]
+    synth = OmegaConf.load(checkout / "src/synth_setter/configs/synth/fake_synth.yaml")
+    assert cfg.defaults == ["vst"]
     assert synth.synth_version == "9.9.9"
     assert synth.plugin_path == "plugins/fake.vst3"
     assert synth.param_spec_name == "fake_synth"
@@ -213,7 +219,7 @@ def test_register_warns_when_synth_version_is_unknown(
 
     assert result.exit_code == 0, result.output
     assert "WARNING: synth_version" in result.output
-    synth = OmegaConf.load(checkout / "src/synth_setter/configs/render/synth/fake_synth.yaml")
+    synth = OmegaConf.load(checkout / "src/synth_setter/configs/synth/fake_synth.yaml")
     assert synth.synth_version == "unknown"
 
 
@@ -525,7 +531,9 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     assert "# Introspection verification — `fake_synth`" in verify_report
     assert "## BLOCK" not in verify_report
     assert "registry import + sample() OK" in verify_report
-    assert "Hydra render=fake_synth composes into a valid RenderConfig" in verify_report
+    assert "Hydra render=fake_synth synth=fake_synth composes into a valid RenderConfig" in (
+        verify_report
+    )
 
     probe = textwrap.dedent(
         """
@@ -563,10 +571,8 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     with initialize_config_dir(
         config_dir=str(root / "src/synth_setter/configs"), version_base="1.3"
     ):
-        cfg = compose(overrides=["+render=fake_synth"])
-    raw = OmegaConf.to_container(cfg.render, resolve=True)
-    assert isinstance(raw, dict)
-    render = RenderConfig(**{k: v for k, v in raw.items() if isinstance(k, str)})
+        cfg = compose(overrides=["+render=fake_synth", "+synth=fake_synth"])
+    render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
     assert render.param_spec_name == "fake_synth"
     assert render.plugin_path == "plugins/fake.vst3"
     assert render.plugin_state_path == "presets/fake_synth-base.vstpreset"

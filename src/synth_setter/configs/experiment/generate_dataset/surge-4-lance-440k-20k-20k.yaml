@@ -6,6 +6,7 @@
 defaults:
   - /experiment/generate_dataset/surge-simple-lance-440k-20k-20k@_global_
   - override /datamodule: surge_mini
+  - override /synth: surge_4
   - override /render: surge_4
   - _self_
 

@@ -1,4 +1,3 @@
-# Spec-identity override; generic render knobs inherit from torchsynth_full.
+# Identity moved to the root synth group (#2565); kept so `render=torchsynth_adsr` still composes.
 defaults:
   - torchsynth_full
-  - override synth: torchsynth_adsr

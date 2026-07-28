@@ -206,7 +206,7 @@ def test_markdown_report_carries_verdict_findings_and_artifacts(tmp_path: Path) 
 
 
 def test_registered_artifacts_cover_every_file_register_writes(tmp_path: Path) -> None:
-    """The artifact list feeding the pre-commit gate and report includes all five outputs.
+    """The artifact list feeding the pre-commit gate and report includes all six outputs.
 
     :param tmp_path: Stands in for the checkout root.
     """
@@ -219,5 +219,6 @@ def test_registered_artifacts_cover_every_file_register_writes(tmp_path: Path) -
         paths.preset,
         paths.csv,
         paths.render_config,
+        paths.identity_config,
         paths.registry,
     ]

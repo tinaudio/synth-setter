@@ -147,6 +147,7 @@ def _generated_spec(tmp_path: Path) -> Iterator[DatasetSpec]:
             "experiment=generate_dataset/smoke-shard-lance",
             f"task_name={_TASK_NAME}",
             f"run_id={run_id}",
+            "synth=faust_bright_organ",
             "render=faust_bright_organ",
             "train_val_test_sizes=[2,2,2]",
             "render.samples_per_shard=2",

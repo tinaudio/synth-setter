@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from synth_setter.synth_spec import SynthSpec
+
 # Marker file that identifies a synth-setter checkout root (and is the file
 # the registry transform rewrites).
 _REGISTRY_RELPATH = Path("src/synth_setter/data/vst/param_spec_registry.py")
@@ -74,13 +76,9 @@ class RegistrationPaths:
 
        The identity-table module the transform rewrites in place.
 
-    .. attribute :: synth_config
-
-       Hydra synth-identity group config generated from the table row.
-
     .. attribute :: identity_config
 
-       Root ``configs/synth`` group config selecting this synth (#2565).
+       Root ``configs/synth`` group config generated from the table row (#2565).
     """
 
     spec_module: Path
@@ -89,7 +87,6 @@ class RegistrationPaths:
     render_config: Path
     registry: Path
     synth_module: Path
-    synth_config: Path
     identity_config: Path
 
 
@@ -110,9 +107,6 @@ def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
         render_config=repo_root / "src/synth_setter/configs/render" / f"{spec_name}.yaml",
         registry=repo_root / _REGISTRY_RELPATH,
         synth_module=repo_root / _SYNTH_SPEC_RELPATH,
-        synth_config=(
-            repo_root / "src/synth_setter/configs/render/synth" / f"{spec_name}.yaml"
-        ),
         identity_config=repo_root / "src/synth_setter/configs/synth" / f"{spec_name}.yaml",
     )
 
@@ -338,56 +332,29 @@ def synths_with_spec(
     return "\n".join(lines) + "\n"
 
 
-def _identity_lines(spec_name: str) -> list[str]:
-    """Shared header + identity lines of both generated synth group configs.
+def identity_group_yaml(spec: SynthSpec) -> str:
+    """Emit the root ``configs/synth`` identity config for one ``SYNTHS`` row.
 
-    Identity scalars are double-quoted via ``json.dumps`` so an arbitrary
-    plugin path cannot break the YAML scalar.
+    ``tests/data/vst/test_registration.py`` pins the emitted shape and
+    ``tests/schemas/test_synth_config.py`` pins the checked-in group files as
+    byte-for-byte generator output. Scalars are double-quoted via ``json.dumps``
+    so an arbitrary plugin path cannot break the YAML scalar.
 
-    :param spec_name: Registry key; names the param spec.
-    :returns: Provenance comment plus ``name`` / ``param_spec_name`` lines.
-    """
-    return [
-        "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; "
-        "edit the table, not this file.",
-        f"name: {json.dumps(spec_name)}",
-        f"param_spec_name: {json.dumps(spec_name)}",
-    ]
-
-
-def synth_group_yaml(spec_name: str, *, plugin_path: str, synth_version: str) -> str:
-    """Emit the Hydra synth-identity group config for ``spec_name``.
-
-    The generated projection of the ``SYNTHS`` row; ``tests/test_synth_spec.py``
-    pins the two to agree.
-
-    :param spec_name: Registry key; names the param spec and preset.
-    :param plugin_path: ``.vst3`` path recorded for render workers.
-    :param synth_version: Plugin version pinned in synth identity.
-    :returns: YAML text for ``configs/render/synth/<spec_name>.yaml``.
+    :param spec: The identity row to project; its ``name`` names the group file.
+    :returns: YAML text for ``configs/synth/<spec.name>.yaml``.
     """
     return "\n".join(
         [
-            *_identity_lines(spec_name),
-            f"plugin_path: {json.dumps(plugin_path)}",
-            f"plugin_state_path: {json.dumps(preset_repo_path(spec_name))}",
-            f"synth_version: {json.dumps(synth_version)}",
+            "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; "
+            "edit the table, not this file.",
+            f"name: {json.dumps(spec.name)}",
+            f"param_spec_name: {json.dumps(spec.param_spec_name)}",
+            f"plugin_path: {json.dumps(spec.plugin_path)}",
+            f"plugin_state_path: {json.dumps(spec.plugin_state_path)}",
+            f"synth_version: {json.dumps(spec.synth_version)}",
             "",
         ]
     )
-
-
-def identity_group_yaml(spec_name: str) -> str:
-    """Emit the root ``configs/synth`` identity config for ``spec_name``.
-
-    Identity-only projection of the ``SYNTHS`` row consumed via
-    ``${synth.param_spec_name}``; ``tests/schemas/test_synth_config.py`` pins
-    the group and the table to stay bijective.
-
-    :param spec_name: Registry key; names the param spec and the group file.
-    :returns: YAML text for ``configs/synth/<spec_name>.yaml``.
-    """
-    return "\n".join([*_identity_lines(spec_name), ""])
 
 
 def _import_insert_index(lines: list[str], module: str) -> int:
@@ -471,15 +438,13 @@ def checkout_relative_path(plugin_path: str, root: Path) -> str:
 
 
 def render_config_yaml(spec_name: str) -> str:
-    """Emit the Hydra render group config selecting ``spec_name``.
+    """Emit the Hydra render group config for ``spec_name``.
 
     Generic render knobs (sample rate, shard sizing, cadences) inherit from
-    the ``vst`` group config, while this config pins the synth's identity.
-    Every identity scalar is double-quoted via ``json.dumps`` (a subset of
-    YAML's double-quote style) so arbitrary plugin paths cannot break the scalar.
-    A spec name that is a YAML 1.1 literal (``on``, ``true``) stays a string.
+    the ``vst`` group config. Identity lives in the root ``synth`` group
+    (#2565), so the render config carries none.
 
-    :param spec_name: Registry key; names the param spec and preset.
+    :param spec_name: Registry key; names the render group file.
     :returns: YAML text for ``configs/render/<spec_name>.yaml``.
     :raises ValueError: If the name is reserved for a shared render config.
     """
@@ -488,10 +453,9 @@ def render_config_yaml(spec_name: str) -> str:
     return "\n".join(
         [
             "# Generated by synth-setter-introspect-plugin; generic VST knobs inherit from vst.",
+            f"# Identity lives in the root synth group — select `synth={spec_name}` too.",
             "defaults:",
             "  - vst",
-            f"  - synth: {spec_name}",
-            "  - _self_",
             "",
         ]
     )

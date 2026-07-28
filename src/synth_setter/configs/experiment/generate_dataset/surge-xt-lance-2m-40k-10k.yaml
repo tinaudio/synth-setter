@@ -6,6 +6,7 @@
 
 defaults:
   - override /datamodule: surge
+  - override /synth: surge_xt
   - override /render: surge_xt
   - _self_
 

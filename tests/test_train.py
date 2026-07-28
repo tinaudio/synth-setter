@@ -27,6 +27,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
+from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
@@ -548,29 +549,23 @@ def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None
     assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
 
 
-def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: Path) -> None:
-    """The real train entrypoint dies at configure time on a probe/model spec mismatch.
+def test_train_without_synth_group_fails_loudly_at_configure_time(tmp_path: Path) -> None:
+    """The real train entrypoint dies at configure time when the identity group is missing.
 
-    The guard kills a launch whose probe cannot decode the model's predictions
-    before a single training step runs (#1990).
+    Identity interpolates from the root ``synth`` group (#2565), so a probe/model
+    spec mismatch is no longer expressible; a VST launch without the group dies
+    on the first ``${synth.param_spec_name}`` read before a training step runs.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
     cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
     with open_dict(cfg):
         cfg.training.val_audio_probe = True
-        cfg.render = {
-            "synth": {
-                "name": "surge_xt",
-                "param_spec_name": "surge_xt",
-                "plugin_path": "plugins/Surge XT.vst3",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "synth_version": "1.3.4",
-            }
-        }
+        cfg.render = {"sample_rate": 44100, "channels": 2}
+        del cfg.synth
 
     HydraConfig().set_config(cfg)
-    with pytest.raises(ValueError, match="param_spec_name"):
+    with pytest.raises(InterpolationKeyError, match="synth.param_spec_name"):
         train(cfg)
 
 
@@ -1394,7 +1389,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     )
     probe_samples = 2
     with open_dict(cfg_surge_real_train):
-        cfg_surge_real_train.render.synth = probe_synth.model_dump(mode="json")
+        cfg_surge_real_train.synth = probe_synth.model_dump(mode="json")
         # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
         # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
@@ -1523,10 +1518,10 @@ def test_train_same_config_launches_upload_isolated_val_audio_probes(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(audio_probe, "_run_captured", _materialize_fake_probe_stage)
     with open_dict(cfg_surge_fake_train):
-        cfg_surge_fake_train.render.synth.name = param_spec_name
-        cfg_surge_fake_train.render.synth.param_spec_name = param_spec_name
-        cfg_surge_fake_train.render.synth.plugin_state_path = "presets/fake.vstpreset"
-        cfg_surge_fake_train.render.synth.plugin_path = "plugins/fake.vst3"
+        cfg_surge_fake_train.synth.name = param_spec_name
+        cfg_surge_fake_train.synth.param_spec_name = param_spec_name
+        cfg_surge_fake_train.synth.plugin_state_path = "presets/fake.vstpreset"
+        cfg_surge_fake_train.synth.plugin_path = "plugins/fake.vst3"
         cfg_surge_fake_train.render.sample_rate = _SURGE_FIXTURE_SAMPLE_RATE
         cfg_surge_fake_train.render.channels = _SURGE_FIXTURE_CHANNELS
         cfg_surge_fake_train.render.velocity = 100

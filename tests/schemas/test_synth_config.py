@@ -29,16 +29,22 @@ def test_synth_group_files_and_registry_are_bijective() -> None:
 
 
 def test_synth_group_files_mirror_registry_identity() -> None:
-    """Each group file carries exactly the registry row's name and param spec."""
+    """Each group file carries exactly the registry row's five fields."""
     for name, spec in SYNTHS.items():
         content = yaml.safe_load((_SYNTH_CONFIG_DIR / f"{name}.yaml").read_text())
-        assert content == {"name": name, "param_spec_name": spec.param_spec_name}, name
+        assert content == spec.model_dump(), name
 
 
 def test_train_root_selects_synth_group_by_name() -> None:
-    """``synth=<name>`` composes the identity node at the config root."""
+    """``synth=<name>`` composes the full identity node at the config root."""
     cfg = compose_train_cfg(overrides=["synth=surge_4"])
-    assert cfg["synth"] == {"name": "surge_4", "param_spec_name": "surge_4"}
+    assert cfg["synth"] == {
+        "name": "surge_4",
+        "param_spec_name": "surge_4",
+        "plugin_path": "plugins/Surge XT.vst3",
+        "plugin_state_path": "presets/surge-mini.vstpreset",
+        "synth_version": "1.3.4",
+    }
 
 
 def test_train_root_defaults_synth_to_absent() -> None:

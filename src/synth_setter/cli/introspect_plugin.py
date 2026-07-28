@@ -35,13 +35,15 @@ from synth_setter.data.vst.registration import (
     find_repo_root,
     identity_group_yaml,
     is_checkout_root,
+    preset_repo_path,
     registration_paths,
     registry_with_spec,
     render_config_yaml,
-    synth_group_yaml,
     synths_with_spec,
 )
 from synth_setter.data.vst.verification import registered_artifacts, verify_registration
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 # Native VST3 init can block for minutes (Six Sines ~120 s); heartbeats at
 # this cadence keep a slow load distinguishable from a hang.
@@ -231,7 +233,6 @@ def main(
             preset_dest,
             csv_dest,
             paths.render_config,
-            paths.synth_config,
             paths.identity_config,
         )
     else:
@@ -386,26 +387,28 @@ def _write_register_wiring(
     render_config = target.paths.render_config
     render_config.parent.mkdir(parents=True, exist_ok=True)
     render_config.write_text(render_config_yaml(spec_name), encoding="utf-8")
-    synth_config = target.paths.synth_config
-    synth_config.parent.mkdir(parents=True, exist_ok=True)
-    synth_config.write_text(
-        synth_group_yaml(
-            spec_name, plugin_path=target.recorded_plugin_path, synth_version=version
+    identity_config = target.paths.identity_config
+    identity_config.parent.mkdir(parents=True, exist_ok=True)
+    identity_config.write_text(
+        identity_group_yaml(
+            SynthSpec(
+                name=SynthName(spec_name),
+                param_spec_name=ParamSpecName(spec_name),
+                plugin_path=target.recorded_plugin_path,
+                plugin_state_path=preset_repo_path(spec_name),
+                synth_version=version,
+            )
         ),
         encoding="utf-8",
     )
-    identity_config = target.paths.identity_config
-    identity_config.parent.mkdir(parents=True, exist_ok=True)
-    identity_config.write_text(identity_group_yaml(spec_name), encoding="utf-8")
     target.paths.synth_module.write_text(synth_source, encoding="utf-8")
     target.paths.registry.write_text(target.registry_source, encoding="utf-8")
     click.echo(f"Render cfg  : {render_config}")
-    click.echo(f"Synth cfg   : {synth_config}")
     click.echo(f"Identity cfg: {identity_config}")
     click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
     if version == "unknown":
         click.echo(
-            f"WARNING: synth_version is 'unknown' — edit {synth_config} to pin the "
+            f"WARNING: synth_version is 'unknown' — edit {identity_config} to pin the "
             "real plugin version before generating; generate_dataset cross-checks it "
             "against the loaded plugin.",
             err=True,
@@ -413,7 +416,7 @@ def _write_register_wiring(
     click.echo(
         "Next: hand-tune the spec, run `make format`, commit, then render with:\n"
         f"  synth-setter-generate-dataset experiment=generate_dataset/smoke-shard "
-        f"render={spec_name}"
+        f"synth={spec_name} render={spec_name}"
     )
 
 

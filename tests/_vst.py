@@ -31,11 +31,11 @@ TEST_PRESET_PATH = plugin_state_paths[TEST_SYNTH]
 def _composed_synth_version(synth: str) -> str:
     """Read one synth group's ``synth_version`` pin through Hydra.
 
-    :param synth: Render group name, matching the registry key.
+    :param synth: Root synth group name, matching the registry key (#2565).
     :returns: The ``synth_version`` that group composes to.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        return str(compose(config_name=f"render/{synth}").render.synth.synth_version)
+        return str(compose(config_name=f"synth/{synth}").synth.synth_version)
 
 
 TEST_SYNTH_VERSION = _composed_synth_version(TEST_SYNTH)

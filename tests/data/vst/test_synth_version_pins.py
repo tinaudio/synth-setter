@@ -1,8 +1,8 @@
 """Pin each synth group's ``synth_version`` against its runtime artifact.
 
-The version belongs to synth identity and is composed from
-``configs/render/synth/<synth>.yaml``. Workers still inspect the installed
-artifact through ``extract_renderer_version`` before rendering.
+The version belongs to synth identity and is composed from the root
+``configs/synth/<synth>.yaml`` group (#2565). Workers still inspect the
+installed artifact through ``extract_renderer_version`` before rendering.
 """
 
 from __future__ import annotations
@@ -26,13 +26,13 @@ _TORCHSYNTH_SYNTHS = sorted(
 
 
 def _composed_synth(group: str) -> tuple[str, str]:
-    """Compose one render group and read its artifact identity.
+    """Compose one root synth group and read its artifact identity.
 
-    :param group: Render group name below ``configs/render``.
+    :param group: Synth group name below ``configs/synth``.
     :returns: ``(plugin_path, synth_version)`` declared by the synth group.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        synth = compose(config_name=f"render/{group}").render.synth
+        synth = compose(config_name=f"synth/{group}").synth
     return synth.plugin_path, synth.synth_version
 
 

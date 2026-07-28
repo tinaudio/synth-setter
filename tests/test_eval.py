@@ -28,7 +28,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import Trainer, seed_everything
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationResolutionError
 from pedalboard.io import AudioFile
 
@@ -89,10 +89,11 @@ def test_eval_faust_render_group_resolves_production_renderer_contract() -> None
                     "model=ffn",
                     "trainer=cpu",
                     "ckpt_path=.",
+                    "synth=faust_bright_organ",
                     "render=faust_bright_organ",
                 ],
             )
-        render = RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
+        render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
     finally:
         GlobalHydra.instance().clear()
 
@@ -1265,27 +1266,31 @@ def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_w
             assert isinstance(value, float) and math.isfinite(value)
 
 
-@pytest.mark.parametrize("render_group", ["surge_simple", "surge_xt"])
-def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> None:
-    """Composing ``render=<group>`` into eval exposes the three keys postprocessing reads.
+@pytest.mark.parametrize("synth_group", ["surge_simple", "surge_xt"])
+def test_eval_synth_group_exposes_postprocessing_keys(synth_group: str) -> None:
+    """Composing ``synth=<group>`` into eval exposes the three keys postprocessing reads.
 
-    ``_run_predict_postprocessing`` resolves identity via ``SynthSpec.from_render_cfg``
-    to build the renderer argv. This composition test pins that both shipped render
-    groups supply the whole identity, so a future rename in a ``render/*.yaml``
-    surfaces here rather than mid-eval.
+    ``_run_predict_postprocessing`` resolves identity via
+    ``RenderConfig.from_cfg_nodes`` to build the renderer argv. This composition
+    test pins that both shipped synth groups supply the whole identity, so a
+    future rename in a ``synth/*.yaml`` surfaces here rather than mid-eval.
 
-    :param render_group: Render config group composed into the eval cfg.
+    :param synth_group: Synth config group composed into the eval cfg.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", f"render={render_group}"],
+            overrides=[
+                "experiment=surge/fake_oracle",
+                f"synth={synth_group}",
+                f"render={synth_group}",
+            ],
         )
     try:
-        assert cfg.render.synth.param_spec_name
-        assert cfg.render.synth.plugin_state_path
-        assert cfg.render.synth.plugin_path
+        assert cfg.synth.param_spec_name
+        assert cfg.synth.plugin_state_path
+        assert cfg.synth.plugin_path
     finally:
         GlobalHydra.instance().clear()
 

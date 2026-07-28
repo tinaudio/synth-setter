@@ -443,7 +443,7 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 @pytest.fixture(scope="function")
 def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose ``dataset.yaml`` with ``render=obxf`` for entrypoint OB-Xf coverage.
+    """Compose ``dataset.yaml`` with ``synth=obxf render=obxf`` for entrypoint OB-Xf coverage.
 
     The Hydra config-initializer lives here, not in ``tests/test_generate_dataset.py``,
     so that module stays free of the imports banned by
@@ -452,13 +452,13 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
 
     :param tmp_path: Per-test output/work/log root.
 
-    :yields DictConfig: ``render=obxf`` cfg with ``tmp_path``-pinned paths;
+    :yields DictConfig: OB-Xf cfg with ``tmp_path``-pinned paths;
         teardown clears Hydra's global singleton.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+            overrides=["experiment=generate_dataset/smoke-shard", "synth=obxf", "render=obxf"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -483,6 +483,7 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
+                "synth=faust_bright_organ",
                 "render=faust_bright_organ",
                 "render.gui_toggle_cadence=never",
             ],
@@ -1403,14 +1404,17 @@ def _apply_smoke_train_paths(
     :param variant: Dataset-format arm selecting the predict-split suffix.
     :param tmp_path: Shared output/log directory (and checkpoint parent for eval).
     """
+    render_values = _surge_smoke_render_config(
+        str(cfg.datamodule.param_spec_name), variant.plugin_path
+    )
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
         cfg.datamodule.predict_file = str(dataset_root / f"test{variant.split_ext}")
-        cfg.render = _surge_smoke_render_config(
-            str(cfg.datamodule.param_spec_name), variant.plugin_path
-        )
+        # Identity lives in the root synth group (#2565); knobs stay under render.
+        cfg.synth = render_values.pop("synth")
+        cfg.render = render_values
 
 
 @pytest.fixture(scope="function")

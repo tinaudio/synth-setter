@@ -11,7 +11,6 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationKeyError
-from pydantic import ValidationError
 
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
@@ -730,8 +729,8 @@ def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> 
     """
     cfg = _compose("dataset.yaml", ["experiment=generate_dataset/surge-4-lance-440k-20k-20k"])
 
-    assert cfg.render.synth.param_spec_name == "surge_4"
-    assert cfg.render.synth.plugin_state_path == "presets/surge-mini.vstpreset"
+    assert cfg.synth.param_spec_name == "surge_4"
+    assert cfg.synth.plugin_state_path == "presets/surge-mini.vstpreset"
     assert cfg.datamodule.param_spec_name == "surge_4"
     assert cfg.output_format == "lance"
     assert list(cfg.train_val_test_sizes) == [440000, 20000, 20000]
@@ -765,7 +764,7 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     cfg = _compose("eval.yaml", ["experiment=surge/eval_ffn_4", "ckpt_path=dummy.ckpt"])
 
     assert cfg.mode == "predict"
-    assert cfg.render.synth.param_spec_name == "surge_4"
+    assert cfg.synth.param_spec_name == "surge_4"
     assert cfg.datamodule.param_spec_name == "surge_4"
     assert cfg.model.net.d_out == 7
     assert cfg.evaluation.render_vst is True
@@ -794,7 +793,7 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
         "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
     )
     assert cfg.datamodule.param_spec_name == "surge_simple"
-    assert cfg.render.synth.param_spec_name == "surge_simple"
+    assert cfg.synth.param_spec_name == "surge_simple"
     assert cfg.training.val_audio_probe is True
     assert cfg.trainer.val_check_interval == 2000
     assert cfg.trainer.limit_val_batches == 20
@@ -970,8 +969,18 @@ def test_extras_rejects_datamodule_spec_skewed_from_synth_selection() -> None:
 
 
 def test_extras_validates_synth_before_missing_extras_early_return() -> None:
-    """A malformed ``synth`` node fails even when no ``extras`` block is composed."""
-    cfg = OmegaConf.create({"synth": {"name": "surge_xt", "param_spec_name": "surge_4"}})
+    """A registry-skewed ``synth`` node fails even when no ``extras`` block is composed."""
+    cfg = OmegaConf.create(
+        {
+            "synth": {
+                "name": "surge_xt",
+                "param_spec_name": "surge_4",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            }
+        }
+    )
 
-    with pytest.raises(ValidationError, match="surge_4"):
+    with pytest.raises(ValueError, match="surge_4"):
         extras(cfg)
