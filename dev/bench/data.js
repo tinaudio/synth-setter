@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785267861856,
+  "lastUpdate": 1785267864699,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -20852,6 +20852,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.12919294834136963,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "998ba6abe73e05175d0f34d67cd10f26ef1d4bbb",
+          "message": "test: remove twelve tests that cannot fail for an interesting reason (#2609)\n\nA semantic audit read all 3,738 tests. These twelve were then re-verified\nindividually against the production code they claim to cover.\n\nStructurally incapable of failing:\n\n- test_skypilot_launch: two subset assertions over constants built by tuple\n  spread (_WORKER_ENV_KEYS = (*RCLONE_ENV_KEYS, ...)), so the subset relation\n  holds by syntax no matter what the constants contain.\n- test_add_embeddings: compares EMBEDDING_REGISTRY[x].default_checkpoint to\n  the same imported constant production assigns it from.\n- test_xdist_scheduling: asserts a same-file helper returns the f-string it\n  builds from its own arguments. The helper stays; a real test uses it.\n\nRedundant with a sibling that already asserts more:\n\n- test_generate_vst_dataset: duplicates the num_retries=0 case of the\n  parametrize three tests above it, same call_count assertion.\n- test_param_spec: asserts one span that the adjacent test already pins as\n  part of the full ordered span list.\n- test_dataset_spec: same assertion as the test two above it, and its\n  docstring justifies itself by a NotImplementedError gate no longer in spec.py.\n- test_eval_postprocessing: byte-identical cfg and assertion to the test\n  directly above it.\n- test_lite_dependency_base is untouched — see the PR body for what was\n  rejected on review.\n\nTesting a library or prose rather than our behavior:\n\n- test_shard_metadata: Pydantic JSON round-trip over plain int/float fields\n  with no custom serializer.\n- test_format_dispatch: StrEnum's own __str__ contract; the sibling\n  test_value_is_the_lowercase_token already requires it.\n- test_settings_hooks: asserts wording inside a settings.json description\n  string; both extensions are already covered behaviorally in the same file.\n- test_pr_review_model_routing: greps production source text for literal\n  lines including quote style, so ruff-format alone could break it.\n\nRefs #2603",
+          "timestamp": "2026-07-28T11:50:24-07:00",
+          "tree_id": "3ae7d7754d8d3de9ac1676e876d8c13e69fe8944",
+          "url": "https://github.com/tinaudio/synth-setter/commit/998ba6abe73e05175d0f34d67cd10f26ef1d4bbb"
+        },
+        "date": 1785267863931,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 12.553143882533337,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 3.1382859706333344,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 5.543834814233333,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.3859587035583332,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.28522051206665916,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.07130512801666479,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 23.07777976989746,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 20.13979721069336,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.29499268531799316,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 21.41114929318428,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.1556006669998169,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 7.610737323760986,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.456560134887695,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.03230476379394531,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.834146957155317,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.03556782007217407,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 23.09634780883789,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 20.369245529174805,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.2941744923591614,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 21.727656836509706,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.1563451886177063,
             "unit": "1-cos"
           }
         ]
