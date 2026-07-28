@@ -16,12 +16,12 @@ const bundleAfter =
   "if (path.extname(f).toLowerCase() === '.vst3' || " +
   "fileExists(path.join(f, 'Contents', 'Info.plist'))) {";
 const dmgBefore = "const pkgs = dirRead(path.join(mountPoint, '**', '*.pkg'));";
-const dmgMarker = "dirRead(path.join(mountPoint, '*.pkg'))";
+const dmgMarker = 'readdirSync(mountPoint)';
 const dmgAfter =
-  "const pkgs = [\n" +
-  "            ...dirRead(path.join(mountPoint, '*.pkg')),\n" +
-  "            ...dirRead(path.join(mountPoint, '**', '*.pkg')),\n" +
-  '        ];';
+  "const rootPkgs = readdirSync(mountPoint)\n" +
+  "            .filter(entry => path.extname(entry).toLowerCase() === '.pkg')\n" +
+  '            .map(entry => path.join(mountPoint, entry));\n' +
+  "        const pkgs = [...rootPkgs, ...dirRead(path.join(mountPoint, '**', '*.pkg'))];";
 const elevationBefore = 'if (!isAdmin() && !isTests()) {';
 const elevationMarker = 'files.every(file => file.type === FileType.Archive)';
 const elevationAfter =

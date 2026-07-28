@@ -76,7 +76,7 @@ def test_patch_core_adds_linux_vst3_bundle_detection(tmp_path: Path) -> None:
     patched = helper.read_text()
     assert "path.extname(f).toLowerCase() === '.vst3'" in patched
     assert "Contents', 'Info.plist'" in patched
-    assert "dirRead(path.join(mountPoint, '*.pkg'))" in patched
+    assert "readdirSync(mountPoint)" in patched
     assert "files.every(file => file.type === FileType.Archive)" in manager.read_text()
 
 
