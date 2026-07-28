@@ -104,7 +104,7 @@ class TestComputeConfig:
             resources=[ComputeResources(cloud="kubernetes", cpus="1+")],
             config={"kubernetes": {"pod_config": {"spec": {}}}},
         )
-        assert compute.config is not None
+        assert compute.config == {"kubernetes": {"pod_config": {"spec": {}}}}
 
     def test_extra_field_rejected(self) -> None:
         """Reject unknown task-option fields."""

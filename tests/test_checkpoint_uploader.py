@@ -391,8 +391,23 @@ def test_uploader_reuploads_equal_size_rewrite_at_same_mtime_after_new_save(
 
 
 def test_checkpoint_save_token_reads_model_checkpoint_compatibility_field() -> None:
-    """The Lightning compatibility adapter reads the current completed-save token."""
-    assert callbacks_module._checkpoint_save_token(ModelCheckpoint()) == 0
+    """The adapter returns the token Lightning recorded, not a constant.
+
+    A freshly-built ``ModelCheckpoint`` already carries ``0``, so asserting the
+    default would pass against a hardcoded ``return 0``.
+    """
+    checkpoint_callback = ModelCheckpoint()
+    checkpoint_callback._last_global_step_saved = 7
+
+    assert callbacks_module._checkpoint_save_token(checkpoint_callback) == 7
+
+
+def test_checkpoint_save_token_absent_field_returns_none() -> None:
+    """A Lightning build that drops the private field degrades to ``None``."""
+    checkpoint_callback = ModelCheckpoint()
+    del checkpoint_callback._last_global_step_saved
+
+    assert callbacks_module._checkpoint_save_token(checkpoint_callback) is None
 
 
 def test_uploader_swallows_missing_checkpoint_file(monkeypatch: pytest.MonkeyPatch) -> None:
