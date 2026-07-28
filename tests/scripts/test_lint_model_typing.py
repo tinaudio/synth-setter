@@ -16,27 +16,35 @@ GIT = shutil.which("git") or "git"
 
 
 def _run_linter(
-    models_dir: Path, baseline: Path, *, base_ref: str | None = None
+    models_dir: Path,
+    baseline: Path,
+    *,
+    base_ref: str | None = None,
+    allow_missing_git_base: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real lint CLI against an isolated package.
 
     :param models_dir: Modeling package fixture.
     :param baseline: Baseline fixture for the package.
     :param base_ref: Optional git ref that owns the frozen baseline.
+    :param allow_missing_git_base: Permit non-git unit-test fixtures.
     :returns: Completed lint process with captured output.
     """
     env = os.environ.copy()
     if base_ref is not None:
         env["MODEL_TYPING_BASE_REF"] = base_ref
+    command = [
+        sys.executable,
+        str(LINTER),
+        "--models-dir",
+        str(models_dir),
+        "--baseline",
+        str(baseline),
+    ]
+    if allow_missing_git_base:
+        command.append("--allow-missing-git-base")
     return subprocess.run(  # noqa: S603 - fixed interpreter and repository script.
-        [
-            sys.executable,
-            str(LINTER),
-            "--models-dir",
-            str(models_dir),
-            "--baseline",
-            str(baseline),
-        ],
+        command,
         capture_output=True,
         check=False,
         cwd=baseline.parent,
@@ -149,6 +157,32 @@ def encode(value):
     assert "rebound.py:encode:JAX001" in result.stdout
 
 
+def test_linter_later_fake_import_invalidates_jaxtyped_binding(tmp_path: Path) -> None:
+    """Resolve decorator imports in module source order.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "overwritten.py").write_text(
+        """from beartype import beartype
+from jaxtyping import jaxtyped
+from project.fake_typing import jaxtyped
+
+@jaxtyped(typechecker=beartype)
+def encode(value):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "overwritten.py:encode:JAX001" in result.stdout
+
+
 def test_linter_new_modeling_callable_reports_missing_runtime_check(tmp_path: Path) -> None:
     """Reject a callable without the beartype-backed decorator.
 
@@ -223,6 +257,32 @@ def encode(value: TorchTensor) -> th.Tensor:
 
     assert result.returncode == 1
     assert "aliased.py:encode:JAX002" in result.stdout
+
+
+def test_linter_unrelated_local_torch_parameter_preserves_module_binding(tmp_path: Path) -> None:
+    """Keep module imports visible outside unrelated local scopes.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "scoped.py").write_text(
+        """import torch
+
+def helper(torch: str):
+    return torch
+
+def encode(value: torch.Tensor):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "scoped.py:encode:JAX002" in result.stdout
 
 
 def test_linter_import_torch_submodule_still_resolves_torch_binding(tmp_path: Path) -> None:
@@ -442,12 +502,38 @@ def new(value: torch.Tensor):
     )
     baseline.write_text("new.py:new:JAX001\nnew.py:new:JAX002\n")
 
-    result = _run_linter(models_dir, baseline, base_ref="HEAD")
+    result = _run_linter(
+        models_dir,
+        baseline,
+        base_ref="HEAD",
+        allow_missing_git_base=False,
+    )
 
     assert result.returncode == 1
     assert "baseline additions are forbidden" in result.stdout
     assert "new.py:new:JAX001" in result.stdout
     assert "new.py:new:JAX002" in result.stdout
+
+
+def test_linter_missing_git_base_fails_closed(tmp_path: Path) -> None:
+    """Reject baseline validation outside a git repository by default.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "legacy.py").write_text(
+        """def legacy(value):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("legacy.py:legacy:JAX001\n")
+
+    result = _run_linter(models_dir, baseline, allow_missing_git_base=False)
+
+    assert result.returncode == 1
+    assert "cannot locate git root for model typing baseline" in result.stdout
 
 
 def test_linter_stale_baseline_entry_fails(tmp_path: Path) -> None:

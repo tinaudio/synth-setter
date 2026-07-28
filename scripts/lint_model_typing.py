@@ -80,14 +80,14 @@ class ImportNames:
 class ModelTypingVisitor(ast.NodeVisitor):
     """Collect modeling-typing diagnostics from one Python module."""
 
-    def __init__(self, relative_path: Path, imports: ImportNames) -> None:
+    def __init__(self, relative_path: Path, tree: ast.Module) -> None:
         """Initialize the visitor for a baseline-relative path.
 
         :param relative_path: Python file path relative to the models directory.
-        :param imports: Local names that resolve to typing-library symbols.
+        :param tree: Module tree used for source-ordered import resolution.
         """
         self._relative_path = relative_path.as_posix()
-        self._imports = imports
+        self._tree = tree
         self._scope: list[str] = []
         self.diagnostics: list[Diagnostic] = []
 
@@ -121,7 +121,8 @@ class ModelTypingVisitor(ast.NodeVisitor):
         """
         qualified_name = ".".join((*self._scope, node.name))
         key_prefix = f"{self._relative_path}:{qualified_name}"
-        if not _has_runtime_typecheck(node, self._imports):
+        imports = _collect_import_names(self._tree, before_line=node.lineno)
+        if not _has_runtime_typecheck(node, imports):
             self.diagnostics.append(
                 Diagnostic(
                     f"{key_prefix}:JAX001",
@@ -129,8 +130,7 @@ class ModelTypingVisitor(ast.NodeVisitor):
                 )
             )
         if any(
-            _contains_bare_torch_tensor(annotation, self._imports)
-            for annotation in _annotations(node)
+            _contains_bare_torch_tensor(annotation, imports) for annotation in _annotations(node)
         ):
             self.diagnostics.append(
                 Diagnostic(
@@ -144,74 +144,110 @@ class ModelTypingVisitor(ast.NodeVisitor):
         self._scope.pop()
 
 
-def _collect_import_names(tree: ast.Module) -> ImportNames:
-    """Resolve local names imported from beartype, jaxtyping, and torch.
+def _collect_import_names(tree: ast.Module, *, before_line: int) -> ImportNames:
+    """Resolve module bindings active before a callable definition.
 
     :param tree: Module syntax tree to inspect.
+    :param before_line: Ignore statements at or after this source line.
     :returns: Immutable local-name groups for lint matching.
     """
-    beartype_functions: set[str] = set()
-    beartype_modules: set[str] = set()
-    jaxtyped_functions: set[str] = set()
-    jaxtyping_modules: set[str] = set()
-    jaxtyping_wrappers: set[str] = set()
-    torch_modules: set[str] = set()
-    torch_tensors: set[str] = set()
-
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                local_name = alias.asname or alias.name.split(".", maxsplit=1)[0]
-                if alias.name == "beartype":
-                    beartype_modules.add(local_name)
-                elif alias.name == "jaxtyping":
-                    jaxtyping_modules.add(local_name)
-                elif alias.name == "torch" or (
-                    alias.asname is None and alias.name.startswith("torch.")
-                ):
-                    torch_modules.add(local_name)
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                local_name = alias.asname or alias.name
-                if node.module == "beartype" and alias.name == "beartype":
-                    beartype_functions.add(local_name)
-                elif node.module == "jaxtyping" and alias.name == "jaxtyped":
-                    jaxtyped_functions.add(local_name)
-                elif node.module == "jaxtyping":
-                    jaxtyping_wrappers.add(local_name)
-                elif node.module == "torch" and alias.name == "Tensor":
-                    torch_tensors.add(local_name)
-
-    rebound_names = _collect_rebound_names(tree)
-    return ImportNames(
-        beartype_functions=frozenset(beartype_functions - rebound_names),
-        beartype_modules=frozenset(beartype_modules - rebound_names),
-        jaxtyped_functions=frozenset(jaxtyped_functions - rebound_names),
-        jaxtyping_modules=frozenset(jaxtyping_modules - rebound_names),
-        jaxtyping_wrappers=frozenset(jaxtyping_wrappers - rebound_names),
-        torch_modules=frozenset(torch_modules - rebound_names),
-        torch_tensors=frozenset(torch_tensors - rebound_names),
-    )
+    bindings: dict[str, str] = {}
+    for statement in tree.body:
+        if statement.lineno >= before_line:
+            break
+        _apply_module_binding(bindings, statement)
+    return _import_names_from_bindings(bindings)
 
 
-def _collect_rebound_names(tree: ast.Module) -> set[str]:
-    """Find names whose assignments can shadow imported lint symbols.
+def _apply_module_binding(bindings: dict[str, str], statement: ast.stmt) -> None:
+    """Apply one top-level statement to the import binding map.
 
-    :param tree: Module syntax tree to inspect.
-    :returns: Names bound by syntax other than imports.
+    :param bindings: Mutable map from local names to canonical symbol kinds.
+    :param statement: Top-level statement executed before a callable definition.
     """
-    names = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
-    }
-    names.update(
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    if isinstance(statement, ast.Import):
+        for alias in statement.names:
+            local_name = alias.asname or alias.name.split(".", maxsplit=1)[0]
+            bindings[local_name] = _module_import_kind(alias)
+        return
+    if isinstance(statement, ast.ImportFrom):
+        for alias in statement.names:
+            bindings[alias.asname or alias.name] = _from_import_kind(statement, alias)
+        return
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        bindings[statement.name] = "other"
+        return
+    for name in _assignment_names(statement):
+        bindings[name] = "other"
+
+
+def _module_import_kind(alias: ast.alias) -> str:
+    """Classify a module import for lint resolution.
+
+    :param alias: Imported module and its local alias.
+    :returns: Canonical symbol kind or ``other``.
+    """
+    if alias.name == "beartype":
+        return "beartype_module"
+    if alias.name == "jaxtyping":
+        return "jaxtyping_module"
+    if alias.name == "torch" or (alias.asname is None and alias.name.startswith("torch.")):
+        return "torch_module"
+    return "other"
+
+
+def _from_import_kind(statement: ast.ImportFrom, alias: ast.alias) -> str:
+    """Classify a direct import for lint resolution.
+
+    :param statement: Import statement containing the source module.
+    :param alias: Imported symbol and its local alias.
+    :returns: Canonical symbol kind or ``other``.
+    """
+    if statement.module == "beartype" and alias.name == "beartype":
+        return "beartype_function"
+    if statement.module == "jaxtyping" and alias.name == "jaxtyped":
+        return "jaxtyped_function"
+    if statement.module == "jaxtyping":
+        return "jaxtyping_wrapper"
+    if statement.module == "torch" and alias.name == "Tensor":
+        return "torch_tensor"
+    return "other"
+
+
+def _assignment_names(statement: ast.stmt) -> set[str]:
+    """Return names assigned directly by a top-level statement.
+
+    :param statement: Statement that may overwrite an imported name.
+    :returns: Direct module-scope assignment targets.
+    """
+    if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        return {
+            node.id
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+        }
+    return set()
+
+
+def _import_names_from_bindings(bindings: dict[str, str]) -> ImportNames:
+    """Group active module bindings by canonical symbol kind.
+
+    :param bindings: Local names mapped to canonical symbol kinds.
+    :returns: Immutable local-name groups for lint matching.
+    """
+    names_by_kind: dict[str, set[str]] = {}
+    for name, kind in bindings.items():
+        names_by_kind.setdefault(kind, set()).add(name)
+    frozen_by_kind = {kind: frozenset(names) for kind, names in names_by_kind.items()}
+    return ImportNames(
+        beartype_functions=frozen_by_kind.get("beartype_function", frozenset()),
+        beartype_modules=frozen_by_kind.get("beartype_module", frozenset()),
+        jaxtyped_functions=frozen_by_kind.get("jaxtyped_function", frozenset()),
+        jaxtyping_modules=frozen_by_kind.get("jaxtyping_module", frozenset()),
+        jaxtyping_wrappers=frozen_by_kind.get("jaxtyping_wrapper", frozenset()),
+        torch_modules=frozen_by_kind.get("torch_module", frozenset()),
+        torch_tensors=frozen_by_kind.get("torch_tensor", frozenset()),
     )
-    names.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
-    return names
 
 
 def _annotations(node: FunctionNode) -> list[ast.expr]:
@@ -273,12 +309,8 @@ def _contains_bare_torch_tensor(
     :returns: Whether a bare Tensor reference is present.
     """
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
-        try:
-            parsed = ast.parse(annotation.value, mode="eval").body
-        except SyntaxError:
-            return _string_mentions_torch_tensor(annotation.value, imports)
-        return _contains_bare_torch_tensor(
-            parsed,
+        return _contains_bare_tensor_forward_reference(
+            annotation.value,
             imports,
             in_jaxtyping=in_jaxtyping,
         )
@@ -300,11 +332,31 @@ def _contains_bare_torch_tensor(
         attribute="Tensor",
     ):
         return True
+    children = (child for child in ast.iter_child_nodes(annotation) if isinstance(child, ast.expr))
     return any(
         _contains_bare_torch_tensor(child, imports, in_jaxtyping=in_jaxtyping)
-        for child in ast.iter_child_nodes(annotation)
-        if isinstance(child, ast.expr)
+        for child in children
     )
+
+
+def _contains_bare_tensor_forward_reference(
+    value: str,
+    imports: ImportNames,
+    *,
+    in_jaxtyping: bool,
+) -> bool:
+    """Inspect a quoted annotation, including malformed expressions.
+
+    :param value: Forward-reference annotation text.
+    :param imports: Local tensor and jaxtyping names.
+    :param in_jaxtyping: Whether the string is nested under a jaxtyping wrapper.
+    :returns: Whether the text contains a bare Tensor reference.
+    """
+    try:
+        parsed = ast.parse(value, mode="eval").body
+    except SyntaxError:
+        return not in_jaxtyping and _string_mentions_torch_tensor(value, imports)
+    return _contains_bare_torch_tensor(parsed, imports, in_jaxtyping=in_jaxtyping)
 
 
 def _string_mentions_torch_tensor(value: str, imports: ImportNames) -> bool:
@@ -381,7 +433,7 @@ def collect_diagnostics(models_dir: Path) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     for path in sorted(models_dir.rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
-        visitor = ModelTypingVisitor(path.relative_to(models_dir), _collect_import_names(tree))
+        visitor = ModelTypingVisitor(path.relative_to(models_dir), tree)
         visitor.visit(tree)
         diagnostics.extend(visitor.diagnostics)
     return sorted(diagnostics)
@@ -400,42 +452,45 @@ def _baseline_keys(text: str) -> set[str]:
     }
 
 
-def _read_base_baseline(path: Path) -> set[str] | None:
-    """Read the frozen baseline from the pull request's git base.
+def _run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a read-only git query with captured output.
 
-    :param path: Current baseline path.
-    :returns: Base keys, or ``None`` when the base does not contain the file.
-    :raises RuntimeError: If an expected git base cannot be resolved.
+    :param cwd: Directory from which git resolves the repository.
+    :param args: Git arguments after the executable.
+    :returns: Completed process without exception-on-failure behavior.
     """
-    root_result = subprocess.run(  # noqa: S603 - fixed git inspection command.
-        [GIT, "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+    return subprocess.run(  # noqa: S603 - fixed git executable and read-only callers.
+        [GIT, "-C", str(cwd), *args],
         capture_output=True,
         check=False,
         text=True,
     )
+
+
+def _read_base_baseline(path: Path, *, allow_missing_git_base: bool) -> set[str] | None:
+    """Read the frozen baseline from the pull request's git base.
+
+    :param path: Current baseline path.
+    :param allow_missing_git_base: Permit isolated fixtures outside git.
+    :returns: Base keys, or ``None`` when the base does not contain the file.
+    :raises RuntimeError: If an expected git base cannot be resolved.
+    """
+    root_result = _run_git(path.parent, ["rev-parse", "--show-toplevel"])
     if root_result.returncode != 0:
-        return None
+        if allow_missing_git_base:
+            return None
+        raise RuntimeError("cannot locate git root for model typing baseline")
 
     root = Path(root_result.stdout.strip())
     relative_path = path.resolve().relative_to(root.resolve()).as_posix()
     explicit_base = os.environ.get("MODEL_TYPING_BASE_REF")
     github_base = os.environ.get("GITHUB_BASE_REF")
     base_ref = explicit_base or (f"origin/{github_base}" if github_base else "origin/main")
-    ref_result = subprocess.run(  # noqa: S603 - fixed git inspection command.
-        [GIT, "-C", str(root), "rev-parse", "--verify", f"{base_ref}^{{commit}}"],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
+    ref_result = _run_git(root, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"])
     if ref_result.returncode != 0:
         raise RuntimeError(f"cannot resolve model typing base ref {base_ref!r}")
 
-    show_result = subprocess.run(  # noqa: S603 - fixed git inspection command.
-        [GIT, "-C", str(root), "show", f"{base_ref}:{relative_path}"],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
+    show_result = _run_git(root, ["show", f"{base_ref}:{relative_path}"])
     if show_result.returncode != 0:
         return None
     return _baseline_keys(show_result.stdout)
@@ -449,13 +504,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models-dir", type=Path, default=Path("src/synth_setter/models"))
     parser.add_argument("--baseline", type=Path, default=Path(".model-typing-baseline.txt"))
+    parser.add_argument("--allow-missing-git-base", action="store_true")
     args = parser.parse_args()
 
     diagnostics = collect_diagnostics(args.models_dir)
     diagnostic_by_key = {diagnostic.key: diagnostic for diagnostic in diagnostics}
     baseline = _baseline_keys(args.baseline.read_text())
     try:
-        base_baseline = _read_base_baseline(args.baseline)
+        base_baseline = _read_base_baseline(
+            args.baseline,
+            allow_missing_git_base=args.allow_missing_git_base,
+        )
     except RuntimeError as error:
         sys.stdout.write(f"{error}\n")
         return 1
