@@ -19,7 +19,5 @@ net:
   kernel_size: 7
   norm: bn
 
-loss_fn: mse
-
 # compile model for faster training with pytorch 2.0
 compile: true

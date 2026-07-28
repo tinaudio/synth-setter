@@ -6,8 +6,11 @@ from typing import Any
 import torch
 from lightning import LightningModule
 
-from synth_setter.metrics import ChamferDistance, LinearAssignmentDistance, LogSpectralDistance
-from synth_setter.models.components.loss import ChamferLoss, MSESortLoss
+from synth_setter.metrics import LogSpectralDistance
+
+Renderer = Callable[[torch.Tensor], torch.Tensor]
+TorchSynthBatch = tuple[torch.Tensor, torch.Tensor, torch.Tensor, Renderer]
+ModelStepOutput = tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
 
 class TorchSynthFeedForwardModule(LightningModule):
@@ -16,21 +19,16 @@ class TorchSynthFeedForwardModule(LightningModule):
     def __init__(
         self,
         net: torch.nn.Module,
-        loss_fn: str,
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None,
         compile: bool,
-        params_per_token: int = 1,
-    ):
-        """Configure the TorchSynth regression model and audio-domain metrics.
+    ) -> None:
+        """Configure the TorchSynth regression model and audio-domain metric.
 
         :param net: Network mapping rendered audio to normalized parameters.
-        :param loss_fn: Parameter loss name: ``mse``, ``chamfer``, or ``mse_sort``.
         :param optimizer: Optimizer factory receiving the module parameters.
         :param scheduler: Optional scheduler factory receiving the optimizer.
         :param compile: Compile ``net`` in place before fitting.
-        :param params_per_token: Parameter grouping width for permutation metrics.
-        :raises NotImplementedError: ``loss_fn`` is unsupported.
         """
         super().__init__()
 
@@ -40,100 +38,71 @@ class TorchSynthFeedForwardModule(LightningModule):
         self._compile = compile
         self._optimizer_factory = optimizer
         self._scheduler_factory = scheduler
-
-        if loss_fn == "mse":
-            self.criterion = torch.nn.MSELoss()
-        elif loss_fn == "chamfer":
-            self.criterion = ChamferLoss(params_per_token)
-        elif loss_fn == "mse_sort":
-            self.criterion = MSESortLoss(params_per_token)
-        else:
-            raise NotImplementedError(f"Unsupported loss function: {loss_fn}")
-
+        self.criterion = torch.nn.MSELoss()
         self.val_lsd = LogSpectralDistance()
-        self.val_chamfer = ChamferDistance(params_per_token)
-
         self.test_lsd = LogSpectralDistance()
-        self.test_chamfer = ChamferDistance(params_per_token)
-        self.test_lad = LinearAssignmentDistance(params_per_token)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Predict normalized parameters from rendered audio.
 
-        :param x: Batched audio.
-        :returns: Batched parameter predictions.
+        :param x: Batched audio with shape ``(batch, signal_length)``.
+        :returns: Float parameter predictions with shape ``(batch, num_params)``.
         """
         return self.net(x)
 
     def on_train_start(self) -> None:
         """Discard metric state accumulated by Lightning's sanity validation."""
         self.val_lsd.reset()
-        self.val_chamfer.reset()
 
-    def model_step(self, batch: tuple[torch.Tensor, torch.Tensor]):
+    def model_step(self, batch: TorchSynthBatch) -> ModelStepOutput:
         """Compute loss and predictions for one collated TorchSynth batch.
 
-        :param batch: Audio, target params, optional noise, and renderer callable.
-        :returns: Loss, predictions, targets, and input audio.
+        :param batch: Audio, normalized params, sampling noise, and renderer.
+        :returns: Scalar loss, predictions, targets, and input audio.
         """
-        x, y, *_ = batch
-        preds = self.forward(x)
-        loss = self.criterion(preds, y)
-        return loss, preds, y, x
+        inputs, targets, _noise, _renderer = batch
+        predictions = self.forward(inputs)
+        loss = self.criterion(predictions, targets)
+        return loss, predictions, targets, inputs
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: TorchSynthBatch, _batch_idx: int) -> torch.Tensor:
         """Log and return one training loss.
 
         :param batch: Collated TorchSynth training batch.
-        :param batch_idx: Lightning batch index.
+        :param _batch_idx: Unused Lightning batch index.
         :returns: Scalar loss used for backpropagation.
         """
         loss, *_ = self.model_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
-        """Accumulate validation loss and audio-domain metrics.
+    def validation_step(self, batch: TorchSynthBatch, _batch_idx: int) -> None:
+        """Accumulate validation loss and audio-domain distance.
 
         :param batch: Collated TorchSynth validation batch.
-        :param batch_idx: Lightning batch index.
+        :param _batch_idx: Unused Lightning batch index.
         """
-        loss, preds, targets, inputs = self.model_step(batch)
-
-        *_, synth_fn = batch
-        self.val_lsd(preds, inputs, synth_fn)
-        self.val_chamfer(preds, targets)
+        loss, predictions, _targets, inputs = self.model_step(batch)
+        renderer = batch[-1]
+        self.val_lsd(predictions, inputs, renderer)
 
         self.log("val/lsd", self.val_lsd, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/chamfer", self.val_chamfer, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
-        """Accumulate test loss and parameter/audio metrics.
+    def test_step(self, batch: TorchSynthBatch, _batch_idx: int) -> None:
+        """Accumulate test loss and parameter/audio distances.
 
         :param batch: Collated TorchSynth test batch.
-        :param batch_idx: Lightning batch index.
+        :param _batch_idx: Unused Lightning batch index.
         """
-        loss, preds, targets, inputs = self.model_step(batch)
+        loss, predictions, targets, inputs = self.model_step(batch)
+        renderer = batch[-1]
+        self.test_lsd(predictions, inputs, renderer)
 
-        *_, synth_fn = batch
-        self.test_lsd(preds, inputs, synth_fn)
-        self.test_chamfer(preds, targets)
-        self.test_lad(preds, targets)
-
-        param_mse = (preds - targets).square().mean()
+        param_mse = (predictions - targets).square().mean()
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
-
         self.log("test/lsd", self.test_lsd, on_step=False, on_epoch=True, prog_bar=True)
-        self.log(
-            "test/chamfer",
-            self.test_chamfer,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-        )
         self.log("test/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/lad", self.test_lad, on_step=False, on_epoch=True, prog_bar=True)
 
     def setup(self, stage: str) -> None:
         """Compile the network only for the fit stage.

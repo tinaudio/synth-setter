@@ -187,7 +187,6 @@ metrics = [
   "pesto-pitch==2.0.1",
   "dtw-python==1.7.4",
   "kymatio==0.3.0",
-  "POT",
   "einops",
 ]
 notebooks = [

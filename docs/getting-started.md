@@ -405,7 +405,7 @@ src/synth_setter/configs/   # located via synth_setter.resources.configs_dir()
   eval.yaml           # Top-level evaluation defaults
   dataset.yaml        # Pipeline dataset defaults
   datamodule/         # Data module configs (TorchSynth, Surge, Lance, ...)
-  model/              # Model configs (ffn, flow, flowmlp, ...)
+  model/              # Model configs (ffn and Surge/VST model families)
   trainer/            # Trainer configs (gpu, cpu, mps, ddp, ...)
   logger/             # Logger configs (wandb, csv, tensorboard, ...)
   callbacks/          # Callback configs

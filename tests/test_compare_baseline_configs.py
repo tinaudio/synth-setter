@@ -98,15 +98,8 @@ PREDICT_SCRIPTS: tuple[str, ...] = (
     "jobs/predict/vae-simple.sh",
 )
 
-# Baseline refs for ref-comparison tests. Prefer tags over raw SHAs when
-# possible: they're more stable/discoverable for humans, and the harness
-# fetches the requested ref itself when needed (see `try_fetch_ref`).
-# FIXTURE_BASELINE pins the synthetic-fixture equality + inequality tests.
-# MODEL_BASELINE pins the SURGE train.sh tests and jobs/predict/*.sh
-# predict-script tests against the published-results
-# model-config snapshot. Keep it stable — only bump when the snapshot itself
-# is regenerated. Mechanical migrations go through ACCEPTED_DIFFS /
-# ACCEPTED_DIFF_LEAVES instead.
+# Prefer tags for fetchable, human-readable baselines; FIXTURE_BASELINE covers fixtures.
+# MODEL_BASELINE covers published Surge configs and changes only with regenerated snapshots.
 FIXTURE_BASELINE = "1bfa7ea9c4b237a4561a9ac546a3e241ecff5951"  # PR #679 merge commit on main
 # Mechanical migrations (e.g. Phase 2's `src.X` → `synth_setter.X` `_target_:` rewrite,
 # #989) are absorbed via ACCEPTED_DIFF_LEAVES / #993, not by bumping this anchor.

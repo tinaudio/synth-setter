@@ -3,10 +3,7 @@
 from collections.abc import Callable
 
 import torch
-from scipy.optimize import linear_sum_assignment
 from torchmetrics import Metric
-
-from synth_setter.models.components.loss import chamfer_loss, params_to_tokens
 
 
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):
@@ -74,55 +71,6 @@ class SpectralDistance(Metric):
 
     def compute(self):
         return self.sd / self.count
-
-
-class ChamferDistance(Metric):
-    """Mean Chamfer distance between predicted and target parameter token sets."""
-
-    def __init__(self, params_per_token: int, **kwargs):
-        super().__init__(**kwargs)
-        self.add_state("chamfer_distance", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("count", default=torch.tensor(0), dist_reduce_fx="sum")
-        self.params_per_token = params_per_token
-
-    def update(self, predicted: torch.Tensor, target: torch.Tensor):
-        self.chamfer_distance += chamfer_loss(predicted, target, self.params_per_token)
-        self.count += 1
-
-    def compute(self):
-        return self.chamfer_distance / self.count
-
-
-class LinearAssignmentDistance(Metric):
-    """Mean linear-assignment (Hungarian-matched) distance between predicted and target tokens."""
-
-    def __init__(self, params_per_token: int, **kwargs):
-        super().__init__(**kwargs)
-        self.add_state(
-            "linear_assignment_distance",
-            default=torch.tensor(0.0),
-            dist_reduce_fx="sum",
-        )
-        self.add_state("count", default=torch.tensor(0), dist_reduce_fx="sum")
-        self.params_per_token = params_per_token
-
-    def update(self, predicted: torch.Tensor, target: torch.Tensor):
-        predicted_tokens = params_to_tokens(predicted, self.params_per_token)
-        target_tokens = params_to_tokens(target, self.params_per_token)
-
-        dist = torch.cdist(predicted_tokens, target_tokens)
-        dist_c = dist.detach().cpu()
-
-        cost = 0.0
-        for b in range(dist_c.shape[0]):
-            row_ind, col_ind = linear_sum_assignment(dist_c[b])
-            cost = cost + dist[b, row_ind, col_ind].mean()
-
-        self.count += dist.shape[0]
-        self.linear_assignment_distance += cost
-
-    def compute(self):
-        return self.linear_assignment_distance / self.count
 
 
 def best_swap_per_param_mse(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:

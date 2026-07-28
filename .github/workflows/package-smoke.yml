@@ -111,12 +111,8 @@ jobs:
           "$RUNNER_TEMP/full/bin/pip" install "${WHL}"
           "$RUNNER_TEMP/full/bin/uv" pip install --python "$RUNNER_TEMP/full/bin/python" --group runtime
 
-      # Compose train.yaml through the canonical entry pattern — exercises
-      # the namespace plugin's auto-registration of `pkg://synth_setter.configs`,
-      # the model output-width interpolation and every YAML in train's defaults
-      # chain (datamodule/torchsynth, model/ffn, trainer/cpu, callbacks,
-      # logger, paths, extras, hydra). Stops short of `hydra.utils.instantiate`
-      # — that's what tests/test_configs.py covers against the editable tree.
+      # Compose from the installed wheel to verify config registration and interpolation;
+      # editable-tree instantiation is covered by tests/test_configs.py.
       - name: Canonical Hydra compose against installed wheel
         working-directory: ${{ runner.temp }}
         run: |
