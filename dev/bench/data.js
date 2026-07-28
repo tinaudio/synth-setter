@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785216903750,
+  "lastUpdate": 1785216905713,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -19340,6 +19340,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.566021193300049,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d481fe13c444ca29f523f4f9e838dd660045681f",
+          "message": "internal-feat(training): select log_per_param_mse as a callbacks group (#2582)\n\n* internal-feat(training): select log_per_param_mse as a callbacks group\n\nEight surge experiments carried inline callbacks.log_per_param_mse blocks\nbyte-identical to configs/callbacks/log_per_param_mse.yaml, which nothing\ncomposed. Select the group in each experiment's defaults list instead and\ndelete the inline copies.\n\nCLI compositions that override the callbacks group on top of these\nexperiments would now silently drop the callback, so the full-model\npredict job scripts, the surge smoke-cfg fixture builder, and the two\nmirroring tests add log_per_param_mse to their group lists — resolved\nconfigs are unchanged for every entry point. vae/simple experiments\nintentionally keep no per-param MSE callback.\n\nRefs #2580\n\n* chore(ci-automation): retrigger title gate after PR title edit",
+          "timestamp": "2026-07-27T21:40:33-07:00",
+          "tree_id": "68ee23f1e4306f1b6c1bdbd4dca104d345bb262c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/d481fe13c444ca29f523f4f9e838dd660045681f"
+        },
+        "date": 1785216905419,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.41794490814209,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.152974646687507,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09041383862495422,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.00593334436416626,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3105785846710205,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.992061171800003,
             "unit": "seconds"
           }
         ]
