@@ -453,10 +453,27 @@ def _rename_data_group_to_datamodule(cfg: dict) -> dict:
     return result
 
 
+def _strip_null_download_defaults(cfg: dict) -> dict:
+    """Remove explicit null hydration defaults while preserving non-null values.
+
+    :param cfg: Resolved config from either comparison side.
+    :returns: Copy with null download controls removed.
+    """
+    result = copy.deepcopy(cfg)
+    datamodule = result.get("datamodule")
+    if not isinstance(datamodule, dict):
+        return result
+    for key in ("download_dataset_row_limit", "download_dataset_txids"):
+        if datamodule.get(key) is None:
+            datamodule.pop(key, None)
+    return result
+
+
 def _normalize_for_compare(cfg: dict) -> dict:
     """Apply both strip passes used by the equality/inequality assertions."""
     renamed = _rename_data_group_to_datamodule(cfg)
-    stripped = _strip_dotted_keys(renamed, INVOCATION_PATH_KEYS + ACCEPTED_DIFFS)
+    normalized_defaults = _strip_null_download_defaults(renamed)
+    stripped = _strip_dotted_keys(normalized_defaults, INVOCATION_PATH_KEYS + ACCEPTED_DIFFS)
     return _strip_leaf_keys(stripped, ACCEPTED_DIFF_LEAVES)
 
 
@@ -473,6 +490,48 @@ def test_normalize_for_compare_accepts_persistent_workers_resource_drift() -> No
     current = {"datamodule": {"persistent_workers": True}, "model": {"hidden_size": 512}}
 
     assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_accepts_absent_and_null_download_defaults() -> None:
+    """Null download controls preserve the legacy no-materialization behavior."""
+    baseline = {"datamodule": {}, "model": {"hidden_size": 512}}
+    current = {
+        "datamodule": {
+            "download_dataset_txids": None,
+            "download_dataset_row_limit": None,
+        },
+        "model": {"hidden_size": 512},
+    }
+
+    assert _normalize_for_compare(baseline) == _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_rejects_non_null_download_txids() -> None:
+    """Transaction pins remain visible against the unpinned legacy config."""
+    baseline = {"datamodule": {}, "model": {"hidden_size": 512}}
+    current = {
+        "datamodule": {
+            "download_dataset_txids": {"train": "t1", "val": "t2", "test": "t3"},
+            "download_dataset_row_limit": None,
+        },
+        "model": {"hidden_size": 512},
+    }
+
+    assert _normalize_for_compare(baseline) != _normalize_for_compare(current)
+
+
+def test_normalize_for_compare_rejects_non_null_download_row_limit() -> None:
+    """A materialization row cap remains visible against the uncapped legacy config."""
+    baseline = {"datamodule": {}, "model": {"hidden_size": 512}}
+    current = {
+        "datamodule": {
+            "download_dataset_txids": None,
+            "download_dataset_row_limit": 100,
+        },
+        "model": {"hidden_size": 512},
+    }
+
+    assert _normalize_for_compare(baseline) != _normalize_for_compare(current)
 
 
 def test_normalize_for_compare_accepts_wandb_resume_observability_drift() -> None:
