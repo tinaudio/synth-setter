@@ -21,8 +21,10 @@
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
+experiment=flow_mlp_full
 python -m synth_setter.cli.eval \
-    experiment=surge/wandb_checkpoint/flow_mlp_full \
+    experiment="surge/${experiment}" \
+    ckpt_path="\${wandb:tinaudio/synth-setter/model-${experiment}:latest}" \
     model.test_cfg_strength=2.0 \
     model.test_sample_steps=100 \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/flowmlp_nsynth/ \
