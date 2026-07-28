@@ -51,6 +51,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     Encoder,
     IndexSpec,
     ParamTextEncodeFn,
+    _completion_marker_exists,
     _configure_lance_logging,
     _downmix_to_mono,
     _encode_t5gemma_column,
@@ -58,9 +59,13 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
+    _remove_completion_marker,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
+    _root_child_exists,
     _write_columns,
+    _write_completion_marker,
+    _write_dataset_card,
     add_embeddings,
     build_index,
     load_clap_audio_encoder,
@@ -2424,6 +2429,54 @@ def test_add_embeddings_config_with_both_dataset_targets_raises() -> None:
     """A run cannot ambiguously target both one split and a dataset root."""
     with pytest.raises(ValidationError, match="exactly one of lance_uri or dataset_root_uri"):
         AddEmbeddingsConfig(lance_uri="train.lance", dataset_root_uri="dataset")
+
+
+def test_remote_root_artifact_helpers_use_r2_object_contracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remote cards, markers, and split probes use their corresponding R2 operations.
+
+    :param tmp_path: Temporary path receiving uploaded artifact snapshots.
+    :param monkeypatch: Fixture replacing the external R2 process boundary.
+    """
+    uploads: list[tuple[str, str]] = []
+    deletes: list[str] = []
+
+    def capture_upload(source: Path, uri: str) -> None:
+        copied = tmp_path / f"upload-{len(uploads)}"
+        copied.write_bytes(source.read_bytes())
+        uploads.append((copied.read_text(), uri))
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.r2_directory_exists",
+        lambda uri: uri.endswith("train.lance"),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.object_size", lambda uri: 0
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.upload_to_uri", capture_upload
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.delete_object", deletes.append
+    )
+    card = LanceDatasetCard(
+        schema_version=1,
+        run_id="remote-root",
+        finalized_at="2026-07-28T00:00:00+00:00",
+        selected_attempts=(),
+    )
+
+    assert _root_child_exists("r2://bucket/root/train.lance")
+    assert _completion_marker_exists("r2://bucket/root")
+    _write_dataset_card("r2://bucket/root", card)
+    _write_completion_marker("r2://bucket/root")
+    _remove_completion_marker("r2://bucket/root")
+
+    assert LanceDatasetCard.model_validate_json(uploads[0][0]) == card
+    assert uploads[0][1] == "r2://bucket/root/dataset.json"
+    assert uploads[1] == ("", "r2://bucket/root/dataset.complete")
+    assert deletes == ["r2://bucket/root/dataset.complete"]
 
 
 def test_add_embeddings_config_dataset_root_with_non_tinymu_raises() -> None:
