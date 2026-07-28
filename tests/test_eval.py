@@ -36,7 +36,6 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
-from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -47,7 +46,6 @@ from tests.conftest import (
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embeddings,
     augment_lance_splits_with_same,
-    augment_lance_splits_with_tinymu,
     build_surge_xt_embedding_train_cfg,
 )
 from tests.helpers.eval_fakes import (
@@ -1602,11 +1600,10 @@ def _assert_conditioning_train_validate_finite(
 
     HydraConfig().set_config(cfg_eval)
     try:
-        val_metric_dict, object_dict = evaluate(cfg_eval)
+        val_metric_dict, _ = evaluate(cfg_eval)
     finally:
         GlobalHydra.instance().clear()
 
-    assert isinstance(object_dict["model"].encoder, EmbeddingPool)
     assert math.isfinite(val_metric_dict["val/param_mse"].item())
 
 
@@ -1634,30 +1631,6 @@ def test_train_eval_embedding_conditioning_real_e2e(
     dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
     _assert_conditioning_train_validate_finite(
         tmp_path, dataset_root, param_spec_name, conditioning
-    )
-
-
-@pytest.mark.requires_vst
-@pytest.mark.slow
-@pytest.mark.integration_r2
-@pytest.mark.r2
-def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
-    tmp_path: Path,
-    surge_xt_smoke_datasets: Path,
-    param_spec_name: str,
-) -> None:
-    """Train and validate real TinyMU tensors through the generic pooler.
-
-    :param tmp_path: Shared train/eval output directory.
-    :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
-    :param param_spec_name: Parameter specification driving model width.
-    """
-    dataset_root = augment_lance_splits_with_tinymu(surge_xt_smoke_datasets)
-    _assert_conditioning_train_validate_finite(
-        tmp_path,
-        dataset_root,
-        param_spec_name,
-        "tinymu",
     )
 
 

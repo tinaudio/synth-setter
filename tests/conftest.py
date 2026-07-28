@@ -53,7 +53,6 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
-_LICENSED_EMBEDDING_KEYS = ("clap", "m2l", "same_s", "same_l", "t5gemma")
 _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
@@ -1490,10 +1489,10 @@ def cfg_surge_fake_train(
     GlobalHydra.instance().clear()
 
 
-def augment_lance_splits_with_licensed_embeddings(
+def augment_lance_splits_with_all_embeddings(
     dataset_root: Path, checkpoints: dict[str, str], param_spec_name: str
 ) -> Path:
-    """Run the Hydra CLI for every source-redistributable encoder and clone its output.
+    """Run the Hydra CLI for every real embedding and clone its output splits.
 
     :param dataset_root: Directory holding finalized local Lance splits.
     :param checkpoints: Complete local checkpoint directories from preflight.
@@ -1506,7 +1505,7 @@ def augment_lance_splits_with_licensed_embeddings(
         "-m",
         "synth_setter.pipeline.data.add_embeddings",
         f"lance_uri={train_uri}",
-        f"embeddings=[{','.join(_LICENSED_EMBEDDING_KEYS)}]",
+        "embeddings=[clap,m2l,same_s,same_l,t5gemma]",
         f"param_spec_name={param_spec_name}",
         "device=cpu",
         "build_index=false",
@@ -1522,30 +1521,8 @@ def augment_lance_splits_with_licensed_embeddings(
     return dataset_root
 
 
-def augment_lance_splits_with_tinymu(dataset_root: Path) -> Path:
-    """Append real TinyMU embeddings to every split for train/eval entrypoint tests.
-
-    :param dataset_root: Directory holding finalized local Lance splits.
-    :returns: Augmented dataset root.
-    """
-    from synth_setter.pipeline.data.add_embeddings import add_embeddings
-    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
-
-    for split in ("train", "val", "test"):
-        add_embeddings(
-            AddEmbeddingsConfig(
-                lance_uri=str(dataset_root / f"{split}.lance"),
-                embeddings=("tinymu",),
-                device="cpu",
-                batch_size=1,
-                build_index=False,
-            )
-        )
-    return dataset_root
-
-
-def assert_licensed_embedding_columns(dataset_root: Path) -> None:
-    """Assert every source-redistributable embedding follows its row semantics.
+def assert_all_embedding_columns(dataset_root: Path) -> None:
+    """Assert every real embedding is finite and follows its row semantics.
 
     :param dataset_root: Directory holding the augmented train split.
     """
@@ -1567,7 +1544,7 @@ def assert_licensed_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(_LICENSED_EMBEDDING_KEYS) <= set(EMBEDDING_REGISTRY)
+    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
