@@ -17,7 +17,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
-    DEFAULT_NUM_SUB_VECTORS,
     EMBEDDING_REGISTRY,
 )
 
@@ -106,8 +105,8 @@ class AddEmbeddingsConfig(BaseModel):
     num_partitions: int | None = Field(
         default=None, ge=1, description="IVF partition override; null derives it from rows."
     )
-    num_sub_vectors: int = Field(
-        default=DEFAULT_NUM_SUB_VECTORS, ge=1, description="PQ sub-vector override."
+    num_sub_vectors: int | None = Field(
+        default=None, ge=1, description="PQ sub-vector override; null uses each spec's default."
     )
     metric: str = Field(default=DEFAULT_INDEX_METRIC, description="Vector metric override.")
     resume_cache: Path | None = Field(
@@ -236,7 +235,11 @@ class AddEmbeddingsConfig(BaseModel):
         :returns: Validated config unchanged.
         :raises ValueError: The count cannot evenly split selected CLAP vectors.
         """
-        if "clap" in self.embeddings and CLAP_EMBEDDING_DIM % self.num_sub_vectors != 0:
+        if (
+            "clap" in self.embeddings
+            and self.num_sub_vectors is not None
+            and CLAP_EMBEDDING_DIM % self.num_sub_vectors != 0
+        ):
             raise ValueError(
                 f"num_sub_vectors ({self.num_sub_vectors}) must divide the clap dim "
                 f"({CLAP_EMBEDDING_DIM})"

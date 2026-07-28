@@ -1143,6 +1143,15 @@ interrupted run can resume without re-encoding already-processed rows (see
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 
+`sketch` is not a learned embedding: it extracts the Sketch2Sound-style
+loudness, spectral-centroid, and PESTO pitch tracks
+(`features/sketch_controls.py`) from `audio` on the mel frame grid and writes
+them as a `(NUM_SKETCH_CONTROLS, F)` tensor column plus a mean-pooled
+`sketch_ctrl_vec` companion for contour-similarity search. Its `IndexSpec`
+pins `num_sub_vectors` to the pooled vector's width, since the CLAP-oriented
+default cannot divide it; a run config leaves `num_sub_vectors` null to let
+each spec's default apply.
+
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,
 renders each row to text through the `param_text_normalizer` strategy

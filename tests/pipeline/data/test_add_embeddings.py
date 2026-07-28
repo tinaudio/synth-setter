@@ -344,7 +344,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert cfg.batch_size == DEFAULT_LANCE_BATCH_SIZE
         assert cfg.build_index is True
         assert cfg.num_partitions is None
-        assert cfg.num_sub_vectors == 16
+        assert cfg.num_sub_vectors is None
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
         assert cfg.debug is False
@@ -1199,7 +1199,13 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     ) -> bool:
         del dataset
         calls.append(
-            (column, index, cast(int, config.num_partitions), config.num_sub_vectors, config.metric)
+            (
+                column,
+                index,
+                cast(int, config.num_partitions),
+                cast(int, config.num_sub_vectors),
+                config.metric,
+            )
         )
         return False
 
@@ -2639,3 +2645,30 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
     np.testing.assert_allclose(controls, expected, atol=1e-5)
     assert np.isfinite(controls).all()
     assert controls.min() >= -1.0 and controls.max() <= 1.0
+
+
+def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Path) -> None:
+    """A spec's PQ split applies when the run config leaves the override unset.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "sketch-index.lance"
+    rng = np.random.default_rng(3)
+    vectors = rng.random((300, NUM_SKETCH_CONTROLS)).astype(np.float32)
+    flat = pa.array(vectors.reshape(-1), pa.float32())
+    column = pa.FixedSizeListArray.from_arrays(flat, NUM_SKETCH_CONTROLS)
+    lance.write_dataset(pa.table({f"{SKETCH_CTRL_FIELD}_vec": column}), str(uri))
+    dataset = lance.dataset(str(uri))
+    spec_index = EMBEDDING_REGISTRY["sketch"].index
+    assert spec_index is not None
+
+    built = build_index(
+        dataset,
+        f"{SKETCH_CTRL_FIELD}_vec",
+        index=spec_index,
+        config=AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",)),
+    )
+
+    assert built is True
+    index_fields = [cast("dict[str, Any]", idx)["fields"] for idx in dataset.list_indices()]
+    assert [f"{SKETCH_CTRL_FIELD}_vec"] in index_fields
