@@ -16,7 +16,7 @@ docs:
     description: uv sync command surface, relock cadence, Linux resync flip
     sources:
       - pattern: "pyproject.toml"
-        covers: "Dependency groups and the commit-pinned stable-audio-3 runtime."
+        covers: "Dependency groups, backend-routing and TinyMU extras, and the commit-pinned stable-audio-3 runtime."
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
@@ -25,6 +25,16 @@ docs:
         covers: "uv-lock hook (astral-sh/uv-pre-commit) relocking uv.lock on every commit; the local lock-sync gate that complements uv-lock-check.yml"
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
+
+  - doc: docs/reference/tinymu-embeddings.md
+    description: TinyMU MATPAC embedding contract
+    sources:
+      - pattern: "src/synth_setter/pipeline/data/tinymu.py"
+        covers: "TinyMU MATPAC package integration"
+      - pattern: "src/synth_setter/configs/conditioning/tinymu.yaml"
+        covers: "Four-second TinyMU generic conditioning profile"
+      - pattern: "pyproject.toml"
+        covers: "The commit-pinned `tinymu` runtime dependency"
 
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference
@@ -146,7 +156,7 @@ docs:
       - pattern: "src/synth_setter/model_cache.py"
         covers: "XDG-aware shared cache paths for embedding model artifacts."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "Registry-driven Lance embedding augmentation, including strict Stable Audio 3 SAME checkpoint loading."
+        covers: "Registry-driven Lance embedding augmentation, including TinyMU and strict Stable Audio 3 SAME checkpoint loading."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
       - pattern: "tests/pipeline/data/test_same_encoder_e2e.py"
@@ -160,7 +170,7 @@ docs:
       - pattern: "src/synth_setter/data/vst/param_text.py"
         covers: "Param-spec text normalizers rendering encoded param rows as conditioning captions; `param_names` joins the spec's parameter names."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"
-        covers: "`synth-setter-add-embeddings` @hydra.main entry config: required `lance_uri` plus embedding-selection, index, device/batch, and param-text conditioning (`param_spec_name`, `param_text_normalizer`) knobs."
+        covers: "`synth-setter-add-embeddings` runtime configuration, including TinyMU source selection and param-text conditioning."
       - pattern: "src/synth_setter/pipeline/schemas/add_embeddings_config.py"
         covers: "AddEmbeddingsConfig — the strict/frozen knobs the endpoint validates from its composed cfg via `from_hydra_cfg`."
       - pattern: "src/synth_setter/pipeline/data/add_preview_columns.py"

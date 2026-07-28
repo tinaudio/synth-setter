@@ -32,6 +32,7 @@ from synth_setter.pipeline.schemas.object_storage import (
 __all__ = [
     "R2_URI_SCHEME",
     "RemoteEntry",
+    "delete_object",
     "download_dir_no_overwrite",
     "download_to_path",
     "downloaded_to_tempfile",
@@ -508,6 +509,15 @@ def download_dir_no_overwrite(
     operands = [f"--exclude={exclude}"] if exclude is not None else []
     args = _rclone_argv("copy", "--immutable", *operands, source_path, str(dest_path))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def delete_object(r2_uri: str) -> None:
+    """Delete one R2 object with the shared retry and timeout policy.
+
+    :param r2_uri: Exact object URI to delete.
+    """
+    args = _rclone_argv("deletefile", _to_rclone_path(r2_uri))
+    subprocess.check_call(args)  # noqa: S603 — args from a validated URI
 
 
 def download_to_path(r2_uri: str, dest_path: Path) -> None:

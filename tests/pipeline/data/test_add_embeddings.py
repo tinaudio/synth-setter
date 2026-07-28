@@ -33,6 +33,7 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     T5GEMMA_FIELD,
+    TINYMU_FIELD,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
@@ -50,6 +51,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     Encoder,
     IndexSpec,
     ParamTextEncodeFn,
+    _completion_marker_exists,
     _configure_lance_logging,
     _downmix_to_mono,
     _encode_t5gemma_column,
@@ -57,9 +59,14 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
+    _producer_identity,
+    _remove_completion_marker,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
+    _root_child_exists,
     _write_columns,
+    _write_completion_marker,
+    _write_dataset_card,
     add_embeddings,
     build_index,
     load_clap_audio_encoder,
@@ -69,7 +76,9 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND, tinymu_num_latent_frames
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
@@ -145,11 +154,26 @@ def _fake_same(
     return encode
 
 
+def _fake_tinymu(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Encode audio as deterministic MATPAC-shaped sequences.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :returns: Deterministic TinyMU-shaped embeddings.
+    """
+    frames = tinymu_num_latent_frames(audio.shape[-1], sample_rate)
+    fill = audio.astype(np.float32).mean(axis=(1, 2))
+    return np.broadcast_to(
+        fill[:, None, None], (len(audio), TINYMU_FRONTEND.embedding_dim, frames)
+    ).copy()
+
+
 def _encoder_for(name: str) -> Callable[..., np.ndarray]:
     """Return the fake encoder matching a registry key.
 
     :param name: Embedding registry key.
     :returns: Matching fake encoder.
+    :raises ValueError: No fake is registered for ``name``.
     """
     if name == "m2l":
         return _fake_m2l
@@ -157,7 +181,11 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_clap
     if name == "same_s":
         return _fake_same(0.25)
-    return _fake_same(0.75, same_l_num_latent_frames)
+    if name == "same_l":
+        return _fake_same(0.75, same_l_num_latent_frames)
+    if name == "tinymu":
+        return _fake_tinymu
+    raise ValueError(f"no fake encoder for {name!r}")
 
 
 def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
@@ -278,7 +306,14 @@ def test_downmix_to_mono_with_any_channel_count_averages_to_float32(
 
 def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None:
     """The registry is the single source of truth for all supported embeddings."""
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "t5gemma",
+        "tinymu",
+    }
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
@@ -296,6 +331,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
+    assert EMBEDDING_REGISTRY["tinymu"].co_resident is False
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
@@ -2375,6 +2411,194 @@ def test_t5gemma_encoder_with_matching_param_rows_encodes_one_caption_per_row(
     encode(np.zeros((3, spec.encoded_width), dtype=np.float32))
 
     assert seen == [[", ".join(spec.names)] * 3]
+
+
+def test_add_embeddings_config_with_neither_dataset_target_raises() -> None:
+    """An augmentation run requires one dataset or one finalized dataset root."""
+    with pytest.raises(ValidationError, match="exactly one of lance_uri or dataset_root_uri"):
+        AddEmbeddingsConfig()
+
+
+def test_add_embeddings_config_with_both_dataset_targets_raises() -> None:
+    """A run cannot ambiguously target both one split and a dataset root."""
+    with pytest.raises(ValidationError, match="exactly one of lance_uri or dataset_root_uri"):
+        AddEmbeddingsConfig(lance_uri="train.lance", dataset_root_uri="dataset")
+
+
+def test_producer_identity_is_anchored_to_installed_source_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MATPAC identity ignores process-global operator workspace state.
+
+    :param tmp_path: Unrelated workspace override.
+    :param monkeypatch: Fixture replacing the process workspace resolver.
+    """
+    _producer_identity.cache_clear()
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.operator_workspace", lambda: tmp_path
+    )
+
+    git_sha, transform_sha = _producer_identity()
+
+    assert len(git_sha) == 40
+    assert len(transform_sha) == 64
+
+
+def test_remote_root_artifact_helpers_use_r2_object_contracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remote cards, markers, and split probes use their corresponding R2 operations.
+
+    :param tmp_path: Temporary path receiving uploaded artifact snapshots.
+    :param monkeypatch: Fixture replacing the external R2 process boundary.
+    """
+    uploads: list[tuple[str, str]] = []
+    deletes: list[str] = []
+
+    def capture_upload(source: Path, uri: str) -> None:
+        copied = tmp_path / f"upload-{len(uploads)}"
+        copied.write_bytes(source.read_bytes())
+        uploads.append((copied.read_text(), uri))
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.r2_directory_exists",
+        lambda uri: uri.endswith("train.lance"),
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.object_size", lambda uri: 0
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.upload_to_uri", capture_upload
+    )
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.r2_io.delete_object", deletes.append
+    )
+    card = LanceDatasetCard(
+        schema_version=1,
+        run_id="remote-root",
+        finalized_at="2026-07-28T00:00:00+00:00",
+        selected_attempts=(),
+    )
+
+    assert _root_child_exists("r2://bucket/root/train.lance")
+    assert _completion_marker_exists("r2://bucket/root")
+    _write_dataset_card("r2://bucket/root", card)
+    _write_completion_marker("r2://bucket/root")
+    _remove_completion_marker("r2://bucket/root")
+
+    assert LanceDatasetCard.model_validate_json(uploads[0][0]) == card
+    assert uploads[0][1] == "r2://bucket/root/dataset.json"
+    assert uploads[1] == ("", "r2://bucket/root/dataset.complete")
+    assert deletes == ["r2://bucket/root/dataset.complete"]
+
+
+def test_add_embeddings_config_dataset_root_with_non_tinymu_raises() -> None:
+    """Root transactions are limited to the strongly pinned MATPAC policy."""
+    with pytest.raises(ValidationError, match="dataset_root_uri requires embeddings=\\[tinymu\\]"):
+        AddEmbeddingsConfig(dataset_root_uri="dataset", embeddings=("clap",))
+
+
+def test_add_embeddings_dataset_root_writes_every_split_and_persists_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Root mode augments train, validation, and test and records MATPAC identity.
+
+    :param tmp_path: Temporary finalized dataset root.
+    :param monkeypatch: Fixture replacing the heavyweight MATPAC encoder.
+    """
+    dataset_spec = build_lance_smoke_spec(train_val_test_sizes=(4, 4, 4))
+    for split, rows in (("train", 3), ("val", 2), ("test", 1)):
+        write_minimal_lance_shard(tmp_path / f"{split}.lance", dataset_spec, num_rows=rows)
+    card = LanceDatasetCard(
+        schema_version=1,
+        run_id="run-1",
+        finalized_at="2026-07-28T00:00:00+00:00",
+        selected_attempts=(),
+    )
+    (tmp_path / "dataset.json").write_text(card.model_dump_json(indent=2))
+    (tmp_path / "dataset.complete").touch()
+    _install_fake_specs(monkeypatch, ("tinymu",))
+    config = AddEmbeddingsConfig(
+        dataset_root_uri=str(tmp_path), embeddings=("tinymu",), build_index=False
+    )
+
+    add_embeddings(config)
+
+    versions = {}
+    for split, rows in (("train", 3), ("val", 2), ("test", 1)):
+        dataset = lance.dataset(tmp_path / f"{split}.lance")
+        assert dataset.count_rows() == rows
+        assert {TINYMU_FIELD, f"{TINYMU_FIELD}_vec"} <= set(dataset.schema.names)
+        versions[split] = dataset.version
+    persisted = LanceDatasetCard.model_validate_json((tmp_path / "dataset.json").read_text())
+    provenance = persisted.embeddings[0]
+    assert persisted.schema_version == 2
+    assert provenance.name == "tinymu"
+    assert provenance.columns == (TINYMU_FIELD, f"{TINYMU_FIELD}_vec")
+    assert provenance.checkpoint == EMBEDDING_REGISTRY["tinymu"].default_checkpoint
+    assert tuple(result.split for result in provenance.splits) == ("train", "val", "test")
+    assert tuple(result.row_count for result in provenance.splits) == (3, 2, 1)
+    assert all(result.complete for result in provenance.splits)
+    assert (tmp_path / "dataset.complete").is_file()
+
+    add_embeddings(config)
+
+    assert {
+        split: lance.dataset(tmp_path / f"{split}.lance").version for split in versions
+    } == versions
+    assert LanceDatasetCard.model_validate_json(
+        (tmp_path / "dataset.json").read_text()
+    ) == persisted
+
+    with pytest.raises(ValueError, match="provenance does not match"):
+        add_embeddings(config.model_copy(update={"build_index": True}))
+
+
+def test_add_embeddings_dataset_root_after_index_failure_resumes_and_reseals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A post-column index failure resumes without re-encoding MATPAC columns.
+
+    :param tmp_path: Temporary finalized dataset root.
+    :param monkeypatch: Fixture replacing the heavyweight MATPAC encoder and index failure.
+    """
+    dataset_spec = build_lance_smoke_spec()
+    write_minimal_lance_shard(tmp_path / "train.lance", dataset_spec)
+    card = LanceDatasetCard(
+        schema_version=1,
+        run_id="run-partial",
+        finalized_at="2026-07-28T00:00:00+00:00",
+        selected_attempts=(),
+    )
+    (tmp_path / "dataset.json").write_text(card.model_dump_json(indent=2))
+    (tmp_path / "dataset.complete").touch()
+    _install_fake_specs(monkeypatch, ("tinymu",))
+
+    def fail_index(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.build_index", fail_index)
+    config = AddEmbeddingsConfig(
+        dataset_root_uri=str(tmp_path), embeddings=("tinymu",), build_index=True
+    )
+
+    with pytest.raises(RuntimeError, match="index unavailable"):
+        add_embeddings(config)
+
+    interrupted = lance.dataset(tmp_path / "train.lance")
+    interrupted_version = interrupted.version
+    assert {TINYMU_FIELD, f"{TINYMU_FIELD}_vec"} <= set(interrupted.schema.names)
+    assert not (tmp_path / "dataset.complete").exists()
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.build_index", build_index)
+    add_embeddings(config)
+
+    resumed = lance.dataset(tmp_path / "train.lance")
+    assert resumed.version == interrupted_version
+    assert (tmp_path / "dataset.complete").is_file()
+    persisted = LanceDatasetCard.model_validate_json((tmp_path / "dataset.json").read_text())
+    assert all(result.complete for entry in persisted.embeddings for result in entry.splits)
 
 
 def test_add_embeddings_config_with_t5gemma_and_no_param_spec_raises() -> None:

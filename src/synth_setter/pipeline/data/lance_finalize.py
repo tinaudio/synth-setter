@@ -391,6 +391,11 @@ def _recorded_attempt_names(spec: DatasetSpec) -> dict[int, str]:
         raise ValueError(
             f"existing dataset card run_id {card.run_id!r} does not match {spec.run_id!r}"
         )
+    if card.embeddings:
+        raise ValueError(
+            "dataset finalization is complete but embedding augmentation owns the missing "
+            "readiness marker; resume synth-setter-add-embeddings instead of finalizing"
+        )
     return {selected.shard_id: selected.attempt for selected in card.selected_attempts}
 
 
