@@ -183,90 +183,7 @@ RUN rm -rf /home/build/plugin/surge /home/build/cmake-install
 # installs it together with its runtime dependencies.
 # ==========================================
 FROM builder-base AS builder-install-surge-from-prebuilt
-WORKDIR /home/build
-COPY --from=arch-vars /artifacts/surge-package-filepath.txt /surge-package-filepath.txt
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends wget
-RUN pkg="$(cat /surge-package-filepath.txt)"; \
-    echo $pkg; \
-    wget "https://github.com/surge-synthesizer/releases-xt/releases/download/${pkg}"
-
-# Add any additional dependencies needed to install the prebuilt package
-# TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
-    cmake \
-    libcairo-dev \
-    libxkbcommon-x11-dev \
-    libxkbcommon-dev \
-    libxcb-cursor-dev \
-    libxcb-keysyms1-dev \
-    libxcb-util-dev \
-    libxrandr-dev \
-    libxinerama-dev \
-    libxcursor-dev \
-    libasound2-dev \
-    libjack-jackd2-dev
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    pkg="$(cat /surge-package-filepath.txt)" && \
-    fname="${pkg##*/}" && \
-    apt-get update && apt-get install -y --no-install-recommends "./${fname}" && \
-    rm "./${fname}"
-
-# ==========================================
-# VST3 synth fetch: SHA256-pinned prebuilt Linux VST3 bundles, staged under
-# /plugins-staging for the runtime stage to copy. Upstream ships x86_64-only
-# binaries, so non-amd64 builds stage nothing and downstream steps skip.
-# Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, so assets
-# built against glibc 2.38 (Ubuntu 24.04 runners) cannot load (#1649).
-# License: these third-party binaries ship in the published GHCR image —
-# review upstream license/redistribution terms before adding or bumping an
-# asset (Dexed: GPL-3.0; OB-Xf: GPL-3.0; Six Sines: MIT).
-# ==========================================
-FROM ${BASE_IMAGE} AS vst3-synths-fetch
-SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
-ARG TARGETARCH
-# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
-    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    unzip \
-    wget
-WORKDIR /plugins-staging
-
-ARG DEXED_VERSION=0.9.8
-ARG DEXED_SHA256=5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Dexed: x86_64-only asset" >&2; exit 0; fi; \
-    wget -q -O /tmp/dexed.zip "https://github.com/asb2m10/dexed/releases/download/v${DEXED_VERSION}/dexed-${DEXED_VERSION}-lnx.zip" && \
-    echo "${DEXED_SHA256}  /tmp/dexed.zip" | sha256sum -c - && \
-    unzip -q /tmp/dexed.zip -d /tmp/dexed && \
-    mv "/tmp/dexed/dexed-${DEXED_VERSION}-lnx/Dexed.vst3" . && \
-    rm -rf /tmp/dexed.zip /tmp/dexed
-
-ARG OBXF_VERSION=v1.0.3
-ARG OBXF_SHA256=72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping OB-Xf: x86_64-only asset" >&2; exit 0; fi; \
-    wget -q -O /tmp/obxf.zip "https://github.com/surge-synthesizer/OB-Xf/releases/download/${OBXF_VERSION}/ob-xf-Linux-${OBXF_VERSION}.zip" && \
-    echo "${OBXF_SHA256}  /tmp/obxf.zip" | sha256sum -c - && \
-    unzip -q /tmp/obxf.zip "obxf_products/OB-Xf.vst3/*" -d /tmp/obxf && \
-    mv "/tmp/obxf/obxf_products/OB-Xf.vst3" . && \
-    rm -rf /tmp/obxf.zip /tmp/obxf
-
-ARG SIX_SINES_VERSION=v1.1.0
-ARG SIX_SINES_ASSET=six-sines-linux-2025-03-18-43d10b2.tgz
-ARG SIX_SINES_SHA256=fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Six Sines: x86_64-only asset" >&2; exit 0; fi; \
-    wget -q -O /tmp/six-sines.tgz "https://github.com/baconpaul/six-sines/releases/download/${SIX_SINES_VERSION}/${SIX_SINES_ASSET}" && \
-    echo "${SIX_SINES_SHA256}  /tmp/six-sines.tgz" | sha256sum -c - && \
-    tar -xzf /tmp/six-sines.tgz -C . "./Six Sines.vst3" && \
-    rm /tmp/six-sines.tgz
+# Prebuilt VST3 packages are installed together by Studiorack after Python deps land.
 
 # ==========================================
 # KR106 source build: upstream release ZIPs require glibc 2.38, so build the
@@ -338,13 +255,7 @@ RUN curl -fsSL \
 # Python base: Python + venv on top of the chosen Surge install.
 # ==========================================
 FROM builder-install-surge-from-${BUILD_MODE} AS python-base
-# Surge XT is the only bundle present here; the amd64-only fetched synths land
-# downstream (vst3-synths-fetch COPY), gated and load-validated there.
-RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
-    || (echo "ERROR: Surge XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
-
-# Point tests and ensure_plugin_symlinks.sh at the system VST3 path baked above,
-# so container callers don't have to pass `-e SYNTH_SETTER_PLUGIN_PATH=...`.
+# Point tests and managed alias restoration at the stable VST3 path.
 ENV SYNTH_SETTER_PLUGIN_PATH="/usr/lib/vst3/Surge XT.vst3"
 
 # Install build-time system Python and uv; the runtime venv is created below.
@@ -418,8 +329,23 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       apt-get install -y --no-install-recommends \
         dbus-x11 \
         fuse \
+        libasound2 \
+        libcairo2 \
+        libcurl4 \
+        libfontconfig1 \
+        libfreetype6 \
         libgl1-mesa-dri \
         libgl1-mesa-glx \
+        libgtk-3-0 \
+        libjack-jackd2-0 \
+        libx11-6 \
+        libxcb-cursor0 \
+        libxcb-keysyms1 \
+        libxcb-util1 \
+        libxcursor1 \
+        libxinerama1 \
+        libxkbcommon-x11-0 \
+        libxrandr2 \
         mesa-utils \
         openbox \
         openssh-client \
@@ -462,41 +388,83 @@ RUN case "${TARGETARCH:-}" in \
     pueue --version && \
     pueued --version
 
+# ==========================================
+# Studiorack-managed VST3 installation. Archive packages stay versioned under
+# /opt/studiorack; stable /usr/lib/vst3 aliases keep serialized render specs portable.
+# The core patch recognizes Linux VST3 bundles without a macOS Info.plist; remove it
+# when https://github.com/open-audio-stack/open-audio-stack-core/issues/82 and
+# https://github.com/open-audio-stack/open-audio-stack-core/issues/83 ship.
+# Surge source mode and KR-106 retain source fallbacks because the registry has no
+# Surge arm64 artifact and KR-106 binaries require newer glibc than Ubuntu 22.04.
+# ==========================================
+FROM builder-install-synth-setter-deps AS builder-install-studiorack-plugins
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG BUILD_MODE
+ARG TARGETARCH
+COPY --from=node:24.15.0-bookworm-slim /usr/local/ /usr/local/
+COPY --from=synth-setter-src /home/build/synth-setter/package.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/scripts/studiorack/patch-core.mjs /artifacts/studiorack/scripts/studiorack/patch-core.mjs
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/__init__.py /artifacts/studiorack-src/synth_setter/__init__.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_manager.py /artifacts/studiorack-src/synth_setter/plugin_manager.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/__init__.py /artifacts/studiorack-src/synth_setter/cli/__init__.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/plugins.py /artifacts/studiorack-src/synth_setter/cli/plugins.py
+WORKDIR /artifacts/studiorack
+RUN npm ci
+ENV STUDIORACK_PLUGINS_DIR=/opt/studiorack
+RUN if [[ "${TARGETARCH:-}" == "amd64" ]]; then \
+      packages=( \
+        --plugin asb2m10/dexed \
+        --plugin baconpaul/six-sines \
+        --plugin surge-synthesizer/ob-xf \
+      ); \
+      if [[ "${BUILD_MODE}" == "prebuilt" ]]; then \
+        packages+=(--plugin surge-synthesizer/surge); \
+      fi; \
+      PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+        --manifest /artifacts/studiorack/studiorack.json \
+        --links-dir /usr/lib/vst3 install "${packages[@]}"; \
+    fi
+COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
+RUN if [[ "${BUILD_MODE}" == "source" ]]; then \
+      PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+        --manifest /artifacts/studiorack/studiorack.json adopt \
+        --plugin surge-synthesizer/surge \
+        --bundle-path "/usr/lib/vst3/Surge XT.vst3"; \
+    fi && \
+    PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+      --manifest /artifacts/studiorack/studiorack.json adopt \
+      --plugin kayrockscreenprinting/ultramaster-kr106 \
+      --bundle-path "/usr/lib/vst3/Ultramaster KR-106.vst3" && \
+    PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+      --manifest /artifacts/studiorack/studiorack.json \
+      --links-dir /usr/lib/vst3 link \
+      --plugin surge-synthesizer/surge \
+      --plugin kayrockscreenprinting/ultramaster-kr106
+
 WORKDIR /artifacts
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
-# Validate that Surge XT loads correctly under headless X11
 RUN ./run-linux-vst-headless.sh \
     python -X faulthandler load_vst3_check.py "/usr/lib/vst3/Surge XT.vst3"
-
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
-
-COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
-COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
-# Presence gate for the bundles the image must ship: Surge XT on every arch,
-# bundled plugin synths on amd64 only. Load-validation follows.
 RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
       if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
-        echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
+        continue; \
       fi; \
       [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \
         || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
     done
-
-# Validate each bundled synth loads under headless X11 — one wrapper run per
-# plugin, since sequential in-process loads crash order-dependently (#1649) —
-# then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
-# Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
+RUN if [[ "${TARGETARCH:-}" != "amd64" ]]; then exit 0; fi; \
     for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
       name="${entry%%|*}"; \
       ./run-linux-vst-headless.sh \
         python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
       ln -s "/usr/lib/vst3/${name}.vst3" "/home/build/synth-setter/plugins/${name}.vst3" || exit 1; \
     done
-
 WORKDIR /home/build/synth-setter
 
 # ==========================================
@@ -510,16 +478,14 @@ WORKDIR /home/build/synth-setter
 # Useful for CI or one-off runs without mounting local source.
 # Usage: make docker-build-dev-snapshot GIT_REF=<sha>
 # ==========================================
-FROM builder-install-synth-setter-deps AS dev-base
+FROM builder-install-studiorack-plugins AS dev-base
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
-# unzip: the in-image pytest run exercises the Makefile install-plugins
-# targets, whose recipes unpack cached .zip archives (#1789).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq unzip
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
 
 WORKDIR /home/build/synth-setter
 
@@ -549,8 +515,7 @@ RUN uv pip install --no-deps -e .
 # needed here; the `devcontainer-tools` stage adds them for the Codex CLI.
 COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 
-# Run not-slow unit tests: no VST or R2 needed, but the infra-marked
-# install-plugins tests shell out to the real Makefile recipes (tar/unzip).
+# Run not-slow unit tests after the managed plugins pass their load checks.
 RUN pytest -k "not slow" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with

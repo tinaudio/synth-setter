@@ -1,15 +1,15 @@
 name: Set up Surge XT
 description: >-
-  Install the Surge XT VST3 cask on a macOS runner and symlink it into
-  `plugins/` where the project's render config resolves it. Docker-based
-  callers ship Surge XT in the image and do not use this action.
+  Install the pinned Surge XT package through Studiorack and link its VST3
+  bundle into `plugins/` where synth-setter render configs resolve it.
 
 runs:
   using: composite
   steps:
-    - name: Install Surge XT VST3
+    - name: Install Surge XT with Studiorack
       shell: bash
       run: |
-        brew install --cask surge-xt
-        mkdir -p plugins
-        ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' 'plugins/Surge XT.vst3'
+        npm ci
+        sudo -E env "PATH=${PATH}" \
+          "STUDIORACK_PLUGINS_DIR=/Library/Application Support/synth-setter/studiorack" \
+          uv run synth-setter-plugins install --plugin surge-synthesizer/surge

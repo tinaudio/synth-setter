@@ -46,6 +46,14 @@ docs:
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
         covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools + devcontainer-tools-dev-user publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission"
+      - pattern: "studiorack.json"
+        covers: "Exact image VST3 package versions and bundle names"
+      - pattern: "package*.json"
+        covers: "Locked Studiorack CLI and core dependency graph"
+      - pattern: "src/synth_setter/plugin_manager.py"
+        covers: "Managed bundle resolution and stable alias creation"
+      - pattern: "src/synth_setter/cli/plugins.py"
+        covers: "Studiorack install and link commands used by image builds"
 
   # ── W&B integration reference ───────────────────────────────────
   - doc: docs/reference/wandb-integration.md
@@ -212,7 +220,7 @@ docs:
       - pattern: "src/synth_setter/configs/skypilot_launch/compute/scripts/*.sh"
         covers: "Compute-option shell helpers"
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
-        covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
+        covers: "Restore the Studiorack-pinned Surge alias after a workspace bind mount"
       - pattern: "scripts/sync_worker_checkout.sh"
         covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install --group runtime -e .` helper invoked by the launcher-built worker cmd on every provider. The launcher always supplies a preflight-verified ref; full transitive resolve handles commits that add new top-level packages."
       - pattern: "scripts/skypilot/write_provider_creds.sh"
@@ -363,6 +371,15 @@ docs:
         scope: "local-dev"
       - pattern: "Makefile"
         covers: "Pinned plugin installation targets."
+        scope: "local-dev"
+      - pattern: "studiorack.json"
+        covers: "Local VST3 package and bundle pins"
+        scope: "local-dev"
+      - pattern: "package*.json"
+        covers: "Pinned Studiorack CLI installation"
+        scope: "local-dev"
+      - pattern: ".github/actions/setup-surge-xt/action.yml"
+        covers: "Managed Surge provisioning on macOS CI"
         scope: "local-dev"
       - pattern: "Makefile"
         covers: "Worktree plugin, thought, and skill-linking targets."
@@ -546,7 +563,7 @@ docs:
     description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)
     sources:
       - pattern: "tart/**"
-        covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version/base_image_digest), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow, local validate/build helper (build.sh)"
+        covers: "Packer provisioning for the developer environment"
         scope: "tart"
 
   - doc: docs/guides/vst-interactive.md
@@ -571,7 +588,11 @@ docs:
     description: Onboard a new VST3 synth — introspect, hand-tune the spec, register, generate
     sources:
       - pattern: "src/synth_setter/cli/introspect_plugin.py"
-        covers: "synth-setter-introspect-plugin CLI contract and its draft-spec, baseline-preset, and CSV-triage outputs"
+        covers: "Managed and explicit-path plugin registration"
+      - pattern: "studiorack.json"
+        covers: "Package identity used by managed registration"
+      - pattern: "src/synth_setter/plugin_manager.py"
+        covers: "Managed package resolution and checkout alias creation"
       - pattern: "src/synth_setter/data/vst/introspect.py"
         covers: "Draft generation behind the CLI: parameter classification and emission of the draft spec module, baseline preset, and CSV triage table"
       - pattern: "src/synth_setter/data/vst/registration.py"
@@ -591,7 +612,7 @@ docs:
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless X11/Xvfb wrapper for GUI-heavy VST3 plugins that need a display during introspection or rendering"
       - pattern: "docker/ubuntu22_04/Dockerfile"
-        covers: "vst3-synths-fetch stage — sha256-pinned amd64-only synth fetch + headless-X11 load check + plugins/ symlink referenced by the optional Docker baking step"
+        covers: "Studiorack package installation and per-bundle load verification"
 
   # ── Config reference (autogenerated mkdocstrings pages) ────────
   - doc: docs/config_reference/dataset_spec.md
