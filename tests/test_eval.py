@@ -381,9 +381,12 @@ def _torchsynth_initial_loss(
     total_squared_error = 0.0
     total_elements = 0
     with torch.no_grad():
-        for baseline_audio, baseline_params, *_ in dataloader:
+        for baseline_batch in dataloader:
+            baseline_audio = baseline_batch["audio"]
+            baseline_params = baseline_batch["params"]
+            # VSTFeedForwardModule has no forward(); predictions go through its net.
             squared_error = torch.nn.functional.mse_loss(
-                baseline_model(baseline_audio), baseline_params, reduction="sum"
+                baseline_model.net(baseline_audio), baseline_params, reduction="sum"
             )
             total_squared_error += squared_error.item()
             total_elements += baseline_params.numel()
@@ -446,11 +449,11 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     finally:
         GlobalHydra.instance().clear()
 
-    val_loss = metric_dict["val/loss"]
+    val_loss = metric_dict["val/param_mse"]
     assert torch.isfinite(val_loss)
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
-    assert torch.isfinite(eval_batch[0]).all()
+    assert torch.isfinite(eval_batch["audio"]).all()
 
 
 _FAKE_ORACLE_DATASETS = [
@@ -666,9 +669,10 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     HydraConfig().set_config(cfg_eval)
     test_metric_dict, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(test_metric_dict["test/loss"].item())
+    assert math.isfinite(test_metric_dict["test/param_mse"].item())
     assert (
-        abs(train_metric_dict["test/loss"].item() - test_metric_dict["test/loss"].item()) < 0.001
+        abs(train_metric_dict["test/param_mse"].item() - test_metric_dict["test/param_mse"].item())
+        < 0.001
     )
 
 
@@ -708,7 +712,7 @@ def test_evaluate_loads_compiled_cpu_training_checkpoint(
     HydraConfig().set_config(cfg_eval)
     metrics, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(metrics["test/loss"].item())
+    assert math.isfinite(metrics["test/param_mse"].item())
 
 
 def test_evaluate_legacy_wrapped_checkpoint_hints_migration_cli_which_recovers(
@@ -761,7 +765,7 @@ def test_evaluate_legacy_wrapped_checkpoint_hints_migration_cli_which_recovers(
         cfg_eval.ckpt_path = str(migrated_path)
     metrics, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(metrics["test/loss"].item())
+    assert math.isfinite(metrics["test/param_mse"].item())
 
 
 @pytest.mark.gpu
@@ -795,8 +799,11 @@ def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictCon
     HydraConfig().set_config(cfg_eval)
     val_metric_dict, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(val_metric_dict["val/loss"].item())
-    assert abs(train_metric_dict["val/loss"].item() - val_metric_dict["val/loss"].item()) < 0.001
+    assert math.isfinite(val_metric_dict["val/param_mse"].item())
+    assert (
+        abs(train_metric_dict["val/param_mse"].item() - val_metric_dict["val/param_mse"].item())
+        < 0.001
+    )
 
 
 def _compose_fake_oracle_eval_cfg(

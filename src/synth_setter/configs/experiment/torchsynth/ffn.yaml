@@ -3,7 +3,7 @@
 defaults:
   - override /datamodule: torchsynth
   - override /synth: torchsynth_full
-  - override /render: torchsynth_full
+  - override /render: torchsynth
   - override /model: ffn
   - override /callbacks: default
   - override /trainer: gpu

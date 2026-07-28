@@ -3,7 +3,7 @@
 defaults:
   - override /datamodule: torchsynth
   - override /synth: torchsynth_full
-  - override /render: torchsynth_full
+  - override /render: torchsynth
   - override /model: vst_flow
   - override /model/encoder: log_mel
   - override /callbacks: default
