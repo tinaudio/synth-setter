@@ -84,7 +84,6 @@ def test_audio_weight_at_final_time_equals_lambda() -> None:
     assert torch.allclose(weight, torch.tensor([[0.25]]))
 
 
-@pytest.mark.slow
 def test_grad_render_output_matches_the_documented_audio_contract() -> None:
     """The differentiable render emits finite float32 ``(batch, signal_length)`` audio in range."""
     audio = _render(torch.rand(_BATCH, _NUM_PARAMS, generator=torch.Generator().manual_seed(0)))
@@ -95,7 +94,6 @@ def test_grad_render_output_matches_the_documented_audio_contract() -> None:
     assert audio.abs().max() <= 1.0
 
 
-@pytest.mark.slow
 def test_mslm_loss_backprops_finite_gradient_through_the_renderer() -> None:
     """A real render sends finite, non-zero gradient back to the parameter estimate."""
     torch.manual_seed(0)
@@ -110,7 +108,6 @@ def test_mslm_loss_backprops_finite_gradient_through_the_renderer() -> None:
     assert (gradient != 0).any()
 
 
-@pytest.mark.slow
 def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     """The latent distance differentiates through both the render and the encoder."""
     torch.manual_seed(0)
@@ -128,7 +125,6 @@ def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     assert (gradient != 0).any()
 
 
-@pytest.mark.slow
 def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
     """Token-emitting encoders must still yield one distance per sample, not per token."""
 
@@ -152,7 +148,6 @@ def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
     assert torch.isfinite(value)
 
 
-@pytest.mark.slow
 def test_latent_loss_leaves_encoder_weights_and_stats_untouched() -> None:
     """The latent space is frozen: no weight gradients, no BatchNorm stat drift."""
     torch.manual_seed(0)

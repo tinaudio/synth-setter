@@ -114,7 +114,6 @@ def _synthetic_batch() -> dict[str, torch.Tensor]:
     }
 
 
-@pytest.mark.slow
 def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> None:
     """A real online batch produces a finite audio term with gradients in the flow."""
     torch.manual_seed(0)
@@ -138,7 +137,6 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> N
         assert (parameter.grad != 0).any(), f"{name} gradient is identically zero"
 
 
-@pytest.mark.slow
 def test_combined_objective_decreases_on_a_fixed_online_batch() -> None:
     """A short fixed-batch finetune reduces the combined CFM + audio objective.
 
@@ -198,7 +196,6 @@ def test_module_with_audio_loss_and_nonzero_sigma_min_raises() -> None:
         )
 
 
-@pytest.mark.slow
 def test_audio_loss_keep_mask_zeroes_cfg_dropped_rows() -> None:
     """Rows dropped by CFG must contribute nothing to the audio term."""
     torch.manual_seed(0)
@@ -214,7 +211,6 @@ def test_audio_loss_keep_mask_zeroes_cfg_dropped_rows() -> None:
     assert all_kept.item() > 0.0
 
 
-@pytest.mark.slow
 def test_grad_render_matches_the_row_at_a_time_production_render() -> None:
     """Batch grad renders align noise with the per-row target renderer.
 
@@ -268,7 +264,6 @@ def test_fit_with_audio_loss_and_non_drop_last_loader_raises() -> None:
         trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
 
 
-@pytest.mark.slow
 def test_fit_with_audio_loss_on_the_online_datamodule_completes_one_step() -> None:
     """The supported configuration trains end to end through the real datamodule."""
     torch.manual_seed(0)
