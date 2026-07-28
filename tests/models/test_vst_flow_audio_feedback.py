@@ -115,7 +115,7 @@ def _synthetic_batch() -> dict[str, torch.Tensor]:
 
 
 @pytest.mark.slow
-def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term():
+def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> None:
     """A real online batch produces a finite audio term with gradients in the flow."""
     torch.manual_seed(0)
     module = _module(audio_loss=_audio_loss())
@@ -128,14 +128,45 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term():
 
     assert torch.isfinite(total)
     assert audio_term.item() > 0.0
-    gradients = torch.cat(
-        [p.grad.flatten() for p in module.vector_field.parameters() if p.grad is not None]
-    )
-    assert torch.isfinite(gradients).all()
-    assert (gradients != 0).any()
+    # Every trainable field parameter must join the graph; only the CFG dropout token
+    # may legitimately sit out of a step where no row was dropped.
+    for name, parameter in module.vector_field.named_parameters():
+        if "dropout" in name:
+            continue
+        assert parameter.grad is not None, f"{name} received no gradient"
+        assert torch.isfinite(parameter.grad).all(), f"{name} gradient is non-finite"
+        assert (parameter.grad != 0).any(), f"{name} gradient is identically zero"
 
 
-def test_train_step_without_audio_loss_returns_no_audio_term():
+@pytest.mark.slow
+def test_combined_objective_decreases_on_a_fixed_online_batch() -> None:
+    """A short fixed-batch finetune reduces the combined CFM + audio objective.
+
+    Guards against sign, scaling, or gradient-path defects that leave finite non-zero gradients
+    while making the objective unlearnable.
+    """
+    torch.manual_seed(0)
+    module = _module(audio_loss=_audio_loss())
+    # Pin flow time so the objective is deterministic across steps; random t makes
+    # per-step losses incomparable and would mask (or fake) a decrease.
+    module._sample_time = lambda n, device: torch.full((n, 1), 0.9, device=device)
+    batch = next(iter(_datamodule().train_dataloader()))
+    optimizer = torch.optim.Adam(module.parameters(), lr=3e-3)
+
+    losses = []
+    for _ in range(40):
+        loss, audio_term, _ = module._train_step(batch)
+        assert audio_term is not None
+        total = loss + audio_term
+        optimizer.zero_grad()
+        total.backward()
+        optimizer.step()
+        losses.append(total.item())
+
+    assert min(losses[-5:]) < losses[0]
+
+
+def test_train_step_without_audio_loss_returns_no_audio_term() -> None:
     """The default module pays for no render and reports no audio term."""
     torch.manual_seed(0)
     module = _module()
@@ -146,13 +177,13 @@ def test_train_step_without_audio_loss_returns_no_audio_term():
     assert torch.isfinite(loss)
 
 
-def test_module_with_audio_loss_and_torch_compile_raises_at_construction():
+def test_module_with_audio_loss_and_torch_compile_raises_at_construction() -> None:
     """Compiling over the functional_call render miscompiles, so refuse up front."""
     with pytest.raises(ValueError, match="compile"):
         _module(audio_loss=_audio_loss(), compile=True)
 
 
-def test_fit_with_audio_loss_and_non_drop_last_loader_raises():
+def test_fit_with_audio_loss_and_non_drop_last_loader_raises() -> None:
     """A trailing partial batch would miss the renderer cache; fit must refuse it."""
     module = _module(audio_loss=_audio_loss())
     batch = _synthetic_batch()
@@ -168,7 +199,7 @@ def test_fit_with_audio_loss_and_non_drop_last_loader_raises():
 
 
 @pytest.mark.slow
-def test_fit_with_audio_loss_on_the_online_datamodule_completes_one_step():
+def test_fit_with_audio_loss_on_the_online_datamodule_completes_one_step() -> None:
     """The supported configuration trains end to end through the real datamodule."""
     torch.manual_seed(0)
     module = _module(audio_loss=_audio_loss())

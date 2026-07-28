@@ -31,7 +31,7 @@ def _datamodule() -> TorchSynthDataModule:
     return datamodule
 
 
-def test_dict_batch_carries_the_vst_module_keys():
+def test_dict_batch_carries_the_vst_module_keys() -> None:
     """The dict format supplies everything the VST modules index off the batch."""
     batch = next(iter(_datamodule().train_dataloader()))
     assert set(batch) == {"params", "noise", "mel_spec", "audio"}
@@ -39,9 +39,10 @@ def test_dict_batch_carries_the_vst_module_keys():
     assert batch["noise"].shape == (_BATCH, _NUM_PARAMS)
     assert batch["audio"].shape == (_BATCH, _SIGNAL_LENGTH)
     assert batch["mel_spec"].shape[:2] == (_BATCH, 1)
+    assert all(batch[key].dtype == torch.float32 for key in batch)
 
 
-def test_dict_batch_params_are_in_model_space():
+def test_dict_batch_params_are_in_model_space() -> None:
     """VST batches carry params in ``[-1, 1]``, not the renderer's ``[0, 1]``."""
     params = next(iter(_datamodule().train_dataloader()))["params"]
     assert params.min() >= -1.0
@@ -49,8 +50,25 @@ def test_dict_batch_params_are_in_model_space():
     assert params.min() < 0.0
 
 
+def test_collate_vst_dict_maps_known_rows_to_the_model_space_contract() -> None:
+    """Known rows collate to stacked audio and the exact ``2p - 1`` param mapping."""
+    from synth_setter.data.torchsynth_datamodule import collate_vst_dict
 
-def test_vst_flow_matching_module_trains_on_an_online_torchsynth_batch():
+    audio_rows = [torch.full((1, 8), 0.25), torch.full((1, 8), -0.5)]
+    params_rows = [torch.tensor([[0.0, 0.5]]), torch.tensor([[1.0, 0.25]])]
+    renderer = lambda p: p  # noqa: E731 - unused placeholder in the item tuple
+
+    batch = collate_vst_dict(
+        [(audio_rows[0], params_rows[0], renderer), (audio_rows[1], params_rows[1], renderer)],
+        sample_rate=44_100,
+    )
+
+    assert torch.equal(batch["audio"], torch.cat(audio_rows, dim=0))
+    assert torch.equal(batch["params"], torch.tensor([[-1.0, 0.0], [1.0, -0.5]]))
+    assert batch["noise"].shape == batch["params"].shape
+
+
+def test_vst_flow_matching_module_trains_on_an_online_torchsynth_batch() -> None:
     """The production flow module consumes the online batch and produces real gradients."""
     torch.manual_seed(0)
     batch = next(iter(_datamodule().train_dataloader()))

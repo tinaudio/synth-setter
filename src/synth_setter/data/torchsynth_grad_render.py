@@ -11,6 +11,7 @@ via ``torch.func.functional_call`` so the graph flows through
 from __future__ import annotations
 
 import contextlib
+import threading
 from collections.abc import Iterator
 
 import torch
@@ -25,6 +26,10 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     KEYBOARD_DURATION_BOUNDS,
     NUM_PARAMS,
 )
+
+# Serializes the process-global SynthModule.p patch: renderers are cached per geometry
+# with per-instance locks, so two geometries could otherwise interleave patch/restore.
+_PATCH_LOCK = threading.Lock()
 
 
 class _VoiceOutputShim(torch.nn.Module):
@@ -111,8 +116,7 @@ def render_torchsynth_grad(
         w.r.t. ``params``.
     :raises ValueError: Wrong parameter width or an out-of-range note duration.
     """
-    if params.shape[1] != NUM_PARAMS:
-        raise ValueError(f"Expected {NUM_PARAMS} TorchSynth parameters, got {params.shape[1]}")
+    _validate_render_inputs(params)
     duration = (
         note_duration_seconds if note_duration_seconds is not None else signal_length / sample_rate
     )
@@ -124,7 +128,7 @@ def render_torchsynth_grad(
         )
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
-    with renderer.lock:
+    with renderer.lock, _PATCH_LOCK:
         all_parameters = voice.get_parameters()
         for name, value in (("midi_f0", float(midi_pitch)), ("duration", duration)):
             keyboard = all_parameters[("keyboard", name)]
@@ -143,13 +147,25 @@ def render_torchsynth_grad(
     return audio
 
 
+def _validate_render_inputs(params: torch.Tensor) -> None:
+    """Reject parameter batches the render would silently corrupt.
+
+    :param params: Candidate parameter rows shaped ``(batch, NUM_PARAMS)``.
+    :raises ValueError: Wrong parameter width or non-finite entries.
+    """
+    if params.shape[1] != NUM_PARAMS:
+        raise ValueError(f"Expected {NUM_PARAMS} TorchSynth parameters, got {params.shape[1]}")
+    if not torch.isfinite(params).all():
+        # NaN/Inf survives the clamp and would propagate through the loss and gradients.
+        raise ValueError("non-finite TorchSynth parameters; the model has diverged")
+
+
 def differentiable_decode(theta: torch.Tensor) -> torch.Tensor:
     """Map model space ``[-1, 1]`` to renderable ``[eps, 1 - eps]``, keeping gradient.
 
-    The forward value is the clamp the renderer needs; the backward pass sees the
-    identity, so saturated entries still receive gradient and an audio loss can pull
-    them back into range. A plain ``clamp`` zeroes them instead — measured on
-    fully-saturated input, straight-through keeps 76% of gradients alive against 0%.
+    The forward clamp preserves valid renderer input while the straight-through
+    backward pass lets saturated entries receive gradients, so an audio loss can
+    pull them back into range where a plain ``clamp`` would zero them.
 
     :param theta: Params in model space shaped ``(batch, NUM_PARAMS)``.
     :returns: Params in torchsynth space, strictly inside ``(0, 1)``.

@@ -8,3 +8,7 @@ distance: mslm
 sample_rate: ${datamodule.sample_rate}
 signal_length: ${datamodule.signal_length}
 midi_pitch: ${datamodule.midi_pitch}
+# Mel front-end fully declared so runs never depend on hidden code defaults.
+n_ffts: [256, 512, 1024]
+n_mels: 64
+eps: 1.0e-5

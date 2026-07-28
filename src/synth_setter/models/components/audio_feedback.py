@@ -71,11 +71,44 @@ def validate_audio_feedback_runtime(*, drop_last: bool, compiled: bool, world_si
         )
 
 
+def _frozen_latent_distance(
+    encoder: nn.Module, rendered: torch.Tensor, target_audio: torch.Tensor
+) -> torch.Tensor:
+    """Per-sample embedding MSE with the encoder held fixed as the reference space.
+
+    The encoder's parameters are detached via ``functional_call`` and it runs in eval
+    mode, so the term cannot shrink by collapsing the (jointly trained) conditioning
+    encoder or by drifting its BatchNorm running stats; gradient still flows to the
+    rendered estimate through the frozen weights.
+
+    :param encoder: Encoder defining the latent space; left in its original mode.
+    :param rendered: Rendered estimate shaped ``(batch, samples)``.
+    :param target_audio: Observed audio, same shape.
+    :returns: Per-sample distance shaped ``(batch,)``.
+    """
+    frozen_state = {
+        name: tensor.detach()
+        for name, tensor in (*encoder.named_parameters(), *encoder.named_buffers())
+    }
+    was_training = encoder.training
+    encoder.eval()
+    try:
+        embeddings = (
+            torch.func.functional_call(encoder, frozen_state, (signal,))
+            for signal in (rendered, target_audio)
+        )
+        pred_embedding, target_embedding = embeddings
+        return (pred_embedding - target_embedding).square().mean(dim=-1)
+    finally:
+        encoder.train(was_training)
+
+
 class AudioFeedbackLoss(nn.Module):
     """Weighted audio-domain distance on the flow's rendered one-step estimate."""
 
     def __init__(
         self,
+        *,
         lambda_audio: float,
         t_min: float,
         sample_rate: int,
@@ -178,7 +211,7 @@ class AudioFeedbackLoss(nn.Module):
             midi_pitch=self.midi_pitch,
         )
         if encoder is not None and self.distance is AudioDistance.LATENT:
-            distance = (encoder(rendered) - encoder(target_audio)).square().mean(dim=-1)
+            distance = _frozen_latent_distance(encoder, rendered, target_audio)
         else:
             distance = self.multi_scale_log_mel(rendered, target_audio)
         return (self.audio_weight(t).squeeze(-1) * distance).mean()

@@ -69,20 +69,20 @@ def test_resolve_embedding_conditioning_unknown_literal_raises() -> None:
         resolve_embedding_conditioning("clap")  # type: ignore[arg-type]
 
 
-def test_audio_mode_selects_the_raw_waveform_batch_key():
+def test_audio_mode_selects_the_raw_waveform_batch_key() -> None:
     """Online-render synths have no stored mel; their observation is the waveform."""
     batch = {"mel_spec": torch.zeros(2, 1, 4, 4), "audio": torch.ones(2, 128)}
     key = raw_conditioning_key("audio")
     assert torch.equal(select_conditioning(batch, None, raw_key=key), batch["audio"])
 
 
-def test_mel_mode_still_selects_the_mel_batch_key():
+def test_mel_mode_still_selects_the_mel_batch_key() -> None:
     """The default observation stays the stored mel spectrogram."""
     batch = {"mel_spec": torch.zeros(2, 1, 4, 4), "audio": torch.ones(2, 128)}
     key = raw_conditioning_key("mel")
     assert torch.equal(select_conditioning(batch, None, raw_key=key), batch["mel_spec"])
 
 
-def test_audio_mode_resolves_to_no_embedding_spec():
+def test_audio_mode_resolves_to_no_embedding_spec() -> None:
     """Raw audio is not a Lance embedding column."""
     assert resolve_embedding_conditioning("audio") is None

@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import threading
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
 from typing import TYPE_CHECKING, Literal, TypeAlias, cast
@@ -40,9 +40,8 @@ if TYPE_CHECKING:
 TorchSynthItem: TypeAlias = tuple[
     torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
 ]
-TorchSynthBatch: TypeAlias = tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
-]
+# The VST module family's dict contract: params/noise/mel_spec/audio.
+TorchSynthBatch: TypeAlias = dict[str, torch.Tensor]
 # Finite params clamp into the open interval (0, 1) because model predictions are unconstrained.
 # NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
@@ -176,16 +175,18 @@ def render_torchsynth(
     return audio.as_subclass(torch.Tensor).clamp(-1, 1)
 
 
-def collate_vst_dict(batch: list[TorchSynthItem], sample_rate: float) -> dict[str, torch.Tensor]:
+def collate_vst_dict(batch: Sequence[TorchSynthItem], sample_rate: float) -> TorchSynthBatch:
     """Collate online rows into the VST module family's dict contract.
 
     ``mel_spec`` goes through the same ``make_spectrogram`` the dataset generator uses, so
     an online torchsynth batch is byte-identical in shape and scaling to a Lance-hydrated
     one. ``params`` convert to the ``[-1, 1]`` model space VST batches carry.
 
-    :param batch: Rows from :class:`TorchSynthDataset`.
+    :param batch: Rows from :class:`TorchSynthDataset`; each row carries audio shaped
+        ``(1, samples)`` and params shaped ``(1, NUM_PARAMS)`` in ``[0, 1]``.
     :param sample_rate: Audio sample rate in Hz, for the mel front-end.
-    :returns: Batch keyed ``params``, ``noise``, ``mel_spec`` and ``audio``.
+    :returns: Batch keyed ``params``/``noise`` shaped ``(batch, NUM_PARAMS)``, ``audio``
+        shaped ``(batch, samples)``, and ``mel_spec`` shaped ``(batch, 1, mels, frames)``.
     """
     from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 
@@ -377,6 +378,8 @@ class TorchSynthDataModule(LightningDataModule):
         """
         # persistent_workers / pin_memory are unset — per-epoch worker Voice rebuilds
         # and the host→GPU copy are tunable throughput wins, deferred to #1820.
+        # The cast re-types the loader by its collate output; DataLoader's generic only
+        # tracks the dataset's item type.
         return cast(
             DataLoader[TorchSynthBatch],
             DataLoader(
@@ -395,11 +398,15 @@ class TorchSynthDataModule(LightningDataModule):
 
         :returns: Batched online training data.
         """
+        # Dropping the remainder keeps the renderer's batch-size-keyed cache warm, but a
+        # split smaller than one batch must keep its partial batch or training starves;
+        # the audio-feedback runtime guard rejects that case explicitly.
+        drop_last = len(self.train) >= self.batch_size
         if self.resample_train_per_epoch:
             return self._loader(
-                self.train, sampler=_FreshEpochSampler(len(self.train)), drop_last=True
+                self.train, sampler=_FreshEpochSampler(len(self.train)), drop_last=drop_last
             )
-        return self._loader(self.train, shuffle=True, drop_last=True)
+        return self._loader(self.train, shuffle=True, drop_last=drop_last)
 
     def val_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online validation loader.

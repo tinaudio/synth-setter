@@ -13,9 +13,8 @@ experiment_name: torchsynth
 run_name: ffn
 tags: [torchsynth]
 
-# val/loss has a high irreducible floor (near-inaudible params), so the audio-domain
-# signal is what reflects inversion quality (PR #1810). That signal now comes from the
-# val-audio probe rather than an in-module val/lsd; the checkpoint monitor tracks
+# Param loss has a high irreducible floor for near-inaudible params (PR #1810); the
+# val-audio probe supplies audio-quality metrics off-loop. Checkpointing uses
 # val/param_mse because probe metrics arrive a validation late and can be skipped.
 callbacks:
   model_checkpoint:

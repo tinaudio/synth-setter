@@ -76,7 +76,7 @@ class VSTFlowMatchingModule(LightningModule):
         test_sample_steps: int = 100,
         test_cfg_strength: float = 4.0,
         compile: bool = False,
-    ):
+    ) -> None:
         """Wire the encoder/vector-field and persist the flow-matching hyperparameters.
 
         :param encoder: Encoder over legacy mel or a fixed-shape embedding.
@@ -120,7 +120,7 @@ class VSTFlowMatchingModule(LightningModule):
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
 
-    def on_train_start(self):
+    def on_train_start(self) -> None:
         if self.audio_loss is None:
             return
 
@@ -173,7 +173,9 @@ class VSTFlowMatchingModule(LightningModule):
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return select_conditioning(batch, self._embedding_conditioning, self._raw_conditioning_key)
 
-    def _train_step(self, batch: dict[str, torch.Tensor]):
+    def _train_step(
+        self, batch: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
@@ -210,7 +212,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         return loss, audio_term, penalty
 
-    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         loss, audio_term, penalty = self._train_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 

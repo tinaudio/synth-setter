@@ -2,6 +2,7 @@
 
 from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
+from omegaconf import DictConfig
 
 from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
 
@@ -67,7 +68,42 @@ def test_torchsynth_ffn_four_second_model_has_bounded_parameter_count() -> None:
     assert sum(parameter.numel() for parameter in network.parameters()) < 3_000_000
 
 
-def _flow_cfg():
+def test_torchsynth_ffn_composed_model_trains_on_an_online_dict_batch() -> None:
+    """The migrated FFN module consumes a real online torchsynth batch end to end.
+
+    Instantiates the composed experiment model (not just its target string) and checks a training
+    step produces a finite loss with gradients in the network.
+    """
+    import torch
+
+    signal_length = 4_410
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/ffn",
+                f"datamodule.signal_length={signal_length}",
+                "datamodule.train_val_test_sizes=[4,2,2]",
+                "datamodule.batch_size=4",
+                "datamodule.num_workers=0",
+            ],
+        )
+
+    datamodule = instantiate(cfg.datamodule)
+    datamodule.setup("fit")
+    model = instantiate(cfg.model)
+    batch = next(iter(datamodule.train_dataloader()))
+
+    loss, preds, targets, _ = model.model_step(batch)
+    loss.backward()
+
+    assert preds.shape == targets.shape == batch["params"].shape
+    assert torch.isfinite(loss)
+    gradients = [p.grad for p in model.net.parameters() if p.grad is not None]
+    assert gradients and all(torch.isfinite(g).all() for g in gradients)
+
+
+def _flow_cfg() -> DictConfig:
     """Compose the torchsynth flow experiment.
 
     :returns: The composed Hydra config.
