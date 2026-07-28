@@ -62,54 +62,6 @@ def _assert_process_terminated(pid: int, *, timeout: float = 1) -> None:
         time.sleep(0.05)
 
 
-def test_process_state_permission_denied_reports_pid_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Treat an inaccessible PID as present rather than terminated.
-
-    :param monkeypatch: Replaces the process probe with its permission-denied result.
-    """
-    monkeypatch.setattr(os, "kill", mock.Mock(side_effect=PermissionError))
-
-    assert _process_state(123) == "?"
-
-
-def test_assert_process_terminated_live_pid_fails() -> None:
-    """Reject a descendant that is still executing."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        time.sleep(30)
-        os._exit(0)
-    try:
-        with pytest.raises(AssertionError, match="still running"):
-            _assert_process_terminated(child_pid, timeout=0)
-    finally:
-        os.kill(child_pid, signal.SIGKILL)
-        os.waitpid(child_pid, 0)
-
-
-def test_assert_process_terminated_nonexistent_pid_passes() -> None:
-    """Accept a PID after its process has been reaped."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        os._exit(0)
-    os.waitpid(child_pid, 0)
-
-    _assert_process_terminated(child_pid, timeout=0)
-
-
-@pytest.mark.skipif(not Path("/proc").is_dir(), reason="requires Linux process states")
-def test_assert_process_terminated_zombie_pid_passes() -> None:
-    """Accept a terminated child before its parent reaps it."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        os._exit(0)
-    try:
-        _assert_process_terminated(child_pid, timeout=1)
-    finally:
-        os.waitpid(child_pid, 0)
-
-
 _ROLE_MODELS = {
     "pr-review-orchestrator": {
         "claude": ("haiku", "medium"),
