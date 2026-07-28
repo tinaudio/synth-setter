@@ -25,6 +25,9 @@ def _helper_source(path: Path) -> None:
     :param path: Destination for the JavaScript fixture.
     """
     path.write_text(
+        "else if (isTarFile) {\n"
+        "    return await tar.extract({ file: filePath, cwd: dirPath });\n"
+        "}\n"
         "const pkgs = dirRead(path.join(mountPoint, '**', '*.pkg'));\n"
         "if (dirIs(f)) {\n"
         "    // Check if this is a macOS application bundle or plugin bundle\n"
@@ -77,7 +80,10 @@ def test_patch_core_adds_linux_vst3_bundle_detection(tmp_path: Path) -> None:
     assert "path.extname(f).toLowerCase() === '.vst3'" in patched
     assert "Contents', 'Info.plist'" in patched
     assert "readdirSync(mountPoint)" in patched
-    assert "files.every(file => file.type === FileType.Archive)" in manager.read_text()
+    assert "dirCreate(dirPath)" in patched
+    manager_text = manager.read_text()
+    assert "files.every(file => file.type === FileType.Archive)" in manager_text
+    assert "files = files.filter(file => file.type === FileType.Archive)" in manager_text
 
 
 def test_patch_core_repeated_run_is_idempotent(tmp_path: Path) -> None:
