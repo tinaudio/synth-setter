@@ -33,6 +33,10 @@ AUDIO_MP3_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
 # Optional audio-embedding columns appended post-hoc by the add_embeddings CLI;
 # not in DATASET_FIELD_NAMES because the writers never emit them.
 M2L_FIELD: str = "m2l"
+# Time-varying sketch controls (loudness, spectral centroid, pitch) on the mel
+# frame grid; extracted by synth_setter.features.sketch_controls.
+SKETCH_CONTROL_FIELD: str = "sketch_ctrl"
+NUM_SKETCH_CONTROLS: int = 3
 CLAP_FIELD: str = "clap"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
