@@ -435,7 +435,6 @@ known-third-party = ["wandb"]
 # New code under synth_setter/models/ should still annotate; remove this entry once legacy
 # callsites are cleaned up.
 "src/synth_setter/models/**" = ["ANN001"]
-"src/synth_setter/models/components/loss.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/cnn.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/embed_pool.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/residual_mlp.py" = ["D102", "D103", "D107"]

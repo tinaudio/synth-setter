@@ -82,8 +82,8 @@ Logged via `self.log()` in each LightningModule:
 | `VSTFeedForwardModule`        | `train/loss`                                        | yes  | yes   |
 |                               | `val/param_mse`, `test/param_mse`                   | —    | yes   |
 | `TorchSynthFeedForwardModule` | `train/loss`                                        | yes  | yes   |
-|                               | `val/lsd`, `val/chamfer`, `val/loss`                | —    | yes   |
-|                               | `test/*` metrics                                    | —    | yes   |
+|                               | `val/lsd`, `val/loss`                               | —    | yes   |
+|                               | `test/lsd`, `test/loss`, `test/param_mse`           | —    | yes   |
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 

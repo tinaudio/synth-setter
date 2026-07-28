@@ -39,10 +39,6 @@ src/synth_setter/metrics.py
     DOC103: Method `LogSpectralDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , eps: float].
     DOC101: Method `SpectralDistance.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `SpectralDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , eps: float].
-    DOC101: Method `ChamferDistance.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `ChamferDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , params_per_token: int].
-    DOC101: Method `LinearAssignmentDistance.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `LinearAssignmentDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , params_per_token: int].
 --------------------
 src/synth_setter/models/components/cnn.py
     DOC101: Method `ResidualMLPBlock.__init__`: Docstring contains fewer arguments than in function signature.
@@ -56,15 +52,6 @@ src/synth_setter/models/components/cnn.py
     DOC103: Method `ConvDownsampler.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [in_dim: int, norm: Literal['bn', 'ln'], out_dim: int, stride: int].
     DOC101: Method `ResidualEncoder.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `ResidualEncoder.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [hidden_dim: int, in_dim: int, kernel_size: int, norm: Literal['bn', 'ln'], num_blocks: int, out_dim: int].
---------------------
-src/synth_setter/models/components/loss.py
-    DOC101: Function `params_to_tokens`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `params_to_tokens`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [params: torch.Tensor, params_per_token: int].
-    DOC201: Function `params_to_tokens` does not have a return section in docstring
-    DOC101: Method `ChamferLoss.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `ChamferLoss.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [params_per_token: int].
-    DOC101: Method `MSESortLoss.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `MSESortLoss.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [params_per_token: int].
 --------------------
 src/synth_setter/models/components/residual_mlp.py
     DOC101: Method `ResidualMLPBlock.__init__`: Docstring contains fewer arguments than in function signature.
