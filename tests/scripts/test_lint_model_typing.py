@@ -9,10 +9,12 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LINTER = PROJECT_ROOT / "scripts" / "lint_model_typing.py"
 GIT = shutil.which("git") or "git"
+UV = shutil.which("uv") or "uv"
 
 
 def _run_linter(
@@ -181,6 +183,113 @@ def encode(value):
 
     assert result.returncode == 1
     assert "overwritten.py:encode:JAX001" in result.stdout
+
+
+def test_linter_relative_typing_imports_do_not_satisfy_runtime_check(tmp_path: Path) -> None:
+    """Reject local modules masquerading as typing dependencies.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "relative.py").write_text(
+        """from .beartype import beartype
+from .jaxtyping import jaxtyped
+
+@jaxtyped(typechecker=beartype)
+def encode(value):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "relative.py:encode:JAX001" in result.stdout
+
+
+def test_linter_compound_rebinding_invalidates_jaxtyped_import(tmp_path: Path) -> None:
+    """Reject canonical decorator names overwritten in compound statements.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "compound.py").write_text(
+        """from beartype import beartype
+from jaxtyping import jaxtyped
+
+if True:
+    jaxtyped = lambda **kwargs: lambda function: function
+
+@jaxtyped(typechecker=beartype)
+def encode(value):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "compound.py:encode:JAX001" in result.stdout
+
+
+def test_linter_comprehension_target_does_not_hide_torch_import(tmp_path: Path) -> None:
+    """Keep comprehension-local targets out of module binding resolution.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "comprehension.py").write_text(
+        """import torch
+
+items = [torch for torch in ()]
+
+def encode(value: torch.Tensor):
+    return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 1
+    assert "comprehension.py:encode:JAX002" in result.stdout
+
+
+def test_linter_class_scope_typing_imports_pass(tmp_path: Path) -> None:
+    """Accept canonical imports active in a method's class scope.
+
+    :param tmp_path: Isolated lint fixture directory.
+    """
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "scoped_class.py").write_text(
+        """class Encoder:
+    from beartype import beartype
+    from jaxtyping import Float, jaxtyped
+    from torch import Tensor
+
+    @jaxtyped(typechecker=beartype)
+    def encode(self, value: Float[Tensor, \"features\"]):
+        return value
+"""
+    )
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("")
+
+    result = _run_linter(models_dir, baseline)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "scoped_class.py:Encoder.encode:JAX001" not in result.stdout
+    assert "scoped_class.py:Encoder.encode:JAX002" not in result.stdout
+    assert "scoped_class.py:Encoder:JAX001" not in result.stdout
 
 
 def test_linter_new_modeling_callable_reports_missing_runtime_check(tmp_path: Path) -> None:
@@ -452,14 +561,59 @@ def legacy_forward(value: torch.Tensor) -> torch.Tensor:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_precommit_runs_model_typing_lint_for_models_and_baseline() -> None:
-    """Register the linter for every input that can affect its result."""
-    config = (PROJECT_ROOT / ".pre-commit-config.yaml").read_text()
+def test_precommit_model_typing_hook_rejects_violating_model(tmp_path: Path) -> None:
+    """Run the configured hook against a staged violating model.
 
-    assert "id: model-typing" in config
-    assert "entry: uv run python scripts/lint_model_typing.py" in config
-    assert ".model-typing-baseline\\.txt" in config
-    assert "src/synth_setter/models/" in config
+    :param tmp_path: Isolated git repository for the real pre-commit invocation.
+    """
+    config = yaml.safe_load((PROJECT_ROOT / ".pre-commit-config.yaml").read_text())
+    model_hook = next(
+        hook
+        for repo in config["repos"]
+        if repo["repo"] == "local"
+        for hook in repo["hooks"]
+        if hook["id"] == "model-typing"
+    )
+    (tmp_path / ".pre-commit-config.yaml").write_text(
+        yaml.safe_dump({"repos": [{"repo": "local", "hooks": [model_hook]}]})
+    )
+    (tmp_path / "scripts").mkdir()
+    shutil.copy2(LINTER, tmp_path / "scripts" / LINTER.name)
+    (tmp_path / ".model-typing-baseline.txt").write_text("")
+    subprocess.run([GIT, "init", "-q"], cwd=tmp_path, check=True)  # noqa: S603
+    subprocess.run([GIT, "add", "."], cwd=tmp_path, check=True)  # noqa: S603
+    subprocess.run(  # noqa: S603
+        [
+            GIT,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    model = tmp_path / "src" / "synth_setter" / "models" / "new.py"
+    model.parent.mkdir(parents=True)
+    model.write_text("def new(value):\n    return value\n")
+    subprocess.run([GIT, "add", str(model)], cwd=tmp_path, check=True)  # noqa: S603
+    env = os.environ.copy()
+    env["MODEL_TYPING_BASE_REF"] = "HEAD"
+
+    result = subprocess.run(  # noqa: S603
+        [UV, "run", "pre-commit", "run", "model-typing", "--files", str(model)],
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "new.py:new:JAX001" in result.stdout
 
 
 def test_linter_baseline_addition_against_git_ref_fails(

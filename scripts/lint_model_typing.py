@@ -89,6 +89,7 @@ class ModelTypingVisitor(ast.NodeVisitor):
         self._relative_path = relative_path.as_posix()
         self._tree = tree
         self._scope: list[str] = []
+        self._class_bodies: list[list[ast.stmt]] = []
         self.diagnostics: list[Diagnostic] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
@@ -97,7 +98,9 @@ class ModelTypingVisitor(ast.NodeVisitor):
         :param node: Class definition whose scope contains callables.
         """
         self._scope.append(node.name)
+        self._class_bodies.append(node.body)
         self.generic_visit(node)
+        self._class_bodies.pop()
         self._scope.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
@@ -121,7 +124,11 @@ class ModelTypingVisitor(ast.NodeVisitor):
         """
         qualified_name = ".".join((*self._scope, node.name))
         key_prefix = f"{self._relative_path}:{qualified_name}"
-        imports = _collect_import_names(self._tree, before_line=node.lineno)
+        imports = _collect_import_names(
+            self._tree,
+            before_line=node.lineno,
+            class_bodies=self._class_bodies,
+        )
         if not _has_runtime_typecheck(node, imports):
             self.diagnostics.append(
                 Diagnostic(
@@ -144,19 +151,39 @@ class ModelTypingVisitor(ast.NodeVisitor):
         self._scope.pop()
 
 
-def _collect_import_names(tree: ast.Module, *, before_line: int) -> ImportNames:
-    """Resolve module bindings active before a callable definition.
+def _collect_import_names(
+    tree: ast.Module,
+    *,
+    before_line: int,
+    class_bodies: list[list[ast.stmt]],
+) -> ImportNames:
+    """Resolve module and class bindings active before a callable definition.
 
     :param tree: Module syntax tree to inspect.
     :param before_line: Ignore statements at or after this source line.
+    :param class_bodies: Enclosing class bodies whose bindings are in scope.
     :returns: Immutable local-name groups for lint matching.
     """
     bindings: dict[str, str] = {}
-    for statement in tree.body:
+    _apply_bindings_before_line(bindings, tree.body, before_line)
+    for class_body in class_bodies:
+        _apply_bindings_before_line(bindings, class_body, before_line)
+    return _import_names_from_bindings(bindings)
+
+
+def _apply_bindings_before_line(
+    bindings: dict[str, str], statements: list[ast.stmt], before_line: int
+) -> None:
+    """Apply statements executed before a callable definition.
+
+    :param bindings: Mutable map from local names to canonical symbol kinds.
+    :param statements: Statements in one module or class scope.
+    :param before_line: Ignore statements at or after this source line.
+    """
+    for statement in statements:
         if statement.lineno >= before_line:
             break
         _apply_module_binding(bindings, statement)
-    return _import_names_from_bindings(bindings)
 
 
 def _apply_module_binding(bindings: dict[str, str], statement: ast.stmt) -> None:
@@ -177,7 +204,7 @@ def _apply_module_binding(bindings: dict[str, str], statement: ast.stmt) -> None
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         bindings[statement.name] = "other"
         return
-    for name in _assignment_names(statement):
+    for name in _potential_binding_names(statement):
         bindings[name] = "other"
 
 
@@ -203,6 +230,8 @@ def _from_import_kind(statement: ast.ImportFrom, alias: ast.alias) -> str:
     :param alias: Imported symbol and its local alias.
     :returns: Canonical symbol kind or ``other``.
     """
+    if statement.level != 0:
+        return "other"
     if statement.module == "beartype" and alias.name == "beartype":
         return "beartype_function"
     if statement.module == "jaxtyping" and alias.name == "jaxtyped":
@@ -214,18 +243,42 @@ def _from_import_kind(statement: ast.ImportFrom, alias: ast.alias) -> str:
     return "other"
 
 
-def _assignment_names(statement: ast.stmt) -> set[str]:
-    """Return names assigned directly by a top-level statement.
+def _potential_binding_names(statement: ast.stmt) -> set[str]:
+    """Return names a compound or assignment statement may bind.
 
     :param statement: Statement that may overwrite an imported name.
-    :returns: Direct module-scope assignment targets.
+    :returns: Potential bindings in the statement's current lexical scope.
     """
-    if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-        return {
-            node.id
-            for node in ast.walk(statement)
-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
-        }
+    if isinstance(statement, ast.Assign):
+        return set().union(*(_target_names(target) for target in statement.targets))
+    if isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        return _target_names(statement.target)
+    if isinstance(statement, (ast.For, ast.AsyncFor)):
+        names = _target_names(statement.target)
+    elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {statement.name}
+    elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+        return {alias.asname or alias.name.split(".", maxsplit=1)[0] for alias in statement.names}
+    else:
+        names = set()
+    for child in ast.iter_child_nodes(statement):
+        if isinstance(child, ast.stmt):
+            names.update(_potential_binding_names(child))
+    return names
+
+
+def _target_names(target: ast.expr) -> set[str]:
+    """Return names bound by an assignment target only.
+
+    :param target: Assignment target expression.
+    :returns: Names bound in the current lexical scope.
+    """
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return set().union(*(_target_names(element) for element in target.elts))
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
     return set()
 
 
