@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785259881117,
+  "lastUpdate": 1785259884047,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -19769,6 +19769,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.629763008800001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45cc44c01935ff35e2b148c1941569bb933e16d3",
+          "message": "test: remove the baseline-config drift comparator (#2607)\n\ntest_compare_baseline_configs.py materialized a detached git worktree per\ncase, ran each jobs/ script there under a PATH shim to capture resolved Hydra\nYAML, and diffed it against the live tree — over the network, marked slow.\n\nIts guard had inverted. ACCEPTED_DIFFS grew to 24 entries citing 10 PRs, and\nexcluded the whole `training`, `evaluation`, and `r2` subtrees, so the diff it\nstill checked no longer covered the reproducibility it was written to protect.\nWhat remained was a tax on every deliberate config change: add the key, then\nadd its allowlist entry.\n\nCompose-level coverage of the same experiments stays in test_configs.py, which\nresolves each jobs/predict/ config and asserts model and callback identity\nwithout a worktree or the network.\n\nDrops the sole consumers with it: _baseline_worktree.py, the baseline_repo /\ndiff_repo / noop_repo fixtures, and the conftest fixture re-export.\npython-semantic-release stays — test_release_lock_refresh.py drives that\nbinary; its pyproject comment is corrected to say so.\n\nRefs #2603",
+          "timestamp": "2026-07-28T09:37:54-07:00",
+          "tree_id": "c3b4ee40b37076535094de3efbe31fad25826d8a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/45cc44c01935ff35e2b148c1941569bb933e16d3"
+        },
+        "date": 1785259883301,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.229458808898926,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.16651306554675,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09546609967947006,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006241917610168457,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.1897120475769043,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.822043500900008,
             "unit": "seconds"
           }
         ]
