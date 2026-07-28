@@ -19,11 +19,15 @@ TOKEN_ENV_VAR = "RESTRICTED_AGENT_GIT_PAT"  # noqa: S105 — env-var name, not a
 def test_post_create_references_token_env_var_for_gh_auth_flow(
     post_create_script: Path,
 ) -> None:
-    """post-create.sh must reference RESTRICTED_AGENT_GIT_PAT for gh auth."""
+    """post-create.sh must pipe RESTRICTED_AGENT_GIT_PAT into ``gh auth login``.
+
+    A bare substring check also matches a comment or a leftover mention, so it would keep passing
+    after the auth call itself was removed.
+    """
     text = post_create_script.read_text()
-    assert TOKEN_ENV_VAR in text, (
-        f"post-create.sh must reference {TOKEN_ENV_VAR} to authenticate gh"
-    )
+    assert re.search(
+        rf'printf\s+.%s.\s+"\${TOKEN_ENV_VAR}"\s*\|\s*gh auth login --with-token', text
+    ), f"post-create.sh must pipe {TOKEN_ENV_VAR} into `gh auth login --with-token`"
 
 
 @pytest.mark.infra
