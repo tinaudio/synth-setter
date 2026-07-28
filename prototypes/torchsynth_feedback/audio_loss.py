@@ -9,7 +9,9 @@ separate control field as a conditioning feature.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 
 import torch
 from torch import nn
@@ -29,6 +31,22 @@ from synth_setter.data.torchsynth_datamodule import _PARAM_CLAMP_EPS
 from synth_setter.models.components.vector_field import VectorField
 
 GRAD_CLIP_NORM = 1.0
+
+
+class AudioDistance(StrEnum):
+    """Representation the audio term measures error in.
+
+    .. attribute :: MSLM
+
+        Multi-scale log-mel L1 on the raw waveforms.
+
+    .. attribute :: LATENT
+
+        MSE between the conditioning encoder's embeddings of both waveforms.
+    """
+
+    MSLM = "mslm"
+    LATENT = "latent"
 
 
 @dataclass
@@ -71,10 +89,20 @@ class AudioLossConfig:
 
        Flow time at which the audio term switches on. Below it the one-step
        estimate is still near noise, so its render carries no usable signal.
+
+    .. attribute :: distance
+
+       Representation the audio term measures error in.
+
+    .. attribute :: signal_length
+
+       Rendered samples per row.
     """
 
     lambda_audio: float = 1.0
     t_min: float = 0.8
+    distance: AudioDistance = AudioDistance.MSLM
+    signal_length: int = SIGNAL_LENGTH
 
 
 @dataclass
@@ -105,6 +133,14 @@ class FinetuneConfig:
     .. attribute :: seed
 
        RNG seed for the online data stream.
+
+    .. attribute :: distance
+
+       Representation the audio term measures error in.
+
+    .. attribute :: signal_length
+
+       Rendered samples per row.
     """
 
     steps: int = 6_000
@@ -113,6 +149,8 @@ class FinetuneConfig:
     lambda_audio: float = 1.0
     t_min: float = 0.8
     seed: int = 7
+    distance: AudioDistance = AudioDistance.MSLM
+    signal_length: int = SIGNAL_LENGTH
 
 
 def differentiable_decode(theta: torch.Tensor) -> torch.Tensor:
@@ -169,10 +207,13 @@ def combined_loss(
     rendered = render_torchsynth_grad(
         differentiable_decode(theta_hat),
         sample_rate=SAMPLE_RATE,
-        signal_length=SIGNAL_LENGTH,
+        signal_length=config.signal_length,
         midi_pitch=MIDI_PITCH,
     )
-    distance = multi_scale_log_mel_distance(rendered, batch.target_audio, SAMPLE_RATE)
+    if config.distance is AudioDistance.LATENT:
+        distance = latent_distance(encoder, rendered, batch.target_audio)
+    else:
+        distance = multi_scale_log_mel_distance(rendered, batch.target_audio, SAMPLE_RATE)
     audio_loss = (audio_weight(t, config.lambda_audio, config.t_min).squeeze(-1) * distance).mean()
     loss = cfm_loss + audio_loss
     return loss, {
@@ -180,6 +221,22 @@ def combined_loss(
         "cfm_loss": cfm_loss.item(),
         "audio_loss": audio_loss.item(),
     }
+
+
+def latent_distance(
+    encoder: SpectrumEncoder, pred_audio: torch.Tensor, target_audio: torch.Tensor
+) -> torch.Tensor:
+    """Per-sample MSE between the encoder's embeddings of two waveforms.
+
+    The encoder is frozen during stage B, so this cannot collapse — but it also
+    only measures error the encoder's representation retained.
+
+    :param encoder: Conditioning encoder, used here as the latent space.
+    :param pred_audio: Rendered estimate shaped ``(batch, samples)``.
+    :param target_audio: Observed audio, same shape.
+    :returns: Per-sample distance shaped ``(batch,)``.
+    """
+    return (encoder(pred_audio) - encoder(target_audio)).square().mean(dim=-1)
 
 
 def per_param_grad_norms(theta: torch.Tensor, target_audio: torch.Tensor) -> torch.Tensor:
@@ -210,6 +267,7 @@ def finetune_audio_loss(
     vector_field: VectorField,
     device: str,
     config: FinetuneConfig,
+    on_step: Callable[[int, dict[str, float]], None] | None = None,
 ) -> list[dict[str, float]]:
     """Train the flow with the combined loss, holding the encoder frozen.
 
@@ -217,16 +275,24 @@ def finetune_audio_loss(
     :param vector_field: Pretrained flow, updated in place.
     :param device: Torch device string.
     :param config: Optimization settings.
+    :param on_step: Optional per-step progress callback taking ``(step, metrics)``.
     :returns: One loss record per step, in step order.
     """
     encoder.eval()
     encoder.requires_grad_(False)
     optimizer = torch.optim.AdamW(vector_field.parameters(), lr=config.learning_rate)
     generator = torch.Generator().manual_seed(config.seed)
-    loss_config = AudioLossConfig(lambda_audio=config.lambda_audio, t_min=config.t_min)
+    loss_config = AudioLossConfig(
+        lambda_audio=config.lambda_audio,
+        t_min=config.t_min,
+        distance=config.distance,
+        signal_length=config.signal_length,
+    )
     history: list[dict[str, float]] = []
-    for _ in range(config.steps):
-        params, target_audio = sample_batch(config.batch_size, device, generator)
+    for step in range(config.steps):
+        params, target_audio = sample_batch(
+            config.batch_size, device, generator, config.signal_length
+        )
         # Train only inside the feedback window; below t_min the estimate is still noise.
         t = config.t_min + (1 - config.t_min) * torch.rand(config.batch_size, 1, device=device)
         batch = FlowBatch(params, target_audio, torch.randn_like(params), t)
@@ -236,10 +302,13 @@ def finetune_audio_loss(
         nn.utils.clip_grad_norm_(vector_field.parameters(), GRAD_CLIP_NORM)
         optimizer.step()
         history.append(metrics)
+        if on_step is not None:
+            on_step(step, metrics)
     return history
 
 
 __all__ = [
+    "AudioDistance",
     "AudioLossConfig",
     "FinetuneConfig",
     "FlowBatch",
@@ -247,5 +316,6 @@ __all__ = [
     "combined_loss",
     "differentiable_decode",
     "finetune_audio_loss",
+    "latent_distance",
     "per_param_grad_norms",
 ]

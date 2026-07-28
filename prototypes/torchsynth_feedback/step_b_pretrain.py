@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import torch
@@ -53,6 +54,7 @@ def evaluate(
     batch_size: int = BATCH_SIZE,
     eval_batches: int = EVAL_BATCHES,
     sample_steps: int = 50,
+    signal_length: int = SIGNAL_LENGTH,
 ) -> dict[str, float]:
     """Report held-out param MSE (model space) and audio spectral distances.
 
@@ -64,12 +66,13 @@ def evaluate(
     :param batch_size: Rows per held-out batch.
     :param eval_batches: Held-out batches to average over.
     :param sample_steps: RK4 steps used to draw predictions.
+    :param signal_length: Rendered samples per row.
     :returns: Mean ``param_mse``, ``lsd``, and ``mslm`` over the held-out batches.
     """
     generator = torch.Generator().manual_seed(seed)
     mses, lsds, mslms = [], [], []
     for _ in range(eval_batches):
-        params, audio = sample_batch(batch_size, device, generator)
+        params, audio = sample_batch(batch_size, device, generator, signal_length)
         noise = torch.randn_like(params)
         preds = sample_ode(
             encoder, vector_field, audio, noise, config=SampleConfig(steps=sample_steps)
@@ -78,7 +81,7 @@ def evaluate(
         pred_audio = render_torchsynth(
             ((preds + 1) / 2).clamp(0, 1),
             sample_rate=SAMPLE_RATE,
-            signal_length=SIGNAL_LENGTH,
+            signal_length=signal_length,
             midi_pitch=MIDI_PITCH,
         )
         lsds.append(log_spectral_distance(pred_audio, audio).mean().item())
@@ -98,40 +101,64 @@ def evaluate(
     return result
 
 
+def pretrain_flow(
+    encoder: SpectrumEncoder,
+    vector_field: VectorField,
+    device: str,
+    *,
+    steps: int = TRAIN_STEPS,
+    batch_size: int = BATCH_SIZE,
+    learning_rate: float = LEARNING_RATE,
+    signal_length: int = SIGNAL_LENGTH,
+    seed: int = 123,
+    on_step: Callable[[int, float], None] | None = None,
+) -> None:
+    """Train encoder and flow with the conditional flow-matching loss, in place.
+
+    :param encoder: Conditioning encoder, trained here.
+    :param vector_field: Flow, trained here.
+    :param device: Torch device string.
+    :param steps: Optimizer steps.
+    :param batch_size: Rows per step; fixed for the loop (renderer cache #1820).
+    :param learning_rate: AdamW learning rate.
+    :param signal_length: Rendered samples per row.
+    :param seed: RNG seed for the online data stream.
+    :param on_step: Optional progress callback taking ``(step, loss)``.
+    """
+    parameters = list(encoder.parameters()) + list(vector_field.parameters())
+    _LOG.info("flow params: %d (device=%s)", sum(p.numel() for p in parameters), device)
+    optimizer = torch.optim.AdamW(parameters, lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps)
+    generator = torch.Generator().manual_seed(seed)
+    start = time.perf_counter()
+    for step in range(steps):
+        params, audio = sample_batch(batch_size, device, generator, signal_length)
+        z = vector_field.apply_dropout(encoder(audio), CFG_DROPOUT_RATE)
+        with torch.no_grad():
+            t = torch.rand(params.shape[0], 1, device=device)
+            x0 = torch.randn_like(params)
+            x_t = x0 * (1 - t) + params * t
+            target = params - x0
+        loss = (vector_field(x_t, t, z) - target).square().mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+        if on_step is not None:
+            on_step(step, loss.item())
+        if step % 500 == 0 or step == steps - 1:
+            _LOG.info(
+                "step %5d loss %.4f (%.1f s)", step, loss.item(), time.perf_counter() - start
+            )
+
+
 def main() -> None:
     """Pretrain the base flow and save it under ``artifacts/``."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(0)
     encoder, vector_field = build_base_flow(device)
-    parameters = list(encoder.parameters()) + list(vector_field.parameters())
-    total = sum(p.numel() for p in parameters)
-    _LOG.info("base flow params: %d (device=%s)", total, device)
-    optimizer = torch.optim.AdamW(parameters, lr=LEARNING_RATE)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=TRAIN_STEPS)
-
-    generator = torch.Generator().manual_seed(123)
-    start = time.perf_counter()
-    for step in range(TRAIN_STEPS):
-        params, audio = sample_batch(BATCH_SIZE, device, generator)
-        conditioning = encoder(audio)
-        z = vector_field.apply_dropout(conditioning, CFG_DROPOUT_RATE)
-        with torch.no_grad():
-            t = torch.rand(params.shape[0], 1, device=device)
-            x0 = torch.randn_like(params)
-            x_t = x0 * (1 - t) + params * t
-            target = params - x0
-        prediction = vector_field(x_t, t, z)
-        loss = (prediction - target).square().mean()
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-        if step % 500 == 0 or step == TRAIN_STEPS - 1:
-            _LOG.info(
-                "step %5d loss %.4f (%.1f s)", step, loss.item(), time.perf_counter() - start
-            )
-
+    pretrain_flow(encoder, vector_field, device)
     evaluate(encoder, vector_field, device, label="base-flow")
     ARTIFACTS_DIR.mkdir(exist_ok=True)
     torch.save(

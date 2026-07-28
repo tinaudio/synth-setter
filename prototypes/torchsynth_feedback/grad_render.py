@@ -146,23 +146,34 @@ def render_torchsynth_grad(
 
 
 @functools.cache
-def _mel_filterbank(n_fft: int, sample_rate: int, n_mels: int, device: str) -> torch.Tensor:
-    """Return a cached mel filterbank for one STFT geometry and device.
+def _mel_spectrogram(
+    n_fft: int, sample_rate: int, n_mels: int, device: str
+) -> torchaudio.transforms.MelSpectrogram:
+    """Return a cached mel front-end for one STFT geometry and device.
+
+    Slaney scale and area-normalization match the dataset's librosa front-end
+    (:meth:`LogMelEncoder.log_mel_spectrogram`). torchaudio's own defaults
+    (``norm=None``, ``mel_scale="htk"``) give unit-PEAK filters, so wide treble
+    bands collect ~13x the energy of narrow bass bands.
 
     :param n_fft: STFT window size.
     :param sample_rate: Audio sample rate in Hz.
     :param n_mels: Number of mel bands.
     :param device: Torch device string.
-    :returns: Filterbank shaped ``(n_fft // 2 + 1, n_mels)``.
+    :returns: Configured mel transform on ``device``.
     """
-    fbank = torchaudio.functional.melscale_fbanks(
-        n_freqs=n_fft // 2 + 1,
+    return torchaudio.transforms.MelSpectrogram(
+        sample_rate=sample_rate,
+        n_fft=n_fft,
+        hop_length=n_fft // 4,
+        n_mels=n_mels,
         f_min=0.0,
         f_max=sample_rate / 2,
-        n_mels=n_mels,
-        sample_rate=sample_rate,
-    )
-    return fbank.to(device)
+        window_fn=torch.hann_window,
+        power=1.0,
+        norm="slaney",
+        mel_scale="slaney",
+    ).to(device)
 
 
 def multi_scale_log_mel_distance(
@@ -181,23 +192,18 @@ def multi_scale_log_mel_distance(
     :param target_signal: Target audio shaped ``(batch, samples)``.
     :param sample_rate: Audio sample rate in Hz.
     :param n_ffts: STFT window sizes (hop is a quarter window).
-    :param n_mels: Number of mel bands per scale.
-    :param eps: Mel-power clamp floor before the log.
+    :param n_mels: Maximum mel bands per scale; capped so no band ends up empty.
+    :param eps: Mel-magnitude clamp floor before the log.
     :returns: Per-sample distance shaped ``(batch,)``.
     """
     device = str(pred_signal.device)
     total = torch.zeros(pred_signal.shape[0], device=pred_signal.device)
     for n_fft in n_ffts:
-        window = torch.hann_window(n_fft, device=pred_signal.device)
-        fbank = _mel_filterbank(n_fft, sample_rate, n_mels, device)
-        distances = []
-        for signal in (pred_signal, target_signal):
-            spectrogram = torch.stft(
-                signal, n_fft=n_fft, hop_length=n_fft // 4, window=window, return_complex=True
-            ).abs()
-            mel = (spectrogram.transpose(-1, -2) @ fbank).clamp_min(eps)
-            distances.append(mel.log10())
-        total = total + (distances[0] - distances[1]).abs().mean(dim=(-1, -2))
+        # A band needs a few FFT bins to land in it; 64 mels over n_fft=256's 129 bins
+        # leaves 6 bands identically zero, which contribute a constant to the distance.
+        mel = _mel_spectrogram(n_fft, sample_rate, min(n_mels, (n_fft // 2 + 1) // 4), device)
+        predicted, target = (mel(signal).clamp_min(eps) for signal in (pred_signal, target_signal))
+        total = total + (predicted.log10() - target.log10()).abs().mean(dim=(-1, -2))
     return total / len(n_ffts)
 
 

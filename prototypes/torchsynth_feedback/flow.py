@@ -88,22 +88,26 @@ def build_base_flow(device: str) -> tuple[SpectrumEncoder, VectorField]:
 
 
 def sample_batch(
-    batch_size: int, device: str, generator: torch.Generator
+    batch_size: int,
+    device: str,
+    generator: torch.Generator,
+    signal_length: int = SIGNAL_LENGTH,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Draw random torchsynth params and render their audio (no grad).
 
     :param batch_size: Rows to draw; keep fixed per loop (renderer cache #1820).
     :param device: Torch device string.
     :param generator: CPU RNG driving the parameter draw.
+    :param signal_length: Rendered samples per row.
     :returns: Params in model space ``[-1, 1]`` shaped ``(batch, NUM_PARAMS)``
-        and audio shaped ``(batch, SIGNAL_LENGTH)``, both on ``device``.
+        and audio shaped ``(batch, signal_length)``, both on ``device``.
     """
     params01 = torch.rand((batch_size, NUM_PARAMS), generator=generator).to(device)
     with torch.no_grad():
         audio = render_torchsynth(
             params01,
             sample_rate=SAMPLE_RATE,
-            signal_length=SIGNAL_LENGTH,
+            signal_length=signal_length,
             midi_pitch=MIDI_PITCH,
         )
     return params01 * 2 - 1, audio
