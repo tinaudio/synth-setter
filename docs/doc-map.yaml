@@ -656,6 +656,16 @@ docs:
         covers: "make mutmut target; macOS fork-safety workaround"
         scope: "mutmut"
 
+  # ── Test-quality reference ──────────────────────────────────────
+  - doc: docs/testing/test-quality.md
+    description: Test-value bar, audited anti-patterns, patterns worth copying
+    sources:
+      - pattern: "AGENTS.md"
+        covers: "Testing section pointer to the quality bar"
+        scope: "test"
+      - pattern: "tests/_meta/**"
+        covers: "Suite-level invariant tests cited as the invariants-over-enumeration pattern"
+
   # ── GitHub Actions reference ─────────────────────────────────────
   - doc: docs/reference/github-actions.md
     description: Workflow catalog, secrets table, concurrency gotchas
