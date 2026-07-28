@@ -1013,10 +1013,12 @@ def _producer_identity() -> tuple[str, str]:
     :returns: Producer Git SHA and transform-module SHA-256.
     :raises ValueError: The installed source cannot be tied to its owning checkout.
     """
-    workspace = operator_workspace()
     source = Path(__file__).resolve()
-    if not source.is_relative_to(workspace):
-        raise ValueError(f"embedding producer source {source} is outside workspace {workspace}")
+    workspace = next(
+        (parent for parent in source.parents if (parent / ".project-root").is_file()), None
+    )
+    if workspace is None:
+        raise ValueError(f"cannot locate embedding producer checkout for {source}")
     try:
         git_sha = subprocess.check_output(  # noqa: S603 — fixed checkout identity probe
             ["git", "-C", str(workspace), "rev-parse", "HEAD"],  # noqa: S607

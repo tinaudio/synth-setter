@@ -59,6 +59,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
+    _producer_identity,
     _remove_completion_marker,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
@@ -2429,6 +2430,25 @@ def test_add_embeddings_config_with_both_dataset_targets_raises() -> None:
     """A run cannot ambiguously target both one split and a dataset root."""
     with pytest.raises(ValidationError, match="exactly one of lance_uri or dataset_root_uri"):
         AddEmbeddingsConfig(lance_uri="train.lance", dataset_root_uri="dataset")
+
+
+def test_producer_identity_is_anchored_to_installed_source_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MATPAC identity ignores process-global operator workspace state.
+
+    :param tmp_path: Unrelated workspace override.
+    :param monkeypatch: Fixture replacing the process workspace resolver.
+    """
+    _producer_identity.cache_clear()
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.operator_workspace", lambda: tmp_path
+    )
+
+    git_sha, transform_sha = _producer_identity()
+
+    assert len(git_sha) == 40
+    assert len(transform_sha) == 64
 
 
 def test_remote_root_artifact_helpers_use_r2_object_contracts(
