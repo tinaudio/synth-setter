@@ -23,7 +23,9 @@ import hydra
 import numpy as np
 import pyarrow as pa
 import structlog
+from beartype import beartype
 from einops import rearrange
+from jaxtyping import Float, jaxtyped
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -76,6 +78,7 @@ SAME_DOWNSAMPLING_RATIO: int = 4096
 SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
+SKETCH_INDEX_SUB_VECTORS: int = 2
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
@@ -449,7 +452,10 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
     return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
 
 
-def _sketch_encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+@jaxtyped(typechecker=beartype)
+def _sketch_encode(
+    audio: Float[np.ndarray, "batch channel time"], sample_rate: int
+) -> Float[np.ndarray, "batch control frame"]:
     """Extract sketch controls for one audio batch.
 
     :param audio: ``(B, C, T)`` audio batch.
@@ -534,8 +540,8 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
     ),
-    # num_sub_vectors: PQ sub-vectors must divide the pooled (loudness, centroid,
-    # pitch) vector's width, so the CLAP-oriented default of 16 cannot apply.
+    # num_sub_vectors: PQ sub-vectors must divide the pooled control vector's
+    # width (2 + 384 pitch bins = 2 * 193), so only 2 divides it cleanly.
     "sketch": EmbeddingSpec(
         name="sketch",
         column=SKETCH_CTRL_FIELD,
@@ -543,7 +549,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=True,
         index=IndexSpec(
             pool="mean",
-            num_sub_vectors=NUM_SKETCH_CONTROLS,
+            num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
             vector_column=f"{SKETCH_CTRL_FIELD}_vec",
         ),
         load_encoder=_load_sketch_spec_encoder,

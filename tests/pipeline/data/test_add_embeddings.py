@@ -49,6 +49,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_SAME_L_CHECKPOINT,
     DEFAULT_SAME_S_CHECKPOINT,
     EMBEDDING_REGISTRY,
+    SKETCH_INDEX_SUB_VECTORS,
     SAME_DOWNSAMPLING_RATIO,
     SAME_EMBEDDING_DIM,
     SAME_LATENT_FRAMES,
@@ -304,7 +305,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma", "sketch"}
     assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
         pool="mean",
-        num_sub_vectors=NUM_SKETCH_CONTROLS,
+        num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
         vector_column=f"{SKETCH_CTRL_FIELD}_vec",
     )
     assert EMBEDDING_REGISTRY["sketch"].co_resident is True
@@ -2575,7 +2576,7 @@ def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
         del sample_rate
         return np.zeros((len(batch), NUM_SKETCH_CONTROLS, 5), np.float32)
 
-    with pytest.raises(ValueError, match=r"expected \(2, 3, 1\)"):
+    with pytest.raises(ValueError, match=r"expected \(2, 386, 1\)"):
         EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, off_grid)
 
 

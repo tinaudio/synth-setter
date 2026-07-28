@@ -393,8 +393,10 @@ extend-exclude = []
 # "Returns …").
 select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001",
           "D100", "D101", "D102", "D103", "D107", "D205", "D401"]
-# E501: line length handled by ruff-format, S101: allow assert in tests
-ignore = ["E501", "S101"]
+# E501: line length handled by ruff-format, S101: allow assert in tests.
+# F722: incompatible with jaxtyping shape strings; disabling it is jaxtyping's
+# documented ruff integration (https://docs.kidger.site/jaxtyping/faq/).
+ignore = ["E501", "S101", "F722"]
 
 [tool.ruff.lint.isort]
 # W&B runs drop an untracked ./wandb dir that flips ruff's first-party detection,

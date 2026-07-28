@@ -38,7 +38,10 @@ SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 T5GEMMA_FIELD: str = "t5gemma"
 SKETCH_CTRL_FIELD: str = "sketch_ctrl"
-NUM_SKETCH_CONTROLS: int = 3
+# PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
+SKETCH_PITCH_BINS: int = 384
+# Rows: loudness, centroid, then the pitch-activation block.
+NUM_SKETCH_CONTROLS: int = 2 + SKETCH_PITCH_BINS
 
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.
