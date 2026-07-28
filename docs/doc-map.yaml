@@ -673,6 +673,19 @@ docs:
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
+  - doc: docs/operations/nsynth-import.md
+    description: NSynth ingest and byte-level verification operations
+    sources:
+      - pattern: "src/synth_setter/cli/import_nsynth.py"
+        covers: "Packaged NSynth operator interface"
+      - pattern: "src/synth_setter/pipeline/data/nsynth_import.py"
+        covers: "Bounded NSynth import integrity contract"
+      - pattern: "src/synth_setter/pipeline/r2_io.py"
+        covers: "Checksum-enabled immutable upload helpers"
+      - pattern: "pyproject.toml"
+        covers: "NSynth packaging metadata"
+        scope: "nsynth"
+
   # ── RunPod dataset network volume ───────────────────────────────
   - doc: docs/operations/runpod-network-volume.md
     description: Persistent RunPod dataset cache operations

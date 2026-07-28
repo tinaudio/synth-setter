@@ -4404,6 +4404,7 @@ config = [
     { name = "pydantic-settings" },
 ]
 data = [
+    { name = "ijson" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pylance" },
@@ -4420,6 +4421,7 @@ dev = [
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
     { name = "hypothesis" },
+    { name = "ijson" },
     { name = "jaxtyping" },
     { name = "kubernetes" },
     { name = "kymatio" },
@@ -4505,6 +4507,7 @@ runtime = [
     { name = "hydra-colorlog" },
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
+    { name = "ijson" },
     { name = "jaxtyping" },
     { name = "kubernetes" },
     { name = "kymatio" },
@@ -4625,6 +4628,7 @@ config = [
     { name = "pydantic-settings", specifier = ">=2" },
 ]
 data = [
+    { name = "ijson" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pylance", specifier = ">=7.0.0" },
@@ -4641,6 +4645,7 @@ dev = [
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "hydra-optuna-sweeper", specifier = "==1.2.0" },
     { name = "hypothesis" },
+    { name = "ijson" },
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },
@@ -4720,6 +4725,7 @@ runtime = [
     { name = "hydra-colorlog", specifier = "==1.2.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "hydra-optuna-sweeper", specifier = "==1.2.0" },
+    { name = "ijson" },
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },

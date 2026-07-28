@@ -833,6 +833,55 @@ class TestUploadDir:
         assert "--retries=3" in args
 
 
+class TestUploadDirImmutable:
+    """Tests for checksum-enabled immutable directory uploads."""
+
+    def test_changed_reupload_fails_and_preserves_remote(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """A changed local object cannot replace an existing remote object.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir holding the local source tree.
+        """
+        local_dir = tmp_path / "immutable-dir"
+        local_dir.mkdir()
+        source = local_dir / "artifact.bin"
+        source.write_bytes(b"original")
+        r2_io.upload_dir_immutable(local_dir, "r2://bucket/nsynth/train.lance")
+        source.write_bytes(b"changed!")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            r2_io.upload_dir_immutable(local_dir, "r2://bucket/nsynth/train.lance")
+
+        remote = fake_r2_remote / "bucket" / "nsynth" / "train.lance" / "artifact.bin"
+        assert remote.read_bytes() == b"original"
+
+
+class TestUploadFileImmutable:
+    """Tests for checksum-enabled immutable single-file uploads."""
+
+    def test_changed_reupload_fails_and_preserves_remote(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """A changed local file cannot replace an existing remote object.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir holding the local source file.
+        """
+        source = tmp_path / "manifest.json"
+        source.write_bytes(b"original")
+        uri = "r2://bucket/nsynth/manifest.json"
+        r2_io.upload_file_immutable(source, uri)
+        source.write_bytes(b"changed!")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            r2_io.upload_file_immutable(source, uri)
+
+        remote = fake_r2_remote / "bucket" / "nsynth" / "manifest.json"
+        assert remote.read_bytes() == b"original"
+
+
 class TestUploadToUri:
     """Tests for upload_to_uri — file→file upload with reliability flags."""
 

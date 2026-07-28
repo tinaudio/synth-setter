@@ -50,6 +50,8 @@ __all__ = [
     "to_s3_uri",
     "upload",
     "upload_dir",
+    "upload_dir_immutable",
+    "upload_file_immutable",
     "upload_to_uri",
 ]
 
@@ -557,6 +559,43 @@ def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None
     operands += [str(local_dir), _to_rclone_path(r2_uri)]
     args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def upload_dir_immutable(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None:
+    """Copy a directory tree without replacing changed remote objects.
+
+    ``--immutable`` permits already-identical objects but fails if any destination
+    object differs. No remote deletion or purge is performed.
+
+    :param local_dir: Local directory whose contents land under ``r2_uri``.
+    :param r2_uri: Immutable ``r2://`` destination prefix.
+    :param exclude: Optional rclone ``--exclude`` glob.
+    """
+    operands = [f"--exclude={exclude}"] if exclude is not None else []
+    operands += ["--immutable", str(local_dir), _to_rclone_path(r2_uri)]
+    args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
+    subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def upload_file_immutable(local_path: Path, r2_uri: str) -> None:
+    """Upload one file without replacing a changed remote object.
+
+    rclone's file-source transfer ignores ``--immutable`` on its local backend,
+    so a one-file staging directory keeps the flag's behavior consistent.
+
+    :param local_path: Local file to upload.
+    :param r2_uri: Immutable destination object URI.
+    """
+    destination_name = Path(r2_uri).name
+    parent_uri = r2_uri.rsplit("/", maxsplit=1)[0]
+    with tempfile.TemporaryDirectory(prefix="immutable-upload-") as stage_dir:
+        staged = Path(stage_dir) / destination_name
+        try:
+            os.link(local_path, staged)
+        except OSError:
+            shutil.copy2(local_path, staged)
+        args = _rclone_argv("copy", "--immutable", stage_dir, _to_rclone_path(parent_uri))
+        subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
 def upload(source: str | Path, destination_uri: str) -> None:
