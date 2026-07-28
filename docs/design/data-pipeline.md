@@ -1546,7 +1546,7 @@ src/synth_setter/configs/
   # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
   #   generate_dataset/
   #     surge-simple-480k-10k.yaml
-  # render/              # Renderer settings plus nested synth identity groups
+  # render/              # Backend-named renderer settings; identity lives in the root synth/ group
   #   vst.yaml
   # r2/                  # R2 bucket + prefix_root
   #   default.yaml
