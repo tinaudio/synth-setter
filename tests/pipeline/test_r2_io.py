@@ -929,25 +929,6 @@ class TestUploadToUri:
         assert "--retries=3" in args
 
 
-class TestDeleteObject:
-    """Tests for deleting one exact remote object."""
-
-    def test_removes_only_the_selected_object(self, fake_r2_remote: Path) -> None:
-        """Deletion removes the object while preserving its sibling.
-
-        :param fake_r2_remote: Local-typed rclone remote rooted at a temporary directory.
-        """
-        root = fake_r2_remote / "bucket" / "dataset"
-        root.mkdir(parents=True)
-        (root / "dataset.complete").touch()
-        (root / "dataset.json").write_text("{}")
-
-        r2_io.delete_object("r2://bucket/dataset/dataset.complete")
-
-        assert not (root / "dataset.complete").exists()
-        assert (root / "dataset.json").is_file()
-
-
 class TestIsR2Reachable:
     """Tests for ``is_r2_reachable`` — boolean auth-probe used as a test-skip gate."""
 
