@@ -50,6 +50,23 @@ def test_dict_batch_params_are_in_model_space() -> None:
     assert params.min() < 0.0
 
 
+def test_datamodule_without_emit_mel_omits_the_mel_column() -> None:
+    """Audio-conditioned experiments skip the per-row librosa mel entirely."""
+    datamodule = TorchSynthDataModule(
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        midi_pitch=60,
+        train_val_test_sizes=(8, 4, 4),
+        train_val_test_seeds=(1, 2, 3),
+        batch_size=_BATCH,
+        num_workers=0,
+        emit_mel=False,
+    )
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert set(batch) == {"params", "noise", "audio"}
+
+
 def test_collate_vst_dict_maps_known_rows_to_the_model_space_contract() -> None:
     """Known rows collate to stacked audio and the exact ``2p - 1`` param mapping."""
     from synth_setter.data.torchsynth_datamodule import collate_vst_dict

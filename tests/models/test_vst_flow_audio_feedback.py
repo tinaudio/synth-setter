@@ -177,6 +177,76 @@ def test_train_step_without_audio_loss_returns_no_audio_term() -> None:
     assert torch.isfinite(loss)
 
 
+def test_module_with_audio_loss_and_nonzero_sigma_min_raises() -> None:
+    """A sigma-bearing path makes the one-step estimate inexact, so refuse it."""
+    with pytest.raises(ValueError, match="rectified_sigma_min"):
+        VSTFlowMatchingModule(
+            encoder=_WaveformEncoder(),
+            vector_field=VectorField(
+                field_dim=_NUM_PARAMS,
+                hidden_dim=32,
+                conditioning_dim=_CONDITIONING_DIM,
+                num_blocks=2,
+            ),
+            optimizer=torch.optim.Adam,  # pyright: ignore[reportArgumentType]
+            scheduler=None,  # pyright: ignore[reportArgumentType]
+            num_params=_NUM_PARAMS,
+            conditioning="audio",
+            audio_loss=_audio_loss(),
+            rectified_sigma_min=0.01,
+            compile=False,
+        )
+
+
+@pytest.mark.slow
+def test_audio_loss_keep_mask_zeroes_cfg_dropped_rows() -> None:
+    """Rows dropped by CFG must contribute nothing to the audio term."""
+    torch.manual_seed(0)
+    loss = _audio_loss()
+    batch = next(iter(_datamodule().train_dataloader()))
+    theta_hat = torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1
+    t = torch.full((_BATCH, 1), 0.9)
+
+    all_dropped = loss(theta_hat, t, batch["audio"], keep=torch.zeros(_BATCH))
+    all_kept = loss(theta_hat, t, batch["audio"], keep=torch.ones(_BATCH))
+
+    assert all_dropped.item() == 0.0
+    assert all_kept.item() > 0.0
+
+
+@pytest.mark.slow
+def test_grad_render_matches_the_row_at_a_time_production_render() -> None:
+    """Batch grad renders align noise with the per-row target renderer.
+
+    Without the chunk-0 noise alignment, every row past the first compares against a target
+    rendered with a different noise realization.
+    """
+    from synth_setter.data.torchsynth_datamodule import render_torchsynth
+    from synth_setter.data.torchsynth_grad_render import render_torchsynth_grad
+
+    params01 = torch.rand(_BATCH, _NUM_PARAMS, generator=torch.Generator().manual_seed(7))
+    row_targets = torch.cat(
+        [
+            render_torchsynth(
+                row.unsqueeze(0),
+                sample_rate=_SAMPLE_RATE,
+                signal_length=_SIGNAL_LENGTH,
+                midi_pitch=_MIDI_PITCH,
+            )
+            for row in params01
+        ]
+    )
+    with torch.no_grad():
+        batched = render_torchsynth_grad(
+            params01,
+            sample_rate=_SAMPLE_RATE,
+            signal_length=_SIGNAL_LENGTH,
+            midi_pitch=_MIDI_PITCH,
+        ).clamp(-1, 1)
+
+    assert torch.allclose(batched, row_targets, atol=1e-5)
+
+
 def test_module_with_audio_loss_and_torch_compile_raises_at_construction() -> None:
     """Compiling over the functional_call render miscompiles, so refuse up front."""
     with pytest.raises(ValueError, match="compile"):

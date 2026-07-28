@@ -128,6 +128,56 @@ def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     assert (gradient != 0).any()
 
 
+@pytest.mark.slow
+def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
+    """Token-emitting encoders must still yield one distance per sample, not per token."""
+
+    class _TokenEncoder(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(_SIGNAL_LENGTH, 24)
+
+        def forward(self, audio: torch.Tensor) -> torch.Tensor:
+            return self.linear(audio).reshape(audio.shape[0], 3, 8)
+
+    torch.manual_seed(0)
+    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
+    theta = torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1
+
+    value = _loss(distance=AudioDistance.LATENT).forward(
+        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_TokenEncoder()
+    )
+
+    assert value.ndim == 0
+    assert torch.isfinite(value)
+
+
+@pytest.mark.slow
+def test_latent_loss_leaves_encoder_weights_and_stats_untouched() -> None:
+    """The latent space is frozen: no weight gradients, no BatchNorm stat drift."""
+    torch.manual_seed(0)
+    encoder = torch.nn.Sequential(
+        torch.nn.Linear(_SIGNAL_LENGTH, 8), torch.nn.BatchNorm1d(8), torch.nn.GELU()
+    )
+    encoder.train()
+    batch_norm = encoder[1]
+    assert isinstance(batch_norm, torch.nn.BatchNorm1d)
+    assert batch_norm.running_mean is not None
+    stats_before = batch_norm.running_mean.clone()
+    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
+    theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
+
+    value = _loss(distance=AudioDistance.LATENT).forward(
+        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=encoder
+    )
+    value.backward()
+
+    assert theta.grad is not None and (theta.grad != 0).any()
+    assert all(parameter.grad is None for parameter in encoder.parameters())
+    assert torch.equal(batch_norm.running_mean, stats_before)
+    assert encoder.training
+
+
 def test_latent_loss_without_an_encoder_raises() -> None:
     """The latent distance is unusable without the encoder that defines the space."""
     with pytest.raises(ValueError, match="encoder"):

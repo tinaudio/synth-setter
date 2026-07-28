@@ -98,6 +98,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sample_steps: RK4 integration steps used at test.
         :param test_cfg_strength: Classifier-free-guidance strength at test.
         :param compile: Whether to compile the encoder and vector field during fit setup.
+        :raises ValueError: ``audio_loss`` is combined with a nonzero
+            ``rectified_sigma_min`` or with ``compile=True`` (#2585).
         """
         super().__init__()
 
@@ -106,6 +108,12 @@ class VSTFlowMatchingModule(LightningModule):
         self.encoder = encoder
         self.vector_field = vector_field
         self.audio_loss = audio_loss
+        if audio_loss is not None and rectified_sigma_min != 0.0:
+            # theta_hat = x_t + (1 - t) * prediction is the exact one-step estimate only
+            # on the sigma-free path; any other sigma silently biases the rendered params.
+            raise ValueError(
+                f"audio feedback requires rectified_sigma_min=0, got {rectified_sigma_min}"
+            )
         if audio_loss is not None and compile:
             from synth_setter.models.components.audio_feedback import (
                 validate_audio_feedback_runtime,
@@ -181,7 +189,18 @@ class VSTFlowMatchingModule(LightningModule):
         noise = batch["noise"]
 
         conditioning = self.encoder(conditioning)
-        z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
+        keep = None
+        if self.audio_loss is not None and self.hparams.cfg_dropout_rate > 0.0:
+            # Sample the CFG mask here so the audio term can skip dropped rows: the
+            # unconditional branch must not be trained on row-specific targets.
+            keep = torch.rand(params.shape[0], device=params.device) > (
+                self.hparams.cfg_dropout_rate
+            )
+            z = self.vector_field.apply_dropout(
+                conditioning, self.hparams.cfg_dropout_rate, keep_mask=keep
+            )
+        else:
+            z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
 
         with torch.no_grad():
             t = self._sample_time(params.shape[0], params.device)
@@ -204,7 +223,9 @@ class VSTFlowMatchingModule(LightningModule):
             # One-step estimate of x1 from the current field; rendering it keeps
             # autograd connected so spectral error reaches the field's weights.
             theta_hat = x_t + (1 - t) * prediction
-            audio_term = self.audio_loss(theta_hat, t, batch["audio"], encoder=self.encoder)
+            audio_term = self.audio_loss(
+                theta_hat, t, batch["audio"], encoder=self.encoder, keep=keep
+            )
 
         penalty = None
         if hasattr(self.vector_field, "penalty"):

@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import threading
 from collections.abc import Iterator
+from typing import cast
 
 import torch
 from torch.func import functional_call
@@ -128,7 +129,7 @@ def render_torchsynth_grad(
         )
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
-    with renderer.lock, _PATCH_LOCK:
+    with renderer.lock, _PATCH_LOCK, _aligned_noise(voice):
         all_parameters = voice.get_parameters()
         for name, value in (("midi_f0", float(midi_pitch)), ("duration", duration)):
             keyboard = all_parameters[("keyboard", name)]
@@ -144,7 +145,37 @@ def render_torchsynth_grad(
         shim = _VoiceOutputShim(voice)
         with _patched_module_p(voice):
             audio = functional_call(shim, overrides)
+    if not torch.isfinite(audio).all():
+        # Mirrors render_torchsynth's output guard: one non-finite render would
+        # otherwise write NaN into every weight on the next backward pass.
+        raise ValueError("TorchSynth rendered non-finite audio")
     return audio
+
+
+@contextlib.contextmanager
+def _aligned_noise(voice: torch.nn.Module) -> Iterator[None]:
+    """Give every batch row the noise realization the stored targets were rendered with.
+
+    ``Noise`` pre-draws one seeded ``(batch, buffer)`` block, so row ``i`` gets chunk
+    ``i`` — but :class:`TorchSynthDataset` renders targets one row at a time, always on
+    chunk 0. Broadcasting chunk 0 here keeps the estimate/target comparison free of an
+    irreducible noise-mismatch penalty. The original buffers are restored on exit.
+
+    :param voice: Live torchsynth voice whose noise buffers are aligned.
+    :yields: Control while the alignment is active.
+    :ytype: None
+    """
+    from torchsynth.module import Noise
+
+    noise_modules = [module for module in voice.modules() if isinstance(module, Noise)]
+    saved = [cast(torch.Tensor, module.noise) for module in noise_modules]
+    for module, original in zip(noise_modules, saved, strict=True):
+        module.noise = original[0:1].expand_as(original)
+    try:
+        yield
+    finally:
+        for module, original in zip(noise_modules, saved, strict=True):
+            module.noise = original
 
 
 def _validate_render_inputs(params: torch.Tensor) -> None:

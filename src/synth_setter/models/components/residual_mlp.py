@@ -129,11 +129,18 @@ class ConditionalResidualMLP(nn.Module):
     def penalty(self):
         return 0.0
 
-    def apply_dropout(self, z: torch.tensor, rate: float = 0.1):
+    def apply_dropout(
+        self, z: torch.tensor, rate: float = 0.1, keep_mask: torch.Tensor | None = None
+    ):
         if rate == 0.0:
             return z
 
-        dropout_mask = torch.rand(z.shape[0], device=z.device) > rate
+        # keep_mask lets the caller pre-sample which rows keep conditioning (True = keep),
+        # so a co-located loss can observe the same CFG decision.
+        if keep_mask is None:
+            dropout_mask = torch.rand(z.shape[0], device=z.device) > rate
+        else:
+            dropout_mask = keep_mask
         if z.ndim == 2:
             dropout_mask = dropout_mask[..., None]
             dropout_token = self.cfg_dropout_token[0]
