@@ -1,3 +1,0 @@
-# Generic VST knobs; identity comes from the root synth group (`synth=surge_xt`, #2565).
-defaults:
-  - vst

@@ -87,7 +87,7 @@ RunPod is used because it's the platform where GPUs are already available and co
 #    as `experiment=` is `generate_dataset/<stem>`.
 #    Hydra composes the final DatasetSpec from src/synth_setter/configs/dataset.yaml + this overlay.
 cat src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
-# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: surge_simple, ...], ...
+# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: vst, ...], ...
 
 # 2. Run multi-shard generation on a single worker (default sequential loop;
 #    `render.parallel=true` opts into thread-pool parallel dispatch).
@@ -1431,7 +1431,7 @@ A run starts from a Hydra experiment YAML composed against `src/synth_setter/con
 
 defaults:
   - override /datamodule: surge_simple
-  - override /render: surge_simple
+  - override /render: vst
   - _self_
 
 task_name: surge-simple-480k-10k
@@ -1529,8 +1529,10 @@ src/synth_setter/configs/
   datamodule/          # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
-  render/              # Generic renderer settings and per-synth selectors
-    synth/              # Synth identity groups, including synth_version
+  render/              # Backend-named render groups (generic knobs + backend selectors)
+    vst.yaml
+    surgepy.yaml
+  synth/               # Root synth identity groups, including synth_version
     surge_simple.yaml
     surge_xt.yaml
   r2/                  # R2 bucket + prefix root
@@ -1545,7 +1547,7 @@ src/synth_setter/configs/
   #   generate_dataset/
   #     surge-simple-480k-10k.yaml
   # render/              # Renderer settings plus nested synth identity groups
-  #   surge_xt.yaml
+  #   vst.yaml
   # r2/                  # R2 bucket + prefix_root
   #   default.yaml
 ```

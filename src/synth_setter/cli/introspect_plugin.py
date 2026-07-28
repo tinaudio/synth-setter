@@ -3,7 +3,7 @@
 Loads the plugin via pedalboard, optionally applies a starting preset, then
 writes an editable draft spec module plus a captured baseline ``.vstpreset``.
 By default the artifacts land as loose files; ``--register`` instead wires
-them into a synth-setter checkout — spec module, preset, render config, and
+them into a synth-setter checkout — spec module, preset, identity config, and
 ``param_spec_registry`` entries — so committing the result makes the synth
 renderable via ``generate_dataset`` (issue #1596).
 """
@@ -38,7 +38,6 @@ from synth_setter.data.vst.registration import (
     preset_repo_path,
     registration_paths,
     registry_with_spec,
-    render_config_yaml,
     synths_with_spec,
 )
 from synth_setter.data.vst.verification import registered_artifacts, verify_registration
@@ -140,7 +139,7 @@ class _RegisterTarget:
     default=False,
     help=(
         "Wire the outputs into a synth-setter checkout: spec module, preset, CSV, and "
-        "render config at their conventional paths, plus param_spec_registry entries."
+        "identity config at their conventional paths, plus param_spec_registry entries."
     ),
 )
 @click.option(
@@ -232,7 +231,6 @@ def main(
             spec_dest,
             preset_dest,
             csv_dest,
-            paths.render_config,
             paths.identity_config,
         )
     else:
@@ -377,16 +375,13 @@ def _register_synth_source(target: _RegisterTarget, spec_name: str, version: str
 def _write_register_wiring(
     target: _RegisterTarget, spec_name: str, version: str, *, synth_source: str
 ) -> None:
-    """Write the render config + registry entries and echo the run instructions.
+    """Write the identity config + registry entries and echo the run instructions.
 
     :param target: Pre-computed checkout wiring.
     :param spec_name: Registry key for the synth.
     :param version: Plugin version pinned in synth identity.
     :param synth_source: Prevalidated identity-table source to write.
     """
-    render_config = target.paths.render_config
-    render_config.parent.mkdir(parents=True, exist_ok=True)
-    render_config.write_text(render_config_yaml(spec_name), encoding="utf-8")
     identity_config = target.paths.identity_config
     identity_config.parent.mkdir(parents=True, exist_ok=True)
     identity_config.write_text(
@@ -403,7 +398,6 @@ def _write_register_wiring(
     )
     target.paths.synth_module.write_text(synth_source, encoding="utf-8")
     target.paths.registry.write_text(target.registry_source, encoding="utf-8")
-    click.echo(f"Render cfg  : {render_config}")
     click.echo(f"Identity cfg: {identity_config}")
     click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
     if version == "unknown":
@@ -416,7 +410,7 @@ def _write_register_wiring(
     click.echo(
         "Next: hand-tune the spec, run `make format`, commit, then render with:\n"
         f"  synth-setter-generate-dataset experiment=generate_dataset/smoke-shard "
-        f"synth={spec_name} render={spec_name}"
+        f"synth={spec_name} render=vst"
     )
 
 
@@ -548,7 +542,7 @@ def _plugin_version(plugin_path: str) -> str:
     """Extract the plugin bundle's version, degrading to ``"unknown"``.
 
     The version is informational in the provenance line but load-bearing in
-    the render config (``generate`` cross-checks it); the fallback keeps the
+    the identity config (``generate`` cross-checks it); the fallback keeps the
     draft flowing on the helper's documented failure modes (missing/odd bundle
     metadata, scan failure) and is echoed so the operator can pin it by hand.
 

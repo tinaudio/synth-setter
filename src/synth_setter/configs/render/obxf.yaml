@@ -1,3 +1,0 @@
-# Generic VST knobs; identity comes from the root synth group (`synth=obxf`, #2565).
-defaults:
-  - vst

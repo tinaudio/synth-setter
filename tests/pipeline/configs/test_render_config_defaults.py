@@ -164,12 +164,12 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     [("torchsynth_adsr", 8), ("torchsynth_simple", 19), ("torchsynth_full", 79)],
 )
 def test_render_torchsynth_composes_into_valid_render_config(name: str, num_params: int) -> None:
-    """Each ``render=torchsynth_*`` group composes into a valid in-process ``RenderConfig``.
+    """Each torchsynth identity composes with ``render=torchsynth`` into a valid ``RenderConfig``.
 
-    :param name: Render group / param-spec registry key under test.
+    :param name: Synth group / param-spec registry key under test.
     :param num_params: Expected encoded parameter width.
     """
-    spec = _spec_from_dataset_overrides([f"synth={name}", f"render={name}"])
+    spec = _spec_from_dataset_overrides([f"synth={name}", "render=torchsynth"])
 
     assert spec.render.param_spec_name == name
     assert spec.render.renderer_backend == "torchsynth"
@@ -185,26 +185,28 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
 
 
 @pytest.mark.parametrize(
-    ("name", "num_params", "channels"),
+    ("name", "num_params", "channels", "render_group"),
     [
-        ("faust_bright_organ", 13, 2),
-        ("faust_bubble", 10, 2),
-        ("faust_church_organ", 16, 2),
-        ("faust_filter_osc", 6, 1),
+        ("faust_bright_organ", 13, 2, "faust"),
+        ("faust_bubble", 10, 2, "faust"),
+        ("faust_church_organ", 16, 2, "faust"),
+        ("faust_filter_osc", 6, 1, "faust_filter_osc"),
     ],
 )
 def test_render_faust_composes_into_valid_render_config(
     name: str,
     num_params: int,
     channels: int,
+    render_group: str,
 ) -> None:
-    """Each Faust group resolves checked-in source/spec identity without paths.
+    """Each Faust identity resolves checked-in source/spec identity without paths.
 
-    :param name: Render group and Faust registry identity.
+    :param name: Synth group and Faust registry identity.
     :param num_params: Expected encoded synth-and-note width.
     :param channels: Native source output channel count.
+    :param render_group: Backend render group paired with the identity.
     """
-    spec = _spec_from_dataset_overrides([f"synth={name}", f"render={name}"])
+    spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
 
     assert spec.render.param_spec_name == name
     assert spec.render.renderer_backend == "dawdreamer_faust"
@@ -217,8 +219,8 @@ def test_render_faust_composes_into_valid_render_config(
 
 
 def test_render_obxf_composes_into_valid_render_config() -> None:
-    """``render=obxf`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
-    spec = _spec_from_dataset_overrides(["synth=obxf", "render=obxf"])
+    """``synth=obxf render=vst`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
+    spec = _spec_from_dataset_overrides(["synth=obxf", "render=vst"])
 
     assert spec.render.param_spec_name == "obxf"
     assert spec.render.synth.synth_version == "1.0.3"
@@ -229,7 +231,7 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
 
 
 @pytest.mark.parametrize(
-    ("group", "param_spec_name", "plugin_state_path"),
+    ("synth_group", "param_spec_name", "plugin_state_path"),
     [
         ("surge_4_surgepy", "surge_4", "presets/surge-mini.fxp"),
         ("surge_simple_surgepy", "surge_simple", "presets/surge-simple.fxp"),
@@ -237,20 +239,22 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     ],
 )
 @pytest.mark.requires_surgepy
-def test_surgepy_render_groups_compose_to_validated_isolated_configs(
-    group: str,
+def test_surgepy_render_group_composes_to_validated_isolated_configs(
+    synth_group: str,
     param_spec_name: str,
     plugin_state_path: str,
 ) -> None:
-    """Shipped SurgePy groups satisfy the strict runtime lifecycle contract.
+    """``render=surgepy`` satisfies the strict runtime lifecycle contract for each identity.
 
-    :param group: SurgePy render group.
+    :param synth_group: SurgePy synth identity group.
     :param param_spec_name: Expected Surge parameter specification.
     :param plugin_state_path: Expected FXP patch resource.
     """
     import surgepy
 
-    config = RenderConfig.from_cfg_nodes(_compose_render_group(group), _compose_synth_group(group))
+    config = RenderConfig.from_cfg_nodes(
+        _compose_render_group("surgepy"), _compose_synth_group(synth_group)
+    )
 
     assert config.synth.synth_version == surgepy.getVersion()
     assert config.renderer_backend == "surgepy"
@@ -268,7 +272,7 @@ def test_surgepy_render_groups_compose_to_validated_isolated_configs(
         ("surge_simple", "surge_simple", "presets/surge-simple.vstpreset"),
     ],
 )
-def test_surge_subset_render_groups_keep_surge_xt_identity(
+def test_surge_subset_synth_groups_keep_surge_xt_identity(
     group: str, param_spec_name: str, plugin_state_path: str
 ) -> None:
     """Surge subset synth groups override only their spec and preset identity.
@@ -284,5 +288,3 @@ def test_surge_subset_render_groups_keep_surge_xt_identity(
     assert synth.plugin_state_path == plugin_state_path
     assert synth.plugin_path == surge_xt.plugin_path
     assert synth.synth_version == surge_xt.synth_version
-    render = _compose_render_group(group)
-    assert render.plugin_reload_cadence == _compose_render_group("surge_xt").plugin_reload_cadence

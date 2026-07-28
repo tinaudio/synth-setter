@@ -8,7 +8,7 @@ defaults:
   # and no torchsynth-specific lance datamodule exists yet.
   - override /datamodule: surge_simple
   - override /synth: torchsynth_simple
-  - override /render: torchsynth_simple
+  - override /render: torchsynth
   - _self_
 
 task_name: torchsynth-smoke

@@ -147,14 +147,14 @@ def test_cfg_dataset_dawdreamer_error_precedes_darwin_guard(
 def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     cfg_dataset_obxf: DictConfig,
 ) -> None:
-    """``render=obxf`` resolves its registered spec through the ``spec_from_cfg`` entrypoint path.
+    """``synth=obxf`` resolves its registered spec through the ``spec_from_cfg`` entrypoint path.
 
     ``num_params`` is ``len(param_specs[param_spec_name])`` — the registry lookup
     the shard writer makes — so a resolving width proves the entrypoint reaches the
     OB-Xf spec without a ``KeyError`` (P31 e2e gate for the new ``render`` group).
 
     :param cfg_dataset_obxf: Function-scoped fixture composing ``dataset.yaml`` with
-        the smoke-shard experiment, ``render=obxf``, and ``tmp_path``-pinned paths.
+        the smoke-shard experiment, ``synth=obxf render=vst``, and ``tmp_path``-pinned paths.
     """
     spec = spec_from_cfg(cfg_dataset_obxf)
     assert spec.render.param_spec_name == "obxf"
@@ -1447,16 +1447,16 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
     """``from_hydra`` renders every OB-Xf shard with the real plugin and uploads to R2.
 
     The second-synth counterpart to ``test_generate_dataset_renders_shards_to_r2``,
-    under ``render=obxf`` so the real OB-Xf VST3 renders each shard (no stub) before the
+    under ``synth=obxf`` so the real OB-Xf VST3 renders each shard (no stub) before the
     ``rclone copy`` upload. The unique-per-run ``r2.prefix`` keeps concurrent runs
     isolated; a best-effort ``rclone purge`` in ``finally`` removes the prefix even on
     failure so we don't leak shards. Auto-skips when ``rclone`` is missing or
     ``rclone lsd r2:`` fails (contributor laptops, fork PRs without secrets), and
     when the OB-Xf bundle is absent: ``requires_vst`` only gates the env-selected
     synth (``SYNTH_SETTER_PLUGIN_PATH``), so a Surge-only host would otherwise fail
-    here rather than skip when ``render=obxf``'s ``plugin_path`` is missing.
+    here rather than skip when ``synth=obxf``'s ``plugin_path`` is missing.
 
-    :param cfg_dataset_obxf: ``render=obxf`` cfg composed with the
+    :param cfg_dataset_obxf: ``synth=obxf`` cfg composed with the
         ``generate_dataset/smoke-shard`` experiment; carries the real OB-Xf bundle,
         preset, and pinned renderer version.
     """
@@ -1473,7 +1473,7 @@ def test_generate_dataset_renders_obxf_shards_to_r2(
     assert spec.render.param_spec_name == "obxf"
     obxf_bundle = Path(spec.render.plugin_path)
     if not obxf_bundle.exists():
-        pytest.skip(f"OB-Xf bundle not found at {obxf_bundle} (render=obxf plugin_path)")
+        pytest.skip(f"OB-Xf bundle not found at {obxf_bundle} (synth=obxf plugin_path)")
     try:
         from_hydra(cfg_dataset_obxf)
         for shard in spec.shards:

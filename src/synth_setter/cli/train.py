@@ -226,7 +226,7 @@ def _configure_val_audio_probe(
             auto,
             "no render group composed",
             "training.val_audio_probe=true requires a render config group "
-            "(e.g. `render=surge_xt synth=surge_xt`); cfg.render is unset.",
+            "(e.g. `synth=surge_xt render=vst`); cfg.render is unset.",
         )
         return
     # A validation-hooked probe wired into a validation-disabled run would silently
