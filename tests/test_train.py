@@ -837,8 +837,8 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 ) -> None:
     """Training resumes from a ``ckpt_path`` pinned as ``${wandb:...}``, downloaded from the live registry.
 
-    Exercises the exact train-side seam the wandb_checkpoint split protects: ``train.py`` reads
-    ``cfg.get("ckpt_path")`` into ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
+    Exercises the train-side checkpoint seam: ``train.py`` reads ``cfg.get("ckpt_path")`` into
+    ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
     real Lightning checkpoint, published to ``tinaudio/synth-setter-citest``; a second run pins
     that artifact via ``${wandb:...}`` and must download + resume it, advancing ``global_step``.
     Proves the resolver works through the real W&B API on the train entrypoint, not just a fake.

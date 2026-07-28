@@ -2469,7 +2469,11 @@ class TestCheckedInLaunchConfigs:
 
         assert cfg.cmd is not None
         tokens = shlex.split(cfg.cmd)
-        assert "experiment=${EXPERIMENT:-surge/wandb_checkpoint/ffn_simple}" in tokens
+        assert "experiment=${EXPERIMENT:-surge/ffn_simple}" in tokens
+        assert (
+            "ckpt_path=\\${wandb:${CHECKPOINT_REF:-tinaudio/synth-setter/"
+            "model-ffn_simple:latest}}" in tokens
+        )
         assert any(
             token.startswith("datamodule.download_dataset_root_uri=")
             and "DATASET_ROOT_URI:-r2://" in token

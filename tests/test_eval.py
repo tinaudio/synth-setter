@@ -212,7 +212,7 @@ def _audio_prediction_cli_args(
         sys.executable,
         "-m",
         "synth_setter.cli.eval",
-        f"experiment=surge/wandb_checkpoint/{case.experiment}",
+        f"experiment=surge/{case.experiment}",
         f"datamodule={case.datamodule}",
         callbacks,
         "mode=predict",
@@ -243,7 +243,7 @@ def _save_audio_prediction_checkpoint(case: _AudioPredictionCase, path: Path) ->
         cfg = compose(
             config_name="eval.yaml",
             overrides=[
-                f"experiment=surge/wandb_checkpoint/{case.experiment}",
+                f"experiment=surge/{case.experiment}",
                 f"datamodule={case.datamodule}",
                 "trainer=cpu",
                 *case.model_overrides,
@@ -1322,9 +1322,9 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
 ) -> None:
     """Predict eval resolves ckpt_path via ``${wandb:...}`` from the live registry, loads it, and runs inference.
 
-    The full wandb_checkpoint contract end to end: train a real checkpoint, publish it to
-    ``tinaudio/synth-setter-citest``, then pin ``ckpt_path: ${wandb:...}`` (no CLI path, the form
-    the ``surge/wandb_checkpoint/<id>`` overlay produces) and run ``evaluate()`` in predict mode.
+    The full W&B checkpoint contract end to end: train a real checkpoint, publish it to
+    ``tinaudio/synth-setter-citest``, then pass ``ckpt_path=${wandb:...}`` explicitly and run
+    ``evaluate()`` in predict mode.
     The resolver downloads the artifact, Lightning loads the weights, and predict-mode inference
     writes finite per-sample predictions — the contract a fake-stub test cannot prove.
 

@@ -22,7 +22,8 @@ rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
 python -m synth_setter.cli.eval \
-    experiment=surge/wandb_checkpoint/vae_simple \
+    experiment=surge/vae_simple \
+    ckpt_path='${wandb:tinaudio/synth-setter/model-vae_simple:latest}' \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/vae_simple/ \
     datamodule=surge_simple \
     callbacks=eval_surge \

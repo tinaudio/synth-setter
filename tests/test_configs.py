@@ -889,48 +889,46 @@ def test_surge_experiment_resolves_consistent_synth_identity(
 
 
 # Mirrors AUDIO_PREDICT_CASES in tests/test_compare_baseline_configs.py at
-# compose level (no shell shim) so the swap-invariance contract (#2565/#2558)
-# sits in the fast loop: pairing a checkpoint overlay with an audio datamodule
-# must never break model/callback identity resolution.
-AUDIO_OVERLAY_SWAP_CASES: tuple[tuple[str, str, str], ...] = (
+# compose level so swapping in an audio datamodule cannot break model or callback identity.
+AUDIO_EXPERIMENT_SWAP_CASES: tuple[tuple[str, str, str], ...] = (
     (
-        "surge/wandb_checkpoint/ffn_full",
+        "surge/ffn_full",
         "model.encoder_output_dim",
         "callbacks.log_per_param_mse.param_spec",
     ),
     (
-        "surge/wandb_checkpoint/ffn_full",
+        "surge/ffn_full",
         "model.net.d_out",
         "callbacks.log_per_param_mse.param_spec",
     ),
     (
-        "surge/wandb_checkpoint/flow_full",
+        "surge/flow_full",
         "model.num_params",
         "callbacks.log_per_param_mse.param_spec",
     ),
     (
-        "surge/wandb_checkpoint/flow_mlp_full",
+        "surge/flow_mlp_full",
         "model.num_params",
         "callbacks.log_per_param_mse.param_spec",
     ),
-    ("surge/wandb_checkpoint/vae_full", "model.net.latent_dim", "model.param_spec"),
+    ("surge/vae_full", "model.net.latent_dim", "model.param_spec"),
 )
 
 
 @pytest.mark.parametrize(
     ("experiment", "width_path", "spec_path"),
-    AUDIO_OVERLAY_SWAP_CASES,
+    AUDIO_EXPERIMENT_SWAP_CASES,
     ids=[
         f"{case[0].rsplit('/', 1)[-1]}-{case[1].rsplit('.', 1)[-1]}"
-        for case in AUDIO_OVERLAY_SWAP_CASES
+        for case in AUDIO_EXPERIMENT_SWAP_CASES
     ],
 )
-def test_checkpoint_overlay_resolves_identity_with_audio_datamodule(
+def test_surge_experiment_resolves_identity_with_audio_datamodule(
     experiment: str, width_path: str, spec_path: str
 ) -> None:
-    """Swapping in an audio datamodule leaves checkpoint identity resolvable.
+    """Swapping in an audio datamodule leaves model identity resolvable.
 
-    :param experiment: Checkpoint overlay composed with ``datamodule=fsd``.
+    :param experiment: Surge experiment composed with ``datamodule=fsd``.
     :param width_path: Model width key that must still resolve to the surge_xt width.
     :param spec_path: Param-spec label key that must still resolve.
     """
