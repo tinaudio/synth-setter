@@ -80,6 +80,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
     apt-get update --error-on=any && apt-get install -y --no-install-recommends \
   software-properties-common \
+  sudo \
   gcc-12 \
   g++-12 \
   git \
@@ -356,6 +357,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
         x11-utils \
         x11-xserver-utils \
         xauth \
+        xclip \
+        xdg-utils \
         xsettingsd \
         xvfb; \
     apt-get clean; \
