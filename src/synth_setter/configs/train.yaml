@@ -19,7 +19,7 @@ defaults:
   - synth: null
 
   # render settings the val audio probe re-renders predictions with; only needed
-  # when training.val_audio_probe is on (e.g. `render=surge_xt`)
+  # when training.val_audio_probe is on (e.g. `render=vst`)
   - render: null
 
   # embedding-conditioning profiles pairing a stored Lance column with its

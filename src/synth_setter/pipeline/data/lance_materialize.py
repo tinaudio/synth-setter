@@ -274,7 +274,7 @@ def _open_source(source_uri: str) -> lance.LanceDataset:
     if r2_io.is_r2_uri(source_uri):
         open_uri, storage_options = r2_io.lance_target(source_uri)
     elif is_file_uri(source_uri):
-        open_uri, storage_options = str(file_uri_to_path(source_uri)), None
+        open_uri, storage_options = file_uri_to_path(source_uri).as_uri(), None
     else:
         open_uri, storage_options = source_uri, None
     return _retry_lance_read(

@@ -16,6 +16,7 @@ from structlog.testing import capture_logs
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import (
     MaterializeManifest,
+    _open_source,
     materialize_lance_subset,
     materialize_splits,
     resolve_txid_version,
@@ -282,6 +283,27 @@ def test_materialize_column_projection_subset_columns_only_requested_schema(
     materialize_lance_subset(source, dest, txid=txid, columns=("a",))
     out = lance.dataset(str(dest))
     assert out.schema.names == ["a"]
+
+
+def test_open_source_absolute_file_uri_from_other_cwd_preserves_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file URI remains absolute while Lance reads it outside the source cwd.
+
+    :param tmp_path: Pytest fixture providing source and unrelated working directories.
+    :param monkeypatch: Fixture changing the process working directory.
+    """
+    source = tmp_path / "network volume" / "train.lance"
+    source.parent.mkdir()
+    lance.write_dataset(pa.table({"a": [1, 2, 3]}), str(source))
+    unrelated_cwd = tmp_path / "worker"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+
+    dataset = _open_source(source.as_uri())
+
+    assert dataset.uri == source.as_uri()
+    assert dataset.to_table().column("a").to_pylist() == [1, 2, 3]
 
 
 def test_materialize_file_uri_source_resolves_local_path(

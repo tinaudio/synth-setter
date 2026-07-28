@@ -436,24 +436,28 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
 
 
 @pytest.mark.slow
-def test_train_file_uri_hydrates_local_dataset_root(tmp_path: Path) -> None:
-    """The train entrypoint hydrates pod-local storage from a mounted file URI.
+def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The train entrypoint consumes projected splits from a marker-staged file URI.
 
-    :param tmp_path: Parent of the mounted source, local destination, and run output.
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
     """
-    source = tmp_path / "network-volume"
-    source.mkdir()
+    source = Path(cfg_train_lance.datamodule.dataset_root)
     (source / ".synth-setter-stage-complete").touch()
     destination = tmp_path / "local-dataset"
-    cfg = build_fake_train_cfg(tmp_path / "run", param_spec_name="surge_simple")
-    with open_dict(cfg):
-        cfg.datamodule.dataset_root = str(destination)
-        cfg.datamodule.download_dataset_root_uri = source.as_uri()
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
 
-    HydraConfig().set_config(cfg)
-    train(cfg)
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
 
-    assert (destination / ".synth-setter-stage-complete").is_file()
+    assert object_dict["trainer"].global_step > 0
+    assert torch.isfinite(metric_dict["train/loss"])
+    hydrated_root = object_dict["datamodule"].dataset_root
+    assert (hydrated_root / ".synth-setter-stage-complete").is_file()
 
 
 @pytest.mark.slow

@@ -1,3 +1,0 @@
-# Identity moved to the root synth group (#2565); kept so `render=faust_church_organ` still composes.
-defaults:
-  - faust_bright_organ

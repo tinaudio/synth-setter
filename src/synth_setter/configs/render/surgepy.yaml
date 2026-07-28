@@ -1,0 +1,8 @@
+# surgepy backend knobs; identity comes from the root synth group (`synth=<name>_surgepy`).
+defaults:
+  - vst
+  - _self_
+
+renderer_backend: surgepy
+plugin_reload_cadence: render
+gui_toggle_cadence: never

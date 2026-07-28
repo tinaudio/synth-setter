@@ -442,7 +442,7 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 @pytest.fixture(scope="function")
 def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose ``dataset.yaml`` with ``synth=obxf render=obxf`` for entrypoint OB-Xf coverage.
+    """Compose ``dataset.yaml`` with ``synth=obxf render=vst`` for entrypoint OB-Xf coverage.
 
     The Hydra config-initializer lives here, not in ``tests/test_generate_dataset.py``,
     so that module stays free of the imports banned by
@@ -457,7 +457,7 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/smoke-shard", "synth=obxf", "render=obxf"],
+            overrides=["experiment=generate_dataset/smoke-shard", "synth=obxf", "render=vst"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -483,7 +483,7 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
                 "synth=faust_bright_organ",
-                "render=faust_bright_organ",
+                "render=faust",
                 "render.gui_toggle_cadence=never",
             ],
         )

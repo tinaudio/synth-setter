@@ -6,7 +6,7 @@
 
 defaults:
   - /experiment/surge/flow_simple
-  - override /render: surge_simple
+  - override /render: vst
   - _self_
 
 run_name: flow_440k
