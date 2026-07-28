@@ -719,7 +719,7 @@ def _build_surge_xt_smoke_cfg(
     overrides = [
         f"experiment={experiment}",
         f"synth={param_spec_name}",
-        "callbacks=[default_vst,eval_vst]",
+        "callbacks=[default_vst,eval_vst,log_per_param_mse]",
     ]
     if datamodule_group is not None:
         overrides.insert(1, f"datamodule={datamodule_group}")
@@ -809,7 +809,9 @@ def build_fake_train_cfg(
                 f"synth={param_spec_name}",
                 "trainer=cpu",
                 f"model={model_group}",
-                f"callbacks={callbacks_group}",
+                # Replacing the experiment's callbacks group must keep its
+                # log_per_param_mse selection (asserted by consumers).
+                f"callbacks=[{callbacks_group},log_per_param_mse]",
             ],
         )
         with open_dict(cfg):

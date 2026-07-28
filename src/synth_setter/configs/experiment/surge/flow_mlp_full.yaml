@@ -5,6 +5,7 @@ defaults:
   - override /model: vst_flowmlp
   - override /datamodule: surge
   - override /synth: surge_xt
+  - override /callbacks: [default_vst, log_per_param_mse]
   - _self_
 
 run_name: flowmlp
@@ -14,7 +15,4 @@ tags:
   - surge
 
 callbacks:
-  log_per_param_mse:
-    _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: ${synth.param_spec_name}
   plot_proj_ii: null
