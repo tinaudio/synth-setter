@@ -48,7 +48,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
     falls back to loading the plugin via pedalboard and reading
     `plugin.version`. The fallback requires a usable X11 display, so callers in
     interpreter-only contexts (the SkyPilot launcher) must avoid it — they pin
-    `render.synth.synth_version` in the dataset config and let the
+    `synth.synth_version` in the dataset config (serialized as
+    `render.synth.synth_version` in the spec) and let the
     worker compare against this function's output before rendering (see
     `synth_setter.cli.generate_dataset.generate`).
 

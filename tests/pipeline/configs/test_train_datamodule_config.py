@@ -29,7 +29,13 @@ def _instantiate_train_datamodule(*overrides: str) -> LanceVSTDataModule:
             cfg = compose(
                 config_name="train.yaml",
                 return_hydra_config=True,
-                overrides=["datamodule=surge_simple", "model=ffn", "trainer=cpu", *overrides],
+                overrides=[
+                    "datamodule=surge_simple",
+                    "synth=surge_simple",
+                    "model=ffn",
+                    "trainer=cpu",
+                    *overrides,
+                ],
             )
         HydraConfig().set_config(cfg)
         return instantiate(cfg.datamodule)

@@ -74,7 +74,7 @@ Reference: `data-pipeline.md` §14.5 (finalize stage)
 ### 2.3 Training
 
 ```
-train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, render, ...)
+train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, synth, render, ...)
   → Hydra composes DictConfig
     → hydra.utils.instantiate() → LightningModule, DataModule, Trainer
       → trainer.fit(model, datamodule)
@@ -92,6 +92,10 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one
+- `synth:` defaults to `null`; VST runs select the root identity group
+  (e.g. `synth=surge_xt`, usually via the experiment's defaults) that VST
+  datamodules, models, callbacks, and the render pipeline all resolve —
+  identity's single home (#2565)
 
 Reference: `training-pipeline.md` §4–5
 
@@ -100,13 +104,14 @@ Reference: `training-pipeline.md` §4–5
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
   + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_seed}
-  + render: {synth: {name, param_spec_name, plugin_path, plugin_state_path}}   # required when render_vst=true
+  + synth: {name, param_spec_name, plugin_path, plugin_state_path, synth_version}  # required when render_vst=true
+  + render: {backend knobs}                                                       # required when render_vst=true
   → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)
 ```
 
 - Experiment config pins everything: model checkpoint (W&B artifact ref), data config, eval settings
 - `evaluation:` block (in `src/synth_setter/configs/eval.yaml`) gates the in-process render and metrics phases — both default off so `mode=test`/`mode=validate` runs are unchanged
-- `render:` defaults entry composes a renderer config group (e.g. `render=surge_xt`) and supplies the VST plugin/preset/param-spec that `_run_predict_postprocessing` forwards to the render subprocess
+- `render:` composes a backend-knob group and the root `synth:` group supplies the VST plugin/preset/param-spec (`render=surge_xt synth=surge_xt`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess
 - No eval spec — configs are the source of truth
 - Full provenance in R2 path: `eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/`
 

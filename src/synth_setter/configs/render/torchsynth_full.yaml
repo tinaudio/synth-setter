@@ -1,8 +1,5 @@
 # In-process torchsynth backend (no plugin host); the no-preset baseline patch
 # lives in torchsynth_param_spec.py.
-defaults:
-  - synth: torchsynth_full
-  - _self_
 renderer_backend: torchsynth
 sample_rate: 44100
 channels: 2

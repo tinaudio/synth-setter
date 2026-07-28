@@ -146,8 +146,8 @@ python -m pipeline generate \
   --workers 10 --backend runpod --image tinaudio/synth-setter:dev-snapshot-abc1234
 ```
 
-**Synth version:** Authored in the selected `render/synth` Hydra group as
-`render.synth.synth_version`. The launcher path stays interpreter-only; the worker
+**Synth version:** Authored in the selected root `synth` Hydra group (#2565)
+and serialized as `render.synth.synth_version`. The launcher path stays interpreter-only; the worker
 calls `extract_renderer_version` against the actual plugin bundle (`moduleinfo.json`
 on Linux, `Info.plist` → `CFBundleShortVersionString` on macOS, pedalboard fallback)
 and refuses to render on mismatch.
@@ -638,8 +638,8 @@ Click group from `cli.py`).
 - Auth validation: check R2 connectivity + RunPod API key before launching.
   On failure: clear error message, exit 1, no workers launched.
 - Plugin-path validation runs on the worker, not the launcher. The launcher path is
-  interpreter-only (no VST load), so it composes `render.synth.synth_version`
-  from the selected synth group and the worker validates the actual plugin bundle
+  interpreter-only (no VST load), so it composes `synth.synth_version`
+  from the selected root synth group and the worker validates the actual plugin bundle
   via `extract_renderer_version` before rendering.
 - First run: config → validate → compose `synth_version` → materialize spec →
   upload frozen spec to `metadata/input_spec.json` + source config to
@@ -940,8 +940,8 @@ no workers launched.
 The launcher path is interpreter-only (the SkyPilot launcher in
 `src/synth_setter/pipeline/skypilot_launch.py` cannot load a VST3 plugin — no X11),
 so `materialize_spec` neither extracts `synth_version` from the plugin bundle nor
-enforces a `plugin_path.exists()` precondition. Compose `render.synth.synth_version`
-from the selected synth group; the worker calls
+enforces a `plugin_path.exists()` precondition. Compose `synth.synth_version`
+from the selected root synth group; the worker calls
 `extract_renderer_version` against the actual plugin before rendering and raises a clear
 mismatch error if the running plugin disagrees with the spec. This pushes plugin-bundle
 errors to the worker, where the X stack and pedalboard fallback are available, instead

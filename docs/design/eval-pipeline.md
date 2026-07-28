@@ -250,13 +250,13 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. Both phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`) and are gated by `cfg.evaluation`:
 
-| Key                          | Default | Effect when true                                                                                                                                                                                                                        |
-| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}` from the complete `cfg.render` backend configuration, including the nested synth identity resolved via `SynthSpec.from_render_cfg` |
-| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                                          |
-| `evaluation.rerender_target` | `true`  | Forwards `--rerender-target True` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                               |
-| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                            |
-| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)                        |
+| Key                          | Default | Effect when true                                                                                                                                                                                                             |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}` from the `cfg.render` backend knobs joined with the root `cfg.synth` identity via `RenderConfig.from_cfg_nodes` (#2565) |
+| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                               |
+| `evaluation.rerender_target` | `true`  | Forwards `--rerender-target True` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                    |
+| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                 |
+| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)             |
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
@@ -342,7 +342,7 @@ num_workers: 4  # per dataloader — validation doubles the live worker count
 persistent_workers: true  # automatically disabled when num_workers=0
 ```
 
-`surge_simple.yaml` is a thin overlay (`defaults: [surge_xt, override synth: surge_simple]`) that swaps only the synth identity group; it inherits the keys above from `surge_xt.yaml`, which in turn inherits them from `vst.yaml`.
+The surge datamodule variants (`surge.yaml`, `surge_simple.yaml`, ...) are thin overlays of `vst.yaml` and carry no identity of their own; the synth spec is selected at the config root (e.g. `- override /synth: surge_simple` in `experiment/surge/base.yaml`) and reaches the datamodule through `${synth.param_spec_name}`.
 
 To use R2, pass it explicitly:
 

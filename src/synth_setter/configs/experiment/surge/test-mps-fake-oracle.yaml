@@ -12,6 +12,7 @@ defaults:
   - surge/base
   - override /model: vst_fake_oracle
   - override /datamodule: surge
+  - override /synth: surge_xt
   - override /trainer: mps
   - override /callbacks: [default_vst, eval_vst]
   - _self_
@@ -64,7 +65,7 @@ trainer:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: ${datamodule.param_spec_name}
+    param_spec: ${synth.param_spec_name}
   plot_proj_ii: null
   model_checkpoint:
     save_last: true

@@ -286,7 +286,7 @@ Each trial subprocess opens its own wandb run with `id = spec.run_id`; the
 When `oracle_eval_inline=true`, the local-run path shells out to
 `synth_setter.cli.eval` **once per split (train, val, test)** after `generate(...)` has closed its run.
 `_run_oracle_eval_subprocess` (`src/synth_setter/cli/generate_dataset.py`)
-re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=vst`, and appends the generation render's absent identity fields with `+render.<field>=...` to
+re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=vst synth=<name>`, restating identity fields as plain `synth.<field>=...` overrides so per-run plugin substitutions survive, to
 re-render the predicted params. Generic knobs already in `vst` use plain `render.<field>=...` overrides; the eval deposits audio-similarity metrics onto the
 generate run — a `wandb sync` then merges both phases under one run id. Because
 all three splits resume the **same** run, the metric keys are namespaced per

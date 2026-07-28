@@ -443,7 +443,7 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 @pytest.fixture(scope="function")
 def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose ``dataset.yaml`` with ``render=obxf`` for entrypoint OB-Xf coverage.
+    """Compose ``dataset.yaml`` with ``synth=obxf render=obxf`` for entrypoint OB-Xf coverage.
 
     The Hydra config-initializer lives here, not in ``tests/test_generate_dataset.py``,
     so that module stays free of the imports banned by
@@ -452,13 +452,13 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
 
     :param tmp_path: Per-test output/work/log root.
 
-    :yields DictConfig: ``render=obxf`` cfg with ``tmp_path``-pinned paths;
+    :yields DictConfig: OB-Xf cfg with ``tmp_path``-pinned paths;
         teardown clears Hydra's global singleton.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+            overrides=["experiment=generate_dataset/smoke-shard", "synth=obxf", "render=obxf"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -483,6 +483,7 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
+                "synth=faust_bright_organ",
                 "render=faust_bright_organ",
                 "render.gui_toggle_cadence=never",
             ],
@@ -715,7 +716,11 @@ def _build_surge_xt_smoke_cfg(
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
-    overrides = [f"experiment={experiment}", "callbacks=[default_vst,eval_vst]"]
+    overrides = [
+        f"experiment={experiment}",
+        f"synth={param_spec_name}",
+        "callbacks=[default_vst,eval_vst]",
+    ]
     if datamodule_group is not None:
         overrides.insert(1, f"datamodule={datamodule_group}")
 
@@ -743,7 +748,6 @@ def _build_surge_xt_smoke_cfg(
 
             # The smoke fixture writes one sample, so use a one-row training batch.
             cfg.datamodule.batch_size = 1
-            cfg.datamodule.param_spec_name = param_spec_name
             cfg.datamodule.pin_memory = False
             cfg.datamodule.ot = False
             # Smoke fixture writes stats.npz via masked get_dataset_stats — see #1002.
@@ -802,6 +806,7 @@ def build_fake_train_cfg(
             return_hydra_config=True,
             overrides=[
                 "experiment=surge/fake_oracle",
+                f"synth={param_spec_name}",
                 "trainer=cpu",
                 f"model={model_group}",
                 f"callbacks={callbacks_group}",
@@ -814,7 +819,6 @@ def build_fake_train_cfg(
             cfg.paths.output_dir = str(output_dir)
             cfg.paths.log_dir = str(output_dir)
             cfg.datamodule.fake = True
-            cfg.datamodule.param_spec_name = param_spec_name
             cfg.datamodule.batch_size = 2
             cfg.datamodule.num_workers = 0
             cfg.datamodule.use_saved_mean_and_variance = False
@@ -823,9 +827,6 @@ def build_fake_train_cfg(
             cfg.logger = None
             if "lr_monitor" in cfg.callbacks:
                 del cfg.callbacks.lr_monitor
-            # log_per_param_mse keys its spec off ${render.param_spec_name}; pin it
-            # concretely — this train path composes no render group.
-            cfg.callbacks.log_per_param_mse.param_spec = param_spec_name
     return cfg
 
 
@@ -1233,6 +1234,7 @@ def build_surge_xt_embedding_train_cfg(
             return_hydra_config=True,
             overrides=[
                 f"experiment={experiment}",
+                f"synth={param_spec_name}",
                 f"conditioning={conditioning}",
                 "trainer=cpu",
                 "datamodule=surge_lance",
@@ -1260,7 +1262,6 @@ def build_surge_xt_embedding_train_cfg(
             cfg.datamodule.fake = fake
             cfg.datamodule.dataset_root = str(dataset_root)
             cfg.datamodule.predict_file = str(dataset_root / "test.lance")
-            cfg.datamodule.param_spec_name = param_spec_name
             cfg.datamodule.batch_size = 1
             cfg.datamodule.num_workers = 0
             cfg.datamodule.pin_memory = False
@@ -1403,14 +1404,17 @@ def _apply_smoke_train_paths(
     :param variant: Dataset-format arm selecting the predict-split suffix.
     :param tmp_path: Shared output/log directory (and checkpoint parent for eval).
     """
+    render_values = _surge_smoke_render_config(
+        str(cfg.datamodule.param_spec_name), variant.plugin_path
+    )
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
         cfg.datamodule.predict_file = str(dataset_root / f"test{variant.split_ext}")
-        cfg.render = _surge_smoke_render_config(
-            str(cfg.datamodule.param_spec_name), variant.plugin_path
-        )
+        # Identity lives in the root synth group (#2565); knobs stay under render.
+        cfg.synth = render_values.pop("synth")
+        cfg.render = render_values
 
 
 @pytest.fixture(scope="function")
@@ -2206,7 +2210,12 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=surge_lance", "model=vst_ffn", "trainer=cpu"],
+            overrides=[
+                "datamodule=surge_lance",
+                f"synth={_LANCE_SMOKE_PARAM_SPEC}",
+                "model=vst_ffn",
+                "trainer=cpu",
+            ],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -2222,7 +2231,6 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             cfg.trainer.max_steps = 1
             cfg.datamodule.dataset_root = str(dataset_root)
             cfg.datamodule.batch_size = 1
-            cfg.datamodule.param_spec_name = _LANCE_SMOKE_PARAM_SPEC
             cfg.datamodule.ot = False
             cfg.datamodule.num_workers = 0
             cfg.datamodule.pin_memory = False

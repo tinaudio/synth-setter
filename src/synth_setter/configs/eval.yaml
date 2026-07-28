@@ -10,6 +10,9 @@ defaults:
   - extras: default
   - hydra: default
   - callbacks: none
+  # synth identity consumed by VST datamodules, models, and callbacks via
+  # ${synth.param_spec_name}; VST experiments override it (e.g. `synth=surge_xt`)
+  - synth: null
   # `render` before `experiment` (matching train.yaml/dataset.yaml): Hydra only
   # lets an experiment override groups declared ahead of it.
   - render: null

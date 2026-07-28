@@ -10,11 +10,12 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import InterpolationToMissingValueError
+from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.resources import configs_dir
+from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
 
 
@@ -168,7 +169,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
             return_hydra_config=False,
             overrides=[
                 f"experiment={test_mps_yaml}",
-                f"datamodule.param_spec_name={fixture_param_spec}",
+                f"synth={fixture_param_spec}",
             ],
         )
     GlobalHydra.instance().clear()
@@ -223,7 +224,7 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
         "train.yaml",
         [
             "datamodule=surge_lance",
-            "datamodule.param_spec_name=surge_xt",
+            "synth=surge_xt",
             "model=vst_flow",
             f"conditioning={profile}",
             "trainer=cpu",
@@ -262,7 +263,7 @@ def _compose_t5gemma_cached_train_cfg(
         "train.yaml",
         [
             "datamodule=surge_lance",
-            "datamodule.param_spec_name=surge_xt",
+            "synth=surge_xt",
             f"model={model_name}",
             "conditioning=t5gemma",
             "trainer=cpu",
@@ -342,7 +343,7 @@ def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
         "train.yaml",
         [
             "datamodule=surge_lance",
-            "datamodule.param_spec_name=surge_xt",
+            "synth=surge_xt",
             "model=vst_flow",
             "model/encoder=vector_projection",
             "trainer=cpu",
@@ -387,7 +388,7 @@ def test_embedding_conditioning_profile_encoder_matches_model_output(
         "train.yaml",
         [
             "datamodule=surge_lance",
-            "datamodule.param_spec_name=surge_xt",
+            "synth=surge_xt",
             f"model={model_name}",
             f"conditioning={profile}",
             "trainer=cpu",
@@ -474,7 +475,7 @@ def test_vst_model_width_derives_from_active_param_spec(
         "train.yaml",
         [
             "datamodule=surge_lance",
-            "datamodule.param_spec_name=obxf",
+            "synth=obxf",
             f"model={model_name}",
             "trainer=cpu",
         ],
@@ -492,7 +493,7 @@ def test_vst_model_width_resolves_for_every_registered_spec(param_spec_name: str
         "train.yaml",
         [
             "datamodule=surge_lance",
-            f"datamodule.param_spec_name={param_spec_name}",
+            f"synth={param_spec_name}",
             "model=vst_ffn",
             "trainer=cpu",
         ],
@@ -532,7 +533,7 @@ def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
         "train.yaml",
         [
             "datamodule=surge_lance",
-            "datamodule.param_spec_name=obxf",
+            "synth=obxf",
             "model=vst_flowvae",
             "trainer=cpu",
             "+model.net.latent_flow_num_layers=2",
@@ -622,7 +623,7 @@ def test_legacy_surge_model_group_composes_canonical_defaults(
     """
     legacy_cfg = _compose(
         "train.yaml",
-        ["datamodule=surge_simple", f"model={legacy_name}", "trainer=cpu"],
+        ["datamodule=surge_simple", "synth=surge_simple", f"model={legacy_name}", "trainer=cpu"],
     )
     assert legacy_cfg.model._target_.endswith(target_suffix)
     assert OmegaConf.select(legacy_cfg.model, expected_path) == expected_value
@@ -679,12 +680,13 @@ def test_legacy_surge_callback_alias_composes_vst_callbacks(
     assert expected_callback in cfg.callbacks
 
 
-def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
-    """The VST per-parameter callback resolves the active datamodule spec."""
+def test_log_per_param_mse_config_uses_active_synth_spec() -> None:
+    """The VST per-parameter callback resolves the selected synth's spec."""
     cfg = _compose(
         "train.yaml",
         [
             "datamodule=surge_mini",
+            "synth=surge_4",
             "model=ffn",
             "callbacks=log_per_param_mse",
             "trainer=cpu",
@@ -694,8 +696,8 @@ def test_log_per_param_mse_config_uses_active_datamodule_spec() -> None:
     assert cfg.callbacks.log_per_param_mse.param_spec == "surge_4"
 
 
-def test_log_per_param_mse_config_requires_datamodule_spec() -> None:
-    """The VST per-parameter callback rejects an unset ParamSpec."""
+def test_log_per_param_mse_config_requires_synth_selection() -> None:
+    """The VST per-parameter callback rejects a run with no synth selected."""
     cfg = _compose(
         "train.yaml",
         [
@@ -706,7 +708,7 @@ def test_log_per_param_mse_config_requires_datamodule_spec() -> None:
         ],
     )
 
-    with pytest.raises(InterpolationToMissingValueError, match="param_spec_name"):
+    with pytest.raises(InterpolationKeyError, match="synth"):
         OmegaConf.to_container(cfg.callbacks, resolve=True, throw_on_missing=True)
 
 
@@ -727,8 +729,8 @@ def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> 
     """
     cfg = _compose("dataset.yaml", ["experiment=generate_dataset/surge-4-lance-440k-20k-20k"])
 
-    assert cfg.render.synth.param_spec_name == "surge_4"
-    assert cfg.render.synth.plugin_state_path == "presets/surge-mini.vstpreset"
+    assert cfg.synth.param_spec_name == "surge_4"
+    assert cfg.synth.plugin_state_path == "presets/surge-mini.vstpreset"
     assert cfg.datamodule.param_spec_name == "surge_4"
     assert cfg.output_format == "lance"
     assert list(cfg.train_val_test_sizes) == [440000, 20000, 20000]
@@ -762,7 +764,7 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     cfg = _compose("eval.yaml", ["experiment=surge/eval_ffn_4", "ckpt_path=dummy.ckpt"])
 
     assert cfg.mode == "predict"
-    assert cfg.render.synth.param_spec_name == "surge_4"
+    assert cfg.synth.param_spec_name == "surge_4"
     assert cfg.datamodule.param_spec_name == "surge_4"
     assert cfg.model.net.d_out == 7
     assert cfg.evaluation.render_vst is True
@@ -791,7 +793,7 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
         "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
     )
     assert cfg.datamodule.param_spec_name == "surge_simple"
-    assert cfg.render.synth.param_spec_name == "surge_simple"
+    assert cfg.synth.param_spec_name == "surge_simple"
     assert cfg.training.val_audio_probe is True
     assert cfg.trainer.val_check_interval == 2000
     assert cfg.trainer.limit_val_batches == 20
@@ -846,3 +848,141 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
     assert cfg.trainer.min_steps is None
     assert cfg.model.net.d_out == 300
     assert cfg.model.compile is False
+
+
+# Resolved-identity guard for the synth-identity hoist (#2565): each surge
+# experiment must keep pairing this synth spec with these resolved widths and
+# callback labels across the ownership migration to the root `synth` group.
+SURGE_EXPERIMENT_IDENTITY_CASES: tuple[tuple[str, str, str, str | None], ...] = (
+    ("surge/ffn_full", "surge_xt", "model.net.d_out", "surge_xt"),
+    ("surge/ffn_4", "surge_4", "model.net.d_out", "surge_4"),
+    ("surge/ffn_simple", "surge_simple", "model.net.d_out", None),
+    ("surge/flow_full", "surge_xt", "model.num_params", "surge_xt"),
+    ("surge/flow_simple", "surge_simple", "model.num_params", None),
+    ("surge/flow_mlp_full", "surge_xt", "model.num_params", "surge_xt"),
+    ("surge/fake_oracle", "surge_xt", "model.net.d_out", "surge_xt"),
+    ("surge/vae_full", "surge_xt", "model.net.latent_dim", None),
+)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "param_spec", "width_path", "callback_spec"),
+    SURGE_EXPERIMENT_IDENTITY_CASES,
+    ids=[case[0].removeprefix("surge/") for case in SURGE_EXPERIMENT_IDENTITY_CASES],
+)
+def test_surge_experiment_resolves_consistent_synth_identity(
+    experiment: str, param_spec: str, width_path: str, callback_spec: str | None
+) -> None:
+    """Each surge experiment resolves one synth spec across datamodule, model, and callback.
+
+    :param experiment: Hydra ``experiment=...`` override under test.
+    :param param_spec: Spec the experiment's synth selection must resolve to.
+    :param width_path: Model key sized from the spec's parameter width.
+    :param callback_spec: Expected ``log_per_param_mse.param_spec``, or ``None``
+        when the experiment composes no per-param-MSE callback.
+    """
+    cfg = _compose("train.yaml", [f"experiment={experiment}", "trainer=cpu"])
+
+    assert cfg.datamodule.param_spec_name == param_spec
+    assert OmegaConf.select(cfg, width_path) == resolve_param_spec_width(param_spec)
+    assert OmegaConf.select(cfg, "callbacks.log_per_param_mse.param_spec") == callback_spec
+
+
+# Mirrors AUDIO_PREDICT_CASES in tests/test_compare_baseline_configs.py at
+# compose level (no shell shim) so the swap-invariance contract (#2565/#2558)
+# sits in the fast loop: pairing a checkpoint overlay with an audio datamodule
+# must never break model/callback identity resolution.
+AUDIO_OVERLAY_SWAP_CASES: tuple[tuple[str, str, str], ...] = (
+    (
+        "surge/wandb_checkpoint/ffn_full",
+        "model.encoder_output_dim",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    (
+        "surge/wandb_checkpoint/ffn_full",
+        "model.net.d_out",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    (
+        "surge/wandb_checkpoint/flow_full",
+        "model.num_params",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    (
+        "surge/wandb_checkpoint/flow_mlp_full",
+        "model.num_params",
+        "callbacks.log_per_param_mse.param_spec",
+    ),
+    ("surge/wandb_checkpoint/vae_full", "model.net.latent_dim", "model.param_spec"),
+)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "width_path", "spec_path"),
+    AUDIO_OVERLAY_SWAP_CASES,
+    ids=[
+        f"{case[0].rsplit('/', 1)[-1]}-{case[1].rsplit('.', 1)[-1]}"
+        for case in AUDIO_OVERLAY_SWAP_CASES
+    ],
+)
+def test_checkpoint_overlay_resolves_identity_with_audio_datamodule(
+    experiment: str, width_path: str, spec_path: str
+) -> None:
+    """Swapping in an audio datamodule leaves checkpoint identity resolvable.
+
+    :param experiment: Checkpoint overlay composed with ``datamodule=fsd``.
+    :param width_path: Model width key that must still resolve to the surge_xt width.
+    :param spec_path: Param-spec label key that must still resolve.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        [
+            f"experiment={experiment}",
+            "datamodule=fsd",
+            "callbacks=eval_surge",
+            "mode=predict",
+            "ckpt_path=fake.ckpt",
+        ],
+    )
+
+    assert "param_spec_name" not in cfg.datamodule
+    assert OmegaConf.select(cfg, width_path) == resolve_param_spec_width("surge_xt")
+    assert OmegaConf.select(cfg, spec_path) == "surge_xt"
+
+
+def test_extras_rejects_datamodule_spec_skewed_from_synth_selection() -> None:
+    """``extras`` fails fast when a forced datamodule spec contradicts ``synth``.
+
+    Guards the one hole the rootward interpolation leaves open: a CLI override
+    like ``datamodule.param_spec_name=surge_4`` would otherwise train a model
+    sized for the synth selection on data described by a different spec.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "experiment=surge/ffn_full",
+            "trainer=cpu",
+            "datamodule.param_spec_name=surge_4",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="surge_4"):
+        extras(cfg)
+
+
+def test_extras_validates_synth_before_missing_extras_early_return() -> None:
+    """A registry-skewed ``synth`` node fails even when no ``extras`` block is composed."""
+    cfg = OmegaConf.create(
+        {
+            "synth": {
+                "name": "surge_xt",
+                "param_spec_name": "surge_4",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="surge_4"):
+        extras(cfg)

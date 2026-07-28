@@ -429,7 +429,11 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
     assert b"git_sha" in payload, "artifact metadata 'git_sha' not recorded in offline run binary"
 
 
+# The upload path runs `r2_io.ensure_r2_env_loaded`, whose credential projection
+# overwrites `RCLONE_CONFIG_R2_TYPE`, so the local-backed remote cannot stand in
+# for real R2 here and the test needs credentials to reach its assertions (#2564).
 @pytest.mark.slow
+@pytest.mark.integration_r2
 def test_train_uploaded_checkpoint_is_described_by_offline_artifact_metadata(
     cfg_train_lance: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

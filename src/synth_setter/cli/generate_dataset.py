@@ -171,13 +171,14 @@ def _run_oracle_eval_subprocess(
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
         "logger=wandb",
-        # ``+`` adds identity keys absent from ``render/vst.yaml``; generic knobs override normally.
+        # Identity replays through the root synth group (#2565): select the row,
+        # then restate each field so per-run overrides (stub plugins) survive.
         "render=vst",
-        f"+render.synth.name={render.synth.name}",
-        f"+render.synth.param_spec_name={render.param_spec_name}",
-        f"+render.synth.plugin_state_path={render.plugin_state_path}",
-        f"+render.synth.plugin_path={render.plugin_path}",
-        f"+render.synth.synth_version={render.synth.synth_version}",
+        f"synth={render.synth.name}",
+        *(
+            f"synth.{field}={value}"
+            for field, value in render.synth.model_dump(exclude={"name"}).items()
+        ),
         f"render.renderer_backend={render.renderer_backend}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
         f"render.gui_toggle_cadence={render.gui_toggle_cadence}",

@@ -77,7 +77,7 @@ def _compose_smoke_shard_cfg(prefix: str) -> DictConfig:
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
-                f"render.synth.plugin_path={_SURGE_VST3}",
+                f"synth.plugin_path={_SURGE_VST3}",
                 f"+r2.prefix={prefix}",
             ],
         )

@@ -7,6 +7,9 @@
 defaults:
   - _self_
   - datamodule: ???
+  # Synth identity (#2565): the ``synth`` group names what to render, the
+  # ``render`` group names how (backend + knobs); experiments select both.
+  - synth: ???
   - render: ???
   - r2: default
   - paths: default

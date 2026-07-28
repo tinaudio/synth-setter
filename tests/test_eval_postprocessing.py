@@ -68,20 +68,22 @@ def _build_postprocess_cfg(
     :param shuffle_seed: Drives ``cfg.evaluation.shuffle_seed``.
     :param metric_prefix: Drives ``cfg.evaluation.metric_prefix``; prepended to
         every returned audio metric key.
-    :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
+    :param render: Drives ``cfg.render`` and, for identity keys, the root
+        ``cfg.synth`` node (#2565); pass ``None`` to test the unset-render branch.
     :param batch_size: Drives ``cfg.datamodule.batch_size``; the render timeout
         scales with ``pred-*.pt`` count times this.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
+    synth_values: dict[str, Any] | None = None
     if render is not None:
+        synth_values = {
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-simple.vstpreset",
+            "synth_version": "1.3.4",
+        }
         render_values: dict[str, Any] = {
-            "synth": {
-                "name": "surge_simple",
-                "param_spec_name": "surge_simple",
-                "plugin_path": "plugins/Surge XT.vst3",
-                "plugin_state_path": "presets/surge-simple.vstpreset",
-                "synth_version": "1.3.4",
-            },
             "renderer_backend": "pedalboard",
             "sample_rate": 44100,
             "channels": 2,
@@ -94,8 +96,7 @@ def _build_postprocess_cfg(
             "gui_toggle_cadence": "never",
         }
         identity_keys = {"param_spec_name", "plugin_path", "plugin_state_path", "synth_version"}
-        identity_overrides = {key: render[key] for key in identity_keys if key in render}
-        render_values["synth"].update(identity_overrides)
+        synth_values.update({key: render[key] for key in identity_keys if key in render})
         render_values.update(
             {key: value for key, value in render.items() if key not in identity_keys}
         )
@@ -112,6 +113,7 @@ def _build_postprocess_cfg(
                 "metric_prefix": metric_prefix,
             },
             "datamodule": {"batch_size": batch_size},
+            "synth": synth_values,
             "render": render,
         }
     )

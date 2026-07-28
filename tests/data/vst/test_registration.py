@@ -17,15 +17,16 @@ import pytest
 import yaml
 
 from synth_setter.data.vst import param_spec_registry
+from synth_setter.synth_spec import SYNTHS, SynthSpec
 from synth_setter.data.vst.registration import (
     checkout_relative_path,
     find_repo_root,
-    registration_paths,
+    identity_group_yaml,
     preset_repo_path,
+    registration_paths,
     registry_with_spec,
-    synth_group_yaml,
-    synths_with_spec,
     render_config_yaml,
+    synths_with_spec,
 )
 from tests.data.vst._introspect_fakes import assert_ruff_format_clean
 
@@ -67,6 +68,23 @@ def _dict_keys(source: str, name: str) -> list[str]:
                 keys.append(ast.literal_eval(key))
             return keys
     raise AssertionError(f"no module-level dict named {name} in source")
+
+
+def _fake_spec(**overrides: str) -> SynthSpec:
+    """Build a registration-shaped identity row with per-test field overrides.
+
+    :param **overrides: Field values replacing the fake defaults.
+    :returns: Frozen identity row for generator tests.
+    """
+    fields: dict[str, str] = {
+        "name": "fake_synth",
+        "param_spec_name": "fake_synth",
+        "plugin_path": "plugins/fake.vst3",
+        "plugin_state_path": preset_repo_path("fake_synth"),
+        "synth_version": "9.9.9",
+    }
+    fields.update(overrides)
+    return SynthSpec.model_validate(fields)
 
 
 def test_registry_with_spec_adds_the_param_spec_key() -> None:
@@ -304,34 +322,32 @@ def test_registry_with_spec_unrecognized_source_raises() -> None:
         registry_with_spec("print('not the registry')\n", "fake_synth")
 
 
-def test_render_config_yaml_selects_the_synth_group_over_vst_defaults() -> None:
-    """The emitted config inherits generic VST knobs and selects its synth group."""
+def test_render_config_yaml_inherits_vst_defaults_without_identity() -> None:
+    """The emitted config inherits generic VST knobs; identity lives in the root synth group."""
     cfg = yaml.safe_load(render_config_yaml("fake_synth"))
 
-    assert cfg == {"defaults": ["vst", {"synth": "fake_synth"}, "_self_"]}
+    assert cfg == {"defaults": ["vst"]}
 
 
-def test_synth_group_yaml_quotes_arbitrary_plugin_path() -> None:
+def test_identity_group_yaml_quotes_arbitrary_plugin_path() -> None:
     """A plugin path with YAML-hostile characters round-trips through safe_load."""
     hostile = '/tmp/odd: "name" #1.vst3'  # noqa: S108 — literal fixture path, never opened
 
-    text = synth_group_yaml("fake_synth", plugin_path=hostile, synth_version="9.9.9")
+    text = identity_group_yaml(_fake_spec(plugin_path=hostile))
 
     assert yaml.safe_load(text)["plugin_path"] == hostile
 
 
-def test_synth_group_yaml_owns_the_synth_version() -> None:
+def test_identity_group_yaml_owns_the_synth_version() -> None:
     """The generated identity group owns the artifact version pin."""
-    text = synth_group_yaml(
-        "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
-    )
+    text = identity_group_yaml(_fake_spec())
 
     assert yaml.safe_load(text)["synth_version"] == "9.9.9"
 
 
-def test_synth_group_yaml_preserves_reserved_word_spec_name_as_string() -> None:
+def test_identity_group_yaml_preserves_reserved_word_spec_name_as_string() -> None:
     """A spec name that is a YAML 1.1 boolean literal stays a string after parsing."""
-    text = synth_group_yaml("on", plugin_path="plugins/fake.vst3", synth_version="1.0")
+    text = identity_group_yaml(_fake_spec(name="on", param_spec_name="on"))
 
     assert yaml.safe_load(text)["param_spec_name"] == "on"
 
@@ -585,11 +601,16 @@ def test_synths_with_spec_without_the_table_anchor_raises() -> None:
         )
 
 
-def test_synth_group_yaml_states_the_full_identity() -> None:
+def test_identity_group_yaml_reproduces_every_checked_in_group_file() -> None:
+    """Each ``configs/synth`` file is byte-for-byte generator output of its row."""
+    group_dir = Path("src/synth_setter/configs/synth")
+    for name, spec in SYNTHS.items():
+        assert (group_dir / f"{name}.yaml").read_text() == identity_group_yaml(spec), name
+
+
+def test_identity_group_yaml_states_the_full_identity() -> None:
     """The generated group carries every field ``SynthSpec`` requires."""
-    yaml_text = synth_group_yaml(
-        "fake_synth", plugin_path="plugins/fake.vst3", synth_version="9.9.9"
-    )
+    yaml_text = identity_group_yaml(_fake_spec())
 
     assert yaml.safe_load(yaml_text) == {
         "name": "fake_synth",

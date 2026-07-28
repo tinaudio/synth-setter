@@ -858,7 +858,7 @@ def _run_predict(
             "datamodule.predict_file=" + str(predict_file.resolve()),
             "datamodule.dataset_root=" + str(dataset_root_dir.resolve()),
             "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir.resolve()),
-            f"datamodule.param_spec_name={param_spec_name}",
+            f"synth={param_spec_name}",
             "mode=predict",
         ],
         timeout=_EVAL_SUBPROCESS_TIMEOUT_SECONDS,

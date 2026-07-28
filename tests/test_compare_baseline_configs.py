@@ -358,6 +358,9 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # Param-spec selection key added in #1602; absent in v0.0.0 — selects the spec,
     # doesn't size the model (d_out/num_params are pinned separately).
     "datamodule.param_spec_name",
+    # Root synth-identity group added in #2565; absent in v0.0.0. Structural
+    # relocation of the spec selection — resolved widths/labels are unchanged.
+    "synth",
     # Conditioning-modality routing added in #2279; absent in v0.0.0. Resolves to
     # the legacy `mel` default, reproducing v0.0.0 mel-spectrogram behavior.
     "datamodule.conditioning",
@@ -367,6 +370,11 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     # Model-side conditioning routing added in #2279; absent in v0.0.0. Resolves
     # to the legacy `mel` default, reproducing v0.0.0 mel-spectrogram behavior.
     "model.conditioning",
+    # Named encoder plumbing added in #2508; absent in v0.0.0. Both resolve to the
+    # values the encoder already used (n_heads 8, d_model 512), so the built model
+    # is unchanged — the keys only give the wiring a name.
+    "model.encoder_num_heads",
+    "model.encoder_output_dim",
     "evaluation",  # eval CLI predict-mode post-processing block; not a model knob
     "r2",  # checkpoint-artifact bucket/prefix added to train.yaml; storage locality, not a model knob
     # Training contains checkpoint/probe observability only; re-narrow this path if a
