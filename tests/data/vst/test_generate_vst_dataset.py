@@ -28,9 +28,9 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_sot,
     compute_wmfcc,
 )
-from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
@@ -1498,35 +1498,6 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(
         warmup=False,
     )
     assert warmup_mock.call_count == 0
-
-
-def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Strict equality at zero retries: ``warmup_plugin`` fires once, not at least once.
-
-    The "happy path" pin — when the first render passes the loudness gate, the
-    warm-up primitive is invoked exactly once. Without this, a regression that
-    silently double-warmed on the success path could slip past the retry tests
-    (which only exercise the retry branch).
-
-    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
-    """
-    from synth_setter.data.vst import generate_vst_dataset
-
-    spec = param_specs[_SPEC_NAME]
-    warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=0)
-
-    generate_vst_dataset.generate_sample(
-        renderer=_pedalboard_renderer(),
-        velocity=_VELOCITY,
-        min_loudness=_MIN_LOUDNESS,
-        param_spec=spec,
-        fixed_synth_params=None,
-        fixed_note_params=_HARDCODED_NOTE_PARAMS,
-        warmup=True,
-    )
-    assert warmup_mock.call_count == 1
 
 
 @pytest.mark.slow

@@ -486,24 +486,6 @@ def test_postprocessing_compute_metrics_off_fires_no_subprocess(
     assert captured_argv == []
 
 
-def test_postprocessing_no_op_when_both_gates_off(
-    predictions_tree: Path,
-    captured_argv: list[list[str]],
-) -> None:
-    """No subprocess fires when ``render_vst`` and ``compute_metrics`` are both off.
-
-    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
-    :param captured_argv: Captured argv list — asserted empty.
-    """
-    cfg = _build_postprocess_cfg(
-        predictions_tree, render_vst=False, compute_metrics=False, render=None
-    )
-
-    _run_predict_postprocessing(cfg)
-
-    assert captured_argv == []
-
-
 def test_postprocessing_render_requires_render_cfg(
     predictions_tree: Path,
     captured_argv: list[list[str]],

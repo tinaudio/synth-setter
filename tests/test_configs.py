@@ -890,8 +890,8 @@ def test_surge_experiment_resolves_consistent_synth_identity(
     assert OmegaConf.select(cfg, "callbacks.log_per_param_mse.param_spec") == callback_spec
 
 
-# Mirrors AUDIO_PREDICT_CASES in tests/test_compare_baseline_configs.py at
-# compose level so swapping in an audio datamodule cannot break model or callback identity.
+# Compose-level guard that swapping in an audio datamodule cannot break model
+# or callback identity, for each `jobs/predict/` experiment.
 AUDIO_EXPERIMENT_SWAP_CASES: tuple[tuple[str, str, str], ...] = (
     (
         "surge/ffn_full",

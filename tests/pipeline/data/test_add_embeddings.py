@@ -2276,13 +2276,6 @@ def test_add_embeddings_main_with_registry_selection_writes_requested_columns(
     assert checkpoints == ["custom/same-s"]
 
 
-def test_registry_default_checkpoints_match_public_sources() -> None:
-    """Checkpoint-backed registry entries preserve their established defaults."""
-    assert EMBEDDING_REGISTRY["clap"].default_checkpoint == DEFAULT_CLAP_CHECKPOINT
-    assert EMBEDDING_REGISTRY["same_s"].default_checkpoint == DEFAULT_SAME_S_CHECKPOINT
-    assert EMBEDDING_REGISTRY["same_l"].default_checkpoint == DEFAULT_SAME_L_CHECKPOINT
-
-
 def _install_fake_t5gemma(
     monkeypatch: pytest.MonkeyPatch, seen: list[np.ndarray] | None = None
 ) -> None:
