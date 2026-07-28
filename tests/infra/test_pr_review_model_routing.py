@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import importlib
 import io
@@ -235,17 +236,38 @@ def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
     assert "openrouter" in text
 
 
+def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
+    """Every ``pi_review_routing.py <cmd>`` the runbook names must be a real subcommand.
+
+    Matching fixed command names as prose only catches a rename by coincidence. Resolving them
+    against the live parser turns the check into a real consistency guard, and it covers commands
+    added to the runbook later.
+
+    :param runbook_text: Body of the review-orchestration runbook.
+    """
+    routing = importlib.import_module("agent._shared.pi_review_routing")
+    subparsers = next(
+        action
+        for action in routing._build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    registered = set(subparsers.choices)
+
+    referenced = set(re.findall(r"pi_review_routing\.py ([a-z][a-z-]*)", runbook_text))
+    assert referenced, "runbook names no pi_review_routing subcommand"
+    assert referenced <= registered, (
+        f"runbook references unknown subcommands {sorted(referenced - registered)}; "
+        f"the CLI registers {sorted(registered)}"
+    )
+
+
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
 
-    assert "pi_review_routing.py plan" in text
-    assert "pi_review_routing.py extract-report" in text
-    assert "pi_review_routing.py validate-report" in text
-    assert "pi_review_routing.py transcript-stats" in text
-    assert "pi_review_routing.py provenance" in text
+    _assert_referenced_subcommands_exist(text)
     assert "extract a unique worker JSON object from harmless surrounding prose" in text
     assert '"severity": "block"' in text
     assert "The worker does not render Markdown or attach provenance" in text
