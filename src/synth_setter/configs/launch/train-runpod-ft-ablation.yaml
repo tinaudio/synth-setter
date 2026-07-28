@@ -10,8 +10,12 @@ tail: false
 cmd: >-
   cd /home/build/synth-setter &&
   bash scripts/sync_worker_checkout.sh &&
+  rclone copyto --checksum
+  r2:intermediate-data/experiments/feedback-ft-10k/base-flow_simple-35k.ckpt
+  /home/build/synth-setter/base-flow_simple-35k.ckpt &&
   synth-setter-train
   experiment=surge/flow_simple_ft_ablation
+  model.pretrained_ckpt=/home/build/synth-setter/base-flow_simple-35k.ckpt
   training.upload_checkpoints_during_training=true
   hydra.run.dir=/home/build/synth-setter/train-run &&
   python -m synth_setter.evaluation.eval_feedback_finetune

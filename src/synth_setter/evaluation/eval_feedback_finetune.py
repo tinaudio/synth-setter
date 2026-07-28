@@ -131,7 +131,10 @@ def main(
     :param noise_seed: Seed for the shared per-row initial noise.
     """
     logging.basicConfig(level=logging.INFO)
-    logging.getLogger("synth_setter.evaluation.compute_audio_metrics").setLevel(logging.WARNING)
+    # compute_audio_metrics logs one loguru line per metric call — 8 per row.
+    from loguru import logger as loguru_logger
+
+    loguru_logger.disable("synth_setter.evaluation.compute_audio_metrics")
     cfg = _compose_cfg(experiment, work_dir)
 
     from hydra.utils import instantiate

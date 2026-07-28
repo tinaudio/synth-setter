@@ -14,9 +14,11 @@ experiment_name: surge-simple-flow-ft
 run_name: feedback
 
 model:
-  # Pinned to the immutable v0 (the mel-conditioned 440k run); :latest was
-  # overwritten by a SAME-S-conditioned run — see the canonical-slot incident.
-  pretrained_ckpt: ${wandb:khaledtinubu-n-a/synth-setter/model-flow_simple_440k:v0}
+  # The launcher downloads the immutable base snapshot
+  # r2://intermediate-data/experiments/feedback-ft-10k/base-flow_simple-35k.ckpt
+  # (the 35k-step mel/AST flow_simple; canonical slots are clobber-prone) and
+  # passes its local path on the command line.
+  pretrained_ckpt: ???
   feedback_enabled: true
 
 datamodule:
