@@ -1,5 +1,6 @@
-"""Lightning module for feed-forward k-sinusoidal parameter prediction."""
+"""Lightning module for feed-forward TorchSynth parameter prediction."""
 
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -9,23 +10,36 @@ from synth_setter.metrics import ChamferDistance, LinearAssignmentDistance, LogS
 from synth_setter.models.components.loss import ChamferLoss, MSESortLoss
 
 
-class KSinFeedForwardModule(LightningModule):
-    """Feed-forward LightningModule that regresses sinusoidal-synth parameters from audio."""
+class TorchSynthFeedForwardModule(LightningModule):
+    """Regress TorchSynth parameters from online-rendered audio."""
 
     def __init__(
         self,
         net: torch.nn.Module,
         loss_fn: str,
-        optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler,
+        optimizer: Callable[..., torch.optim.Optimizer],
+        scheduler: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None,
         compile: bool,
-        params_per_token: int = 3,
+        params_per_token: int = 1,
     ):
+        """Configure the TorchSynth regression model and audio-domain metrics.
+
+        :param net: Network mapping rendered audio to normalized parameters.
+        :param loss_fn: Parameter loss name: ``mse``, ``chamfer``, or ``mse_sort``.
+        :param optimizer: Optimizer factory receiving the module parameters.
+        :param scheduler: Optional scheduler factory receiving the optimizer.
+        :param compile: Compile ``net`` in place before fitting.
+        :param params_per_token: Parameter grouping width for permutation metrics.
+        :raises NotImplementedError: ``loss_fn`` is unsupported.
+        """
         super().__init__()
 
         self.save_hyperparameters(logger=False)
 
         self.net = net
+        self._compile = compile
+        self._optimizer_factory = optimizer
+        self._scheduler_factory = scheduler
 
         if loss_fn == "mse":
             self.criterion = torch.nn.MSELoss()
@@ -44,36 +58,48 @@ class KSinFeedForwardModule(LightningModule):
         self.test_lad = LinearAssignmentDistance(params_per_token)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Predict normalized parameters from rendered audio.
+
+        :param x: Batched audio.
+        :returns: Batched parameter predictions.
+        """
         return self.net(x)
 
-    def on_train_start(self):
-        # by default lightning executes validation step sanity checks before training starts,
-        # so it's worth to make sure validation metrics don't store results from these checks
+    def on_train_start(self) -> None:
+        """Discard metric state accumulated by Lightning's sanity validation."""
         self.val_lsd.reset()
         self.val_chamfer.reset()
 
     def model_step(self, batch: tuple[torch.Tensor, torch.Tensor]):
+        """Compute loss and predictions for one collated TorchSynth batch.
+
+        :param batch: Audio, target params, optional noise, and renderer callable.
+        :returns: Loss, predictions, targets, and input audio.
+        """
         x, y, *_ = batch
         preds = self.forward(x)
         loss = self.criterion(preds, y)
         return loss, preds, y, x
 
     def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
-        loss, preds, targets, inputs = self.model_step(batch)
+        """Log and return one training loss.
 
-        *_, synth_fn = batch
+        :param batch: Collated TorchSynth training batch.
+        :param batch_idx: Lightning batch index.
+        :returns: Scalar loss used for backpropagation.
+        """
+        loss, *_ = self.model_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-
-        # return loss or backpropagation will fail
         return loss
 
-    def on_train_epoch_end(self) -> None:
-        pass
-
     def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+        """Accumulate validation loss and audio-domain metrics.
+
+        :param batch: Collated TorchSynth validation batch.
+        :param batch_idx: Lightning batch index.
+        """
         loss, preds, targets, inputs = self.model_step(batch)
 
-        # update and log metrics
         *_, synth_fn = batch
         self.val_lsd(preds, inputs, synth_fn)
         self.val_chamfer(preds, targets)
@@ -82,10 +108,12 @@ class KSinFeedForwardModule(LightningModule):
         self.log("val/chamfer", self.val_chamfer, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
 
-    def on_validation_epoch_end(self):
-        pass
-
     def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+        """Accumulate test loss and parameter/audio metrics.
+
+        :param batch: Collated TorchSynth test batch.
+        :param batch_idx: Lightning batch index.
+        """
         loss, preds, targets, inputs = self.model_step(batch)
 
         *_, synth_fn = batch
@@ -107,21 +135,23 @@ class KSinFeedForwardModule(LightningModule):
         self.log("test/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/lad", self.test_lad, on_step=False, on_epoch=True, prog_bar=True)
 
-    def on_test_epoch_end(self) -> None:
-        # TODO: implement metrics
-        # self.log("test/lsd", self.test_lsd, on_step=False, on_epoch=True, prog_bar=True)
-        # etc...
-        pass
-
     def setup(self, stage: str) -> None:
-        if self.hparams.compile and stage == "fit":
+        """Compile the network only for the fit stage.
+
+        :param stage: Lightning stage name.
+        """
+        if self._compile and stage == "fit":
             self.net.compile()
 
     def configure_optimizers(self) -> dict[str, Any]:
-        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+        """Instantiate the configured optimizer and optional scheduler.
 
-        if self.hparams.scheduler is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
+        :returns: Lightning optimizer configuration.
+        """
+        optimizer = self._optimizer_factory(params=self.parameters())
+
+        if self._scheduler_factory is not None:
+            scheduler = self._scheduler_factory(optimizer=optimizer)
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
@@ -133,7 +163,3 @@ class KSinFeedForwardModule(LightningModule):
             }
 
         return {"optimizer": optimizer}
-
-
-if __name__ == "__main__":
-    _ = KSinFeedForwardModule(None, None, None, None, None)

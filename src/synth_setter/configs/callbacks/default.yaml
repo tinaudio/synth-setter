@@ -5,7 +5,6 @@ defaults:
   - model_summary
   - rich_progress_bar
   # - plot_loss
-  - plot_pos_enc
   - plot_proj
   - plot_projii
   - _self_

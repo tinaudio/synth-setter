@@ -26,11 +26,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
-from synth_setter.models.components.transformer import (
-    ApproxEquivTransformer,
-    LearntProjection,
-)
-from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
+from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.subprocess_stream import STDERR_TAIL_CHARS
@@ -445,74 +441,6 @@ class PlotLossPerTimestep(Callback):
         self._log_plot(fig, trainer)
 
 
-def _self_similarity(x):
-    y = x.permute(1, 0, 2)
-    sim = torch.nn.functional.cosine_similarity(x, y, dim=-1)
-    return sim
-
-
-class PlotPositionalEncodingSimilarity(Callback):
-    """Log a cosine-similarity heatmap of the vector field's positional encoding."""
-
-    def _compute_similarity(self, pl_module):
-        if pl_module.vector_field.pe_type == "initial":
-            return _self_similarity(pl_module.vector_field.pe.pe)
-        elif pl_module.vector_field.pe_type == "layerwise":
-            return [_self_similarity(pe.pe) for pe in pl_module.vector_field.pe]
-
-    def _plot_single_similarity(self, sim):
-        fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-
-        ax.imshow(sim.cpu().numpy(), vmin=-1, vmax=1, aspect="equal")
-        fig.tight_layout()
-        fig.suptitle("Positional Encoding Similarity")
-
-        return fig
-
-    def _plot_multiple_similarities(self, sims):
-        n_pe = len(sims)
-        n_rows = int(np.sqrt(n_pe))
-        n_cols = int(np.ceil(n_pe / n_rows))
-
-        fig, ax = plt.subplots(n_rows, n_cols, figsize=(2 * n_cols, 2 * n_rows))
-
-        for i, sim in enumerate(sims):
-            ax[i // n_cols, i % n_cols].imshow(sim.cpu().numpy(), vmin=-1, vmax=1, aspect="equal")
-            ax[i // n_cols, i % n_cols].set_title(f"PE {i // n_cols}-{i % n_cols}", fontsize=8)
-
-        for i in range(n_pe, n_rows * n_cols):
-            ax[i // n_cols, i % n_cols].axis("off")
-
-        fig.tight_layout()
-        fig.suptitle("Positional Encoding Similarities")
-
-        return fig
-
-    def _plot_similarity(self, sim):
-        if isinstance(sim, torch.Tensor):
-            return self._plot_single_similarity(sim)
-        else:
-            return self._plot_multiple_similarities(sim)
-
-    def _log_plot(self, fig, trainer):
-        _log_figure(trainer, "pos_enc_similarity", fig)
-        plt.close(fig)
-
-    def on_validation_epoch_end(self, trainer, pl_module) -> None:
-        if not isinstance(pl_module, KSinFlowMatchingModule):
-            return
-
-        if not isinstance(pl_module.vector_field, ApproxEquivTransformer):
-            return
-
-        if pl_module.vector_field.pe_type == "none":
-            return
-
-        pe_sims = self._compute_similarity(pl_module)
-        fig = self._plot_similarity(pe_sims)
-        self._log_plot(fig, trainer)
-
-
 class PlotLearntProjection(Callback):
     """Log the learnt parameter-to-token projection matrix as an image."""
 
@@ -626,10 +554,7 @@ class PlotLearntProjection(Callback):
         plt.close(fig_value)
 
     def _do_plotting(self, trainer, pl_module):
-        if not (
-            isinstance(pl_module, KSinFlowMatchingModule)
-            or isinstance(pl_module, VSTFlowMatchingModule)
-        ):
+        if not isinstance(pl_module, VSTFlowMatchingModule):
             return
 
         if not hasattr(pl_module.vector_field, "projection"):

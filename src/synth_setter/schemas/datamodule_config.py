@@ -1,7 +1,6 @@
 """Pydantic schema for the YAMLs under ``configs/datamodule/``.
 
-Datamodule kwargs vary per module (``VSTDataModule`` is path-driven,
-``KSinDataModule`` is synthetic) and pass through via ``extra="allow"``.
+Datamodule kwargs vary by data source and pass through via ``extra="allow"``.
 """
 
 from __future__ import annotations

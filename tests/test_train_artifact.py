@@ -392,7 +392,7 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
     lineage-only; the ``s3://`` reference path is pinned by the
     ``_upload_best_checkpoint`` / ``build_model_artifact`` unit tests above.
 
-    :param cfg_train: Tiny CPU train cfg (``datamodule=ksin``, ``model=ffn``); no VST.
+    :param cfg_train: Tiny CPU TorchSynth train config; no external plugin.
     :param tmp_path: Hosts the offline run dir and the model checkpoints.
     :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env.
     """

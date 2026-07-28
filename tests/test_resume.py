@@ -573,7 +573,7 @@ def test_composed_train_config_ships_resume_keys() -> None:
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
-            overrides=["datamodule=ksin", "model=ffn", "trainer=cpu"],
+            overrides=["datamodule=torchsynth", "model=ffn", "trainer=cpu"],
         )
 
     assert OmegaConf.select(cfg, "training.resume") is None

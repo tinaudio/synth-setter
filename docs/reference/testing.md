@@ -94,7 +94,7 @@ Only needed for tests that exercise Hydra-composed configs (test_configs, test_t
 
 Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped `*_global` fixtures wrapped by function-scoped fixtures that inject `tmp_path`. Each `*_global` fixture composes the corresponding entry-point YAML with explicit `datamodule=` / `model=` / `trainer=` overrides at compose time, then applies test-friendly tweaks via an `open_dict(cfg):` block. Read both blocks for today's presets — they change as the fixtures evolve.
 
-`cfg_train_global` and `cfg_eval_global` compose with the **same** `datamodule=ksin model=ffn trainer=cpu` overrides, and dataset shape is pinned via integer `train_val_test_sizes=[2,2,2]` rather than fractional `limit_*_batches`. A train→eval round-trip shares the same `datamodule` / `model` / `callbacks` shape across both fixtures, so neither side has to copy fields from the other.
+`cfg_train_global` and `cfg_eval_global` compose with the **same** `datamodule=torchsynth model=ffn trainer=cpu` overrides, and dataset shape is pinned via integer `train_val_test_sizes=[2,2,2]` rather than fractional `limit_*_batches`. A train→eval round-trip shares the same `datamodule` / `model` / `callbacks` shape across both fixtures, so neither side has to copy fields from the other.
 
 Both fixtures clear global Hydra state on teardown via `GlobalHydra.instance().clear()`.
 
@@ -162,7 +162,7 @@ ______________________________________________________________________
 
 ## 6. Gotchas
 
-1. **DataModule `setup(stage)` must cover every stage you invoke.** Lightning passes one of `{"fit", "validate", "test", "predict"}` depending on which Trainer method runs. A `setup()` that only handles `"fit"` silently builds the wrong (or no) dataloader for the others. See Lightning's [DataModule docs](https://lightning.ai/docs/pytorch/stable/data/datamodule.html) for the contract, and [`src/synth_setter/data/ksin_datamodule.py`](../../src/synth_setter/data/ksin_datamodule.py) for the canonical three-branch pattern in this repo.
+1. **DataModule `setup(stage)` must cover every stage you invoke.** Lightning passes one of `{"fit", "validate", "test", "predict"}` depending on which Trainer method runs. A `setup()` that only handles `"fit"` silently builds the wrong (or no) dataloader for the others. See Lightning's [DataModule docs](https://lightning.ai/docs/pytorch/stable/data/datamodule.html) for the contract, and [`src/synth_setter/data/torchsynth_datamodule.py`](../../src/synth_setter/data/torchsynth_datamodule.py) for the canonical three-branch pattern in this repo.
 
 2. **`src/synth_setter/configs/train.yaml` and `src/synth_setter/configs/eval.yaml` require explicit `datamodule=` / `model=`.** Both entry points use `???` for `datamodule` and `model`, so Hydra fails fast if either is missing. Production runs pass them via an `experiment=` config; tests pass them at compose time inside `conftest.py`. There is no fallback to a researcher-local default.
 

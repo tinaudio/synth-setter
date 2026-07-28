@@ -254,6 +254,7 @@ def test_render_torchsynth_multirow_preserves_shape_and_bounds() -> None:
     audio = render_torchsynth(params, **_RENDER_KWARGS)
 
     assert audio.shape == (3, _RENDER_KWARGS["signal_length"])
+    assert type(audio) is torch.Tensor
     assert audio.dtype == torch.float32
     assert torch.isfinite(audio).all()
     assert torch.all((-1 <= audio) & (audio <= 1))

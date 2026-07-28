@@ -1,4 +1,4 @@
-"""Unit tests for :class:`synth_setter.models.ksin_ff_module.KSinFeedForwardModule`.
+"""Unit tests for :class:`synth_setter.models.torchsynth_ff_module.TorchSynthFeedForwardModule`.
 
 Each section maps to a slice of the module's contract:
 
@@ -26,10 +26,9 @@ import torch
 import torch.nn as nn
 import torchmetrics
 
-from synth_setter.data.ksin_datamodule import make_sin
 from synth_setter.models.components.loss import ChamferLoss, MSESortLoss
 from synth_setter.models.components.residual_mlp import ResidualMLPBlock
-from synth_setter.models.ksin_ff_module import KSinFeedForwardModule
+from synth_setter.models.torchsynth_ff_module import TorchSynthFeedForwardModule
 
 _K = 4
 _PARAMS_PER_TOKEN = 2
@@ -82,8 +81,12 @@ def sched_partial() -> Callable[..., torch.optim.lr_scheduler.LRScheduler]:  # n
 
 @pytest.fixture
 def synth_fn() -> Callable[[torch.Tensor], torch.Tensor]:  # noqa: DOC201,DOC203
-    """Return the real renderer used by the LSD metric, partial-bound to ``signal_length``."""
-    return functools.partial(make_sin, length=_SIGNAL_LENGTH, break_symmetry=False)
+    """Return a deterministic renderer with the LSD metric's audio-shape contract."""
+
+    def render(params: torch.Tensor) -> torch.Tensor:
+        return params.repeat_interleave(_SIGNAL_LENGTH // _NUM_PARAMS, dim=1)
+
+    return render
 
 
 @pytest.fixture
@@ -115,11 +118,11 @@ def _make_module(  # noqa: DOC101,DOC103,DOC201,DOC203
     scheduler: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None = None,
     compile: bool = False,
     params_per_token: int = _PARAMS_PER_TOKEN,
-) -> KSinFeedForwardModule:
-    """Build a :class:`KSinFeedForwardModule` with sensible defaults for unit tests."""
+) -> TorchSynthFeedForwardModule:
+    """Build a :class:`TorchSynthFeedForwardModule` with sensible defaults for unit tests."""
     if optimizer is None:
         optimizer = functools.partial(torch.optim.SGD, lr=1e-2)
-    return KSinFeedForwardModule(
+    return TorchSynthFeedForwardModule(
         net=net,
         loss_fn=loss_fn,
         optimizer=optimizer,  # type: ignore[arg-type]
@@ -355,7 +358,7 @@ def test_training_step_returns_scalar_with_grad(  # noqa: DOC101,DOC103
 # --------------------------------------------------------------------------- #
 
 
-def _patch_log(module: KSinFeedForwardModule) -> MagicMock:  # noqa: DOC101,DOC103,DOC201,DOC203
+def _patch_log(module: TorchSynthFeedForwardModule) -> MagicMock:  # noqa: DOC101,DOC103,DOC201,DOC203
     """Replace ``module.log`` with a mock so ``*_step`` runs without an attached Trainer."""
     log_mock = MagicMock()
     module.log = log_mock  # type: ignore[method-assign]
@@ -363,7 +366,7 @@ def _patch_log(module: KSinFeedForwardModule) -> MagicMock:  # noqa: DOC101,DOC1
 
 
 def _patch_metrics_and_log(  # noqa: DOC101,DOC103,DOC201,DOC203
-    module: KSinFeedForwardModule,
+    module: TorchSynthFeedForwardModule,
 ) -> dict[str, MagicMock]:
     """Replace metric instances and ``log`` with mocks and return a dict for assertions."""
     mocks = {

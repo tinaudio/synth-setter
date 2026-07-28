@@ -108,7 +108,7 @@ synth-setter/
 │   │   ├── generate_dataset.py  # Dataset-generation entrypoint
 │   │   └── ...
 │   ├── metrics.py          #   Metric definitions
-│   ├── data/               #   DataModules (Surge, K-Sin, K-Osc, etc.)
+│   ├── data/               #   DataModules (TorchSynth, VST, Lance, audio folders)
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
 │   │   └── components/     #     Model building blocks (VAE, networks)
 │   ├── utils/              #   Logging, config helpers

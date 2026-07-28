@@ -169,8 +169,8 @@ src/synth_setter/models/*_module.py                     LightningModule implemen
 src/synth_setter/data/vst/*                             Dataset generation + VST/CLAP parameter tooling
 src/synth_setter/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
 src/synth_setter/data/ot.py                             Optimal transport minibatch coupling
-src/synth_setter/data/kosc_datamodule.py                k-osc task data module
-configs/experiment/kosc                    k-osc experiment configs
+src/synth_setter/data/torchsynth_datamodule.py          online TorchSynth data module
+configs/experiment/torchsynth               TorchSynth experiment configs
 configs/experiment/surge                   Surge XT experiment configs
 ```
 
