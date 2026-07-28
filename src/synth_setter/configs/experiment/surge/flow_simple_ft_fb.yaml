@@ -1,0 +1,44 @@
+# @package _global_
+
+# Decisive 10k-step simulator-feedback finetune (arXiv 2410.22573) of the frozen
+# 440k mel flow base, feedback arm. The ablation arm (flow_simple_ft_ablation)
+# derives from this file and flips only feedback_enabled.
+
+defaults:
+  - /experiment/surge/base
+  - override /model: vst_flow_finetune
+  - override /render: surge_simple
+  - _self_
+
+experiment_name: surge-simple-flow-ft
+run_name: feedback
+
+model:
+  # Pinned to the immutable v0 (the mel-conditioned 440k run); :latest was
+  # overwritten by a SAME-S-conditioned run — see the canonical-slot incident.
+  pretrained_ckpt: ${wandb:khaledtinubu-n-a/synth-setter/model-flow_simple_440k:v0}
+  feedback_enabled: true
+
+datamodule:
+  download_dataset_root_uri: r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/
+  # Render-bound step; 32 balances renders/step against GPU efficiency.
+  batch_size: 32
+  num_workers: 4
+
+# The paired eval script owns held-out evaluation; skip Lightning's test stage.
+test: false
+
+trainer:
+  min_steps: 10_000
+  max_steps: 10_000
+  val_check_interval: 1000
+  limit_val_batches: 8
+  log_every_n_steps: 25
+  # The online render loop is CPU-bound; bf16 autocast adds nothing here.
+  precision: 32-true
+
+callbacks:
+  model_checkpoint:
+    # The finetune module logs val/loss (its corrected CFM loss), not val/param_mse.
+    monitor: val/loss
+    every_n_train_steps: 1000

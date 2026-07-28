@@ -12,9 +12,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import librosa
 import numpy as np
 import torch
+import torchaudio
 from lightning import LightningModule
 
 from synth_setter.data.vst.param_spec import decode_model_output
@@ -22,7 +22,6 @@ from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.shapes import (
     MEL_N_MELS,
-    MEL_WINDOW,
     mel_hop_length,
     mel_n_fft,
 )
@@ -193,7 +192,23 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         self._param_spec = resolve_param_spec(self._param_spec_name)
         self._renderer: AudioRenderer | None = None
         self._mel_stats: tuple[np.ndarray, np.ndarray] | None = None
+        self._mel_stats_tensors: tuple[torch.Tensor, torch.Tensor] | None = None
         self._runtime_ready = False
+        # Dataset-matching torch mel (librosa parity: hamming, slaney/slaney,
+        # constant STFT padding); lives on-device so the rep never bottlenecks on CPU.
+        self._mel_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=mel_n_fft(sample_rate),
+            hop_length=mel_hop_length(sample_rate),
+            n_mels=MEL_N_MELS,
+            window_fn=torch.hamming_window,
+            power=2.0,
+            norm="slaney",
+            mel_scale="slaney",
+            center=True,
+            pad_mode="constant",
+        )
+        self._mel_transform.requires_grad_(False)
 
     def train(self, mode: bool = True) -> "VSTFlowMatchingFinetuneModule":
         """Keep the frozen base in eval mode across Lightning's train/eval flips.
@@ -243,25 +258,28 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
             )
         self._runtime_ready = True
 
-    def _rendered_mel(self, audio: np.ndarray) -> np.ndarray:
-        """Compute the dataset-matching normalized log-mel of one rendered note.
+    def _rendered_mel_batch(self, audio: torch.Tensor) -> torch.Tensor:
+        """Compute dataset-matching normalized log-mels for a batch of rendered notes.
 
-        :param audio: Channel-leading rendered audio.
-        :returns: Normalized mel shaped ``(channels, n_mels, n_frames)``.
+        Mirrors ``generate_vst_dataset.make_spectrogram`` (``librosa.power_to_db``
+        with ``ref=np.max`` and ``top_db=80``, referenced per sample across channels).
+
+        :param audio: Rendered audio shaped ``(batch, channels, samples)``.
+        :returns: Normalized mels shaped ``(batch, channels, n_mels, n_frames)``.
         """
-        spec = librosa.feature.melspectrogram(
-            y=audio,
-            sr=self._sample_rate,
-            n_mels=MEL_N_MELS,
-            n_fft=mel_n_fft(self._sample_rate),
-            hop_length=mel_hop_length(self._sample_rate),
-            window=MEL_WINDOW,
-            center=True,
-        )
-        spec_db = librosa.power_to_db(spec, ref=np.max)
+        spec = self._mel_transform(audio)
+        spec_db = 10.0 * torch.log10(torch.clamp(spec, min=1e-10))
+        ref = spec_db.amax(dim=(1, 2, 3), keepdim=True)
+        spec_db = torch.clamp(spec_db - ref, min=-80.0)
         if self._mel_stats is not None:
-            mean, std = self._mel_stats
-            spec_db = (spec_db - mean) / std
+            if self._mel_stats_tensors is None:
+                mean, std = self._mel_stats
+                self._mel_stats_tensors = (
+                    torch.as_tensor(mean, dtype=spec_db.dtype, device=spec_db.device),
+                    torch.as_tensor(std, dtype=spec_db.dtype, device=spec_db.device),
+                )
+            mean_t, std_t = self._mel_stats_tensors
+            spec_db = (spec_db - mean_t) / std_t
         return spec_db
 
     def _sanitized_note_window(self, start: float, end: float) -> tuple[float, float]:
@@ -280,8 +298,7 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         assert self._renderer is not None
         rows = theta_hat.detach().cpu().numpy()
         render_seconds = 0.0
-        rep_seconds = 0.0
-        reps = []
+        audios = []
         for row in rows:
             synth_params, note_params = decode_model_output(row, self._param_spec)
             start, end = self._sanitized_note_window(*note_params["note_start_and_end"])
@@ -289,12 +306,13 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
             audio = self._renderer.render(
                 synth_params, int(note_params["pitch"]), self._velocity, (start, end)
             )
-            t1 = time.perf_counter()
-            reps.append(self._rendered_mel(audio))
-            render_seconds += t1 - t0
-            rep_seconds += time.perf_counter() - t1
-        stacked = np.stack(reps).astype(np.float32)
-        return torch.from_numpy(stacked).to(self.device), render_seconds, rep_seconds
+            render_seconds += time.perf_counter() - t0
+            audios.append(np.asarray(audio, dtype=np.float32))
+        t1 = time.perf_counter()
+        batch = torch.from_numpy(np.stack(audios)).to(self.device)
+        reps = self._rendered_mel_batch(batch)
+        rep_seconds = time.perf_counter() - t1
+        return reps, render_seconds, rep_seconds
 
     def _feedback_step(
         self, batch: dict[str, torch.Tensor]
@@ -365,17 +383,37 @@ class VSTFlowMatchingFinetuneModule(LightningModule):
         self.log("train/time/step", time.perf_counter() - step_start, on_step=True, on_epoch=False)
         return loss
 
-    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    # Euler steps for the batch-0 probe sample; coarser than the final eval protocol
+    # because it runs at every validation and each control-window step renders the batch.
+    _PROBE_SAMPLE_STEPS = 25
+
+    def validation_step(
+        self, batch: dict[str, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Report the feedback-corrected and frozen-base CFM losses on one val batch.
 
+        Batch 0 additionally samples corrected predictions (``ValAudioProbe``
+        stages its ``preds`` key) and logs their ``val/param_mse``.
+
         :param batch: Model batch with ``mel_spec``, ``params``, and ``noise``.
-        :param batch_idx: Lightning batch index (unused).
-        :returns: Scalar validation loss.
+        :param batch_idx: Lightning batch index; only batch 0 pays for sampling.
+        :returns: Scalar validation loss, or a ``loss``/``preds`` dict on batch 0.
         """
         loss, metrics = self._feedback_step(batch)
         self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val/base_loss", metrics["base_loss"], on_step=False, on_epoch=True)
-        return loss
+        if batch_idx != 0:
+            return loss
+        preds = self.sample_with_feedback(
+            batch["mel_spec"], batch["noise"], self._PROBE_SAMPLE_STEPS
+        )
+        self.log(
+            "val/param_mse",
+            (preds - batch["params"]).square().mean(),
+            on_step=False,
+            on_epoch=True,
+        )
+        return {"loss": loss, "preds": preds}
 
     @torch.no_grad()
     def sample_with_feedback(

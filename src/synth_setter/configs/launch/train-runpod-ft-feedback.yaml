@@ -1,0 +1,26 @@
+# RunPod launch for the decisive 10k-step simulator-feedback finetune, feedback
+# arm (experiment surge/flow_simple_ft_fb). After training, the same job runs
+# the paired base-vs-arm eval on 512 held-out val rows and uploads the per-row
+# metrics CSV; the ablation arm launch config mirrors this file.
+
+compute: runpod/ft-training
+tier: mid
+worker_image_tag: devcontainer-tools
+env_file: .env
+tail: false
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  synth-setter-train
+  experiment=surge/flow_simple_ft_fb
+  training.upload_checkpoints_during_training=true
+  hydra.run.dir=/home/build/synth-setter/train-run &&
+  python -m synth_setter.evaluation.eval_feedback_finetune
+  --experiment surge/flow_simple_ft_fb
+  --ckpt /home/build/synth-setter/train-run/checkpoints/last.ckpt
+  --work-dir /home/build/synth-setter/train-run
+  --out /home/build/synth-setter/train-run/eval_feedback_finetune.csv
+  --num-rows 512 &&
+  rclone copyto --checksum
+  /home/build/synth-setter/train-run/eval_feedback_finetune.csv
+  r2:intermediate-data/experiments/feedback-ft-10k/flow_simple_ft_fb.csv

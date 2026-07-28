@@ -155,6 +155,84 @@ def test_sample_with_feedback_renders_only_in_control_window() -> None:
     assert fake.calls == 2 * _BATCH
 
 
+def test_render_reps_batched_torch_mel_matches_dataset_librosa_mel() -> None:
+    """The GPU log-mel path reproduces the dataset's librosa mel within tolerance."""
+    from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
+
+    sample_rate = 44100
+    duration = 0.1
+    n = int(sample_rate * duration)
+    rng = np.random.default_rng(0)
+    audio = rng.standard_normal((2, n)).astype(np.float32) * 0.1
+
+    class _ToneRenderer(_FakeRenderer):
+        def render(
+            self,
+            params: dict[str, float],
+            midi_note: int,
+            velocity: int,
+            note_start_and_end: tuple[float, float],
+        ) -> np.ndarray:
+            """Return the fixed reference audio for any request.
+
+            :param params: Ignored native parameter dict.
+            :param midi_note: Ignored MIDI pitch.
+            :param velocity: Ignored MIDI velocity.
+            :param note_start_and_end: Note window forwarded to the base fake.
+            :returns: The module-level reference audio, shaped ``(2, n)``.
+            """
+            super().render(params, midi_note, velocity, note_start_and_end)
+            return audio
+
+    module, _ = _make_module(feedback_enabled=True)
+    module._renderer = cast(AudioRenderer, _ToneRenderer())
+    theta_hat = _fake_batch()["params"]
+
+    reps, _, _ = module._render_reps(theta_hat)
+
+    expected = make_spectrogram(audio, sample_rate)
+    assert reps.shape == (_BATCH, *expected.shape)
+    np.testing.assert_allclose(reps[0].cpu().numpy(), expected, atol=0.02)
+
+
+def test_render_reps_applies_dataset_mel_statistics() -> None:
+    """Loaded mel mean/std normalize the rendered rep exactly like the spike path."""
+    module, _ = _make_module(feedback_enabled=True)
+    mean = np.full((1, 1, 1), 2.0, dtype=np.float32)
+    std = np.full((1, 1, 1), 4.0, dtype=np.float32)
+
+    raw, _, _ = module._render_reps(_fake_batch()["params"])
+    module._mel_stats = (mean, std)
+    module._mel_stats_tensors = None
+    normalized, _, _ = module._render_reps(_fake_batch()["params"])
+
+    torch.testing.assert_close(normalized, (raw - 2.0) / 4.0)
+
+
+def test_validation_step_first_batch_returns_probe_preds() -> None:
+    """Batch 0 returns a dict carrying sampled preds so ValAudioProbe can stage them."""
+    module, _ = _make_module(feedback_enabled=True)
+    batch = _fake_batch()
+
+    outputs = module.validation_step(batch, 0)
+
+    assert isinstance(outputs, dict)
+    assert outputs["preds"].shape == batch["params"].shape
+    assert torch.isfinite(outputs["loss"])
+
+
+def test_validation_step_later_batches_skip_sampling() -> None:
+    """Batches past 0 return the plain scalar loss without probe sampling renders."""
+    module, fake = _make_module(feedback_enabled=True)
+    batch = _fake_batch()
+
+    outputs = module.validation_step(batch, 1)
+
+    assert isinstance(outputs, torch.Tensor)
+    # One CFM feedback pass renders exactly once per row; probe sampling would add more.
+    assert fake.calls == _BATCH
+
+
 def test_configure_optimizers_trains_only_control_parameters() -> None:
     """The optimizer covers exactly the control encoder + field parameters."""
     module, _ = _make_module(feedback_enabled=True)

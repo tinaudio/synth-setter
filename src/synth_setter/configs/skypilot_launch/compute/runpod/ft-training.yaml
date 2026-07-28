@@ -1,0 +1,12 @@
+# Finetune-tier RunPod pool. Projection hydration downloads only the columns
+# training reads (mel/params/noise, ~200 GB for the 440k splits), so this pool
+# avoids the inventory-scarce 750 GB disk the full-dataset pool needs.
+name: runpod-ft-training
+resources:
+  - cloud: runpod
+    accelerators:
+      RTX3090: 1
+      RTX4090: 1
+      A40: 1
+    use_spot: false
+    disk_size: 300

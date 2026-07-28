@@ -1,0 +1,14 @@
+# @package _global_
+
+# Capacity ablation (c = 0) arm of the decisive simulator-feedback finetune:
+# identical recipe, seed, and control-net init as flow_simple_ft_fb, with the
+# rendered-feedback control vector zeroed and no online rendering.
+
+defaults:
+  - /experiment/surge/flow_simple_ft_fb
+  - _self_
+
+run_name: ablation
+
+model:
+  feedback_enabled: false
