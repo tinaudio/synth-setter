@@ -8,6 +8,7 @@ from typing import TypedDict, cast
 
 import pytest
 
+_TINYMU_RUNTIME_REQUIREMENT = "timm==0.4.12"
 _SA3_REQUIREMENT = (
     "stable-audio-3 @ "
     "git+https://github.com/Stability-AI/stable-audio-3@"
@@ -71,7 +72,15 @@ def test_sa3_requirement_is_in_torch_group_not_project_or_extras(
     """
     assert _SA3_REQUIREMENT in pyproject["dependency-groups"]["torch"]
     assert _SA3_REQUIREMENT not in pyproject["project"]["dependencies"]
-    assert set(pyproject["project"]["optional-dependencies"]) == {"cpu", "cu128", "tinymu"}
+    assert set(pyproject["project"]["optional-dependencies"]) == {"cpu", "cu128"}
+
+
+def test_tinymu_runtime_is_in_normal_torch_group(pyproject: _Pyproject) -> None:
+    """MATPAC works in the standard runtime without a hidden feature extra.
+
+    :param pyproject: Parsed project metadata.
+    """
+    assert _TINYMU_RUNTIME_REQUIREMENT in pyproject["dependency-groups"]["torch"]
 
 
 def test_legacy_same_runtime_is_absent_from_metadata_and_lock(

@@ -525,7 +525,7 @@ def test_load_tinymu_source_module_missing_dependency_names_extra(tmp_path: Path
     model_path = tmp_path / "model.py"
     model_path.write_text("import dependency_that_does_not_exist_for_tinymu\n")
 
-    with pytest.raises(ImportError, match="uv sync --extra tinymu"):
+    with pytest.raises(ImportError, match="uv sync"):
         tinymu_module._load_source_module(model_path)
 
 

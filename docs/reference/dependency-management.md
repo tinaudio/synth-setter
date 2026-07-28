@@ -9,11 +9,13 @@ command differs by hardware, and how to keep the committed `uv.lock` honest.
 | ------------------------------------ | -------------------------------------------------------------- |
 | macOS (Apple Silicon, MPS)           | `uv sync --frozen`                                             |
 | Linux GPU box (CUDA 12.8)            | `uv sync --frozen --extra cu128`                               |
-| TinyMU MATPAC adapter                | `uv sync --frozen --extra tinymu`                              |
 | Linux CPU-only — laptop / CI runner  | `uv sync --frozen --extra cpu --no-default-groups --group dev` |
 | Lint / type-check only (no torch)    | `uv sync --frozen --only-group dev`                            |
 | Verify the lock is in sync           | `uv lock --check`                                              |
 | Regenerate the lock after a dep edit | `uv lock` (then commit the diff)                               |
+
+The standard runtime includes TinyMU's measured `timm` dependency; only its unlicensed external
+source checkout must be supplied separately.
 
 `--frozen` errors instead of silently re-resolving when the lock and
 `pyproject.toml` disagree. CI uses it for the main project install everywhere

@@ -37,7 +37,11 @@ class AddEmbeddingsConfig(BaseModel):
 
     .. attribute :: lance_uri
 
-        Finalized Lance dataset to augment.
+        One finalized Lance split to augment.
+
+    .. attribute :: dataset_root_uri
+
+        Finalized root whose canonical splits are augmented.
 
     .. attribute :: embeddings
 
@@ -94,7 +98,12 @@ class AddEmbeddingsConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    lance_uri: str = Field(description="Finalized Lance dataset to augment.")
+    lance_uri: str | None = Field(
+        default=None, description="One finalized Lance split to augment."
+    )
+    dataset_root_uri: str | None = Field(
+        default=None, description="Finalized dataset root whose non-empty splits are augmented."
+    )
     embeddings: tuple[str, ...] = Field(
         default=("clap", "m2l"), description="Ordered embedding registry keys to write."
     )
@@ -221,6 +230,28 @@ class AddEmbeddingsConfig(BaseModel):
                 f"param_text_normalizer {value!r} must be one of {sorted(PARAM_TEXT_NORMALIZERS)}"
             )
         return value
+
+    @model_validator(mode="after")
+    def _exactly_one_dataset_target(self) -> Self:
+        """Require one single-split or dataset-root target.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: Both targets or neither target are configured.
+        """
+        if (self.lance_uri is None) == (self.dataset_root_uri is None):
+            raise ValueError("exactly one of lance_uri or dataset_root_uri must be set")
+        return self
+
+    @model_validator(mode="after")
+    def _dataset_root_is_limited_to_strongly_pinned_tinymu(self) -> Self:
+        """Keep resumable root transactions on the immutable MATPAC artifact.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: Root mode selects a policy without strong artifact provenance.
+        """
+        if self.dataset_root_uri is not None and self.embeddings != ("tinymu",):
+            raise ValueError("dataset_root_uri requires embeddings=[tinymu]")
+        return self
 
     @model_validator(mode="after")
     def _param_sourced_embeddings_need_a_param_spec(self) -> Self:

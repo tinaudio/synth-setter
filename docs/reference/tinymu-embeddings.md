@@ -15,8 +15,8 @@ checkout and requires both its Git HEAD and model-file blob to match:
 
 Set `tinymu_source_dir=/path/to/TinyMU` in the Hydra command or export
 `TINYMU_SOURCE_DIR=/path/to/TinyMU`. A missing checkout, a different commit, or a modified model
-file is an error. Install the adapter's third-party dependency separately with
-`uv sync --extra tinymu`; the extra contains `timm==0.4.12`, not TinyMU source.
+file is an error. `uv sync` installs the measured `timm==0.4.12` dependency as part of the
+standard embedding runtime; it does not install TinyMU source.
 
 The default checkpoint is the immutable R2 object:
 
@@ -55,15 +55,27 @@ state dictionaries, output shapes, dtypes, NaN, or infinity.
 
 ## Usage and conditioning
 
-For a finalized four-second Lance dataset:
+For a finalized four-second dataset root:
 
 ```bash
-uv sync --extra tinymu
+uv sync
 TINYMU_SOURCE_DIR=/path/to/TinyMU \
   synth-setter-add-embeddings \
-  lance_uri=/path/to/train.lance \
+  dataset_root_uri=/path/to/dataset \
   embeddings=[tinymu]
 ```
+
+Root mode requires a finalized `dataset.complete`, then augments every present `train.lance`,
+`val.lance`, and `test.lance` split. It records pending work in `dataset.json`, removes the readiness
+marker before mutation, checkpoints each embedding commit, and restores the marker only when all
+work is complete. Schema version 2 records the MATPAC source commit, checkpoint revision and
+SHA-256, producer Git SHA and transform digest, transform and index settings, emitted columns, row
+count, Lance version, and index status.
+Re-running resumes incomplete work; any changed output identity fails closed. Root augmentation is
+single-operator: do not run concurrent augmentation commands against the same root because R2 has
+no compare-and-set for card updates.
+Use `lance_uri=/path/to/train.lance` only for an intentional single-split operation, which does not
+own a dataset-root provenance card.
 
 The generic training and evaluation path selects the resulting sequence with
 `conditioning=tinymu`. That profile declares `input_shape: [3840, 25]` and uses the existing

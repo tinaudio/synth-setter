@@ -1123,9 +1123,11 @@ Additional stages could follow the same contract (§5) without modifying existin
 | **render-presets** | preset bank  | audio shards         | CPU     |
 
 `add-embeddings` is now implemented as the `synth-setter-add-embeddings` Hydra
-endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
-`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): it augments
-a finalized Lance dataset in place with a `clap` (LAION-CLAP)
+endpoint (`synth-setter-add-embeddings dataset_root_uri=DATASET_ROOT`, config
+`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): root mode augments every
+present finalized split for the strongly pinned `tinymu` policy, persists resumable provenance in
+`dataset.json`, and removes `dataset.complete` until all intended work commits; `lance_uri=` remains
+the explicit single-split mode. It writes a `clap` (LAION-CLAP)
 `FixedSizeList<float32, 512>` vector column and sequence embeddings (`m2l`,
 `same_s`, `same_l`, and `tinymu`) stored as fixed-shape tensors, all derived from
 the audio column and selectable via `embeddings=` (the selectable set is
@@ -1146,7 +1148,8 @@ interrupted run can resume without re-encoding already-processed rows (see
 `tinymu` runs TinyMU's frozen MATPAC encoder through an external, exact-commit
 source checkout because upstream has no detected license file; synth-setter does
 not redistribute that source. The pinned R2 checkpoint is verified by SHA-256,
-and the adapter rejects source drift, incompatible model state, malformed audio,
+and root-mode provenance records both identities after every split commit. The adapter rejects
+source drift, incompatible model state, malformed audio,
 shape drift, and non-finite output. The measured preprocessing, sequence shape,
 cache identity, source boundary, and `conditioning=tinymu` profile are documented
 in [TinyMU audio embeddings](../reference/tinymu-embeddings.md).

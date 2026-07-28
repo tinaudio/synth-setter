@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from synth_setter.pipeline.schemas.lance_attempt import (
+    EmbeddingProvenance,
+    EmbeddingSplitProvenance,
     LanceDatasetCard,
     LanceFragmentSidecar,
     SelectedLanceAttempt,
@@ -57,7 +59,51 @@ def test_sidecar_is_frozen() -> None:
 def test_dataset_card_round_trips_through_json() -> None:
     """The audit card survives the R2 JSON round trip unchanged."""
     card = _card()
-    assert LanceDatasetCard.model_validate_json(card.model_dump_json()) == card
+    payload = card.model_dump_json()
+
+    assert '"embeddings"' not in payload
+    assert LanceDatasetCard.model_validate_json(payload) == card
+
+
+def test_dataset_card_with_duplicate_embedding_names_raises() -> None:
+    """A v2 card cannot hide one embedding record behind another."""
+    split = EmbeddingSplitProvenance(
+        split="train", dataset_version=2, row_count=4, index_built=False, complete=True
+    )
+    embedding = EmbeddingProvenance(
+        name="tinymu",
+        columns=("tinymu", "tinymu_vec"),
+        checkpoint="checkpoint",
+        producer_git_sha="producer-sha",
+        producer_transform_sha256="transform-sha",
+        splits=(split,),
+    )
+
+    with pytest.raises(ValidationError, match="duplicate embedding names"):
+        LanceDatasetCard(
+            schema_version=2,
+            run_id="run-1",
+            finalized_at="2026-07-09T00:00:00+00:00",
+            selected_attempts=(),
+            embeddings=(embedding, embedding),
+        )
+
+
+def test_embedding_provenance_with_duplicate_splits_raises() -> None:
+    """One embedding cannot claim the same split twice."""
+    split = EmbeddingSplitProvenance(
+        split="train", dataset_version=2, row_count=4, index_built=False, complete=True
+    )
+
+    with pytest.raises(ValidationError, match="duplicate splits"):
+        EmbeddingProvenance(
+            name="tinymu",
+            columns=("tinymu", "tinymu_vec"),
+            checkpoint="checkpoint",
+            producer_git_sha="producer-sha",
+            producer_transform_sha256="transform-sha",
+            splits=(split, split),
+        )
 
 
 def test_dataset_card_rejects_unknown_fields() -> None:

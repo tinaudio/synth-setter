@@ -4,9 +4,9 @@ defaults:
   - hydra: default
   - _self_
 
-# Dataset to augment with the selected embedding columns (local path, `r2://`, or `s3://`);
-# validated into AddEmbeddingsConfig and opened by the endpoint.
-lance_uri: ???
+# Set exactly one target: one Lance split, or a finalized root containing train/val/test splits.
+lance_uri: null
+dataset_root_uri: null
 
 # Registry keys selecting which embedding columns to write.
 embeddings: [clap, m2l]

@@ -301,8 +301,8 @@ def _git_output(source_dir: Path, *arguments: str) -> str:
     :raises ValueError: Git cannot resolve the requested identity.
     """
     try:
-        result = subprocess.run(  # noqa: S603 — executable and arguments are fixed probes
-            ["git", "-C", str(source_dir), *arguments],
+        result = subprocess.run(  # noqa: S603 — fixed git identity probe
+            ["git", "-C", str(source_dir), *arguments],  # noqa: S607
             check=False,
             capture_output=True,
             text=True,
@@ -382,7 +382,7 @@ def _load_source_module(model_path: Path) -> ModuleType:
         sys.modules.pop(_TINYMU_MODULE_NAME, None)
         raise ImportError(
             "loading TinyMU requires the optional `tinymu` extra — "
-            "install it with `uv sync --extra tinymu`"
+            "install the standard runtime with `uv sync`"
         ) from exc
     return module
 
