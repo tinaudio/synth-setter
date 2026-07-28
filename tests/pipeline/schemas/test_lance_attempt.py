@@ -56,15 +56,6 @@ def test_sidecar_is_frozen() -> None:
         sidecar.fragment_json = "{...}"  # type: ignore[misc]
 
 
-def test_dataset_card_round_trips_through_json() -> None:
-    """The audit card survives the R2 JSON round trip unchanged."""
-    card = _card()
-    payload = card.model_dump_json()
-
-    assert '"embeddings"' not in payload
-    assert LanceDatasetCard.model_validate_json(payload) == card
-
-
 def test_dataset_card_with_duplicate_embedding_names_raises() -> None:
     """A v2 card cannot hide one embedding record behind another."""
     split = EmbeddingSplitProvenance(

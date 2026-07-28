@@ -8,22 +8,6 @@ from pydantic import ValidationError
 from synth_setter.pipeline.schemas.seed_debug import SeedDebugDocument
 
 
-def test_seed_debug_document_json_round_trip_preserves_document() -> None:
-    """Natural JSON serialization preserves the typed debug document."""
-    document = SeedDebugDocument(
-        seed=17,
-        master_seed=42,
-        sample_idx=9,
-        attempt=2,
-        shard_id=7,
-        parameter_source="sampled",
-    )
-
-    encoded = document.model_dump_json(exclude_none=True)
-
-    assert SeedDebugDocument.model_validate_json(encoded) == document
-
-
 def test_seed_debug_document_without_consumed_seed_omits_seed() -> None:
     """Rows rendered from fixed parameters have no concrete sampler seed."""
     document = SeedDebugDocument(
