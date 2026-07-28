@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import shutil
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
+from typing import cast
 
 import lance
 import pyarrow as pa
@@ -659,6 +662,39 @@ def test_materialize_cache_hit_same_request_returns_without_rewrite(
     assert lance.dataset(str(dest)).version == version_after_first
 
 
+def test_materialize_cache_transient_destination_open_retries(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient local cache read retries before declaring corruption.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture injecting one transient destination-open failure.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    real_dataset = lance.dataset
+    attempts = 0
+
+    def transient_destination_open(
+        uri: str, *, storage_options: dict[str, str] | None = None
+    ) -> lance.LanceDataset:
+        nonlocal attempts
+        if uri == str(dest):
+            attempts += 1
+            if attempts == 1:
+                raise TimeoutError("transient destination timeout")
+        return real_dataset(uri, storage_options=storage_options)
+
+    monkeypatch.setattr(lance, "dataset", transient_destination_open)
+
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+    assert attempts == 2
+
+
 def test_materialize_cache_replaced_destination_raises(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
@@ -673,7 +709,7 @@ def test_materialize_cache_replaced_destination_raises(
     shutil.rmtree(dest)
     lance.write_dataset(pa.table({"a": [999]}), dest)
 
-    with pytest.raises(ValueError, match="identity"):
+    with pytest.raises(ValueError, match="sidecar"):
         materialize_lance_subset(source, dest, txid=txid, columns=("a",))
 
 
@@ -743,6 +779,43 @@ def test_materialize_rerun_different_columns_raises(
         materialize_lance_subset(source, dest, txid=txid, columns=("a", "b"))
 
 
+def test_materialize_concurrent_identical_requests_publish_one_valid_cache(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent writers converge on one destination-manifest identity.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture synchronizing the two real Lance writes.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    barrier = Barrier(2)
+    real_write_dataset = cast(Callable[..., lance.LanceDataset], lance.write_dataset)
+
+    def synchronized_write(*args: object, **kwargs: object) -> lance.LanceDataset:
+        barrier.wait()
+        return real_write_dataset(*args, **kwargs)
+
+    monkeypatch.setattr(lance, "write_dataset", synchronized_write)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                materialize_lance_subset,
+                source,
+                dest,
+                txid=txid,
+                columns=("a",),
+            )
+            for _ in range(2)
+        ]
+        assert [future.result() for future in futures] == [dest, dest]
+
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+
+
 def test_materialize_interrupted_publish_rerun_recovers(
     two_version_source: tuple[str, str],
     tmp_path: Path,
@@ -756,7 +829,6 @@ def test_materialize_interrupted_publish_rerun_recovers(
     """
     source, txid = two_version_source
     dest = tmp_path / "out" / "train.lance"
-    partial = dest.parent / f".{dest.name}.partial"
     original_write_text = Path.write_text
 
     def interrupt_sidecar_write(
@@ -766,7 +838,7 @@ def test_materialize_interrupted_publish_rerun_recovers(
         errors: str | None = None,
         newline: str | None = None,
     ) -> int:
-        if path == sidecar_path(dest):
+        if path.name == sidecar_path(dest).name:
             raise OSError("injected sidecar write interruption")
         return original_write_text(
             path, data, encoding=encoding, errors=errors, newline=newline
@@ -778,9 +850,8 @@ def test_materialize_interrupted_publish_rerun_recovers(
             materialize_lance_subset(source, dest, txid=txid, columns=("a",))
 
     assert not dest.exists()
-    assert partial.exists()
+    assert not list(dest.parent.glob(f".{dest.name}.*.partial"))
     assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
-    assert not partial.exists()
 
 
 def test_materialize_dest_without_sidecar_raises(

@@ -461,6 +461,29 @@ def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
 
 
 @pytest.mark.slow
+def test_train_file_uri_without_completion_marker_raises_before_hydration(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The training entrypoint rejects an unfinalized hydration source.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    (source / "dataset.complete").unlink()
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+
+    HydraConfig().set_config(cfg_train_lance)
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        train(cfg_train_lance)
+
+    assert not destination.exists()
+
+
+@pytest.mark.slow
 def test_train_row_limited_file_uri_hydration_without_txids(
     cfg_train_lance: DictConfig,
     tmp_path: Path,

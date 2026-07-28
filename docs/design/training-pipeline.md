@@ -313,7 +313,7 @@ Behavior:
 - Splits land in `dataset_root/<prefix>-<digest>/`, where `<prefix>` is the conditioning column truncated to `_DIRNAME_PREFIX_CHARS` and the digest covers the source URI, txids, per-split projection, and row limit (see `subset_dirname` in `lance_materialize.py`). The name is derivable from configuration alone so rank-0 `prepare_data` and all-rank `setup` agree without a source read, and changing conditioning hydrates a sibling subset instead of colliding with the old one. `predict_file` naming the configured root rebases onto the subset
 - Nothing reclaims stale subsets yet; a persistent `dataset_root` accumulates one per distinct request (#2569)
 - `download_dataset_txids` pins per-split source snapshots; without them hydration uses each split's latest version, resolved independently — there is no atomic cross-split snapshot. That is accepted: reproducible or resumable runs supply txids
-- Cache hits verify the local Lance transaction identity recorded at publication and run Lance's structural validation. Unpinned caches additionally require the source to reopen and retain the same snapshot identity; legacy or unverifiable caches fail closed
+- Each staged subset contains its request manifest, so one directory rename atomically publishes the Lance data and matching local transaction identity; concurrent identical writers converge on that winner. Cache hits retry transient metadata reads, verify that identity, and run Lance's structural validation. Unpinned caches additionally require the source to reopen and retain the same snapshot identity; legacy or unverifiable caches fail closed
 - `download_dataset_row_limit` accepts only positive first-N row caps for disposable smoke/tuning runs
 
 ### 6.2 Checkpoint Durability via R2

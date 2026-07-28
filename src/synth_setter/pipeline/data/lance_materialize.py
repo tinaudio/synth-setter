@@ -2,9 +2,9 @@
 
 Streams a projected scan of one source snapshot into a fresh local Lance
 dataset, so hydration transfers only the columns and rows a training run
-reads instead of the whole dataset directory. A sidecar manifest beside
-the destination records the request and gates cache reuse: a rerun with the
-same request reuses the local copy; any drift fails loudly.
+reads instead of the whole dataset directory. A manifest inside the
+materialized directory records the request and gates cache reuse: a rerun with
+the same request reuses the local copy; any drift fails loudly.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from uuid import uuid4
 
 import lance
 import structlog
@@ -37,7 +38,7 @@ from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 logger = structlog.get_logger(__name__)
 
-_SIDECAR_SUFFIX = ".materialize.json"
+_SIDECAR_FILENAME = "_materialize.json"
 # Long enough that two live subsets under one root never collide, short enough
 # to stay readable next to the prefix.
 _DIRNAME_DIGEST_CHARS = 8
@@ -237,12 +238,15 @@ def subset_dirname(
 
 
 def sidecar_path(dest_path: Path) -> Path:
-    """Return the manifest path beside a materialized dataset directory.
+    """Return the manifest path inside a materialized dataset directory.
+
+    Keeping the identity record inside the staged directory makes publication
+    atomic when the directory is renamed into place.
 
     :param dest_path: Materialized Lance dataset directory.
-    :returns: ``<dest>.materialize.json`` in the same parent directory.
+    :returns: Materialization manifest within ``dest_path``.
     """
-    return dest_path.parent / (dest_path.name + _SIDECAR_SUFFIX)
+    return dest_path / _SIDECAR_FILENAME
 
 
 def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
@@ -365,9 +369,14 @@ def _validate_materialized_destination(
             "delete the dataset and re-materialize"
         )
     try:
-        destination = lance.dataset(str(dest_path))
-        transaction = destination.read_transaction(destination.version)
-        destination.validate()
+        destination = _retry_lance_read(
+            "destination_open", lambda: lance.dataset(str(dest_path))
+        )
+        transaction = _retry_lance_read(
+            "destination_transaction_read",
+            lambda: destination.read_transaction(destination.version),
+        )
+        _retry_lance_read("destination_validate", destination.validate)
     except (OSError, ValueError) as exc:
         raise ValueError(
             f"materialized dataset {dest_path} failed Lance validation; "
@@ -450,6 +459,7 @@ def _write_materialized_snapshot(
     :param manifest: Validated request and source identity to persist.
     :param batch_size: Scan batch size in rows.
     :returns: ``dest_path``.
+    :raises OSError: Manifest writing or atomic publication fails without a winner.
     :raises ValueError: The written dataset has no transaction identity.
     """
     scanner = snapshot.scanner(
@@ -465,9 +475,7 @@ def _write_materialized_snapshot(
         limit=manifest.limit,
     )
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    staging_path = dest_path.parent / f".{dest_path.name}.partial"
-    if staging_path.exists():
-        shutil.rmtree(staging_path)
+    staging_path = dest_path.parent / f".{dest_path.name}.{uuid4().hex}.partial"
     transaction_properties = (
         {"cloned_from_txn": manifest.txid}
         if manifest.txid is not None
@@ -488,10 +496,27 @@ def _write_materialized_snapshot(
     published_manifest = manifest.model_copy(
         update={"materialized_txid": transaction.uuid}
     )
-    sidecar_path(dest_path).write_text(
-        published_manifest.model_dump_json(), encoding="utf-8"
-    )
-    staging_path.replace(dest_path)
+    try:
+        sidecar_path(staging_path).write_text(
+            published_manifest.model_dump_json(), encoding="utf-8"
+        )
+        staging_path.replace(dest_path)
+    except OSError:
+        winner_exists = dest_path.exists()
+        shutil.rmtree(staging_path, ignore_errors=True)
+        if not winner_exists:
+            raise
+        return _reuse_or_raise(
+            dest_path,
+            source_uri=manifest.source_uri,
+            txid=manifest.txid,
+            columns=manifest.columns,
+            limit=manifest.limit,
+            resolved_version=(
+                manifest.resolved_version if manifest.txid is None else None
+            ),
+            resolved_txid=manifest.resolved_txid,
+        )
     logger.info(
         "lance_materialize.done",
         dest_path=str(dest_path),
