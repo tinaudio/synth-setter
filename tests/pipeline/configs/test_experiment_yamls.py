@@ -8,8 +8,8 @@ to top-level via interpolation or only exist for Hydra runtime — must validate
 ``DatasetSpec`` and JSON round-trip without drift.
 
 The list is curated rather than auto-discovered: ``configs/experiment/`` also holds
-train-side configs (top-level files like ``time_weighting.yaml`` and the nested
-``kosc/``, ``ksin/``, ``surge/``, … subdirectories) that compose ``train.yaml``, not
+train-side configs (such as the nested ``surge/`` and ``torchsynth/``
+subdirectories) that compose ``train.yaml``, not
 ``dataset.yaml``, and would not validate as ``DatasetSpec``. Add a new entry here when
 landing a new datagen experiment under ``configs/experiment/generate_dataset/``.
 """

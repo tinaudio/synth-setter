@@ -14,8 +14,12 @@ defaults:
   - hydra: default
   - r2: default # bucket the train-end model artifact uploads/references its checkpoint under
 
+  # synth identity consumed by VST datamodules, models, and callbacks via
+  # ${synth.param_spec_name}; VST experiments override it (e.g. `synth=surge_xt`)
+  - synth: null
+
   # render settings the val audio probe re-renders predictions with; only needed
-  # when training.val_audio_probe is on (e.g. `render=surge_xt`)
+  # when training.val_audio_probe is on (e.g. `render=vst`)
   - render: null
 
   # embedding-conditioning profiles pairing a stored Lance column with its

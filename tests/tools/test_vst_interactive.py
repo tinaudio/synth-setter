@@ -1316,7 +1316,7 @@ class TestRunPredict:
         args = runner.calls[0]
         assert "experiment=surge/test" in args
         assert "mode=predict" in args
-        assert f"datamodule.param_spec_name={SURGE_SIMPLE}" in args
+        assert f"synth={SURGE_SIMPLE}" in args
         assert not any(arg.startswith("model.net.d_out=") for arg in args)
         # Every path-bearing override must be absolute.
         for prefix, original in (
@@ -1811,7 +1811,7 @@ class TestEvalPatches:
             "synth_setter.evaluation.compute_audio_metrics",
         ]
         assert "experiment=vst/custom" in runner.calls[0]
-        assert "datamodule.param_spec_name=surge_simple" in runner.calls[0]
+        assert "synth=surge_simple" in runner.calls[0]
         assert "surge_simple" in runner.calls[1]
         assert "presets/surge-simple.vstpreset" in runner.calls[1]
         assert len(pd.read_csv(tmp_path / "metrics" / "metrics.csv")) == 2

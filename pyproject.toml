@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "10.7.0"
+version = "10.8.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -193,7 +193,6 @@ metrics = [
   "pesto-pitch==2.0.1",
   "dtw-python==1.7.4",
   "kymatio==0.3.0",
-  "POT",
   "einops",
 ]
 notebooks = [
@@ -413,7 +412,6 @@ known-third-party = ["wandb"]
 "src/synth_setter/pipeline/data/add_music2latent.py" = ["S605", "D102", "D103", "D107"]
 "src/synth_setter/evaluation/compute_audio_metrics.py" = ["T201", "ANN001", "D102", "D103", "D107"]
 "src/synth_setter/pipeline/data/stats.py" = ["E402", "T201", "ANN001"]
-"src/synth_setter/tools/sig_perf.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/tools/model_from_wandb.py" = ["E402", "D102", "D103", "D107"]
 "src/synth_setter/tools/paramspec_to_table.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/tools/plot_param2tok.py" = ["E402", "E741", "F841", "T201", "D102", "D103", "D107"]
@@ -424,9 +422,6 @@ known-third-party = ["wandb"]
 "src/synth_setter/pipeline/data/reshard.py" = ["T201"]
 "src/synth_setter/pipeline/data/rewrite_to_latest.py" = ["ANN001", "D102", "D103", "D107"]
 "src/synth_setter/data/audio_datamodule.py" = ["D102", "D103", "D107"]
-"src/synth_setter/data/fm_datamodule.py" = ["D102", "D103", "D107"]
-"src/synth_setter/data/kosc_datamodule.py" = ["D102", "D103", "D107"]
-"src/synth_setter/data/ksin_datamodule.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/core.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/generate_vst_dataset.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/param_spec.py" = ["D102", "D103", "D107"]
@@ -446,7 +441,6 @@ known-third-party = ["wandb"]
 # New code under synth_setter/models/ should still annotate; remove this entry once legacy
 # callsites are cleaned up.
 "src/synth_setter/models/**" = ["ANN001"]
-"src/synth_setter/models/components/loss.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/cnn.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/embed_pool.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/residual_mlp.py" = ["D102", "D103", "D107"]
@@ -454,9 +448,7 @@ known-third-party = ["wandb"]
 "src/synth_setter/models/components/transformer.py" = ["F841", "D102", "D103", "D107"]
 "src/synth_setter/models/components/vae.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/models/components/vector_field.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/ksin_ff_module.py" = ["F821", "D102", "D103", "D107"]
 "src/synth_setter/models/vst_ff_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/ksin_flow_matching_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/vst_flow_matching_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/vst_flowvae_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/cli/train.py" = ["E402", "D102", "D103", "D107"]

@@ -7,7 +7,8 @@
 
 defaults:
   - override /datamodule: surge_simple
-  - override /render: surge_simple
+  - override /synth: surge_simple
+  - override /render: vst
   - _self_
 
 task_name: nightly-parallel-smoke

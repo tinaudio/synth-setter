@@ -5,7 +5,6 @@ defaults:
   - model_summary
   - rich_progress_bar
   # - plot_loss
-  - plot_pos_enc
   - plot_proj
   - plot_projii
   - _self_
@@ -17,7 +16,3 @@ model_checkpoint:
   mode: "min"
   save_last: True
   auto_insert_metric_name: False
-# early_stopping:
-#   monitor: "val/chamfer"
-#   patience: 50
-#   mode: "min"

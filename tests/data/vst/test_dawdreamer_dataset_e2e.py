@@ -8,7 +8,6 @@ import lance
 import numpy as np
 import pytest
 from hydra import compose, initialize_config_module
-from omegaconf import OmegaConf
 
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.renderers import DawDreamerRenderer
@@ -26,8 +25,8 @@ from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
     TEST_PRESET_PATH,
-    TEST_SYNTH_VERSION,
     TEST_SYNTH,
+    TEST_SYNTH_VERSION,
 )
 from tests.data.vst.test_generate_vst_dataset import (
     _HARDCODED_NOTE_PARAMS,
@@ -56,13 +55,13 @@ def _dawdreamer_experiment_config() -> RenderConfig:
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/surge-xt-dawdreamer-smoke",
-                f"render.synth.plugin_path={PLUGIN_PATH}",
-                f"render.synth.plugin_state_path={TEST_PRESET_PATH}",
-                f"render.synth.param_spec_name={TEST_PARAM_SPEC_NAME}",
-                f"render.synth.synth_version={TEST_SYNTH_VERSION}",
+                f"synth.plugin_path={PLUGIN_PATH}",
+                f"synth.plugin_state_path={TEST_PRESET_PATH}",
+                f"synth.param_spec_name={TEST_PARAM_SPEC_NAME}",
+                f"synth.synth_version={TEST_SYNTH_VERSION}",
             ],
         )
-    config = RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
+    config = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
     # base_seed / attempts_per_sample are RenderConfig fields, not render-group keys,
     # so pin them post-validation the way the launcher injects the per-shard seed.
     return config.model_copy(update={"base_seed": 1808, "attempts_per_sample": 1})

@@ -1,6 +1,0 @@
-# @package _global_
-
-datamodule:
-  algorithm: mixed
-
-out_dim: 8

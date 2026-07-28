@@ -158,58 +158,30 @@ that the virtual environment is active and dependencies installed correctly.
 
 ______________________________________________________________________
 
-## 3. k-osc Quickstart (No External Dependencies)
+## 3. TorchSynth Quickstart (No External Dependencies)
 
-The k-osc task is a synthetic benchmark where the model learns to predict
-parameters of a sum-of-sinusoids signal. It generates data on the fly, so you
-do not need any external datasets, VST plugins, or cloud storage.
+TorchSynth renders training rows in process, so this path needs no external
+dataset, VST plugin, or cloud storage.
 
 ### 3a. Train a model
 
 ```bash
-python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer.max_steps=5000 trainer.min_steps=null
+python -m synth_setter.cli.train experiment=torchsynth/ffn trainer.max_steps=5000 trainer.min_steps=null
 ```
 
 > **No CUDA GPU?** The default trainer is `gpu` (CUDA). On CPU-only machines use
 > `trainer=cpu`; on Apple Silicon use `trainer=mps`:
 >
 > ```bash
-> python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu trainer.max_steps=5000 trainer.min_steps=null
+> python -m synth_setter.cli.train experiment=torchsynth/ffn trainer=cpu trainer.max_steps=5000 trainer.min_steps=null
 > ```
 
-This runs a feed-forward network with MSE loss on the k-osc task for 5,000
-training steps. The `trainer.min_steps=null` override is needed because the
-default trainer config sets `min_steps: 400_000`, which would otherwise prevent
-the run from stopping at 5,000 steps. You should see Lightning's progress bar
-with decreasing loss values.
-
-**What happens:**
-
-- Hydra composes the config from `src/synth_setter/configs/train.yaml` + the experiment override
-- Lightning sets up the data module, model, callbacks, and trainer
-- Checkpoints are saved under `logs/{task_name}/{experiment_name}/{run_name}-{timestamp}/checkpoints/` (for this command: `logs/train/kosc/ffn_mse-<timestamp>/checkpoints/`)
-- Metrics are logged to W&B + CSV + TensorBoard by default. W&B requires
-  `wandb login` (or `WANDB_API_KEY`) — see [section 4c](#4c-weights--biases-wb)
-  for credentials, or to drop W&B from the default compose
-
-### 3b. Available k-osc experiments
-
-The `src/synth_setter/configs/experiment/kosc/` directory contains several variants:
-
-| Config             | Description                          |
-| ------------------ | ------------------------------------ |
-| `kosc/base`        | Base config (used by other variants) |
-| `kosc/ffn_mse`     | Feed-forward network, MSE loss       |
-| `kosc/ffn_chamfer` | Feed-forward network, Chamfer loss   |
-| `kosc/flow`        | Flow matching model                  |
-| `kosc/flow_asym`   | Flow matching, asymmetric            |
-| `kosc/flowmlp`     | Flow MLP variant                     |
-
-Run any of them with:
-
-```bash
-python -m synth_setter.cli.train experiment=kosc/<variant>
-```
+The `trainer.min_steps=null` override lets the run stop at 5,000 steps instead
+of the default trainer's longer minimum. Hydra composes the TorchSynth online
+datamodule, feed-forward model, callbacks, and trainer; checkpoints land under
+`logs/{task_name}/{experiment_name}/{run_name}-{timestamp}/checkpoints/`. Metrics
+use W&B, CSV, and TensorBoard by default. See [section 4c](#4c-weights--biases-wb)
+for credentials or logger overrides.
 
 ______________________________________________________________________
 
@@ -217,7 +189,7 @@ ______________________________________________________________________
 
 The sections below cover dependencies needed for the full workflow: generating
 audio datasets from VST plugins, syncing data with cloud storage, and tracking
-experiments. **None of these are needed for the k-osc quickstart above.**
+experiments. **None of these are needed for the TorchSynth quickstart above.**
 
 ### 4a. Surge XT (VST Plugin)
 
@@ -323,7 +295,7 @@ in the codebase.
 4. Run training as usual — metrics flow to W&B + CSV + TensorBoard:
 
    ```bash
-   python -m synth_setter.cli.train experiment=kosc/ffn_mse
+   python -m synth_setter.cli.train experiment=torchsynth/ffn
    ```
 
 **Disabled — drop W&B from the default compose:** comment out `- wandb` in
@@ -331,7 +303,7 @@ in the codebase.
 or `logger=tensorboard`:
 
 ```bash
-python -m synth_setter.cli.train experiment=kosc/ffn_mse logger=csv
+python -m synth_setter.cli.train experiment=torchsynth/ffn logger=csv
 ```
 
 Without `wandb login` (or `WANDB_API_KEY`), the W&B logger will prompt for
@@ -432,13 +404,13 @@ src/synth_setter/configs/   # located via synth_setter.resources.configs_dir()
   train.yaml          # Top-level training defaults
   eval.yaml           # Top-level evaluation defaults
   dataset.yaml        # Pipeline dataset defaults
-  datamodule/         # Data module configs (kosc, ksin, surge, ...)
-  model/              # Model configs (ffn, flow, flowmlp, ...)
+  datamodule/         # Data module configs (TorchSynth, Surge, Lance, ...)
+  model/              # Model configs (ffn and Surge/VST model families)
   trainer/            # Trainer configs (gpu, cpu, mps, ddp, ...)
   logger/             # Logger configs (wandb, csv, tensorboard, ...)
   callbacks/          # Callback configs
   experiment/         # Experiment configs (compose datamodule + model + overrides)
-    kosc/             # k-osc experiments
+    torchsynth/       # Online TorchSynth experiments
     surge/            # Surge XT experiments
     generate_dataset/ # Pipeline dataset experiments
 ```
@@ -447,7 +419,7 @@ src/synth_setter/configs/   # located via synth_setter.resources.configs_dir()
 specified — they have no default. The defaults for each model family
 (including required-for-training values like `trainer.max_steps` for surge's
 LR scheduler) live in `src/synth_setter/configs/experiment/`. Look there to see how a given
-model is meant to be trained — `src/synth_setter/configs/experiment/kosc/base.yaml` and
+model is meant to be trained — `src/synth_setter/configs/experiment/torchsynth/ffn.yaml` and
 `src/synth_setter/configs/experiment/surge/base.yaml` are the canonical starting points.
 
 ### 5b. Common overrides
@@ -456,22 +428,22 @@ Override any config value from the command line:
 
 ```bash
 # Change batch size
-python -m synth_setter.cli.train experiment=kosc/ffn_mse datamodule.batch_size=32
+python -m synth_setter.cli.train experiment=torchsynth/ffn datamodule.batch_size=32
 
 # Change learning rate
-python -m synth_setter.cli.train experiment=kosc/ffn_mse model.optimizer.lr=1e-4
+python -m synth_setter.cli.train experiment=torchsynth/ffn model.optimizer.lr=1e-4
 
 # Use CPU trainer instead of GPU
-python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
+python -m synth_setter.cli.train experiment=torchsynth/ffn trainer=cpu
 
 # Override default logger compose (default is W&B + CSV + TensorBoard)
-python -m synth_setter.cli.train experiment=kosc/ffn_mse logger=csv
+python -m synth_setter.cli.train experiment=torchsynth/ffn logger=csv
 
 # Limit training steps
-python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer.max_steps=10000
+python -m synth_setter.cli.train experiment=torchsynth/ffn trainer.max_steps=10000
 
 # Run in debug mode (1 batch per epoch, no logging)
-python -m synth_setter.cli.train experiment=kosc/ffn_mse debug=default
+python -m synth_setter.cli.train experiment=torchsynth/ffn debug=default
 ```
 
 For the full configuration reference, see
@@ -554,13 +526,13 @@ make format
 Reduce the batch size:
 
 ```bash
-python -m synth_setter.cli.train experiment=kosc/ffn_mse datamodule.batch_size=8
+python -m synth_setter.cli.train experiment=torchsynth/ffn datamodule.batch_size=8
 ```
 
 Or switch to CPU for debugging:
 
 ```bash
-python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
+python -m synth_setter.cli.train experiment=torchsynth/ffn trainer=cpu
 ```
 
 ### Training dies with no traceback (host RAM, not GPU)

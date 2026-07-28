@@ -1,4 +1,0 @@
-# Spec-identity override; generic render knobs inherit from surge_xt.
-defaults:
-  - surge_xt
-  - override synth: surge_4

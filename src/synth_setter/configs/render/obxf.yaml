@@ -1,5 +1,0 @@
-# Pin OB-Xf identity while generic knobs come from ``vst``.
-defaults:
-  - vst
-  - synth: obxf
-  - _self_

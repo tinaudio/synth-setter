@@ -1,0 +1,6 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "surge_xt_surgepy"
+param_spec_name: "surge_xt"
+plugin_path: "surgepy"
+plugin_state_path: "presets/surge-base.fxp"
+synth_version: "1.3.master.f7b97c68"

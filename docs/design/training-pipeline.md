@@ -307,12 +307,14 @@ dataset_root: ${paths.output_dir}/data # shipped default (per-run Hydra dir)
 
 Behavior:
 
-- Local-only by default
-- If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
-- If `download_dataset_txids` or `download_dataset_row_limit` is set, each split is instead rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`); txids pin source snapshots when supplied, otherwise row-limited hydration uses the latest snapshots, and only non-Lance sidecars still download via `download_dir_no_overwrite`
-- No-txid hydration is intentionally non-reproducible and reserved for disposable smoke/tuning runs; splits resolve independently without an atomic cross-split snapshot, while resumable or reproducible runs must supply per-split txids
+- Local-only by default; no hidden default R2 fetch
+- If `download_dataset_root_uri` is specified, every split is rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`) — only the columns the loaders read (`param_array` + the conditioning column, plus `audio` for the split serving prediction) cross the wire. There is no whole-dataset copy mode; only non-Lance sidecars still download via `download_dir_no_overwrite`
+- The source must expose the `train`/`val`/`test` `.lance` split layout; a root that does not is a hard failure, not a fallback to a raw copy
+- Splits land in `dataset_root/<prefix>-<digest>/`, where `<prefix>` is the conditioning column truncated to `_DIRNAME_PREFIX_CHARS` and the digest covers the source URI, txids, per-split projection, and row limit (see `subset_dirname` in `lance_materialize.py`). The name is derivable from configuration alone so rank-0 `prepare_data` and all-rank `setup` agree without a source read, and changing conditioning hydrates a sibling subset instead of colliding with the old one. `predict_file` naming the configured root rebases onto the subset
+- Nothing reclaims stale subsets yet; a persistent `dataset_root` accumulates one per distinct request (#2569)
+- `download_dataset_txids` pins per-split source snapshots; without them hydration uses each split's latest version, resolved independently — there is no atomic cross-split snapshot. That is accepted: reproducible or resumable runs supply txids
 - Unpinned cache hits fail closed when the source cannot be reopened and identity-checked; local data is never treated as current after an unverifiable remote read
-- No hidden default R2 fetch
+- `download_dataset_row_limit` caps each split at first-N rows, for disposable smoke/tuning runs
 
 ### 6.2 Checkpoint Durability via R2
 

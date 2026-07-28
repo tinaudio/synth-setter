@@ -25,7 +25,6 @@ from synth_setter.pipeline.dataset_lineage import (
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.run_id import make_wandb_run_id
-from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -185,47 +184,6 @@ def _skip_auto_probe_or_raise(auto: bool, reason: str, error: str) -> None:
     raise ValueError(error)
 
 
-def _validate_probe_spec_match(cfg: DictConfig) -> None:
-    """Reject a render spec that cannot decode the model's predictions.
-
-    :param cfg: Hydra config carrying the render and datamodule specs.
-    :raises ValueError: If a VST datamodule's spec differs from the render spec.
-    """
-    render_synth = SynthSpec.from_render_cfg(OmegaConf.select(cfg, "render"))
-    render_spec = None if render_synth is None else render_synth.param_spec_name
-    datamodule_spec = OmegaConf.select(cfg, "datamodule.param_spec_name")
-    if datamodule_spec is None or datamodule_spec == render_spec:
-        return
-
-    render_desc = "unset" if render_spec is None else repr(render_spec)
-    raise ValueError(
-        "the val audio probe must decode predictions with the model's spec, "
-        f"but render.param_spec_name is {render_desc} while "
-        f"datamodule.param_spec_name={datamodule_spec!r}. Use the matching render "
-        f"group (e.g. `render={datamodule_spec}`)."
-    )
-
-
-def _probe_render_settings(cfg: DictConfig) -> RenderConfig:
-    """Validate the composed render group for the audio-probe subprocess.
-
-    :param cfg: Hydra config carrying the composed render group.
-    :returns: The shared render configuration consumed by the renderer factory.
-    :raises TypeError: The Hydra render group does not resolve to a mapping.
-    :raises ValueError: The render group declares no synth identity.
-    """
-    values = OmegaConf.to_container(cfg.render, resolve=True)
-    if not isinstance(values, dict):
-        raise TypeError("cfg.render must resolve to a mapping")
-    synth = SynthSpec.from_render_cfg(cfg.render)
-    if synth is None:
-        raise ValueError("render group names no param spec; the audio probe cannot decode")
-    for legacy_key in ("param_spec_name", "plugin_path", "plugin_state_path"):
-        values.pop(legacy_key, None)
-    values["synth"] = synth.model_dump()
-    return RenderConfig.model_validate(values)
-
-
 def _configure_val_audio_probe(
     cfg: DictConfig, callbacks: list[Callback], launch_namespace: str
 ) -> None:
@@ -238,10 +196,14 @@ def _configure_val_audio_probe(
     :param cfg: Hydra config carrying the probe mode, ``render`` group, and ``r2.bucket``.
     :param callbacks: Callback list mutated in place.
     :param launch_namespace: Collision-resistant identifier for one training launch.
+    A CLI-forced datamodule spec that skews from the synth selection is rejected
+    earlier, by ``validate_synth_identity`` inside ``extras()`` — do not re-add
+    a spec-match guard here.
+
     :raises ValueError: If any condition holds:
 
         - A present mode is not ``true``, ``false``, or ``"auto"``.
-        - The render spec cannot decode the model's predictions.
+        - No root ``synth`` identity group is composed alongside ``render``.
         - The sample count is not a positive integer.
         - Mode ``true`` lacks a render group or validation is disabled.
 
@@ -264,11 +226,9 @@ def _configure_val_audio_probe(
             auto,
             "no render group composed",
             "training.val_audio_probe=true requires a render config group "
-            "(e.g. `render=surge_xt`); cfg.render is unset.",
+            "(e.g. `synth=surge_xt render=vst`); cfg.render is unset.",
         )
         return
-    # A composed render group states intent, so spec mismatches raise under auto too.
-    _validate_probe_spec_match(cfg)
     # A validation-hooked probe wired into a validation-disabled run would silently
     # stage nothing forever.
     if OmegaConf.select(cfg, "trainer.limit_val_batches") == 0:
@@ -286,7 +246,9 @@ def _configure_val_audio_probe(
         raise ValueError(
             f"training.val_audio_probe_samples must be a positive integer; got {num_samples!r}."
         )
-    settings = _probe_render_settings(cfg)
+    # Identity comes from the root synth group (#2565) — the same node the
+    # datamodule interpolates — so the probe's spec cannot skew from the model's.
+    settings = RenderConfig.from_cfg_nodes(cfg.render, cfg.get("synth"))
     try:
         r2_io.ensure_r2_env_loaded()
     except (RuntimeError, OSError) as exc:

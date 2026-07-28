@@ -1,0 +1,17 @@
+# DawDreamer compiles the selected identity's checked-in source string; no source or preset path is accepted.
+renderer_backend: dawdreamer_faust
+sample_rate: 44100
+channels: 2
+velocity: 100
+signal_duration_seconds: 4.0
+min_loudness: -55.0
+audio_dtype: float16
+mel_spec_dtype: float32
+samples_per_shard: 10000
+samples_per_render_batch: 32
+max_retries: 0
+parallel: false
+# Recompile per row so oscillator, delay, filter, and voice state cannot cross samples.
+plugin_reload_cadence: render
+gui_toggle_cadence: never
+param_sample_cadence: sample

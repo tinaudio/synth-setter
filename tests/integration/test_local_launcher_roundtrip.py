@@ -153,8 +153,8 @@ def test_launcher_roundtrip_with_stubbed_renderer(
     argv = [
         "synth-setter-generate-dataset",
         f"experiment={experiment}",
-        f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
-        f"render.synth.synth_version={TEST_PLUGIN_VERSION}",
+        f"synth.plugin_path={TEST_PLUGIN_VST3}",
+        f"synth.synth_version={TEST_PLUGIN_VERSION}",
         f"+r2.prefix={ci_r2_prefix}",
         f"+created_at={fixed_created_at}",
     ]
@@ -248,8 +248,8 @@ def test_subprocess_writes_spec_under_hydra_output_dir(
     hydra_run_dir = tmp_path / "run"
     overrides = [
         "experiment=generate_dataset/smoke-shard",
-        f"render.synth.plugin_path={TEST_PLUGIN_VST3}",
-        f"render.synth.synth_version={TEST_PLUGIN_VERSION}",
+        f"synth.plugin_path={TEST_PLUGIN_VST3}",
+        f"synth.synth_version={TEST_PLUGIN_VERSION}",
         f"+r2.prefix={ci_r2_prefix}",
         f"+created_at={fixed_created_at}",
         f"hydra.run.dir={hydra_run_dir}",

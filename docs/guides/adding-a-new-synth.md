@@ -13,18 +13,19 @@ registered `ParamSpec` and `RenderConfig`, never from a synth literal (see
 **additive** — no edits to core pipeline, storage, or model code. A synth is
 fully described by four registered artifacts:
 
-| Artifact        | Where it lives                                   | Registry key                |
-| --------------- | ------------------------------------------------ | --------------------------- |
-| Identity row    | `src/synth_setter/synth_spec.py`                 | `SYNTHS["<name>"]`          |
-| `ParamSpec`     | `src/synth_setter/data/vst/<name>_param_spec.py` | `param_specs["<name>"]`     |
-| Baseline preset | `presets/<name>-base.vstpreset`                  | named by the identity row   |
-| `RenderConfig`  | `src/synth_setter/configs/render/<name>.yaml`    | selected by `render=<name>` |
+| Artifact        | Where it lives                                   | Registry key                                        |
+| --------------- | ------------------------------------------------ | --------------------------------------------------- |
+| Identity row    | `src/synth_setter/synth_spec.py`                 | `SYNTHS["<name>"]`                                  |
+| `ParamSpec`     | `src/synth_setter/data/vst/<name>_param_spec.py` | `param_specs["<name>"]`                             |
+| Baseline preset | `presets/<name>-base.vstpreset`                  | named by the identity row                           |
+| `RenderConfig`  | `src/synth_setter/configs/render/<backend>.yaml` | selected by `render=vst` (or another backend group) |
 
 The **identity row is the authoring point**: which param spec, which plugin, which
-baseline preset. `plugin_state_paths` and
-`src/synth_setter/configs/render/synth/<name>.yaml` are projections of it, pinned
-against the table by
-[`tests/test_synth_spec.py`](../../tests/test_synth_spec.py). The `ParamSpec`
+baseline preset. `plugin_state_paths` and the root identity group
+`src/synth_setter/configs/synth/<name>.yaml` (selected via `synth=<name>`) are
+projections of it, pinned against the table by
+[`tests/test_synth_spec.py`](../../tests/test_synth_spec.py) and
+[`tests/schemas/test_synth_config.py`](../../tests/schemas/test_synth_config.py). The `ParamSpec`
 objects themselves live in
 [`param_spec_registry.py`](../../src/synth_setter/data/vst/param_spec_registry.py).
 The preset filename convention is `<name>-base.vstpreset` for new registrations;
@@ -33,7 +34,7 @@ several existing `surge*` keys use shorter legacy names (e.g. `surge_xt` →
 
 This workflow is specifically for VST3 plugins. Checked-in Faust programs use a
 registered source/spec pair instead: their `plugin_state_paths` entry is empty,
-their render config selects `dawdreamer_faust`, and parameter names preserve the
+they render through the `dawdreamer_faust` backend (`render=faust`), and parameter names preserve the
 exact addresses reported by Faust compilation.
 
 The one genuinely hard part is the `ParamSpec`: pedalboard can enumerate a
@@ -151,15 +152,16 @@ patch:
 The encoded width (`param_specs[name].encoded_width`) exceeds the curated count
 (`len(spec.synth_params)`) because onehot-encoded categoricals expand one
 parameter into several dimensions, and the note parameters add their own. VST
-model configs resolve this width from `datamodule.param_spec_name`; experiments
-must not repeat it as a `num_params`, `d_out`, or `latent_dim` literal.
+model configs resolve this width from the root `synth` group's
+`param_spec_name`; experiments must not repeat it as a `num_params`, `d_out`,
+or `latent_dim` literal.
 See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
 for hand-tuned examples.
 
 ## Step 3 — Register the synth
 
-Wire the spec, preset, and render config into the checkout. The CLI does this
+Wire the spec, preset, and identity config into the checkout. The CLI does this
 for you with `--register`:
 
 ```bash
@@ -170,8 +172,8 @@ synth-setter-introspect-plugin \
 ```
 
 `--register` writes the spec module, preset, and CSV to their conventional
-paths, generates `src/synth_setter/configs/render/mysynth.yaml` and its
-`configs/render/synth/mysynth.yaml` identity group, adds the `SYNTHS` row, and
+paths, generates `src/synth_setter/configs/synth/mysynth.yaml` (the root identity
+group every run selects via `synth=mysynth`), adds the `SYNTHS` row, and
 inserts the import + `param_specs` entry into the registry. `--verify`
 then runs the post-draft battery (pre-commit gates, registry import + sample,
 Hydra compose, classifier audit), writes `verify-mysynth.md` at the checkout
@@ -210,11 +212,12 @@ param_specs: dict[str, ParamSpec] = {
 Skipping the identity row is the common mistake: `--verify` will pass, then
 `tests/test_synth_spec.py` fails in CI because `SYNTHS` has no entry.
 
-The synth group is a generated projection of that row and owns all identity
-fields, including the required artifact version:
+The root synth group is a generated projection of that row and owns all
+identity fields, including the required artifact version; VST datamodules,
+models, and callbacks resolve it through `${synth.param_spec_name}`:
 
 ```yaml
-# src/synth_setter/configs/render/synth/mysynth.yaml
+# src/synth_setter/configs/synth/mysynth.yaml
 name: "mysynth"
 param_spec_name: "mysynth"
 plugin_path: "plugins/MySynth.vst3"
@@ -222,43 +225,35 @@ plugin_state_path: "presets/mysynth-base.vstpreset"
 synth_version: "1.2.3"
 ```
 
-The render config selects the synth group and inherits generic render knobs
-(sample rate, cadence, batch size) from the `vst` render base
-(`src/synth_setter/configs/render/vst.yaml`):
+Render groups are backend-named, not per-synth: a registered VST3 synth uses
+the generic `vst` render base (`src/synth_setter/configs/render/vst.yaml`)
+directly via `render=vst`, so no render config is generated or needed.
 
-```yaml
-# src/synth_setter/configs/render/mysynth.yaml
-defaults:
-  - vst
-  - synth: mysynth
-  - _self_
-```
-
-`render.synth.synth_version` is cross-checked against the loaded plugin before
+`synth.synth_version` is cross-checked against the loaded plugin before
 rendering, so pin the exact version you onboarded against.
 
 `--register` writes the output files and rewrites the registry module, so run
 `make format` and commit before generating — the smoke run reads the committed
 checkout. Faust source identities are registered manually with an empty state
-entry and a `dawdreamer_faust` render config; the VST3 introspection command does
-not generate them.
+entry and rendered via `render=faust` (the `dawdreamer_faust` backend group);
+the VST3 introspection command does not generate them.
 
 ## Step 4 — Generate a smoke dataset
 
-With the synth registered, pass `render=<name>` to any generate-dataset
-experiment. The `render=mysynth` override replaces the experiment's default
-render group (e.g. `smoke-shard` defaults to `render=surge_simple`):
+With the synth registered, pass `synth=<name> render=vst` to any
+generate-dataset experiment. The override replaces the experiment's default
+identity (e.g. `smoke-shard` defaults to `synth=surge_simple`):
 
 ```bash
 synth-setter-generate-dataset \
   experiment=generate_dataset/smoke-shard \
-  render=mysynth \
+  synth=mysynth render=vst \
   paths.output_dir=/path/to/output
 ```
 
 This renders a small smoke dataset, proving the synth resolves through
 `spec_from_cfg` and renders non-silent audio end-to-end. Scale up by pointing
-`render=mysynth` at a larger experiment config.
+`synth=mysynth render=vst` at a larger experiment config.
 
 ## Optional — bake the synth into the Docker image
 

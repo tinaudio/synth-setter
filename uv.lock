@@ -2995,25 +2995,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pot"
-version = "0.9.6.post1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "scipy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/42/8b/5f939eaf1fbeb7ff914fe540d659486951a056e5537b8f454362045b6c72/pot-0.9.6.post1.tar.gz", hash = "sha256:9b6cc14a8daecfe1268268168cf46548f9130976b22b24a9e8ec62a734be6c43", size = 604243, upload-time = "2025-09-22T12:51:14.894Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b9/28/13622807461f9f6082a8cd6768f9b4a810bc3a8fda474b81572da94b4d23/pot-0.9.6.post1-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:f7c542fc20662e35c24dd82eeff8a737220757434d7f0038664a7322221452f7", size = 599240, upload-time = "2025-09-22T12:50:44.848Z" },
-    { url = "https://files.pythonhosted.org/packages/c6/5c/b4e017560531f53d06798c681b0d0a9488bb8116bc98da9d399a3d096391/pot-0.9.6.post1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:c1755516a7354cbd6110ad2e5f341b98b9968240c2f0f67b0ff5e3ebcb3105bd", size = 464695, upload-time = "2025-09-22T12:50:46.341Z" },
-    { url = "https://files.pythonhosted.org/packages/07/9f/57e49b3f7173359741053c5e2766a45dcf649d767c2e967ef93526c9045f/pot-0.9.6.post1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:f3207362d3e3b5aaa783f452aa85f66e83edbefb5764f34662860af54ac72ee6", size = 454726, upload-time = "2025-09-22T12:50:47.953Z" },
-    { url = "https://files.pythonhosted.org/packages/30/60/fa72dd6094f7dbe6b38e2c6907af8cd0f18c6bd107e0cf4874deddaba883/pot-0.9.6.post1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:05f6659c5657e6d7e9f98f4a82e0ed64f88e9fce69b2e557416d156343919ba3", size = 1503391, upload-time = "2025-09-22T12:50:49.336Z" },
-    { url = "https://files.pythonhosted.org/packages/2f/3f/cc519c1176116271b6282268a705162fa042c16cc922bc56039445c9d697/pot-0.9.6.post1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4f1b0148ae17bec0ed12264c6da3a05e13913b716e2a8c9043242b5d8349d8df", size = 1528170, upload-time = "2025-09-22T12:50:50.625Z" },
-    { url = "https://files.pythonhosted.org/packages/f5/01/0132c94404cd0b1b2f21c4a49698db9dcd6107c47c02b22df1ed38206b2a/pot-0.9.6.post1-cp312-cp312-win32.whl", hash = "sha256:571e543cc2b0a462365002203595baf2b89c3d064cce4fce70fd1231e832c21f", size = 440577, upload-time = "2025-09-22T12:50:51.716Z" },
-    { url = "https://files.pythonhosted.org/packages/c1/6d/23229c0e198a4f7fb27750b3ef8497e6ebed23fe531ed64b5194da8b2b02/pot-0.9.6.post1-cp312-cp312-win_amd64.whl", hash = "sha256:b1d8bd9a334c72baa37f9a2b268de5366c23c0f9c9e3d6dc25d150137ec2823c", size = 455404, upload-time = "2025-09-22T12:50:52.956Z" },
-]
-
-[[package]]
 name = "pre-commit"
 version = "4.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4371,7 +4352,7 @@ wheels = [
 
 [[package]]
 name = "synth-setter"
-version = "10.7.0"
+version = "10.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -4461,7 +4442,6 @@ dev = [
     { name = "pandas" },
     { name = "pedalboard" },
     { name = "pesto-pitch" },
-    { name = "pot" },
     { name = "pre-commit" },
     { name = "pydantic-settings" },
     { name = "pylance" },
@@ -4514,7 +4494,6 @@ metrics = [
     { name = "einops" },
     { name = "kymatio" },
     { name = "pesto-pitch" },
-    { name = "pot" },
 ]
 notebooks = [
     { name = "duckdb" },
@@ -4543,7 +4522,6 @@ runtime = [
     { name = "pandas" },
     { name = "pedalboard" },
     { name = "pesto-pitch" },
-    { name = "pot" },
     { name = "pydantic-settings" },
     { name = "pylance" },
     { name = "pyloudnorm" },
@@ -4686,7 +4664,6 @@ dev = [
     { name = "pandas" },
     { name = "pedalboard" },
     { name = "pesto-pitch", specifier = "==2.0.1" },
-    { name = "pot" },
     { name = "pre-commit" },
     { name = "pydantic-settings", specifier = ">=2" },
     { name = "pylance", specifier = ">=7.0.0" },
@@ -4733,7 +4710,6 @@ metrics = [
     { name = "einops" },
     { name = "kymatio", specifier = "==0.3.0" },
     { name = "pesto-pitch", specifier = "==2.0.1" },
-    { name = "pot" },
 ]
 notebooks = [
     { name = "duckdb", specifier = ">=1.5.4" },
@@ -4762,7 +4738,6 @@ runtime = [
     { name = "pandas" },
     { name = "pedalboard" },
     { name = "pesto-pitch", specifier = "==2.0.1" },
-    { name = "pot" },
     { name = "pydantic-settings", specifier = ">=2" },
     { name = "pylance", specifier = ">=7.0.0" },
     { name = "pyloudnorm" },

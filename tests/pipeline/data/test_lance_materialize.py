@@ -16,6 +16,7 @@ from structlog.testing import capture_logs
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import (
     MaterializeManifest,
+    _open_source,
     materialize_lance_subset,
     materialize_splits,
     resolve_txid_version,
@@ -284,6 +285,27 @@ def test_materialize_column_projection_subset_columns_only_requested_schema(
     assert out.schema.names == ["a"]
 
 
+def test_open_source_absolute_file_uri_from_other_cwd_preserves_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file URI remains absolute while Lance reads it outside the source cwd.
+
+    :param tmp_path: Pytest fixture providing source and unrelated working directories.
+    :param monkeypatch: Fixture changing the process working directory.
+    """
+    source = tmp_path / "network volume" / "train.lance"
+    source.parent.mkdir()
+    lance.write_dataset(pa.table({"a": [1, 2, 3]}), str(source))
+    unrelated_cwd = tmp_path / "worker"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+
+    dataset = _open_source(source.as_uri())
+
+    assert dataset.uri == source.as_uri()
+    assert dataset.to_table().column("a").to_pylist() == [1, 2, 3]
+
+
 def test_materialize_file_uri_source_resolves_local_path(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
@@ -325,16 +347,13 @@ def test_materialize_splits_builds_projected_capped_splits_per_txid(
     def download_spy(source_uri: str, dest_path: Path, *, exclude: str | None = None) -> None:
         calls.append((source_uri, dest_path, exclude))
 
-    def columns_for(_split: str) -> tuple[str, ...]:
-        return ("a",)
-
     monkeypatch.setattr(r2_io, "download_dir_no_overwrite", download_spy)
     dest_root = tmp_path / "dest"
     materialize_splits(
         str(source_root),
         dest_root,
         txids=txids,
-        columns_for=columns_for,
+        projection={split: ("a",) for split in ("train", "val", "test")},
         row_limit=2,
         shard_suffix=".lance",
     )
@@ -365,7 +384,7 @@ def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
         source_root,
         dest_root,
         txids={},
-        columns_for=lambda _split: (),
+        projection={},
         row_limit=None,
         shard_suffix=".lance",
     )

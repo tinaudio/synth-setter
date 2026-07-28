@@ -174,7 +174,7 @@ def render_torchsynth(
             audio = voice.output()
     if not torch.isfinite(audio).all():
         raise ValueError("TorchSynth audio must be finite")
-    return audio.clamp(-1, 1)
+    return audio.as_subclass(torch.Tensor).clamp(-1, 1)
 
 
 class TorchSynthDataset(Dataset[TorchSynthItem]):

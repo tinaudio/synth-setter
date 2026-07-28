@@ -40,7 +40,7 @@ Training models for these tasks requires large-scale datasets: 500k–15M audio 
 
 ### Prior Work
 
-The core generation and training infrastructure was built by benhayes@: the VST rendering engine (`generate_vst_dataset.py`), a comprehensive parameter specification system covering Surge XT's full parameter space (`param_spec.py`, `surge_xt_param_spec.py` — ~1300 lines of sampling, encoding, and semantic representation), plugin loading with audio and mel extraction (`core.py`), and the PyTorch Lightning DataModule (`vst_datamodule.py`). Beyond the generation code, benhayes@ built an extensive Hydra configuration system — 40+ composable experiment configs across multiple datasets (Surge, k-osc, k-sin, FM, FSD, NSynth), multi-logger support (W&B, TensorBoard, MLflow), Optuna integration for hyperparameter search, and SGE job scripts for QMUL's HPC cluster with proper resource management, array jobs, and W&B checkpoint retrieval. This is a well-structured research codebase with strong configuration practices, and it remains the foundation the distributed pipeline builds on.
+The core generation and training infrastructure was built by benhayes@: the VST rendering engine (`generate_vst_dataset.py`), a comprehensive parameter specification system covering Surge XT's full parameter space (`param_spec.py`, `surge_xt_param_spec.py` — ~1300 lines of sampling, encoding, and semantic representation), plugin loading with audio and mel extraction (`core.py`), and the PyTorch Lightning DataModule (`vst_datamodule.py`). Beyond the generation code, benhayes@ built an extensive Hydra configuration system — composable experiment configs across multiple datasets and synthesizers (Surge, TorchSynth, FSD, NSynth), multi-logger support (W&B, TensorBoard, MLflow), Optuna integration for hyperparameter search, and SGE job scripts for QMUL's HPC cluster with proper resource management, array jobs, and W&B checkpoint retrieval. This is a well-structured research codebase with strong configuration practices, and it remains the foundation the distributed pipeline builds on.
 
 On top of this, ktinubu@ added sequential orchestration (`run_dataset_pipeline.py`), cloud storage integration via rclone (`uploader.py`), a containerized execution environment with Docker, a first parallelization attempt with per-instance shards (`generate_shards.py`), RunPod scaling (`runpod_launch.py`), and post-generation finalization (`finalize_shards.py`).
 
@@ -87,7 +87,7 @@ RunPod is used because it's the platform where GPUs are already available and co
 #    as `experiment=` is `generate_dataset/<stem>`.
 #    Hydra composes the final DatasetSpec from src/synth_setter/configs/dataset.yaml + this overlay.
 cat src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
-# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: surge_simple, ...], ...
+# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: vst, ...], ...
 
 # 2. Run multi-shard generation on a single worker (default sequential loop;
 #    `render.parallel=true` opts into thread-pool parallel dispatch).
@@ -1439,7 +1439,7 @@ A run starts from a Hydra experiment YAML composed against `src/synth_setter/con
 
 defaults:
   - override /datamodule: surge_simple
-  - override /render: surge_simple
+  - override /render: vst
   - _self_
 
 task_name: surge-simple-480k-10k
@@ -1537,8 +1537,10 @@ src/synth_setter/configs/
   datamodule/          # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
-  render/              # Generic renderer settings and per-synth selectors
-    synth/              # Synth identity groups, including synth_version
+  render/              # Backend-named render groups (generic knobs + backend selectors)
+    vst.yaml
+    surgepy.yaml
+  synth/               # Root synth identity groups, including synth_version
     surge_simple.yaml
     surge_xt.yaml
   r2/                  # R2 bucket + prefix root
@@ -1552,8 +1554,8 @@ src/synth_setter/configs/
   # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
   #   generate_dataset/
   #     surge-simple-480k-10k.yaml
-  # render/              # Renderer settings plus nested synth identity groups
-  #   surge_xt.yaml
+  # render/              # Backend-named renderer settings; identity lives in the root synth/ group
+  #   vst.yaml
   # r2/                  # R2 bucket + prefix_root
   #   default.yaml
 ```

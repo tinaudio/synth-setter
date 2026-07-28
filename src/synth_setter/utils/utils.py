@@ -15,6 +15,7 @@ from lightning.pytorch.loggers import Logger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec_width
+from synth_setter.synth_spec import validate_synth_identity
 from synth_setter.utils import pylogger, rich_utils
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
@@ -168,15 +169,19 @@ def _select_checkpoint(ref: str, checkpoints: list[Path]) -> str:
 
 
 def extras(cfg: DictConfig) -> None:
-    """Apply optional utilities before the task is started.
+    """Validate the composed synth identity, then apply optional utilities.
 
-    Utilities:
+    Optional utilities (gated by the ``extras`` block):
         - Ignoring python warnings
         - Setting tags from command line
         - Rich config printing
 
     :param cfg: A DictConfig object containing the config tree.
     """
+    # Identity check precedes the extras-block early return: a skewed synth
+    # selection must fail fast regardless of which extras are composed.
+    validate_synth_identity(cfg)
+
     # return if no `extras` config
     if not cfg.get("extras"):
         log.warning("Extras config not found! <cfg.extras=null>")

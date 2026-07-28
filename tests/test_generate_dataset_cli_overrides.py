@@ -48,8 +48,8 @@ def test_generate_dataset_cli_accepts_overrides(
     preset_path = _REPO_ROOT / "presets" / "surge-simple.vstpreset"
     override_args = (
         "experiment=generate_dataset/smoke-shard "
-        f"render.synth.plugin_path={shlex.quote(str(resolved_plugin_path))} "
-        f"render.synth.plugin_state_path={shlex.quote(str(preset_path))} "
+        f"synth.plugin_path={shlex.quote(str(resolved_plugin_path))} "
+        f"synth.plugin_state_path={shlex.quote(str(preset_path))} "
         "train_val_test_sizes=[1,1,1] "
         "render.samples_per_shard=1 "
         "render.samples_per_render_batch=1 "
