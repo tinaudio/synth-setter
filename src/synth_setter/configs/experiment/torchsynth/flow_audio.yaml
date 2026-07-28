@@ -10,3 +10,6 @@ defaults:
 
 run_name: flow_audio
 tags: [torchsynth, flow, audio_loss]
+
+datamodule:
+  drop_last: true

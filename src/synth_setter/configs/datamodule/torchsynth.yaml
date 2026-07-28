@@ -9,6 +9,4 @@ train_val_test_seeds: [123, 456, 789]
 batch_size: 32
 num_workers: 4
 resample_train_per_epoch: false
-# Every shipped torchsynth experiment conditions on raw audio, so the per-row librosa
-# mel is dead weight; flip on for a mel-conditioned model.
-emit_mel: false
+drop_last: false

@@ -12,7 +12,6 @@ defaults:
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"
-  # Every VST-family module logs val/param_mse; val/loss died with the torchsynth fork.
   monitor: "val/param_mse"
   mode: "min"
   save_last: True

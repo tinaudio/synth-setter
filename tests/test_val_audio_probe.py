@@ -15,10 +15,15 @@ import threading
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pytest
 import torch
 from lightning.pytorch import LightningModule, Trainer
 
+from synth_setter.data.vst import TorchSynthRenderer, param_specs
+from synth_setter.data.vst.param_spec import decode_model_output
+from synth_setter.data.vst.torchsynth_param_spec import DEFAULT_NORMALIZED_ROW
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.utils.callbacks import ValAudioProbe, _stderr_tail
 
 _DRAIN_TIMEOUT_SECONDS = 30
@@ -167,9 +172,58 @@ def test_val_audio_probe_stages_only_first_batch_up_to_num_samples(tmp_path: Pat
         "pred-0.pt",
         "target-params-0.pt",
     ]
-    assert torch.load(predictions / "pred-0.pt", weights_only=True).shape[0] == 5
-    assert torch.load(predictions / "target-params-0.pt", weights_only=True).shape[0] == 5
+    staged_preds = torch.load(predictions / "pred-0.pt", weights_only=True)
+    staged_targets = torch.load(predictions / "target-params-0.pt", weights_only=True)
+    expected_targets = _batch()["params"]
+    assert expected_targets is not None
+    assert torch.equal(staged_preds, _outputs()["preds"][:5])
+    assert torch.equal(staged_targets, expected_targets[:5])
     assert staged == [tmp_path / "val_audio_probe" / "step-5000"]
+
+
+def test_val_audio_probe_fixed_note_suffix_stages_renderable_torchsynth_rows(
+    tmp_path: Path,
+) -> None:
+    """A fixed model-space note suffix completes online TorchSynth rows for rendering.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = param_specs[ParamSpecName("torchsynth_full")]
+    note_values = {"pitch": 60, "note_start_and_end": (0.0, 0.1)}
+    placeholder_synth_params = {parameter.name: 0.0 for parameter in spec.synth_params}
+    encoded_row = spec.encode(placeholder_synth_params, note_values)
+    note_suffix = torch.from_numpy(encoded_row[spec.synth_param_length :] * 2 - 1)
+    synth_row = torch.tensor(DEFAULT_NORMALIZED_ROW, dtype=torch.float32) * 2 - 1
+    probe = _probe(tmp_path, fixed_model_param_suffix=note_suffix)
+
+    probe.on_validation_batch_end(
+        _trainer(global_step=1),
+        _module(),
+        {"preds": synth_row.unsqueeze(0)},
+        {"audio": None, "params": synth_row.unsqueeze(0)},
+        0,
+    )
+
+    predictions = tmp_path / "val_audio_probe" / "step-1" / "predictions"
+    staged_pred = torch.load(predictions / "pred-0.pt", weights_only=True)
+    staged_target = torch.load(predictions / "target-params-0.pt", weights_only=True)
+    assert staged_pred.shape == staged_target.shape == (1, 79)
+
+    synth_params, note_params = decode_model_output(staged_pred[0].numpy(), spec)
+    renderer = TorchSynthRenderer(
+        plugin_path="torchsynth",
+        sample_rate=8_000,
+        channels=2,
+        signal_duration_seconds=0.1,
+    )
+    audio = renderer.render(
+        synth_params,
+        note_params["pitch"],
+        100,
+        note_params["note_start_and_end"],
+    )
+    assert audio.shape == (2, 800)
+    assert np.isfinite(audio).all()
 
 
 def test_val_audio_probe_stages_whole_batch_when_smaller_than_num_samples(tmp_path: Path) -> None:

@@ -29,6 +29,9 @@ training:
 # Fresh train rows each epoch: E2 vs E5 in the PR #1810 log show the fixed split
 # memorizes (val rises past the 0.0833 prior) while resampling crosses below it.
 datamodule:
+  collate_fn:
+    _target_: synth_setter.data.torchsynth_datamodule.collate_audio_dict
+    _partial_: true
   resample_train_per_epoch: true
 
 model:

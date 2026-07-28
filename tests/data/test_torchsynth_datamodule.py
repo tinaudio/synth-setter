@@ -146,6 +146,53 @@ def test_datamodule_loaders_shuffle_only_training_rows() -> None:
     assert isinstance(datamodule.test_dataloader().sampler, SequentialSampler)
 
 
+def test_datamodule_default_retains_train_remainder() -> None:
+    """The default loader keeps a trailing partial training batch."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(3, 1, 1),
+        batch_size=2,
+        num_workers=0,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert loader.drop_last is False
+    assert [len(batch["audio"]) for batch in loader] == [2, 1]
+
+
+def test_datamodule_drop_last_discards_train_remainder() -> None:
+    """An opted-in loader discards a trailing partial training batch."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(3, 1, 1),
+        batch_size=2,
+        num_workers=0,
+        drop_last=True,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert loader.drop_last is True
+    assert [len(batch["audio"]) for batch in loader] == [2]
+
+
+def test_datamodule_drop_last_tiny_split_retains_partial_batch() -> None:
+    """An undersized opted-in split remains nonempty so runtime validation can reject it."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 1, 1),
+        batch_size=2,
+        num_workers=0,
+        drop_last=True,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert loader.drop_last is False
+    assert len(next(iter(loader))["audio"]) == 1
+
+
 def _epoch_param_rows(loader: DataLoader[TorchSynthBatch]) -> list[tuple[float, ...]]:
     """Collect one epoch of parameter rows as hashable tuples.
 

@@ -13,7 +13,7 @@ import torch
 from lightning.pytorch import Trainer
 from torch.utils.data import DataLoader
 
-from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule
+from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule, _make_renderer
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -24,6 +24,9 @@ _MIDI_PITCH = 60
 _BATCH = 4
 _NUM_PARAMS = 76
 _CONDITIONING_DIM = 32
+_OVERFIT_AUDIO_THRESHOLD = 0.005
+_OVERFIT_STEPS = 300
+_OVERFIT_TOTAL_THRESHOLD = 0.04
 
 
 class _WaveformEncoder(torch.nn.Module):
@@ -42,15 +45,13 @@ class _WaveformEncoder(torch.nn.Module):
         return self.linear(audio)
 
 
-def _audio_loss(lambda_audio: float = 0.03) -> AudioFeedbackLoss:
+def _audio_loss() -> AudioFeedbackLoss:
     """Build an audio-feedback loss with test-sized render settings.
 
-    :param lambda_audio: Term weight; defaults to the shipped value, above which the cosine term's
-        gradient destabilizes the flow objective at this learning rate.
-    :returns: Configured loss module.
+    :returns: Configured loss module at the shipped weight.
     """
     return AudioFeedbackLoss(
-        lambda_audio=lambda_audio,
+        lambda_audio=0.03,
         t_min=0.0,
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
@@ -59,12 +60,15 @@ def _audio_loss(lambda_audio: float = 0.03) -> AudioFeedbackLoss:
 
 
 def _module(
-    audio_loss: AudioFeedbackLoss | None = None, compile: bool = False
+    audio_loss: AudioFeedbackLoss | None = None,
+    compile: bool = False,
+    cfg_dropout_rate: float = 0.1,
 ) -> VSTFlowMatchingModule:
     """Build a tiny flow module conditioned on raw audio.
 
     :param audio_loss: Optional audio-feedback term to attach.
     :param compile: Value forwarded to the module's ``compile`` flag.
+    :param cfg_dropout_rate: Probability of replacing conditioning with the CFG token.
     :returns: Configured module.
     """
     return VSTFlowMatchingModule(
@@ -80,13 +84,15 @@ def _module(
         num_params=_NUM_PARAMS,
         conditioning="audio",
         audio_loss=audio_loss,
+        cfg_dropout_rate=cfg_dropout_rate,
         compile=compile,
     )
 
 
-def _datamodule() -> TorchSynthDataModule:
+def _datamodule(batch_size: int = _BATCH) -> TorchSynthDataModule:
     """Build a tiny online datamodule already set up for fitting.
 
+    :param batch_size: Number of online examples per batch.
     :returns: The datamodule.
     """
     datamodule = TorchSynthDataModule(
@@ -95,8 +101,9 @@ def _datamodule() -> TorchSynthDataModule:
         midi_pitch=_MIDI_PITCH,
         train_val_test_sizes=(8, 4, 4),
         train_val_test_seeds=(1, 2, 3),
-        batch_size=_BATCH,
+        batch_size=batch_size,
         num_workers=0,
+        drop_last=True,
     )
     datamodule.setup("fit")
     return datamodule
@@ -123,11 +130,20 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> N
 
     loss, audio_term, _, _ = module._train_step(batch)
     assert audio_term is not None
+    encoder_gradients = torch.autograd.grad(
+        loss, tuple(module.encoder.parameters()), retain_graph=True, allow_unused=True
+    )
     total = loss + audio_term
     total.backward()
 
     assert torch.isfinite(total)
     assert audio_term.item() > 0.0
+    assert any(
+        gradient is not None
+        and torch.isfinite(gradient).all()
+        and torch.count_nonzero(gradient).item() > 0
+        for gradient in encoder_gradients
+    )
     # Every trainable field parameter must join the graph; only the CFG dropout token
     # may legitimately sit out of a step where no row was dropped.
     for name, parameter in module.vector_field.named_parameters():
@@ -138,54 +154,38 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> N
         assert (parameter.grad != 0).any(), f"{name} gradient is identically zero"
 
 
-def _finetune_on_a_fixed_batch(lambda_audio: float) -> tuple[list[float], list[float]]:
-    """Run a short fixed-batch finetune and report both objectives per step.
+def _overfit_one_fixed_example() -> tuple[float, float]:
+    """Overfit one deterministic online example.
 
-    :param lambda_audio: Weight on the audio term.
-    :returns: Per-step combined totals and per-step audio terms.
+    :returns: Final combined objective and weighted audio term.
     """
+    _make_renderer.cache_clear()
     torch.manual_seed(0)
-    module = _module(audio_loss=_audio_loss(lambda_audio=lambda_audio))
-    # Pin flow time so the objective is deterministic across steps; random t makes
-    # per-step losses incomparable and would mask (or fake) a decrease.
+    module = _module(audio_loss=_audio_loss(), cfg_dropout_rate=0.0)
     module._sample_time = lambda n, device: torch.full((n, 1), 0.9, device=device)
-    batch = next(iter(_datamodule().train_dataloader()))
-    optimizer = torch.optim.Adam(module.parameters(), lr=3e-3)
+    batch = next(iter(_datamodule(batch_size=1).train_dataloader()))
+    optimizer = torch.optim.Adam(module.parameters(), lr=3e-4)
 
-    totals, audio_terms = [], []
-    for _ in range(40):
+    for _ in range(_OVERFIT_STEPS):
         loss, audio_term, _, _ = module._train_step(batch)
         assert audio_term is not None
         total = loss + audio_term
         optimizer.zero_grad()
         total.backward()
         optimizer.step()
-        totals.append(total.item())
-        audio_terms.append(audio_term.item())
-    return totals, audio_terms
+
+    final_loss, final_audio, _, _ = module._train_step(batch)
+    assert final_audio is not None
+    return (final_loss + final_audio).item(), final_audio.item()
 
 
-def test_audio_term_decreases_on_a_fixed_online_batch() -> None:
-    """The audio objective is itself learnable through the render.
+@pytest.mark.slow
+def test_combined_audio_objective_overfits_one_fixed_online_example() -> None:
+    """The integrated objective can fit one fixed example to near zero."""
+    final_total, final_audio = _overfit_one_fixed_example()
 
-    Guards against sign, scaling, or gradient-path defects that leave finite non-zero gradients
-    while making the term unminimizable. Uses a weight above the shipped one so the term moves
-    measurably within the step budget; at 0.03 its drift is smaller than run-to-run noise.
-    """
-    _, audio_terms = _finetune_on_a_fixed_batch(lambda_audio=0.1)
-
-    assert min(audio_terms[-5:]) < audio_terms[0]
-
-
-def test_combined_objective_decreases_at_the_shipped_audio_weight() -> None:
-    """At the shipped weight the audio term does not come at the flow objective's expense.
-
-    Above roughly 0.1 the cosine term's gradient destabilizes the flow loss at this learning rate,
-    so this pins the shipped weight specifically rather than any weight.
-    """
-    totals, _ = _finetune_on_a_fixed_batch(lambda_audio=0.03)
-
-    assert min(totals[-5:]) < totals[0]
+    assert final_total < _OVERFIT_TOTAL_THRESHOLD
+    assert final_audio < _OVERFIT_AUDIO_THRESHOLD
 
 
 def test_train_step_without_audio_loss_returns_no_audio_term() -> None:

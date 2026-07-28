@@ -2,7 +2,12 @@
 
 import torch
 
-from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule
+from synth_setter.data.torchsynth_datamodule import (
+    TorchSynthDataModule,
+    TorchSynthItem,
+    collate_audio_dict,
+    collate_vst_dict,
+)
 from synth_setter.models.components.residual_mlp import ConditionalResidualMLP
 from synth_setter.models.components.transformer import AudioSpectrogramTransformer
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -50,39 +55,59 @@ def test_dict_batch_params_are_in_model_space() -> None:
     assert params.min() < 0.0
 
 
-def test_datamodule_without_emit_mel_omits_the_mel_column() -> None:
-    """Audio-conditioned experiments skip the per-row librosa mel entirely."""
-    datamodule = TorchSynthDataModule(
-        sample_rate=_SAMPLE_RATE,
-        signal_length=_SIGNAL_LENGTH,
-        midi_pitch=60,
-        train_val_test_sizes=(8, 4, 4),
-        train_val_test_seeds=(1, 2, 3),
-        batch_size=_BATCH,
-        num_workers=0,
-        emit_mel=False,
-    )
-    datamodule.setup("fit")
-    batch = next(iter(datamodule.train_dataloader()))
+def _known_rows(signal_length: int = 8) -> list[TorchSynthItem]:
+    """Return two rows with distinct audio and parameter values.
+
+    :param signal_length: Number of audio samples in each row.
+    :returns: Two collator-ready rows.
+    """
+    renderer = torch.nn.Identity()
+    return [
+        (
+            torch.full((1, signal_length), 0.25, dtype=torch.float32),
+            torch.tensor([[0.0, 0.5]], dtype=torch.float32),
+            renderer,
+        ),
+        (
+            torch.full((1, signal_length), -0.5, dtype=torch.float32),
+            torch.tensor([[1.0, 0.25]], dtype=torch.float32),
+            renderer,
+        ),
+    ]
+
+
+def test_collate_audio_dict_returns_exact_audio_batch_contract() -> None:
+    """Audio-only collation emits three float32 tensors with exact shapes."""
+    batch = collate_audio_dict(_known_rows())
+
     assert set(batch) == {"params", "noise", "audio"}
+    assert batch["params"].shape == (2, 2)
+    assert batch["noise"].shape == (2, 2)
+    assert batch["audio"].shape == (2, 8)
+    assert all(value.dtype == torch.float32 for value in batch.values())
 
 
-def test_collate_vst_dict_maps_known_rows_to_the_model_space_contract() -> None:
-    """Known rows collate to stacked audio and the exact ``2p - 1`` param mapping."""
-    from synth_setter.data.torchsynth_datamodule import collate_vst_dict
+def test_collate_audio_dict_maps_known_rows_to_model_space() -> None:
+    """Known rows preserve order and use the exact ``2p - 1`` parameter mapping."""
+    batch = collate_audio_dict(_known_rows())
 
-    audio_rows = [torch.full((1, 8), 0.25), torch.full((1, 8), -0.5)]
-    params_rows = [torch.tensor([[0.0, 0.5]]), torch.tensor([[1.0, 0.25]])]
-    renderer = lambda p: p  # noqa: E731 - unused placeholder in the item tuple
-
-    batch = collate_vst_dict(
-        [(audio_rows[0], params_rows[0], renderer), (audio_rows[1], params_rows[1], renderer)],
-        sample_rate=44_100,
+    assert torch.equal(
+        batch["audio"],
+        torch.tensor([[0.25] * 8, [-0.5] * 8], dtype=torch.float32),
     )
-
-    assert torch.equal(batch["audio"], torch.cat(audio_rows, dim=0))
     assert torch.equal(batch["params"], torch.tensor([[-1.0, 0.0], [1.0, -0.5]]))
-    assert batch["noise"].shape == batch["params"].shape
+
+
+def test_collate_vst_dict_composes_mel_with_audio_batch_contract() -> None:
+    """Mel collation adds the Lance-compatible mel tensor to the audio batch."""
+    batch = collate_vst_dict(_known_rows(signal_length=4_410), sample_rate=_SAMPLE_RATE)
+
+    assert set(batch) == {"params", "noise", "mel_spec", "audio"}
+    assert batch["params"].shape == (2, 2)
+    assert batch["noise"].shape == (2, 2)
+    assert batch["audio"].shape == (2, 4_410)
+    assert batch["mel_spec"].shape == (2, 1, 128, 11)
+    assert all(value.dtype == torch.float32 for value in batch.values())
 
 
 def test_vst_flow_matching_module_trains_on_an_online_torchsynth_batch() -> None:

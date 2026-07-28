@@ -89,8 +89,8 @@ class VectorField(nn.Module):
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
     def apply_dropout(
-        self, z: torch.tensor, rate: float = 0.1, keep_mask: torch.Tensor | None = None
-    ):
+        self, z: torch.Tensor, rate: float = 0.1, keep_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if rate == 0.0:
             return z
 

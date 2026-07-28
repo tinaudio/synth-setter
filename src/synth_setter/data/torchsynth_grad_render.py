@@ -1,11 +1,15 @@
 """Gradient-enabled TorchSynth rendering for audio-domain training losses.
 
-Sibling of :func:`synth_setter.data.torchsynth_datamodule.render_torchsynth` that
-keeps autograd connected from the normalized parameter batch to the rendered
-audio. The production renderer copies values into ``ModuleParameter.data`` and
-renders under ``torch.no_grad()``; here the parameter tensors are substituted
-via ``torch.func.functional_call`` so the graph flows through
-``Voice.output()``.
+Parameter tensors are substituted through ``torch.func.functional_call`` so gradients flow from
+rendered audio to normalized synthesizer parameters.
+
+Typical usage:
+    audio = render_torchsynth_grad(
+        differentiable_decode(theta_hat),
+        sample_rate=44_100,
+        signal_length=176_400,
+        midi_pitch=60,
+    )
 """
 
 from __future__ import annotations
@@ -117,7 +121,7 @@ def render_torchsynth_grad(
         w.r.t. ``params``.
     :raises ValueError: Wrong parameter width or an out-of-range note duration.
     """
-    _validate_render_inputs(params)
+    validate_torchsynth_params(params)
     duration = (
         note_duration_seconds if note_duration_seconds is not None else signal_length / sample_rate
     )
@@ -178,7 +182,7 @@ def _aligned_noise(voice: torch.nn.Module) -> Iterator[None]:
             module.noise = original
 
 
-def _validate_render_inputs(params: torch.Tensor) -> None:
+def validate_torchsynth_params(params: torch.Tensor) -> None:
     """Reject parameter batches the render would silently corrupt.
 
     :param params: Candidate parameter rows shaped ``(batch, NUM_PARAMS)``.

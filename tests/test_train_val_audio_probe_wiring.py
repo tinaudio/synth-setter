@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+import torch
 from lightning import Callback
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pydantic import ValidationError
@@ -22,6 +23,9 @@ from synth_setter.cli.train import (
     _configure_val_audio_probe,
     _derive_probe_uri,
 )
+from synth_setter.data.vst import param_specs
+from synth_setter.data.vst.param_spec import decode_model_output
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import ValAudioProbe
 
@@ -131,6 +135,36 @@ def test_configure_val_audio_probe_forwards_validated_render_config() -> None:
     assert settings.plugin_state_path == "presets/surge-base.vstpreset"
     assert settings.synth.synth_version == "1.3.4"
     assert settings.sample_rate == 44100
+
+
+def test_configure_val_audio_probe_derives_torchsynth_note_suffix_from_datamodule() -> None:
+    """TorchSynth probe rows receive encoded fixed note values from the online data config."""
+    cfg = _cfg(enabled=True)
+    with open_dict(cfg):
+        cfg.synth = {
+            "name": "torchsynth_full",
+            "param_spec_name": "torchsynth_full",
+            "plugin_state_path": "",
+            "plugin_path": "torchsynth",
+            "synth_version": "1.0.2",
+        }
+        cfg.datamodule = {
+            "midi_pitch": 66,
+            "sample_rate": 44_100,
+            "signal_length": 88_200,
+        }
+        cfg.render.renderer_backend = "torchsynth"
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(cfg, callbacks, _LAUNCH_NAMESPACE)
+
+    probe = callbacks[0]
+    assert isinstance(probe, ValAudioProbe)
+    assert probe.fixed_model_param_suffix is not None
+    assert probe.fixed_model_param_suffix.shape == (3,)
+    full_row = torch.cat((torch.zeros(76), probe.fixed_model_param_suffix)).numpy()
+    _, note_params = decode_model_output(full_row, param_specs[ParamSpecName("torchsynth_full")])
+    assert note_params == {"pitch": 66, "note_start_and_end": (0.0, 2.0)}
 
 
 def test_configure_val_audio_probe_raises_when_render_group_missing() -> None:

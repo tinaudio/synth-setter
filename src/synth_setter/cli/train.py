@@ -17,6 +17,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
+from synth_setter.data.vst import param_specs
 from synth_setter.evaluation.audio_probe import run_audio_probe
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
@@ -256,6 +257,21 @@ def _configure_val_audio_probe(
             _skip_auto_probe(f"R2 unavailable ({exc})")
             return
         raise
+    fixed_model_param_suffix = None
+    # Online TorchSynth omits fixed notes from its 76 model targets; rendering decodes 79.
+    if settings.param_spec_name == "torchsynth_full":
+        spec = param_specs[settings.param_spec_name]
+        placeholder_synth_params = {parameter.name: 0.0 for parameter in spec.synth_params}
+        note_params = {
+            "pitch": cfg.datamodule.midi_pitch,
+            "note_start_and_end": (
+                0.0,
+                cfg.datamodule.signal_length / cfg.datamodule.sample_rate,
+            ),
+        }
+        encoded_row = spec.encode(placeholder_synth_params, note_params)
+        fixed_model_param_suffix = torch.from_numpy(encoded_row[spec.synth_param_length :] * 2 - 1)
+
     callbacks.append(
         ValAudioProbe(
             probe_root=Path(cfg.paths.output_dir) / "val_audio_probe",
@@ -265,6 +281,7 @@ def _configure_val_audio_probe(
                 upload_uri=_derive_probe_uri(cfg, launch_namespace),
             ),
             num_samples=num_samples,
+            fixed_model_param_suffix=fixed_model_param_suffix,
         )
     )
 

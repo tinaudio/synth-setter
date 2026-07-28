@@ -12,7 +12,7 @@ import types
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
-from typing import TYPE_CHECKING, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 import torch
 from lightning import LightningDataModule
@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 TorchSynthItem: TypeAlias = tuple[
     torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
 ]
-# The VST module family's dict contract: params/noise/mel_spec/audio.
 TorchSynthBatch: TypeAlias = dict[str, torch.Tensor]
+TorchSynthCollateFn: TypeAlias = Callable[[Sequence[TorchSynthItem]], TorchSynthBatch]
 # Finite params clamp into the open interval (0, 1) because model predictions are unconstrained.
 # NaN/Inf signal divergence or a pipeline bug and raise instead.
 _PARAM_CLAMP_EPS = 1e-4
@@ -175,38 +175,48 @@ def render_torchsynth(
     return audio.as_subclass(torch.Tensor).clamp(-1, 1)
 
 
-def collate_vst_dict(
-    batch: Sequence[TorchSynthItem], sample_rate: float, emit_mel: bool = True
-) -> TorchSynthBatch:
-    """Collate online rows into the VST module family's dict contract.
+def collate_audio_dict(batch: Sequence[TorchSynthItem]) -> TorchSynthBatch:
+    """Collate online rows into the audio-conditioned VST batch contract.
 
-    ``mel_spec`` goes through the same ``make_spectrogram`` the dataset generator uses, so
-    an online torchsynth batch is byte-identical in shape and scaling to a Lance-hydrated
-    one. ``params`` convert to the ``[-1, 1]`` model space VST batches carry.
-
-    :param batch: Rows from :class:`TorchSynthDataset`; each row carries audio shaped
-        ``(1, samples)`` and params shaped ``(1, NUM_PARAMS)`` in ``[0, 1]``.
-    :param sample_rate: Audio sample rate in Hz, for the mel front-end.
-    :param emit_mel: Whether to compute ``mel_spec``; audio-conditioned experiments
-        skip the per-row librosa cost.
-    :returns: Batch keyed ``params``/``noise`` shaped ``(batch, NUM_PARAMS)``, ``audio``
-        shaped ``(batch, samples)``, and ``mel_spec`` shaped ``(batch, 1, mels, frames)``.
+    :param batch: Rows carrying audio shaped ``(1, samples)`` and params shaped
+        ``(1, NUM_PARAMS)`` in ``[0, 1]``.
+    :returns: Float32 ``params``/``noise`` shaped ``(batch, NUM_PARAMS)`` and ``audio``
+        shaped ``(batch, samples)``; params use the model's ``[-1, 1]`` space.
     """
-    from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
-
     audio = torch.cat([row[0] for row in batch], dim=0)
     params01 = torch.cat([row[1] for row in batch], dim=0)
     params = params01 * 2 - 1
-    collated = {
+    return {
         "params": params,
         "noise": torch.randn_like(params),
         "audio": audio,
     }
-    if emit_mel:
-        mel = torch.stack(
-            [torch.from_numpy(make_spectrogram(row.numpy(), sample_rate)) for row in audio]
-        ).unsqueeze(1)
-        collated["mel_spec"] = mel.to(torch.float32)
+
+
+def collate_vst_dict(
+    batch: Sequence[TorchSynthItem], sample_rate: float
+) -> TorchSynthBatch:
+    """Collate online rows into the mel-capable VST batch contract.
+
+    ``mel_spec`` uses the dataset generator's frontend so online and Lance-hydrated
+    batches share shape and scaling.
+
+    :param batch: Rows carrying audio shaped ``(1, samples)`` and params shaped
+        ``(1, NUM_PARAMS)`` in ``[0, 1]``.
+    :param sample_rate: Audio sample rate in Hz for the mel frontend.
+    :returns: The audio-conditioned contract plus float32 ``mel_spec`` shaped
+        ``(batch, 1, mels, frames)``.
+    """
+    from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
+
+    collated = collate_audio_dict(batch)
+    mel = torch.stack(
+        [
+            torch.from_numpy(make_spectrogram(row.numpy(), sample_rate))
+            for row in collated["audio"]
+        ]
+    ).unsqueeze(1)
+    collated["mel_spec"] = mel.to(torch.float32)
     return collated
 
 
@@ -306,8 +316,9 @@ class TorchSynthDataModule(LightningDataModule):
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
         num_workers: int = 0,
+        collate_fn: TorchSynthCollateFn | None = None,
         resample_train_per_epoch: bool = False,
-        emit_mel: bool = True,
+        drop_last: bool = False,
     ) -> None:
         """Configure the online TorchSynth train, validation, and test splits.
 
@@ -319,10 +330,11 @@ class TorchSynthDataModule(LightningDataModule):
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
         :param num_workers: DataLoader worker process count.
+        :param collate_fn: Fully configured row collator; defaults to mel-capable batches.
         :param resample_train_per_epoch: Draw fresh train rows every epoch (truly online
             training) instead of revisiting one fixed split; validation and test stay fixed.
-        :param emit_mel: Whether batches carry a ``mel_spec`` column. Audio-conditioned
-            experiments skip it — one librosa mel per row per batch is pure waste there.
+        :param drop_last: Whether training discards a trailing partial batch when the split
+            contains at least one full batch.
         """
         super().__init__()
         self.sample_rate = sample_rate
@@ -333,8 +345,13 @@ class TorchSynthDataModule(LightningDataModule):
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.collate_fn = (
+            collate_fn
+            if collate_fn is not None
+            else partial(collate_vst_dict, sample_rate=sample_rate)
+        )
         self.resample_train_per_epoch = resample_train_per_epoch
-        self.emit_mel = emit_mel
+        self.drop_last = drop_last
 
     def setup(self, stage: str | None = None) -> None:
         """Build only the splits required for the requested Lightning stage.
@@ -376,7 +393,7 @@ class TorchSynthDataModule(LightningDataModule):
         sampler: Sampler[int] | None = None,
         drop_last: bool = False,
     ) -> DataLoader[TorchSynthBatch]:
-        """Wrap one online split with the shared tuple collator.
+        """Wrap one online split with the configured collator.
 
         :param dataset: Online split to load.
         :param shuffle: Whether to shuffle logical row indices; exclusive with ``sampler``.
@@ -399,9 +416,7 @@ class TorchSynthDataModule(LightningDataModule):
                 sampler=sampler,
                 num_workers=self.num_workers,
                 drop_last=drop_last,
-                collate_fn=partial(
-                    collate_vst_dict, sample_rate=self.sample_rate, emit_mel=self.emit_mel
-                ),
+                collate_fn=self.collate_fn,
             ),
         )
 
@@ -410,10 +425,8 @@ class TorchSynthDataModule(LightningDataModule):
 
         :returns: Batched online training data.
         """
-        # Dropping the remainder keeps the renderer's batch-size-keyed cache warm, but a
-        # split smaller than one batch must keep its partial batch or training starves;
-        # the audio-feedback runtime guard rejects that case explicitly.
-        drop_last = len(self.train) >= self.batch_size
+        # Undersized splits remain nonempty so the audio-feedback runtime guard fails loudly.
+        drop_last = self.drop_last and len(self.train) >= self.batch_size
         if self.resample_train_per_epoch:
             return self._loader(
                 self.train, sampler=_FreshEpochSampler(len(self.train)), drop_last=drop_last

@@ -645,6 +645,7 @@ class ValAudioProbe(Callback):
         probe_root: str | Path,
         probe_fn: Callable[[Path, int], dict[str, float]],
         num_samples: int = 5,
+        fixed_model_param_suffix: torch.Tensor | None = None,
     ) -> None:
         """Initialize the probe.
 
@@ -654,10 +655,13 @@ class ValAudioProbe(Callback):
             verbatim (e.g. ``{"val_audio/mss_mean": ...}``). Exceptions it raises are
             logged as warnings at the next harvest and never crash the fit loop.
         :param num_samples: Upper bound on samples taken from the first val batch.
+        :param fixed_model_param_suffix: Optional one-dimensional model-space values
+            appended to each staged prediction and target row.
         """
         super().__init__()
         self.probe_root = Path(probe_root)
         self.num_samples = num_samples
+        self.fixed_model_param_suffix = fixed_model_param_suffix
         self._probe_fn = probe_fn
         # Created lazily: ddp_spawn pickles callbacks, and a live executor can't travel.
         self._pool: ThreadPoolExecutor | None = None
@@ -726,7 +730,11 @@ class ValAudioProbe(Callback):
             ("pred", outputs["preds"]),
             ("target-params", params),
         ):
-            torch.save(tensor[:limit].detach().cpu(), predictions_dir / f"{name}-0.pt")
+            staged = tensor[:limit].detach()
+            if self.fixed_model_param_suffix is not None:
+                suffix = self.fixed_model_param_suffix.to(staged).expand(len(staged), -1)
+                staged = torch.cat((staged, suffix), dim=-1)
+            torch.save(staged.cpu(), predictions_dir / f"{name}-0.pt")
         self._staged = (probe_dir, trainer.global_step)
 
     def on_validation_epoch_end(self, trainer: "Trainer", pl_module: "LightningModule") -> None:

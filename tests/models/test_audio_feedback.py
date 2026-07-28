@@ -2,6 +2,8 @@
 
 import pytest
 import torch
+from lightning.pytorch.utilities.combined_loader import CombinedLoader
+from torch.utils.data import DataLoader, TensorDataset
 
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
@@ -49,6 +51,15 @@ def _loss(**kwargs: object) -> AudioFeedbackLoss:
         "midi_pitch": _MIDI_PITCH,
     }
     return AudioFeedbackLoss(**(settings | kwargs))
+
+
+def _drop_last_loader(drop_last: bool) -> DataLoader:
+    """Build a plain loader exposing the requested partial-batch policy.
+
+    :param drop_last: Loader policy under test.
+    :returns: One-row tensor loader.
+    """
+    return DataLoader(TensorDataset(torch.tensor([0.0])), batch_size=1, drop_last=drop_last)
 
 
 def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
@@ -105,6 +116,130 @@ def test_grad_render_output_matches_the_documented_audio_contract() -> None:
     assert audio.dtype == torch.float32
     assert torch.isfinite(audio).all()
     assert audio.abs().max() <= 1.0
+
+
+def test_grad_render_each_output_row_depends_only_on_matching_parameter_row() -> None:
+    """A row-local render cannot leak gradients across batch examples."""
+    params = torch.rand(
+        2, _NUM_PARAMS, generator=torch.Generator().manual_seed(11)
+    ).requires_grad_()
+    audio = render_torchsynth_grad(
+        params,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        midi_pitch=_MIDI_PITCH,
+    )
+
+    for output_row in range(2):
+        (gradient,) = torch.autograd.grad(
+            audio[output_row].square().mean(), params, retain_graph=True
+        )
+        assert torch.isfinite(gradient[output_row]).all()
+        assert torch.count_nonzero(gradient[output_row]).item() > 0
+        assert torch.equal(gradient[1 - output_row], torch.zeros_like(gradient[1 - output_row]))
+
+
+def test_latent_loss_with_all_zero_weights_skips_render_and_preserves_scalar_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inactive batch returns a graph-connected scalar without rendering.
+
+    :param monkeypatch: Pytest patcher used to make any render fail.
+    """
+
+    def fail_render(*args: object, **kwargs: object) -> torch.Tensor:
+        raise AssertionError("renderer must not run")
+
+    monkeypatch.setattr(
+        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fail_render
+    )
+    theta = torch.zeros(_BATCH, _NUM_PARAMS, dtype=torch.float64, requires_grad=True)
+
+    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+
+    assert value.shape == torch.Size([])
+    assert value.device == theta.device
+    assert value.dtype == theta.dtype
+    assert value.requires_grad
+
+
+def test_latent_loss_with_partially_zero_weights_still_renders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One active row keeps the batch render enabled.
+
+    :param monkeypatch: Pytest patcher used to observe the render boundary.
+    """
+    render_calls = 0
+
+    def fake_render(params: torch.Tensor, **kwargs: object) -> torch.Tensor:
+        nonlocal render_calls
+        render_calls += 1
+        return params[:, :1].expand(-1, _SIGNAL_LENGTH)
+
+    monkeypatch.setattr(
+        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fake_render
+    )
+    theta = torch.zeros(_BATCH, _NUM_PARAMS, requires_grad=True)
+    keep = torch.tensor([True, False, False, False])
+
+    value = _loss()(
+        theta,
+        torch.full((_BATCH, 1), 0.9),
+        torch.zeros(_BATCH, _SIGNAL_LENGTH),
+        _linear_encoder(),
+        keep=keep,
+    )
+
+    assert value.ndim == 0
+    assert render_calls == 1
+
+
+def test_latent_loss_with_zero_weights_still_rejects_wrong_parameter_width() -> None:
+    """The render skip retains the renderer's parameter-shape boundary."""
+    theta = torch.zeros(_BATCH, _NUM_PARAMS - 1, requires_grad=True)
+
+    with pytest.raises(ValueError, match="Expected"):
+        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+
+
+def test_latent_loss_with_zero_weights_still_rejects_non_finite_parameters() -> None:
+    """The render skip cannot hide a diverged parameter estimate."""
+    theta = torch.zeros(_BATCH, _NUM_PARAMS, requires_grad=True)
+    with torch.no_grad():
+        theta[0, 0] = float("nan")
+
+    with pytest.raises(ValueError, match="non-finite"):
+        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+
+
+def test_latent_loss_with_all_zero_weights_backprops_zero_theta_gradients() -> None:
+    """The skipped render keeps a zero autograd path to every estimate row."""
+    theta = torch.zeros(_BATCH, _NUM_PARAMS, requires_grad=True)
+
+    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(0), _linear_encoder())
+    (gradient,) = torch.autograd.grad(value, theta)
+
+    assert torch.equal(gradient, torch.zeros_like(theta))
+
+
+def test_gradient_balance_with_all_zero_audio_weights_is_finite_zero() -> None:
+    """An inactive audio term remains measurable by the training diagnostic."""
+    prediction = torch.randn(_BATCH, _NUM_PARAMS, requires_grad=True)
+    flow_loss = prediction.square().mean()
+    audio_term = _loss()(
+        prediction,
+        torch.zeros(_BATCH, 1),
+        torch.empty(0),
+        _linear_encoder(),
+    )
+
+    ratio, cosine = gradient_balance(flow_loss=flow_loss, audio_term=audio_term, shared=prediction)
+
+    assert torch.isfinite(ratio)
+    assert torch.isfinite(cosine)
+    assert ratio.item() == 0.0
+    assert cosine.item() == 0.0
 
 
 def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
@@ -196,10 +331,23 @@ def test_latent_loss_leaves_encoder_weights_and_stats_untouched() -> None:
     assert encoder.training
 
 
-def test_zero_lambda_is_rejected_rather_than_silently_rendering() -> None:
-    """A zero weight means the control arm, which must not pay for renders."""
+@pytest.mark.parametrize("lambda_audio", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_audio_loss_with_non_finite_or_non_positive_lambda_raises(lambda_audio: float) -> None:
+    """Only finite positive audio weights define an enabled loss.
+
+    :param lambda_audio: Invalid weight under test.
+    """
     with pytest.raises(ValueError, match="lambda_audio"):
-        _loss(lambda_audio=0.0)
+        _loss(lambda_audio=lambda_audio)
+
+
+@pytest.mark.parametrize("lambda_audio", [torch.finfo(torch.float32).tiny, 0.03, 1.0])
+def test_audio_loss_with_finite_positive_lambda_is_accepted(lambda_audio: float) -> None:
+    """Every finite positive weight is valid.
+
+    :param lambda_audio: Valid weight under test.
+    """
+    assert _loss(lambda_audio=lambda_audio).lambda_audio == lambda_audio
 
 
 def test_gradient_balance_of_a_term_against_itself_is_unit_ratio_and_alignment() -> None:
@@ -249,24 +397,73 @@ def test_gradient_balance_with_a_detached_flow_loss_is_finite() -> None:
     assert torch.isfinite(cosine)
 
 
-def test_validate_runtime_without_drop_last_raises() -> None:
-    """A trailing partial batch would silently miss the renderer's batch-keyed cache."""
-    with pytest.raises(ValueError, match="drop_last"):
-        validate_audio_feedback_runtime(drop_last=False, compiled=False, world_size=1)
+def test_validate_runtime_with_plain_drop_last_false_loader_raises() -> None:
+    """An explicit partial-batch leaf is unsupported."""
+    loader = _drop_last_loader(False)
+
+    with pytest.raises(ValueError, match="drop_last=False"):
+        validate_audio_feedback_runtime(train_dataloader=loader, compiled=False, world_size=1)
+
+
+def test_validate_runtime_with_plain_drop_last_true_loader_is_accepted() -> None:
+    """A plain fixed-batch loader exposes sufficient metadata."""
+    loader = _drop_last_loader(True)
+
+    validate_audio_feedback_runtime(train_dataloader=loader, compiled=False, world_size=1)
+
+
+def test_validate_runtime_with_mixed_nested_loaders_raises() -> None:
+    """One explicit partial-batch leaf invalidates the nested loader tree."""
+    loaders = {
+        "conditioned": _drop_last_loader(True),
+        "reference": [_drop_last_loader(False)],
+    }
+
+    with pytest.raises(ValueError, match="drop_last=False"):
+        validate_audio_feedback_runtime(train_dataloader=loaders, compiled=False, world_size=1)
+
+
+def test_validate_runtime_with_all_true_nested_loaders_is_accepted() -> None:
+    """Every true leaf in a list/dict loader tree satisfies the fixed-batch contract."""
+    loaders = {
+        "conditioned": _drop_last_loader(True),
+        "reference": [_drop_last_loader(True)],
+    }
+
+    validate_audio_feedback_runtime(train_dataloader=loaders, compiled=False, world_size=1)
+
+
+def test_validate_runtime_with_combined_loader_inspects_nested_leaves() -> None:
+    """Lightning's CombinedLoader wrapper does not hide leaf metadata."""
+    loaders = CombinedLoader(
+        {
+            "conditioned": _drop_last_loader(True),
+            "reference": _drop_last_loader(False),
+        }
+    )
+
+    with pytest.raises(ValueError, match="drop_last=False"):
+        validate_audio_feedback_runtime(train_dataloader=loaders, compiled=False, world_size=1)
+
+
+def test_validate_runtime_with_attribute_less_input_reports_indeterminate_metadata() -> None:
+    """Missing metadata is distinct from an explicit partial-batch loader."""
+    with pytest.raises(ValueError, match="could not determine"):
+        validate_audio_feedback_runtime(train_dataloader=object(), compiled=False, world_size=1)
 
 
 def test_validate_runtime_with_torch_compile_raises() -> None:
     """Compiling over the functional_call render graph-breaks or miscompiles."""
     with pytest.raises(ValueError, match="compile"):
-        validate_audio_feedback_runtime(drop_last=True, compiled=True, world_size=1)
+        validate_audio_feedback_runtime(compiled=True, world_size=1)
 
 
 def test_validate_runtime_with_multiple_devices_raises() -> None:
     """The renderer is process-local and single-device only."""
     with pytest.raises(ValueError, match="world_size"):
-        validate_audio_feedback_runtime(drop_last=True, compiled=False, world_size=2)
+        validate_audio_feedback_runtime(compiled=False, world_size=2)
 
 
 def test_validate_runtime_accepts_a_supported_configuration() -> None:
-    """A single-device, uncompiled, drop-last run is the supported configuration."""
-    validate_audio_feedback_runtime(drop_last=True, compiled=False, world_size=1)
+    """A pre-trainer compile check can omit loader metadata."""
+    validate_audio_feedback_runtime(compiled=False, world_size=1)

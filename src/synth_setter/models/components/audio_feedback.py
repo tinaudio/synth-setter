@@ -1,45 +1,82 @@
 """Audio-domain feedback loss that backpropagates through a differentiable render.
 
-The flow's one-step parameter estimate is rendered with autograd connected and scored
-against the target audio in a frozen encoder's embedding space, so perceptual error reaches
-the vector field's own weights. The term is gated to late flow times: below ``t_min`` the
-estimate is still near noise and its render carries no usable signal.
+The flow's one-step parameter estimate is scored against target audio in a frozen encoder's
+embedding space. The term is gated to late flow times, where the estimate carries usable signal.
+
+Typical usage:
+    audio_term = AudioFeedbackLoss(**audio_loss_config)(
+        theta_hat, t, target_audio, encoder
+    )
 """
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
+
 import torch
+from lightning.pytorch.utilities.combined_loader import CombinedLoader
 from torch import nn
 from torch.nn import functional
 
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
+    validate_torchsynth_params,
 )
 
 # Guards the gradient-ratio denominator when the flow loss contributes no gradient.
 _GRAD_NORM_EPS = 1e-12
 
 
-def validate_audio_feedback_runtime(*, drop_last: bool, compiled: bool, world_size: int) -> None:
+def _drop_last_metadata(train_dataloader: object) -> tuple[bool | None, ...]:
+    """Collect drop-last metadata from every loader leaf.
+
+    :param train_dataloader: Plain or nested loader structure to inspect.
+    :returns: One explicit boolean or indeterminate marker per leaf.
+    """
+    if isinstance(train_dataloader, CombinedLoader):
+        return _drop_last_metadata(train_dataloader.iterables)
+    if isinstance(train_dataloader, Mapping):
+        return tuple(
+            status
+            for loader in train_dataloader.values()
+            for status in _drop_last_metadata(loader)
+        )
+    if isinstance(train_dataloader, (list, tuple)):
+        return tuple(
+            status for loader in train_dataloader for status in _drop_last_metadata(loader)
+        )
+    drop_last = getattr(train_dataloader, "drop_last", None)
+    return (drop_last if isinstance(drop_last, bool) else None,)
+
+
+def validate_audio_feedback_runtime(
+    *, train_dataloader: object | None = None, compiled: bool, world_size: int
+) -> None:
     """Reject runtime configurations the differentiable renderer cannot serve.
 
     Each condition fails loudly rather than degrading silently — see
     https://github.com/tinaudio/synth-setter/issues/2585.
 
-    :param drop_last: Whether the train loader drops a trailing partial batch.
+    :param train_dataloader: Trainer loader metadata, or ``None`` before trainer attachment.
     :param compiled: Whether the module is wrapped by ``torch.compile``.
     :param world_size: Number of distributed training processes.
     :raises ValueError: Any unsupported condition holds.
     """
-    if not drop_last:
-        # The renderer caches per (sample_rate, signal_length, batch, device) — #1820. A
-        # trailing partial batch changes the batch dim and silently misses that cache.
-        raise ValueError(
-            "audio feedback requires drop_last=True on the train dataloader; the torchsynth "
-            "renderer is cached per batch size and a partial final batch misses the cache "
-            "(see https://github.com/tinaudio/synth-setter/issues/2585)"
-        )
+    if train_dataloader is not None:
+        drop_last_metadata = _drop_last_metadata(train_dataloader)
+        if False in drop_last_metadata:
+            # The renderer caches per (sample_rate, signal_length, batch, device) — #1820. A
+            # trailing partial batch changes the batch dim and silently misses that cache.
+            raise ValueError(
+                "audio feedback requires drop_last=True on every train dataloader leaf; found "
+                "drop_last=False (see https://github.com/tinaudio/synth-setter/issues/2585)"
+            )
+        if not drop_last_metadata or None in drop_last_metadata:
+            raise ValueError(
+                "audio feedback could not determine drop_last for every train dataloader leaf"
+            )
     if compiled:
         # torch.compile traces through functional_call into torchsynth's Voice, where it
         # graph-breaks or miscompiles; wrong gradients are worse than no run.
@@ -129,17 +166,17 @@ class AudioFeedbackLoss(nn.Module):
     ) -> None:
         """Configure the render geometry and the term's weighting.
 
-        :param lambda_audio: Audio-term weight at t=1; must be positive.
+        :param lambda_audio: Finite positive audio-term weight at t=1.
         :param t_min: Flow time at which the term switches on, in ``[0, 1)``.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row.
         :param midi_pitch: Fixed MIDI note rendered for every row.
-        :raises ValueError: Non-positive ``lambda_audio`` or out-of-range ``t_min``.
+        :raises ValueError: Non-finite/non-positive ``lambda_audio`` or out-of-range ``t_min``.
         """
         super().__init__()
-        if lambda_audio <= 0.0:
+        if not math.isfinite(lambda_audio) or lambda_audio <= 0.0:
             raise ValueError(
-                f"lambda_audio must be positive, got {lambda_audio}; omit the audio loss "
+                f"lambda_audio must be finite and positive, got {lambda_audio}; omit the audio loss "
                 "entirely for the no-render control arm"
             )
         if not 0.0 <= t_min < 1.0:
@@ -177,8 +214,16 @@ class AudioFeedbackLoss(nn.Module):
             row-specific targets).
         :returns: Scalar weighted audio loss.
         """
+        params = differentiable_decode(theta_hat)
+        validate_torchsynth_params(params)
+        weight = self.audio_weight(t).squeeze(-1)
+        if keep is not None:
+            weight = weight * keep
+        if torch.count_nonzero(weight).item() == 0:
+            return theta_hat.sum() * 0.0
+
         rendered = render_torchsynth_grad(
-            differentiable_decode(theta_hat),
+            params,
             sample_rate=self.sample_rate,
             signal_length=self.signal_length,
             midi_pitch=self.midi_pitch,
@@ -187,7 +232,4 @@ class AudioFeedbackLoss(nn.Module):
         # clamp matches that contract without zeroing gradient on clipped samples.
         rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
         distance = _frozen_latent_distance(encoder, rendered, target_audio)
-        weight = self.audio_weight(t).squeeze(-1)
-        if keep is not None:
-            weight = weight * keep
         return (weight * distance).mean()

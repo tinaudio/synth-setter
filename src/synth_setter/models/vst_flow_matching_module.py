@@ -121,7 +121,7 @@ class VSTFlowMatchingModule(LightningModule):
 
             # Only `compiled` is known here; drop_last/world_size are re-checked against
             # the real trainer in on_train_start. Must fail before setup() compiles (#2585).
-            validate_audio_feedback_runtime(drop_last=True, compiled=True, world_size=1)
+            validate_audio_feedback_runtime(compiled=True, world_size=1)
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
         self._raw_conditioning_key = raw_conditioning_key(conditioning)
 
@@ -137,7 +137,7 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
         validate_audio_feedback_runtime(
-            drop_last=getattr(self.trainer.train_dataloader, "drop_last", False),
+            train_dataloader=self.trainer.train_dataloader,
             compiled=self.hparams.compile,
             world_size=self.trainer.world_size,
         )

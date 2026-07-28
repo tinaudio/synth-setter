@@ -1,10 +1,14 @@
 """Composed-config contracts for the TorchSynth train experiment."""
 
+import pytest
+import torch
 from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
+from synth_setter.models.components.cnn import LogMelEncoder
+from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
 
 
 def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
@@ -14,6 +18,18 @@ def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
 
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.datamodule.sample_rate == 44_100
+    assert "emit_mel" not in cfg.datamodule
+
+
+def test_default_callbacks_monitor_parameter_mse() -> None:
+    """The shared callback group monitors the metric emitted by default train modules."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["datamodule=torchsynth", "model=ffn", "callbacks=default"],
+        )
+
+    assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse"
 
 
 def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
@@ -41,6 +57,11 @@ def test_torchsynth_ffn_experiment_uses_four_second_log_mel_frontend() -> None:
     assert cfg.model.net.top_db == 80.0
     assert cfg.model.net.window == "hamming"
     assert cfg.datamodule.resample_train_per_epoch is True
+    assert cfg.datamodule.drop_last is False
+    assert (
+        cfg.datamodule.collate_fn._target_
+        == "synth_setter.data.torchsynth_datamodule.collate_audio_dict"
+    )
 
 
 def test_torchsynth_ffn_derives_log_mel_geometry_from_sample_rate() -> None:
@@ -74,8 +95,6 @@ def test_torchsynth_ffn_composed_model_trains_on_an_online_dict_batch() -> None:
     Instantiates the composed experiment model (not just its target string) and checks a training
     step produces a finite loss with gradients in the network.
     """
-    import torch
-
     signal_length = 4_410
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -103,13 +122,22 @@ def test_torchsynth_ffn_composed_model_trains_on_an_online_dict_batch() -> None:
     assert gradients and all(torch.isfinite(g).all() for g in gradients)
 
 
-def _flow_cfg() -> DictConfig:
-    """Compose the torchsynth flow experiment.
+def _experiment_cfg(experiment: str) -> DictConfig:
+    """Compose one TorchSynth experiment.
 
+    :param experiment: Experiment group member below ``torchsynth/``.
     :returns: The composed Hydra config.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        return compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow"])
+        return compose(config_name="train.yaml", overrides=[f"experiment=torchsynth/{experiment}"])
+
+
+def _flow_cfg() -> DictConfig:
+    """Compose the TorchSynth flow experiment.
+
+    :returns: The composed Hydra config.
+    """
+    return _experiment_cfg("flow")
 
 
 def test_torchsynth_flow_experiment_uses_the_vst_flow_module() -> None:
@@ -128,6 +156,10 @@ def test_torchsynth_flow_experiment_observes_raw_audio() -> None:
     cfg = _flow_cfg()
     assert cfg.model.conditioning == "audio"
     assert cfg.model.encoder._target_ == "synth_setter.models.components.cnn.LogMelEncoder"
+    assert (
+        cfg.datamodule.collate_fn._target_
+        == "synth_setter.data.torchsynth_datamodule.collate_audio_dict"
+    )
 
 
 def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() -> None:
@@ -138,9 +170,60 @@ def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() 
 
 
 def test_torchsynth_flow_experiment_carries_no_audio_loss() -> None:
-    """The base flow experiment is the control arm and must not pay for renders."""
+    """The base flow experiment is the control arm and must retain every train row."""
     cfg = _flow_cfg()
     assert cfg.model.get("audio_loss") is None
+    assert cfg.datamodule.drop_last is False
+
+
+def test_torchsynth_flow_experiment_uses_online_parameter_width() -> None:
+    """The module and projection both match the online dataset's 76 parameters."""
+    cfg = _flow_cfg()
+
+    assert cfg.datamodule.num_params == 76
+    assert cfg.model.num_params == 76
+    assert cfg.model.vector_field.projection.num_params == 76
+
+
+def test_torchsynth_flow_experiment_resamples_training_rows() -> None:
+    """The long-running flow experiment draws fresh online rows each epoch."""
+    assert _flow_cfg().datamodule.resample_train_per_epoch is True
+
+
+def test_torchsynth_flow_composed_predict_step_preserves_datamodule_width() -> None:
+    """The production encoder, transformer, and projection predict all online parameters."""
+    signal_length = 800
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_audio",
+                "datamodule.sample_rate=8000",
+                f"datamodule.signal_length={signal_length}",
+                "model.encoder.hidden_dim=2",
+                "model.encoder.out_dim=8",
+                "model.encoder.n_mels=16",
+                "model.encoder.num_blocks=1",
+                "model.encoder.kernel_size=3",
+                "model.vector_field.d_model=8",
+                "model.vector_field.num_heads=2",
+                "model.vector_field.d_ff=8",
+                "model.vector_field.num_layers=1",
+                "model.vector_field.projection.num_tokens=2",
+                "model.test_sample_steps=1",
+            ],
+        )
+
+    model = instantiate(cfg.model)
+    model.eval()
+    predictions, _ = model.predict_step({"audio": torch.randn(2, signal_length)}, 0)
+
+    assert isinstance(model.encoder, LogMelEncoder)
+    assert isinstance(model.vector_field, ApproxEquivTransformer)
+    assert isinstance(model.vector_field.projection, LearntProjection)
+    assert cfg.model.num_params == cfg.datamodule.num_params == 76
+    assert predictions.shape == (2, cfg.datamodule.num_params)
+    assert torch.isfinite(predictions).all()
 
 
 def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> None:
@@ -155,5 +238,66 @@ def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> No
     assert cfg.model.audio_loss.sample_rate == 44_100
     assert cfg.model.audio_loss.signal_length == 176_400
     assert cfg.model.audio_loss.midi_pitch == 60
+    assert cfg.datamodule.drop_last is True
     # torch.compile traces through the renderer's functional_call and miscompiles.
     assert cfg.model.compile is False
+
+
+@pytest.mark.parametrize("experiment", ["ffn", "flow", "flow_audio"])
+def test_torchsynth_audio_experiment_collation_returns_exact_keys(experiment: str) -> None:
+    """Every audio-conditioned experiment emits only params, noise, and audio.
+
+    :param experiment: TorchSynth experiment group member under test.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                f"experiment=torchsynth/{experiment}",
+                "datamodule.signal_length=4410",
+                "datamodule.train_val_test_sizes=[2,1,1]",
+                "datamodule.batch_size=2",
+                "datamodule.num_workers=0",
+            ],
+        )
+
+    datamodule = instantiate(cfg.datamodule)
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+
+    assert set(batch) == {"params", "noise", "audio"}
+    assert batch["params"].shape == (2, 76)
+    assert batch["noise"].shape == (2, 76)
+    assert batch["audio"].shape == (2, 4_410)
+    assert all(value.dtype == torch.float32 for value in batch.values())
+
+
+def test_torchsynth_flow_audio_tiny_split_retains_partial_batch() -> None:
+    """The audio-loss arm keeps an undersized split for the runtime guard to reject."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_audio",
+                "datamodule.signal_length=4410",
+                "datamodule.train_val_test_sizes=[1,1,1]",
+                "datamodule.batch_size=2",
+                "datamodule.num_workers=0",
+            ],
+        )
+
+    datamodule = instantiate(cfg.datamodule)
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert loader.drop_last is False
+    assert len(next(iter(loader))["audio"]) == 1
+
+
+@pytest.mark.parametrize("experiment", ["ffn", "flow", "flow_audio"])
+def test_torchsynth_experiment_checkpoint_monitor_is_param_mse(experiment: str) -> None:
+    """Every TorchSynth experiment explicitly resolves the parameter-MSE monitor.
+
+    :param experiment: TorchSynth experiment group member under test.
+    """
+    assert _experiment_cfg(experiment).callbacks.model_checkpoint.monitor == "val/param_mse"

@@ -23,12 +23,17 @@ model:
   # keeping it off here keeps this config swappable with flow_audio.
   compile: false
   encoder_output_dim: ${model.encoder.out_dim}
+  num_params: ${datamodule.num_params}
   vector_field:
     # LogMelEncoder emits a flat embedding, so conditioning width is its out_dim
     # rather than the AST's d_model.
     conditioning_dim: ${model.encoder.out_dim}
-    projection:
-      num_params: ${datamodule.num_params}
+
+datamodule:
+  collate_fn:
+    _target_: synth_setter.data.torchsynth_datamodule.collate_audio_dict
+    _partial_: true
+  resample_train_per_epoch: true
 
 callbacks:
   model_checkpoint:

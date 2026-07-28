@@ -130,8 +130,8 @@ class ConditionalResidualMLP(nn.Module):
         return 0.0
 
     def apply_dropout(
-        self, z: torch.tensor, rate: float = 0.1, keep_mask: torch.Tensor | None = None
-    ):
+        self, z: torch.Tensor, rate: float = 0.1, keep_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if rate == 0.0:
             return z
 
