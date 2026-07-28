@@ -52,7 +52,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
-    assert_all_embedding_columns,
+    assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_all_embeddings,
@@ -1904,7 +1904,14 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
+_EMBEDDING_CONDITIONING_PROFILES = (
+    "clap",
+    "m2l",
+    "same_s",
+    "same_l",
+    "t5gemma",
+    "tinymu",
+)
 
 
 def _assert_t5gemma_feed_forward_checkpoint_validates(
@@ -1959,6 +1966,8 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.integration_r2
+@pytest.mark.r2
 def test_train_all_embedding_conditioning_real_e2e(
     local_embedding_checkpoints: dict[str, str],
     tmp_path: Path,
@@ -1977,9 +1986,9 @@ def test_train_all_embedding_conditioning_real_e2e(
         local_embedding_checkpoints,
         param_spec_name,
     )
-    assert_all_embedding_columns(dataset_root)
+    assert_embedding_columns(dataset_root)
 
-    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
+    for conditioning in _EMBEDDING_CONDITIONING_PROFILES:
         cfg = build_surge_xt_embedding_train_cfg(
             tmp_path / conditioning,
             dataset_root,

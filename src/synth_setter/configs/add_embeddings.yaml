@@ -4,8 +4,7 @@ defaults:
   - hydra: default
   - _self_
 
-# Dataset to augment with the selected embedding columns (local path, `r2://`, or `s3://`);
-# validated into AddEmbeddingsConfig and opened by the endpoint.
+# Lance dataset to augment.
 lance_uri: ???
 
 # Registry keys selecting which embedding columns to write.
@@ -32,7 +31,6 @@ debug: false
 param_spec_name: null
 # Strategy rendering param rows as conditioning text for param-sourced embeddings.
 param_text_normalizer: param_names
-
 # hydra/default interpolates ${task_name}; run.dir is overridden below since
 # its group default also references ${run_name}, absent here.
 task_name: add_embeddings

@@ -5,13 +5,14 @@ The registry keeps checkpoint loading, Arrow encoding, residency, optional depen
 index policy together for each embedding. Co-resident encoders share one Lance UDF pass; large
 SAME encoders run in separate load-write-release passes.
 
-CLI: ``synth-setter-add-embeddings lance_uri=DATASET.lance embeddings=[clap,m2l]``.
+CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,tinymu]``.
 """
 
 from __future__ import annotations
 
 import math
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -33,9 +34,17 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     T5GEMMA_FIELD,
+    TINYMU_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.tinymu import (
+    DEFAULT_TINYMU_CHECKPOINT,
+    TINYMU_FRONTEND,
+    TinyMUEncodeFn,
+    load_tinymu_audio_encoder,
+    tinymu_num_latent_frames,
+)
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -79,7 +88,7 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn | TinyMUEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 
@@ -392,6 +401,19 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_same_audio_encoder(checkpoint, config.device)
 
 
+def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load TinyMU through its managed package dependency.
+
+    :param checkpoint: Exact pinned URI or a hash-identical local artifact.
+    :param config: Run config supplying the device.
+    :returns: Frozen MATPAC encoder.
+    """
+    return load_tinymu_audio_encoder(
+        checkpoint,
+        device=_resolve_torch_device(config.device),
+    )
+
+
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -420,6 +442,31 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
         return encode_text(normalize(spec, params))
 
     return encode
+
+
+def _encode_tinymu_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as a fixed-shape TinyMU MATPAC tensor column.
+
+    :param audio: ``(B, C, T)`` source audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: Frozen MATPAC encoder over source audio.
+    :returns: ``(B, 3840, T_tokens)`` fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    encode = cast("TinyMUEncodeFn", encoder)
+    embeddings = _finite_embedding(TINYMU_FIELD, encode(audio, sample_rate))
+    expected_shape = (
+        len(audio),
+        TINYMU_FRONTEND.embedding_dim,
+        tinymu_num_latent_frames(audio.shape[-1], sample_rate),
+    )
+    if embeddings.shape != expected_shape:
+        raise ValueError(
+            f"{TINYMU_FIELD} encoder produced shape {embeddings.shape}, expected {expected_shape}"
+        )
+    return tensor_array(embeddings, np.dtype("float32"), expected_shape[1:])
 
 
 def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
@@ -492,6 +539,15 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_t5gemma_spec_encoder,
         encode_column=_encode_t5gemma_column,
         input_field=PARAM_ARRAY_FIELD,
+    ),
+    "tinymu": EmbeddingSpec(
+        name="tinymu",
+        column=TINYMU_FIELD,
+        default_checkpoint=DEFAULT_TINYMU_CHECKPOINT,
+        co_resident=False,
+        index=IndexSpec(pool="mean", vector_column=f"{TINYMU_FIELD}_vec"),
+        load_encoder=_load_tinymu_spec_encoder,
+        encode_column=_encode_tinymu_column,
     ),
 }
 
@@ -818,15 +874,19 @@ def build_index(
     return True
 
 
-def add_embeddings(config: AddEmbeddingsConfig) -> None:
-    """Append the registry entries selected by ``config.embeddings``.
+def _add_embeddings_to_lance_uri(
+    config: AddEmbeddingsConfig, uri: str
+) -> tuple[lance.LanceDataset, dict[str, bool]]:
+    """Append selected embeddings to one Lance split.
 
-    :param config: Validated dataset, embedding, checkpoint, and write settings.
+    :param config: Validated embedding, checkpoint, and write settings.
+    :param uri: Local or remote Lance split URI.
+    :returns: Updated dataset and index-built status by registry key.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
-    dataset = _open_lance_dataset(config.lance_uri)
+    dataset = _open_lance_dataset(uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
     _guard_existing_columns(dataset, specs)
     _validate_write_source(dataset, config.batch_size)
@@ -834,7 +894,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
 
     logger.info(
         "adding_embeddings",
-        uri=config.lance_uri,
+        uri=uri,
         columns=output_columns,
         sample_rate=sample_rate,
         rows=dataset.count_rows(),
@@ -847,13 +907,24 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     for spec in solo:
         _write_columns(dataset, [spec], sample_rate, config)
 
+    index_results = {spec.name: False for spec in specs}
     if config.build_index:
         for spec in specs:
             if spec.index is not None:
                 vector_column = spec.index.vector_column or spec.column
-                build_index(dataset, vector_column, index=spec.index, config=config)
-    logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
+                index_results[spec.name] = build_index(
+                    dataset, vector_column, index=spec.index, config=config
+                )
+    logger.info("added_embeddings", uri=uri, columns=output_columns)
+    return dataset, index_results
 
+
+def add_embeddings(config: AddEmbeddingsConfig) -> None:
+    """Append registry entries to one Lance dataset.
+
+    :param config: Validated dataset, embedding, checkpoint, and write settings.
+    """
+    _add_embeddings_to_lance_uri(config, config.lance_uri)
 
 def _configure_lance_logging(*, debug: bool) -> None:
     """Set native Lance logging before its first import.
@@ -1060,13 +1131,13 @@ def _hydra_main(cfg: DictConfig) -> None:
     """
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
-    config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
-    _configure_lance_logging(debug=config.debug)
-    logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
     try:
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+        _configure_lance_logging(debug=config.debug)
+        logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
         add_embeddings(config)
-    except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        logger.error("add_embeddings_failed", uri=config.lance_uri, error=str(exc))
+    except (OSError, ValueError, RuntimeError, ImportError, subprocess.CalledProcessError) as exc:
+        logger.error("add_embeddings_failed", uri=cfg.get("lance_uri"), error=str(exc))
         sys.exit(1)
 
 

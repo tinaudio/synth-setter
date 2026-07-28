@@ -33,6 +33,7 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     T5GEMMA_FIELD,
+    TINYMU_FIELD,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
@@ -69,6 +70,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND, tinymu_num_latent_frames
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
@@ -145,11 +147,26 @@ def _fake_same(
     return encode
 
 
+def _fake_tinymu(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Encode audio as deterministic MATPAC-shaped sequences.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :returns: Deterministic TinyMU-shaped embeddings.
+    """
+    frames = tinymu_num_latent_frames(audio.shape[-1], sample_rate)
+    fill = audio.astype(np.float32).mean(axis=(1, 2))
+    return np.broadcast_to(
+        fill[:, None, None], (len(audio), TINYMU_FRONTEND.embedding_dim, frames)
+    ).copy()
+
+
 def _encoder_for(name: str) -> Callable[..., np.ndarray]:
     """Return the fake encoder matching a registry key.
 
     :param name: Embedding registry key.
     :returns: Matching fake encoder.
+    :raises ValueError: No fake is registered for ``name``.
     """
     if name == "m2l":
         return _fake_m2l
@@ -157,7 +174,11 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_clap
     if name == "same_s":
         return _fake_same(0.25)
-    return _fake_same(0.75, same_l_num_latent_frames)
+    if name == "same_l":
+        return _fake_same(0.75, same_l_num_latent_frames)
+    if name == "tinymu":
+        return _fake_tinymu
+    raise ValueError(f"no fake encoder for {name!r}")
 
 
 def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
@@ -278,7 +299,14 @@ def test_downmix_to_mono_with_any_channel_count_averages_to_float32(
 
 def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None:
     """The registry is the single source of truth for all supported embeddings."""
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "t5gemma",
+        "tinymu",
+    }
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
@@ -296,6 +324,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
+    assert EMBEDDING_REGISTRY["tinymu"].co_resident is False
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
@@ -2109,6 +2138,42 @@ def test_add_embeddings_main_when_open_fails_exits_one(
     assert exc_info.value.code == 1
 
 
+def test_add_embeddings_hydra_main_with_invalid_config_exits_one() -> None:
+    """Trust-boundary validation failures use the structured CLI error path."""
+    from synth_setter.pipeline.data.add_embeddings import _hydra_main
+
+    cfg = DictConfig({"lance_uri": 123})
+
+    with capture_logs() as logs, pytest.raises(SystemExit) as exc_info:
+        _hydra_main.__wrapped__(cfg)
+
+    assert exc_info.value.code == 1
+    assert logs[-1]["event"] == "add_embeddings_failed"
+
+
+def test_add_embeddings_hydra_main_with_subprocess_failure_exits_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint subprocess failures use the structured CLI error path.
+
+    :param monkeypatch: Fixture replacing the embedding operation.
+    """
+    from synth_setter.pipeline.data.add_embeddings import _hydra_main
+
+    def fail(config: AddEmbeddingsConfig) -> None:
+        del config
+        raise subprocess.CalledProcessError(1, ["rclone", "copy"])
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.add_embeddings", fail)
+    cfg = DictConfig({"lance_uri": "dataset.lance"})
+
+    with capture_logs() as logs, pytest.raises(SystemExit) as exc_info:
+        _hydra_main.__wrapped__(cfg)
+
+    assert exc_info.value.code == 1
+    assert logs[-1]["event"] == "add_embeddings_failed"
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize(
     ("selection", "expected", "expected_checkpoints"),
@@ -2375,6 +2440,20 @@ def test_t5gemma_encoder_with_matching_param_rows_encodes_one_caption_per_row(
     encode(np.zeros((3, spec.encoded_width), dtype=np.float32))
 
     assert seen == [[", ".join(spec.names)] * 3]
+
+
+def test_add_embeddings_config_without_lance_uri_raises() -> None:
+    """An augmentation run requires one Lance dataset."""
+    with pytest.raises(ValidationError, match="lance_uri"):
+        AddEmbeddingsConfig.model_validate({})
+
+
+def test_add_embeddings_config_with_dataset_root_target_raises() -> None:
+    """Every embedding uses the same single-Lance-dataset target contract."""
+    with pytest.raises(ValidationError, match="dataset_root_uri"):
+        AddEmbeddingsConfig.model_validate(
+            {"dataset_root_uri": "dataset", "embeddings": ("tinymu",)}
+        )
 
 
 def test_add_embeddings_config_with_t5gemma_and_no_param_spec_raises() -> None:
