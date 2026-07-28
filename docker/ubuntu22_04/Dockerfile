@@ -84,6 +84,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
   gcc-12 \
   g++-12 \
   git \
+  make \
   ninja-build \
   flex \
   wget
