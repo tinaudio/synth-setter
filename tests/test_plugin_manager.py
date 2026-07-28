@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from synth_setter.cli.plugins import main
 from synth_setter.plugin_manager import (
     PluginManifest,
+    adopt_plugin_bundle,
+    default_plugins_dir,
     install_plugins,
     link_plugin,
     resolve_plugin_bundle,
@@ -46,6 +48,46 @@ def test_manifest_load_valid_project_returns_pinned_plugin(tmp_path: Path) -> No
     assert plugin.version == "1.2.3"
     assert plugin.bundle == "Example Synth.vst3"
     assert plugin.reference == "example/synth@1.2.3"
+
+
+def test_manifest_resolve_unknown_package_raises(tmp_path: Path) -> None:
+    """Unknown package selection fails at the manifest boundary.
+
+    :param tmp_path: Scratch root for the test manifest.
+    """
+    manifest = PluginManifest.load(_manifest(tmp_path / "studiorack.json"))
+
+    with pytest.raises(KeyError, match="missing/synth"):
+        manifest.resolve("missing/synth")
+
+
+def test_default_plugins_dir_expands_environment_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The managed storage override accepts a user-relative path.
+
+    :param tmp_path: Scratch home used to expand the override.
+    :param monkeypatch: Supplies isolated HOME and storage settings.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("STUDIORACK_PLUGINS_DIR", "~/managed")
+
+    assert default_plugins_dir() == tmp_path / "managed"
+
+
+def test_install_plugins_missing_executable_raises(tmp_path: Path) -> None:
+    """Installation reports how to provision the pinned CLI.
+
+    :param tmp_path: Scratch root without a Studiorack executable.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+
+    with pytest.raises(FileNotFoundError, match="npm ci"):
+        install_plugins(
+            (plugin,),
+            plugins_dir=tmp_path / "managed",
+            studiorack_executable=tmp_path / "missing-studiorack",
+        )
 
 
 def test_manifest_load_unpinned_version_rejected(tmp_path: Path) -> None:
@@ -163,6 +205,72 @@ def test_install_plugins_adopts_native_installer_bundle(
     resolved = resolve_plugin_bundle(plugin, tmp_path / "managed")
     assert resolved.is_symlink()
     assert resolved.resolve() == bundle.resolve()
+
+
+def test_link_plugin_existing_stale_symlink_is_replaced(tmp_path: Path) -> None:
+    """Alias refresh replaces only stale symlinks, not real bundles.
+
+    :param tmp_path: Scratch root containing managed and stale bundles.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    managed = tmp_path / "managed/VST3/example/synth/1.2.3/Example Synth.vst3"
+    managed.mkdir(parents=True)
+    stale = tmp_path / "stale/Example Synth.vst3"
+    stale.mkdir(parents=True)
+    alias = tmp_path / "checkout/plugins/Example Synth.vst3"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(stale, target_is_directory=True)
+
+    first = link_plugin(plugin, plugins_dir=tmp_path / "managed", links_dir=alias.parent)
+    second = link_plugin(plugin, plugins_dir=tmp_path / "managed", links_dir=alias.parent)
+
+    assert first == second == alias
+    assert alias.resolve() == managed.resolve()
+
+
+def test_adopt_plugin_bundle_missing_source_raises(tmp_path: Path) -> None:
+    """Adoption rejects a fallback path that does not exist.
+
+    :param tmp_path: Scratch root without a source bundle.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+
+    with pytest.raises(FileNotFoundError, match="fallback bundle is not installed"):
+        adopt_plugin_bundle(
+            plugin,
+            plugins_dir=tmp_path / "managed",
+            bundle=tmp_path / "missing.vst3",
+        )
+
+
+def test_adopt_plugin_bundle_repeated_call_is_idempotent(tmp_path: Path) -> None:
+    """Repeated adoption preserves the exact managed fallback alias.
+
+    :param tmp_path: Scratch root for source and managed bundles.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    bundle = tmp_path / "source/Example Synth.vst3"
+    bundle.mkdir(parents=True)
+
+    first = adopt_plugin_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=bundle)
+    second = adopt_plugin_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=bundle)
+
+    assert first == second
+
+
+def test_adopt_plugin_bundle_conflicting_managed_path_raises(tmp_path: Path) -> None:
+    """Adoption refuses to replace a different managed bundle.
+
+    :param tmp_path: Scratch root containing a managed path conflict.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    bundle = tmp_path / "source/Example Synth.vst3"
+    bundle.mkdir(parents=True)
+    managed = tmp_path / "managed/VST3/example/synth/1.2.3/Example Synth.vst3"
+    managed.mkdir(parents=True)
+
+    with pytest.raises(FileExistsError, match="refusing to replace"):
+        adopt_plugin_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=bundle)
 
 
 def test_link_plugin_existing_real_bundle_refuses_to_overwrite(tmp_path: Path) -> None:
