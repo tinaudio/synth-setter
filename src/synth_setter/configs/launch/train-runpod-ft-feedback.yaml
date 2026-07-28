@@ -5,6 +5,7 @@
 
 compute: runpod/ft-training
 tier: mid
+job_name: ft-fb-10k
 worker_image_tag: devcontainer-tools
 env_file: .env
 tail: false
