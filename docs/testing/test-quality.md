@@ -42,21 +42,33 @@ def test_assert_process_terminated_live_pid_fails() -> None:
 If a test helper is complex enough to need tests, it is production code — move it
 to `src/` or `tests/helpers/` and test it there. Otherwise let its consumers cover it.
 
-### 2. Freezing config into a literal
+### 2. Freezing config into a literal for its own sake
 
-A tuple in a test that mirrors a checked-in YAML/JSON file asserts only that two
-files match. Every intentional config edit must be made twice, and the test
-catches no behavior.
+A table in a test that mirrors a checked-in YAML/JSON file, asserting only that
+the two agree, is a change detector: every intentional config edit must be made
+twice, and no behavior is covered.
 
 ```python
-# Change detector: mirrors agent config, breaks on every deliberate model bump.
-_ROLE_MODELS = {
-    "pr-review-worker-deep": {"claude": ("sonnet", "high"), ...},
-}
+# Change detector: restates the config file, one entry per key.
+EXPECTED = {"batch_size": 512, "num_workers": 24, "prefetch_factor": 4}
+assert yaml.safe_load(path.read_text()) == EXPECTED
 ```
 
-Assert the **property** that matters instead — every role resolves to a
-registered model, effort is within the allowed set — and read the config as data.
+Assert the **property** that matters instead — every referenced model is
+registered, every required key is present, values are in range — and read the
+config as data.
+
+This is a judgement call, not a ban. Pinning exact values is right when the
+value **is** the contract:
+
+- `tests/pipeline/test_r2_io.py` asserts the full `rclone` argv, because flag
+  order and the mandatory `--checksum` are the invariant being protected.
+- `tests/infra/test_pr_review_model_routing.py` pins `(model, effort)` per role
+  to enforce parity across the `.claude` / `.codex` / `.opencode` definitions —
+  a real cross-provider invariant no other test covers.
+
+The question to ask: if this literal and the config disagree, is that a **bug**,
+or just a stale test? Only the second case is the anti-pattern.
 
 ### 3. The allowlist treadmill
 
