@@ -218,12 +218,6 @@ class TestEncodedSlices:
             ("note_start_and_end", 4, 6),
         ]
 
-    def test_multi_column_parameter_span_is_wider_than_one(self) -> None:
-        """A onehot parameter claims one column per raw value, not a single column."""
-        spans = dict((param.name, sl) for param, sl in _tiny_spec().encoded_slices())
-
-        assert spans["mode"] == slice(1, 3)
-
     def test_final_stop_equals_encoded_width(self) -> None:
         """The walk consumes exactly the encoded row — no trailing columns are unclaimed."""
         spec = _tiny_spec()

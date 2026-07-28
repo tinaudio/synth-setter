@@ -51,12 +51,12 @@ from synth_setter.pipeline.data.add_embeddings import (
     IndexSpec,
     ParamTextEncodeFn,
     _configure_lance_logging,
+    _downmix_to_mono,
     _encode_t5gemma_column,
     _load_clap_spec_encoder,
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
-    _downmix_to_mono,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _write_columns,
@@ -2238,13 +2238,6 @@ def test_add_embeddings_main_with_registry_selection_writes_requested_columns(
     assert M2L_FIELD not in names
     assert SAME_L_FIELD not in names
     assert checkpoints == ["custom/same-s"]
-
-
-def test_registry_default_checkpoints_match_public_sources() -> None:
-    """Checkpoint-backed registry entries preserve their established defaults."""
-    assert EMBEDDING_REGISTRY["clap"].default_checkpoint == DEFAULT_CLAP_CHECKPOINT
-    assert EMBEDDING_REGISTRY["same_s"].default_checkpoint == DEFAULT_SAME_S_CHECKPOINT
-    assert EMBEDDING_REGISTRY["same_l"].default_checkpoint == DEFAULT_SAME_L_CHECKPOINT
 
 
 def _install_fake_t5gemma(

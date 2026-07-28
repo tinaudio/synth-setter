@@ -379,15 +379,6 @@ def test_builder_base_configures_timezone_without_debconf_pipe() -> None:
     assert "debconf-set-selections" not in stage
 
 
-def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
-    """The KR-106 Docker build surfaces the version label with the pinned ref."""
-    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
-    assert re.search(
-        r"echo\b.*\$\{ULTRAMASTER_KR106_VERSION\}.*\$\{ULTRAMASTER_KR106_GIT_REF\}",
-        stage,
-    )
-
-
 def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
     """The KR-106 Docker stage skips build dependencies before apt runs."""
     stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")

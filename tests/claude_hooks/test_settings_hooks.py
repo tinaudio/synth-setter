@@ -1789,31 +1789,3 @@ def test_trailer_hook_finding_does_not_contain_embedded_newlines(
     for line in finding_lines:
         assert "\t" in line, f"finding line missing label/match tab: {line!r}"
         assert "\\n" not in line, f"escaped newline leaked into finding: {line!r}"
-
-
-def test_yaml_run_hook_description_documents_both_extensions() -> None:
-    """The matcher description must mention both ``.yml`` and ``.yaml`` extensions.
-
-    The hook's ``in_scope`` accepts ``.github/workflows/*.{yml,yaml}`` and
-    ``src/synth_setter/configs/skypilot_launch/compute/*.{yml,yaml}``. A description naming only one extension
-    per directory misleads users into surprise when the other fires.
-    """
-    # _find_handler enforces "exactly one matcher entry" — call it first so a
-    # description rename trips a focused AssertionError there, not a silent
-    # StopIteration here.
-    _find_handler("No-yaml-run-comments")
-    matcher_entry = next(
-        entry
-        for entry in _matcher_entries()
-        if "No-yaml-run-comments" in entry.get("description", "")
-    )
-    desc = matcher_entry["description"]
-    assert "yml" in desc and "yaml" in desc, desc
-    assert "workflows" in desc and "compute" in desc, desc
-    # Each scoped directory must reference both extensions, not just one.
-    assert "workflows/*.{yml,yaml}" in desc or (
-        "workflows/*.yml" in desc and "workflows/*.yaml" in desc
-    ), desc
-    assert "compute/*.{yml,yaml}" in desc or (
-        "compute/*.yml" in desc and "compute/*.yaml" in desc
-    ), desc

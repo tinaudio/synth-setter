@@ -46,9 +46,21 @@ repos:
       - id: ruff-format
         types_or: [python, jupyter]
 
-  # pyright: static type checker for Python (local hook)
+  # Project-specific static analysis (local hooks).
   - repo: local
     hooks:
+      - id: model-typing
+        name: model-typing
+        entry: uv run python scripts/lint_model_typing.py
+        language: system
+        pass_filenames: false
+        files: >-
+          (?x)^(
+            \.model-typing-baseline\.txt|
+            scripts/lint_model_typing\.py|
+            src/synth_setter/models/.*\.py|
+            tests/scripts/test_lint_model_typing\.py
+          )$
       - id: pyright
         name: pyright
         entry: uv run pyright

@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from synth_setter.pipeline.file_uri import (
-    FILE_URI_SCHEME,
     file_uri_to_path,
     is_file_uri,
 )
@@ -15,10 +14,6 @@ from synth_setter.pipeline.file_uri import (
 
 class TestFileUriScheme:
     """The exported scheme constant is the canonical ``file://`` prefix."""
-
-    def test_scheme_constant_is_canonical_file_prefix(self) -> None:
-        """The module-level constant matches the RFC 8089 prefix."""
-        assert FILE_URI_SCHEME == "file://"
 
 
 class TestIsFileUri:

@@ -64,6 +64,8 @@ blocks you, ask how to proceed.
 
 - Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON
   from R2, worker reports). Dataclasses for internal typed containers.
+- New callables under `src/synth_setter/models/` use jaxtyping tensor annotations
+  and `@jaxtyped(typechecker=beartype)`; bare `torch.Tensor` annotations are forbidden.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
 - **Lance distributed-write exception:** workers may write only uncommitted
@@ -88,6 +90,10 @@ full rules in the `comment-hygiene` skill.
 
 - `make test-fast` is the default CPU loop; `@pytest.mark.slow` for slow.
 - Test names: `test_<what>_<condition>_<expected>`.
+- A test must be able to fail for exactly one interesting reason. Don't test
+  helpers defined in the test file, freeze config into literals, or assert that
+  a mock returned its own `return_value` —
+  [docs/testing/test-quality.md](docs/testing/test-quality.md).
 - Mutation testing: [docs/testing/mutmut.md](docs/testing/mutmut.md).
 
 ## Design defaults
@@ -150,6 +156,10 @@ A `PreToolUse` hook (`agent/hooks/no-baseline-additions.sh`) blocks new rows
 in `.pydoclint-baseline.txt`. If a check fails on a file your PR touches,
 the remediation is to fix the underlying lint — never register the file as
 exempt.
+
+`.model-typing-baseline.txt` is also append-frozen and contains only the
+violations tracked by #2645. Remove entries as callables adopt jaxtyping and
+beartype; never add entries for new violations.
 
 ## YAML `run:` block scalars are bash
 
