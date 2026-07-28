@@ -259,6 +259,19 @@ def test_compute_mss_is_symmetric() -> None:
     assert compute_mss(a, b) == pytest.approx(compute_mss(b, a), abs=1e-9)
 
 
+def test_compute_mss_grows_with_frequency_separation() -> None:
+    """A tone two octaves away scores further from the reference than one octave.
+
+    Monotonicity holds over this range but not globally — the mel-scale distance saturates above
+    ~3.5 kHz, so widening the sweep would invert the comparison.
+    """
+    reference = _sine(seconds=0.5, freq=440.0)[0]
+    one_octave = _sine(seconds=0.5, freq=880.0)[0]
+    two_octaves = _sine(seconds=0.5, freq=1760.0)[0]
+
+    assert compute_mss(reference, one_octave) < compute_mss(reference, two_octaves)
+
+
 # ---------------------------------------------------------------------------
 # compute_mfcc
 # ---------------------------------------------------------------------------
@@ -312,6 +325,22 @@ def test_compute_wmfcc_different_inputs_is_positive() -> None:
     dist = compute_wmfcc(target, pred)
     assert dist > 0
     assert np.isfinite(dist)
+
+
+def test_compute_wmfcc_is_symmetric() -> None:
+    """``compute_wmfcc(a, b) == compute_wmfcc(b, a)`` despite the DTW alignment.
+
+    DTW distance is only symmetric when the local cost and step pattern are; the length
+    normalisation applied here preserves that, so a step-pattern change that broke it would surface
+    as an argument-order dependence.
+
+    Unlike the other distances, wMFCC is *not* monotonic in frequency separation — it dips around
+    3.5 kHz — so no ordering is asserted.
+    """
+    a = _sine(seconds=0.5, freq=440.0)[0]
+    b = _sine(seconds=0.5, freq=880.0)[0]
+
+    assert compute_wmfcc(a, b) == pytest.approx(compute_wmfcc(b, a), rel=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +414,24 @@ def test_compute_sot_different_inputs_is_finite_and_nonnegative() -> None:
     pred = _sine(seconds=0.5, freq=1760.0)
     dist = compute_sot(target, pred)
     assert np.isfinite(dist)
-    assert dist >= 0
+    assert dist > 0
+
+
+def test_compute_sot_is_symmetric() -> None:
+    """``compute_sot(a, b) == compute_sot(b, a)`` — transport cost carries no direction."""
+    a = _sine(seconds=0.5, freq=440.0)
+    b = _sine(seconds=0.5, freq=880.0)
+
+    assert compute_sot(a, b) == pytest.approx(compute_sot(b, a), rel=1e-9)
+
+
+def test_compute_sot_grows_with_frequency_separation() -> None:
+    """Transport cost rises as the spectra move further apart."""
+    reference = _sine(seconds=0.5, freq=440.0)
+    one_octave = _sine(seconds=0.5, freq=880.0)
+    three_octaves = _sine(seconds=0.5, freq=3520.0)
+
+    assert compute_sot(reference, one_octave) < compute_sot(reference, three_octaves)
 
 
 # ---------------------------------------------------------------------------
@@ -570,11 +616,30 @@ def test_compute_f0_identical_inputs_returns_zero() -> None:
 
 @pytest.mark.slow
 def test_compute_f0_different_inputs_is_finite() -> None:
-    """Distinct tones produce a finite mean abs f0 difference."""
+    """An octave apart produces a finite, strictly positive mean abs f0 difference."""
     target = _sine(seconds=1.0, freq=440.0)
     pred = _sine(seconds=1.0, freq=880.0)
     dist = compute_f0(target, pred)
     assert np.isfinite(dist)
+    assert dist > 0
+
+
+@pytest.mark.slow
+def test_compute_f0_without_confident_frames_returns_nan() -> None:
+    """No frame clearing the 0.85 gate on both signals yields NaN, not an error.
+
+    Pins current behaviour, not desired behaviour: the pinned ``mir-1k_g7``
+    model is vocal-trained, so a 1760 Hz tone leaves the mask empty and the
+    mean over zero frames is NaN, which then propagates into eval aggregates.
+    Tracked in #2634 — update this test with the fix.
+    """
+    target = _sine(seconds=1.0, freq=440.0)
+    pred = _sine(seconds=1.0, freq=1760.0)
+
+    confident_target, _ = get_pesto_activations(target, pred)
+    assert confident_target.size == 0
+
+    assert np.isnan(compute_f0(target, pred))
 
 
 _UNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.5,0.5\nresonance,0.2,0.2\n"
