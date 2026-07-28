@@ -143,7 +143,7 @@ def test_torchsynth_flow_experiment_carries_no_audio_loss() -> None:
     assert cfg.model.get("audio_loss") is None
 
 
-def test_torchsynth_flow_audio_experiment_attaches_the_mslm_audio_loss() -> None:
+def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> None:
     """The audio arm swaps in the render-feedback term with the datamodule's geometry."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio"])
@@ -152,7 +152,6 @@ def test_torchsynth_flow_audio_experiment_attaches_the_mslm_audio_loss() -> None
         cfg.model.audio_loss._target_
         == "synth_setter.models.components.audio_feedback.AudioFeedbackLoss"
     )
-    assert cfg.model.audio_loss.distance == "mslm"
     assert cfg.model.audio_loss.sample_rate == 44_100
     assert cfg.model.audio_loss.signal_length == 176_400
     assert cfg.model.audio_loss.midi_pitch == 60

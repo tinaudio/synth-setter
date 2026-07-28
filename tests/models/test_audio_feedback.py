@@ -8,8 +8,8 @@ from synth_setter.data.torchsynth_grad_render import (
     render_torchsynth_grad,
 )
 from synth_setter.models.components.audio_feedback import (
-    AudioDistance,
     AudioFeedbackLoss,
+    gradient_balance,
     validate_audio_feedback_runtime,
 )
 
@@ -44,12 +44,25 @@ def _loss(**kwargs: object) -> AudioFeedbackLoss:
     settings = {
         "lambda_audio": 1.0,
         "t_min": 0.8,
-        "distance": AudioDistance.MSLM,
         "sample_rate": _SAMPLE_RATE,
         "signal_length": _SIGNAL_LENGTH,
         "midi_pitch": _MIDI_PITCH,
     }
     return AudioFeedbackLoss(**(settings | kwargs))
+
+
+def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
+    """Build a deterministic encoder whose output magnitude is set by ``scale``.
+
+    :param scale: Multiplier applied to every weight and bias.
+    :returns: Encoder mapping ``(batch, signal_length)`` to ``(batch, 8)``.
+    """
+    torch.manual_seed(0)
+    encoder = torch.nn.Linear(_SIGNAL_LENGTH, 8)
+    with torch.no_grad():
+        encoder.weight.mul_(scale)
+        encoder.bias.mul_(scale)
+    return encoder
 
 
 def test_differentiable_decode_in_range_input_matches_affine_map() -> None:
@@ -94,35 +107,47 @@ def test_grad_render_output_matches_the_documented_audio_contract() -> None:
     assert audio.abs().max() <= 1.0
 
 
-def test_mslm_loss_backprops_finite_gradient_through_the_renderer() -> None:
-    """A real render sends finite, non-zero gradient back to the parameter estimate."""
-    torch.manual_seed(0)
-    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
-    theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
-
-    value = _loss().forward(theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=None)
-    (gradient,) = torch.autograd.grad(value, theta)
-
-    assert value.item() > 0.0
-    assert torch.isfinite(gradient).all()
-    assert (gradient != 0).any()
-
-
 def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     """The latent distance differentiates through both the render and the encoder."""
     torch.manual_seed(0)
-    encoder = torch.nn.Sequential(torch.nn.Linear(_SIGNAL_LENGTH, 8), torch.nn.GELU())
     target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
     theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
 
-    value = _loss(distance=AudioDistance.LATENT).forward(
-        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=encoder
+    value = _loss().forward(
+        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
     )
     (gradient,) = torch.autograd.grad(value, theta)
 
     assert value.item() > 0.0
     assert torch.isfinite(gradient).all()
     assert (gradient != 0).any()
+
+
+def test_latent_loss_is_invariant_to_encoder_output_scale() -> None:
+    """Cosine geometry: scaling the encoder's outputs must not move the distance."""
+    torch.manual_seed(0)
+    params = torch.rand(_BATCH, _NUM_PARAMS)
+    target_audio = _render(params)
+    theta = torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1
+    t = torch.full((_BATCH, 1), 0.9)
+
+    unscaled = _loss().forward(theta, t, target_audio, encoder=_linear_encoder(scale=1.0))
+    scaled = _loss().forward(theta, t, target_audio, encoder=_linear_encoder(scale=10.0))
+
+    assert torch.allclose(unscaled, scaled, atol=1e-5)
+
+
+def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
+    """An estimate that decodes to the target's own parameters renders an exact match."""
+    torch.manual_seed(0)
+    params = torch.rand(_BATCH, _NUM_PARAMS).clamp(0.01, 0.99)
+    target_audio = _render(params)
+
+    value = _loss().forward(
+        params * 2 - 1, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
+    )
+
+    assert value.item() == pytest.approx(0.0, abs=1e-6)
 
 
 def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
@@ -140,7 +165,7 @@ def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
     target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
     theta = torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1
 
-    value = _loss(distance=AudioDistance.LATENT).forward(
+    value = _loss().forward(
         theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_TokenEncoder()
     )
 
@@ -162,9 +187,7 @@ def test_latent_loss_leaves_encoder_weights_and_stats_untouched() -> None:
     target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
     theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
 
-    value = _loss(distance=AudioDistance.LATENT).forward(
-        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=encoder
-    )
+    value = _loss().forward(theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=encoder)
     value.backward()
 
     assert theta.grad is not None and (theta.grad != 0).any()
@@ -173,21 +196,57 @@ def test_latent_loss_leaves_encoder_weights_and_stats_untouched() -> None:
     assert encoder.training
 
 
-def test_latent_loss_without_an_encoder_raises() -> None:
-    """The latent distance is unusable without the encoder that defines the space."""
-    with pytest.raises(ValueError, match="encoder"):
-        _loss(distance=AudioDistance.LATENT).forward(
-            torch.zeros(_BATCH, _NUM_PARAMS),
-            torch.full((_BATCH, 1), 0.9),
-            torch.zeros(_BATCH, _SIGNAL_LENGTH),
-            encoder=None,
-        )
-
-
 def test_zero_lambda_is_rejected_rather_than_silently_rendering() -> None:
     """A zero weight means the control arm, which must not pay for renders."""
     with pytest.raises(ValueError, match="lambda_audio"):
         _loss(lambda_audio=0.0)
+
+
+def test_gradient_balance_of_a_term_against_itself_is_unit_ratio_and_alignment() -> None:
+    """Identical terms contribute identically: ratio 1, cosine 1."""
+    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    term = shared.square().sum()
+
+    ratio, cosine = gradient_balance(flow_loss=term, audio_term=term, shared=shared)
+
+    assert ratio.item() == pytest.approx(1.0)
+    assert cosine.item() == pytest.approx(1.0)
+
+
+def test_gradient_balance_scaled_audio_term_scales_the_ratio_only() -> None:
+    """The ratio tracks relative gradient magnitude; the cosine ignores it."""
+    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    flow = shared.square().sum()
+
+    ratio, cosine = gradient_balance(flow_loss=flow, audio_term=3.0 * flow, shared=shared)
+
+    assert ratio.item() == pytest.approx(3.0)
+    assert cosine.item() == pytest.approx(1.0)
+
+
+def test_gradient_balance_opposed_terms_reports_negative_cosine() -> None:
+    """A term pulling against the flow loss is the conflict signal we want to see."""
+    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    flow = shared.square().sum()
+
+    ratio, cosine = gradient_balance(flow_loss=flow, audio_term=-flow, shared=shared)
+
+    assert ratio.item() == pytest.approx(1.0)
+    assert cosine.item() == pytest.approx(-1.0)
+
+
+def test_gradient_balance_with_a_detached_flow_loss_is_finite() -> None:
+    """A zero flow gradient must not divide by zero."""
+    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+
+    ratio, cosine = gradient_balance(
+        flow_loss=(shared.detach() * shared.detach()).sum() + 0.0 * shared.sum(),
+        audio_term=shared.square().sum(),
+        shared=shared,
+    )
+
+    assert torch.isfinite(ratio)
+    assert torch.isfinite(cosine)
 
 
 def test_validate_runtime_without_drop_last_raises() -> None:

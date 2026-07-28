@@ -5,7 +5,7 @@
 # https://github.com/tinaudio/synth-setter/issues/2585.
 defaults:
   - torchsynth/flow
-  - override /model/audio_loss: mslm
+  - override /model/audio_loss: latent
   - _self_
 
 run_name: flow_audio

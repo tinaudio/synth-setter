@@ -1,39 +1,24 @@
 """Audio-domain feedback loss that backpropagates through a differentiable render.
 
 The flow's one-step parameter estimate is rendered with autograd connected and scored
-against the target audio, so spectral error reaches the vector field's own weights. The
-term is gated to late flow times: below ``t_min`` the estimate is still near noise and
-its render carries no usable signal.
+against the target audio in a frozen encoder's embedding space, so perceptual error reaches
+the vector field's own weights. The term is gated to late flow times: below ``t_min`` the
+estimate is still near noise and its render carries no usable signal.
 """
 
 from __future__ import annotations
 
-from enum import StrEnum
-
 import torch
-import torchaudio
 from torch import nn
+from torch.nn import functional
 
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
 
-
-class AudioDistance(StrEnum):
-    """Representation the audio term measures error in.
-
-    .. attribute :: MSLM
-
-        Multi-scale log-mel L1 on the raw waveforms.
-
-    .. attribute :: LATENT
-
-        MSE between a frozen encoder's embeddings of both waveforms.
-    """
-
-    MSLM = "mslm"
-    LATENT = "latent"
+# Guards the gradient-ratio denominator when the flow loss contributes no gradient.
+_GRAD_NORM_EPS = 1e-12
 
 
 def validate_audio_feedback_runtime(*, drop_last: bool, compiled: bool, world_size: int) -> None:
@@ -71,20 +56,45 @@ def validate_audio_feedback_runtime(*, drop_last: bool, compiled: bool, world_si
         )
 
 
+def gradient_balance(
+    *, flow_loss: torch.Tensor, audio_term: torch.Tensor, shared: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Measure how two loss terms contribute gradient at a tensor they both reach.
+
+    Loss magnitude is a poor proxy for gradient magnitude, so a weight tuned against loss curves
+    does not transfer. EnCodec's balancer instead reads the weight as a fraction of total gradient,
+    sampled at one shared intermediate tensor rather than at every parameter. The cosine is REPA's
+    conflict diagnostic: it turns negative once the auxiliary term starts fighting the primary
+    objective. Both gradients retain the graph, so the caller's own backward pass is unaffected.
+
+    :param flow_loss: Scalar flow-matching loss.
+    :param audio_term: Scalar weighted audio loss.
+    :param shared: Tensor both terms backpropagate through.
+    :returns: Audio-to-flow gradient-norm ratio, and the cosine between the two gradients.
+    """
+    (flow_grad,) = torch.autograd.grad(flow_loss, shared, retain_graph=True)
+    (audio_grad,) = torch.autograd.grad(audio_term, shared, retain_graph=True)
+    ratio = audio_grad.norm() / flow_grad.norm().clamp_min(_GRAD_NORM_EPS)
+    cosine = functional.cosine_similarity(audio_grad.flatten(), flow_grad.flatten(), dim=0)
+    return ratio, cosine
+
+
 def _frozen_latent_distance(
     encoder: nn.Module, rendered: torch.Tensor, target_audio: torch.Tensor
 ) -> torch.Tensor:
-    """Per-sample embedding MSE with the encoder held fixed as the reference space.
+    """Per-sample cosine distance in an encoder's embedding space, holding the space fixed.
 
-    The encoder's parameters are detached via ``functional_call`` and it runs in eval
-    mode, so the term cannot shrink by collapsing the (jointly trained) conditioning
-    encoder or by drifting its BatchNorm running stats; gradient still flows to the
-    rendered estimate through the frozen weights.
+    The encoder's parameters are detached via ``functional_call`` and it runs in eval mode,
+    so the term cannot shrink by collapsing the (jointly trained) conditioning encoder or by
+    drifting its BatchNorm running stats; gradient still flows to the rendered estimate
+    through the frozen weights. Cosine rather than raw MSE because embedding norm carries no
+    fixed meaning while the encoder trains, which would let the term's magnitude drift with
+    activation scale alone.
 
     :param encoder: Encoder defining the latent space; left in its original mode.
     :param rendered: Rendered estimate shaped ``(batch, samples)``.
     :param target_audio: Observed audio, same shape.
-    :returns: Per-sample distance shaped ``(batch,)``.
+    :returns: Per-sample distance in ``[0, 2]`` shaped ``(batch,)``.
     """
     frozen_state = {
         name: tensor.detach()
@@ -93,20 +103,20 @@ def _frozen_latent_distance(
     was_training = encoder.training
     encoder.eval()
     try:
+        # flatten(1) collapses token/layer axes so sequence encoders also reduce to a
+        # per-sample scalar instead of broadcasting against the (batch,) weight.
         embeddings = (
-            torch.func.functional_call(encoder, frozen_state, (signal,))
+            torch.func.functional_call(encoder, frozen_state, (signal,)).flatten(start_dim=1)
             for signal in (rendered, target_audio)
         )
         pred_embedding, target_embedding = embeddings
-        # flatten(1) collapses token/layer axes so sequence encoders also reduce to a
-        # per-sample scalar instead of broadcasting against the (batch,) weight.
-        return (pred_embedding - target_embedding).square().flatten(start_dim=1).mean(dim=-1)
+        return 1.0 - functional.cosine_similarity(pred_embedding, target_embedding, dim=-1)
     finally:
         encoder.train(was_training)
 
 
 class AudioFeedbackLoss(nn.Module):
-    """Weighted audio-domain distance on the flow's rendered one-step estimate."""
+    """Weighted latent-space audio distance on the flow's rendered one-step estimate."""
 
     def __init__(
         self,
@@ -116,22 +126,14 @@ class AudioFeedbackLoss(nn.Module):
         sample_rate: int,
         signal_length: int,
         midi_pitch: int,
-        distance: AudioDistance = AudioDistance.MSLM,
-        n_ffts: tuple[int, ...] = (256, 512, 1024),
-        n_mels: int = 64,
-        eps: float = 1e-5,
     ) -> None:
-        """Configure the render geometry and the distance.
+        """Configure the render geometry and the term's weighting.
 
         :param lambda_audio: Audio-term weight at t=1; must be positive.
         :param t_min: Flow time at which the term switches on, in ``[0, 1)``.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row.
         :param midi_pitch: Fixed MIDI note rendered for every row.
-        :param distance: Representation the error is measured in.
-        :param n_ffts: STFT window sizes for the multi-scale mel distance.
-        :param n_mels: Maximum mel bands per scale; capped so no band ends up empty.
-        :param eps: Mel-magnitude clamp floor before the log.
         :raises ValueError: Non-positive ``lambda_audio`` or out-of-range ``t_min``.
         """
         super().__init__()
@@ -147,22 +149,6 @@ class AudioFeedbackLoss(nn.Module):
         self.sample_rate = sample_rate
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
-        self.distance = AudioDistance(distance)
-        self.eps = eps
-        self.mels = nn.ModuleList(
-            torchaudio.transforms.MelSpectrogram(
-                sample_rate=sample_rate,
-                n_fft=n_fft,
-                hop_length=n_fft // 4,
-                n_mels=min(n_mels, (n_fft // 2 + 1) // 4),
-                f_min=0.0,
-                f_max=sample_rate / 2,
-                power=1.0,
-                norm="slaney",
-                mel_scale="slaney",
-            )
-            for n_fft in n_ffts
-        )
 
     def audio_weight(self, t: torch.Tensor) -> torch.Tensor:
         """Ramp the weight from zero at ``t_min`` to ``lambda_audio`` at t=1.
@@ -172,44 +158,25 @@ class AudioFeedbackLoss(nn.Module):
         """
         return self.lambda_audio * ((t - self.t_min) / (1 - self.t_min)).clamp(min=0.0)
 
-    def multi_scale_log_mel(self, predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """Per-sample L1 between log-mel spectrograms, averaged over the STFT scales.
-
-        :param predicted: Rendered estimate shaped ``(batch, samples)``.
-        :param target: Observed audio, same shape.
-        :returns: Per-sample distance shaped ``(batch,)``.
-        """
-        total = torch.zeros(predicted.shape[0], device=predicted.device)
-        for mel in self.mels:
-            pred_mel, target_mel = (
-                mel(signal).clamp_min(self.eps) for signal in (predicted, target)
-            )
-            total = total + (pred_mel.log10() - target_mel.log10()).abs().mean(dim=(-1, -2))
-        return total / len(self.mels)
-
     def forward(
         self,
         theta_hat: torch.Tensor,
         t: torch.Tensor,
         target_audio: torch.Tensor,
-        encoder: nn.Module | None = None,
+        encoder: nn.Module,
         keep: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Render the estimate and return the weighted distance to the target.
+        """Render the estimate and return the weighted latent distance to the target.
 
         :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.
         :param t: Flow time shaped ``(batch, 1)``.
         :param target_audio: Observed audio shaped ``(batch, signal_length)``.
-        :param encoder: Encoder defining the latent space; required for
-            :attr:`AudioDistance.LATENT`.
+        :param encoder: Encoder defining the latent space the distance is measured in.
         :param keep: Optional per-row mask shaped ``(batch,)``; rows at ``False`` are
             zero-weighted (CFG-dropped rows must not train the unconditional branch on
             row-specific targets).
         :returns: Scalar weighted audio loss.
-        :raises ValueError: The latent distance is selected without an encoder.
         """
-        if self.distance is AudioDistance.LATENT and encoder is None:
-            raise ValueError("the latent distance needs an encoder to define the space")
         rendered = render_torchsynth_grad(
             differentiable_decode(theta_hat),
             sample_rate=self.sample_rate,
@@ -219,10 +186,7 @@ class AudioFeedbackLoss(nn.Module):
         # The stored target was hard-clamped by render_torchsynth; a straight-through
         # clamp matches that contract without zeroing gradient on clipped samples.
         rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
-        if encoder is not None and self.distance is AudioDistance.LATENT:
-            distance = _frozen_latent_distance(encoder, rendered, target_audio)
-        else:
-            distance = self.multi_scale_log_mel(rendered, target_audio)
+        distance = _frozen_latent_distance(encoder, rendered, target_audio)
         weight = self.audio_weight(t).squeeze(-1)
         if keep is not None:
             weight = weight * keep

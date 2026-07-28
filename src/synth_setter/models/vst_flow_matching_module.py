@@ -181,9 +181,26 @@ class VSTFlowMatchingModule(LightningModule):
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return select_conditioning(batch, self._embedding_conditioning, self._raw_conditioning_key)
 
+    def _should_probe_gradient_balance(self) -> bool:
+        """Whether this step pays for the probe's extra backward through the renderer.
+
+        :returns: True on Lightning's own logging cadence; False when detached from a trainer.
+        """
+        # self.trainer raises when detached, so the private attribute is the only probe
+        # that works for direct _train_step calls outside a fit loop.
+        if self._trainer is None:
+            return False
+        every = self.trainer.log_every_n_steps
+        return every > 0 and self.trainer.global_step % every == 0
+
     def _train_step(
         self, batch: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        tuple[torch.Tensor, torch.Tensor] | None,
+    ]:
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
@@ -219,28 +236,42 @@ class VSTFlowMatchingModule(LightningModule):
         loss = loss.mean()
 
         audio_term = None
+        balance = None
         if self.audio_loss is not None:
             # One-step estimate of x1 from the current field; rendering it keeps
-            # autograd connected so spectral error reaches the field's weights.
+            # autograd connected so latent audio error reaches the field's weights.
             theta_hat = x_t + (1 - t) * prediction
             audio_term = self.audio_loss(
                 theta_hat, t, batch["audio"], encoder=self.encoder, keep=keep
             )
+            if self._should_probe_gradient_balance():
+                from synth_setter.models.components.audio_feedback import gradient_balance
+
+                balance = gradient_balance(
+                    flow_loss=loss, audio_term=audio_term, shared=prediction
+                )
 
         penalty = None
         if hasattr(self.vector_field, "penalty"):
             penalty = self.vector_field.penalty()
 
-        return loss, audio_term, penalty
+        return loss, audio_term, penalty, balance
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        loss, audio_term, penalty = self._train_step(batch)
+        loss, audio_term, penalty, balance = self._train_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
         total = loss
         if audio_term is not None:
             self.log("train/audio_loss", audio_term, on_step=True, on_epoch=True, prog_bar=True)
             total = total + audio_term
+
+        if balance is not None:
+            # Set lambda_audio from the ratio, not the loss value; watch the cosine turn
+            # negative for the point the audio term starts fighting the flow objective.
+            ratio, cosine = balance
+            self.log("train/audio_grad_ratio", ratio, on_step=True, on_epoch=False)
+            self.log("train/audio_grad_cosine", cosine, on_step=True, on_epoch=False)
 
         if penalty is not None:
             self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
