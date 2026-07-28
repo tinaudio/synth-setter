@@ -347,11 +347,16 @@ class TestLanceMapDataModuleSetup:
             assert preflighted
             return str(source / uri.rsplit("/", 1)[-1]), None
 
+        def object_size(_uri: str) -> int:
+            assert preflighted
+            return 0
+
         monkeypatch.setattr(
             "synth_setter.data.vst_datamodule.r2_io.ensure_r2_env_loaded",
             ensure_r2_env_loaded,
         )
         monkeypatch.setattr("synth_setter.pipeline.r2_io.lance_target", lance_target)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", object_size)
         monkeypatch.setattr(
             "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
             lambda source_uri, dest_path, exclude=None: None,
@@ -380,6 +385,7 @@ class TestLanceMapDataModuleSetup:
         for split in ("train", "val", "test"):
             write_seeded_lance_shard(source / f"{split}.lance", num_rows=4, seed=1)
         write_mel_stats(source)
+        (source / "dataset.complete").touch()
         destination = tmp_path / "local-ssd"
 
         def hydrate(source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
