@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785259884047,
+  "lastUpdate": 1785267861856,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11502,6 +11502,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.042233169078826904,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "998ba6abe73e05175d0f34d67cd10f26ef1d4bbb",
+          "message": "test: remove twelve tests that cannot fail for an interesting reason (#2609)\n\nA semantic audit read all 3,738 tests. These twelve were then re-verified\nindividually against the production code they claim to cover.\n\nStructurally incapable of failing:\n\n- test_skypilot_launch: two subset assertions over constants built by tuple\n  spread (_WORKER_ENV_KEYS = (*RCLONE_ENV_KEYS, ...)), so the subset relation\n  holds by syntax no matter what the constants contain.\n- test_add_embeddings: compares EMBEDDING_REGISTRY[x].default_checkpoint to\n  the same imported constant production assigns it from.\n- test_xdist_scheduling: asserts a same-file helper returns the f-string it\n  builds from its own arguments. The helper stays; a real test uses it.\n\nRedundant with a sibling that already asserts more:\n\n- test_generate_vst_dataset: duplicates the num_retries=0 case of the\n  parametrize three tests above it, same call_count assertion.\n- test_param_spec: asserts one span that the adjacent test already pins as\n  part of the full ordered span list.\n- test_dataset_spec: same assertion as the test two above it, and its\n  docstring justifies itself by a NotImplementedError gate no longer in spec.py.\n- test_eval_postprocessing: byte-identical cfg and assertion to the test\n  directly above it.\n- test_lite_dependency_base is untouched — see the PR body for what was\n  rejected on review.\n\nTesting a library or prose rather than our behavior:\n\n- test_shard_metadata: Pydantic JSON round-trip over plain int/float fields\n  with no custom serializer.\n- test_format_dispatch: StrEnum's own __str__ contract; the sibling\n  test_value_is_the_lowercase_token already requires it.\n- test_settings_hooks: asserts wording inside a settings.json description\n  string; both extensions are already covered behaviorally in the same file.\n- test_pr_review_model_routing: greps production source text for literal\n  lines including quote style, so ruff-format alone could break it.\n\nRefs #2603",
+          "timestamp": "2026-07-28T11:50:24-07:00",
+          "tree_id": "3ae7d7754d8d3de9ac1676e876d8c13e69fe8944",
+          "url": "https://github.com/tinaudio/synth-setter/commit/998ba6abe73e05175d0f34d67cd10f26ef1d4bbb"
+        },
+        "date": 1785267860202,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.159290313720703,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.446906410971133,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.017000732943415642,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.007695317268371582,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.95563006401062,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.665492602999999,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.8888466358184814,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.790678974017501,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02373902127146721,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.017969846725463867,
             "unit": "1-cos"
           },
           {
