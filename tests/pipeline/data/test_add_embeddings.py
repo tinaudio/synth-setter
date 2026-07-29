@@ -515,7 +515,7 @@ def test_embedding_spec_encode_column_for_valid_encoder_builds_arrow_array(name:
     spec = EMBEDDING_REGISTRY[name]
     encoder = _encoder_for(name)
 
-    array = spec.encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, encoder)[spec.column]
+    array = spec.encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encoder)
 
     assert len(array) == 3
     if name == "clap":
@@ -554,7 +554,7 @@ def test_embedding_spec_encode_column_with_nonfinite_output_raises(
     with pytest.raises(
         ValueError, match=f"{EMBEDDING_REGISTRY[name].column} embeddings contain non-finite values"
     ):
-        EMBEDDING_REGISTRY[name].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
+        EMBEDDING_REGISTRY[name].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
 def test_same_embedding_spec_prepares_stereo_before_encoder_call() -> None:
@@ -566,9 +566,7 @@ def test_same_embedding_spec_prepares_stereo_before_encoder_call() -> None:
         seen.append(stereo)
         return _fake_same(1.0)(stereo)
 
-    EMBEDDING_REGISTRY["same_s"].encode_columns(
-        {AUDIO_FIELD: mono}, SAME_SAMPLE_RATE, recording
-    )
+    EMBEDDING_REGISTRY["same_s"].encode_column({AUDIO_FIELD: mono}, SAME_SAMPLE_RATE, recording)
 
     assert seen[0].shape == (2, 2, _FIXTURE_SAMPLES)
     assert seen[0].dtype == np.float32
@@ -612,7 +610,7 @@ def test_embedding_spec_encode_column_with_invalid_shape_raises(
     audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
 
     with pytest.raises(ValueError, match=message):
-        EMBEDDING_REGISTRY[name].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, encoder)
+        EMBEDDING_REGISTRY[name].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encoder)
 
 
 @pytest.mark.parametrize("name", ["clap", "m2l", "same_s", "same_l"])
@@ -721,11 +719,11 @@ def test_write_columns_for_co_resident_specs_shares_audio_object(tmp_path: Path)
 
         def encode(
             sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
-        ) -> Mapping[str, pa.Array]:
+        ) -> pa.Array:
             seen[name].append(id(sources[AUDIO_FIELD]))
-            return original.encode_columns(sources, sample_rate, encoder)
+            return original.encode_column(sources, sample_rate, encoder)
 
-        return replace(original, encode_columns=encode)
+        return replace(original, encode_column=encode)
 
     _write_columns(
         lance.dataset(str(uri)),
@@ -1152,15 +1150,15 @@ def test_write_columns_with_default_batch_size_bounds_work_and_progress(
 
     def encode(
         sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
-    ) -> Mapping[str, pa.Array]:
+    ) -> pa.Array:
         batch_sizes.append(len(sources[AUDIO_FIELD]))
-        return spec.encode_columns(sources, sample_rate, encoder)
+        return spec.encode_column(sources, sample_rate, encoder)
 
     monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
         _write_columns(
             lance.dataset(str(uri)),
-            [replace(spec, encode_columns=encode)],
+            [replace(spec, encode_column=encode)],
             _SAMPLE_RATE,
             AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
         )
@@ -2391,11 +2389,11 @@ def test_add_embeddings_uses_sample_rate_from_dataset_metadata(
 
     def encode(
         sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
-    ) -> Mapping[str, pa.Array]:
+    ) -> pa.Array:
         seen.append(sample_rate)
-        return spec.encode_columns(sources, sample_rate, encoder)
+        return spec.encode_column(sources, sample_rate, encoder)
 
-    monkeypatch.setitem(EMBEDDING_REGISTRY, "clap", replace(spec, encode_columns=encode))
+    monkeypatch.setitem(EMBEDDING_REGISTRY, "clap", replace(spec, encode_column=encode))
     add_embeddings(
         AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
     )
@@ -2973,7 +2971,7 @@ def test_sketch_encode_column_builds_fixed_shape_tensor_array() -> None:
     audio = np.random.default_rng(7).random((3, 2, _FIXTURE_SAMPLES)).astype(np.float16)
     spec = EMBEDDING_REGISTRY["sketch"]
 
-    array = spec.encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, _fake_sketch)[spec.column]
+    array = spec.encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, _fake_sketch)
 
     assert isinstance(array.type, pa.FixedShapeTensorType)
     assert array.type.value_type == pa.float32()
@@ -2995,7 +2993,7 @@ def test_sketch_encode_column_with_nonfinite_output_raises(value: float) -> None
         return output
 
     with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} embeddings contain non-finite values"):
-        EMBEDDING_REGISTRY["sketch"].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
+        EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
 @pytest.mark.parametrize(
@@ -3017,7 +3015,7 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         return output
 
     with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} controls out of bounds"):
-        EMBEDDING_REGISTRY["sketch"].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
+        EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
 def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
@@ -3029,7 +3027,7 @@ def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
         return np.zeros((len(batch), NUM_SKETCH_CONTROLS, 5), np.float32)
 
     with pytest.raises(ValueError, match=r"expected \(2, 386, 1\)"):
-        EMBEDDING_REGISTRY["sketch"].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, off_grid)
+        EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, off_grid)
 
 
 def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(

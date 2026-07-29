@@ -47,27 +47,25 @@ SKETCH_PITCH_BINS: int = 384
 # Rows: loudness, centroid, then the pitch-activation block.
 NUM_SKETCH_CONTROLS: int = 2 + SKETCH_PITCH_BINS
 
-# Single-parameter sensitivity columns appended by the ``param_shift`` embedder: the
-# shifted parameter's name, the size of the shift in encoded space, the re-rendered
-# audio, and the metric distances between the original and re-rendered audio.
-PARAM_SHIFT_FIELD: str = "param_shift"
-PARAM_AMOUNT_SHIFT_FIELD: str = "param_amount_shift"
-AUDIO_SHIFT_FIELD: str = "audio_shift"
-RMS_SHIFT_FIELD: str = "rms_shift"
-SOT_SHIFT_FIELD: str = "sot_shift"
-WMFCC_SHIFT_FIELD: str = "wmfcc_shift"
-MSS_SHIFT_FIELD: str = "mss_shift"
-PARAM_SHIFT_SCALAR_FIELD_NAMES: tuple[str, ...] = (
-    PARAM_SHIFT_FIELD,
-    PARAM_AMOUNT_SHIFT_FIELD,
-    RMS_SHIFT_FIELD,
-    SOT_SHIFT_FIELD,
-    WMFCC_SHIFT_FIELD,
-    MSS_SHIFT_FIELD,
-)
-PARAM_SHIFT_FIELD_NAMES: tuple[str, ...] = (
-    AUDIO_SHIFT_FIELD,
-    *PARAM_SHIFT_SCALAR_FIELD_NAMES,
+# Single-parameter sensitivity struct appended by the ``param_shift`` embedder. One nested
+# column keeps the shift's seven facets together and readable as ``shift.param``,
+# ``shift.audio``, ... rather than seven suffixed siblings of the dataset's own columns.
+SHIFT_FIELD: str = "shift"
+SHIFT_PARAM_SUBFIELD: str = "param"
+SHIFT_AMOUNT_SUBFIELD: str = "amount"
+SHIFT_AUDIO_SUBFIELD: str = "audio"
+SHIFT_RMS_SUBFIELD: str = "rms"
+SHIFT_SOT_SUBFIELD: str = "sot"
+SHIFT_WMFCC_SUBFIELD: str = "wmfcc"
+SHIFT_MSS_SUBFIELD: str = "mss"
+SHIFT_SUBFIELD_NAMES: tuple[str, ...] = (
+    SHIFT_PARAM_SUBFIELD,
+    SHIFT_AMOUNT_SUBFIELD,
+    SHIFT_AUDIO_SUBFIELD,
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_WMFCC_SUBFIELD,
+    SHIFT_MSS_SUBFIELD,
 )
 
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal

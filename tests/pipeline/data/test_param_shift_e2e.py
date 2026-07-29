@@ -2,7 +2,7 @@
 
 The real writer renders a real torchsynth Lance shard, the real
 ``synth-setter-add-embeddings`` CLI runs against it in a subprocess, and the committed
-columns are checked against a fresh render of the patch each row claims to describe.
+``shift`` struct is checked against a fresh render of the patch each row claims to describe.
 torchsynth is the backend because it renders in-process, so the whole production path
 runs on a stock CI runner with nothing substituted.
 """
@@ -23,22 +23,23 @@ from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
-    AUDIO_SHIFT_FIELD,
-    MSS_SHIFT_FIELD,
-    PARAM_AMOUNT_SHIFT_FIELD,
     PARAM_ARRAY_FIELD,
-    PARAM_SHIFT_FIELD,
-    PARAM_SHIFT_FIELD_NAMES,
-    RMS_SHIFT_FIELD,
-    SOT_SHIFT_FIELD,
-    WMFCC_SHIFT_FIELD,
+    SHIFT_AMOUNT_SUBFIELD,
+    SHIFT_AUDIO_SUBFIELD,
+    SHIFT_FIELD,
+    SHIFT_MSS_SUBFIELD,
+    SHIFT_PARAM_SUBFIELD,
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_SUBFIELD_NAMES,
+    SHIFT_WMFCC_SUBFIELD,
 )
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.param_shift import (
     ROW_ID_FIELD,
     assigned_param_index,
-    encode_param_shift_columns,
+    encode_param_shift_column,
     load_param_shifter,
     param_shift_policy_values,
     shift_encoded_row,
@@ -57,7 +58,12 @@ _CHANNELS = 2
 _VELOCITY = 100
 _ROWS = 28
 _SEED = 4242
-_METRIC_FIELDS = (RMS_SHIFT_FIELD, SOT_SHIFT_FIELD, WMFCC_SHIFT_FIELD, MSS_SHIFT_FIELD)
+_METRIC_SUBFIELDS = (
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_WMFCC_SUBFIELD,
+    SHIFT_MSS_SUBFIELD,
+)
 
 
 def _render_config() -> RenderConfig:
@@ -118,27 +124,58 @@ def _shifted_dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return shard
 
 
-def _column(dataset: lance.LanceDataset, field: str) -> pa.Array:
-    """Read one committed column in row order.
+def _subfield(dataset: lance.LanceDataset, name: str) -> pa.Array:
+    """Read one ``shift`` subfield in row order through Lance's nested projection.
 
     :param dataset: Augmented Lance dataset.
-    :param field: Column to read.
-    :returns: Combined Arrow array for the column.
+    :param name: Subfield name below ``shift``.
+    :returns: Combined Arrow array for the subfield.
     """
-    return dataset.to_table(columns=[field]).column(field).combine_chunks()
+    projected = dataset.to_table(columns={name: f"{SHIFT_FIELD}.{name}"})
+    return projected.column(name).combine_chunks()
 
 
-def test_param_shift_cli_writes_every_declared_column(shifted_dataset: Path) -> None:
-    """A real CLI run commits all seven columns with usable Arrow types.
+def _sources(dataset: lance.LanceDataset) -> dict[str, np.ndarray]:
+    """Decode the encoder's three source columns from a dataset.
+
+    :param dataset: Dataset supplying real source columns.
+    :returns: Decoded ``audio``, ``param_array`` and ``_rowid`` arrays.
+    """
+    table = dataset.to_table(columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD], with_row_id=True)
+    return {
+        AUDIO_FIELD: table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray(),
+        PARAM_ARRAY_FIELD: table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray(),
+        ROW_ID_FIELD: np.asarray(table.column(ROW_ID_FIELD).to_pylist()),
+    }
+
+
+def test_param_shift_cli_writes_one_nested_struct_column(shifted_dataset: Path) -> None:
+    """A real CLI run commits a single ``shift`` struct carrying all seven subfields.
 
     :param shifted_dataset: Augmented Lance dataset.
     """
     dataset = lance.dataset(str(shifted_dataset))
 
-    assert set(PARAM_SHIFT_FIELD_NAMES) <= set(dataset.schema.names)
-    assert dataset.schema.field(PARAM_SHIFT_FIELD).type == pa.string()
-    for field in (PARAM_AMOUNT_SHIFT_FIELD, *_METRIC_FIELDS):
-        assert dataset.schema.field(field).type == pa.float32()
+    assert SHIFT_FIELD in dataset.schema.names
+    struct_type = dataset.schema.field(SHIFT_FIELD).type
+    assert pa.types.is_struct(struct_type)
+    assert [struct_type.field(i).name for i in range(struct_type.num_fields)] == list(
+        SHIFT_SUBFIELD_NAMES
+    )
+    # None of the flat siblings the nesting replaced may leak back into the schema.
+    assert not [name for name in dataset.schema.names if name.endswith("_shift")]
+
+
+def test_param_shift_subfields_are_projectable_and_typed(shifted_dataset: Path) -> None:
+    """Each subfield reads back through ``shift.<name>`` with the type it was declared with.
+
+    :param shifted_dataset: Augmented Lance dataset.
+    """
+    dataset = lance.dataset(str(shifted_dataset))
+
+    assert _subfield(dataset, SHIFT_PARAM_SUBFIELD).type == pa.string()
+    for name in (SHIFT_AMOUNT_SUBFIELD, *_METRIC_SUBFIELDS):
+        assert _subfield(dataset, name).type == pa.float32()
 
 
 def test_param_shift_audio_matches_the_source_audio_layout(shifted_dataset: Path) -> None:
@@ -148,10 +185,12 @@ def test_param_shift_audio_matches_the_source_audio_layout(shifted_dataset: Path
     """
     dataset = lance.dataset(str(shifted_dataset))
 
-    audio = _column(dataset, AUDIO_FIELD).to_numpy_ndarray()
-    shifted = _column(dataset, AUDIO_SHIFT_FIELD).to_numpy_ndarray()
+    column = dataset.to_table(columns=[AUDIO_FIELD]).column(AUDIO_FIELD)
+    audio = column.combine_chunks().to_numpy_ndarray()
+    shifted = _subfield(dataset, SHIFT_AUDIO_SUBFIELD).to_numpy_ndarray()
 
-    assert shifted.shape == audio.shape == (_ROWS, _CHANNELS, int(_SAMPLE_RATE * _DURATION_SECONDS))
+    expected = (_ROWS, _CHANNELS, int(_SAMPLE_RATE * _DURATION_SECONDS))
+    assert shifted.shape == audio.shape == expected
     assert shifted.dtype == audio.dtype
     assert np.isfinite(shifted.astype(np.float32)).all()
 
@@ -162,7 +201,7 @@ def test_param_shift_spreads_rows_evenly_across_the_param_spec(shifted_dataset: 
     :param shifted_dataset: Augmented Lance dataset.
     """
     spec = resolve_param_spec(ParamSpecName(_SYNTH))
-    names = _column(lance.dataset(str(shifted_dataset)), PARAM_SHIFT_FIELD).to_pylist()
+    names = _subfield(lance.dataset(str(shifted_dataset)), SHIFT_PARAM_SUBFIELD).to_pylist()
 
     counts = Counter(names)
 
@@ -180,28 +219,28 @@ def test_param_shift_records_a_move_and_finite_metrics(shifted_dataset: Path) ->
     """
     dataset = lance.dataset(str(shifted_dataset))
 
-    amounts = np.asarray(_column(dataset, PARAM_AMOUNT_SHIFT_FIELD).to_pylist())
+    amounts = np.asarray(_subfield(dataset, SHIFT_AMOUNT_SUBFIELD).to_pylist())
     assert amounts.shape == (_ROWS,)
     assert np.isfinite(amounts).all()
     assert (amounts >= 0.0).all()
     assert np.count_nonzero(amounts) >= _ROWS // 2
-    for field in _METRIC_FIELDS:
-        scores = np.asarray(_column(dataset, field).to_pylist())
+    for name in _METRIC_SUBFIELDS:
+        scores = np.asarray(_subfield(dataset, name).to_pylist())
         assert scores.shape == (_ROWS,)
         assert np.isfinite(scores).all()
     # An RMS-envelope cosine similarity is bounded; the guard would catch a wired-up
     # distance masquerading as a similarity. The tolerance covers float32 rounding of a
     # similarity of exactly 1.0, which an unchanged redraw produces.
-    rms = np.asarray(_column(dataset, RMS_SHIFT_FIELD).to_pylist())
+    rms = np.asarray(_subfield(dataset, SHIFT_RMS_SUBFIELD).to_pylist())
     assert np.all((rms >= -1.0 - 1e-6) & (rms <= 1.0 + 1e-6))
 
 
 def test_param_shift_audio_is_the_patch_the_row_claims(shifted_dataset: Path) -> None:
     """Re-deriving each row's shift from its row id reproduces the committed audio.
 
-    This is the load-bearing check: it proves ``param_shift``/``param_amount_shift`` are a
-    truthful description of ``audio_shift`` rather than three independently-computed
-    columns that happen to sit in the same row.
+    This is the load-bearing check: it proves ``shift.param``/``shift.amount`` are a
+    truthful description of ``shift.audio`` rather than three independently-computed
+    subfields that happen to sit in the same struct.
 
     :param shifted_dataset: Augmented Lance dataset.
     """
@@ -209,15 +248,13 @@ def test_param_shift_audio_is_the_patch_the_row_claims(shifted_dataset: Path) ->
     spec = resolve_param_spec(ParamSpecName(_SYNTH))
     renderer = make_audio_renderer(_render_config())
 
-    table = dataset.to_table(
-        columns=[PARAM_ARRAY_FIELD, PARAM_SHIFT_FIELD, PARAM_AMOUNT_SHIFT_FIELD, AUDIO_SHIFT_FIELD],
-        with_row_id=True,
-    )
+    table = dataset.to_table(columns=[PARAM_ARRAY_FIELD, SHIFT_FIELD], with_row_id=True)
     params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
-    committed_audio = table.column(AUDIO_SHIFT_FIELD).combine_chunks().to_numpy_ndarray()
-    committed_names = table.column(PARAM_SHIFT_FIELD).to_pylist()
-    committed_amounts = table.column(PARAM_AMOUNT_SHIFT_FIELD).to_pylist()
-    row_ids = table.column("_rowid").to_pylist()
+    shift = table.column(SHIFT_FIELD).combine_chunks()
+    committed_audio = shift.field(SHIFT_AUDIO_SUBFIELD).to_numpy_ndarray()
+    committed_names = shift.field(SHIFT_PARAM_SUBFIELD).to_pylist()
+    committed_amounts = shift.field(SHIFT_AMOUNT_SUBFIELD).to_pylist()
+    row_ids = table.column(ROW_ID_FIELD).to_pylist()
 
     for index, row_id in enumerate(row_ids):
         expected = shift_encoded_row(
@@ -238,26 +275,19 @@ def test_param_shift_audio_is_the_patch_the_row_claims(shifted_dataset: Path) ->
         ), f"row {index} audio does not match a re-render of its recorded shift"
 
 
-def test_param_shift_in_process_encoder_reproduces_the_committed_columns(
+def test_param_shift_in_process_encoder_reproduces_the_committed_struct(
     shifted_dataset: Path,
 ) -> None:
     """Driving the encoder in-process yields exactly what the CLI subprocess committed.
 
     Runs the same production entry points the CLI uses — ``load_param_shifter`` then
-    ``encode_param_shift_columns`` — against the dataset's own source columns, so the
-    Arrow column contract is pinned without going through a Lance write.
+    ``encode_param_shift_column`` — against the dataset's own source columns, so the Arrow
+    struct contract is pinned without going through a Lance write.
 
     :param shifted_dataset: Augmented Lance dataset.
     """
     dataset = lance.dataset(str(shifted_dataset))
-    table = dataset.to_table(
-        columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD, *PARAM_SHIFT_FIELD_NAMES], with_row_id=True
-    )
-    sources = {
-        AUDIO_FIELD: table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray(),
-        PARAM_ARRAY_FIELD: table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray(),
-        ROW_ID_FIELD: np.asarray(table.column(ROW_ID_FIELD).to_pylist()),
-    }
+    committed = dataset.to_table(columns=[SHIFT_FIELD]).column(SHIFT_FIELD).combine_chunks()
     shifter = load_param_shifter(
         AddEmbeddingsConfig(
             lance_uri=str(shifted_dataset),
@@ -268,20 +298,9 @@ def test_param_shift_in_process_encoder_reproduces_the_committed_columns(
         )
     )
 
-    columns = encode_param_shift_columns(sources, _SAMPLE_RATE, shifter)
+    struct = encode_param_shift_column(_sources(dataset), _SAMPLE_RATE, shifter)
 
-    assert set(columns) == set(PARAM_SHIFT_FIELD_NAMES)
-    for field in PARAM_SHIFT_FIELD_NAMES:
-        committed = table.column(field).combine_chunks()
-        assert columns[field].equals(committed), f"{field} differs from the committed column"
-
-
-def test_load_param_shifter_without_a_render_config_raises() -> None:
-    """The loader refuses to guess a renderer even when reached outside config validation."""
-    config = AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
-
-    with pytest.raises(ValueError, match="composed render config"):
-        load_param_shifter(config)
+    assert struct.equals(committed)
 
 
 def test_param_shift_encoder_rejects_a_render_config_the_dataset_does_not_match(
@@ -292,12 +311,6 @@ def test_param_shift_encoder_rejects_a_render_config_the_dataset_does_not_match(
     :param shifted_dataset: Augmented Lance dataset supplying real source columns.
     """
     dataset = lance.dataset(str(shifted_dataset))
-    table = dataset.to_table(columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD], with_row_id=True)
-    sources = {
-        AUDIO_FIELD: table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray(),
-        PARAM_ARRAY_FIELD: table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray(),
-        ROW_ID_FIELD: np.asarray(table.column(ROW_ID_FIELD).to_pylist()),
-    }
     mismatched = _render_config().model_copy(update={"sample_rate": _SAMPLE_RATE * 2})
     shifter = load_param_shifter(
         AddEmbeddingsConfig(
@@ -309,7 +322,15 @@ def test_param_shift_encoder_rejects_a_render_config_the_dataset_does_not_match(
     )
 
     with pytest.raises(ValueError, match="does not match the dataset"):
-        encode_param_shift_columns(sources, _SAMPLE_RATE, shifter)
+        encode_param_shift_column(_sources(dataset), _SAMPLE_RATE, shifter)
+
+
+def test_load_param_shifter_without_a_render_config_raises() -> None:
+    """The loader refuses to guess a renderer even when reached outside config validation."""
+    config = AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
+
+    with pytest.raises(ValueError, match="composed render config"):
+        load_param_shifter(config)
 
 
 def test_param_shift_policy_values_without_a_render_config_stay_distinct() -> None:

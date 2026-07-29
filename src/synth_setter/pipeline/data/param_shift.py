@@ -6,6 +6,9 @@ redrawn from its own distribution, the patch is re-rendered through the ordinary
 audio. Selection is keyed on the Lance row id so the assignment is balanced across the
 spec and survives a resume-cache replay unchanged.
 
+The seven facets land in one nested ``shift`` struct column — ``shift.param``,
+``shift.amount``, ``shift.audio``, and one subfield per metric.
+
 Consumed through the ``param_shift`` entry of ``add_embeddings``'s registry, not directly.
 """
 
@@ -23,14 +26,16 @@ import structlog
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
-    AUDIO_SHIFT_FIELD,
-    MSS_SHIFT_FIELD,
-    PARAM_AMOUNT_SHIFT_FIELD,
     PARAM_ARRAY_FIELD,
-    PARAM_SHIFT_FIELD,
-    RMS_SHIFT_FIELD,
-    SOT_SHIFT_FIELD,
-    WMFCC_SHIFT_FIELD,
+    SHIFT_AMOUNT_SUBFIELD,
+    SHIFT_AUDIO_SUBFIELD,
+    SHIFT_FIELD,
+    SHIFT_MSS_SUBFIELD,
+    SHIFT_PARAM_SUBFIELD,
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_SUBFIELD_NAMES,
+    SHIFT_WMFCC_SUBFIELD,
 )
 
 if TYPE_CHECKING:
@@ -44,18 +49,18 @@ logger = structlog.get_logger(__name__)
 ROW_ID_FIELD: str = "_rowid"
 PARAM_SHIFT_INPUT_FIELDS: tuple[str, ...] = (AUDIO_FIELD, PARAM_ARRAY_FIELD, ROW_ID_FIELD)
 
-_METRIC_FIELDS: tuple[str, ...] = (
-    RMS_SHIFT_FIELD,
-    SOT_SHIFT_FIELD,
-    WMFCC_SHIFT_FIELD,
-    MSS_SHIFT_FIELD,
+_METRIC_SUBFIELDS: tuple[str, ...] = (
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_WMFCC_SUBFIELD,
+    SHIFT_MSS_SUBFIELD,
 )
-# ``audio_shift`` is absent by design: its tensor type is taken from the dataset's own audio
+# ``audio`` is absent by design: its tensor type is taken from the dataset's own audio
 # column, so the re-render is stored exactly like the render it is compared against.
 _SCALAR_TYPES: dict[str, pa.DataType] = {
-    PARAM_SHIFT_FIELD: pa.string(),
-    PARAM_AMOUNT_SHIFT_FIELD: pa.float32(),
-    **dict.fromkeys(_METRIC_FIELDS, pa.float32()),
+    SHIFT_PARAM_SUBFIELD: pa.string(),
+    SHIFT_AMOUNT_SUBFIELD: pa.float32(),
+    **dict.fromkeys(_METRIC_SUBFIELDS, pa.float32()),
 }
 
 
@@ -176,7 +181,7 @@ def _shift_metrics(original: np.ndarray, shifted: np.ndarray, sample_rate: int) 
     :param original: Stored audio, shape ``(C, T)``.
     :param shifted: Re-rendered audio, same shape as ``original``.
     :param sample_rate: Dataset sample rate in Hz.
-    :returns: One finite score per metric column.
+    :returns: One finite score per metric subfield.
     :raises ValueError: A metric produced a non-finite score.
     """
     from synth_setter.evaluation.compute_audio_metrics import (
@@ -189,14 +194,14 @@ def _shift_metrics(original: np.ndarray, shifted: np.ndarray, sample_rate: int) 
     target = np.ascontiguousarray(original, dtype=np.float32)
     pred = np.ascontiguousarray(shifted, dtype=np.float32)
     scores = {
-        RMS_SHIFT_FIELD: float(compute_rms(target, pred, sample_rate)),
-        SOT_SHIFT_FIELD: float(compute_sot(target, pred, sample_rate)),
-        WMFCC_SHIFT_FIELD: float(compute_wmfcc(target, pred, sample_rate)),
-        MSS_SHIFT_FIELD: float(compute_mss(target, pred, sample_rate)),
+        SHIFT_RMS_SUBFIELD: float(compute_rms(target, pred, sample_rate)),
+        SHIFT_SOT_SUBFIELD: float(compute_sot(target, pred, sample_rate)),
+        SHIFT_WMFCC_SUBFIELD: float(compute_wmfcc(target, pred, sample_rate)),
+        SHIFT_MSS_SUBFIELD: float(compute_mss(target, pred, sample_rate)),
     }
     non_finite = sorted(name for name, score in scores.items() if not np.isfinite(score))
     if non_finite:
-        raise ValueError(f"param-shift metrics {non_finite} are non-finite")
+        raise ValueError(f"shift metrics {non_finite} are non-finite")
     return scores
 
 
@@ -210,7 +215,7 @@ class ShiftedBatch:
 
     .. attribute :: scalars
 
-        Non-audio output columns keyed by field name.
+        Non-audio subfield values keyed by subfield name.
     """
 
     audio: np.ndarray
@@ -279,7 +284,7 @@ class ParamShifter:
 
         :param sources: Decoded ``audio``, ``param_array``, and ``_rowid`` columns.
         :param sample_rate: Dataset sample rate in Hz.
-        :returns: Re-rendered audio and non-audio columns aligned with the batch's rows.
+        :returns: Re-rendered audio and non-audio subfields aligned with the batch's rows.
         """
         rows = zip(
             sources[ROW_ID_FIELD], sources[PARAM_ARRAY_FIELD], sources[AUDIO_FIELD], strict=True
@@ -287,7 +292,7 @@ class ParamShifter:
         names: list[str] = []
         amounts: list[float] = []
         rendered_rows: list[np.ndarray] = []
-        metrics: dict[str, list[float]] = {field: [] for field in _METRIC_FIELDS}
+        metrics: dict[str, list[float]] = {field: [] for field in _METRIC_SUBFIELDS}
         with _quiet_metric_logs():
             for row_id, encoded, original in rows:
                 shift = self._shift_row(int(row_id), encoded)
@@ -300,8 +305,8 @@ class ParamShifter:
         return ShiftedBatch(
             audio=np.stack(rendered_rows),
             scalars={
-                PARAM_SHIFT_FIELD: names,
-                PARAM_AMOUNT_SHIFT_FIELD: amounts,
+                SHIFT_PARAM_SUBFIELD: names,
+                SHIFT_AMOUNT_SUBFIELD: amounts,
                 **metrics,
             },
         )
@@ -319,7 +324,7 @@ def load_param_shifter(config: AddEmbeddingsConfig) -> ParamShifter:
 
     if config.render is None:
         raise ValueError(
-            f"{PARAM_SHIFT_FIELD} embeddings re-render every row and need a composed render "
+            f"{SHIFT_FIELD} embeddings re-render every row and need a composed render "
             "config; pass `render=<group> synth=<group>`"
         )
     render: RenderConfig = config.render
@@ -338,26 +343,28 @@ def load_param_shifter(config: AddEmbeddingsConfig) -> ParamShifter:
     )
 
 
-def encode_param_shift_columns(
+def encode_param_shift_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: object
-) -> dict[str, pa.Array]:
-    """Encode one batch's shift results as the embedder's Arrow columns.
+) -> pa.Array:
+    """Encode one batch's shift results as the nested ``shift`` struct column.
 
     :param sources: Decoded ``audio``, ``param_array``, and ``_rowid`` columns.
     :param sample_rate: Dataset sample rate in Hz.
     :param encoder: Renderer-bound :class:`ParamShifter` for this run.
-    :returns: One Arrow array per ``param_shift`` output column.
+    :returns: Struct array whose subfields are ``SHIFT_SUBFIELD_NAMES``.
     """
     from synth_setter.pipeline.data.lance_shard import tensor_array
 
     audio = sources[AUDIO_FIELD]
     batch = cast("ParamShifter", encoder)(sources, sample_rate)
-    columns = {
+    subfields: dict[str, pa.Array] = {
         name: pa.array(batch.scalars[name], arrow_type)
         for name, arrow_type in _SCALAR_TYPES.items()
     }
-    columns[AUDIO_SHIFT_FIELD] = tensor_array(batch.audio, audio.dtype, audio.shape[1:])
-    return columns
+    subfields[SHIFT_AUDIO_SUBFIELD] = tensor_array(batch.audio, audio.dtype, audio.shape[1:])
+    return pa.StructArray.from_arrays(
+        [subfields[name] for name in SHIFT_SUBFIELD_NAMES], names=list(SHIFT_SUBFIELD_NAMES)
+    )
 
 
 def param_shift_policy_values(config: AddEmbeddingsConfig) -> Sequence[str]:

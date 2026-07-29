@@ -168,11 +168,11 @@ def test_tinymu_registry_encoder_valid_sequence_returns_fixed_shape_tensor() -> 
         assert sample_rate == _SAMPLE_RATE
         return np.ones((2, TINYMU_FRONTEND.embedding_dim, 7), dtype=np.float32)
 
-    encoded = EMBEDDING_REGISTRY["tinymu"].encode_columns(
+    encoded = EMBEDDING_REGISTRY["tinymu"].encode_column(
         {AUDIO_FIELD: audio}, _SAMPLE_RATE, encode
     )
 
-    assert encoded[TINYMU_FIELD].to_numpy_ndarray().shape == (2, TINYMU_FRONTEND.embedding_dim, 7)
+    assert encoded.to_numpy_ndarray().shape == (2, TINYMU_FRONTEND.embedding_dim, 7)
 
 
 @pytest.mark.parametrize(
@@ -200,7 +200,7 @@ def test_tinymu_registry_encoder_invalid_output_raises(
         return output
 
     with pytest.raises(ValueError, match=message):
-        EMBEDDING_REGISTRY["tinymu"].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
+        EMBEDDING_REGISTRY["tinymu"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
 
 
 def test_resolve_tinymu_checkpoint_hash_identical_local_file_returns_path(
