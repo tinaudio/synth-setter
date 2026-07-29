@@ -85,7 +85,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
-from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND, tinymu_num_latent_frames
+from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND, matpac_plus_num_latent_frames
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
@@ -180,17 +180,17 @@ def _fake_sketch(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return np.ascontiguousarray(np.repeat(cells, frames, axis=2))
 
 
-def _fake_tinymu(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+def _fake_matpac_plus(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Encode audio as deterministic MATPAC-shaped sequences.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate in Hz.
-    :returns: Deterministic TinyMU-shaped embeddings.
+    :returns: Deterministic MATPAC++-shaped embeddings.
     """
-    frames = tinymu_num_latent_frames(audio.shape[-1], sample_rate)
+    frames = matpac_plus_num_latent_frames(audio.shape[-1], sample_rate)
     fill = audio.astype(np.float32).mean(axis=(1, 2))
     return np.broadcast_to(
-        fill[:, None, None], (len(audio), TINYMU_FRONTEND.embedding_dim, frames)
+        fill[:, None, None], (len(audio), MATPAC_PLUS_FRONTEND.embedding_dim, frames)
     ).copy()
 
 
@@ -211,8 +211,8 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_same(0.25)
     if name == "same_l":
         return _fake_same(0.75, same_l_num_latent_frames)
-    if name == "tinymu":
-        return _fake_tinymu
+    if name == "matpac_plus":
+        return _fake_matpac_plus
     raise ValueError(f"no fake encoder for {name!r}")
 
 
@@ -346,7 +346,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "sketch",
         "ssondo",
         "t5gemma",
-        "tinymu",
+        "matpac_plus",
     }
     assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
         pool="mean",
@@ -376,7 +376,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
-    assert EMBEDDING_REGISTRY["tinymu"].co_resident is False
+    assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
@@ -878,8 +878,8 @@ def test_checkpoint_tree_identity_ignores_huggingface_download_bookkeeping(
 def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
     """Unrelated repository revisions do not alter artifact identity."""
     assert (
-        _versioned_artifact_identity("tinymu", "checkpoint:sha256:abc")
-        == "tinymu:policy-v1:checkpoint:sha256:abc"
+        _versioned_artifact_identity("matpac_plus", "checkpoint:sha256:abc")
+        == "matpac_plus:policy-v1:checkpoint:sha256:abc"
     )
 
 
@@ -2831,7 +2831,7 @@ def test_add_embeddings_config_with_dataset_root_target_raises() -> None:
     """Every embedding uses the same single-Lance-dataset target contract."""
     with pytest.raises(ValidationError, match="dataset_root_uri"):
         AddEmbeddingsConfig.model_validate(
-            {"dataset_root_uri": "dataset", "embeddings": ("tinymu",)}
+            {"dataset_root_uri": "dataset", "embeddings": ("matpac_plus",)}
         )
 
 

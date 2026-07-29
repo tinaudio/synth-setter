@@ -1,7 +1,7 @@
-# TinyMU audio embeddings
+# MATPAC++ audio embeddings
 
-`synth-setter-add-embeddings` exposes TinyMU's frozen MATPAC representation as
-`embeddings=[tinymu]`. This integration runs only the audio encoder; it does not load TinyMU's
+`synth-setter-add-embeddings` exposes the frozen MATPAC++ representation as
+`embeddings=[matpac_plus]`. TinyMU supplies the package API; this integration does not load its
 language decoder or implement TinyMU training.
 
 ## Package and checkpoint identity
@@ -22,8 +22,8 @@ r2://intermediate-data/tinymu/source/pretrained/AndreasXi/TinyMU/0735fc50bc8b881
 Its required SHA-256 is
 `e8cec6847b2d918c8f77f82d79d90adf7dd82f99e80fa12eb3444f87f24bb998`. The integration downloads it
 through the canonical rclone path into
-`${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/tinymu-0735fc50bc8b881d687dedccdd48b742927611b3/`,
-then verifies the digest before moving it into place. A local `checkpoints.tinymu=/path/to/file`
+`${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/matpac-plus-0735fc50bc8b881d687dedccdd48b742927611b3/`,
+then verifies the digest before moving it into place. A local `checkpoints.matpac_plus=/path/to/file`
 override is accepted only when its digest is identical. Other R2 URIs are rejected.
 
 ## Measured encoder contract
@@ -40,7 +40,7 @@ the pinned source commit:
 - output is transposed from upstream `(batch, tokens, 3840)` to the conditioning convention
   `(batch, 3840, tokens)`, persisted as a float32 fixed-shape tensor;
 - the frozen model runs in eval/inference mode and repeated CPU inference is bitwise deterministic;
-- `tinymu_vec` is the temporal mean, a `FixedSizeList<float32, 3840>` used by the registry's
+- `matpac_plus_vec` is the temporal mean, a `FixedSizeList<float32, 3840>` used by the registry's
   cosine IVF_PQ policy.
 
 Measured token counts are 1 for 175 ms, 7 for one second, 25 for four seconds, and 63 for ten
@@ -56,14 +56,14 @@ Augment each four-second Lance split through the same registry path as every oth
 uv sync
 synth-setter-add-embeddings \
   lance_uri=/path/to/dataset/train.lance \
-  embeddings=[tinymu]
+  embeddings=[matpac_plus]
 ```
 
 Run the command separately for each required split. The endpoint modifies only the selected Lance
 dataset; dataset cards and completion markers remain finalize-owned.
 
 The generic training and evaluation path selects the resulting sequence with
-`conditioning=tinymu`. That profile declares `input_shape: [3840, 25]` and uses the existing
+`conditioning=matpac_plus`. That profile declares `input_shape: [3840, 25]` and uses the existing
 `embedpool` encoder. It is therefore specific to four-second source clips; a dataset with another
 clip duration must provide a matching generic conditioning shape rather than silently padding or
 truncating stored embeddings.
