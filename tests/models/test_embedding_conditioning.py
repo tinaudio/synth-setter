@@ -205,13 +205,13 @@ def test_ff_default_mel_conditioning_uses_legacy_network() -> None:
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
     )
-    mel_spec = torch.randn(2, 1, 2, 3)
+    mel = torch.randn(2, 1, 2, 3)
 
     loss, predictions, _, conditioning = module.model_step(
-        {"mel_spec": mel_spec, "params": torch.randn(2, 2)}
+        {"mel": mel, "params": torch.randn(2, 2)}
     )
 
-    assert conditioning is mel_spec
+    assert conditioning is mel
     assert predictions.shape == (2, 2)
     assert torch.isfinite(loss)
 
@@ -389,7 +389,7 @@ def test_model_embedding_spec_reads_generic_conditioning_key() -> None:
     expected = torch.randn(2, 5)
 
     actual = module._get_conditioning_from_batch(  # noqa: SLF001
-        {"conditioning": expected, "mel_spec": torch.randn(2, 1)}
+        {"conditioning": expected, "mel": torch.randn(2, 1)}
     )
 
     assert actual is expected

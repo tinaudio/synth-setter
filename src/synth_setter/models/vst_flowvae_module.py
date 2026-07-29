@@ -50,12 +50,12 @@ class VSTFlowVAEModule(LightningModule):
 
         target_params = batch["params"]
 
-        mel_spec = batch["mel_spec"]
+        mel = batch["mel"]
 
-        vae_out = self.net(mel_spec)
-        losses = compute_flowvae_loss(vae_out, mel_spec, target_params, self.hparams.param_spec)
+        vae_out = self.net(mel)
+        losses = compute_flowvae_loss(vae_out, mel, target_params, self.hparams.param_spec)
 
-        return losses, mel_spec, target_params, vae_out
+        return losses, mel, target_params, vae_out
 
     def get_beta(self) -> float:
         step = self.global_step
@@ -120,8 +120,8 @@ class VSTFlowVAEModule(LightningModule):
         pass
 
     def predict_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        mel_spec = batch["mel_spec"]
-        out = self.net(mel_spec)
+        mel = batch["mel"]
+        out = self.net(mel)
 
         return (
             out.x_hat,

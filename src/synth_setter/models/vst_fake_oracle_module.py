@@ -34,16 +34,16 @@ class FakeOracleNet(nn.Module):
         self.d_out = d_out
         self.dummy = nn.Parameter(torch.zeros(1))
 
-    def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
+    def forward(self, mel: torch.Tensor) -> torch.Tensor:
         """Return the trainable dummy parameter, ignoring the input tensor.
 
-        :param mel_spec: Unused mel-spectrogram batch — accepted for API parity with
+        :param mel: Unused mel-spectrogram batch — accepted for API parity with
             the real feature extractor.
 
         :return: The single-element ``dummy`` parameter, with grad attached.
         :rtype: torch.Tensor
         """
-        del mel_spec
+        del mel
         return self.dummy
 
 
@@ -77,21 +77,21 @@ class VSTFakeOracleModule(LightningModule):
     def model_step(
         self, batch: dict[str, torch.Tensor]
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return the oracle 4-tuple ``(loss, preds, targets, mel_spec)``.
+        """Return the oracle 4-tuple ``(loss, preds, targets, mel)``.
 
         ``preds`` and ``targets`` both alias ``batch["params"]`` (the oracle is
         perfect by construction). ``loss`` is zero but carries a grad path
         through ``self.net``'s dummy parameter so ``loss.backward()`` works.
 
-        :param batch: Dict with at least ``params`` and ``mel_spec``.
+        :param batch: Dict with at least ``params`` and ``mel``.
 
         :return: 4-tuple matching :meth:`VSTFeedForwardModule.model_step`.
         :rtype: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
         """
         target_params = batch["params"]
-        mel_spec = batch["mel_spec"]
-        loss = 0.0 * self.net(mel_spec).sum()
-        return loss, target_params, target_params, mel_spec
+        mel = batch["mel"]
+        loss = 0.0 * self.net(mel).sum()
+        return loss, target_params, target_params, mel
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Compute and log ``train/loss`` (always 0); return the loss for Lightning.
