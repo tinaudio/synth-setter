@@ -21,8 +21,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, cast
 
 import numpy as np
+import pyarrow as pa
 import structlog
 
+from synth_setter.data.vst.shapes import TINYMU_FIELD
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.logging_utils import resolve_git_sha
@@ -332,6 +334,48 @@ def tinymu_num_latent_frames(num_samples: int, sample_rate: int) -> int:
         resampled_samples - TINYMU_FRONTEND.n_fft
     ) // TINYMU_FRONTEND.hop_length
     return math.ceil(mel_frames / TINYMU_FRONTEND.patch_size)
+
+
+def tinymu_artifact_digest(checkpoint: str) -> str:
+    """Verify and identify the pinned TinyMU package/checkpoint pair.
+
+    :param checkpoint: Pinned R2 URI or SHA-identical local checkpoint.
+    :returns: Package and checkpoint identity for generic policy versioning.
+    """
+    resolve_tinymu_checkpoint(checkpoint)
+    return f"package:{TINYMU_PACKAGE_COMMIT};checkpoint:sha256:{TINYMU_CHECKPOINT_SHA256}"
+
+
+def encode_tinymu_column(
+    audio: np.ndarray, sample_rate: int, encoder: object
+) -> pa.Array:
+    """Encode one audio batch as a fixed-shape MATPAC tensor column.
+
+    :param audio: Source ``(B, C, T)`` waveforms.
+    :param sample_rate: Dataset sample rate in Hz.
+    :param encoder: Loaded TinyMU audio encoder.
+    :returns: Fixed-shape Arrow tensor array with shape ``(3840, T_tokens)``.
+    :raises ValueError: The encoder output violates TinyMU's shape or finite contract.
+    """
+    encode = cast("TinyMUEncodeFn", encoder)
+    embeddings = np.asarray(encode(audio, sample_rate), dtype=np.float32)
+    expected_shape = (
+        len(audio),
+        TINYMU_FRONTEND.embedding_dim,
+        tinymu_num_latent_frames(audio.shape[-1], sample_rate),
+    )
+    if embeddings.shape != expected_shape:
+        raise ValueError(
+            f"{TINYMU_FIELD} encoder produced shape {embeddings.shape}, "
+            f"expected {expected_shape}"
+        )
+    if not np.isfinite(embeddings).all():
+        raise ValueError(f"{TINYMU_FIELD} encoder produced non-finite values")
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    return tensor_array(
+        np.ascontiguousarray(embeddings), np.dtype("float32"), expected_shape[1:]
+    )
 
 
 def tinymu_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:

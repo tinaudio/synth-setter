@@ -52,12 +52,10 @@ from synth_setter.pipeline.data.ssondo import (
 )
 from synth_setter.pipeline.data.tinymu import (
     DEFAULT_TINYMU_CHECKPOINT,
-    TINYMU_CHECKPOINT_SHA256,
     TINYMU_FRONTEND,
-    TINYMU_PACKAGE_COMMIT,
-    TinyMUEncodeFn,
+    encode_tinymu_column,
     load_tinymu_audio_encoder,
-    tinymu_num_latent_frames,
+    tinymu_artifact_digest,
 )
 from synth_setter.utils.logging_utils import resolve_git_sha
 from synth_setter.workspace import operator_workspace
@@ -105,9 +103,7 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = (
-    M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn | TinyMUEncodeFn
-)
+type Encoder = object
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 type ResolveArtifactIdentityFn = Callable[[str], str]
@@ -312,16 +308,12 @@ def _ssondo_artifact_identity(checkpoint: str) -> str:
 
 
 def _tinymu_artifact_identity(checkpoint: str) -> str:
-    """Verify and identify the pinned TinyMU package/checkpoint pair.
+    """Return TinyMU's generic-policy-wrapped artifact identity.
 
     :param checkpoint: Pinned R2 URI or SHA-identical local checkpoint.
     :returns: Versioned package and checkpoint identity.
     """
-    from synth_setter.pipeline.data.tinymu import resolve_tinymu_checkpoint
-
-    resolve_tinymu_checkpoint(checkpoint)
-    digest = f"package:{TINYMU_PACKAGE_COMMIT};checkpoint:sha256:{TINYMU_CHECKPOINT_SHA256}"
-    return _versioned_artifact_identity("tinymu", digest)
+    return _versioned_artifact_identity("tinymu", tinymu_artifact_digest(checkpoint))
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -632,31 +624,6 @@ def _encode_ssondo_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     return _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)
 
 
-def _encode_tinymu_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
-    """Encode one audio batch as a fixed-shape TinyMU MATPAC tensor column.
-
-    :param audio: ``(B, C, T)`` source audio.
-    :param sample_rate: Source sample rate in Hz.
-    :param encoder: Frozen MATPAC encoder over source audio.
-    :returns: ``(B, 3840, T_tokens)`` fixed-shape tensor array.
-    :raises ValueError: The encoder returns the wrong shape or non-finite values.
-    """
-    from synth_setter.pipeline.data.lance_shard import tensor_array
-
-    encode = cast("TinyMUEncodeFn", encoder)
-    embeddings = _finite_embedding(TINYMU_FIELD, encode(audio, sample_rate))
-    expected_shape = (
-        len(audio),
-        TINYMU_FRONTEND.embedding_dim,
-        tinymu_num_latent_frames(audio.shape[-1], sample_rate),
-    )
-    if embeddings.shape != expected_shape:
-        raise ValueError(
-            f"{TINYMU_FIELD} encoder produced shape {embeddings.shape}, expected {expected_shape}"
-        )
-    return tensor_array(embeddings, np.dtype("float32"), expected_shape[1:])
-
-
 def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
     """Encode one param batch as a fixed-shape text-embedding tensor column.
 
@@ -754,7 +721,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
             vector_dim=TINYMU_FRONTEND.embedding_dim,
         ),
         load_encoder=_load_tinymu_spec_encoder,
-        encode_column=_encode_tinymu_column,
+        encode_column=encode_tinymu_column,
         resolve_artifact_identity=_tinymu_artifact_identity,
     ),
 }
