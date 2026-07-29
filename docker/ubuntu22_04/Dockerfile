@@ -409,6 +409,7 @@ COPY --from=node:24.15.0-bookworm-slim /usr/local/ /usr/local/
 COPY --from=synth-setter-src /home/build/synth-setter/package.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/studiorack.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack-cardinal.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/scripts/studiorack/patch-core.mjs /artifacts/studiorack/scripts/studiorack/patch-core.mjs
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/__init__.py /artifacts/studiorack-src/synth_setter/__init__.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_manager.py /artifacts/studiorack-src/synth_setter/plugin_manager.py
@@ -429,6 +430,9 @@ RUN if [[ "${TARGETARCH:-}" == "amd64" ]]; then \
       PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
         --manifest /artifacts/studiorack/studiorack.json \
         --links-dir /usr/lib/vst3 install "${packages[@]}"; \
+      PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+        --manifest /artifacts/studiorack/studiorack-cardinal.json \
+        --links-dir /usr/lib/vst3 install --plugin distrho/cardinal; \
     fi
 COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
 RUN if [[ "${BUILD_MODE}" == "source" ]]; then \
@@ -455,7 +459,7 @@ RUN ./run-linux-vst-headless.sh \
     python -X faulthandler load_vst3_check.py "/usr/lib/vst3/Surge XT.vst3"
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
-RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
+RUN for bundle in "Surge XT" "CardinalSynth" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
       if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
         continue; \
       fi; \
@@ -463,7 +467,7 @@ RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; d
         || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
     done
 RUN if [[ "${TARGETARCH:-}" != "amd64" ]]; then exit 0; fi; \
-    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
+    for entry in "CardinalSynth|" "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
       name="${entry%%|*}"; \
       ./run-linux-vst-headless.sh \
         python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
