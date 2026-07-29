@@ -141,6 +141,24 @@ def test_block_gate_excludes_comment_hygiene_blocks(tmp_path: Path) -> None:
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 
+def test_gate_does_not_fire_on_nit_only_sentinel(tmp_path: Path) -> None:
+    """NIT is advisory: neither sub-gate fires, even on ``[comment-hygiene:nit]``.
+
+    Both gates run at their defaults here, so a pass proves NIT is outside the
+    comment sub-gate's ``warn|block`` set as well as the block sub-gate's.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Nits\n\n"
+        "- **[comment-hygiene:nit]** `src/example.py:9` — comment restates the assignment.\n"
+        "- **[code-health:nit]** `src/example.py:14` — name could be shorter.\n",
+    )
+    result = _run_gate(review)
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
 def test_gate_allows_clean_pass_sentinel(tmp_path: Path) -> None:
     """A clean PASS sentinel (no bracketed findings) passes (exit 0).
 

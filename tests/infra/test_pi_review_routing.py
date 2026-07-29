@@ -380,6 +380,29 @@ def test_report_is_parseable_accepts_structured_json() -> None:
     )
 
 
+def test_parse_worker_report_accepts_nit_severity() -> None:
+    """Carry advisory NIT findings through the boundary instead of dropping them."""
+    report = json.dumps(
+        {
+            "skill": "comment-hygiene",
+            "target": "PR #1",
+            "findings": [
+                {
+                    "severity": "nit",
+                    "path": "src/example.py",
+                    "line": 9,
+                    "description": "Comment restates the assignment.",
+                }
+            ],
+            "what_looks_good": ["Docstrings open with the contract."],
+        }
+    )
+
+    parsed = parse_worker_report(report, expected_skill="comment-hygiene", expected_target="PR #1")
+
+    assert parsed.findings[0].severity == "nit"
+
+
 @pytest.mark.parametrize(
     "report",
     [
