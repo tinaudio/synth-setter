@@ -146,6 +146,7 @@ patch:
 | Synth                        | `synth_params` | encoded width |
 | ---------------------------- | -------------- | ------------- |
 | `surge_4` (4-param toy spec) | 4              | 7             |
+| `cardinal`                   | 9              | 13            |
 | `surge_simple`               | 89             | 92            |
 | `obxf`                       | 94             | 187           |
 | `surge_xt`                   | 162            | 300           |
@@ -159,6 +160,17 @@ or `latent_dim` literal.
 See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
 for hand-tuned examples.
+
+### Hosts that restore state asynchronously
+
+Some plugins rebuild their internal graph when a preset is restored and apply
+that on the audio thread. Cardinal is one: its curated controls are generic host
+slots whose meaning comes from the `HostParametersMap` module inside
+`presets/cardinal-base.vstpreset`, and parameters written before the plugin has
+processed a single block are silently dropped. `DawDreamerRenderer` therefore
+renders and discards `PRESET_SETTLE_SECONDS` of audio after every preset load
+(#2543). Such a synth also needs `plugin_reload_cadence: render`, because a
+reused instance carries free-running engine state across samples.
 
 ## Step 3 — Register the synth
 

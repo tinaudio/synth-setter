@@ -288,3 +288,16 @@ def test_surge_subset_synth_groups_keep_surge_xt_identity(
     assert synth.plugin_state_path == plugin_state_path
     assert synth.plugin_path == surge_xt.plugin_path
     assert synth.synth_version == surge_xt.synth_version
+
+
+def test_cardinal_identity_uses_dawdreamer_with_per_render_reload() -> None:
+    """Cardinal composes its root identity with the reproducible DawDreamer profile."""
+    spec = _spec_from_dataset_overrides(["synth=cardinal", "render=cardinal"])
+
+    assert spec.render.synth.name == "cardinal"
+    assert spec.render.param_spec_name == "cardinal"
+    assert spec.render.plugin_path == "plugins/CardinalSynth.vst3"
+    assert spec.render.plugin_state_path == "presets/cardinal-base.vstpreset"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"

@@ -5,19 +5,23 @@ The registry keeps checkpoint loading, Arrow encoding, residency, optional depen
 index policy together for each embedding. Co-resident encoders share one Lance UDF pass; large
 SAME encoders run in separate load-write-release passes.
 
-CLI: ``synth-setter-add-embeddings lance_uri=DATASET.lance embeddings=[clap,m2l]``.
+CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,tinymu]``.
 """
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
+import json
 import math
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import hydra
 import numpy as np
@@ -34,14 +38,25 @@ from synth_setter.data.vst.shapes import (
     SAME_S_FIELD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
+    TINYMU_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
+    SSONDO_CHECKPOINT_SHA256,
     SSONDO_EMBEDDING_DIM,
+    SSONDO_SOURCE_REVISION,
     SSONDOEncodeFn,
     load_ssondo_audio_encoder,
+    resolve_ssondo_checkpoint,
+)
+from synth_setter.pipeline.data.tinymu import (
+    DEFAULT_TINYMU_CHECKPOINT,
+    TINYMU_FRONTEND,
+    encode_tinymu_column,
+    load_tinymu_audio_encoder,
+    tinymu_artifact_digest,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -74,6 +89,8 @@ DEFAULT_NUM_SUB_VECTORS: int = 16
 DEFAULT_INDEX_METRIC: str = "cosine"
 DEFAULT_LANCE_LOG: str = "warn"
 PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
+_EMBEDDING_NAME_METADATA = b"synth_setter.embedding.name"
+_EMBEDDING_ARTIFACT_METADATA = b"synth_setter.embedding.artifact"
 SAME_EMBEDDING_DIM: int = 256
 SAME_SAMPLE_RATE: int = 44100
 SAME_DOWNSAMPLING_RATIO: int = 4096
@@ -89,6 +106,7 @@ type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
+type ResolveArtifactIdentityFn = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -155,6 +173,10 @@ class EmbeddingSpec:
 
         Source batch, sample rate, and encoder to Arrow array transform.
 
+    .. attribute :: resolve_artifact_identity
+
+        Checkpoint source to immutable encoder-artifact identity resolver.
+
     .. attribute :: input_field
 
         Dataset column supplying this embedding's encoder input.
@@ -167,7 +189,136 @@ class EmbeddingSpec:
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
     encode_column: EncodeColumnFn
+    resolve_artifact_identity: ResolveArtifactIdentityFn
     input_field: str = AUDIO_FIELD
+
+
+EMBEDDING_POLICY_VERSION = 1
+
+
+class _Digest(Protocol):
+    """Structural hash state used by artifact identity framing."""
+
+    def update(self, value: bytes, /) -> None:
+        """Append bytes to the hash state.
+
+        :param value: Bytes to append.
+        """
+        ...
+
+
+def _update_framed_digest(digest: _Digest, value: bytes) -> None:
+    """Append one length-delimited value to a digest.
+
+    :param digest: Hash state to update.
+    :param value: Bytes whose boundary must be preserved.
+    """
+    digest.update(len(value).to_bytes(8, "big"))
+    digest.update(value)
+
+
+def _checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
+    """Hash checkpoint file paths and contents in deterministic order.
+
+    :param checkpoint_dir: Materialized checkpoint directory.
+    :returns: SHA-256 identity for the complete checkpoint tree.
+    :raises ValueError: The checkpoint directory contains no files.
+    """
+    digest = hashlib.sha256()
+    files = sorted(
+        path
+        for path in checkpoint_dir.rglob("*")
+        if path.is_file()
+        and not path.relative_to(checkpoint_dir).parts[:2] == (".cache", "huggingface")
+    )
+    if not files:
+        raise ValueError(f"checkpoint directory has no files: {checkpoint_dir}")
+    for path in files:
+        _update_framed_digest(digest, path.relative_to(checkpoint_dir).as_posix().encode())
+        digest.update(path.stat().st_size.to_bytes(8, "big"))
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _versioned_artifact_identity(name: str, digest: str) -> str:
+    """Bind checkpoint identity to synth-setter's preprocessing contract.
+
+    :param name: Embedding registry key.
+    :param digest: Immutable package or checkpoint digest.
+    :returns: Versioned identity persisted in Lance field metadata.
+    """
+    return f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:{digest}"
+
+
+def _m2l_artifact_identity(checkpoint: str) -> str:
+    """Resolve the package-owned music2latent artifact identity.
+
+    :param checkpoint: Empty placeholder; caller overrides are unsupported.
+    :returns: Versioned installed-package identity.
+    :raises ValueError: A checkpoint override bypasses package-owned weights.
+    """
+    if checkpoint:
+        raise ValueError("music2latent does not support checkpoint overrides")
+    version = importlib.metadata.version("music2latent")
+    return _versioned_artifact_identity("m2l", f"package:{version}")
+
+
+def _clap_artifact_identity(checkpoint: str) -> str:
+    """Resolve and hash one CLAP checkpoint tree.
+
+    :param checkpoint: Local directory or HuggingFace model id.
+    :returns: Versioned content identity.
+    """
+    checkpoint_dir = Path(_resolve_clap_checkpoint(checkpoint))
+    return _versioned_artifact_identity("clap", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _same_artifact_identity(checkpoint: str) -> str:
+    """Resolve and hash one SAME checkpoint tree.
+
+    :param checkpoint: Local, R2, or HuggingFace checkpoint source.
+    :returns: Versioned content identity.
+    """
+    checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
+    return _versioned_artifact_identity("same", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _t5gemma_artifact_identity(checkpoint: str) -> str:
+    """Resolve and hash one T5Gemma checkpoint tree.
+
+    :param checkpoint: Local, R2, or HuggingFace checkpoint source.
+    :returns: Versioned content identity.
+    """
+    from synth_setter.pipeline.data.t5gemma import _resolve_t5gemma_checkpoint_dir
+
+    checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
+    return _versioned_artifact_identity("t5gemma", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _ssondo_artifact_identity(checkpoint: str) -> str:
+    """Verify and identify the pinned S-SONDO package/checkpoint pair.
+
+    :param checkpoint: Pinned Hugging Face repo or SHA-identical local checkpoint.
+    :returns: Versioned package and checkpoint identity.
+    """
+    resolve_ssondo_checkpoint(checkpoint)
+    package_version = importlib.metadata.version("ssondo")
+    digest = (
+        f"package:{package_version};source:{SSONDO_SOURCE_REVISION};"
+        f"checkpoint:sha256:{SSONDO_CHECKPOINT_SHA256}"
+    )
+    return _versioned_artifact_identity("ssondo", digest)
+
+
+def _tinymu_artifact_identity(checkpoint: str) -> str:
+    """Return TinyMU's generic-policy-wrapped artifact identity.
+
+    :param checkpoint: Pinned R2 URI or SHA-identical local checkpoint.
+    :returns: Versioned package and checkpoint identity.
+    """
+    return _versioned_artifact_identity("tinymu", tinymu_artifact_digest(checkpoint))
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -335,7 +486,9 @@ def _encode_same_column(
         frame_count(prepared.shape[-1], SAME_SAMPLE_RATE),
     )
     if latents.shape != expected_shape:
-        raise ValueError(f"{field} encoder produced shape {latents.shape}, expected {expected_shape}")
+        raise ValueError(
+            f"{field} encoder produced shape {latents.shape}, expected {expected_shape}"
+        )
     return tensor_array(latents, np.dtype("float32"), expected_shape[1:])
 
 
@@ -412,6 +565,19 @@ def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     :returns: S-SONDO encoder over source audio.
     """
     return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
+
+
+def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load TinyMU through its managed package dependency.
+
+    :param checkpoint: Exact pinned URI or a hash-identical local artifact.
+    :param config: Run config supplying the device.
+    :returns: Frozen MATPAC encoder.
+    """
+    return load_tinymu_audio_encoder(
+        checkpoint,
+        device=_resolve_torch_device(config.device),
+    )
 
 
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -494,6 +660,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM),
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
+        resolve_artifact_identity=_clap_artifact_identity,
     ),
     "m2l": EmbeddingSpec(
         name="m2l",
@@ -503,6 +670,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
         load_encoder=_load_m2l_spec_encoder,
         encode_column=_encode_m2l_column,
+        resolve_artifact_identity=_m2l_artifact_identity,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",
@@ -512,6 +680,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{SAME_S_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_s_column,
+        resolve_artifact_identity=_same_artifact_identity,
     ),
     "same_l": EmbeddingSpec(
         name="same_l",
@@ -521,6 +690,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
+        resolve_artifact_identity=_same_artifact_identity,
     ),
     "ssondo": EmbeddingSpec(
         name="ssondo",
@@ -530,6 +700,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="none", vector_dim=SSONDO_EMBEDDING_DIM),
         load_encoder=_load_ssondo_spec_encoder,
         encode_column=_encode_ssondo_column,
+        resolve_artifact_identity=_ssondo_artifact_identity,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.
@@ -541,7 +712,22 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=None,
         load_encoder=_load_t5gemma_spec_encoder,
         encode_column=_encode_t5gemma_column,
+        resolve_artifact_identity=_t5gemma_artifact_identity,
         input_field=PARAM_ARRAY_FIELD,
+    ),
+    "tinymu": EmbeddingSpec(
+        name="tinymu",
+        column=TINYMU_FIELD,
+        default_checkpoint=DEFAULT_TINYMU_CHECKPOINT,
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{TINYMU_FIELD}_vec",
+            vector_dim=TINYMU_FRONTEND.embedding_dim,
+        ),
+        load_encoder=_load_tinymu_spec_encoder,
+        encode_column=encode_tinymu_column,
+        resolve_artifact_identity=_tinymu_artifact_identity,
     ),
 }
 
@@ -557,9 +743,7 @@ def _output_columns(spec: EmbeddingSpec) -> tuple[str, ...]:
     return spec.column, spec.index.vector_column
 
 
-def _guard_existing_columns(
-    dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]
-) -> None:
+def _guard_existing_columns(dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]) -> None:
     """Reject selected columns already present in the dataset.
 
     :param dataset: Open Lance dataset.
@@ -595,6 +779,89 @@ def _validate_write_source(
     return total_rows
 
 
+def _resume_identity_path(resume_cache: Path) -> Path:
+    """Return the identity sidecar path for a Lance UDF cache.
+
+    :param resume_cache: User-selected cache path.
+    :returns: Sibling identity sidecar path.
+    """
+    return resume_cache.with_name(f"{resume_cache.name}.identity")
+
+
+def _resume_source_identity(
+    dataset: lance.LanceDataset,
+    *,
+    sample_rate: int,
+    batch_size: int,
+    input_fields: Sequence[str],
+) -> str:
+    """Identify the exact source and batching contract behind cached UDF outputs.
+
+    :param dataset: Lance source read by the UDF.
+    :param sample_rate: Dataset sample rate in Hz.
+    :param batch_size: Rows passed to each UDF invocation.
+    :param input_fields: Ordered source columns read by the UDF.
+    :returns: Stable source-policy identity.
+    """
+    digest = hashlib.sha256()
+    for value in (
+        str(dataset.uri),
+        str(dataset.version),
+        str(sample_rate),
+        str(batch_size),
+        *input_fields,
+    ):
+        _update_framed_digest(digest, value.encode())
+    _update_framed_digest(digest, dataset.schema.serialize().to_pybytes())
+    fragments = sorted(dataset.get_fragments(), key=lambda fragment: fragment.fragment_id)
+    for fragment in fragments:
+        metadata = json.dumps(
+            fragment.metadata.to_json(), sort_keys=True, separators=(",", ":")
+        ).encode()
+        _update_framed_digest(digest, metadata)
+    return digest.hexdigest()
+
+
+def _prepare_resume_cache(
+    resume_cache: Path | None,
+    identities: Mapping[str, str],
+    source_identity: str,
+) -> None:
+    """Bind a Lance UDF cache to exact artifacts and source inputs.
+
+    :param resume_cache: Cache path, or ``None`` for a cacheless run.
+    :param identities: Artifact identities keyed by embedding name.
+    :param source_identity: Exact Lance source and batching-policy identity.
+    :raises ValueError: An existing cache belongs to different artifacts or inputs.
+    """
+    if resume_cache is None:
+        return
+    digest = hashlib.sha256()
+    _update_framed_digest(digest, source_identity.encode())
+    for name, identity in sorted(identities.items()):
+        _update_framed_digest(digest, name.encode())
+        _update_framed_digest(digest, identity.encode())
+    expected = digest.hexdigest()
+    identity_path = _resume_identity_path(resume_cache)
+    if resume_cache.exists() and not identity_path.is_file():
+        logger.warning(
+            "resume_cache_identity_missing",
+            resume_cache=str(resume_cache),
+            identity_path=str(identity_path),
+            action="discard",
+        )
+        resume_cache.unlink()
+    if resume_cache.exists():
+        actual = identity_path.read_text().strip()
+        if actual != expected:
+            raise ValueError(
+                f"resume cache {resume_cache} resume identity in {identity_path} "
+                "does not match requested source and policy"
+            )
+        return
+    identity_path.write_text(expected)
+
+
 def _delete_resume_cache(resume_cache: Path | None) -> None:
     """Best-effort delete a consumed UDF resume cache after commit.
 
@@ -604,6 +871,7 @@ def _delete_resume_cache(resume_cache: Path | None) -> None:
         return
     try:
         resume_cache.unlink(missing_ok=True)
+        _resume_identity_path(resume_cache).unlink(missing_ok=True)
     except OSError as exc:
         logger.warning(
             "resume_cache_cleanup_failed",
@@ -630,9 +898,24 @@ def _resume_cache_for_specs(
     return resume_cache.with_name(f"{resume_cache.name}.{suffix}")
 
 
-def _load_encoders(
-    specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
-) -> list[Encoder]:
+def _resolve_artifact_identity(spec: EmbeddingSpec, config: AddEmbeddingsConfig) -> str:
+    """Resolve checkpoint and input-policy identity for one embedding.
+
+    :param spec: Embedding policy to identify.
+    :param config: Checkpoint and input-policy selection.
+    :returns: Identity covering every output-affecting artifact and policy.
+    """
+    checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
+    identity = spec.resolve_artifact_identity(checkpoint)
+    if spec.input_field != PARAM_ARRAY_FIELD:
+        return identity
+    digest = hashlib.sha256()
+    for value in (config.param_spec_name or "", config.param_text_normalizer):
+        _update_framed_digest(digest, value.encode())
+    return f"{identity}:input-policy:{digest.hexdigest()}"
+
+
+def _load_encoders(specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig) -> list[Encoder]:
     """Load selected encoders in policy order.
 
     :param specs: Policies sharing this UDF pass.
@@ -670,9 +953,7 @@ def _pooled_vector_column(
     return index.vector_column, _fixed_size_list(pooled, pooled.shape[1])
 
 
-def _decoded_sources(
-    batch: pa.RecordBatch, input_fields: Sequence[str]
-) -> dict[str, np.ndarray]:
+def _decoded_sources(batch: pa.RecordBatch, input_fields: Sequence[str]) -> dict[str, np.ndarray]:
     """Decode each required source column of one batch into a numpy array.
 
     :param batch: Source batch supplied by Lance.
@@ -738,7 +1019,15 @@ def _write_columns(
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
         encoders = _load_encoders(specs, config)
+    identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
+    source_identity = _resume_source_identity(
+        dataset,
+        sample_rate=sample_rate,
+        batch_size=config.batch_size,
+        input_fields=input_fields,
+    )
+    _prepare_resume_cache(resume_cache, identities, source_identity)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info("inferring_embedding_schema", columns=output_columns)
@@ -748,6 +1037,9 @@ def _write_columns(
         sample_output = _encode_columns(
             _decoded_sources(sample, input_fields), sample_rate, specs, encoders
         )
+    output_schema = _embedding_output_schema(
+        sample_output.schema, specs, config, identities=identities
+    )
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
@@ -761,7 +1053,7 @@ def _write_columns(
     stage_ms: dict[str, float] = {}
 
     @lance.batch_udf(
-        output_schema=sample_output.schema,
+        output_schema=output_schema,
         checkpoint_file=None if resume_cache is None else str(resume_cache),
     )
     def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -847,9 +1139,7 @@ def build_index(
         )
         return False
     partitions = (
-        max(1, round(rows**0.5))
-        if config.num_partitions is None
-        else config.num_partitions
+        max(1, round(rows**0.5)) if config.num_partitions is None else config.num_partitions
     )
     dataset.create_index(
         column,
@@ -868,59 +1158,168 @@ def build_index(
     return True
 
 
-def _index_exists(dataset: lance.LanceDataset, spec: EmbeddingSpec) -> bool:
-    """Return whether Lance reports an index over the policy's vector column.
+def _embedding_output_schema(
+    schema: pa.Schema,
+    specs: Sequence[EmbeddingSpec],
+    config: AddEmbeddingsConfig,
+    *,
+    identities: Mapping[str, str] | None = None,
+) -> pa.Schema:
+    """Attach policy identity to every generated field.
 
-    :param dataset: Open dataset.
-    :param spec: Registry policy whose index is checked.
-    :returns: Whether the target column has an index.
+    :param schema: Inferred encoder output schema.
+    :param specs: Policies producing the output fields.
+    :param config: Checkpoint overrides for this write.
+    :param identities: Pre-resolved artifact identities, when available.
+    :returns: Schema carrying resumable embedding identity metadata.
     """
-    if spec.index is None:
-        return False
-    target = spec.index.vector_column or spec.column
-    indices = cast("list[dict[str, object]]", dataset.list_indices())
-    return any(entry.get("fields") == [target] for entry in indices)
+    fields = []
+    for spec in specs:
+        identity = (
+            _resolve_artifact_identity(spec, config)
+            if identities is None
+            else identities[spec.name]
+        )
+        metadata = {
+            _EMBEDDING_NAME_METADATA: spec.name.encode(),
+            _EMBEDDING_ARTIFACT_METADATA: identity.encode(),
+        }
+        fields.extend(
+            schema.field(column).with_metadata(metadata) for column in _output_columns(spec)
+        )
+    return pa.schema(fields)
 
 
-def _resume_missing_indexes(
+def _missing_embedding_specs(
     dataset: lance.LanceDataset,
     specs: Sequence[EmbeddingSpec],
     config: AddEmbeddingsConfig,
-) -> bool:
-    """Build missing indexes when every selected output column already exists.
+) -> list[EmbeddingSpec]:
+    """Return absent policies while rejecting partial or incompatible commits.
 
-    :param dataset: Open dataset that may contain a completed embedding write.
-    :param specs: Selected registry policies.
-    :param config: Index settings for the rerun.
-    :returns: Whether index-only recovery completed.
+    :param dataset: Open Lance dataset.
+    :param specs: Selected embedding policies.
+    :param config: Checkpoint overrides for this run.
+    :returns: Policies whose complete output schema is absent.
+    :raises ValueError: A policy is partial or has a different checkpoint identity.
     """
-    expected = {column for spec in specs for column in _output_columns(spec)}
-    present = expected & set(dataset.schema.names)
-    if not present:
+    names = set(dataset.schema.names)
+    missing = []
+    for spec in specs:
+        expected = set(_output_columns(spec))
+        present = expected & names
+        if present and present != expected:
+            raise ValueError(
+                f"dataset has partial {spec.name} columns: {sorted(present)}; "
+                f"expected {sorted(expected)}"
+            )
+        if not present:
+            missing.append(spec)
+            continue
+        field_metadata = {
+            column: dataset.schema.field(column).metadata or {} for column in expected
+        }
+        has_identity = any(
+            _EMBEDDING_NAME_METADATA in metadata
+            or _EMBEDDING_ARTIFACT_METADATA in metadata
+            for metadata in field_metadata.values()
+        )
+        if not has_identity:
+            logger.warning("legacy_embedding_identity_missing", embedding=spec.name)
+            continue
+        artifact_identity = _resolve_artifact_identity(spec, config).encode()
+        for column, metadata in field_metadata.items():
+            if (
+                metadata.get(_EMBEDDING_NAME_METADATA) != spec.name.encode()
+                or metadata.get(_EMBEDDING_ARTIFACT_METADATA) != artifact_identity
+            ):
+                raise ValueError(
+                    f"dataset {column} checkpoint identity does not match requested "
+                    f"{spec.name} policy"
+                )
+    return missing
+
+
+def _index_config_matches(
+    dataset: lance.LanceDataset,
+    index_name: str,
+    *,
+    num_partitions: int,
+    num_sub_vectors: int,
+    metric: str,
+) -> bool:
+    """Compare persisted Lance index statistics with requested search policy.
+
+    :param dataset: Open Lance dataset.
+    :param index_name: Persisted index name.
+    :param num_partitions: Requested IVF partition count.
+    :param num_sub_vectors: Requested PQ sub-vector count.
+    :param metric: Requested distance metric.
+    :returns: Whether every persisted index segment has the requested policy.
+    """
+    os.environ.setdefault("LANCE_INCLUDE_VECTOR_CENTROIDS", "false")
+    stats = dataset.index_statistics(index_name)
+    segments = stats.get("indices")
+    if not isinstance(segments, list) or not segments:
         return False
-    if present != expected or not config.build_index or dataset.count_rows() < MIN_ROWS_FOR_INDEX:
-        _guard_existing_columns(dataset, specs)
-
-    missing = [
-        (spec, index)
-        for spec in specs
-        if (index := spec.index) is not None and not _index_exists(dataset, spec)
-    ]
-    if not missing:
-        _guard_existing_columns(dataset, specs)
-
-    logger.info(
-        "embedding_index_resume_started",
-        columns=[index.vector_column or spec.column for spec, index in missing],
-    )
-    for spec, index in missing:
-        target = index.vector_column or spec.column
-        build_index(dataset, target, index=index, config=config)
+    for segment in segments:
+        if not isinstance(segment, dict):
+            return False
+        sub_index = segment.get("sub_index")
+        if not isinstance(sub_index, dict):
+            return False
+        if (
+            segment.get("metric_type") != metric
+            or segment.get("num_partitions") != num_partitions
+            or sub_index.get("num_sub_vectors") != num_sub_vectors
+        ):
+            return False
     return True
 
 
+def _matching_index_exists(
+    dataset: lance.LanceDataset,
+    column: str,
+    *,
+    index: IndexSpec,
+    config: AddEmbeddingsConfig,
+) -> bool:
+    """Return whether a column index exactly matches the requested policy.
+
+    :param dataset: Open Lance dataset.
+    :param column: Vector column selected by registry policy.
+    :param index: Registry index defaults.
+    :param config: Per-run index overrides.
+    :returns: Whether a matching index targets the column.
+    :raises ValueError: An index exists with incompatible search semantics.
+    """
+    rows = dataset.count_rows()
+    num_partitions = (
+        max(1, round(rows**0.5))
+        if config.num_partitions is None
+        else config.num_partitions
+    )
+    num_sub_vectors = config.num_sub_vectors
+    metric = config.metric
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    column_indices = [entry for entry in indices if entry.get("fields") == [column]]
+    for entry in column_indices:
+        index_name = entry.get("name")
+        if isinstance(index_name, str) and _index_config_matches(
+            dataset,
+            index_name,
+            num_partitions=num_partitions,
+            num_sub_vectors=num_sub_vectors,
+            metric=metric,
+        ):
+            return True
+    if column_indices:
+        raise ValueError(f"dataset {column} index configuration does not match requested policy")
+    return False
+
+
 def add_embeddings(config: AddEmbeddingsConfig) -> None:
-    """Append the registry entries selected by ``config.embeddings``.
+    """Append registry entries to one Lance dataset and resume missing index work.
 
     :param config: Validated dataset, embedding, checkpoint, and write settings.
     """
@@ -929,13 +1328,18 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    pending = _missing_embedding_specs(dataset, specs, config)
+    if config.build_index:
+        for spec in specs:
+            if spec.index is None:
+                continue
+            vector_column = spec.index.vector_column or spec.column
+            if vector_column in dataset.schema.names:
+                _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
+    if pending:
+        _validate_write_source(dataset, config.batch_size)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
-    if _resume_missing_indexes(dataset, specs, config):
-        logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
-        return
 
-    _guard_existing_columns(dataset, specs)
-    _validate_write_source(dataset, config.batch_size)
     logger.info(
         "adding_embeddings",
         uri=config.lance_uri,
@@ -944,8 +1348,8 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
         rows=dataset.count_rows(),
         batch_size=config.batch_size,
     )
-    co_resident = [spec for spec in specs if spec.co_resident]
-    solo = [spec for spec in specs if not spec.co_resident]
+    co_resident = [spec for spec in pending if spec.co_resident]
+    solo = [spec for spec in pending if not spec.co_resident]
     if co_resident:
         _write_columns(dataset, co_resident, sample_rate, config)
     for spec in solo:
@@ -953,8 +1357,10 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
 
     if config.build_index:
         for spec in specs:
-            if spec.index is not None:
-                vector_column = spec.index.vector_column or spec.column
+            if spec.index is None:
+                continue
+            vector_column = spec.index.vector_column or spec.column
+            if not _matching_index_exists(dataset, vector_column, index=spec.index, config=config):
                 build_index(dataset, vector_column, index=spec.index, config=config)
     logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
 
@@ -964,6 +1370,7 @@ def _configure_lance_logging(*, debug: bool) -> None:
 
     :param debug: Whether to force debug-level native telemetry.
     """
+    os.environ.setdefault("LANCE_INCLUDE_VECTOR_CENTROIDS", "false")
     if debug:
         os.environ["LANCE_LOG"] = "debug"
     else:
@@ -1164,13 +1571,13 @@ def _hydra_main(cfg: DictConfig) -> None:
     """
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
-    config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
-    _configure_lance_logging(debug=config.debug)
-    logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
     try:
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+        _configure_lance_logging(debug=config.debug)
+        logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
         add_embeddings(config)
-    except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        logger.error("add_embeddings_failed", uri=config.lance_uri, error=str(exc))
+    except (OSError, ValueError, RuntimeError, ImportError, subprocess.CalledProcessError) as exc:
+        logger.error("add_embeddings_failed", uri=cfg.get("lance_uri"), error=str(exc))
         sys.exit(1)
 
 
