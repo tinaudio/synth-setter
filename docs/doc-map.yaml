@@ -27,7 +27,7 @@ docs:
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
 
   - doc: docs/reference/matpac-plus-embeddings.md
-    description: MATPAC++ MATPAC embedding contract
+    description: MATPAC encoder interface
     sources:
       - pattern: "src/synth_setter/pipeline/data/matpac_plus.py"
         covers: "MATPAC++ MATPAC package integration"
