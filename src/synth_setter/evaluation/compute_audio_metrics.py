@@ -105,16 +105,17 @@ def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.nd
     return mel_specs
 
 
-def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
+def compute_mss(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
     """Return mean multi-scale spectrogram distance between ``target`` and ``pred``.
 
     :param target: Target audio, shape ``(C, T)``.
     :param pred: Predicted audio, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the mel window and hop lengths.
     :returns: Mean absolute spectrogram difference averaged across mel scales.
     """
     logger.info("Computing MSS...")
-    target_specs = compute_mel_specs(target)
-    pred_specs = compute_mel_specs(pred)
+    target_specs = compute_mel_specs(target, sample_rate)
+    pred_specs = compute_mel_specs(pred, sample_rate)
 
     dist = 0.0
     for target_spec, pred_spec in zip(target_specs, pred_specs):
@@ -196,17 +197,18 @@ def _l1_distance(a: np.ndarray, b: np.ndarray) -> float:
     return np.mean(np.abs(a - b))
 
 
-def compute_wmfcc(target: np.ndarray, pred: np.ndarray) -> float:
+def compute_wmfcc(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
     """Return DTW-normalised MFCC distance between ``target`` and ``pred``.
 
     :param target: Target audio, shape ``(C, T)``.
     :param pred: Predicted audio, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the MFCC window and hop lengths.
     :returns: DTW-normalised L1 distance between MFCC sequences.
     """
     logger.info("Computing wMFCC...")
 
-    target_mfcc = compute_mfcc(target)
-    pred_mfcc = compute_mfcc(pred)
+    target_mfcc = compute_mfcc(target, sample_rate)
+    pred_mfcc = compute_mfcc(pred, sample_rate)
 
     target_mfcc = target_mfcc.reshape(-1, target_mfcc.shape[-1])
     pred_mfcc = pred_mfcc.reshape(-1, pred_mfcc.shape[-1])
@@ -296,16 +298,17 @@ def batched_wasserstein_distance_np(
     return distance
 
 
-def compute_sot(target: np.ndarray, pred: np.ndarray) -> float:
+def compute_sot(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
     """Return mean Sliced Optimal Transport distance between spectrograms.
 
     :param target: Target audio, shape ``(C, T)``.
     :param pred: Predicted audio, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the STFT window and hop lengths.
     :returns: Mean Wasserstein distance across frequency bins.
     """
     logger.info("Computing SOT...")
-    target_stft = get_stft(target)
-    pred_stft = get_stft(pred)
+    target_stft = get_stft(target, sample_rate)
+    pred_stft = get_stft(pred, sample_rate)
 
     target_stft = target_stft / np.clip(target_stft.sum(axis=-1, keepdims=True), 1e-6, None)
     pred_stft = pred_stft / np.clip(pred_stft.sum(axis=-1, keepdims=True), 1e-6, None)
