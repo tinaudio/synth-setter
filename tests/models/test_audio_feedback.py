@@ -5,10 +5,12 @@ import torch
 from lightning.pytorch.utilities.combined_loader import CombinedLoader
 from torch.utils.data import DataLoader, TensorDataset
 
+from synth_setter.data.torchsynth_datamodule import render_torchsynth
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
+from synth_setter.data.vst.torchsynth_param_spec import INFERABLE_SPEC
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
     gradient_balance,
@@ -128,6 +130,37 @@ def test_grad_render_output_matches_the_documented_audio_contract() -> None:
     assert audio.dtype == torch.float32
     assert torch.isfinite(audio).all()
     assert audio.abs().max() <= 1.0
+
+
+def test_grad_render_of_a_batch_matches_the_per_row_production_render_bitwise() -> None:
+    """The training render reproduces the stored targets sample for sample.
+
+    :class:`TorchSynthDataset` renders one row at a time, so every target sees
+    torchsynth ``Noise`` chunk 0; the batched render broadcasts that same chunk.
+    Drop the broadcast and rows past the first carry a different noise realization,
+    leaving the audio loss chasing a target it can never reach.
+    """
+    params = torch.rand(_BATCH, _NUM_PARAMS, generator=torch.Generator().manual_seed(0))
+    for index, spec in enumerate(INFERABLE_SPEC):
+        if "noise" in spec.name:
+            # Turn the noise path up so a mismatched realization cannot hide under the oscillators.
+            params[:, index] = 0.9
+
+    batched = _render(params)
+    per_row = torch.cat(
+        [
+            render_torchsynth(
+                params[row : row + 1],
+                sample_rate=_SAMPLE_RATE,
+                signal_length=_SIGNAL_LENGTH,
+                midi_pitch=_MIDI_PITCH,
+            )
+            for row in range(_BATCH)
+        ],
+        dim=0,
+    )
+
+    assert torch.equal(batched, per_row)
 
 
 def test_grad_render_each_output_row_depends_only_on_matching_parameter_row() -> None:
