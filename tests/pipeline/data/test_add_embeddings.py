@@ -854,7 +854,7 @@ def test_prepare_resume_cache_without_identity_discards_legacy_batches(
     resume_cache.write_bytes(b"legacy cached batches")
 
     with capture_logs() as logs:
-        _prepare_resume_cache(resume_cache, {"clap": "artifact-a"})
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-a:v1")
 
     assert not resume_cache.exists()
     assert resume_cache.with_name("resume.cache.identity").is_file()
@@ -870,11 +870,26 @@ def test_prepare_resume_cache_with_different_artifact_rejects_stale_batches(
     :param tmp_path: Scratch directory for cache files.
     """
     resume_cache = tmp_path / "resume.cache"
-    _prepare_resume_cache(resume_cache, {"clap": "artifact-a"})
+    _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-a:v1")
     resume_cache.write_bytes(b"cached Lance batches")
 
-    with pytest.raises(ValueError, match="artifact identity .*does not match"):
-        _prepare_resume_cache(resume_cache, {"clap": "artifact-b"})
+    with pytest.raises(ValueError, match="resume identity .*does not match"):
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-b"}, "dataset-a:v1")
+
+
+def test_prepare_resume_cache_with_different_source_rejects_stale_batches(
+    tmp_path: Path,
+) -> None:
+    """A cache created for one Lance source cannot resume another source.
+
+    :param tmp_path: Scratch directory for cache files.
+    """
+    resume_cache = tmp_path / "resume.cache"
+    _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-a:v1")
+    resume_cache.write_bytes(b"cached Lance batches")
+
+    with pytest.raises(ValueError, match="resume identity .*does not match"):
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-b:v1")
 
 
 def test_write_columns_after_success_removes_resume_cache(tmp_path: Path) -> None:

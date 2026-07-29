@@ -102,7 +102,7 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = object
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 type ResolveArtifactIdentityFn = Callable[[str], str]
@@ -787,16 +787,49 @@ def _resume_identity_path(resume_cache: Path) -> Path:
     return resume_cache.with_name(f"{resume_cache.name}.identity")
 
 
-def _prepare_resume_cache(resume_cache: Path | None, identities: Mapping[str, str]) -> None:
-    """Bind a Lance UDF cache to exact embedding artifact identities.
+def _resume_source_identity(
+    dataset: lance.LanceDataset,
+    *,
+    sample_rate: int,
+    batch_size: int,
+    input_fields: Sequence[str],
+) -> str:
+    """Identify the exact source and batching contract behind cached UDF outputs.
+
+    :param dataset: Lance source read by the UDF.
+    :param sample_rate: Dataset sample rate in Hz.
+    :param batch_size: Rows passed to each UDF invocation.
+    :param input_fields: Ordered source columns read by the UDF.
+    :returns: Stable source-policy identity.
+    """
+    digest = hashlib.sha256()
+    for value in (
+        str(dataset.uri),
+        str(dataset.version),
+        str(sample_rate),
+        str(batch_size),
+        *input_fields,
+    ):
+        _update_framed_digest(digest, value.encode())
+    return digest.hexdigest()
+
+
+def _prepare_resume_cache(
+    resume_cache: Path | None,
+    identities: Mapping[str, str],
+    source_identity: str,
+) -> None:
+    """Bind a Lance UDF cache to exact artifacts and source inputs.
 
     :param resume_cache: Cache path, or ``None`` for a cacheless run.
     :param identities: Artifact identities keyed by embedding name.
-    :raises ValueError: An existing cache belongs to different artifacts.
+    :param source_identity: Exact Lance source and batching-policy identity.
+    :raises ValueError: An existing cache belongs to different artifacts or inputs.
     """
     if resume_cache is None:
         return
     digest = hashlib.sha256()
+    _update_framed_digest(digest, source_identity.encode())
     for name, identity in sorted(identities.items()):
         _update_framed_digest(digest, name.encode())
         _update_framed_digest(digest, identity.encode())
@@ -814,8 +847,8 @@ def _prepare_resume_cache(resume_cache: Path | None, identities: Mapping[str, st
         actual = identity_path.read_text().strip()
         if actual != expected:
             raise ValueError(
-                f"resume cache {resume_cache} artifact identity in {identity_path} "
-                "does not match requested policy"
+                f"resume cache {resume_cache} resume identity in {identity_path} "
+                "does not match requested source and policy"
             )
         return
     identity_path.write_text(expected)
@@ -980,7 +1013,13 @@ def _write_columns(
         encoders = _load_encoders(specs, config)
     identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
-    _prepare_resume_cache(resume_cache, identities)
+    source_identity = _resume_source_identity(
+        dataset,
+        sample_rate=sample_rate,
+        batch_size=config.batch_size,
+        input_fields=input_fields,
+    )
+    _prepare_resume_cache(resume_cache, identities, source_identity)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info("inferring_embedding_schema", columns=output_columns)

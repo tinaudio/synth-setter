@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple, cast
 from unittest.mock import MagicMock, patch
 
+import lance
 import pytest
 import torch
 import wandb
@@ -36,6 +37,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
+from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
@@ -1670,6 +1672,11 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
     validation_split = surge_xt_smoke_datasets / "val.lance"
     shutil.rmtree(validation_split)
     _render_smoke_train_subprocess(validation_split, param_spec_name, base_seed=1)
+    train_audio = lance.dataset(surge_xt_smoke_datasets / "train.lance").to_table(
+        columns=[AUDIO_FIELD]
+    )
+    validation_audio = lance.dataset(validation_split).to_table(columns=[AUDIO_FIELD])
+    assert not train_audio.equals(validation_audio)
     dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "tinymu")
     validation_mse = _assert_conditioning_train_validate_finite(
         tmp_path,
