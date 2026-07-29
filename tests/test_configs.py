@@ -867,6 +867,37 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.test is False
 
 
+def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
+    """The prelim 1k A/B arms share pin, seed, and cadence; only sketch flips.
+
+    Pins the one-selector A/B contract (#2196, #2707): both arms compose the same immutable 1k
+    dataset root, shared seed, and 10k-step cadence so the comparison isolates the nested sketch-
+    control conditioning, whose 401-frame grid matches the dataset's 44.1 kHz 4 s render.
+    """
+    base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
+    sketch = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
+
+    for cfg in (base, sketch):
+        assert cfg.datamodule.download_dataset_root_uri == (
+            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
+            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/"
+        )
+        assert cfg.seed == 3407
+        assert cfg.datamodule.param_spec_name == "surge_simple"
+        assert cfg.trainer.max_steps == 10000
+        assert cfg.trainer.min_steps == 10000
+        assert cfg.trainer.val_check_interval == 1000
+        assert cfg.training.val_audio_probe is True
+        assert cfg.test is False
+    assert base.run_name == "flow1k_prelim_base"
+    assert base.model.sketch_controls is None
+    assert base.datamodule.sketch is None
+    assert sketch.run_name == "flow1k_prelim_sketch"
+    assert sketch.model.sketch_controls.column == "sketch"
+    assert sketch.model.sketch_controls.num_frames == 401
+    assert sketch.datamodule.sketch == sketch.model.sketch_controls
+
+
 def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:
     """``surge/ffn_simple_smoke`` bakes the RunPod smoke contract into one experiment.
 
