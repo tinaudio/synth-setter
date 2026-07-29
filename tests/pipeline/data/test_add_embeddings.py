@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -388,7 +388,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     )
     assert EMBEDDING_REGISTRY["ssondo"].index == IndexSpec(pool="none", vector_dim=960)
     assert EMBEDDING_REGISTRY["t5gemma"].index is None
-    assert EMBEDDING_REGISTRY["t5gemma"].input_field == PARAM_ARRAY_FIELD
+    assert EMBEDDING_REGISTRY["t5gemma"].input_fields == (PARAM_ARRAY_FIELD,)
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
@@ -533,7 +533,7 @@ def test_embedding_spec_encode_column_for_valid_encoder_builds_arrow_array(name:
     spec = EMBEDDING_REGISTRY[name]
     encoder = _encoder_for(name)
 
-    array = spec.encode_column(audio, _SAMPLE_RATE, encoder)
+    array = spec.encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encoder)
 
     assert len(array) == 3
     if name == "clap":
@@ -572,7 +572,7 @@ def test_embedding_spec_encode_column_with_nonfinite_output_raises(
     with pytest.raises(
         ValueError, match=f"{EMBEDDING_REGISTRY[name].column} embeddings contain non-finite values"
     ):
-        EMBEDDING_REGISTRY[name].encode_column(audio, _SAMPLE_RATE, poisoned)
+        EMBEDDING_REGISTRY[name].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
 def test_same_embedding_spec_prepares_stereo_before_encoder_call() -> None:
@@ -584,7 +584,7 @@ def test_same_embedding_spec_prepares_stereo_before_encoder_call() -> None:
         seen.append(stereo)
         return _fake_same(1.0)(stereo)
 
-    EMBEDDING_REGISTRY["same_s"].encode_column(mono, SAME_SAMPLE_RATE, recording)
+    EMBEDDING_REGISTRY["same_s"].encode_column({AUDIO_FIELD: mono}, SAME_SAMPLE_RATE, recording)
 
     assert seen[0].shape == (2, 2, _FIXTURE_SAMPLES)
     assert seen[0].dtype == np.float32
@@ -628,7 +628,7 @@ def test_embedding_spec_encode_column_with_invalid_shape_raises(
     audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
 
     with pytest.raises(ValueError, match=message):
-        EMBEDDING_REGISTRY[name].encode_column(audio, _SAMPLE_RATE, encoder)
+        EMBEDDING_REGISTRY[name].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encoder)
 
 
 @pytest.mark.parametrize("name", ["clap", "m2l", "same_s", "same_l"])
@@ -735,9 +735,11 @@ def test_write_columns_for_co_resident_specs_shares_audio_object(tmp_path: Path)
     def recording_spec(name: str) -> EmbeddingSpec:
         original = _fake_spec(name)
 
-        def encode(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
-            seen[name].append(id(audio))
-            return original.encode_column(audio, sample_rate, encoder)
+        def encode(
+            sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+        ) -> pa.Array:
+            seen[name].append(id(sources[AUDIO_FIELD]))
+            return original.encode_column(sources, sample_rate, encoder)
 
         return replace(original, encode_column=encode)
 
@@ -1164,9 +1166,11 @@ def test_write_columns_with_default_batch_size_bounds_work_and_progress(
     batch_sizes: list[int] = []
     spec = _fake_spec("m2l")
 
-    def encode(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
-        batch_sizes.append(len(audio))
-        return spec.encode_column(audio, sample_rate, encoder)
+    def encode(
+        sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+    ) -> pa.Array:
+        batch_sizes.append(len(sources[AUDIO_FIELD]))
+        return spec.encode_column(sources, sample_rate, encoder)
 
     monkeypatch.setattr(lance.LanceDataset, "add_columns", _run_udf_in_process)
     with capture_logs() as logs:
@@ -2401,9 +2405,11 @@ def test_add_embeddings_uses_sample_rate_from_dataset_metadata(
     seen: list[int] = []
     spec = _fake_spec("clap")
 
-    def encode(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    def encode(
+        sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+    ) -> pa.Array:
         seen.append(sample_rate)
-        return spec.encode_column(audio, sample_rate, encoder)
+        return spec.encode_column(sources, sample_rate, encoder)
 
     monkeypatch.setitem(EMBEDDING_REGISTRY, "clap", replace(spec, encode_column=encode))
     add_embeddings(
@@ -2973,7 +2979,9 @@ def test_encode_t5gemma_column_with_malformed_encoder_output_raises(
     params = np.zeros((2, 7), dtype=np.float32)
 
     with pytest.raises(ValueError, match="expected 2 rows"):
-        _encode_t5gemma_column(params, 44100, lambda _: np.zeros(shape, dtype=np.float32))
+        _encode_t5gemma_column(
+            {PARAM_ARRAY_FIELD: params}, 44100, lambda _: np.zeros(shape, dtype=np.float32)
+        )
 
 
 def _struct_sketch_controls(struct: pa.StructArray) -> np.ndarray:
@@ -3022,7 +3030,7 @@ def test_sketch_encode_column_builds_struct_with_split_children_and_vec() -> Non
     audio = np.random.default_rng(7).random((3, 2, _FIXTURE_SAMPLES)).astype(np.float16)
     spec = EMBEDDING_REGISTRY["sketch"]
 
-    array = spec.encode_column(audio, _SAMPLE_RATE, _fake_sketch)
+    array = spec.encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, _fake_sketch)
 
     assert pa.types.is_struct(array.type)
     struct = cast("pa.StructArray", array)
@@ -3054,7 +3062,7 @@ def test_sketch_encode_column_with_nonfinite_output_raises(value: float) -> None
     with pytest.raises(
         ValueError, match=f"{SKETCH_STRUCT_FIELD} embeddings contain non-finite values"
     ):
-        EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, poisoned)
+        EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
 @pytest.mark.parametrize(
@@ -3076,7 +3084,7 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         return output
 
     with pytest.raises(ValueError, match=f"{SKETCH_STRUCT_FIELD} controls out of bounds"):
-        EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, poisoned)
+        EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
 def test_sketch_encode_never_exceeds_extraction_batch_cap(
@@ -3146,7 +3154,7 @@ def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
         return np.zeros((len(batch), NUM_SKETCH_CONTROLS, 5), np.float32)
 
     with pytest.raises(ValueError, match=r"expected \(2, 386, 1\)"):
-        EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, off_grid)
+        EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, off_grid)
 
 
 @pytest.mark.parametrize("storage_version", ["2.1", "2.2"])
