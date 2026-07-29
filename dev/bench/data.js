@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785362719626,
+  "lastUpdate": 1785362722291,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -21914,6 +21914,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.646234084100001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c9d7bfaf809832ff5bb44cee7066d27483fe37cb",
+          "message": "internal-fix(data-pipeline): name MATPAC++ embeddings by encoder (#2730)\n\n* internal-fix(data-pipeline): name MATPAC++ embeddings by encoder\n\n* chore(comments): tighten MATPAC doc map description",
+          "timestamp": "2026-07-29T13:20:43-07:00",
+          "tree_id": "c94a864d85d86402f071fa9e2bc9fdf31c63638b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/c9d7bfaf809832ff5bb44cee7066d27483fe37cb"
+        },
+        "date": 1785362721630,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.967448234558105,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.442932614758611,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.0838632807135582,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0036815404891967773,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.360459804534912,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.904746204399952,
             "unit": "seconds"
           }
         ]
