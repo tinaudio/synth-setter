@@ -13,7 +13,7 @@ import pyarrow as pa
 import pytest
 import torch
 
-from synth_setter.data.vst.shapes import SSONDO_FIELD
+from synth_setter.data.vst.shapes import AUDIO_FIELD, SSONDO_FIELD
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, IndexSpec, build_index
 from synth_setter.pipeline.data.ssondo import (
     SSONDO_CHECKPOINT_SHA256,
@@ -101,7 +101,7 @@ def test_ssondo_registry_encoder_valid_output_returns_fixed_vector() -> None:
         return np.ones((2, SSONDO_EMBEDDING_DIM), dtype=np.float32)
 
     encoded = EMBEDDING_REGISTRY["ssondo"].encode_column(
-        audio, SSONDO_SAMPLE_RATE, encode
+        {AUDIO_FIELD: audio}, SSONDO_SAMPLE_RATE, encode
     )
 
     assert encoded.type == pa.list_(pa.float32(), SSONDO_EMBEDDING_DIM)
@@ -131,7 +131,7 @@ def test_ssondo_registry_encoder_invalid_output_raises(
 
     with pytest.raises(ValueError, match=message):
         EMBEDDING_REGISTRY["ssondo"].encode_column(
-            audio, SSONDO_SAMPLE_RATE, encode
+            {AUDIO_FIELD: audio}, SSONDO_SAMPLE_RATE, encode
         )
 
 
