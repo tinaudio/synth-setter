@@ -37,7 +37,6 @@ CLAP_FIELD: str = "clap"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 T5GEMMA_FIELD: str = "t5gemma"
-TINYMU_FIELD: str = "tinymu"
 SKETCH_CTRL_FIELD: str = "sketch_ctrl"
 # PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
 SKETCH_PITCH_BINS: int = 384

@@ -512,7 +512,13 @@ class TestR2StorageOptions:
         )
         monkeypatch.setattr(r2_io.subprocess, "run", lambda *_args, **_kwargs: config)
 
-        assert r2_io.r2_storage_options()["access_key_id"] == "parsed-access-key"
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "parsed-access-key",
+            "secret_access_key": "parsed-secret-key",
+            "endpoint": "https://parsed.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://parsed.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
 
     def test_rclone_config_read_timeout_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A hung config read stays bounded and fails without exposing output.
@@ -525,7 +531,7 @@ class TestR2StorageOptions:
 
         monkeypatch.setattr(r2_io.subprocess, "run", _timeout)
 
-        with pytest.raises(RuntimeError, match="Object storage settings unresolved"):
+        with pytest.raises(RuntimeError, match=r"rclone config dump timed out after 10s"):
             r2_io.r2_storage_options()
 
     def test_rclone_config_command_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -538,7 +544,7 @@ class TestR2StorageOptions:
         )
         monkeypatch.setattr(r2_io.subprocess, "run", lambda *_args, **_kwargs: failed)
 
-        with pytest.raises(RuntimeError, match="Object storage settings unresolved"):
+        with pytest.raises(RuntimeError, match=r"rclone config dump failed with exit code 1"):
             r2_io.r2_storage_options()
 
 
@@ -927,25 +933,6 @@ class TestUploadToUri:
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
         assert "--retries=3" in args
-
-
-class TestDeleteObject:
-    """Tests for deleting one exact remote object."""
-
-    def test_removes_only_the_selected_object(self, fake_r2_remote: Path) -> None:
-        """Deletion removes the object while preserving its sibling.
-
-        :param fake_r2_remote: Local-typed rclone remote rooted at a temporary directory.
-        """
-        root = fake_r2_remote / "bucket" / "dataset"
-        root.mkdir(parents=True)
-        (root / "dataset.complete").touch()
-        (root / "dataset.json").write_text("{}")
-
-        r2_io.delete_object("r2://bucket/dataset/dataset.complete")
-
-        assert not (root / "dataset.complete").exists()
-        assert (root / "dataset.json").is_file()
 
 
 class TestIsR2Reachable:

@@ -64,6 +64,8 @@ blocks you, ask how to proceed.
 
 - Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON
   from R2, worker reports). Dataclasses for internal typed containers.
+- New callables under `src/synth_setter/models/` use jaxtyping tensor annotations
+  and `@jaxtyped(typechecker=beartype)`; bare `torch.Tensor` annotations are forbidden.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
 - **Lance distributed-write exception:** workers may write only uncommitted
@@ -154,6 +156,10 @@ A `PreToolUse` hook (`agent/hooks/no-baseline-additions.sh`) blocks new rows
 in `.pydoclint-baseline.txt`. If a check fails on a file your PR touches,
 the remediation is to fix the underlying lint — never register the file as
 exempt.
+
+`.model-typing-baseline.txt` is also append-frozen and contains only the
+violations tracked by #2645. Remove entries as callables adopt jaxtyping and
+beartype; never add entries for new violations.
 
 ## YAML `run:` block scalars are bash
 

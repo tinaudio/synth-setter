@@ -33,7 +33,6 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.cnn import LogMelEncoder
-from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
@@ -53,11 +52,10 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_all_embedding_columns,
     assert_finite_train_loss,
-    assert_licensed_embedding_columns,
     assert_log_per_param_mse_wired,
-    augment_lance_splits_with_licensed_embeddings,
-    augment_lance_splits_with_tinymu,
+    augment_lance_splits_with_all_embeddings,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
     build_surge_xt_embedding_train_cfg,
@@ -460,6 +458,29 @@ def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
     assert torch.isfinite(metric_dict["train/loss"])
     hydrated_root = object_dict["datamodule"].dataset_root
     assert (hydrated_root / ".synth-setter-stage-complete").is_file()
+
+
+@pytest.mark.slow
+def test_train_file_uri_without_completion_marker_raises_before_hydration(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The training entrypoint rejects an unfinalized hydration source.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    (source / "dataset.complete").unlink()
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+
+    HydraConfig().set_config(cfg_train_lance)
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        train(cfg_train_lance)
+
+    assert not destination.exists()
 
 
 @pytest.mark.slow
@@ -1906,7 +1927,7 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_LICENSED_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
+_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
 
 
 def _assert_t5gemma_feed_forward_checkpoint_validates(
@@ -1974,14 +1995,14 @@ def test_train_all_embedding_conditioning_real_e2e(
     :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
     :param param_spec_name: Parameter specification driving model width.
     """
-    dataset_root = augment_lance_splits_with_licensed_embeddings(
+    dataset_root = augment_lance_splits_with_all_embeddings(
         surge_xt_embedding_smoke_datasets,
         local_embedding_checkpoints,
         param_spec_name,
     )
-    assert_licensed_embedding_columns(dataset_root)
+    assert_all_embedding_columns(dataset_root)
 
-    for conditioning in _LICENSED_EMBEDDING_CONDITIONING_PROFILES:
+    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
         cfg = build_surge_xt_embedding_train_cfg(
             tmp_path / conditioning,
             dataset_root,
@@ -2003,37 +2024,3 @@ def test_train_all_embedding_conditioning_real_e2e(
     _assert_t5gemma_feed_forward_checkpoint_validates(
         tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name
     )
-
-
-@pytest.mark.requires_vst
-@pytest.mark.slow
-@pytest.mark.integration_r2
-@pytest.mark.r2
-def test_train_tinymu_conditioning_real_lance_uses_generic_pooler(
-    tmp_path: Path,
-    surge_xt_smoke_datasets: Path,
-    param_spec_name: str,
-) -> None:
-    """Real TinyMU Lance tensors train through the generic conditioning pooler.
-
-    :param tmp_path: Training output directory.
-    :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
-    :param param_spec_name: Parameter specification driving model width.
-    """
-    dataset_root = augment_lance_splits_with_tinymu(surge_xt_smoke_datasets)
-    cfg = build_surge_xt_embedding_train_cfg(
-        tmp_path,
-        dataset_root,
-        param_spec_name=param_spec_name,
-        conditioning="tinymu",
-    )
-    HydraConfig().set_config(cfg)
-    try:
-        metric_dict, object_dict = train(cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    model = object_dict["model"]
-    assert isinstance(model.encoder, EmbeddingPool)
-    assert object_dict["trainer"].global_step >= 1
-    assert_finite_train_loss(metric_dict)

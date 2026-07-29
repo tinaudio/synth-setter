@@ -1123,22 +1123,20 @@ Additional stages could follow the same contract (§5) without modifying existin
 | **render-presets** | preset bank  | audio shards         | CPU     |
 
 `add-embeddings` is now implemented as the `synth-setter-add-embeddings` Hydra
-endpoint (`synth-setter-add-embeddings dataset_root_uri=DATASET_ROOT`, config
-`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): root mode augments every
-present finalized split for the strongly pinned `tinymu` policy, persists resumable provenance in
-`dataset.json`, and removes `dataset.complete` until all intended work commits; `lance_uri=` remains
-the explicit single-split mode. It writes a `clap` (LAION-CLAP)
+endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
+`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): it augments
+a finalized Lance dataset in place with a `clap` (LAION-CLAP)
 `FixedSizeList<float32, 512>` vector column and sequence embeddings (`m2l`,
-`same_s`, `same_l`, and `tinymu`) stored as fixed-shape tensors, all derived from
-the audio column and selectable via `embeddings=` (the selectable set is
+`same_s`, and `same_l`) stored as fixed-shape tensors, all derived from the audio
+column and selectable via `embeddings=` (the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
 are each loaded and written in their own sequential pass). SAME-S and SAME-L
 use Stable Audio 3's autoencoder factory with strict safetensors state loading;
 local directories, R2 mirrors, and HuggingFace repo IDs retain the same
 checkpoint-resolution behavior. Each sequence embedding also writes a
-mean-pooled `FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`,
-`same_l_vec`, or `tinymu_vec`); when `build_index=true`, IVF_PQ indexes `clap`
-and the selected companion columns for `nearest=` search. An
+mean-pooled `FixedSizeList<float32, D>` companion
+(`m2l_vec`, `same_s_vec`, or `same_l_vec`); when `build_index=true`, IVF_PQ
+indexes `clap` and the selected companion columns for `nearest=` search. An
 optional `resume_cache=<path>` caches per-batch encoder outputs so an
 interrupted run can resume without re-encoding already-processed rows (see
 `add_embeddings.py`). The default CLAP and SAME sources hydrate under
@@ -1153,14 +1151,6 @@ them as a `(NUM_SKETCH_CONTROLS, F)` tensor column plus a mean-pooled
 pins `num_sub_vectors` to the pooled vector's width, since the CLAP-oriented
 default cannot divide it; a run config leaves `num_sub_vectors` null to let
 each spec's default apply.
-
-`tinymu` runs TinyMU's frozen MATPAC encoder through its public package API,
-installed from an exact Git commit in the normal heavy runtime. The pinned R2
-checkpoint is verified by SHA-256, and root-mode provenance records both identities
-after every split commit. The integration rejects incompatible model state,
-malformed audio, shape drift, and non-finite output. The measured preprocessing,
-sequence shape, cache identity, package boundary, and `conditioning=tinymu` profile are documented
-in [TinyMU audio embeddings](../reference/tinymu-embeddings.md).
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,

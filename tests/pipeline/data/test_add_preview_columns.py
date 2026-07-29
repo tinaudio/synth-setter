@@ -497,18 +497,35 @@ def test_main_rejects_out_of_range_bitrate(tmp_path: Path) -> None:
     assert "bitrate-kbps" in result.output
 
 
-def test_main_bitrate_option_threads_through(tmp_path: Path) -> None:
-    """The ``--bitrate-kbps`` option is accepted and the column is still produced.
+def test_main_bitrate_option_threads_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--bitrate-kbps`` reaches the encoder, not just the CLI parser.
+
+    Exit code and column presence are identical when the flag is dropped on the
+    floor and the default bitrate is used, so the encoder call is recorded.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Wraps the MP3 encoder to record the bitrate it received.
     """
     uri = tmp_path / "shard-000000.lance"
     _write_smoke_dataset(uri)
+
+    seen_bitrates: list[int] = []
+
+    def _recording_encode(row: np.ndarray, sample_rate: int, bitrate_kbps: int) -> bytes:
+        seen_bitrates.append(bitrate_kbps)
+        return encode_audio_to_mp3(row, sample_rate, bitrate_kbps)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_preview_columns.encode_audio_to_mp3", _recording_encode
+    )
 
     result = CliRunner().invoke(main, [str(uri), "--bitrate-kbps", "64"])
 
     assert result.exit_code == 0
     assert AUDIO_MP3_FIELD in lance.dataset(str(uri)).schema.names
+    assert seen_bitrates and set(seen_bitrates) == {64}
 
 
 def test_main_rewrites_r2_uri_and_forwards_storage_options(
