@@ -111,8 +111,9 @@ def _pad_to_render_size(params: torch.Tensor, render_batch_size: int) -> torch.T
     return torch.cat([params, params[:1].detach().expand(missing, -1)])
 
 
-# One voice per configured render size, never per observed batch length, so a partial
-# batch neither allocates a second voice nor changes the render — see #1820.
+# Sized by configuration, never by the observed batch length — that bound is the #1820 fix. The
+# separate size-1 voice is deliberate: the per-row target path costs ~3.8x if folded into it.
+# https://github.com/tinaudio/synth-setter/issues/1820#issuecomment-5111622505
 @cache
 def _make_renderer(
     sample_rate: int, signal_length: int, render_batch_size: int = 1, device: str = "cpu"
@@ -156,8 +157,9 @@ def render_torchsynth(
     :param note_duration_seconds: Note-on length before the release stage; ``None``
         holds the note for the whole buffer. Must lie within the keyboard
         parameter's pinned human range (``KEYBOARD_DURATION_BOUNDS``).
-    :param render_batch_size: Fixed row count of the voice this render runs on;
-        defaults to the row-at-a-time target render.
+    :param render_batch_size: Fixed row count of the voice this render runs on, taken
+        from configuration rather than from ``params`` so the renderer cache stays
+        bounded (#1820); defaults to the row-at-a-time target render.
     :returns: Float32 audio shaped ``(batch, signal_length)``.
     :raises ValueError: The parameter width, a non-finite parameter, an
         out-of-range note duration, a batch exceeding ``render_batch_size``, or the
