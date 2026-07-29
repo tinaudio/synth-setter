@@ -1,6 +1,106 @@
 # CHANGELOG
 
 
+## v10.9.0 (2026-07-29)
+
+### Features
+
+- **code-health**: Manage VST plugins with Studiorack
+  ([#2632](https://github.com/tinaudio/synth-setter/pull/2632),
+  [`dcc0ca0`](https://github.com/tinaudio/synth-setter/commit/dcc0ca02e8371a4cb2313d8ad7cdbdab54ef11ca))
+
+* internal-feat(code-health): manage VST plugins with Studiorack
+
+* internal-fix(code-health): preserve CI plugin provisioning
+
+* internal-fix(code-health): restore aliases in snapshot images
+
+* test(code-health): cover plugin management boundaries
+
+* internal-fix(code-health): support Studiorack installer layouts
+
+* internal-fix(code-health): detect root DMG installers
+
+* internal-fix(code-health): support mixed plugin archives
+
+* internal-fix(code-health): prefer portable plugin archives
+
+* internal-fix(code-health): install native plugin dependencies
+
+* internal-fix(code-health): retain Make in validation image
+
+* docs(agents): forbid external issue creation
+
+### Internal-Feat
+
+- **data-pipeline**: Add S-SONDO embedding support
+  ([#2635](https://github.com/tinaudio/synth-setter/pull/2635),
+  [`280b2c2`](https://github.com/tinaudio/synth-setter/commit/280b2c2e1e07002a85dd30cddf0300531315ea38))
+
+* internal-feat(data-pipeline): add S-SONDO embeddings
+
+* internal-fix(data-pipeline): close S-SONDO review gaps
+
+* internal-fix(data-pipeline): harden S-SONDO preprocessing
+
+* internal-fix(data-pipeline): resolve S-SONDO review findings
+
+### Internal-Fix
+
+- **data-pipeline**: Harden training hydration integrity
+  ([#2644](https://github.com/tinaudio/synth-setter/pull/2644),
+  [`90b9ae7`](https://github.com/tinaudio/synth-setter/commit/90b9ae784e5b366f0620127ba6d3e3dc2b699c80))
+
+* internal-fix(data-pipeline): harden training hydration integrity
+
+* internal-fix(data-pipeline): make cache publication atomic
+
+### Testing
+
+- **infra**: Assert wiring and behavior instead of key presence
+  ([#2641](https://github.com/tinaudio/synth-setter/pull/2641),
+  [`50d2e4a`](https://github.com/tinaudio/synth-setter/commit/50d2e4ac30af115dfa1bf544f1282c37e9f38aa3))
+
+Existence and substring checks in the infra and hook suites passed for configurations that would not
+  work. Replaced with the invariant each test was named for; every expected value measured against
+  the live files.
+
+- devcontainer: postCreateCommand, remoteUser and workspaceFolder were truthiness checks, so a
+  placeholder or a stale path passed. Now the post-create script must actually be invoked,
+  remoteUser must stay ${localEnv:DEVCONTAINER_USER:<default>} so per-developer attach keeps
+  working, and workspaceFolder must be the in-image checkout path. - gh auth: the token env var was
+  matched anywhere in post-create.sh, including a comment, so deleting the auth call would not have
+  failed it. Now the token must be piped into `gh auth login --with-token`. - dataset-generation
+  matrix: the output_format axis is populated at runtime from the setup job, so key-presence said
+  nothing. Now the axis must be wired to setup.outputs.output_formats, catching a rename that would
+  silently collapse the fan-out. Scenario rows compare as sets — GitHub gives no ordering guarantee
+  for matrix.include, so the ordered compare broke on a harmless reorder. - finalize metrics: a bare
+  assert_called_once on the warning left the message unchecked. Now the loguru template and both
+  interpolated arguments, so a broken interpolation fails.
+
+Also merges two identical trailer-hook tests whose only difference was which half of the
+  agent-keyword list they carried.
+
+Refs #2603
+
+- **infra**: Resolve runbook subcommands against the live routing CLI
+  ([#2642](https://github.com/tinaudio/synth-setter/pull/2642),
+  [`72c169f`](https://github.com/tinaudio/synth-setter/commit/72c169fd8c078727135e99675eac3f024663d2d8))
+
+The review runbook test matched five fixed `pi_review_routing.py <cmd>` strings as prose. That only
+  catches a renamed subcommand by coincidence: the assertion is satisfied by the words being
+  present, not by the command existing.
+
+Resolve the referenced commands against the parser instead. Every `pi_review_routing.py <cmd>` the
+  runbook names must be a registered subparser, so a rename fails with the offending name, and
+  commands added to the runbook later are covered without touching the test.
+
+Verified by renaming the `provenance` subparser: the new check fails, the prose match it replaced
+  did not.
+
+Refs #2603
+
+
 ## v10.8.1 (2026-07-28)
 
 ### Chores
