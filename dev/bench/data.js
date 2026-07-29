@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785298673621,
+  "lastUpdate": 1785298675774,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -22514,6 +22514,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.031115293502807617,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc7ab34c612c06ab232367470799c587a245b08f",
+          "message": "feat(data-pipeline): restore resumable TinyMU embeddings (#2668)\n\n* internal-feat(data-pipeline): restore TinyMU through registry path\n\n* internal-fix(data-pipeline): make embedding retries resumable\n\n* internal-fix(data-pipeline): validate embedding resume identity\n\n* internal-fix(data-pipeline): pin resumable embedding identity\n\n* internal-fix(data-pipeline): resume verified embedding artifacts\n\n* internal-fix(data-pipeline): bind retries to embedding artifacts\n\n* internal-fix(data-pipeline): validate embedding input policy\n\n* test(data-pipeline): isolate text embedding artifacts\n\n* refactor(data-pipeline): isolate TinyMU adapter\n\n* internal-fix(data-pipeline): preserve compatible embedding retries\n\n* ci(data-pipeline): target renamed embedding E2E test\n\n* internal-fix(data-pipeline): preserve S-SONDO encoder coverage",
+          "timestamp": "2026-07-28T20:23:36-07:00",
+          "tree_id": "5a771861866aea133f341fcfbc72735cdbd9bccc",
+          "url": "https://github.com/tinaudio/synth-setter/commit/dc7ab34c612c06ab232367470799c587a245b08f"
+        },
+        "date": 1785298675502,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 12.619603917866666,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 3.1549009794666665,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 5.558760377699999,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.3896900944249997,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.27725578530000045,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.06931394632500011,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 7.702324390411377,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.567847728729248,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.03447576239705086,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 6.6332502388147985,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.04137915372848511,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 8.108959197998047,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.994394779205322,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.04073134437203407,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.580947196446359,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.06197643280029297,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 7.77080774307251,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 4.600521564483643,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.03803485631942749,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 6.453687362726778,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.04777771234512329,
             "unit": "1-cos"
           }
         ]
