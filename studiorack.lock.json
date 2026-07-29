@@ -1,0 +1,136 @@
+{
+  "asb2m10/dexed@0.9.8": {
+    "artifacts": [
+      {
+        "architectures": [
+          "x64"
+        ],
+        "sha256": "5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab",
+        "systems": [
+          "linux"
+        ],
+        "type": "archive",
+        "url": "https://github.com/asb2m10/dexed/releases/download/v0.9.8/dexed-0.9.8-lnx.zip"
+      },
+      {
+        "architectures": [
+          "x64"
+        ],
+        "sha256": "3be32f98e56b40d9555a4069368c7307b8bae3368459bb087cf6195ae7538704",
+        "systems": [
+          "mac"
+        ],
+        "type": "archive",
+        "url": "https://github.com/asb2m10/dexed/releases/download/v0.9.8/dexed-0.9.8-macos.zip"
+      }
+    ]
+  },
+  "baconpaul/six-sines@1.1.0": {
+    "artifacts": [
+      {
+        "architectures": [
+          "x64"
+        ],
+        "sha256": "fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421",
+        "systems": [
+          "linux"
+        ],
+        "type": "archive",
+        "url": "https://github.com/baconpaul/six-sines/releases/download/v1.1.0/six-sines-linux-2025-03-18-43d10b2.tgz"
+      },
+      {
+        "architectures": [
+          "arm64",
+          "x64"
+        ],
+        "sha256": "d6fdf29179cd5b35aa024f25912a50bd14df59fa73cea9ce3da6f3fbf1abe55a",
+        "systems": [
+          "mac"
+        ],
+        "type": "installer",
+        "url": "https://github.com/baconpaul/six-sines/releases/download/v1.1.0/six-sines-macOS-2025-03-18-43d10b2.dmg"
+      }
+    ]
+  },
+  "kayrockscreenprinting/ultramaster-kr106@2.5.13": {
+    "artifacts": [
+      {
+        "architectures": [
+          "x64"
+        ],
+        "sha256": "a594943be8b98dc14a762203e92f4ca0e2703429fbab03cc9a1dc9790264ef64",
+        "systems": [
+          "linux"
+        ],
+        "type": "archive",
+        "url": "https://github.com/kayrockscreenprinting/ultramaster_kr106/releases/download/v2.5.13/KR106-Linux.zip"
+      },
+      {
+        "architectures": [
+          "arm64",
+          "x64"
+        ],
+        "sha256": "e34e6ec4eca6d9ab07c5ef9ef20368267c02119e5cf41f73595be51dd80edcbe",
+        "systems": [
+          "mac"
+        ],
+        "type": "archive",
+        "url": "https://github.com/kayrockscreenprinting/ultramaster_kr106/releases/download/v2.5.13/KR106-macOS.zip"
+      }
+    ]
+  },
+  "surge-synthesizer/ob-xf@1.0.3": {
+    "artifacts": [
+      {
+        "architectures": [
+          "x64"
+        ],
+        "sha256": "72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96",
+        "systems": [
+          "linux"
+        ],
+        "type": "archive",
+        "url": "https://github.com/surge-synthesizer/OB-Xf/releases/download/v1.0.3/ob-xf-Linux-v1.0.3.zip"
+      },
+      {
+        "architectures": [
+          "arm64",
+          "x64"
+        ],
+        "sha256": "e6f52f453c476dfafbd3225b80c5c3ec341ec20be5748c6f70c01cef14e7e7a8",
+        "systems": [
+          "mac"
+        ],
+        "type": "installer",
+        "url": "https://github.com/surge-synthesizer/OB-Xf/releases/download/v1.0.3/ob-xf-macOS-v1.0.3.dmg"
+      }
+    ]
+  },
+  "surge-synthesizer/surge@1.3.4": {
+    "artifacts": [
+      {
+        "architectures": [
+          "x64"
+        ],
+        "sha256": "a6e55064487f624147d515b9ae5fc79a568b69746675b2083abde628ca7bb151",
+        "systems": [
+          "linux"
+        ],
+        "type": "installer",
+        "url": "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb"
+      },
+      {
+        "architectures": [
+          "arm64",
+          "x64"
+        ],
+        "sha256": "b56e8d51a8dc2382ae668c9ff4e96bae38dbd452af4e584d5a5ef50ab2d09b07",
+        "systems": [
+          "mac"
+        ],
+        "type": "installer",
+        "url": "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-macOS-1.3.4.dmg"
+      }
+    ]
+  }
+}
