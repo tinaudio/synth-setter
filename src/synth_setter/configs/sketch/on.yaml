@@ -1,0 +1,15 @@
+# @package _global_
+
+# Concat sketch-control token conditioning (#2612): the datamodule reads the
+# sketch_ctrl column (zero-binning pitch below the threshold, #2614) and the
+# flow model injects zero-initialized control tokens into the vector field.
+# 401 frames = 4 s render on the 100 fps mel grid.
+model:
+  sketch_controls:
+    column: sketch_ctrl
+    num_frames: 401
+    num_ctrl_tokens: 32
+    pitch_zero_threshold: 0.1
+
+datamodule:
+  sketch: ${model.sketch_controls}

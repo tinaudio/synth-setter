@@ -53,6 +53,11 @@ num_params: ${param_spec_width:${synth.param_spec_name}}
 # training
 cfg_dropout_rate: 0.1
 
+# sketch-control token conditioning; the `sketch=on` group fills the spec
+sketch_controls: null
+sketch_dropout_rate: 0.2
+sketch_all_dropout_rate: 0.2
+
 rectified_sigma_min: 0.0
 
 # sampling

@@ -421,11 +421,13 @@ def test_prepare_batch_modality_slots_match_read_flags(
         "mel_spec",
         "m2l",
         "conditioning",
+        "sketch_ctrl",
         "params",
         "noise",
         "audio",
     }
     assert out["conditioning"] is None
+    assert out["sketch_ctrl"] is None
     assert (out["mel_spec"] is not None) == read_mel
     assert (out["m2l"] is not None) == read_m2l
     assert (out["audio"] is not None) == read_audio

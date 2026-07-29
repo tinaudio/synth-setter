@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
@@ -909,6 +910,88 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+def _write_sketch_lance_root(dataset_root: Path) -> None:
+    """Write tiny m2l+sketch train/val/test Lance splits.
+
+    :param dataset_root: Directory receiving the three splits.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    for seed, split in enumerate(("train", "val", "test")):
+        rng = np.random.default_rng(seed)
+        pitch = rng.random((4, 384, 401)).astype(np.float32)
+        tracks = rng.uniform(-1.0, 1.0, (4, 2, 401)).astype(np.float32)
+        write_lance_shard(
+            dataset_root / f"{split}.lance",
+            {
+                "param_array": rng.random((4, len(param_specs["surge_4"]))).astype(np.float32),
+                "m2l": rng.standard_normal((4, 128, 42)).astype(np.float32),
+                "sketch_ctrl": np.concatenate([tracks, pitch], axis=1),
+            },
+        )
+
+
+def test_train_fast_dev_run_sketch_tokens_lance(tmp_path: Path) -> None:
+    """Run a real ``train(cfg)`` step with ``conditioning=m2l sketch=on``.
+
+    Drives the full sketch stack end-to-end on real Lance shards: projected
+    ``sketch_ctrl`` reads, pitch zero-binning and conditioning z-scoring in the
+    collate, control-token injection in the training step, and CFG sampling at
+    validation.
+
+    :param tmp_path: Per-test tmpdir holding the dataset and output dirs.
+    """
+    dataset_root = tmp_path / "lance-data"
+    dataset_root.mkdir()
+    _write_sketch_lance_root(dataset_root)
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "datamodule=surge_lance",
+                "synth=surge_4",
+                "model=vst_flow",
+                "conditioning=m2l",
+                "sketch=on",
+                "trainer=cpu",
+            ],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.logger = None
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
+            cfg.trainer.fast_dev_run = True
+            # Not a loop bound under fast_dev_run — the scheduler resolves
+            # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
+            cfg.trainer.max_steps = 1
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.batch_size = 2
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.persistent_workers = False
+            cfg.datamodule.pin_memory = False
+            cfg.model.compile = False
+            cfg.model.validation_sample_steps = 2
+            cfg.model.vector_field.num_layers = 1
+            cfg.model.vector_field.d_model = 32
+            cfg.model.vector_field.d_ff = 32
+            cfg.model.vector_field.projection.num_tokens = 8
+    try:
+        HydraConfig().set_config(cfg)
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    model = object_dict["model"]
+    assert model.sketch_tokens is not None
+    assert object_dict["datamodule"].sketch_controls is not None
+    assert torch.isfinite(metric_dict["train/loss"])
 
 
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(

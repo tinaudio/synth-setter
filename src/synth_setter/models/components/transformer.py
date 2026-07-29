@@ -347,6 +347,8 @@ class ApproxEquivTransformer(nn.Module):
     ):
         super().__init__()
 
+        # Token width consumers (e.g. SketchControlTokens) size against.
+        self.d_model = d_model
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
         conditioning_dim = (
@@ -441,6 +443,7 @@ class ApproxEquivTransformer(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         conditioning: torch.Tensor | None = None,
+        ctrl_tokens: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if conditioning is None:
             conditioning = self.cfg_dropout_token.expand(x.shape[0], -1)
@@ -448,6 +451,7 @@ class ApproxEquivTransformer(nn.Module):
         outer_residual = x if self.outer_residual else None
 
         x = self.projection.param_to_token(x)
+        num_param_tokens = x.shape[1]
 
         t = self.time_encoding(t)
 
@@ -462,9 +466,15 @@ class ApproxEquivTransformer(nn.Module):
         if self.pe_type == "initial":
             x = self.pe(x)
 
+        # Control tokens join after the parameter-token PE so the (frozen,
+        # zero-default) parameter positions never leak onto them (#2612).
+        if ctrl_tokens is not None:
+            x = torch.cat((x, ctrl_tokens), dim=1)
+
         for i, layer in enumerate(self.layers):
             if self.pe_type == "layerwise":
-                x = self.pe[i](x)
+                params_with_pe = self.pe[i](x[:, :num_param_tokens])
+                x = torch.cat((params_with_pe, x[:, num_param_tokens:]), dim=1)
 
             if layerwise_conditioning:
                 z_ = z[:, i, :]
@@ -473,7 +483,7 @@ class ApproxEquivTransformer(nn.Module):
 
             x = layer(x, z_)
 
-        x = self.projection.token_to_param(x)
+        x = self.projection.token_to_param(x[:, :num_param_tokens])
 
         if outer_residual is not None:
             x = x + outer_residual

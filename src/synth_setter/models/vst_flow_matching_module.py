@@ -10,10 +10,13 @@ from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import (
     Conditioning,
+    SketchControls,
     resolve_embedding_conditioning,
+    resolve_sketch_controls,
     select_conditioning,
 )
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
+from synth_setter.models.components.sketch_tokens import SketchControlTokens
 
 
 def call_with_cfg(
@@ -22,8 +25,11 @@ def call_with_cfg(
     t: torch.Tensor,
     conditioning: torch.Tensor,
     cfg_strength: float,
+    ctrl_tokens: torch.Tensor | None = None,
 ):
-    y_c = f(x, t, conditioning)
+    # The unconditional branch drops the control tokens along with the
+    # conditioning; only ctrl-aware fields ever receive the keyword.
+    y_c = f(x, t, conditioning) if ctrl_tokens is None else f(x, t, conditioning, ctrl_tokens)
     y_u = f(x, t, None)
 
     return (1 - cfg_strength) * y_u + cfg_strength * y_c
@@ -36,8 +42,15 @@ def rk4_with_cfg(
     dt: float,
     conditioning: torch.Tensor,
     cfg_strength: float,
+    ctrl_tokens: torch.Tensor | None = None,
 ):
-    f = partial(call_with_cfg, f, conditioning=conditioning, cfg_strength=cfg_strength)
+    f = partial(
+        call_with_cfg,
+        f,
+        conditioning=conditioning,
+        cfg_strength=cfg_strength,
+        ctrl_tokens=ctrl_tokens,
+    )
     k1 = f(x, t)
     k2 = f(x + dt * k1 / 2, t + dt / 2)
     k3 = f(x + dt * k2 / 2, t + dt / 2)
@@ -59,6 +72,9 @@ class VSTFlowMatchingModule(LightningModule):
         *,
         num_params: int,
         conditioning: Conditioning = "mel",
+        sketch_controls: SketchControls = None,
+        sketch_dropout_rate: float = 0.2,
+        sketch_all_dropout_rate: float = 0.2,
         encoder_num_heads: int | None = None,
         encoder_output_dim: int | None = None,
         warmup_steps: int = 5000,
@@ -79,6 +95,11 @@ class VSTFlowMatchingModule(LightningModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
+        :param sketch_controls: Optional sketch-control spec enabling concat
+            control-token injection into the vector field (#2612).
+        :param sketch_dropout_rate: Independent per-control CFG drop probability.
+        :param sketch_all_dropout_rate: Probability of additionally dropping
+            every control at once (Sketch2Sound-style joint dropout).
         :param encoder_num_heads: Model-owned attention head count for sequence encoders.
         :param encoder_output_dim: Configured encoder width consumed by the vector field.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
@@ -97,6 +118,15 @@ class VSTFlowMatchingModule(LightningModule):
         self.encoder = encoder
         self.vector_field = vector_field
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
+        self._sketch_controls = resolve_sketch_controls(sketch_controls)
+        self.sketch_tokens = (
+            SketchControlTokens(
+                d_model=vector_field.d_model,
+                num_ctrl_tokens=self._sketch_controls.num_ctrl_tokens,
+            )
+            if self._sketch_controls is not None
+            else None
+        )
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
@@ -143,6 +173,36 @@ class VSTFlowMatchingModule(LightningModule):
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return select_conditioning(batch, self._embedding_conditioning)
 
+    def _sketch_drop_mask(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        """Draw the per-control CFG drop mask for one training step.
+
+        :param batch_size: Rows in the current batch.
+        :param device: Device the mask is drawn on.
+        :returns: ``(batch_size, 3)`` boolean mask; ``True`` drops a control.
+        """
+        drop = torch.rand(batch_size, 3, device=device) < self.hparams.sketch_dropout_rate
+        drop_all = torch.rand(batch_size, 1, device=device) < self.hparams.sketch_all_dropout_rate
+        return drop | drop_all
+
+    def _sketch_tokens_from_batch(
+        self, batch: dict[str, torch.Tensor], *, training: bool
+    ) -> torch.Tensor | None:
+        """Tokenize the batch's sketch controls when a spec is configured.
+
+        :param batch: Model batch; must carry ``sketch_ctrl`` when configured.
+        :param training: Whether to draw the CFG drop mask; inference keeps all.
+        :returns: Control tokens, or ``None`` without a configured spec.
+        """
+        if self.sketch_tokens is None:
+            return None
+        controls = batch["sketch_ctrl"]
+        drop_mask = (
+            self._sketch_drop_mask(controls.shape[0], controls.device)
+            if training
+            else torch.zeros(controls.shape[0], 3, dtype=torch.bool, device=controls.device)
+        )
+        return self.sketch_tokens(controls, drop_mask)
+
     def _train_step(self, batch: dict[str, torch.Tensor]):
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
@@ -150,6 +210,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         conditioning = self.encoder(conditioning)
         z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
+        ctrl_tokens = self._sketch_tokens_from_batch(batch, training=True)
 
         with torch.no_grad():
             t = self._sample_time(params.shape[0], params.device)
@@ -161,7 +222,10 @@ class VSTFlowMatchingModule(LightningModule):
             x_t = self._sample_probability_path(x0, x1, t)
             target = self._evaluate_target_field(x0, x1, x_t, t)
 
-        prediction = self.vector_field(x_t, t, z)
+        if ctrl_tokens is None:
+            prediction = self.vector_field(x_t, t, z)
+        else:
+            prediction = self.vector_field(x_t, t, z, ctrl_tokens)
 
         loss = (prediction - target).square().mean(dim=-1)
         loss = loss * w
@@ -194,9 +258,13 @@ class VSTFlowMatchingModule(LightningModule):
         noise: torch.Tensor,
         steps: int,
         cfg_strength: float,
+        ctrl_tokens: torch.Tensor | None = None,
     ):
         if conditioning is not None:
             conditioning = self.encoder(conditioning)
+        else:
+            # Unconditional sampling drops the sketch controls with everything else.
+            ctrl_tokens = None
 
         t = torch.zeros(noise.shape[0], 1, device=noise.device)
         dt = 1.0 / steps
@@ -215,6 +283,7 @@ class VSTFlowMatchingModule(LightningModule):
                 warped_dt,
                 conditioning,
                 cfg_strength,
+                ctrl_tokens,
             )
             t = t + dt
 
@@ -227,6 +296,7 @@ class VSTFlowMatchingModule(LightningModule):
             torch.randn_like(batch["params"]),
             self.hparams.validation_sample_steps,
             self.hparams.validation_cfg_strength,
+            self._sketch_tokens_from_batch(batch, training=False),
         )
 
         per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
@@ -259,6 +329,7 @@ class VSTFlowMatchingModule(LightningModule):
             torch.randn_like(batch["params"]),
             self.hparams.test_sample_steps,
             self.hparams.test_cfg_strength,
+            self._sketch_tokens_from_batch(batch, training=False),
         )
 
         param_mse = (pred_params - batch["params"]).square().mean()
@@ -289,6 +360,7 @@ class VSTFlowMatchingModule(LightningModule):
                 ),
                 self.hparams.test_sample_steps,
                 self.hparams.test_cfg_strength,
+                self._sketch_tokens_from_batch(batch, training=False),
             ),
             batch,
         )

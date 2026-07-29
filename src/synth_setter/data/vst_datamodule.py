@@ -10,9 +10,13 @@ from lightning import LightningDataModule
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.conditioning import (
+    SKETCH_PITCH_SLICE,
     Conditioning,
     EmbeddingConditioningSpec,
+    SketchControls,
+    SketchControlSpec,
     resolve_embedding_conditioning,
+    resolve_sketch_controls,
 )
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
@@ -31,14 +35,16 @@ class RawBatch(TypedDict):  # noqa: DOC601, DOC603
     Shapes are ``(batch, ...)``: ``param_array`` is ``(batch, num_params)`` and
     always present; ``mel_spec`` is ``(batch, channels, n_mels, n_frames)``,
     ``music2latent`` is ``(batch, latent_dim, n_frames)``, ``conditioning`` is
-    one configured fixed-shape embedding column, and ``audio`` is ``(batch,
-    channels, samples)``. Optional unread modalities may be absent or ``None``.
+    one configured fixed-shape embedding column, ``sketch_ctrl`` is ``(batch,
+    num_sketch_controls, n_frames)``, and ``audio`` is ``(batch, channels,
+    samples)``. Optional unread modalities may be absent or ``None``.
     """
 
     param_array: np.ndarray
     mel_spec: NotRequired[np.ndarray | None]
     music2latent: NotRequired[np.ndarray | None]
     conditioning: NotRequired[np.ndarray | None]
+    sketch_ctrl: NotRequired[np.ndarray | None]
     audio: NotRequired[np.ndarray | None]
 
 
@@ -53,6 +59,7 @@ def _raw_batch_validation_error(raw: RawBatch) -> str | None:
         "mel_spec": raw.get("mel_spec"),
         "music2latent": raw.get("music2latent"),
         "conditioning": raw.get("conditioning"),
+        "sketch_ctrl": raw.get("sketch_ctrl"),
         "audio": raw.get("audio"),
     }
     for column, array in arrays.items():
@@ -95,6 +102,7 @@ def prepare_batch(
     rescale_params: bool,
     ot: bool,
     generator: torch.Generator,
+    sketch_pitch_zero_threshold: float | None = None,
 ) -> dict[str, torch.Tensor | None]:
     """Turn one batch of stored columns into model-ready tensors.
 
@@ -106,6 +114,8 @@ def prepare_batch(
     :param rescale_params: Whether to map parameters from ``[0, 1]`` to ``[-1, 1]``.
     :param ot: Whether to Hungarian-match noise to parameters.
     :param generator: RNG for the noise draw.
+    :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
+        activations below this value (#2614), or ``None`` to skip.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread modalities.
     :raises ValueError: If stored or transformed values violate the numeric contract.
     """
@@ -144,14 +154,28 @@ def prepare_batch(
     if conditioning is not None and not torch.isfinite(conditioning).all():
         raise ValueError("conditioning float32 conversion produced non-finite values")
 
+    sketch_raw = raw.get("sketch_ctrl")
+    if sketch_raw is not None:
+        sketch = torch.from_numpy(sketch_raw).to(dtype=torch.float32)
+        if sketch_pitch_zero_threshold is not None:
+            # Clone: from_numpy shares storage, and binning must not mutate the
+            # caller's stored batch.
+            sketch = sketch.clone()
+            pitch = sketch[:, SKETCH_PITCH_SLICE]
+            sketch[:, SKETCH_PITCH_SLICE] = pitch.where(
+                pitch >= sketch_pitch_zero_threshold, torch.zeros_like(pitch)
+            )
+    else:
+        sketch = None
+
     param_array = raw["param_array"]
     if rescale_params:
         param_array = param_array * 2 - 1
     params = torch.from_numpy(param_array).to(dtype=torch.float32)
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
-        noise, params, mel_spec, m2l, conditioning, audio = _hungarian_match(
-            noise, params, mel_spec, m2l, conditioning, audio
+        noise, params, mel_spec, m2l, conditioning, sketch, audio = _hungarian_match(
+            noise, params, mel_spec, m2l, conditioning, sketch, audio
         )
 
     return {
@@ -160,6 +184,7 @@ def prepare_batch(
         "conditioning": (
             conditioning.contiguous() if conditioning is not None else None
         ),
+        "sketch_ctrl": sketch.contiguous() if sketch is not None else None,
         "params": params.contiguous(),
         "noise": noise.contiguous(),
         "audio": audio.contiguous() if audio is not None else None,
@@ -291,6 +316,7 @@ class VSTDataModule(LightningDataModule):
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
         conditioning: Conditioning = "mel",
+        sketch: SketchControls = None,
         pin_memory: bool = True,
         *,
         param_spec_name: ParamSpecName,
@@ -313,6 +339,8 @@ class VSTDataModule(LightningDataModule):
         :param predict_file: Prediction split; defaults to ``test.lance``. A path
             naming the configured ``dataset_root`` rebases onto the subset directory.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
+        :param sketch: Optional sketch-control spec adding its stored column to
+            every split's read set (#2612).
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param download_dataset_txids: Per-split transaction uuids pinning the
@@ -344,6 +372,7 @@ class VSTDataModule(LightningDataModule):
         self.embedding_conditioning: EmbeddingConditioningSpec | None = (
             resolve_embedding_conditioning(conditioning)
         )
+        self.sketch_controls: SketchControlSpec | None = resolve_sketch_controls(sketch)
         self.pin_memory = pin_memory
         self.param_spec_name = param_spec_name
         self.download_dataset_txids = materialize_config.download_dataset_txids
@@ -436,6 +465,8 @@ class VSTDataModule(LightningDataModule):
         :returns: Projection for one split — never user-configured.
         """
         columns = ["param_array", self._conditioning_column()]
+        if self.sketch_controls is not None:
+            columns.append(self.sketch_controls.column)
         if read_audio:
             columns.append("audio")
         return columns

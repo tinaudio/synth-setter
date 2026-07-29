@@ -252,6 +252,47 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     assert cfg.model.conditioning.column == profile
 
 
+def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
+    """``sketch=on`` composes over ``conditioning=m2l`` and drives a train step."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_4",
+            "model=vst_flow",
+            "conditioning=m2l",
+            "sketch=on",
+            "trainer=cpu",
+            # The scheduler's T_max interpolates ${trainer.max_steps}, which
+            # trainer/cpu.yaml leaves undefined.
+            "+trainer.max_steps=1",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+            "model.compile=false",
+            "model.vector_field.num_layers=1",
+            "model.vector_field.d_model=32",
+            "model.vector_field.d_ff=32",
+            "model.vector_field.projection.num_tokens=8",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    model = hydra.utils.instantiate(cfg.model)
+
+    assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.column == "sketch_ctrl"
+    assert model.sketch_tokens is not None
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["conditioning"].shape == (2, 128, 42)
+    assert batch["sketch_ctrl"].shape == (2, 386, 401)
+    loss, _penalty = model._train_step(batch)  # noqa: SLF001
+    assert torch.isfinite(loss)
+
+
 def _compose_t5gemma_cached_train_cfg(
     model_name: str, model_overrides: Sequence[str]
 ) -> DictConfig:
