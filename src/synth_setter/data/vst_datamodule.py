@@ -77,31 +77,11 @@ def _raw_batch_validation_error(raw: RawBatch) -> str | None:
     return None
 
 
-def validate_channel_statistics(
-    mean: np.ndarray, std: np.ndarray, *, label: str
-) -> None:
-    """Reject non-finite or non-positive normalization statistics.
-
-    :param mean: Mean array to subtract.
-    :param std: Standard-deviation array to divide by.
-    :param label: Statistic owner named in error messages (e.g. ``"conditioning"``).
-    :raises ValueError: If values are non-finite or standard deviations are not positive.
-    """
-    if not np.isfinite(mean).all():
-        raise ValueError(f"{label} mean must contain only finite values")
-    if not np.isfinite(std).all():
-        raise ValueError(f"{label} std must contain only finite values")
-    if np.any(std <= 0):
-        raise ValueError(f"{label} std values must be positive")
-
-
 def prepare_batch(
     raw: RawBatch,
     *,
     mean: np.ndarray | None,
     std: np.ndarray | None,
-    conditioning_mean: np.ndarray | None = None,
-    conditioning_std: np.ndarray | None = None,
     rescale_params: bool,
     ot: bool,
     generator: torch.Generator,
@@ -112,8 +92,6 @@ def prepare_batch(
     :param raw: Stored columns; see :class:`RawBatch` for keys and shapes.
     :param mean: Mel mean to subtract, or ``None`` to skip normalization.
     :param std: Mel standard deviation, or ``None`` to skip normalization.
-    :param conditioning_mean: Per-channel conditioning mean, or ``None`` to skip.
-    :param conditioning_std: Per-channel conditioning std, or ``None`` to skip.
     :param rescale_params: Whether to map parameters from ``[0, 1]`` to ``[-1, 1]``.
     :param ot: Whether to Hungarian-match noise to parameters.
     :param generator: RNG for the noise draw.
@@ -122,16 +100,11 @@ def prepare_batch(
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread
         modalities; the stored ``mel_spec`` column is emitted under the ``mel`` key,
         as ``music2latent`` is under ``m2l``.
-    :raises ValueError: If stored or transformed values violate the numeric
-        contract, or exactly one of the conditioning statistics is supplied.
+    :raises ValueError: If stored or transformed values violate the numeric contract.
     """
     validation_error = _raw_batch_validation_error(raw)
     if validation_error is not None:
         raise ValueError(validation_error)
-    if (conditioning_mean is None) != (conditioning_std is None):
-        raise ValueError(
-            "conditioning_mean and conditioning_std must be supplied together"
-        )
 
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
@@ -153,9 +126,6 @@ def prepare_batch(
     m2l = torch.from_numpy(m2l_raw).to(dtype=torch.float32) if m2l_raw is not None else None
 
     conditioning_raw = raw.get("conditioning")
-    if conditioning_raw is not None and conditioning_mean is not None and conditioning_std is not None:
-        validate_channel_statistics(conditioning_mean, conditioning_std, label="conditioning")
-        conditioning_raw = (conditioning_raw - conditioning_mean) / conditioning_std
     conditioning = (
         torch.from_numpy(conditioning_raw).to(dtype=torch.float32)
         if conditioning_raw is not None

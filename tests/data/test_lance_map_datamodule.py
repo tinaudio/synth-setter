@@ -779,13 +779,8 @@ class TestLanceMapDataModuleFlows:
         spec = EmbeddingConditioningSpec(
             column="music2latent", input_shape=(6, 7)
         )
-        # Normalization off: this test pins the raw routing contract.
         with _set_up_map_module(
-            dataset_root=dataset_root,
-            batch_size=2,
-            ot=False,
-            conditioning=spec,
-            use_saved_mean_and_variance=False,
+            dataset_root=dataset_root, batch_size=2, ot=False, conditioning=spec
         ) as module:
             batch = next(iter(module.val_dataloader()))
         assert batch["mel"] is None

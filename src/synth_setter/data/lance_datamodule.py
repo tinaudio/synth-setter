@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,15 +42,10 @@ from synth_setter.data.vst_datamodule import (
     load_dataset_statistics,
     prepare_batch,
     ranked_generator_seed,
-    validate_channel_statistics,
 )
 from synth_setter.param_spec_name import ParamSpecName
 
-logger = logging.getLogger(__name__)
-
 _FAKE_BATCHES_PER_EPOCH = 10_000
-# Deterministic first-N train rows sampled for on-the-fly conditioning stats.
-_CONDITIONING_STATS_SAMPLE_ROWS = 1024
 _FAKE_AUDIO_SHAPE = (2, 44100 * 4)
 _FAKE_MEL_SHAPE = (2, 128, 401)
 
@@ -205,78 +199,6 @@ def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None
             )
 
 
-# Divisor floor for channels that are constant across the sampled rows:
-# (x - mean) is ~0 there, so flooring normalizes them to ~0 instead of raising.
-_CONDITIONING_STD_FLOOR = 1e-6
-
-
-# DOC502: the documented ValueError propagates from validate_channel_statistics.
-def _conditioning_statistics(  # noqa: DOC502
-    shard_path: Path, spec: EmbeddingConditioningSpec, *, persist: bool = True
-) -> tuple[np.ndarray, np.ndarray]:
-    """Load saved or compute deterministic per-channel conditioning statistics.
-
-    A ``conditioning_stats_<column>.npz`` file beside the shard takes precedence;
-    otherwise the first ``_CONDITIONING_STATS_SAMPLE_ROWS`` rows are sampled and
-    the result is persisted (when ``persist``) so every later rank/run/eval of a
-    checkpoint reloads the identical constants.
-
-    :param shard_path: Lance split whose parent may hold saved statistics.
-    :param spec: Conditioning spec naming the column and its per-row shape.
-    :param persist: Whether freshly computed statistics are written beside the shard.
-    :returns: Per-channel ``(mean, std)`` arrays with the row axis dropped
-        (``(channels, 1)`` for time-major columns, ``(channels,)`` for vectors).
-    :raises ValueError: If statistics are mis-shaped, non-finite, or not positive.
-    """
-    expected_shape = (spec.input_shape[0], *(1 for _ in spec.input_shape[1:]))
-    stats_file = shard_path.parent / f"conditioning_stats_{spec.column}.npz"
-    if stats_file.exists():
-        with np.load(stats_file) as stats:
-            mean, std = stats["mean"], stats["std"]
-        for label, array in (("mean", mean), ("std", std)):
-            if array.shape != expected_shape:
-                raise ValueError(
-                    f"saved conditioning {label} in {stats_file} has shape "
-                    f"{array.shape}, expected {expected_shape} for column "
-                    f"{spec.column!r} of shape {spec.input_shape}"
-                )
-        validate_channel_statistics(mean, std, label="conditioning")
-        return mean, std
-
-    dataset = lance.dataset(str(shard_path))
-    rows = min(dataset.count_rows(), _CONDITIONING_STATS_SAMPLE_ROWS)
-    sample = dataset.take(range(rows), columns=[spec.column]).combine_chunks()
-    values = torch.cat(
-        [
-            batch_to_shaped_tensors(record_batch)[spec.column]
-            for record_batch in sample.to_batches()
-        ],
-        dim=0,
-    ).numpy()
-    # Per-channel over the row axis and any trailing (e.g. time) axes; the
-    # population std over this pinned sample is the persisted definition.
-    axes = (0, *range(2, values.ndim))
-    mean = values.mean(axis=axes, keepdims=True)[0]
-    std = np.maximum(values.std(axis=axes, keepdims=True)[0], _CONDITIONING_STD_FLOOR)
-    validate_channel_statistics(mean, std, label="conditioning")
-    if persist:
-        # Atomic publish: concurrent ranks compute identical arrays, so the
-        # last replace is harmless.
-        # The temp name keeps the .npz suffix so np.savez does not append one.
-        temp_file = stats_file.with_suffix(".tmp.npz")
-        np.savez(temp_file, mean=mean, std=std)
-        temp_file.replace(stats_file)
-    logger.info(
-        "computed conditioning stats for column %r from %d rows: "
-        "mean per channel %s, std per channel %s",
-        spec.column,
-        rows,
-        np.array2string(mean.ravel(), precision=4, threshold=16),
-        np.array2string(std.ravel(), precision=4, threshold=16),
-    )
-    return mean, std
-
-
 class PrepareBatchCollate:
     """Transform pre-collated Lance columns with a process-local noise RNG."""
 
@@ -285,8 +207,6 @@ class PrepareBatchCollate:
         *,
         mean: np.ndarray | None,
         std: np.ndarray | None,
-        conditioning_mean: np.ndarray | None = None,
-        conditioning_std: np.ndarray | None = None,
         rescale_params: bool,
         ot: bool,
         conditioning_column: str | None = None,
@@ -298,8 +218,6 @@ class PrepareBatchCollate:
 
         :param mean: Mel mean, or ``None`` to skip normalization.
         :param std: Mel standard deviation, or ``None`` to skip normalization.
-        :param conditioning_mean: Per-channel conditioning mean, or ``None`` to skip.
-        :param conditioning_std: Per-channel conditioning std, or ``None`` to skip.
         :param rescale_params: Whether to map parameters to ``[-1, 1]``.
         :param ot: Whether to Hungarian-match noise to parameters.
         :param conditioning_column: Generic embedding column to expose as ``conditioning``.
@@ -311,8 +229,6 @@ class PrepareBatchCollate:
         """
         self.mean = mean
         self.std = std
-        self.conditioning_mean = conditioning_mean
-        self.conditioning_std = conditioning_std
         self.rescale_params = rescale_params
         self.ot = ot
         self.conditioning_column = conditioning_column
@@ -381,8 +297,6 @@ class PrepareBatchCollate:
             raw,
             mean=self.mean,
             std=self.std,
-            conditioning_mean=self.conditioning_mean,
-            conditioning_std=self.conditioning_std,
             rescale_params=self.rescale_params,
             ot=self.ot,
             generator=self._live_generator(),
@@ -685,7 +599,6 @@ class LanceVSTDataModule(VSTDataModule):
         ot: bool,
         read_audio: bool,
         stats: tuple[np.ndarray, np.ndarray] | None,
-        conditioning_stats: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> _MapSplit:
         """Build one real Lance split and its batch transformer.
 
@@ -693,7 +606,6 @@ class LanceVSTDataModule(VSTDataModule):
         :param ot: Whether to match batch noise to parameters.
         :param read_audio: Whether to project prediction audio.
         :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
-        :param conditioning_stats: Per-channel conditioning ``(mean, std)``, or ``None``.
         :returns: Sample-indexed dataset and collate operation.
         """
         spec = self.embedding_conditioning
@@ -704,16 +616,11 @@ class LanceVSTDataModule(VSTDataModule):
             _validate_sketch_column(shard_path, sketch)
         columns = self._loader_columns(read_audio=read_audio)
         mean, std = stats if stats is not None else (None, None)
-        conditioning_mean, conditioning_std = (
-            conditioning_stats if conditioning_stats is not None else (None, None)
-        )
         return _MapSplit(
             dataset=LanceMapDataset(shard_path, columns=columns),
             collate=PrepareBatchCollate(
                 mean=mean,
                 std=std,
-                conditioning_mean=conditioning_mean,
-                conditioning_std=conditioning_std,
                 rescale_params=True,
                 ot=ot,
                 conditioning_column=spec.column if spec is not None else None,
@@ -752,27 +659,16 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: Requested split datasets and collate operations.
         """
         train_shard = self.dataset_root / f"train{self.shard_suffix}"
-        split_stats = predict_stats = conditioning_stats = None
-        if self.use_saved_mean_and_variance:
-            if self.embedding_conditioning is None:
-                if any(name != "predict" for name in split_names):
-                    split_stats = load_dataset_statistics(train_shard)
-                if "predict" in split_names:
-                    predict_stats = (
-                        split_stats
-                        if split_stats is not None
-                        and self.predict_file.parent == self.dataset_root
-                        else load_dataset_statistics(self.predict_file)
-                    )
-            elif any(name != "predict" for name in split_names):
-                conditioning_stats = _conditioning_statistics(
-                    train_shard, self.embedding_conditioning
-                )
-            else:
-                # Predict-only setup must not touch the train shard; a training
-                # run's sidecar beside the predict file still takes precedence.
-                conditioning_stats = _conditioning_statistics(
-                    self.predict_file, self.embedding_conditioning, persist=False
+        split_stats = predict_stats = None
+        if self.use_saved_mean_and_variance and self.embedding_conditioning is None:
+            if any(name != "predict" for name in split_names):
+                split_stats = load_dataset_statistics(train_shard)
+            if "predict" in split_names:
+                predict_stats = (
+                    split_stats
+                    if split_stats is not None
+                    and self.predict_file.parent == self.dataset_root
+                    else load_dataset_statistics(self.predict_file)
                 )
         shard_paths = {
             "train": train_shard,
@@ -786,7 +682,6 @@ class LanceVSTDataModule(VSTDataModule):
                 ot=self.ot if name == "train" else False,
                 read_audio=name == "predict",
                 stats=predict_stats if name == "predict" else split_stats,
-                conditioning_stats=conditioning_stats,
             )
             for name in split_names
         }
