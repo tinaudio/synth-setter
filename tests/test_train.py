@@ -673,6 +673,35 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
 
 
 @pytest.mark.slow
+def test_train_surge_simple_flow_frozen_projection_advances(tmp_path: Path) -> None:
+    """Train through the production entrypoint without optimizing projection weights.
+
+    :param tmp_path: Hydra output and log directory; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="surge_simple",
+        model_group="vst_flow",
+    )
+    with open_dict(cfg):
+        cfg.model.compile = False
+        cfg.test = False
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 32
+        cfg.model.vector_field.d_ff = 32
+        cfg.model.vector_field.projection.num_tokens = 8
+        cfg.model.vector_field.learn_projection = False
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    projection = object_dict["model"].vector_field.projection
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    assert all(not parameter.requires_grad for parameter in projection.parameters())
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("experiment", ["surge/ffn_simple", "surge/flow_simple"])
 @pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
 def test_train_runpod_experiment_default_datamodule_advances(
