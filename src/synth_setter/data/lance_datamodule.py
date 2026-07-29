@@ -235,7 +235,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         :returns: Model-ready random tensors with the configured shapes.
         """
         audio = torch.randn(num_rows, *_FAKE_AUDIO_SHAPE) if self._read_audio else None
-        mel_spec = (
+        mel = (
             torch.randn(num_rows, *_FAKE_MEL_SHAPE)
             if self._embedding_conditioning is None
             else None
@@ -249,7 +249,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         params = torch.rand(num_rows, self._num_params) * 2 - 1
         noise = torch.randn_like(params)
         return {
-            "mel_spec": mel_spec,
+            "mel": mel,
             "m2l": m2l,
             "conditioning": conditioning,
             "params": params,

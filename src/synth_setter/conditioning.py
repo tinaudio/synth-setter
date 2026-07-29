@@ -45,7 +45,7 @@ def select_conditioning(
     :returns: The tensor selected for model conditioning.
     """
     if embedding is None:
-        return batch["mel_spec"]
+        return batch["mel"]
     return batch["conditioning"]
 
 

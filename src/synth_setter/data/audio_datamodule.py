@@ -130,7 +130,7 @@ class AudioFolderDataset(torch.utils.data.Dataset):
 
         return {
             "audio": audio,
-            "mel_spec": spec,
+            "mel": spec,
         }
 
 

@@ -35,11 +35,11 @@ _MEL_N_FRAMES = 5
 def _batch() -> dict[str, torch.Tensor]:
     """Return a batch carrying the keys every VST module's step functions read.
 
-    :returns: Batch dict with ``params`` and ``mel_spec``.
+    :returns: Batch dict with ``params`` and ``mel``.
     """
     return {
         "params": torch.rand(_BATCH, _NUM_PARAMS),
-        "mel_spec": torch.rand(_BATCH, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES),
+        "mel": torch.rand(_BATCH, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES),
     }
 
 
@@ -50,13 +50,13 @@ class _TinyNet(torch.nn.Module):
         super().__init__()
         self.linear = torch.nn.Linear(_MEL_CHANNELS * _MEL_N_MELS * _MEL_N_FRAMES, _NUM_PARAMS)
 
-    def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
-        """Map ``mel_spec`` to a ``(B, _NUM_PARAMS)`` prediction.
+    def forward(self, mel: torch.Tensor) -> torch.Tensor:
+        """Map ``mel`` to a ``(B, _NUM_PARAMS)`` prediction.
 
-        :param mel_spec: Batch of mel spectrograms.
+        :param mel: Batch of mel spectrograms.
         :returns: Predicted parameter tensor.
         """
-        return self.linear(mel_spec.flatten(start_dim=1))
+        return self.linear(mel.flatten(start_dim=1))
 
 
 def _feed_forward_module() -> VSTFeedForwardModule:
@@ -125,13 +125,13 @@ class _TinyEncoder(torch.nn.Module):
         super().__init__()
         self.linear = torch.nn.Linear(_MEL_CHANNELS * _MEL_N_MELS * _MEL_N_FRAMES, 16)
 
-    def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
-        """Map ``mel_spec`` to a single conditioning token per sample.
+    def forward(self, mel: torch.Tensor) -> torch.Tensor:
+        """Map ``mel`` to a single conditioning token per sample.
 
-        :param mel_spec: Batch of mel spectrograms.
+        :param mel: Batch of mel spectrograms.
         :returns: Conditioning tensor of shape ``(B, 1, 16)``.
         """
-        return self.linear(mel_spec.flatten(start_dim=1)).unsqueeze(1)
+        return self.linear(mel.flatten(start_dim=1)).unsqueeze(1)
 
 
 @pytest.mark.parametrize(
@@ -165,7 +165,7 @@ def test_validation_step_preds_are_the_feed_forward_nets_predictions() -> None:
 
     outputs = module.validation_step(batch, batch_idx=0)
 
-    expected = module.net(batch["mel_spec"])
+    expected = module.net(batch["mel"])
     assert torch.allclose(outputs["preds"], expected)
 
 
@@ -188,7 +188,7 @@ def test_validation_step_preds_depend_on_input() -> None:
     torch.manual_seed(0)
     module = _feed_forward_module()
     batch_a = _batch()
-    batch_b = {**batch_a, "mel_spec": batch_a["mel_spec"] + 1.0}
+    batch_b = {**batch_a, "mel": batch_a["mel"] + 1.0}
 
     preds_a = module.validation_step(batch_a, batch_idx=0)["preds"]
     preds_b = module.validation_step(batch_b, batch_idx=0)["preds"]
