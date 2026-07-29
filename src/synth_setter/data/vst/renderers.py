@@ -25,9 +25,8 @@ import numpy as np
 
 from synth_setter.data.vst.param_map import SynthParamMap
 from synth_setter.data.vst.torchsynth_param_spec import (
-    DEFAULT_NORMALIZED_ROW,
-    KEYBOARD_DURATION_BOUNDS,
-    PARAM_INDEX,
+    DEFAULT_NORMALIZED_PATCH,
+    TORCHSYNTH_FULL_PARAM_SPEC,
 )
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
@@ -628,31 +627,20 @@ class TorchSynthRenderer(AudioRenderer):
 
         from synth_setter.data.torchsynth_datamodule import render_torchsynth
 
-        unknown = sorted(params.keys() - PARAM_INDEX.keys())
+        unknown = sorted(params.keys() - DEFAULT_NORMALIZED_PATCH.keys())
         if unknown:
             raise KeyError(f"unknown torchsynth parameter key(s): {', '.join(unknown)}")
-        row = list(DEFAULT_NORMALIZED_ROW)
-        for key, value in params.items():
-            row[PARAM_INDEX[key]] = value
-        start, end = note_start_and_end
-        minimum_duration, maximum_duration = KEYBOARD_DURATION_BOUNDS
-        duration = min(max(end - start, minimum_duration), maximum_duration)
+        row = TORCHSYNTH_FULL_PARAM_SPEC.encode(
+            {**DEFAULT_NORMALIZED_PATCH, **params},
+            {"pitch": midi_note, "note_start_and_end": note_start_and_end},
+        )
         samples = self._signal_length()
         audio = render_torchsynth(
             torch.tensor([row], dtype=torch.float32),
             sample_rate=int(self.sample_rate),
             signal_length=samples,
-            midi_pitch=midi_note,
-            note_duration_seconds=duration,
         ).numpy()
-        # Clamp: a note starting at/after the buffer end is silence (matching a VST
-        # host), not a negative-slice shape error; the loudness gate rejects it.
-        offset = min(int(round(start * self.sample_rate)), samples)
-        if offset:
-            delayed = np.zeros_like(audio)
-            delayed[:, offset:] = audio[:, : samples - offset]
-            audio = delayed
-        # Independent of the delay above: the mono voice fans out to the requested channels.
+        # The note-on delay is applied by the render; the mono voice now fans out to channels.
         if self.channels > 1:
             audio = np.repeat(audio, self.channels, axis=0)
         return _validate_rendered_audio(audio, channels=self.channels, samples=samples)

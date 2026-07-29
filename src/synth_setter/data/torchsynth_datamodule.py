@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from functools import cache, partial
 from typing import TYPE_CHECKING, TypeAlias, cast
 
+import numpy as np
 import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Sampler
@@ -29,7 +30,8 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     TorchSynthParam as TorchSynthParam,
 )
 from synth_setter.data.vst.torchsynth_param_spec import (
-    KEYBOARD_DURATION_BOUNDS,
+    TORCHSYNTH_FULL_PARAM_SPEC,
+    note_on_duration,
 )
 from synth_setter.data.vst.torchsynth_param_spec import (
     verify_voice_matches_spec as _verify_voice_matches_spec,
@@ -117,71 +119,87 @@ def _make_renderer(
     return _Renderer(instance.to(torch.device(device)), threading.Lock())
 
 
-def render_torchsynth(
-    params: torch.Tensor,
-    *,
-    sample_rate: int,
-    signal_length: int,
-    midi_pitch: int,
-    note_duration_seconds: float | None = None,
+def _delay_by_note_start(
+    audio: torch.Tensor, start_seconds: torch.Tensor, sample_rate: int
 ) -> torch.Tensor:
-    """Render normalized TorchSynth parameters into a mono audio batch.
+    """Shift each row right by its note-on offset, zero-filling the head.
 
-    :param params: Finite float32 parameter rows shaped ``(batch, NUM_PARAMS)`` in
-        TorchSynth's native order; values clamp strictly inside ``(0, 1)``.
+    The voice always starts its note at sample 0, so the offset a note window declares is
+    emulated here; a note starting at or past the buffer end renders as silence.
+
+    :param audio: Rendered audio shaped ``(batch, signal_length)``.
+    :param start_seconds: Non-negative note-on offset per row, shaped ``(batch,)``.
+    :param sample_rate: Audio sample rate in Hz.
+    :returns: Delayed audio of the same shape and dtype.
+    """
+    offsets = (start_seconds * sample_rate).round().to(torch.int64).unsqueeze(1)
+    source = torch.arange(audio.shape[1], device=audio.device).unsqueeze(0) - offsets
+    return torch.where(source >= 0, audio.gather(1, source.clamp(min=0)), 0.0)
+
+
+def render_torchsynth(
+    params: torch.Tensor, *, sample_rate: int, signal_length: int
+) -> torch.Tensor:
+    """Render ``torchsynth_full``-encoded rows into a mono audio batch.
+
+    A row is the only thing that determines its audio: pitch and the note window come
+    from the row's own note columns, so no caller can supply note conditioning that
+    contradicts what the row encodes. Note columns clamp into ``[0, 1]`` and the window
+    they decode to clamps into ``KEYBOARD_DURATION_BOUNDS`` — unconstrained model
+    predictions and short spec draws must stay renderable rather than raise.
+
+    :param params: Finite float32 rows shaped ``(batch, torchsynth_full encoded width)``;
+        synth values clamp strictly inside ``(0, 1)``.
     :param sample_rate: Audio sample rate in Hz.
     :param signal_length: Number of output samples.
-    :param midi_pitch: Fixed MIDI note rendered for every parameter row.
-    :param note_duration_seconds: Note-on length before the release stage; ``None``
-        holds the note for the whole buffer. Must lie within the keyboard
-        parameter's pinned human range (``KEYBOARD_DURATION_BOUNDS``).
     :returns: Float32 audio shaped ``(batch, signal_length)``.
-    :raises ValueError: The parameter width, a non-finite parameter, an
-        out-of-range note duration, or the rendered audio violates the data
-        contract.
+    :raises ValueError: The row width, a non-finite value, or the rendered audio
+        violates the data contract.
     """
     if not torch.isfinite(params).all():
         raise ValueError("TorchSynth params must be finite")
-    if params.shape[1] != NUM_PARAMS:
-        raise ValueError(f"Expected {NUM_PARAMS} TorchSynth parameters, got {params.shape[1]}")
-    duration = (
-        note_duration_seconds
-        if note_duration_seconds is not None
-        else signal_length / sample_rate
-    )
-    minimum_duration, maximum_duration = KEYBOARD_DURATION_BOUNDS
-    if not minimum_duration <= duration <= maximum_duration:
-        # Validate here (not via torchsynth's bare asserts, stripped under -O) so
-        # out-of-range durations fail the documented ValueError contract.
-        raise ValueError(
-            f"note duration {duration}s outside the keyboard's pinned range "
-            f"[{minimum_duration}, {maximum_duration}]s"
-        )
+    width = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
+    if params.shape[1] != width:
+        raise ValueError(f"Expected {width} encoded parameter columns, got {params.shape[1]}")
+    notes = [
+        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        for row in params.detach().clamp(0, 1).cpu().numpy()
+    ]
+    column = partial(torch.tensor, dtype=torch.float32, device=params.device)
+    # Slice the synth columns explicitly: only they reach the voice's parameters. The note
+    # columns carry no gradient by construction — pitch is a discrete category, and duration
+    # lands on ADSR segment boundaries through integer sample arithmetic — so a differentiable
+    # render must never see them as if they were continuous knobs.
+    synth_params = params[:, TORCHSYNTH_FULL_PARAM_SPEC.synth_columns]
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
     with renderer.lock:
         all_parameters = voice.get_parameters()
         native = [all_parameters[(spec.module, spec.name)] for spec in INFERABLE_SPEC]
-        for values, parameter in zip(params.T, native, strict=True):
+        for values, parameter in zip(synth_params.T, native, strict=True):
             parameter.data.copy_(values.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS))
-        for name, value in (
-            ("midi_f0", float(midi_pitch)),
-            ("duration", duration),
-        ):
-            keyboard = all_parameters[("keyboard", name)]
-            keyboard.to_0to1(torch.full((len(params),), value, device=params.device))
+        keyboard = (
+            ("midi_f0", column([note["pitch"] for note in notes])),
+            (
+                "duration",
+                column([note_on_duration(note["note_start_and_end"]) for note in notes]),
+            ),
+        )
+        for name, value in keyboard:
+            all_parameters[("keyboard", name)].to_0to1(value)
         with torch.no_grad():
             audio = voice.output()
     if not torch.isfinite(audio).all():
         raise ValueError("TorchSynth audio must be finite")
-    return audio.as_subclass(torch.Tensor).clamp(-1, 1)
+    starts = column([note["note_start_and_end"][0] for note in notes])
+    return _delay_by_note_start(audio.as_subclass(torch.Tensor).clamp(-1, 1), starts, sample_rate)
 
 
 class TorchSynthDataset(Dataset[TorchSynthItem]):
     """Deterministic parameters rendered on demand instead of stored as audio."""
 
     def __init__(
-        self, num_samples: int, seed: int, sample_rate: int, signal_length: int, midi_pitch: int
+        self, num_samples: int, seed: int, sample_rate: int, signal_length: int
     ) -> None:
         """Bind the sampling seed and audio shape for on-demand rendering.
 
@@ -189,14 +207,11 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
         :param seed: Base seed folded with the index to draw each row's parameters.
         :param sample_rate: Audio sample rate in Hz.
         :param signal_length: Number of output samples per rendered row.
-        :param midi_pitch: Fixed MIDI note rendered for every row.
         """
         self.num_samples = num_samples
         self.seed = seed
         self.sample_rate = sample_rate
         self.signal_length = signal_length
-        self.midi_pitch = midi_pitch
-        self.num_params = NUM_PARAMS
 
     def __len__(self) -> int:
         """Return the logical number of online samples.
@@ -208,22 +223,24 @@ class TorchSynthDataset(Dataset[TorchSynthItem]):
     def __getitem__(self, index: int) -> TorchSynthItem:
         """Sample and render one deterministic parameter row.
 
+        Synth values, pitch, and the note window all come from ``torchsynth_full``'s own
+        sampler, so the row is the spec's encoding — the same contract every offline path
+        emits — and the render is driven by the row rather than by configuration.
+
         :param index: Logical row index.
         :returns: Float32 audio shaped ``(1, signal_length)``, float32 parameters shaped ``(1,
-            NUM_PARAMS)``, and the renderer callable.
+            torchsynth_full encoded width)``, and the renderer callable.
         """
-        sample_seed = derive_sample_seed(self.seed, index)
-        generator = torch.Generator().manual_seed(sample_seed)
-        params = torch.rand((1, self.num_params), generator=generator).clamp(
-            _PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS
-        )
+        rng = np.random.default_rng(derive_sample_seed(self.seed, index))
+        synth_values, note_params = TORCHSYNTH_FULL_PARAM_SPEC.sample(rng)
+        row = TORCHSYNTH_FULL_PARAM_SPEC.encode(synth_values, note_params)
+        params = torch.from_numpy(row).unsqueeze(0)
         # Per-sample CPU render; render_fn is passed through so a future collate can
         # batch/GPU-render instead of paying Voice.output() per row — see #1820.
         render_fn = partial(
             render_torchsynth,
             sample_rate=self.sample_rate,
             signal_length=self.signal_length,
-            midi_pitch=self.midi_pitch,
         )
         return render_fn(params), params, render_fn
 
@@ -267,8 +284,7 @@ class TorchSynthDataModule(LightningDataModule):
         self,
         sample_rate: int = 44_100,
         signal_length: int = 4_410,
-        midi_pitch: int = 60,
-        num_params: int = NUM_PARAMS,
+        num_params: int = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width,
         train_val_test_sizes: tuple[int, int, int] = (100_000, 10_000, 10_000),
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
@@ -279,8 +295,7 @@ class TorchSynthDataModule(LightningDataModule):
 
         :param sample_rate: Audio sample rate in Hz.
         :param signal_length: Number of output samples per rendered row.
-        :param midi_pitch: Fixed MIDI note rendered for every parameter row.
-        :param num_params: Expected parameter width, validated against TorchSynth in ``setup``.
+        :param num_params: Expected row width, validated against the spec in ``setup``.
         :param train_val_test_sizes: Row counts for the train, validation, and test splits.
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
@@ -291,7 +306,6 @@ class TorchSynthDataModule(LightningDataModule):
         super().__init__()
         self.sample_rate = sample_rate
         self.signal_length = signal_length
-        self.midi_pitch = midi_pitch
         self.num_params = num_params
         self.train_val_test_sizes = train_val_test_sizes
         self.train_val_test_seeds = train_val_test_seeds
@@ -304,17 +318,11 @@ class TorchSynthDataModule(LightningDataModule):
 
         :param stage: Lightning stage name, or ``None`` to build every split.
         :raises ValueError: The live voice drifts from ``PARAM_SPEC``, or the
-            configured parameter width differs from TorchSynth.
+            configured row width differs from the ``torchsynth_full`` spec.
         """
 
         def dataset(size: int, seed: int) -> TorchSynthDataset:
-            return TorchSynthDataset(
-                size,
-                seed,
-                self.sample_rate,
-                self.signal_length,
-                self.midi_pitch,
-            )
+            return TorchSynthDataset(size, seed, self.sample_rate, self.signal_length)
 
         train_size, val_size, test_size = self.train_val_test_sizes
         train_seed, val_seed, test_seed = self.train_val_test_seeds
@@ -326,9 +334,10 @@ class TorchSynthDataModule(LightningDataModule):
             self.test = dataset(test_size, test_seed)
         renderer = _make_renderer(self.sample_rate, self.signal_length)
         _verify_voice_matches_spec(renderer.voice)
-        if self.num_params != NUM_PARAMS:
+        width = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
+        if self.num_params != width:
             raise ValueError(
-                f"Configured num_params={self.num_params}, TorchSynth exposes {NUM_PARAMS}"
+                f"Configured num_params={self.num_params}, torchsynth_full encodes {width}"
             )
 
     def _loader(
