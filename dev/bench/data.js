@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785345153372,
+  "lastUpdate": 1785345155380,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -21199,6 +21199,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.488596595400002,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "14efffba7a72642dd8e133d48fabfc97133ca6d5",
+          "message": "internal-feat(experiments): enable per-parameter MSE by default (#2709)\n\n* internal-feat(experiments): default to per-param MSE logging\n\n* test(experiments): cover default per-param metrics end to end\n\n* test(models): exercise Flow-VAE callback lifecycle\n\n* refactor(tests): clarify callback contract fixtures",
+          "timestamp": "2026-07-29T09:14:43-07:00",
+          "tree_id": "19bc8a7ec2f760a78da3c7f17d3ae667c7f403f6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/14efffba7a72642dd8e133d48fabfc97133ca6d5"
+        },
+        "date": 1785345155060,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.874047756195068,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.561206197962164,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08115887641906738,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.00277024507522583,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.222120523452759,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.917344082800014,
             "unit": "seconds"
           }
         ]
