@@ -3179,7 +3179,7 @@ def test_write_columns_with_noop_add_columns_raises(
     dataset = lance.dataset(str(uri))
     monkeypatch.setattr(dataset, "add_columns", lambda *args, **kwargs: None)
 
-    with pytest.raises(RuntimeError, match="without committing"):
+    with pytest.raises(RuntimeError, match="0 of 4 rows without committing"):
         _write_columns(
             dataset,
             [_fake_spec("sketch")],
