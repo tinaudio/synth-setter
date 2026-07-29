@@ -59,12 +59,6 @@ variable "vm_name" {
   description = "Name of the built Tart VM. Used with `tart run <name>` and `tart ip <name>`."
 }
 
-variable "surge_xt_version" {
-  type        = string
-  default     = "1.3.4"
-  description = "Required Surge XT version. Asserted after `brew install --cask surge-xt` so the build fails loudly if Homebrew's cask has rolled past this — bump only after validating the new release against the pipeline."
-}
-
 variable "codex_version" {
   type        = string
   default     = "latest"
@@ -88,11 +82,8 @@ source "tart-cli" "tart" {
 build {
   sources = ["source.tart-cli.tart"]
 
-  # CLI + GUI tools. Parity with the CLI stack in the Docker
-  # devcontainer-tools stage, adapted to macOS: surge-xt ships as a cask
-  # (.vst3 installed to /Library/Audio/Plug-Ins/VST3/Surge XT.vst3); tmux
-  # + zellij mirror the multiplexers baked into devcontainer-tools; node
-  # provides the `npm` runtime used to install the Codex CLI below.
+  # CLI + GUI tools. tmux and zellij mirror the Docker multiplexers;
+  # node provides npm for Codex and the pinned Studiorack CLI.
   provisioner "shell" {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
@@ -122,11 +113,6 @@ build {
       "bash /tmp/agy-install.sh",
       "rm /tmp/agy-install.sh",
       "agy --version",
-      "brew install --cask surge-xt",
-      # Hard-fail if Homebrew's cask resolves to a Surge XT version we haven't
-      # qualified against the pipeline. `brew list --cask --versions` prints
-      # `surge-xt <version>`; extract the second field and assert equality.
-      "test \"$(brew list --cask --versions surge-xt | awk '{print $2}')\" = \"${var.surge_xt_version}\"",
     ]
   }
 
@@ -150,12 +136,8 @@ build {
       "cd ~/synth-setter && git checkout ${var.synth_setter_git_ref}",
       "cd ~/synth-setter && uv venv --python ${var.python_version}",
       "cd ~/synth-setter && uv sync --frozen",
-      # Mirror the Docker dev-base convention: symlink the cask-installed
-      # VST3 bundle to the repo-relative `plugins/Surge XT.vst3` path that
-      # configs, CLI `--plugin_path` defaults, and tests all assume. See
-      # docker/ubuntu22_04/Dockerfile step `ln -s "/usr/lib/vst3/Surge XT.vst3" ...`.
-      "mkdir -p ~/synth-setter/plugins",
-      "ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' ~/synth-setter/'plugins/Surge XT.vst3'",
+      "cd ~/synth-setter && npm ci",
+      "cd ~/synth-setter && sudo env \"PATH=$PATH\" 'STUDIORACK_PLUGINS_DIR=/Library/Application Support/synth-setter/studiorack' uv run synth-setter-plugins install --plugin surge-synthesizer/surge",
       # Auto-activate the venv for every interactive shell so tools installed
       # into .venv/bin (pre-commit, pyright, pytest, ruff, etc.) are on PATH
       # from login without a manual `source .venv/bin/activate`.

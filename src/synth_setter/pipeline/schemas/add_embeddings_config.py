@@ -14,7 +14,6 @@ from synth_setter.data.vst.param_text import (
 )
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.pipeline.data.add_embeddings import (
-    CLAP_EMBEDDING_DIM,
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
@@ -229,20 +228,20 @@ class AddEmbeddingsConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _num_sub_vectors_divides_selected_clap_dim(self) -> Self:
-        """Reject incompatible PQ splits only when CLAP is selected.
+    def _num_sub_vectors_divides_selected_fixed_vector_dims(self) -> Self:
+        """Reject incompatible PQ splits for selected fixed-width vectors.
 
         :returns: Validated config unchanged.
-        :raises ValueError: The count cannot evenly split selected CLAP vectors.
+        :raises ValueError: The count cannot evenly split a selected vector.
         """
         if self.num_sub_vectors is None:
             return self
-        fixed_widths = {"clap": CLAP_EMBEDDING_DIM}
         for name in self.embeddings:
-            width = fixed_widths.get(name)
-            if width is not None and width % self.num_sub_vectors != 0:
+            index = EMBEDDING_REGISTRY[name].index
+            dim = None if index is None else index.vector_dim
+            if dim is not None and dim % self.num_sub_vectors != 0:
                 raise ValueError(
-                    f"num_sub_vectors ({self.num_sub_vectors}) must divide the {name} dim ({width})"
+                    f"num_sub_vectors ({self.num_sub_vectors}) must divide the {name} dim ({dim})"
                 )
         return self
 

@@ -66,13 +66,13 @@ The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-se
 
 ### First build (dev-snapshot)
 
-The dev-snapshot image has Surge XT + Python deps + source code baked at a
-specific git ref, plus prebuilt VST3 synths (Dexed, OB-Xf, Six Sines) fetched by
-the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile` (amd64
-only; versions and SHA256 pins live there as `ARG`s). Each synth is
-load-validated at build time by
-`src/synth_setter/scripts/load_vst3_check.py` under headless X11 and
-symlinked into `plugins/`.
+The dev-snapshot image installs the package set pinned in `studiorack.json`
+through the npm-locked Studiorack CLI. Archive packages remain versioned under
+`/opt/studiorack`; `/usr/lib/vst3` and checkout-local `plugins/` aliases keep
+render specs portable. Surge source mode and KR-106 retain source fallbacks for
+registry artifacts that do not satisfy supported architecture/glibc contracts.
+Every shipped bundle is load-validated under headless X11 before the image is
+published.
 
 ```bash
 make docker-build-dev-snapshot \
@@ -124,8 +124,8 @@ make docker-build-devcontainer-tools-dev-user \
 ```
 
 The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
-build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
-the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
+build `FROM dev-base`, the shared parent that holds the Studiorack-provisioned
+plugin set, the venv, and the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
 the npm CLI tree layered onto the Node binary `dev-base` already bakes for its
 own pytest run, the `@anthropic-ai/claude-code`,

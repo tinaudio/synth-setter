@@ -36,11 +36,18 @@ from synth_setter.data.vst.shapes import (
     SAME_S_FIELD,
     NUM_SKETCH_CONTROLS,
     SKETCH_CTRL_FIELD,
+    SSONDO_FIELD,
     T5GEMMA_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.ssondo import (
+    DEFAULT_SSONDO_CHECKPOINT,
+    SSONDO_EMBEDDING_DIM,
+    SSONDOEncodeFn,
+    load_ssondo_audio_encoder,
+)
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -88,7 +95,12 @@ type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = (
-    M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn | SketchEncodeFn
+    M2LEncodeFn
+    | ClapEncodeFn
+    | SameEncodeFn
+    | SSONDOEncodeFn
+    | ParamTextEncodeFn
+    | SketchEncodeFn
 )
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
@@ -113,12 +125,17 @@ class IndexSpec:
     .. attribute :: vector_column
 
         Companion vector column, or ``None`` to index the embedding column.
+
+    .. attribute :: vector_dim
+
+        Static vector width for config validation, or ``None`` when output-derived.
     """
 
     metric: str = DEFAULT_INDEX_METRIC
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS
     pool: Literal["none", "mean", "attention"] = "none"
     vector_column: str | None = None
+    vector_dim: int | None = None
 
 
 @dataclass(frozen=True)
@@ -402,6 +419,16 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_same_audio_encoder(checkpoint, config.device)
 
 
+def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load S-SONDO through its pinned checkpoint adapter.
+
+    :param checkpoint: Pinned Hugging Face repo id or hash-identical local artifact.
+    :param config: Run config supplying the device.
+    :returns: S-SONDO encoder over source audio.
+    """
+    return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
+
+
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -430,6 +457,25 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
         return encode_text(normalize(spec, params))
 
     return encode
+
+
+def _encode_ssondo_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as fixed-width S-SONDO vectors.
+
+    :param audio: ``(B, C, T)`` source audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: S-SONDO encoder over source audio.
+    :returns: Fixed-size-list float32 array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    encode = cast("SSONDOEncodeFn", encoder)
+    vectors = _finite_embedding(SSONDO_FIELD, encode(audio, sample_rate))
+    expected_shape = (len(audio), SSONDO_EMBEDDING_DIM)
+    if vectors.shape != expected_shape:
+        raise ValueError(
+            f"{SSONDO_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
+        )
+    return _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)
 
 
 def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
@@ -511,7 +557,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         column=CLAP_FIELD,
         default_checkpoint=DEFAULT_CLAP_CHECKPOINT,
         co_resident=True,
-        index=IndexSpec(pool="none"),
+        index=IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM),
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
     ),
@@ -553,9 +599,19 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
             pool="mean",
             num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
             vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+            vector_dim=NUM_SKETCH_CONTROLS,
         ),
         load_encoder=_load_sketch_spec_encoder,
         encode_column=_encode_sketch_column,
+    ),
+    "ssondo": EmbeddingSpec(
+        name="ssondo",
+        column=SSONDO_FIELD,
+        default_checkpoint=DEFAULT_SSONDO_CHECKPOINT,
+        co_resident=True,
+        index=IndexSpec(pool="none", vector_dim=SSONDO_EMBEDDING_DIM),
+        load_encoder=_load_ssondo_spec_encoder,
+        encode_column=_encode_ssondo_column,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.
@@ -894,6 +950,57 @@ def build_index(
     return True
 
 
+def _index_exists(dataset: lance.LanceDataset, spec: EmbeddingSpec) -> bool:
+    """Return whether Lance reports an index over the policy's vector column.
+
+    :param dataset: Open dataset.
+    :param spec: Registry policy whose index is checked.
+    :returns: Whether the target column has an index.
+    """
+    if spec.index is None:
+        return False
+    target = spec.index.vector_column or spec.column
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    return any(entry.get("fields") == [target] for entry in indices)
+
+
+def _resume_missing_indexes(
+    dataset: lance.LanceDataset,
+    specs: Sequence[EmbeddingSpec],
+    config: AddEmbeddingsConfig,
+) -> bool:
+    """Build missing indexes when every selected output column already exists.
+
+    :param dataset: Open dataset that may contain a completed embedding write.
+    :param specs: Selected registry policies.
+    :param config: Index settings for the rerun.
+    :returns: Whether index-only recovery completed.
+    """
+    expected = {column for spec in specs for column in _output_columns(spec)}
+    present = expected & set(dataset.schema.names)
+    if not present:
+        return False
+    if present != expected or not config.build_index or dataset.count_rows() < MIN_ROWS_FOR_INDEX:
+        _guard_existing_columns(dataset, specs)
+
+    missing = [
+        (spec, index)
+        for spec in specs
+        if (index := spec.index) is not None and not _index_exists(dataset, spec)
+    ]
+    if not missing:
+        _guard_existing_columns(dataset, specs)
+
+    logger.info(
+        "embedding_index_resume_started",
+        columns=[index.vector_column or spec.column for spec, index in missing],
+    )
+    for spec, index in missing:
+        target = index.vector_column or spec.column
+        build_index(dataset, target, index=index, config=config)
+    return True
+
+
 def add_embeddings(config: AddEmbeddingsConfig) -> None:
     """Append the registry entries selected by ``config.embeddings``.
 
@@ -904,10 +1011,13 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    output_columns = [column for spec in specs for column in _output_columns(spec)]
+    if _resume_missing_indexes(dataset, specs, config):
+        logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
+        return
+
     _guard_existing_columns(dataset, specs)
     _validate_write_source(dataset, config.batch_size)
-    output_columns = [column for spec in specs for column in _output_columns(spec)]
-
     logger.info(
         "adding_embeddings",
         uri=config.lance_uri,

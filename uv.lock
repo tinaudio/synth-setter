@@ -4264,6 +4264,27 @@ wheels = [
 ]
 
 [[package]]
+name = "ssondo"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "timm" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/33/5f/67cd3deb615942380c781fed38191778ffef7c4b1109172bf1486d11297b/ssondo-0.3.1.tar.gz", hash = "sha256:8de21007f7190c20605a41b02c563064934b724881aff829abd5ece88fc93257", size = 32981, upload-time = "2026-04-27T19:12:26.637Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/ad/a42f332930ddef19c61ac3422026ee8642ad07785c935463a7e80a65be12/ssondo-0.3.1-py3-none-any.whl", hash = "sha256:c85351887c0fad1804d116048672102be7eccc18c23d21f6315f426083624098", size = 36256, upload-time = "2026-04-27T19:12:24.726Z" },
+]
+
+[[package]]
 name = "stable-audio-3"
 version = "0.1.0"
 source = { git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1#124e8a799f57a1f665495ecb72e547d0a62867f1" }
@@ -4459,6 +4480,7 @@ dev = [
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "smoosense", extra = ["jupyter"] },
+    { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "structlog" },
     { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
@@ -4527,6 +4549,7 @@ runtime = [
     { name = "scipy" },
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
+    { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "structlog" },
     { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
@@ -4553,6 +4576,7 @@ torch = [
     { name = "jaxtyping" },
     { name = "lightning" },
     { name = "music2latent" },
+    { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
@@ -4680,6 +4704,7 @@ dev = [
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "smoosense", extras = ["jupyter"] },
+    { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "structlog" },
     { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
@@ -4742,6 +4767,7 @@ runtime = [
     { name = "scipy", specifier = ">=1.14,<1.15" },
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
+    { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "structlog" },
     { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
@@ -4762,6 +4788,7 @@ torch = [
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "music2latent", specifier = ">=0.1.8" },
+    { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "torch", specifier = ">=2.0.0" },
     { name = "torchaudio", specifier = ">=2.0.0" },
@@ -4854,6 +4881,26 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b7/4d/08c89e34946fce2aec4fbb45c9016efd5f4d7f24af8e5d93296e935631d8/threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e", size = 21274, upload-time = "2025-03-13T13:49:23.031Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb", size = 18638, upload-time = "2025-03-13T13:49:21.846Z" },
+]
+
+[[package]]
+name = "timm"
+version = "1.0.28"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchvision", version = "0.26.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchvision", version = "0.27.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torchvision", version = "0.27.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/35/03/e41389ac641747bfec48d016fde8be1eade1901e6f2c1aedcb0c8cb4b5d9/timm-1.0.28.tar.gz", hash = "sha256:3789d313fdd5541a327b60180d70dbb4bdec73db8ff0655e413db3c3d134a9a4", size = 2451413, upload-time = "2026-07-11T17:24:32.615Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/76/de1bfac17d183c49c6d0887903d3064ced51cf1d9ba7a8d611c1a8808c4f/timm-1.0.28-py3-none-any.whl", hash = "sha256:e577b88da96b3a722ea5e2f042455ce6f715d398304d8e63b17d126ed7d89968", size = 2597944, upload-time = "2026-07-11T17:24:30.869Z" },
 ]
 
 [[package]]
