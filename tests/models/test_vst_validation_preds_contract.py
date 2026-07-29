@@ -19,13 +19,15 @@ from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
 )
+from synth_setter.models.components.vae import VAEOutput
 from synth_setter.models.vst_fake_oracle_module import FakeOracleNet, VSTFakeOracleModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 
-_VstModule = VSTFeedForwardModule | VSTFakeOracleModule | VSTFlowMatchingModule
+_VstModule = VSTFeedForwardModule | VSTFakeOracleModule | VSTFlowMatchingModule | VSTFlowVAEModule
 
-_NUM_PARAMS = 6
+_NUM_PARAMS = 7
 _BATCH = 3
 _MEL_CHANNELS = 2
 _MEL_N_MELS = 4
@@ -59,6 +61,20 @@ class _TinyNet(torch.nn.Module):
         return self.linear(mel_spec.flatten(start_dim=1))
 
 
+class _TinyFlowVAENet(_TinyNet):
+    """Produce a complete Flow-VAE output from a tiny learned projection."""
+
+    def forward(self, mel_spec: torch.Tensor) -> VAEOutput:
+        """Map ``mel_spec`` to predictions and valid latent-loss tensors.
+
+        :param mel_spec: Batch of mel spectrograms.
+        :returns: Flow-VAE output consumed by the production loss function.
+        """
+        x_hat = super().forward(mel_spec)
+        zeros = torch.zeros_like(x_hat)
+        return VAEOutput(mel_spec, x_hat, x_hat, x_hat, x_hat, zeros, zeros[:, 0])
+
+
 def _feed_forward_module() -> VSTFeedForwardModule:
     """Build a tiny real feed-forward module.
 
@@ -80,6 +96,19 @@ def _fake_oracle_module() -> VSTFakeOracleModule:
         net=FakeOracleNet(d_out=_NUM_PARAMS),
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
+    )
+
+
+def _flow_vae_module() -> VSTFlowVAEModule:
+    """Build a tiny Flow-VAE module with production loss computation.
+
+    :returns: Module wired for the test batch shapes and surge_4 parameter spec.
+    """
+    return VSTFlowVAEModule(
+        net=_TinyFlowVAENet(),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        param_spec="surge_4",
     )
 
 
@@ -136,8 +165,8 @@ class _TinyEncoder(torch.nn.Module):
 
 @pytest.mark.parametrize(
     "build_module",
-    [_feed_forward_module, _fake_oracle_module, _flow_matching_module],
-    ids=["feed_forward", "fake_oracle", "flow_matching"],
+    [_feed_forward_module, _fake_oracle_module, _flow_matching_module, _flow_vae_module],
+    ids=["feed_forward", "fake_oracle", "flow_matching", "flow_vae"],
 )
 def test_validation_step_returns_preds_shaped_like_target_params(
     build_module: Callable[[], _VstModule],
@@ -153,9 +182,24 @@ def test_validation_step_returns_preds_shaped_like_target_params(
 
     assert "preds" in outputs
     assert outputs["preds"].shape == batch["params"].shape
+    assert outputs["per_param_mse"].shape == batch["params"].shape[1:]
     # Finiteness, not range: raw predictions are unbounded by design (linear/flow
     # outputs); decode_model_output owns the mapping into parameter space.
     assert torch.isfinite(outputs["preds"]).all()
+
+
+def test_flow_vae_validation_step_returns_per_param_mse() -> None:
+    """Flow-VAE validation exposes the per-parameter metric consumed by callbacks."""
+    module = _flow_vae_module()
+    batch = _batch()
+    offsets = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]).repeat(_BATCH, 1)
+    batch["params"] = module.net(batch["mel_spec"]).x_hat.detach() + offsets
+
+    outputs = module.validation_step(batch, batch_idx=0)
+
+    torch.testing.assert_close(
+        outputs["per_param_mse"], torch.tensor([1.0, 4.0, 9.0, 16.0, 25.0, 36.0, 49.0])
+    )
 
 
 def test_validation_step_preds_are_the_feed_forward_nets_predictions() -> None:
