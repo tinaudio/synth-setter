@@ -2,6 +2,10 @@
 defaults:
   - paths: default
   - hydra: default
+  # Unselected by default — only re-rendering embeddings need a renderer. Select the
+  # pair together, e.g. `render=torchsynth synth=torchsynth_adsr` (#2565).
+  - render: null
+  - synth: null
   - _self_
 
 # Lance dataset to augment.
@@ -31,6 +35,8 @@ debug: false
 param_spec_name: null
 # Strategy rendering param rows as conditioning text for param-sourced embeddings.
 param_text_normalizer: param_names
+# Master seed for param_shift's per-row replacement draws; row seeds derive from it.
+param_shift_seed: 0
 # hydra/default interpolates ${task_name}; run.dir is overridden below since
 # its group default also references ${run_name}, absent here.
 task_name: add_embeddings

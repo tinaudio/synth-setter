@@ -40,6 +40,29 @@ SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
 TINYMU_FIELD: str = "tinymu"
 
+# Single-parameter sensitivity columns appended by the ``param_shift`` embedder: the
+# shifted parameter's name, the size of the shift in encoded space, the re-rendered
+# audio, and the metric distances between the original and re-rendered audio.
+PARAM_SHIFT_FIELD: str = "param_shift"
+PARAM_AMOUNT_SHIFT_FIELD: str = "param_amount_shift"
+AUDIO_SHIFT_FIELD: str = "audio_shift"
+RMS_SHIFT_FIELD: str = "rms_shift"
+SOT_SHIFT_FIELD: str = "sot_shift"
+WMFCC_SHIFT_FIELD: str = "wmfcc_shift"
+MSS_SHIFT_FIELD: str = "mss_shift"
+PARAM_SHIFT_SCALAR_FIELD_NAMES: tuple[str, ...] = (
+    PARAM_SHIFT_FIELD,
+    PARAM_AMOUNT_SHIFT_FIELD,
+    RMS_SHIFT_FIELD,
+    SOT_SHIFT_FIELD,
+    WMFCC_SHIFT_FIELD,
+    MSS_SHIFT_FIELD,
+)
+PARAM_SHIFT_FIELD_NAMES: tuple[str, ...] = (
+    AUDIO_SHIFT_FIELD,
+    *PARAM_SHIFT_SCALAR_FIELD_NAMES,
+)
+
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.
 DATASET_FIELD_DTYPES: dict[str, np.dtype] = {

@@ -24,7 +24,7 @@ import numpy as np
 import pyarrow as pa
 import structlog
 
-from synth_setter.data.vst.shapes import TINYMU_FIELD
+from synth_setter.data.vst.shapes import AUDIO_FIELD, TINYMU_FIELD
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.logging_utils import resolve_git_sha
@@ -347,16 +347,17 @@ def tinymu_artifact_digest(checkpoint: str) -> str:
 
 
 def encode_tinymu_column(
-    audio: np.ndarray, sample_rate: int, encoder: object
-) -> pa.Array:
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: object
+) -> Mapping[str, pa.Array]:
     """Encode one audio batch as a fixed-shape MATPAC tensor column.
 
-    :param audio: Source ``(B, C, T)`` waveforms.
+    :param sources: Decoded source columns carrying ``(B, C, T)`` waveforms.
     :param sample_rate: Dataset sample rate in Hz.
     :param encoder: Loaded TinyMU audio encoder.
-    :returns: Fixed-shape Arrow tensor array with shape ``(3840, T_tokens)``.
+    :returns: The TinyMU column keyed by name, ``(3840, T_tokens)`` per row.
     :raises ValueError: The encoder output violates TinyMU's shape or finite contract.
     """
+    audio = sources[AUDIO_FIELD]
     encode = cast("TinyMUEncodeFn", encoder)
     embeddings = np.asarray(encode(audio, sample_rate), dtype=np.float32)
     expected_shape = (
@@ -373,9 +374,11 @@ def encode_tinymu_column(
         raise ValueError(f"{TINYMU_FIELD} encoder produced non-finite values")
     from synth_setter.pipeline.data.lance_shard import tensor_array
 
-    return tensor_array(
-        np.ascontiguousarray(embeddings), np.dtype("float32"), expected_shape[1:]
-    )
+    return {
+        TINYMU_FIELD: tensor_array(
+            np.ascontiguousarray(embeddings), np.dtype("float32"), expected_shape[1:]
+        )
+    }
 
 
 def tinymu_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:

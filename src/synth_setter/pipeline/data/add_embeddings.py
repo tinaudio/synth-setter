@@ -31,9 +31,11 @@ from einops import rearrange
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    AUDIO_SHIFT_FIELD,
     CLAP_FIELD,
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
+    PARAM_SHIFT_SCALAR_FIELD_NAMES,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SSONDO_FIELD,
@@ -42,6 +44,14 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.param_shift import (
+    PARAM_SHIFT_INPUT_FIELDS,
+    ROW_ID_FIELD,
+    ParamShifter,
+    encode_param_shift_columns,
+    load_param_shifter,
+    param_shift_policy_values,
+)
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
     SSONDO_CHECKPOINT_SHA256,
@@ -103,9 +113,11 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn
+type Encoder = (
+    M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn | ParamShifter
+)
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
-type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
+type EncodeColumnsFn = Callable[[Mapping[str, np.ndarray], int, Encoder], Mapping[str, pa.Array]]
 type ResolveArtifactIdentityFn = Callable[[str], str]
 
 
@@ -151,7 +163,7 @@ class EmbeddingSpec:
 
     .. attribute :: column
 
-        Lance column written by the encoder.
+        Lance column carrying the embedding and targeted by the index policy.
 
     .. attribute :: default_checkpoint
 
@@ -169,17 +181,26 @@ class EmbeddingSpec:
 
         Checkpoint and device to encoder factory.
 
-    .. attribute :: encode_column
+    .. attribute :: encode_columns
 
-        Source batch, sample rate, and encoder to Arrow array transform.
+        Decoded source columns, sample rate, and encoder to Arrow column mapping.
 
     .. attribute :: resolve_artifact_identity
 
         Checkpoint source to immutable encoder-artifact identity resolver.
 
-    .. attribute :: input_field
+    .. attribute :: input_fields
 
-        Dataset column supplying this embedding's encoder input.
+        Dataset columns supplying this embedding's encoder input.
+
+    .. attribute :: extra_columns
+
+        Further Lance columns the encoder writes alongside ``column``.
+
+    .. attribute :: rerenders
+
+        Whether the encoder re-renders audio, making the run's render config and seed
+        part of its output identity.
     """
 
     name: str
@@ -188,9 +209,11 @@ class EmbeddingSpec:
     co_resident: bool
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
-    encode_column: EncodeColumnFn
+    encode_columns: EncodeColumnsFn
     resolve_artifact_identity: ResolveArtifactIdentityFn
-    input_field: str = AUDIO_FIELD
+    input_fields: tuple[str, ...] = (AUDIO_FIELD,)
+    extra_columns: tuple[str, ...] = ()
+    rerenders: bool = False
 
 
 EMBEDDING_POLICY_VERSION = 1
@@ -312,6 +335,21 @@ def _ssondo_artifact_identity(checkpoint: str) -> str:
     return _versioned_artifact_identity("ssondo", digest)
 
 
+def _param_shift_artifact_identity(checkpoint: str) -> str:
+    """Return the re-render embedder's identity stem.
+
+    The output-determining settings are the render config and seed, which
+    :func:`_resolve_artifact_identity` folds in through ``EmbeddingSpec.rerenders``.
+
+    :param checkpoint: Empty placeholder; the embedder loads no checkpoint.
+    :returns: Versioned identity stem.
+    :raises ValueError: A checkpoint override was supplied for a checkpoint-free embedder.
+    """
+    if checkpoint:
+        raise ValueError("param_shift renders through a render config, not a checkpoint")
+    return _versioned_artifact_identity("param_shift", "renderer")
+
+
 def _tinymu_artifact_identity(checkpoint: str) -> str:
     """Return TinyMU's generic-policy-wrapped artifact identity.
 
@@ -355,18 +393,21 @@ def _finite_embedding(field: str, embedding: np.ndarray) -> np.ndarray:
     return contiguous
 
 
-def _encode_m2l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+def _encode_m2l_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> Mapping[str, pa.Array]:
     """Encode one audio batch as a fixed-shape m2l tensor column.
 
-    :param audio: ``(B, C, T)`` audio batch.
+    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
     :param sample_rate: Unused source sample rate.
     :param encoder: m2l encoder over the original channel layout.
-    :returns: Fixed-shape tensor array.
+    :returns: The m2l column keyed by name.
     :raises ValueError: The encoder returns the wrong row count, rank, or non-finite values.
     """
     from synth_setter.pipeline.data.lance_shard import tensor_array
 
     del sample_rate
+    audio = sources[AUDIO_FIELD]
     encode = cast("M2LEncodeFn", encoder)
     latents = _finite_embedding(M2L_FIELD, encode(audio))
     if latents.ndim < 2 or len(latents) != len(audio):
@@ -374,18 +415,21 @@ def _encode_m2l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) ->
             f"{M2L_FIELD} encoder produced shape {latents.shape}, expected {len(audio)} rows "
             "with at least one embedding dimension"
         )
-    return tensor_array(latents, np.dtype("float32"), latents.shape[1:])
+    return {M2L_FIELD: tensor_array(latents, np.dtype("float32"), latents.shape[1:])}
 
 
-def _encode_clap_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+def _encode_clap_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> Mapping[str, pa.Array]:
     """Encode one audio batch as fixed-width CLAP vectors.
 
-    :param audio: ``(B, C, T)`` audio batch.
+    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: CLAP encoder over mono audio.
-    :returns: Fixed-size-list float32 array.
+    :returns: The CLAP column keyed by name.
     :raises ValueError: The encoder returns the wrong shape or non-finite values.
     """
+    audio = sources[AUDIO_FIELD]
     encode = cast("ClapEncodeFn", encoder)
     vectors = _finite_embedding(CLAP_FIELD, encode(_downmix_to_mono(audio), sample_rate))
     expected_shape = (len(audio), CLAP_EMBEDDING_DIM)
@@ -393,7 +437,7 @@ def _encode_clap_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -
         raise ValueError(
             f"{CLAP_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
         )
-    return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
+    return {CLAP_FIELD: _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)}
 
 
 def _same_resampled_samples(num_samples: int, sample_rate: int) -> int:
@@ -458,25 +502,26 @@ def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 
 
 def _encode_same_column(
-    audio: np.ndarray,
+    sources: Mapping[str, np.ndarray],
     sample_rate: int,
     encoder: Encoder,
     *,
     field: str,
     frame_count: SameFrameCountFn,
-) -> pa.Array:
+) -> Mapping[str, pa.Array]:
     """Encode one audio batch under the selected SAME model's frame contract.
 
-    :param audio: ``(B, C, T)`` source audio.
+    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: SAME encoder over prepared stereo audio.
     :param field: SAME target column.
     :param frame_count: Model-specific latent-frame calculation.
-    :returns: Fixed-shape tensor array.
+    :returns: The SAME column keyed by ``field``.
     :raises ValueError: The encoder returns the wrong shape or non-finite values.
     """
     from synth_setter.pipeline.data.lance_shard import tensor_array
 
+    audio = sources[AUDIO_FIELD]
     prepared = same_encoder_input(audio, sample_rate)
     encode = cast("SameEncodeFn", encoder)
     latents = _finite_embedding(field, encode(prepared))
@@ -489,19 +534,21 @@ def _encode_same_column(
         raise ValueError(
             f"{field} encoder produced shape {latents.shape}, expected {expected_shape}"
         )
-    return tensor_array(latents, np.dtype("float32"), expected_shape[1:])
+    return {field: tensor_array(latents, np.dtype("float32"), expected_shape[1:])}
 
 
-def _encode_same_s_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+def _encode_same_s_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> Mapping[str, pa.Array]:
     """Encode a SAME-S Arrow column through the shared SAME contract.
 
-    :param audio: Source audio batch.
+    :param sources: Decoded source columns carrying the audio batch.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: SAME-S encoder.
-    :returns: Fixed-shape tensor array.
+    :returns: The SAME-S column keyed by name.
     """
     return _encode_same_column(
-        audio,
+        sources,
         sample_rate,
         encoder,
         field=SAME_S_FIELD,
@@ -509,16 +556,18 @@ def _encode_same_s_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     )
 
 
-def _encode_same_l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+def _encode_same_l_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> Mapping[str, pa.Array]:
     """Encode a SAME-L Arrow column through the shared SAME contract.
 
-    :param audio: Source audio batch.
+    :param sources: Decoded source columns carrying the audio batch.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: SAME-L encoder.
-    :returns: Fixed-shape tensor array.
+    :returns: The SAME-L column keyed by name.
     """
     return _encode_same_column(
-        audio,
+        sources,
         sample_rate,
         encoder,
         field=SAME_L_FIELD,
@@ -580,6 +629,17 @@ def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     )
 
 
+def _load_param_shift_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Build the re-render shifter through the registry's uniform factory signature.
+
+    :param checkpoint: Unused registry placeholder.
+    :param config: Run config supplying the composed render selection and seed.
+    :returns: Renderer-bound param shifter.
+    """
+    del checkpoint
+    return load_param_shifter(config)
+
+
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -610,15 +670,18 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
-def _encode_ssondo_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+def _encode_ssondo_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> Mapping[str, pa.Array]:
     """Encode one audio batch as fixed-width S-SONDO vectors.
 
-    :param audio: ``(B, C, T)`` source audio.
+    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: S-SONDO encoder over source audio.
-    :returns: Fixed-size-list float32 array.
+    :returns: The S-SONDO column keyed by name.
     :raises ValueError: The encoder returns the wrong shape or non-finite values.
     """
+    audio = sources[AUDIO_FIELD]
     encode = cast("SSONDOEncodeFn", encoder)
     vectors = _finite_embedding(SSONDO_FIELD, encode(audio, sample_rate))
     expected_shape = (len(audio), SSONDO_EMBEDDING_DIM)
@@ -626,21 +689,24 @@ def _encode_ssondo_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
         raise ValueError(
             f"{SSONDO_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
         )
-    return _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)
+    return {SSONDO_FIELD: _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)}
 
 
-def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+def _encode_t5gemma_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> Mapping[str, pa.Array]:
     """Encode one param batch as a fixed-shape text-embedding tensor column.
 
-    :param params: ``(B, encoded_width)`` param rows.
+    :param sources: Decoded source columns carrying ``(B, encoded_width)`` param rows.
     :param sample_rate: Unused source sample rate.
     :param encoder: Encoder over param rows.
-    :returns: Fixed-shape tensor array.
+    :returns: The T5Gemma column keyed by name.
     :raises ValueError: The encoder returns the wrong row count, rank, or non-finite values.
     """
     from synth_setter.pipeline.data.lance_shard import tensor_array
 
     del sample_rate
+    params = sources[PARAM_ARRAY_FIELD]
     encode = cast("ParamTextEncodeFn", encoder)
     embeddings = _finite_embedding(T5GEMMA_FIELD, encode(params))
     if embeddings.ndim != 3 or len(embeddings) != len(params):
@@ -648,7 +714,7 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
             f"{T5GEMMA_FIELD} encoder produced shape {embeddings.shape}, expected "
             f"{len(params)} rows of (dim, seq) embeddings"
         )
-    return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
+    return {T5GEMMA_FIELD: tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])}
 
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
@@ -659,7 +725,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=True,
         index=IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM),
         load_encoder=_load_clap_spec_encoder,
-        encode_column=_encode_clap_column,
+        encode_columns=_encode_clap_column,
         resolve_artifact_identity=_clap_artifact_identity,
     ),
     "m2l": EmbeddingSpec(
@@ -669,7 +735,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=True,
         index=IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
         load_encoder=_load_m2l_spec_encoder,
-        encode_column=_encode_m2l_column,
+        encode_columns=_encode_m2l_column,
         resolve_artifact_identity=_m2l_artifact_identity,
     ),
     "same_s": EmbeddingSpec(
@@ -679,7 +745,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=False,
         index=IndexSpec(pool="mean", vector_column=f"{SAME_S_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
-        encode_column=_encode_same_s_column,
+        encode_columns=_encode_same_s_column,
         resolve_artifact_identity=_same_artifact_identity,
     ),
     "same_l": EmbeddingSpec(
@@ -689,7 +755,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=False,
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
-        encode_column=_encode_same_l_column,
+        encode_columns=_encode_same_l_column,
         resolve_artifact_identity=_same_artifact_identity,
     ),
     "ssondo": EmbeddingSpec(
@@ -699,7 +765,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=True,
         index=IndexSpec(pool="none", vector_dim=SSONDO_EMBEDDING_DIM),
         load_encoder=_load_ssondo_spec_encoder,
-        encode_column=_encode_ssondo_column,
+        encode_columns=_encode_ssondo_column,
         resolve_artifact_identity=_ssondo_artifact_identity,
     ),
     # Rows share one caption per param spec today, so an index over identical
@@ -711,9 +777,24 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=False,
         index=None,
         load_encoder=_load_t5gemma_spec_encoder,
-        encode_column=_encode_t5gemma_column,
+        encode_columns=_encode_t5gemma_column,
         resolve_artifact_identity=_t5gemma_artifact_identity,
-        input_field=PARAM_ARRAY_FIELD,
+        input_fields=(PARAM_ARRAY_FIELD,),
+    ),
+    # Not an encoder: every row is re-rendered with one parameter redrawn, so the run's
+    # render config replaces a checkpoint and the pass is solo (it holds a plugin host).
+    "param_shift": EmbeddingSpec(
+        name="param_shift",
+        column=AUDIO_SHIFT_FIELD,
+        default_checkpoint="",
+        co_resident=False,
+        index=None,
+        load_encoder=_load_param_shift_encoder,
+        encode_columns=encode_param_shift_columns,
+        resolve_artifact_identity=_param_shift_artifact_identity,
+        input_fields=PARAM_SHIFT_INPUT_FIELDS,
+        extra_columns=PARAM_SHIFT_SCALAR_FIELD_NAMES,
+        rerenders=True,
     ),
     "tinymu": EmbeddingSpec(
         name="tinymu",
@@ -726,7 +807,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
             vector_dim=TINYMU_FRONTEND.embedding_dim,
         ),
         load_encoder=_load_tinymu_spec_encoder,
-        encode_column=encode_tinymu_column,
+        encode_columns=encode_tinymu_column,
         resolve_artifact_identity=_tinymu_artifact_identity,
     ),
 }
@@ -736,11 +817,12 @@ def _output_columns(spec: EmbeddingSpec) -> tuple[str, ...]:
     """Return every dataset column emitted by one embedding policy.
 
     :param spec: Embedding write and index policy.
-    :returns: Sequence column followed by its optional vector companion.
+    :returns: Primary column, further encoder columns, then the optional vector companion.
     """
+    columns = (spec.column, *spec.extra_columns)
     if spec.index is None or spec.index.vector_column is None:
-        return (spec.column,)
-    return spec.column, spec.index.vector_column
+        return columns
+    return (*columns, spec.index.vector_column)
 
 
 def _guard_existing_columns(dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]) -> None:
@@ -769,6 +851,9 @@ def _validate_write_source(
         positive.
     """
     for field in input_fields:
+        # ``_rowid`` is synthesized by Lance per scan, so it is never in the schema.
+        if field == ROW_ID_FIELD:
+            continue
         if field not in dataset.schema.names:
             raise ValueError(f"dataset has no {field!r} column to embed")
     if batch_size < 1:
@@ -907,10 +992,15 @@ def _resolve_artifact_identity(spec: EmbeddingSpec, config: AddEmbeddingsConfig)
     """
     checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
     identity = spec.resolve_artifact_identity(checkpoint)
-    if spec.input_field != PARAM_ARRAY_FIELD:
+    policy_values: tuple[str, ...] = ()
+    if PARAM_ARRAY_FIELD in spec.input_fields:
+        policy_values += (config.param_spec_name or "", config.param_text_normalizer)
+    if spec.rerenders:
+        policy_values += tuple(param_shift_policy_values(config))
+    if not policy_values:
         return identity
     digest = hashlib.sha256()
-    for value in (config.param_spec_name or "", config.param_text_normalizer):
+    for value in policy_values:
         _update_framed_digest(digest, value.encode())
     return f"{identity}:input-policy:{digest.hexdigest()}"
 
@@ -960,7 +1050,18 @@ def _decoded_sources(batch: pa.RecordBatch, input_fields: Sequence[str]) -> dict
     :param input_fields: Column names the selected policies read.
     :returns: Decoded arrays keyed by field name.
     """
-    return {field: batch.column(field).to_numpy_ndarray() for field in input_fields}
+    return {field: _decoded_column(batch.column(field)) for field in input_fields}
+
+
+def _decoded_column(column: pa.Array) -> np.ndarray:
+    """Decode one Arrow column, preserving tensor columns' per-row shape.
+
+    :param column: Arrow column read from the source batch.
+    :returns: ``(B, *inner_shape)`` for tensor columns, ``(B,)`` for flat ones.
+    """
+    if isinstance(column, pa.FixedShapeTensorArray):
+        return column.to_numpy_ndarray()
+    return column.to_numpy(zero_copy_only=False)
 
 
 def _encode_columns(
@@ -977,18 +1078,27 @@ def _encode_columns(
     :param specs: Policies sharing this pass.
     :param encoders: Encoders aligned with ``specs``.
     :param stage_ms: Optional destination for per-encoder wall times.
-    :returns: Record batch containing each selected embedding column.
+    :returns: Record batch whose fields follow ``_output_columns`` order per policy.
+    :raises ValueError: An encoder emitted a different column set than its policy declares.
     """
     columns: dict[str, pa.Array] = {}
     for spec, encoder in zip(specs, encoders, strict=True):
         started_at = time.monotonic()
-        encoded = spec.encode_column(sources[spec.input_field], sample_rate, encoder)
-        columns[spec.column] = encoded
+        encoded = dict(spec.encode_columns(sources, sample_rate, encoder))
         if spec.index is not None:
-            pooled = _pooled_vector_column(encoded, spec.index)
+            pooled = _pooled_vector_column(encoded[spec.column], spec.index)
             if pooled is not None:
                 vector_column, vectors = pooled
-                columns[vector_column] = vectors
+                encoded[vector_column] = vectors
+        # Lance compares the UDF's output schema field-by-field, so the batch must follow
+        # the same order ``_embedding_output_schema`` declared.
+        expected = _output_columns(spec)
+        if set(encoded) != set(expected):
+            raise ValueError(
+                f"{spec.name} encoder produced columns {sorted(encoded)}, "
+                f"expected {sorted(expected)}"
+            )
+        columns.update({column: encoded[column] for column in expected})
         if stage_ms is not None:
             stage_ms[spec.name] = (time.monotonic() - started_at) * 1000
     return pa.record_batch(columns)
@@ -1014,7 +1124,7 @@ def _write_columns(
     if not specs:
         raise ValueError("no embedding specs given; nothing to write")
     _guard_existing_columns(dataset, specs)
-    input_fields = sorted({spec.input_field for spec in specs})
+    input_fields = sorted({field for spec in specs for field in spec.input_fields})
     total_rows = _validate_write_source(dataset, config.batch_size, input_fields)
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
