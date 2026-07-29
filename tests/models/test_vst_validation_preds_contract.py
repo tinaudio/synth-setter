@@ -76,7 +76,15 @@ class _TinyFlowVAENet(_TinyNet):
         """
         x_hat = super().forward(mel_spec)
         zeros = torch.zeros_like(x_hat)
-        return VAEOutput(mel_spec, x_hat, x_hat, x_hat, x_hat, zeros, zeros[:, 0])
+        return VAEOutput(
+            y_hat=mel_spec,
+            x_hat=x_hat,
+            z_0=x_hat,
+            z_k=x_hat,
+            mu=x_hat,
+            log_var=zeros,
+            log_det_jacobian=zeros[:, 0],
+        )
 
 
 def _feed_forward_module() -> VSTFeedForwardModule:

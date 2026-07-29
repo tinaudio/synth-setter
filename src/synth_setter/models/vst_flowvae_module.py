@@ -91,7 +91,8 @@ class VSTFlowVAEModule(LightningModule):
     ) -> dict[str, torch.Tensor]:
         """Return validation predictions and per-parameter MSE for callbacks.
 
-        :param batch: Batch containing mel spectrograms and encoded target parameters.
+        :param batch: Mel spectrograms shaped ``(batch, channels, mel_bins, frames)``
+            and encoded parameters shaped ``(batch, params)``.
         :param batch_idx: Validation batch index, unused.
         :returns: Predictions shaped ``(batch, params)`` and MSE shaped ``(params,)``.
         """

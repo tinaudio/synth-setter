@@ -692,6 +692,7 @@ def _build_surge_xt_smoke_cfg(
     accelerator: str,
     param_spec_name: str,
     experiment: str,
+    *,
     datamodule_group: Literal["surge", "surge_lance"] | None = "surge",
     callbacks_override: str | None = "[default_vst,eval_vst,log_per_param_mse]",
 ) -> DictConfig:
