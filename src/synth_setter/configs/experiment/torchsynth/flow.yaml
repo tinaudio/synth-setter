@@ -1,0 +1,45 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: torchsynth
+  - override /synth: torchsynth_full
+  - override /render: torchsynth
+  - override /model: vst_flow
+  - override /model/encoder: log_mel
+  - override /callbacks: default
+  # vst_flow's cosine scheduler interpolates ${trainer.max_steps}.
+  - override /trainer: gpu_400k_steps
+  - _self_
+
+experiment_name: torchsynth
+run_name: flow
+tags: [torchsynth, flow]
+
+# Online rendering means there is no stored mel column; the encoder observes the
+# waveform and computes its own log-mel.
+model:
+  conditioning: audio
+  # torch.compile traces through the renderer for audio-loss runs and graph-breaks;
+  # keeping it off here keeps this config swappable with flow_audio.
+  compile: false
+  encoder_output_dim: ${model.encoder.out_dim}
+  num_params: ${datamodule.num_params}
+  vector_field:
+    # LogMelEncoder emits a flat embedding, so conditioning width is its out_dim
+    # rather than the AST's d_model.
+    conditioning_dim: ${model.encoder.out_dim}
+
+datamodule:
+  collate_fn:
+    _target_: synth_setter.data.torchsynth_datamodule.collate_audio_dict
+    _partial_: true
+  resample_train_per_epoch: true
+
+callbacks:
+  model_checkpoint:
+    monitor: val/param_mse
+  early_stopping: null
+
+# Audio quality comes from the off-loop probe, not an in-module metric.
+training:
+  val_audio_probe: auto

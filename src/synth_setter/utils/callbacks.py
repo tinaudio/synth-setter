@@ -395,7 +395,9 @@ class PlotLossPerTimestep(Callback):
 
         # Get conditioning vector
         conditioning = pl_module.encoder(signal)
-        z = pl_module.vector_field.apply_dropout(conditioning, pl_module.hparams.cfg_dropout_rate)
+        z, _ = pl_module.vector_field.apply_dropout(
+            conditioning, pl_module.hparams.cfg_dropout_rate
+        )
 
         x0, x1, z = pl_module._sample_x0_and_x1(params, z)
 

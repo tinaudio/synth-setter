@@ -178,6 +178,18 @@ _AUDIO_PREDICTION_CASES = (
     ),
 )
 _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT = 0.05
+# 4 s of audio at a smoke-test rate: the spec draws each row's note window across a 4 s
+# range, so a shorter buffer would start most notes past the end and render silence.
+_TORCHSYNTH_AUDIO_OVERRIDES = (
+    "datamodule.sample_rate=22050",
+    "datamodule.signal_length=88200",
+)
+# Pitch and note timing now vary per row, so a single-row overfit no longer transfers to
+# the val split; the checkpoint has to see enough rows to beat the untrained baseline.
+_TORCHSYNTH_TRAIN_ROWS = 64
+_TORCHSYNTH_BATCH_SIZE = 8
+_TORCHSYNTH_EPOCHS = 10
+_TORCHSYNTH_LR = 0.001
 
 
 def _write_audio_prediction_fixture(path: Path) -> None:
@@ -325,7 +337,7 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
     _assert_audio_prediction_artifacts(output_dir)
 
 
-def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
+def _compose_torchsynth_train_cfg(tmp_path: Path) -> DictConfig:
     """Compose the deterministic TorchSynth checkpoint smoke run.
 
     :param tmp_path: Pinned Hydra output and log directory.
@@ -338,17 +350,17 @@ def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
             overrides=[
                 "experiment=torchsynth/ffn",
                 "trainer=cpu",
-                "+trainer.max_epochs=10",
-                "+trainer.limit_train_batches=1",
+                f"+trainer.max_epochs={_TORCHSYNTH_EPOCHS}",
                 "+trainer.limit_val_batches=1",
                 "trainer.val_check_interval=1.0",
                 "trainer.check_val_every_n_epoch=1",
                 "datamodule.resample_train_per_epoch=false",
-                "datamodule.train_val_test_sizes=[1,1,1]",
-                "datamodule.batch_size=1",
+                *_TORCHSYNTH_AUDIO_OVERRIDES,
+                f"datamodule.train_val_test_sizes=[{_TORCHSYNTH_TRAIN_ROWS},1,1]",
+                f"datamodule.batch_size={_TORCHSYNTH_BATCH_SIZE}",
                 "datamodule.num_workers=0",
                 "model.compile=false",
-                "model.optimizer.lr=0.0001",
+                f"model.optimizer.lr={_TORCHSYNTH_LR}",
                 "logger=csv",
             ],
         )
@@ -389,9 +401,12 @@ def _torchsynth_initial_loss(
     total_squared_error = 0.0
     total_elements = 0
     with torch.no_grad():
-        for baseline_audio, baseline_params, *_ in dataloader:
+        for baseline_batch in dataloader:
+            baseline_audio = baseline_batch["audio"]
+            baseline_params = baseline_batch["params"]
+            # VSTFeedForwardModule has no forward(); predictions go through its net.
             squared_error = torch.nn.functional.mse_loss(
-                baseline_model(baseline_audio), baseline_params, reduction="sum"
+                baseline_model.net(baseline_audio), baseline_params, reduction="sum"
             )
             total_squared_error += squared_error.item()
             total_elements += baseline_params.numel()
@@ -412,8 +427,9 @@ def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig
             overrides=[
                 "experiment=torchsynth/eval_ffn",
                 "trainer=cpu",
+                *_TORCHSYNTH_AUDIO_OVERRIDES,
                 "datamodule.train_val_test_sizes=[2,32,2]",
-                "datamodule.batch_size=1",
+                f"datamodule.batch_size={_TORCHSYNTH_BATCH_SIZE}",
                 "datamodule.num_workers=0",
             ],
         )
@@ -432,7 +448,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     :param tmp_path: Shared training, checkpoint, and evaluation directory.
     """
-    train_cfg = _compose_torchsynth_overfit_cfg(tmp_path)
+    train_cfg = _compose_torchsynth_train_cfg(tmp_path)
     initial_loss = _torchsynth_initial_loss(train_cfg, stage="fit", split="train")
     HydraConfig().set_config(train_cfg)
     try:
@@ -440,9 +456,9 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     finally:
         GlobalHydra.instance().clear()
 
-    overfit_loss = train_metrics["train/loss_epoch"].item()
-    assert math.isfinite(overfit_loss)
-    assert overfit_loss < initial_loss
+    train_loss = train_metrics["train/loss_epoch"].item()
+    assert math.isfinite(train_loss)
+    assert train_loss < initial_loss
 
     checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
     assert checkpoint.is_file()
@@ -454,11 +470,11 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     finally:
         GlobalHydra.instance().clear()
 
-    val_loss = metric_dict["val/loss"]
+    val_loss = metric_dict["val/param_mse"]
     assert torch.isfinite(val_loss)
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
-    assert torch.isfinite(eval_batch[0]).all()
+    assert torch.isfinite(eval_batch["audio"]).all()
 
 
 _FAKE_ORACLE_DATASETS = [
@@ -674,9 +690,10 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     HydraConfig().set_config(cfg_eval)
     test_metric_dict, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(test_metric_dict["test/loss"].item())
+    assert math.isfinite(test_metric_dict["test/param_mse"].item())
     assert (
-        abs(train_metric_dict["test/loss"].item() - test_metric_dict["test/loss"].item()) < 0.001
+        abs(train_metric_dict["test/param_mse"].item() - test_metric_dict["test/param_mse"].item())
+        < 0.001
     )
 
 
@@ -716,7 +733,7 @@ def test_evaluate_loads_compiled_cpu_training_checkpoint(
     HydraConfig().set_config(cfg_eval)
     metrics, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(metrics["test/loss"].item())
+    assert math.isfinite(metrics["test/param_mse"].item())
 
 
 def test_evaluate_legacy_wrapped_checkpoint_hints_migration_cli_which_recovers(
@@ -769,7 +786,7 @@ def test_evaluate_legacy_wrapped_checkpoint_hints_migration_cli_which_recovers(
         cfg_eval.ckpt_path = str(migrated_path)
     metrics, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(metrics["test/loss"].item())
+    assert math.isfinite(metrics["test/param_mse"].item())
 
 
 @pytest.mark.gpu
@@ -803,8 +820,11 @@ def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictCon
     HydraConfig().set_config(cfg_eval)
     val_metric_dict, _ = evaluate(cfg_eval)
 
-    assert math.isfinite(val_metric_dict["val/loss"].item())
-    assert abs(train_metric_dict["val/loss"].item() - val_metric_dict["val/loss"].item()) < 0.001
+    assert math.isfinite(val_metric_dict["val/param_mse"].item())
+    assert (
+        abs(train_metric_dict["val/param_mse"].item() - val_metric_dict["val/param_mse"].item())
+        < 0.001
+    )
 
 
 def _compose_fake_oracle_eval_cfg(

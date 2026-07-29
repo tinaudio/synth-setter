@@ -12,7 +12,7 @@ defaults:
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"
-  monitor: "val/loss"
+  monitor: "val/param_mse"
   mode: "min"
   save_last: True
   auto_insert_metric_name: False

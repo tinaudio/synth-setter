@@ -28,6 +28,8 @@ _MATERIALIZE_SPLITS = ("train", "val", "test")
 class RawBatch(TypedDict):  # noqa: DOC601, DOC603
     """One batch of stored VST columns consumed by :func:`prepare_batch`.
 
+    Keys are stored Lance column names, not model-batch keys; ``prepare_batch``
+    maps ``mel_spec`` onto the ``mel`` batch entry and ``music2latent`` onto ``m2l``.
     Shapes are ``(batch, ...)``: ``param_array`` is ``(batch, num_params)`` and
     always present; ``mel_spec`` is ``(batch, channels, n_mels, n_frames)``,
     ``music2latent`` is ``(batch, latent_dim, n_frames)``, ``conditioning`` is

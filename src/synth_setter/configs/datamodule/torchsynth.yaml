@@ -8,3 +8,4 @@ train_val_test_seeds: [123, 456, 789]
 batch_size: 32
 num_workers: 4
 resample_train_per_epoch: false
+drop_last: false

@@ -1,5 +1,7 @@
 defaults:
   - encoder: ast
+  # Off by default: the render-feedback term is opt-in per experiment (#2585).
+  - audio_loss: null
   - _self_
 
 _target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
