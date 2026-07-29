@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785298675774,
+  "lastUpdate": 1785298678440,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -20770,6 +20770,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.092866757499996,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc7ab34c612c06ab232367470799c587a245b08f",
+          "message": "feat(data-pipeline): restore resumable TinyMU embeddings (#2668)\n\n* internal-feat(data-pipeline): restore TinyMU through registry path\n\n* internal-fix(data-pipeline): make embedding retries resumable\n\n* internal-fix(data-pipeline): validate embedding resume identity\n\n* internal-fix(data-pipeline): pin resumable embedding identity\n\n* internal-fix(data-pipeline): resume verified embedding artifacts\n\n* internal-fix(data-pipeline): bind retries to embedding artifacts\n\n* internal-fix(data-pipeline): validate embedding input policy\n\n* test(data-pipeline): isolate text embedding artifacts\n\n* refactor(data-pipeline): isolate TinyMU adapter\n\n* internal-fix(data-pipeline): preserve compatible embedding retries\n\n* ci(data-pipeline): target renamed embedding E2E test\n\n* internal-fix(data-pipeline): preserve S-SONDO encoder coverage",
+          "timestamp": "2026-07-28T20:23:36-07:00",
+          "tree_id": "5a771861866aea133f341fcfbc72735cdbd9bccc",
+          "url": "https://github.com/tinaudio/synth-setter/commit/dc7ab34c612c06ab232367470799c587a245b08f"
+        },
+        "date": 1785298678125,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.581404685974121,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.297279204130172,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09064460545778275,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.003166675567626953,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.187181234359741,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.598458701599975,
             "unit": "seconds"
           }
         ]
