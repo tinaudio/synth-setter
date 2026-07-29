@@ -529,8 +529,8 @@ def test_train_row_limited_file_uri_hydration_without_txids(
         datamodule.teardown("fit")
     assert batch["params"].shape[0] == 2
     assert torch.isfinite(batch["params"]).all()
-    assert batch["mel_spec"] is not None
-    assert torch.isfinite(batch["mel_spec"]).all()
+    assert batch["mel"] is not None
+    assert torch.isfinite(batch["mel"]).all()
 
 
 @pytest.mark.dataloader_multiprocess
@@ -653,17 +653,21 @@ def test_train_runpod_experiment_default_datamodule_advances(
         param_spec_name="surge_simple",
         experiment=experiment,
         datamodule_group=None,
+        callbacks_override=None,
     )
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(fake_surge_smoke_datasets)
+        cfg.trainer.val_check_interval = 1
 
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
+    assert torch.isfinite(metric_dict["per_param_mse/a_amp_eg_attack"])
 
 
 @pytest.mark.slow
@@ -705,7 +709,7 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
     no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
     ``surge/fake_oracle`` leg additionally pins ``train/loss`` to exactly zero (the
-    oracle constructs its loss as ``0.0 * net(mel_spec).sum()`` — any drift means the
+    oracle constructs its loss as ``0.0 * net(mel).sum()`` — any drift means the
     oracle stopped being an oracle); meaningful loss-progression coverage comes from
     the ``surge/ffn_full`` leg. Both train through the real Surge XT render.
 

@@ -693,7 +693,9 @@ def _build_surge_xt_smoke_cfg(
     accelerator: str,
     param_spec_name: str,
     experiment: str,
+    *,
     datamodule_group: Literal["surge", "surge_lance"] | None = "surge",
+    callbacks_override: str | None = "[default_vst,eval_vst,log_per_param_mse]",
 ) -> DictConfig:
     """Construct the Surge XT smoke-test config without the accelerator availability gate.
 
@@ -713,16 +715,16 @@ def _build_surge_xt_smoke_cfg(
         ``"surge/ffn_full"``); selects which model the smoke cfg wires up.
     :param datamodule_group: Hydra datamodule group override, or ``None`` to retain the
         experiment's selection.
+    :param callbacks_override: Hydra callbacks selection, or ``None`` to retain the
+        experiment's selection.
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
-    overrides = [
-        f"experiment={experiment}",
-        f"synth={param_spec_name}",
-        "callbacks=[default_vst,eval_vst,log_per_param_mse]",
-    ]
+    overrides = [f"experiment={experiment}", f"synth={param_spec_name}"]
     if datamodule_group is not None:
         overrides.insert(1, f"datamodule={datamodule_group}")
+    if callbacks_override is not None:
+        overrides.append(f"callbacks={callbacks_override}")
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(

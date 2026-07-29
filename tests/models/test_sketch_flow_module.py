@@ -88,7 +88,7 @@ def _batch(*, with_sketch: bool) -> dict[str, torch.Tensor]:
     """
     generator = torch.Generator().manual_seed(7)
     batch = {
-        "mel_spec": torch.randn((_BATCH, *_MEL_SHAPE), generator=generator),
+        "mel": torch.randn((_BATCH, *_MEL_SHAPE), generator=generator),
         "params": torch.rand((_BATCH, _NUM_PARAMS), generator=generator) * 2 - 1,
         "noise": torch.randn((_BATCH, _NUM_PARAMS), generator=generator),
     }
@@ -133,7 +133,7 @@ def test_train_step_none_spec_matches_loss_before_sketch_support() -> None:
 
     torch.manual_seed(11)
     field = cast(ApproxEquivTransformer, module.vector_field)
-    z = field.apply_dropout(module.encoder(batch["mel_spec"]), module.hparams["cfg_dropout_rate"])
+    z = field.apply_dropout(module.encoder(batch["mel"]), module.hparams["cfg_dropout_rate"])
     t = torch.rand(_BATCH, 1)
     x_t = batch["noise"] * (1 - t) + batch["params"] * t
     target = batch["params"] - batch["noise"]

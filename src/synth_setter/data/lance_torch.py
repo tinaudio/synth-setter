@@ -8,7 +8,7 @@ stream object storage natively: pass ``storage_options`` (see
 Typical usage::
 
     loader = lance_map_dataloader("data/train.lance", batch_size=128, shuffle=True)
-    for batch in loader:  # {"mel_spec": (128, C, 128, F) tensor, ...}
+    for batch in loader:  # raw stored columns: {"mel_spec": (128, C, 128, F) tensor, ...}
         ...
 """
 

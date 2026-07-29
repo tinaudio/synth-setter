@@ -117,7 +117,9 @@ def prepare_batch(
     :param generator: RNG for the noise draw.
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
-    :returns: Model batch with float32 contiguous tensors and ``None`` for unread modalities.
+    :returns: Model batch with float32 contiguous tensors and ``None`` for unread
+        modalities; the stored ``mel_spec`` column is emitted under the ``mel`` key,
+        as ``music2latent`` is under ``m2l``.
     :raises ValueError: If stored or transformed values violate the numeric
         contract, or exactly one of the conditioning statistics is supplied.
     """
@@ -139,11 +141,11 @@ def prepare_batch(
                 mel_raw = (mel_raw - mean) / std
             if not np.isfinite(mel_raw).all():
                 raise ValueError("mel_spec normalization produced non-finite values")
-        mel_spec = torch.from_numpy(mel_raw).to(dtype=torch.float32)
-        if not torch.isfinite(mel_spec).all():
+        mel = torch.from_numpy(mel_raw).to(dtype=torch.float32)
+        if not torch.isfinite(mel).all():
             raise ValueError("mel_spec float32 conversion produced non-finite values")
     else:
-        mel_spec = None
+        mel = None
 
     m2l_raw = raw.get("music2latent")
     m2l = torch.from_numpy(m2l_raw).to(dtype=torch.float32) if m2l_raw is not None else None
@@ -180,12 +182,12 @@ def prepare_batch(
     params = torch.from_numpy(param_array).to(dtype=torch.float32)
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
-        noise, params, mel_spec, m2l, conditioning, sketch, audio = _hungarian_match(
-            noise, params, mel_spec, m2l, conditioning, sketch, audio
+        noise, params, mel, m2l, conditioning, sketch, audio = _hungarian_match(
+            noise, params, mel, m2l, conditioning, sketch, audio
         )
 
     return {
-        "mel_spec": mel_spec.contiguous() if mel_spec is not None else None,
+        "mel": mel.contiguous() if mel is not None else None,
         "m2l": m2l.contiguous() if m2l is not None else None,
         "conditioning": (
             conditioning.contiguous() if conditioning is not None else None

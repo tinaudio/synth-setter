@@ -30,7 +30,7 @@ class VSTFeedForwardModule(LightningModule):
     ):
         """Wire the regression net and persist the optimizer/scheduler hyperparameters.
 
-        :param net: Feature extractor mapping ``mel_spec`` to predicted parameters.
+        :param net: Feature extractor mapping ``mel`` to predicted parameters.
         :param optimizer: ``functools.partial``-style optimizer factory (Hydra
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
