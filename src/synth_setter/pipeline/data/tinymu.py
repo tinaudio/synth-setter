@@ -351,7 +351,7 @@ def encode_tinymu_column(
 ) -> pa.Array:
     """Encode one audio batch as a fixed-shape MATPAC tensor column.
 
-    :param sources: Decoded source columns carrying ``(B, C, T)`` waveforms.
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` waveforms.
     :param sample_rate: Dataset sample rate in Hz.
     :param encoder: Loaded TinyMU audio encoder.
     :returns: Fixed-shape Arrow tensor array with shape ``(3840, T_tokens)``.

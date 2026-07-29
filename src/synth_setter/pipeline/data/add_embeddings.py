@@ -412,7 +412,7 @@ def _encode_m2l_column(
 ) -> pa.Array:
     """Encode one audio batch as a fixed-shape m2l tensor column.
 
-    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Unused source sample rate.
     :param encoder: m2l encoder over the original channel layout.
     :returns: Fixed-shape tensor array.
@@ -437,7 +437,7 @@ def _encode_clap_column(
 ) -> pa.Array:
     """Encode one audio batch as fixed-width CLAP vectors.
 
-    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: CLAP encoder over mono audio.
     :returns: Fixed-size-list float32 array.
@@ -525,7 +525,7 @@ def _encode_same_column(
 ) -> pa.Array:
     """Encode one audio batch under the selected SAME model's frame contract.
 
-    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: SAME encoder over prepared stereo audio.
     :param field: SAME target column.
@@ -689,7 +689,7 @@ def _encode_ssondo_column(
 ) -> pa.Array:
     """Encode one audio batch as fixed-width S-SONDO vectors.
 
-    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: S-SONDO encoder over source audio.
     :returns: Fixed-size-list float32 array.
@@ -771,7 +771,7 @@ def _encode_sketch_column(
 ) -> pa.Array:
     """Encode one audio batch as a fixed-shape sketch-control tensor column.
 
-    :param sources: Decoded source columns carrying ``(B, C, T)`` audio.
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param encoder: Sketch extractor over the original audio batch.
     :returns: Fixed-shape tensor array.

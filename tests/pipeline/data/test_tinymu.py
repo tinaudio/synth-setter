@@ -168,9 +168,7 @@ def test_tinymu_registry_encoder_valid_sequence_returns_fixed_shape_tensor() -> 
         assert sample_rate == _SAMPLE_RATE
         return np.ones((2, TINYMU_FRONTEND.embedding_dim, 7), dtype=np.float32)
 
-    encoded = EMBEDDING_REGISTRY["tinymu"].encode_column(
-        {AUDIO_FIELD: audio}, _SAMPLE_RATE, encode
-    )
+    encoded = EMBEDDING_REGISTRY["tinymu"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
 
     assert encoded.to_numpy_ndarray().shape == (2, TINYMU_FRONTEND.embedding_dim, 7)
 
