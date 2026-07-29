@@ -224,7 +224,7 @@ class AddEmbeddingsConfig(BaseModel):
         param_sourced = sorted(
             name
             for name in self.embeddings
-            if EMBEDDING_REGISTRY[name].input_field == PARAM_ARRAY_FIELD
+            if PARAM_ARRAY_FIELD in EMBEDDING_REGISTRY[name].input_fields
         )
         if param_sourced and self.param_spec_name is None:
             raise ValueError(f"embeddings {param_sourced} require param_spec_name")
