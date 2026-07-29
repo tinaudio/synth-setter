@@ -43,6 +43,7 @@ def source_root(tmp_path: Path) -> Path:
     write_seeded_lance_shard(root / "val.lance", num_rows=6, seed=2)
     write_seeded_lance_shard(root / "test.lance", num_rows=6, seed=3)
     write_mel_stats(root)
+    (root / "dataset.complete").touch()
     return root
 
 
@@ -143,6 +144,23 @@ class TestMaterializeInitValidation:
             LanceVSTDataModule(
                 dataset_root=tmp_path,
                 download_dataset_row_limit=100,
+                param_spec_name=_PARAM_SPEC,
+            )
+
+    @pytest.mark.parametrize("row_limit", [-1, 0])
+    def test_init_non_positive_row_limit_raises(
+        self, tmp_path: Path, row_limit: int
+    ) -> None:
+        """A non-positive row cap is rejected before hydration.
+
+        :param tmp_path: Local dataset root.
+        :param row_limit: Invalid first-N row cap.
+        """
+        with pytest.raises(ValueError, match="download_dataset_row_limit"):
+            LanceVSTDataModule(
+                dataset_root=tmp_path,
+                download_dataset_root_uri="r2://experiments/data/ds",
+                download_dataset_row_limit=row_limit,
                 param_spec_name=_PARAM_SPEC,
             )
 

@@ -26,11 +26,7 @@ from synth_setter.pipeline.data.lance_staging import (
     shard_has_complete_attempt,
     stage_lance_shard_attempt,
 )
-from synth_setter.pipeline.schemas.lance_attempt import (
-    EmbeddingProvenance,
-    EmbeddingSplitProvenance,
-    LanceDatasetCard,
-)
+from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
     shard_arrays,
@@ -346,46 +342,6 @@ def test_finalize_rerun_after_lost_marker_keeps_winner_despite_later_straggler(
         decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0)[MEL_SPEC_FIELD]
     )
     assert decoded[MEL_SPEC_FIELD].shape[0] == 4
-
-
-def test_finalize_with_pending_embedding_augmentation_refuses_to_overwrite_splits(
-    fake_r2_remote: Path, tmp_path: Path
-) -> None:
-    """Finalize cannot consume the readiness gap owned by add-embeddings.
-
-    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
-    :param tmp_path: Scratch dir for local shard datasets.
-    """
-    spec = tiny_lance_spec()
-    stage_all_shards(spec, tmp_path)
-    finalize_from_spec(spec, tmp_path / "work")
-    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
-    card_path = run_root / "dataset.json"
-    card = LanceDatasetCard.model_validate_json(card_path.read_bytes())
-    pending = EmbeddingSplitProvenance(
-        split="train", dataset_version=1, row_count=4, index_built=False, complete=False
-    )
-    augmented = LanceDatasetCard.model_validate(
-        {
-            **card.model_dump(),
-            "schema_version": 2,
-            "embeddings": (
-                EmbeddingProvenance(
-                    name="tinymu",
-                    columns=("tinymu", "tinymu_vec"),
-                    checkpoint="checkpoint",
-                    producer_git_sha="producer-sha",
-                    producer_transform_sha256="transform-sha",
-                    splits=(pending,),
-                ),
-            ),
-        }
-    )
-    card_path.write_text(augmented.model_dump_json())
-    (run_root / "dataset.complete").unlink()
-
-    with pytest.raises(ValueError, match="resume synth-setter-add-embeddings"):
-        finalize_from_spec(spec, tmp_path / "work2")
 
 
 def test_finalize_interrupted_before_marker_rerun_rebuilds_without_doubled_rows(

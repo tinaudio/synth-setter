@@ -9,9 +9,9 @@ ______________________________________________________________________
 ## 1. Prerequisites
 
 - **Linux (x86_64) or macOS** — Windows is not supported (see the project README).
-- **Git**, **curl**, **make** — standard on most macOS and Linux developer
-  machines, but not guaranteed on minimal/server images. Install via your
-  package manager (`apt`, `brew`, etc.) if missing.
+- **Git**, **curl**, **make**, **Node.js 18+**, and **npm** — install them via
+  your package manager (`apt`, `brew`, etc.) if missing. Node and npm run the
+  repository-pinned Studiorack CLI used for VST3 provisioning.
 - **A CUDA GPU** is recommended for training. CPU and MPS (Apple Silicon) trainers
   are available but significantly slower.
 
@@ -74,55 +74,45 @@ guide assume the venv is active.
 
 ### 2d. Install the Surge XT VST3
 
-The test suite and data pipeline need the [Surge XT](https://surge-synthesizer.github.io/)
-VST3 at `plugins/Surge XT.vst3`. `make install-surge-xt` downloads the pinned
-release directly from GitHub:
+The VST test and render paths use a stable checkout alias at
+`plugins/Surge XT.vst3`. Install the pinned package and create that alias with:
 
 ```bash
 make install-surge-xt
 ```
 
-This downloads the `pluginsonly` archive for your platform (Linux x86_64 or
-macOS universal) for the release pinned by `SURGE_XT_VERSION` in the
-[Makefile](../Makefile), verifies its md5 checksum, and extracts
-`Surge XT.vst3` into `plugins/`. The
-archive is cached at `~/.cache/synth-setter/surge-xt-<version>/`, so re-runs that
-have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
-`plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
-first to reinstall.
+The target runs `npm ci`, so the Studiorack CLI and its transitive core are
+reproduced from `package-lock.json`. It then installs the exact
+`surge-synthesizer/surge` version in `studiorack.json`. Studiorack stores archive
+packages under its versioned `pluginsDir`; native installers may use the
+platform VST3 directory. `synth-setter-plugins` resolves either layout and
+creates the checkout alias.
 
-To mirror the full plugin set the runtime docker image ships — Surge XT plus
-Dexed, OB-Xf, and Six Sines — run `make install-plugins`. The three extra
-synths publish x86_64 Linux binaries only, matching the image; on other hosts
-those targets print a notice and exit 0, so on macOS the aggregate still
-succeeds with just Surge XT installed (on non-x86_64 Linux `install-surge-xt`
-itself fails first — see the arm64 note below). Their version/SHA256 pins mirror the
-Dockerfile ARGs and are kept in sync by
-`tests/infra/test_install_plugins_targets.py`.
+The default managed directory is
+`~/.local/share/synth-setter/studiorack` on Linux and
+`~/Library/Application Support/synth-setter/studiorack` on macOS. Set
+`STUDIORACK_PLUGINS_DIR` to choose another location. Install every package in
+the manifest with:
 
-> **Already have Surge XT installed system-wide?** Skip
-> `make install-surge-xt` and symlink your existing install into `plugins/`:
->
-> ```bash
-> # Linux
-> ln -s "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
->
-> # macOS
-> ln -s "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3" "plugins/Surge XT.vst3"
-> ```
->
-> The one-line symlink is the single supported way to point at a system-wide
-> Surge XT install — there's no wrapper Make target — so the discovery path
-> stays explicit.
->
-> **On arm64 Linux?** The official Surge XT release only ships an x86_64
-> Linux build. Install via your package manager (`apt install surge-xt`) or
-> build from source, then use the manual symlink above.
+```bash
+make install-plugins
+```
 
-> **Pointing the VST tests at a non-default install:** `pytest -m requires_vst`
-> resolves the plugin at `plugins/Surge XT.vst3` by default. If your install
-> lives elsewhere, set `SYNTH_SETTER_PLUGIN_PATH` to the absolute path of the
-> `.vst3` bundle before invoking pytest.
+Studiorack determines artifact compatibility from the host platform and
+architecture. Native installer packages may request administrator privileges;
+headless environments should run the install command with their normal
+privilege mechanism. Unsupported package/host combinations fail rather than
+falling back to an unpinned download.
+
+If a manifest package is already installed in Studiorack storage or a standard
+system VST3 directory, refresh checkout aliases without reinstalling it:
+
+```bash
+make link-plugins
+```
+
+`SYNTH_SETTER_PLUGIN_PATH` remains the explicit escape hatch for unmanaged or
+legacy Surge installations used by tests and interactive tools.
 
 ### 2e. Create `.env`
 
@@ -197,9 +187,9 @@ experiments. **None of these are needed for the TorchSynth quickstart above.**
 used for audio dataset generation. The data pipeline renders audio by
 programmatically driving this plugin.
 
-Installation is covered in [section 2d](#2d-install-the-surge-xt-vst3) —
-`make install-surge-xt` is the canonical path; a manual symlink from a
-system-wide install is an alternative.
+Installation is covered in [section 2d](#2d-install-the-surge-xt-vst3).
+`make install-surge-xt` provisions the pinned package; `make link-plugins`
+reuses an existing managed or system install.
 
 **Verify:**
 
@@ -468,7 +458,7 @@ ______________________________________________________________________
 ## 7. Docker Workflow
 
 A Dockerfile is provided for reproducible environments (training, CI, cloud
-deployment). The image bakes in the source code, dependencies, Surge XT, and several other VST3 synths (see the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile`).
+deployment). The image bakes in the source code, dependencies, and the VST3 package set provisioned by the `builder-install-studiorack-plugins` stage in `docker/ubuntu22_04/Dockerfile`.
 No credentials — R2, W&B, or otherwise — are baked in.
 
 **Build the image:**
@@ -821,21 +811,20 @@ the failure surfaces immediately rather than partway through `post-create`.
   inside the container; container edits under `plugins/` are not
   visible on the host.
 - A fresh worktree starts without `plugins/` or `thoughts/` (both are
-  gitignored, so `git worktree add` doesn't copy them). `make link-plugins`
-  mirrors the primary checkout's `plugins/` entries into the worktree;
-  `make link-thoughts` symlinks `thoughts/` to the primary's central copy.
+  gitignored). `make link-plugins` recreates aliases from user-wide Studiorack
+  storage or standard system VST3 directories; `make link-thoughts` symlinks
+  `thoughts/` to the primary checkout's central copy.
   Claude Code installs the Git hooks and links all shared assets via
   `agent/hooks/worktree-post-setup.sh` after every `git worktree add`; in a
   plain terminal, run the setup targets manually.
 
 ### B.3. macOS VM (Tart)
 
-If you want full dev parity on Apple Silicon inside a throwaway, mostly
-reproducible VM — Python 3.12 venv, Surge XT (native .vst3 via cask), Claude
-Code installed, auto-activated venv — pull the prebuilt Tart image published
-at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
-fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
-even if you pin the base image digest and git SHA.
+If you want full dev parity on Apple Silicon inside a throwaway VM — Python
+3.12, the Studiorack-pinned Surge XT package, and an auto-activated venv — pull
+the Tart image at `registry-1.docker.io/tinaudio/synth-setter-macos`. The
+plugin version comes from `studiorack.json`; Homebrew still supplies other CLI
+tools and may resolve newer formula versions during rebuilds.
 
 **Prerequisites:**
 

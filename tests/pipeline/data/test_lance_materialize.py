@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import shutil
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
+from typing import cast
 
 import lance
 import pyarrow as pa
@@ -322,6 +325,77 @@ def test_materialize_file_uri_source_resolves_local_path(
     assert out.to_table().column("a").to_pylist() == [1, 2, 3]
 
 
+def test_materialize_splits_missing_local_completion_marker_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """An incomplete local source is rejected before any split is published.
+
+    :param tmp_path: Pytest fixture providing fresh source and destination roots.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    lance.write_dataset(pa.table({"a": [1]}), source_root / "train.lance")
+    destination = tmp_path / "destination"
+
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        materialize_splits(
+            str(source_root),
+            destination,
+            txids=None,
+            projection={"train": ("a",)},
+            row_limit=None,
+            shard_suffix=".lance",
+        )
+
+    assert not destination.exists()
+
+
+def test_materialize_splits_missing_file_uri_completion_marker_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """An incomplete file-URI source is rejected before local publication.
+
+    :param tmp_path: Pytest fixture providing fresh source and destination roots.
+    """
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    destination = tmp_path / "destination"
+
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        materialize_splits(
+            source_root.as_uri(),
+            destination,
+            txids=None,
+            projection={},
+            row_limit=None,
+            shard_suffix=".lance",
+        )
+
+    assert not destination.exists()
+
+
+def test_materialize_splits_missing_r2_completion_marker_writes_nothing(
+    fake_r2_remote: Path,
+) -> None:
+    """An incomplete R2 source is rejected before local publication.
+
+    :param fake_r2_remote: Real rclone local backend and destination parent.
+    """
+    destination = fake_r2_remote / "destination"
+
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        materialize_splits(
+            "r2://bucket/incomplete",
+            destination,
+            txids=None,
+            projection={},
+            row_limit=None,
+            shard_suffix=".lance",
+        )
+
+    assert not destination.exists()
+
+
 def test_materialize_splits_builds_projected_capped_splits_per_txid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -332,6 +406,7 @@ def test_materialize_splits_builds_projected_capped_splits_per_txid(
     """
     source_root = tmp_path / "source"
     source_root.mkdir()
+    (source_root / "dataset.complete").touch()
     txids: dict[str, str] = {}
     for split in ("train", "val", "test"):
         dataset = lance.write_dataset(
@@ -378,7 +453,10 @@ def test_materialize_splits_downloads_sidecars_with_lance_metadata_excluded(
         calls.append((source_uri, dest_path, exclude))
 
     monkeypatch.setattr(r2_io, "download_dir_no_overwrite", download_spy)
-    source_root = str(tmp_path / "source")
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    (source_path / "dataset.complete").touch()
+    source_root = str(source_path)
     dest_root = tmp_path / "dest"
     materialize_splits(
         source_root,
@@ -559,6 +637,10 @@ def test_materialize_writes_sidecar_manifest_fields_match_request(
     assert manifest.source_uri == source
     assert manifest.txid == txid
     assert manifest.resolved_version == 1
+    destination = lance.dataset(str(dest))
+    transaction = destination.read_transaction(destination.version)
+    assert transaction is not None
+    assert manifest.materialized_txid == transaction.uuid
     assert manifest.columns == ("a",)
     assert manifest.limit == 2
 
@@ -578,6 +660,93 @@ def test_materialize_cache_hit_same_request_returns_without_rewrite(
     result = materialize_lance_subset(source, dest, txid=txid, columns=("a",))
     assert result == dest
     assert lance.dataset(str(dest)).version == version_after_first
+
+
+def test_materialize_cache_transient_destination_open_retries(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient local cache read retries before declaring corruption.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture injecting one transient destination-open failure.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    real_dataset = lance.dataset
+    attempts = 0
+
+    def transient_destination_open(
+        uri: str, *, storage_options: dict[str, str] | None = None
+    ) -> lance.LanceDataset:
+        nonlocal attempts
+        if uri == str(dest):
+            attempts += 1
+            if attempts == 1:
+                raise TimeoutError("transient destination timeout")
+        return real_dataset(uri, storage_options=storage_options)
+
+    monkeypatch.setattr(lance, "dataset", transient_destination_open)
+
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+    assert attempts == 2
+
+
+def test_materialize_cache_replaced_destination_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A valid but replaced local dataset is not accepted as a cache hit.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    shutil.rmtree(dest)
+    lance.write_dataset(pa.table({"a": [999]}), dest)
+
+    with pytest.raises(ValueError, match="sidecar"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+
+def test_materialize_cache_missing_data_file_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A structurally corrupt local dataset is not accepted as a cache hit.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    next((dest / "data").glob("*.lance")).unlink()
+
+    with pytest.raises(ValueError, match="validation"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+
+def test_materialize_legacy_manifest_without_destination_identity_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A legacy sidecar cannot retroactively trust an unknown destination.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+    payload = json.loads(sidecar_path(dest).read_text(encoding="utf-8"))
+    del payload["materialized_txid"]
+    sidecar_path(dest).write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="destination identity"):
+        materialize_lance_subset(source, dest, txid=txid, columns=("a",))
 
 
 def test_materialize_rerun_different_limit_raises(
@@ -610,6 +779,43 @@ def test_materialize_rerun_different_columns_raises(
         materialize_lance_subset(source, dest, txid=txid, columns=("a", "b"))
 
 
+def test_materialize_concurrent_identical_requests_publish_one_valid_cache(
+    two_version_source: tuple[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent writers converge on one destination-manifest identity.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Fixture synchronizing the two real Lance writes.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    barrier = Barrier(2)
+    real_write_dataset = cast(Callable[..., lance.LanceDataset], lance.write_dataset)
+
+    def synchronized_write(*args: object, **kwargs: object) -> lance.LanceDataset:
+        barrier.wait()
+        return real_write_dataset(*args, **kwargs)
+
+    monkeypatch.setattr(lance, "write_dataset", synchronized_write)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                materialize_lance_subset,
+                source,
+                dest,
+                txid=txid,
+                columns=("a",),
+            )
+            for _ in range(2)
+        ]
+        assert [future.result() for future in futures] == [dest, dest]
+
+    assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
+
+
 def test_materialize_interrupted_publish_rerun_recovers(
     two_version_source: tuple[str, str],
     tmp_path: Path,
@@ -623,7 +829,6 @@ def test_materialize_interrupted_publish_rerun_recovers(
     """
     source, txid = two_version_source
     dest = tmp_path / "out" / "train.lance"
-    partial = dest.parent / f".{dest.name}.partial"
     original_write_text = Path.write_text
 
     def interrupt_sidecar_write(
@@ -633,7 +838,7 @@ def test_materialize_interrupted_publish_rerun_recovers(
         errors: str | None = None,
         newline: str | None = None,
     ) -> int:
-        if path == sidecar_path(dest):
+        if path.name == sidecar_path(dest).name:
             raise OSError("injected sidecar write interruption")
         return original_write_text(
             path, data, encoding=encoding, errors=errors, newline=newline
@@ -645,9 +850,8 @@ def test_materialize_interrupted_publish_rerun_recovers(
             materialize_lance_subset(source, dest, txid=txid, columns=("a",))
 
     assert not dest.exists()
-    assert partial.exists()
+    assert not list(dest.parent.glob(f".{dest.name}.*.partial"))
     assert materialize_lance_subset(source, dest, txid=txid, columns=("a",)) == dest
-    assert not partial.exists()
 
 
 def test_materialize_dest_without_sidecar_raises(

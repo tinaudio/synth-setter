@@ -40,6 +40,19 @@ def test_vst_slow_push_and_pull_request_gate_identical_paths(project_root: Path)
 
 
 @pytest.mark.infra
+@pytest.mark.parametrize("event_name", ["push", "pull_request"])
+def test_vst_slow_ssondo_changes_trigger_real_vst_e2e(project_root: Path, event_name: str) -> None:
+    """S-SONDO implementation changes select the real-VST workflow.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    :param event_name: GitHub event whose path filter is checked.
+    """
+    triggers = _load_triggers(project_root)
+
+    assert "src/synth_setter/pipeline/data/ssondo.py" in triggers[event_name]["paths"]
+
+
+@pytest.mark.infra
 def test_vst_slow_triggers_declare_no_yaml_anchors(project_root: Path) -> None:
     """Neither trigger deduplicates through an anchor GitHub Actions cannot parse.
 

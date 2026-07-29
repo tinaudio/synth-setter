@@ -123,8 +123,10 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     """
     spec = spec_from_cfg(cfg_dataset)
     assert isinstance(spec, DatasetSpec)
-    assert spec.num_shards >= 1
-    assert spec.render.samples_per_shard >= 1
+    # smoke-shard fans 10 samples over 3 shards at 4 per shard, so a floor of 1
+    # would still pass if the partitioner collapsed the fan-out.
+    assert spec.num_shards == 3
+    assert spec.render.samples_per_shard == 4
 
 
 def test_cfg_dataset_dawdreamer_error_precedes_darwin_guard(

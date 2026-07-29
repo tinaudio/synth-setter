@@ -845,8 +845,10 @@ def test_log_metrics_csv_to_wandb_logs_table_to_active_run(
     _log_metrics_csv_to_wandb(tmp_path)
 
     assert len(logged) == 1
-    assert "audio/per_sample_metrics" in logged[0]
-    assert isinstance(logged[0]["audio/per_sample_metrics"], wandb.Table)
+    table = logged[0]["audio/per_sample_metrics"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["sample_id", "mss", "wmfcc", "sot", "rms"]
+    assert table.data == [[0, 0.1, 0.2, 0.3, 0.4], [1, 0.5, 0.6, 0.7, 0.8]]
 
 
 def test_log_metrics_csv_to_wandb_prepends_prefix_to_table_key(

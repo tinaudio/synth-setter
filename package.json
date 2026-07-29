@@ -1,0 +1,16 @@
+{
+  "name": "synth-setter-plugin-management",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/studiorack/patch-core.mjs"
+  },
+  "devDependencies": {
+    "@studiorack/cli": "3.0.6"
+  },
+  "overrides": {
+    "@open-audio-stack/core": "0.1.55"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

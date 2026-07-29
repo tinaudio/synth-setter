@@ -1,6 +1,483 @@
 # CHANGELOG
 
 
+## v10.8.1 (2026-07-28)
+
+### Chores
+
+- **evaluation**: Remove checkpoint experiment Hydra configs
+  ([#2591](https://github.com/tinaudio/synth-setter/pull/2591),
+  [`025a211`](https://github.com/tinaudio/synth-setter/commit/025a211898cdc2a2e187a4a462621addda2a93b0))
+
+* chore(evaluation): remove checkpoint experiment configs
+
+* chore(evaluation): address checkpoint config review
+
+### Documentation
+
+- **ci-automation**: Document the cpu-slow PR lane
+  ([#2596](https://github.com/tinaudio/synth-setter/pull/2596),
+  [`07e453d`](https://github.com/tinaudio/synth-setter/commit/07e453df07e9eea91880d425d11d08cbfcaa6aef))
+
+- **testing**: Add the test-quality bar and audited anti-patterns
+  ([#2604](https://github.com/tinaudio/synth-setter/pull/2604),
+  [`ed92e9c`](https://github.com/tinaudio/synth-setter/commit/ed92e9ce5458a5b9e1d895a108ca0526906a8a3e))
+
+* docs(testing): add test-quality bar and audited anti-patterns
+
+Static audit of all 3,738 tests found no written standard for what a test here must earn its place
+  by doing, so weak patterns get replicated by new contributors and agents.
+
+Document the bar (a test must be able to fail for exactly one interesting reason), the five
+  anti-patterns the audit surfaced, and four patterns from the existing suite worth copying. Point
+  AGENTS.md and CLAUDE.md at it.
+
+Refs #2603
+
+* docs(testing): scope the frozen-literal anti-pattern to unjustified pins
+
+The first draft used _ROLE_MODELS as the example, but that table enforces cross-provider parity
+  across the .claude/.codex/.opencode role definitions, which nothing else covers. The rclone argv
+  assertions are likewise pinning a real invariant (flag order and the mandatory --checksum).
+
+Replace the misattributed example with a generic one and state the test: if the literal and the
+  config disagree, is that a bug or a stale test.
+
+### Internal-Feat
+
+- **code-health**: Enforce jaxtyping in modeling code
+  ([#2654](https://github.com/tinaudio/synth-setter/pull/2654),
+  [`3ed8cf8`](https://github.com/tinaudio/synth-setter/commit/3ed8cf8009e85a44b39843050460b611d59de46c))
+
+* internal-feat(code-health): enforce model tensor typing
+
+* internal-fix(code-health): close model typing lint bypasses
+
+* internal-fix(code-health): harden model typing name resolution
+
+* internal-fix(code-health): resolve model typing scopes
+
+* internal-fix(code-health): cover model typing binding edges
+
+* internal-fix(code-health): resolve nested model typing aliases
+
+* internal-fix(code-health): resolve model typing base in CI
+
+- **data-pipeline**: Add TinyMU MATPAC audio embeddings
+  ([#2528](https://github.com/tinaudio/synth-setter/pull/2528),
+  [`e55eda9`](https://github.com/tinaudio/synth-setter/commit/e55eda9fb529b9580d2f3d43d07953cff0421cbd))
+
+* internal-feat(data-pipeline): add TinyMU audio embeddings
+
+* internal-fix(data-pipeline): clear TinyMU review gates
+
+* internal-fix(data-pipeline): resolve TinyMU review warnings
+
+* internal-fix(data-pipeline): cover TinyMU adapter behavior
+
+* internal-feat(data-pipeline): complete MATPAC dataset lifecycle
+
+* test(data-pipeline): cover MATPAC root R2 artifacts
+
+* internal-fix(data-pipeline): anchor MATPAC producer identity
+
+* internal-fix(data-pipeline): integrate TinyMU package directly
+
+- **training**: Chain vst_ffn net.d_out from model.encoder_output_dim instead of re-resolving the
+  spec width ([#2583](https://github.com/tinaudio/synth-setter/pull/2583),
+  [`9692c92`](https://github.com/tinaudio/synth-setter/commit/9692c925bbca7a4eb89c6f15f3d0cf8a44c75a41))
+
+* internal-feat(training): select log_per_param_mse as a callbacks group
+
+Eight surge experiments carried inline callbacks.log_per_param_mse blocks byte-identical to
+  configs/callbacks/log_per_param_mse.yaml, which nothing composed. Select the group in each
+  experiment's defaults list instead and delete the inline copies.
+
+CLI compositions that override the callbacks group on top of these experiments would now silently
+  drop the callback, so the full-model predict job scripts, the surge smoke-cfg fixture builder, and
+  the two mirroring tests add log_per_param_mse to their group lists — resolved configs are
+  unchanged for every entry point. vae/simple experiments intentionally keep no per-param MSE
+  callback.
+
+Refs #2580
+
+* internal-feat(training): chain vst_ffn net.d_out from encoder_output_dim
+
+vst_ffn.yaml resolved param_spec_width twice from the synth selection. Chain net.d_out to
+  model.encoder_output_dim instead, mirroring vst_flowvae's net.latent_dim chain, so the spec width
+  is resolved in one place. Resolved values are unchanged (surge_4 -> 7, surge_xt -> 300).
+
+Refs #2581
+
+- **training**: Collapse render aliases into backend groups
+  ([#2599](https://github.com/tinaudio/synth-setter/pull/2599),
+  [`c7baf67`](https://github.com/tinaudio/synth-setter/commit/c7baf670fbefc8a39c6068103aeb46ba4fdeca6c))
+
+* internal-feat(training): collapse render aliases into backend groups
+
+Since the synth-identity hoist (#2565), configs/render/* carries backend knobs only, leaving 8 of 15
+  files as empty aliases with identity-implying names. Collapse the group to backend-named configs:
+  keep vst, rename faust_bright_organ->faust and torchsynth_full->torchsynth, merge the three
+  identical surge_*_surgepy variants into one surgepy group, rebase faust_filter_osc on faust, and
+  delete the pure aliases. Migrate experiment defaults, tests, CLI hints, and docs to synth=<name>
+  render=<backend>; --register stops emitting per-synth render configs and the verification probe
+  composes render=vst.
+
+Fixes #2598
+
+* internal-fix(training): fix planned-tree render comment in pipeline doc
+
+The 'Planned' directory-tree comment still described render/ as nesting synth identity groups,
+  contradicting the current tree above it after the identity hoist (#2565) and the backend-group
+  collapse.
+
+Refs #2598
+
+- **training**: Hoist synth identity to a root config group
+  ([#2568](https://github.com/tinaudio/synth-setter/pull/2568),
+  [`32d359d`](https://github.com/tinaudio/synth-setter/commit/32d359dde0985a32cce3804bceb7fc187e94d319))
+
+* internal-feat(training): hoist synth identity to a root config group
+
+Synth identity (param_spec_name) was owned by the datamodule, so model and callback configs reached
+  sideways via ${datamodule.param_spec_name}. Swapping in an audio datamodule for predict tore out
+  that interpolation root (#2558), and the tactical fix pinned widths per-key in every
+  wandb_checkpoint overlay.
+
+Declare identity once at the config root instead: a new configs/synth group (one file per SYNTHS
+  registry row, generated by the introspect-plugin scaffolder) selected via synth=<name>. VST
+  datamodules, models, and callbacks now interpolate ${synth.param_spec_name}; dataset.yaml mirrors
+  identity from its render group, which stays authoritative there. The overlay width pins are
+  deleted — the train experiment's synth selection survives any datamodule swap.
+
+A compose-time validator (SynthIdentityConfig / validate_synth_identity, wired into utils.extras)
+  rejects a synth node that contradicts its registry row and a CLI-forced datamodule.param_spec_name
+  that skews from the synth selection.
+
+Contract tests pin the group/registry bijection, the rootward-only interpolation (no
+  ${datamodule.param_spec_name} anywhere in configs), the per-experiment resolved identities, and
+  compose-level swap invariance for the audio predict overlays. The v0.0.0 baseline comparison
+  absorbs the new root node via ACCEPTED_DIFFS; resolved widths and labels are unchanged by design.
+
+Fixes #2558
+
+Fixes #2565
+
+* internal-fix(training): migrate bright-organ e2e to synth override
+
+The new identity validator correctly rejects the e2e's CLI-forced datamodule.param_spec_name; select
+  synth=faust_bright_organ at the root instead. Also fold the root synth group into the docs the
+  doc-drift advisory flagged: the SYNTHS projection lists, the --register artifact list, the
+  hand-registration walkthrough, the train defaults reference, and the stale datamodule-overlay
+  example in eval-pipeline.md.
+
+Refs #2565
+
+* internal-fix(ci-automation): unblock the cpu-slow lane on this branch
+
+Mirror three hunks verbatim from PR #2562 so its eventual rebase merges clean:
+  WANDB__SERVICE_WAIT=120 on both slow steps (W&B service-start timeouts, #2564), integration_r2 on
+  the checkpoint-upload metadata test (needs real R2 creds), and the
+  encoder_num_heads/encoder_output_dim ACCEPTED_DIFFS rows (#2508 keys absent from the v0.0.0
+  anchor).
+
+With the identity hoist the overlay pins that produced the remaining baseline drift are gone: the
+  full predict + surge-train equality suites pass locally (26 passed in 190s), so no anchor
+  regeneration is needed.
+
+Refs #2558
+
+* internal-feat(training): unify synth identity into one root synth group
+
+The #2565 hoist left identity in two parallel generated groups (configs/synth 2-field,
+  configs/render/synth 5-field) bridged by a hand-written mirror block in dataset.yaml. Collapse
+  them: the root synth group now carries all five SynthSpec fields and is identity's only home;
+  render groups keep backend knobs only, and runs that render select both (synth=X render=X —
+  experiments pair the overrides).
+
+- surgepy rendering variants become SYNTHS rows (surge_*_surgepy), the first with name !=
+  param_spec_name; their render roots shrink to backend/cadence settings. -
+  RenderConfig.from_cfg_nodes joins knobs + identity everywhere a composed cfg builds a render
+  config; DatasetSpec.from_hydra_cfg nests the root node so serialized specs keep their render.synth
+  shape. - validate_synth_identity pins name/param_spec_name to the registry and leaves binding
+  fields per-run overridable; skew is otherwise structurally impossible, so
+  SynthSpec.from_render_cfg, SynthIdentityConfig, and _validate_probe_spec_match are deleted. -
+  identity_group_yaml takes the SynthSpec row and the checked-in group files are pinned
+  byte-for-byte as generator output; --verify now gates the identity config too.
+
+- **training**: Select log_per_param_mse as a callbacks group
+  ([#2582](https://github.com/tinaudio/synth-setter/pull/2582),
+  [`d481fe1`](https://github.com/tinaudio/synth-setter/commit/d481fe13c444ca29f523f4f9e838dd660045681f))
+
+* internal-feat(training): select log_per_param_mse as a callbacks group
+
+Eight surge experiments carried inline callbacks.log_per_param_mse blocks byte-identical to
+  configs/callbacks/log_per_param_mse.yaml, which nothing composed. Select the group in each
+  experiment's defaults list instead and delete the inline copies.
+
+CLI compositions that override the callbacks group on top of these experiments would now silently
+  drop the callback, so the full-model predict job scripts, the surge smoke-cfg fixture builder, and
+  the two mirroring tests add log_per_param_mse to their group lists — resolved configs are
+  unchanged for every entry point. vae/simple experiments intentionally keep no per-param MSE
+  callback.
+
+Refs #2580
+
+* chore(ci-automation): retrigger title gate after PR title edit
+
+### Internal-Fix
+
+- **ci-automation**: Pin binfmt qemu-v9.2.2 for arm64 buildx
+  ([#2578](https://github.com/tinaudio/synth-setter/pull/2578),
+  [`f471566`](https://github.com/tinaudio/synth-setter/commit/f4715669eea02a3bf87bdeecbc11cbcaa9e31665))
+
+* internal-fix(ci-automation): pin binfmt qemu-v9.2.2 for arm64 buildx
+
+test_ultramaster_docker_arm64_target_skips_source_build fails on cpu-slow with exit code 100 from
+  the builder-base apt step: qemu user-mode emulation segfaults ('qemu: uncaught target signal 11')
+  while dpkg configures libc-bin, so the apt transaction dies. The buildx banner in the assertion
+  message is only the first captured output line, not the failure.
+
+The Set up QEMU step floats on docker.io/tonistiigi/binfmt:latest, which has rolled to qemu v10.2.3;
+  the failure appeared without any repo change and is intermittent across same-day runs, consistent
+  with upstream image drift plus per-runner caching. Pin the last known-good emulator generation,
+  qemu-v9.2.2, in both workflows that register the aarch64 handler (cpu-slow and nightly).
+
+The same test file's amd64 timeout flakes on main
+  (test_base_stage_resolves_apt_packages_from_azure_mirror[builder-base],
+  test_runtime_dependency_stage_runs_apt_refresh_wrapper) have a different mechanism (mirror/runner
+  throughput) and stay tracked on the issue.
+
+Refs #2577
+
+* chore: retrigger checks after PR title edit
+
+- **training**: Preserve absolute file URI hydration paths
+  ([#2597](https://github.com/tinaudio/synth-setter/pull/2597),
+  [`08dceda`](https://github.com/tinaudio/synth-setter/commit/08dceda28ed52febcc648ed92bb08fd958d4ac04))
+
+### Refactoring
+
+- **code-health**: Remove obsolete KSin, kOsc, and FM paths
+  ([#2594](https://github.com/tinaudio/synth-setter/pull/2594),
+  [`3821127`](https://github.com/tinaudio/synth-setter/commit/38211270ac6ae9bf0851b1f688bf6339982be3fc))
+
+* refactor(code-health): remove obsolete synthetic synth paths
+
+* refactor(code-health): remove legacy token losses
+
+* chore(lint): remove deleted synthetic loss exemptions
+
+### Revert
+
+- **data-pipeline**: Remove TinyMU MATPAC audio embeddings
+  ([#2653](https://github.com/tinaudio/synth-setter/pull/2653),
+  [`e17a040`](https://github.com/tinaudio/synth-setter/commit/e17a04036c5bb0951915199b61258b97c3fb6dda))
+
+Reverts e55eda9fb529b9580d2f3d43d07953cff0421cbd.
+
+### Testing
+
+- Assert exact values where a weak assertion admitted wrong answers
+  ([#2638](https://github.com/tinaudio/synth-setter/pull/2638),
+  [`cc4ac72`](https://github.com/tinaudio/synth-setter/commit/cc4ac72ff17a5698fffbdd2571dd2f472849c562))
+
+Each of these passed for almost any wrong result. Every replacement value was measured against the
+  running code rather than inferred.
+
+- test_r2_io: r2_storage_options asserted one key of five; now the whole dict, so the
+  endpoint/aws_endpoint/region derivations are covered. Its two failure tests both matched the
+  generic wrapper prefix, making a timeout and a nonzero exit indistinguishable; each now matches
+  its own chained reason. - test_shard_claims: a subset-plus-positivity check over a fully
+  deterministic scenario, so swapping a claimed row for a done row passed. Now the exact {available:
+  1, claimed: 1, done: 1}. - test_subprocess_stream: monotonicity on an exact linear formula that
+  four sibling tests already pin; now the two exact values. - test_compute: `config is not None` on
+  a rich dict; now the dict. - test_eval_postprocessing: asserted the logged value was a wandb.Table
+  without checking it. Now columns and rows — which caught that the index column is renamed to
+  sample_id, something nothing verified. - test_checkpoint_uploader: a fresh ModelCheckpoint already
+  carries 0, so the assertion held against a hardcoded `return 0`. Now a non-default token, plus the
+  absent-field branch that returns None. - test_logger_config: len > 1 passed with a logger silently
+  dropped; now the exact csv/tensorboard/wandb set. - test_paths_config: truthiness on five
+  interpolation templates; now the literal templates.
+
+test_resume's malformed-wandb-dirname test never reached that branch — the run dir had no .hydra, so
+  discovery skipped the candidate first and the test would have passed however malformed names were
+  handled. It now creates .hydra and asserts the skip log is absent, so the branch is really
+  covered.
+
+Refs #2603
+
+- Remove eleven more tests subsumed by a stronger sibling
+  ([#2629](https://github.com/tinaudio/synth-setter/pull/2629),
+  [`b102bd0`](https://github.com/tinaudio/synth-setter/commit/b102bd06c9a9f5f193d9e1c85af2632f0d1d2981))
+
+Second verification pass over the audit's remaining deletion candidates. Each was re-read against
+  the production code and the sibling said to supersede it.
+
+Redundant with a strictly stronger sibling:
+
+- test_prefix: determinism and seconds-precision on a pure formatter given an explicit timestamp,
+  where a sibling pins the exact output string and another already disambiguates at millisecond
+  resolution; plus a trailing-slash check two siblings cover by full-string equality. -
+  test_spec_io: isinstance(..., Path) where the sibling compares against a Path, which already
+  requires the type. - test_file_uri: restates FILE_URI_SCHEME, whose only consumer is covered by
+  every is_file_uri case. - test_image_config: same fixture and call as test_all_fields_populated,
+  which asserts the same image_config_id.
+
+Tautological by construction:
+
+- test_lite_dependency_base: the intersection with HEAVY_DEPS cannot be non-empty once a sibling
+  pins the set to LITE_CLOSURE, which is disjoint from it.
+
+Library round-trips with no project transformation:
+
+- test_seed_debug, test_lance_attempt.
+
+Prose and source text rather than behavior:
+
+- test_install_plugins_targets: regexes an echo line in a Dockerfile stage. -
+  test_generate_dataset_shards_hydra_overrides_validation: matches the literal $'\n' idiom in a
+  workflow run block, where a sibling proves the behavior by executing the bash.
+
+Six further candidates were rejected on verification and kept — see the PR body for why each still
+  earns its place.
+
+Refs #2603
+
+- Remove the baseline-config drift comparator
+  ([#2607](https://github.com/tinaudio/synth-setter/pull/2607),
+  [`45cc44c`](https://github.com/tinaudio/synth-setter/commit/45cc44c01935ff35e2b148c1941569bb933e16d3))
+
+test_compare_baseline_configs.py materialized a detached git worktree per case, ran each jobs/
+  script there under a PATH shim to capture resolved Hydra YAML, and diffed it against the live tree
+  — over the network, marked slow.
+
+Its guard had inverted. ACCEPTED_DIFFS grew to 24 entries citing 10 PRs, and excluded the whole
+  `training`, `evaluation`, and `r2` subtrees, so the diff it still checked no longer covered the
+  reproducibility it was written to protect. What remained was a tax on every deliberate config
+  change: add the key, then add its allowlist entry.
+
+Compose-level coverage of the same experiments stays in test_configs.py, which resolves each
+  jobs/predict/ config and asserts model and callback identity without a worktree or the network.
+
+Drops the sole consumers with it: _baseline_worktree.py, the baseline_repo / diff_repo / noop_repo
+  fixtures, and the conftest fixture re-export. python-semantic-release stays —
+  test_release_lock_refresh.py drives that binary; its pyproject comment is corrected to say so.
+
+Refs #2603
+
+- Remove twelve tests that cannot fail for an interesting reason
+  ([#2609](https://github.com/tinaudio/synth-setter/pull/2609),
+  [`998ba6a`](https://github.com/tinaudio/synth-setter/commit/998ba6abe73e05175d0f34d67cd10f26ef1d4bbb))
+
+A semantic audit read all 3,738 tests. These twelve were then re-verified individually against the
+  production code they claim to cover.
+
+Structurally incapable of failing:
+
+- test_skypilot_launch: two subset assertions over constants built by tuple spread (_WORKER_ENV_KEYS
+  = (*RCLONE_ENV_KEYS, ...)), so the subset relation holds by syntax no matter what the constants
+  contain. - test_add_embeddings: compares EMBEDDING_REGISTRY[x].default_checkpoint to the same
+  imported constant production assigns it from. - test_xdist_scheduling: asserts a same-file helper
+  returns the f-string it builds from its own arguments. The helper stays; a real test uses it.
+
+Redundant with a sibling that already asserts more:
+
+- test_generate_vst_dataset: duplicates the num_retries=0 case of the parametrize three tests above
+  it, same call_count assertion. - test_param_spec: asserts one span that the adjacent test already
+  pins as part of the full ordered span list. - test_dataset_spec: same assertion as the test two
+  above it, and its docstring justifies itself by a NotImplementedError gate no longer in spec.py. -
+  test_eval_postprocessing: byte-identical cfg and assertion to the test directly above it. -
+  test_lite_dependency_base is untouched — see the PR body for what was rejected on review.
+
+Testing a library or prose rather than our behavior:
+
+- test_shard_metadata: Pydantic JSON round-trip over plain int/float fields with no custom
+  serializer. - test_format_dispatch: StrEnum's own __str__ contract; the sibling
+  test_value_is_the_lowercase_token already requires it. - test_settings_hooks: asserts wording
+  inside a settings.json description string; both extensions are already covered behaviorally in the
+  same file. - test_pr_review_model_routing: greps production source text for literal lines
+  including quote style, so ruff-format alone could break it.
+
+Refs #2603
+
+- Scrub stale WANDB_SERVICE from eval subprocesses
+  ([#2574](https://github.com/tinaudio/synth-setter/pull/2574),
+  [`6d56a52`](https://github.com/tinaudio/synth-setter/commit/6d56a52647b3c84fdeaa2bc0d6e8a5e3aa163df9))
+
+The four slow test_audio_dataset_predict_entrypoint_writes_artifacts params fail on the cpu-slow
+  lane with WandbServiceConnectionError: every eval subprocess inherits the same WANDB_SERVICE token
+  (one dead socket path across all 24 log occurrences), minted by an earlier in-process offline
+  wandb run in the pytest session and left behind after its service exited. wandb 0.26's
+  connect_to_service() short-circuits to the env token instead of starting a service, so
+  WANDB__SERVICE_WAIT never applies and wandb.init dies on FileNotFoundError connecting to the dead
+  socket.
+
+Drop WANDB_SERVICE from the subprocess env so each eval CLI run starts its own offline service.
+  Reproduced red locally by exporting a dead token; green with the scrub for flow_full /
+  flow_mlp_full / vae_full (ffn_full stays red on main for the unrelated datamodule.param_spec_name
+  interpolation, #2565).
+
+Refs #2564
+
+- **data-pipeline**: Pin the behavior each CLI test is named for
+  ([#2647](https://github.com/tinaudio/synth-setter/pull/2647),
+  [`aaf9760`](https://github.com/tinaudio/synth-setter/commit/aaf9760038ca15bc98594078a378b949ce5b4355))
+
+Three tests asserted an outcome that is identical whether the behavior they name works or not.
+
+- add_preview_columns: --bitrate-kbps was only checked via exit code and column presence, both
+  unchanged when the flag is dropped and the default bitrate is used. The encoder call now records
+  the bitrate it received. Verified by forcing the default through: the test fails with {128} ==
+  {64}. - add_music2latent: the name claims mutually exclusive selectors exit before the encoder
+  loads, but only the exit code was asserted, so loading first and failing later would pass. The
+  loader is now a tripwire that fails if reached, matching the pattern a sibling test in the file
+  already uses. - generate_dataset: >= 1 floors on num_shards and samples_per_shard would hold if
+  the partitioner collapsed the fan-out. smoke-shard fans 10 samples over 3 shards at 4 per shard,
+  so pin those.
+
+Refs #2603
+
+- **evaluation**: Pin symmetry and separation ordering for audio metrics
+  ([#2636](https://github.com/tinaudio/synth-setter/pull/2636),
+  [`373271f`](https://github.com/tinaudio/synth-setter/commit/373271fbb15bac9e75ceb7151933baef32ea0bd1))
+
+compute_mss had a symmetry test; compute_wmfcc and compute_sot had none, and every "different
+  inputs" test asserted only positivity, which passes for almost any wrong answer.
+
+Add the properties that actually hold, each verified by measurement first:
+
+- compute_wmfcc and compute_sot are symmetric. wMFCC's is the interesting one — DTW distance is
+  symmetric only when the local cost and step pattern are, so an argument-order dependence would
+  mean the step pattern changed. - compute_mss and compute_sot grow with frequency separation. -
+  compute_f0 an octave apart is strictly positive, not merely finite.
+
+No monotonicity assertion for wMFCC: measured across 440 Hz to 7 kHz it is not monotonic, dipping at
+  3.5 kHz. compute_mss saturates above ~3.5 kHz too, so its ordering test stays inside one-to-two
+  octaves.
+
+Also pins compute_f0 returning NaN when no frame clears the 0.85 confidence gate on both signals —
+  current behavior, not desired; see #2634.
+
+Refs #2603
+
+- **infra**: Drop self-tests of the process-assertion helpers
+  ([#2606](https://github.com/tinaudio/synth-setter/pull/2606),
+  [`cb2f946`](https://github.com/tinaudio/synth-setter/commit/cb2f9469b237459942978f7121a39f1ec51ac216))
+
+Four tests in test_pr_review_model_routing.py took `_process_state` and `_assert_process_terminated`
+  as their subject. Both are assertion helpers defined in that same file with no production callers,
+  so a failure meant the test file disagreed with itself rather than that any shipped behavior
+  broke.
+
+Three of them forked real processes to do it, inside the default CPU loop.
+
+The helpers stay — three real tests still use them at their call sites, which is where their
+  behavior is covered.
+
+Refs #2603
+
+
 ## v10.8.0 (2026-07-27)
 
 ### Documentation

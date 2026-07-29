@@ -4,9 +4,9 @@ defaults:
   - hydra: default
   - _self_
 
-# Set exactly one target: one Lance split, or a finalized root containing train/val/test splits.
-lance_uri: null
-dataset_root_uri: null
+# Dataset to augment with the selected embedding columns (local path, `r2://`, or `s3://`);
+# validated into AddEmbeddingsConfig and opened by the endpoint.
+lance_uri: ???
 
 # Registry keys selecting which embedding columns to write.
 embeddings: [clap, m2l]
@@ -16,7 +16,7 @@ checkpoints: {}
 device: null
 # Rows per Lance UDF call (ignored for legacy v1 datasets).
 batch_size: 128
-# Build IVF_PQ indexes on clap and the selected embeddings' pooled companion columns.
+# Build IVF_PQ indexes on selected global vectors and pooled sequence companions.
 build_index: true
 # IVF partition count; null uses round(sqrt(rows)).
 num_partitions: null
@@ -32,6 +32,7 @@ debug: false
 param_spec_name: null
 # Strategy rendering param rows as conditioning text for param-sourced embeddings.
 param_text_normalizer: param_names
+
 # hydra/default interpolates ${task_name}; run.dir is overridden below since
 # its group default also references ${run_name}, absent here.
 task_name: add_embeddings

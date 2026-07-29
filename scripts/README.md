@@ -4,11 +4,12 @@ This directory holds **shell / Python tooling that ships outside the `synth_sett
 
 ## Layout
 
-| Subdir / file                     | Purpose                                                                                                                                             |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/skypilot/`               | SkyPilot bootstrap / diagnostics (cred writer, cluster-state capture)                                                                               |
-| `scripts/ci/`                     | Local CI tooling (triage agent launcher, pueue job queue CLI used by `.github/workflows/job-queue*.yaml`)                                           |
-| `scripts/sync_worker_checkout.sh` | Bake-lag bootstrap — invoked **inside** the worker container by SkyPilot Task `run:` blocks before any source sync; see "Bake-lag exception" below. |
+| Subdir / file                     | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts/skypilot/`               | SkyPilot bootstrap and diagnostics                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `scripts/ci/`                     | Local CI tooling                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `scripts/studiorack/`             | Post-install compatibility patches for Linux VST3 bundles and unprivileged archive installs; remove after upstream [#82](https://github.com/open-audio-stack/open-audio-stack-core/issues/82), [#83](https://github.com/open-audio-stack/open-audio-stack-core/issues/83), [#84](https://github.com/open-audio-stack/open-audio-stack-core/issues/84), and [#85](https://github.com/open-audio-stack/open-audio-stack-core/issues/85) ship |
+| `scripts/sync_worker_checkout.sh` | Bake-lag bootstrap invoked inside worker containers before source sync                                                                                                                                                                                                                                                                                                                                                                     |
 
 ## Bake-lag exception: `scripts/sync_worker_checkout.sh`
 
@@ -25,7 +26,10 @@ The Python utilities live inside the `synth_setter` package and are invoked as `
 | `synth_setter.pipeline.data` | `stats`, `add_music2latent`, `add_embeddings`                                 |
 | `synth_setter.scripts`       | `load_vst3_check`                                                             |
 
-The `synth-setter-train`, `synth-setter-eval`, and `synth-setter-generate-dataset` console scripts (declared in `pyproject.toml`'s `[project.scripts]`) remain the canonical entrypoints for the train / eval / dataset-generation workflows.
+Console scripts declared in `pyproject.toml` are the canonical entrypoints.
+`synth-setter-plugins` installs, resolves, and links packages pinned in
+`studiorack.json`; train, eval, and generation use their existing
+`synth-setter-*` commands.
 
 ## Shell helpers
 
@@ -37,8 +41,9 @@ Container-runtime shell helpers (X11 / VST3 bootstrap):
 | `ensure_plugin_symlinks.sh` | `docker/ubuntu22_04/ensure_plugin_symlinks.sh`       |
 
 `run-linux-vst-headless.sh` ships inside the `synth_setter` package and is
-discovered via `synth_setter.resources.vst_headless_wrapper()` — see
-[`src/synth_setter/resources.py`](../src/synth_setter/resources.py).
+discovered via `synth_setter.resources.vst_headless_wrapper()`. The
+`ensure_plugin_symlinks.sh` helper restores the manifest-pinned Surge alias
+after a container workspace bind mount shadows `plugins/`.
 
 ## See also
 
