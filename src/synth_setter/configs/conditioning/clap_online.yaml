@@ -1,0 +1,14 @@
+# @package _global_
+
+# Online CLAP conditioning computes the frozen embedding from the stored waveform.
+defaults:
+  - override /model/encoder: clap_online
+
+model:
+  conditioning: audio
+  encoder_output_dim: ${model.encoder.out_dim}
+  vector_field:
+    conditioning_dim: ${model.encoder.out_dim}
+
+datamodule:
+  conditioning: audio

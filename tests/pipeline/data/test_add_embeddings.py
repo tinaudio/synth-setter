@@ -2011,8 +2011,8 @@ def test_load_clap_audio_encoder_with_mps_available_selects_mps(
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
     monkeypatch.setattr("torch.backends.mps.is_available", lambda: True)
     monkeypatch.setattr(
-        "huggingface_hub.snapshot_download",
-        lambda *_args, **_kwargs: "/cache/clap",
+        "synth_setter.pipeline.data.add_embeddings._resolve_clap_checkpoint",
+        lambda _checkpoint: "/cache/clap",
     )
     monkeypatch.setitem(sys.modules, "transformers", transformers)
 
@@ -2072,27 +2072,71 @@ def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
     assert _resolve_clap_checkpoint(str(tmp_path)) == str(tmp_path)
 
 
-def test_resolve_clap_checkpoint_with_default_source_uses_canonical_cache(
+def test_resolve_clap_checkpoint_with_default_r2_source_uses_canonical_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Hydrate the default CLAP snapshot into its stable model directory.
+    """Hydrate the mirrored CLAP checkpoint into its stable model directory.
 
-    :param monkeypatch: Fixture isolating cache location and snapshot download.
+    :param monkeypatch: Fixture isolating cache location and R2 download.
     :param tmp_path: XDG cache root for the assertion.
     """
-    downloads: list[tuple[str, str | None]] = []
+    downloads: list[tuple[str, Path]] = []
     expected = tmp_path / "synth-setter/models/embeddings/clap-htsat-unfused"
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
     monkeypatch.setattr(
-        "huggingface_hub.snapshot_download",
-        lambda repo_id, *, local_dir=None: downloads.append((repo_id, local_dir)) or str(expected),
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: downloads.append((uri, destination)),
     )
 
     resolved = _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT)
 
     assert resolved == str(expected)
-    assert downloads == [(DEFAULT_CLAP_CHECKPOINT, str(expected))]
+    assert downloads == [(DEFAULT_CLAP_CHECKPOINT, expected)]
+
+
+def test_resolve_clap_checkpoint_with_complete_default_cache_skips_r2(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A complete shared checkpoint avoids remote auth and transfer.
+
+    :param monkeypatch: Fixture isolating cache location and rejecting R2 access.
+    :param tmp_path: XDG cache root holding the complete checkpoint.
+    """
+    expected = tmp_path / "synth-setter/models/embeddings/clap-htsat-unfused"
+    expected.mkdir(parents=True)
+    for filename in ("config.json", "preprocessor_config.json", "pytorch_model.bin"):
+        (expected / filename).touch()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
+        lambda: pytest.fail("complete cache must not access R2"),
+    )
+
+    assert _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT) == str(expected)
+
+
+def test_resolve_clap_checkpoint_with_full_r2_path_uses_distinct_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A custom CLAP mirror cannot overwrite the production checkpoint cache.
+
+    :param monkeypatch: Fixture replacing credential loading and download.
+    """
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: downloads.append((uri, destination)),
+    )
+
+    checkpoint = "r2://other-bucket/team/clap"
+    resolved = _resolve_clap_checkpoint(checkpoint)
+
+    assert resolved.endswith("models/other-bucket/team/clap")
+    assert downloads == [(checkpoint, Path(resolved))]
 
 
 @pytest.mark.parametrize(

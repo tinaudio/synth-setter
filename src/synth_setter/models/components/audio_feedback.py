@@ -12,7 +12,9 @@ Typical usage:
 """
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 from beartype import beartype
@@ -36,6 +38,8 @@ _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_SHAPE = "batch"
 _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
+
+type EmbeddingTap = Callable[[Float[Tensor, _BATCH_AUDIO_SHAPE]], Float[Tensor, _BATCH_ANY_SHAPE]]
 
 
 @jaxtyped(typechecker=beartype)
@@ -138,40 +142,74 @@ def time_bucket_means(
 
 
 @jaxtyped(typechecker=beartype)
-def _frozen_latent_distance(
-    encoder: nn.Module,
-    rendered: Float[Tensor, _BATCH_AUDIO_SHAPE],
-    target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
-) -> Float[Tensor, _BATCH_SHAPE]:
-    """Per-sample cosine distance in an encoder's embedding space, holding the space fixed.
+def metric_tap(encoder: nn.Module) -> EmbeddingTap:
+    """Resolve the embedding the audio loss measures distance in.
 
-    The encoder's parameters are detached via ``functional_call`` and it runs in eval mode,
-    so the term cannot shrink by collapsing the (jointly trained) conditioning encoder or by
-    drifting its BatchNorm running stats; gradient still flows to the rendered estimate
-    through the frozen weights. Cosine rather than raw MSE because embedding norm carries no
-    fixed meaning while the encoder trains, which would let the term's magnitude drift with
-    activation scale alone.
+    Encoders with a frozen backbone expose ``embed``; ones without are their own tap. The
+    metric never taps a trainable head, which would reintroduce the between-step drift the
+    frozen backbone exists to remove.
 
-    :param encoder: Encoder defining the latent space; left in its original mode.
-    :param rendered: Rendered estimate shaped ``(batch, samples)``.
-    :param target_audio: Observed audio, same shape.
-    :returns: Per-sample distance in ``[0, 2]`` shaped ``(batch,)``.
+    :param encoder: Conditioning encoder.
+    :returns: Callable mapping a waveform batch to its metric-space embedding.
     """
+    return cast(EmbeddingTap, getattr(encoder, "embed", encoder))
+
+
+@jaxtyped(typechecker=beartype)
+def _frozen_embedder(encoder: nn.Module) -> EmbeddingTap:
+    """Build a tap that cannot be reshaped by the gradient it carries.
+
+    A frozen backbone is already stationary. A jointly trained encoder is instead called
+    through ``functional_call`` on detached parameters, so the term cannot shrink by
+    collapsing the encoder while gradient still reaches the rendered estimate.
+
+    :param encoder: Conditioning encoder, expected to be in eval mode already.
+    :returns: Callable mapping a waveform batch to its metric-space embedding.
+    """
+    tap = metric_tap(encoder)
+    if tap is not encoder:
+        return tap
     frozen_state = {
         name: tensor.detach()
         for name, tensor in (*encoder.named_parameters(), *encoder.named_buffers())
     }
+    return lambda signal: torch.func.functional_call(encoder, frozen_state, (signal,))
+
+
+@jaxtyped(typechecker=beartype)
+def _frozen_latent_distance(
+    encoder: nn.Module,
+    rendered: Float[Tensor, _BATCH_AUDIO_SHAPE],
+    target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+    target_embedding: Float[Tensor, _BATCH_ANY_SHAPE] | None = None,
+) -> Float[Tensor, _BATCH_SHAPE]:
+    """Per-sample cosine distance in an encoder's embedding space, holding the space fixed.
+
+    The encoder runs in eval mode so BatchNorm running stats cannot drift, and its space is
+    held fixed either by a frozen backbone or by ``functional_call`` on detached parameters.
+    Cosine rather than raw MSE because embedding norm carries no fixed meaning while the
+    encoder trains, which would let the term's magnitude drift with activation scale alone.
+
+    :param encoder: Encoder defining the latent space; left in its original mode.
+    :param rendered: Rendered estimate shaped ``(batch, samples)``.
+    :param target_audio: Observed audio, same shape.
+    :param target_embedding: Embedding of ``target_audio`` the caller already computed;
+        ``None`` recomputes it.
+    :returns: Per-sample distance in ``[0, 2]`` shaped ``(batch,)``.
+    """
     was_training = encoder.training
     encoder.eval()
     try:
+        embed = _frozen_embedder(encoder)
+        if target_embedding is None:
+            target_embedding = embed(target_audio)
         # flatten(1) collapses token/layer axes so sequence encoders also reduce to a
         # per-sample scalar instead of broadcasting against the (batch,) weight.
-        embeddings = (
-            torch.func.functional_call(encoder, frozen_state, (signal,)).flatten(start_dim=1)
-            for signal in (rendered, target_audio)
+        return 1.0 - functional.cosine_similarity(
+            embed(rendered).flatten(start_dim=1),
+            target_embedding.flatten(start_dim=1),
+            dim=-1,
         )
-        pred_embedding, target_embedding = embeddings
-        return 1.0 - functional.cosine_similarity(pred_embedding, target_embedding, dim=-1)
     finally:
         encoder.train(was_training)
 
@@ -235,6 +273,7 @@ class AudioFeedbackLoss(nn.Module):
         target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
         encoder: nn.Module,
         keep: Shaped[Tensor, _BATCH_SHAPE] | None = None,
+        target_embedding: Float[Tensor, _BATCH_ANY_SHAPE] | None = None,
     ) -> Float[Tensor, _SCALAR_SHAPE]:
         """Render the estimate and return the weighted latent distance to the target.
 
@@ -245,6 +284,8 @@ class AudioFeedbackLoss(nn.Module):
         :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are
             zero-weighted because their estimate is drawn from the marginal, making the
             residual against that row's own audio near-arbitrary.
+        :param target_embedding: Metric-space embedding of ``target_audio`` the caller
+            already computed for conditioning; ``None`` recomputes it.
         :returns: Scalar weighted audio loss.
         """
         params = differentiable_decode(theta_hat)
@@ -264,5 +305,5 @@ class AudioFeedbackLoss(nn.Module):
         # The stored target was hard-clamped by render_torchsynth; a straight-through
         # clamp matches that contract without zeroing gradient on clipped samples.
         rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
-        distance = _frozen_latent_distance(encoder, rendered, target_audio)
+        distance = _frozen_latent_distance(encoder, rendered, target_audio, target_embedding)
         return (weight * distance).mean()

@@ -76,7 +76,14 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 operator_workspace()
 
-DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
+DEFAULT_CLAP_CHECKPOINT: str = (
+    "r2://intermediate-data/models/encoders/clap-htsat-unfused"
+)
+_CLAP_REQUIRED_CHECKPOINT_FILES: tuple[str, ...] = (
+    "config.json",
+    "preprocessor_config.json",
+    "pytorch_model.bin",
+)
 DEFAULT_M2L_CHECKPOINT: str = ""
 DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
 DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
@@ -1538,20 +1545,28 @@ def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
 
 
 def _resolve_clap_checkpoint(checkpoint: str) -> str:
-    """Resolve a local or HuggingFace CLAP checkpoint directory.
+    """Resolve a local, R2, or Hugging Face CLAP checkpoint directory.
 
-    :param checkpoint: Local directory or HuggingFace model id.
+    :param checkpoint: Local directory, R2 prefix, or Hugging Face model id.
     :returns: Local directory accepted by the Transformers loaders.
     """
     local = Path(checkpoint).expanduser()
     if local.is_dir():
         return str(local)
+    if r2_io.is_r2_uri(checkpoint):
+        if checkpoint == DEFAULT_CLAP_CHECKPOINT:
+            cache_dir = embedding_model_dir("clap-htsat-unfused")
+        else:
+            cache_key = checkpoint.removeprefix("r2://").strip("/")
+            cache_dir = synth_setter_cache_dir() / "models" / cache_key
+        if all((cache_dir / filename).is_file() for filename in _CLAP_REQUIRED_CHECKPOINT_FILES):
+            return str(cache_dir)
+        r2_io.ensure_r2_env_loaded()
+        r2_io.download_dir_no_overwrite(checkpoint, cache_dir)
+        return str(cache_dir)
 
     from huggingface_hub import snapshot_download
 
-    if checkpoint == DEFAULT_CLAP_CHECKPOINT:
-        cache_dir = embedding_model_dir("clap-htsat-unfused")
-        return snapshot_download(checkpoint, local_dir=str(cache_dir))
     return snapshot_download(checkpoint)
 
 

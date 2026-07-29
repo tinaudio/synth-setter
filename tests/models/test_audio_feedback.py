@@ -16,6 +16,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
     gradient_balance,
+    metric_tap,
     time_bucket_means,
     validate_audio_feedback_runtime,
 )
@@ -487,6 +488,33 @@ def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     assert value.item() > 0.0
     assert torch.isfinite(gradient).all()
     assert (gradient != 0).any()
+
+
+def test_metric_tap_without_frozen_backbone_uses_encoder_forward() -> None:
+    """Legacy trainable encoders remain their own latent-space tap."""
+    encoder = _linear_encoder()
+
+    assert metric_tap(encoder) is encoder
+
+
+def test_latent_loss_with_precomputed_target_embedding_matches_recomputation() -> None:
+    """Reusing the conditioning embedding leaves the audio-loss value unchanged."""
+    torch.manual_seed(0)
+    encoder = _linear_encoder()
+    target_audio = _render(_encoded_rows(_BATCH))
+    theta = _encoded_rows(_BATCH) * 2 - 1
+    t = torch.full((_BATCH, 1), 0.9)
+
+    recomputed = _loss()(theta, t, target_audio, encoder=encoder)
+    reused = _loss()(
+        theta,
+        t,
+        target_audio,
+        encoder=encoder,
+        target_embedding=encoder(target_audio),
+    )
+
+    assert torch.equal(reused, recomputed)
 
 
 def test_latent_loss_is_invariant_to_encoder_output_scale() -> None:

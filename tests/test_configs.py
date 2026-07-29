@@ -387,19 +387,21 @@ def test_ssondo_conditioning_profile_projects_960_vector() -> None:
     assert encoder(torch.randn(2, 960)).shape == (2, cfg.model.encoder_output_dim)
 
 
-def _conditioning_profile_names() -> list[str]:
-    """Enumerate the ``conditioning/`` Hydra group options from the config dir.
+def _cached_conditioning_profile_names() -> list[str]:
+    """Enumerate conditioning profiles backed by stored embedding columns.
 
-    :returns: Sorted profile names (yaml stems) currently shipped in the group.
+    ``clap_online`` reads raw audio and is covered by the TorchSynth composition tests.
+
+    :returns: Sorted cached-profile names currently shipped in the group.
     """
     return sorted(
         entry.name.removesuffix(".yaml")
         for entry in (configs_dir() / "conditioning").iterdir()
-        if entry.name.endswith(".yaml")
+        if entry.name.endswith(".yaml") and entry.name != "clap_online.yaml"
     )
 
 
-@pytest.mark.parametrize("profile", _conditioning_profile_names())
+@pytest.mark.parametrize("profile", _cached_conditioning_profile_names())
 @pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
 def test_embedding_conditioning_profile_encoder_matches_model_output(
     profile: str, model_name: str
@@ -428,7 +430,7 @@ def test_embedding_conditioning_profile_encoder_matches_model_output(
     assert encoded.shape == (2, cfg.model.encoder_output_dim)
 
 
-@pytest.mark.parametrize("profile", _conditioning_profile_names())
+@pytest.mark.parametrize("profile", _cached_conditioning_profile_names())
 def test_eval_config_conditioning_profile_composes(profile: str) -> None:
     """Regression guard for #2304: eval.yaml accepts every ``conditioning=`` profile.
 

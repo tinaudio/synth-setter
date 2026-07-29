@@ -253,11 +253,20 @@ class VSTFlowMatchingModule(LightningModule):
         :param batch: Online or stored batch carrying params, noise, and audio.
         :returns: Flow loss plus whichever optional terms this configuration produces.
         """
-        conditioning = self._get_conditioning_from_batch(batch)
+        conditioning_input = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
 
-        conditioning = self.encoder(conditioning)
+        if hasattr(self.encoder, "project"):
+            # One frozen-backbone pass feeds both the conditioning head and the audio
+            # loss's metric tap, cutting three backbone passes per step to two.
+            backbone_embedding = self.encoder.embed(conditioning_input)
+            conditioning = self.encoder.project(backbone_embedding)
+        else:
+            backbone_embedding = None
+            conditioning = self.encoder(conditioning_input)
+        # Reusable only when the conditioning input is the very audio the loss scores.
+        target_embedding = backbone_embedding if self._conditioning_key == "audio" else None
         z, keep = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
 
         with torch.no_grad():
@@ -285,7 +294,12 @@ class VSTFlowMatchingModule(LightningModule):
             # `keep` zeroes CFG-dropped rows: their estimate comes from the marginal, so
             # its residual against that row's own audio is high-variance noise, not signal.
             audio_term = self.audio_loss(
-                theta_hat, t, batch["audio"], encoder=self.encoder, keep=keep
+                theta_hat,
+                t,
+                batch["audio"],
+                encoder=self.encoder,
+                keep=keep,
+                target_embedding=target_embedding,
             )
             if self._should_probe_gradient_balance():
                 from synth_setter.models.components.audio_feedback import gradient_balance
@@ -456,7 +470,10 @@ class VSTFlowMatchingModule(LightningModule):
         self.log_dict(encoder_norms, on_step=True, on_epoch=False)
 
     def configure_optimizers(self) -> dict[str, Any]:
-        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+        trainable_parameters = (
+            parameter for parameter in self.trainer.model.parameters() if parameter.requires_grad
+        )
+        optimizer = self.hparams.optimizer(params=trainable_parameters)
 
         if self.hparams.warmup_steps > 0:
             warmup_scheduler = torch.optim.lr_scheduler.LinearLR(

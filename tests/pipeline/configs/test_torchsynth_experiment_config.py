@@ -232,6 +232,37 @@ def test_torchsynth_flow_composed_predict_step_preserves_datamodule_width() -> N
     assert torch.isfinite(predictions).all()
 
 
+def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head() -> None:
+    """The online profile feeds raw audio through frozen CLAP before the trained head."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_audio",
+                "conditioning=clap_online",
+                "model/encoder=clap_online",
+            ],
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
+    )
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
+    assert cfg.model.encoder.backbone.checkpoint.startswith("r2://")
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.vector_projection.VectorProjection"
+    )
+    assert cfg.model.encoder.head.input_dim == 512
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+
+
 def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> None:
     """The audio arm swaps in the render-feedback term with the datamodule's geometry."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
