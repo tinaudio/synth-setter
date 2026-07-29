@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 from beartype import beartype
-from jaxtyping import jaxtyped
+from jaxtyping import Float, jaxtyped
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
@@ -21,8 +21,14 @@ from synth_setter.conditioning import (
 )
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
 
+_BATCH_SHAPE = "batch"
+_BATCH_TIME_SHAPE = "batch 1"
+
 if TYPE_CHECKING:
-    from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+    from synth_setter.models.components.audio_feedback import (
+        AudioFeedbackLoss,
+        GradientBalance,
+    )
 
 
 @dataclass(frozen=True)
@@ -43,13 +49,18 @@ class TrainStepOutputs:
 
     .. attribute :: grad_balance
 
-       Audio-to-flow gradient-norm ratio and cosine, or ``None`` off the probe cadence.
+       Gradient diagnostics for the audio term, or ``None`` off the probe cadence.
+
+    .. attribute :: t
+
+       Flow time per row, shaped ``(batch, 1)``.
     """
 
     loss: torch.Tensor
     audio_term: torch.Tensor | None
     penalty: torch.Tensor | None
-    grad_balance: tuple[torch.Tensor, torch.Tensor] | None
+    grad_balance: GradientBalance | None
+    t: torch.Tensor
 
 
 def call_with_cfg(
@@ -223,6 +234,25 @@ class VSTFlowMatchingModule(LightningModule):
         every = self.trainer.log_every_n_steps
         return every > 0 and self.trainer.global_step % every == 0
 
+    @jaxtyped(typechecker=beartype)
+    def _log_gradient_time_profile(
+        self,
+        audio_row_norms: Float[torch.Tensor, _BATCH_SHAPE],
+        t: Float[torch.Tensor, _BATCH_TIME_SHAPE],
+    ) -> None:
+        """Log where along the flow time axis the audio term's gradient actually lands.
+
+        :param audio_row_norms: Per-row audio gradient norm.
+        :param t: Flow time shaped ``(batch, 1)``.
+        """
+        from synth_setter.models.components.audio_feedback import time_bucket_means
+
+        for index, mean in enumerate(time_bucket_means(audio_row_norms, t)):
+            if torch.isfinite(mean):
+                self.log(
+                    f"train/audio_grad_norm_t_bucket_{index}", mean, on_step=True, on_epoch=False
+                )
+
     def _train_step(self, batch: dict[str, torch.Tensor]) -> TrainStepOutputs:
         """Run one training forward pass and assemble every term the logger consumes.
 
@@ -275,7 +305,7 @@ class VSTFlowMatchingModule(LightningModule):
             penalty = self.vector_field.penalty()
 
         return TrainStepOutputs(
-            loss=loss, audio_term=audio_term, penalty=penalty, grad_balance=grad_balance
+            loss=loss, audio_term=audio_term, penalty=penalty, grad_balance=grad_balance, t=t
         )
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
@@ -284,6 +314,8 @@ class VSTFlowMatchingModule(LightningModule):
 
         total = outputs.loss
         if outputs.audio_term is not None:
+            # Dominated by high-t rows, where the weight is maximal; the gradient peaks at
+            # mid t, so this scalar does not track where the term is actually teaching.
             self.log(
                 "train/audio_loss", outputs.audio_term, on_step=True, on_epoch=True, prog_bar=True
             )
@@ -292,9 +324,10 @@ class VSTFlowMatchingModule(LightningModule):
         if outputs.grad_balance is not None:
             # Set lambda_audio from the ratio, not the loss value; watch the cosine turn
             # negative for the point the audio term starts fighting the flow objective.
-            ratio, cosine = outputs.grad_balance
+            ratio, cosine = outputs.grad_balance.ratio, outputs.grad_balance.cosine
             self.log("train/audio_grad_ratio", ratio, on_step=True, on_epoch=False)
             self.log("train/audio_grad_cosine", cosine, on_step=True, on_epoch=False)
+            self._log_gradient_time_profile(outputs.grad_balance.audio_row_norms, outputs.t)
 
         if outputs.penalty is not None:
             self.log("train/penalty", outputs.penalty, on_step=True, on_epoch=True, prog_bar=True)

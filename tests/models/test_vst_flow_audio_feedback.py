@@ -15,7 +15,10 @@ from lightning.pytorch import Trainer
 from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule, _make_renderer
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.vector_field import VectorField
-from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_matching_module import (
+    TrainStepOutputs,
+    VSTFlowMatchingModule,
+)
 
 _SAMPLE_RATE = 44_100
 _SIGNAL_LENGTH = 4_410
@@ -151,6 +154,82 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> N
         assert parameter.grad is not None, f"{name} received no gradient"
         assert torch.isfinite(parameter.grad).all(), f"{name} gradient is non-finite"
         assert (parameter.grad != 0).any(), f"{name} gradient is identically zero"
+
+
+def _train_step_under_probe(probe: bool) -> tuple[TrainStepOutputs, torch.Tensor, torch.Tensor]:
+    """Run one train step with the gradient probe forced on or off.
+
+    :param probe: Whether ``_should_probe_gradient_balance`` reports True.
+    :returns: The step outputs, the RNG state left behind, and the flow's input-layer grad.
+    """
+    torch.manual_seed(0)
+    module = _module(audio_loss=_audio_loss())
+    module._should_probe_gradient_balance = lambda: probe  # pyright: ignore[reportAttributeAccessIssue]
+    batch = _synthetic_batch()
+    # Warm the cached renderer first: building its voice draws from the global RNG, which
+    # would otherwise read as a probe-induced difference whenever the cache starts cold.
+    module._train_step(batch)
+
+    torch.manual_seed(123)
+    outputs = module._train_step(batch)
+    rng_state = torch.get_rng_state()
+    assert outputs.audio_term is not None
+    (outputs.loss + outputs.audio_term).backward()
+
+    input_gradient = dict(module.vector_field.named_parameters())["input.weight"].grad
+    assert input_gradient is not None
+    return outputs, rng_state, input_gradient.clone()
+
+
+def test_gradient_probe_leaves_the_rng_stream_where_an_unprobed_step_leaves_it() -> None:
+    """The diagnostic must not consume RNG, or enabling it reshuffles every later draw."""
+    _, probed_rng, _ = _train_step_under_probe(probe=True)
+    _, unprobed_rng, _ = _train_step_under_probe(probe=False)
+
+    assert torch.equal(probed_rng, unprobed_rng)
+
+
+def test_gradient_probe_does_not_change_the_losses_the_step_returns() -> None:
+    """Measuring the gradient split must not move the objective it measures."""
+    probed, _, _ = _train_step_under_probe(probe=True)
+    unprobed, _, _ = _train_step_under_probe(probe=False)
+
+    assert probed.audio_term is not None and unprobed.audio_term is not None
+    assert torch.equal(probed.loss, unprobed.loss)
+    assert torch.equal(probed.audio_term, unprobed.audio_term)
+
+
+def test_gradient_probe_does_not_change_the_gradients_the_step_accumulates() -> None:
+    """The probe's extra backward passes must not add into ``.grad``."""
+    _, _, probed_gradient = _train_step_under_probe(probe=True)
+    _, _, unprobed_gradient = _train_step_under_probe(probe=False)
+
+    assert torch.equal(probed_gradient, unprobed_gradient)
+
+
+def test_gradient_probe_reports_one_audio_gradient_norm_per_batch_row() -> None:
+    """The t-bucketed diagnostic needs un-reduced per-row norms to bucket."""
+    outputs, _, _ = _train_step_under_probe(probe=True)
+
+    assert outputs.grad_balance is not None
+    assert outputs.grad_balance.audio_row_norms.shape == (_BATCH,)
+
+
+def test_training_step_logs_an_audio_gradient_norm_for_every_populated_time_bucket() -> None:
+    """The profile reaches the logger, so the envelope is measurable from a run."""
+    torch.manual_seed(0)
+    module = _module(audio_loss=_audio_loss())
+    module._sample_time = lambda n, device: torch.linspace(  # pyright: ignore[reportAttributeAccessIssue]
+        0.1, 0.9, n, device=device
+    ).unsqueeze(-1)
+    trainer = Trainer(
+        fast_dev_run=True, accelerator="cpu", logger=False, enable_checkpointing=False
+    )
+
+    trainer.fit(module, datamodule=_datamodule())
+
+    logged = {key for key in trainer.logged_metrics if "audio_grad_norm_t_bucket" in key}
+    assert logged == {f"train/audio_grad_norm_t_bucket_{index}" for index in range(4)}
 
 
 def _overfit_one_fixed_example() -> tuple[float, float]:

@@ -12,6 +12,7 @@ from synth_setter.data.vst.torchsynth_param_spec import INFERABLE_SPEC
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
     gradient_balance,
+    time_bucket_means,
     validate_audio_feedback_runtime,
 )
 
@@ -409,12 +410,12 @@ def test_gradient_balance_with_all_zero_audio_weights_is_finite_zero() -> None:
         _linear_encoder(),
     )
 
-    ratio, cosine = gradient_balance(flow_loss=flow_loss, audio_term=audio_term, shared=prediction)
+    balance = gradient_balance(flow_loss=flow_loss, audio_term=audio_term, shared=prediction)
 
-    assert torch.isfinite(ratio)
-    assert torch.isfinite(cosine)
-    assert ratio.item() == 0.0
-    assert cosine.item() == 0.0
+    assert torch.isfinite(balance.ratio)
+    assert torch.isfinite(balance.cosine)
+    assert balance.ratio.item() == 0.0
+    assert balance.cosine.item() == 0.0
 
 
 def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
@@ -541,49 +542,98 @@ def test_audio_loss_with_finite_positive_lambda_is_accepted(lambda_audio: float)
 
 def test_gradient_balance_of_a_term_against_itself_is_unit_ratio_and_alignment() -> None:
     """Identical terms contribute identically: ratio 1, cosine 1."""
-    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    shared = torch.tensor([[1.0, -2.0, 3.0]], requires_grad=True)
     term = shared.square().sum()
 
-    ratio, cosine = gradient_balance(flow_loss=term, audio_term=term, shared=shared)
+    balance = gradient_balance(flow_loss=term, audio_term=term, shared=shared)
 
-    assert ratio.item() == pytest.approx(1.0)
-    assert cosine.item() == pytest.approx(1.0)
+    assert balance.ratio.item() == pytest.approx(1.0)
+    assert balance.cosine.item() == pytest.approx(1.0)
 
 
 def test_gradient_balance_scaled_audio_term_scales_the_ratio_only() -> None:
     """The ratio tracks relative gradient magnitude; the cosine ignores it."""
-    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    shared = torch.tensor([[1.0, -2.0, 3.0]], requires_grad=True)
     flow = shared.square().sum()
 
-    ratio, cosine = gradient_balance(flow_loss=flow, audio_term=3.0 * flow, shared=shared)
+    balance = gradient_balance(flow_loss=flow, audio_term=3.0 * flow, shared=shared)
 
-    assert ratio.item() == pytest.approx(3.0)
-    assert cosine.item() == pytest.approx(1.0)
+    assert balance.ratio.item() == pytest.approx(3.0)
+    assert balance.cosine.item() == pytest.approx(1.0)
 
 
 def test_gradient_balance_opposed_terms_reports_negative_cosine() -> None:
     """A term pulling against the flow loss is the conflict signal we want to see."""
-    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    shared = torch.tensor([[1.0, -2.0, 3.0]], requires_grad=True)
     flow = shared.square().sum()
 
-    ratio, cosine = gradient_balance(flow_loss=flow, audio_term=-flow, shared=shared)
+    balance = gradient_balance(flow_loss=flow, audio_term=-flow, shared=shared)
 
-    assert ratio.item() == pytest.approx(1.0)
-    assert cosine.item() == pytest.approx(-1.0)
+    assert balance.ratio.item() == pytest.approx(1.0)
+    assert balance.cosine.item() == pytest.approx(-1.0)
 
 
 def test_gradient_balance_with_a_detached_flow_loss_is_finite() -> None:
     """A zero flow gradient must not divide by zero."""
-    shared = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    shared = torch.tensor([[1.0, -2.0, 3.0]], requires_grad=True)
 
-    ratio, cosine = gradient_balance(
+    balance = gradient_balance(
         flow_loss=(shared.detach() * shared.detach()).sum() + 0.0 * shared.sum(),
         audio_term=shared.square().sum(),
         shared=shared,
     )
 
-    assert torch.isfinite(ratio)
-    assert torch.isfinite(cosine)
+    assert torch.isfinite(balance.ratio)
+    assert torch.isfinite(balance.cosine)
+
+
+def test_time_bucket_means_places_each_row_in_the_bucket_containing_its_time() -> None:
+    """Equal-width buckets over ``[0, 1]``: a row's time picks its bucket."""
+    values = torch.tensor([10.0, 20.0, 30.0, 40.0])
+    t = torch.tensor([[0.1], [0.3], [0.6], [0.9]])
+
+    means = time_bucket_means(values, t, num_buckets=4)
+
+    assert torch.equal(means, values)
+
+
+def test_time_bucket_means_averages_every_row_sharing_a_bucket() -> None:
+    """Rows landing together are reduced by mean, not by sum."""
+    values = torch.tensor([10.0, 20.0, 100.0])
+    t = torch.tensor([[0.05], [0.20], [0.60]])
+
+    means = time_bucket_means(values, t, num_buckets=4)
+
+    assert means[0].item() == pytest.approx(15.0)
+
+
+def test_time_bucket_means_of_a_bucket_no_row_reached_is_not_a_number() -> None:
+    """An empty bucket must read as absent, never as a zero-gradient measurement."""
+    means = time_bucket_means(torch.tensor([1.0]), torch.tensor([[0.9]]), num_buckets=4)
+
+    assert torch.isnan(means[:3]).all()
+    assert means[3].item() == pytest.approx(1.0)
+
+
+def test_time_bucket_means_at_the_closed_upper_edge_uses_the_last_bucket() -> None:
+    """``t = 1`` is in range, so it must not index past the final bucket."""
+    means = time_bucket_means(torch.tensor([7.0]), torch.tensor([[1.0]]), num_buckets=4)
+
+    assert means[3].item() == pytest.approx(7.0)
+
+
+def test_gradient_balance_row_norms_are_the_per_row_audio_gradient_norms() -> None:
+    """The bucketed diagnostic reads these norms, so they must be per row, not reduced."""
+    shared = torch.tensor([[3.0, 4.0], [0.0, 1.0]], requires_grad=True)
+    scale = torch.tensor([[1.0, 0.0], [0.0, 2.0]])
+
+    balance = gradient_balance(
+        flow_loss=shared.square().sum(),
+        audio_term=(shared * scale).sum(),
+        shared=shared,
+    )
+
+    assert torch.allclose(balance.audio_row_norms, torch.tensor([1.0, 2.0]))
 
 
 def test_validate_runtime_with_torch_compile_raises() -> None:

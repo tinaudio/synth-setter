@@ -1,7 +1,9 @@
 """Audio-domain feedback loss that backpropagates through a differentiable render.
 
 The flow's one-step parameter estimate is scored against target audio in a frozen encoder's
-embedding space. The term is gated to late flow times, where the estimate carries usable signal.
+embedding space. Gradient reaching the network scales as ``(t - t_min) * (1 - t)``: zero at
+``t_min``, zero again at t=1 where the estimate is trivially correct, peaking midway — see
+https://github.com/tinaudio/synth-setter/issues/2665.
 
 Typical usage:
     audio_term = AudioFeedbackLoss(**audio_loss_config)(
@@ -10,6 +12,7 @@ Typical usage:
 """
 
 import math
+from dataclasses import dataclass
 
 import torch
 from beartype import beartype
@@ -25,7 +28,9 @@ from synth_setter.data.torchsynth_grad_render import (
 
 # Guards the gradient-ratio denominator when the flow loss contributes no gradient.
 _GRAD_NORM_EPS = 1e-12
-_ANY_SHAPE = "..."
+_TIME_BUCKETS = 4
+_BATCH_ANY_SHAPE = "batch ..."
+_BUCKETS_SHAPE = "buckets"
 _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_SHAPE = "batch"
@@ -60,13 +65,35 @@ def validate_audio_feedback_runtime(*, compiled: bool, world_size: int) -> None:
         )
 
 
+@dataclass(frozen=True)
+class GradientBalance:
+    """How the audio term's gradient compares to the flow loss's at a shared tensor.
+
+    .. attribute :: ratio
+
+       Audio-to-flow gradient-norm ratio; the scale ``lambda_audio`` is tuned against.
+
+    .. attribute :: cosine
+
+       Cosine between the two gradients; negative once the terms conflict.
+
+    .. attribute :: audio_row_norms
+
+       Per-row audio gradient norm, un-reduced so it can be bucketed by flow time.
+    """
+
+    ratio: Tensor
+    cosine: Tensor
+    audio_row_norms: Tensor
+
+
 @jaxtyped(typechecker=beartype)
 def gradient_balance(
     *,
     flow_loss: Float[Tensor, _SCALAR_SHAPE],
     audio_term: Float[Tensor, _SCALAR_SHAPE],
-    shared: Float[Tensor, _ANY_SHAPE],
-) -> tuple[Float[Tensor, _SCALAR_SHAPE], Float[Tensor, _SCALAR_SHAPE]]:
+    shared: Float[Tensor, _BATCH_ANY_SHAPE],
+) -> GradientBalance:
     """Measure how two loss terms contribute gradient at a tensor they both reach.
 
     Loss magnitude is a poor proxy for gradient magnitude, so tune ``lambda_audio`` against the
@@ -76,14 +103,38 @@ def gradient_balance(
 
     :param flow_loss: Scalar flow-matching loss.
     :param audio_term: Scalar weighted audio loss.
-    :param shared: Tensor both terms backpropagate through.
-    :returns: Audio-to-flow gradient-norm ratio, and the cosine between the two gradients.
+    :param shared: Batch-first tensor both terms backpropagate through.
+    :returns: The two aggregate diagnostics plus the un-reduced per-row audio norms.
     """
     (flow_grad,) = torch.autograd.grad(flow_loss, shared, retain_graph=True)
     (audio_grad,) = torch.autograd.grad(audio_term, shared, retain_graph=True)
-    ratio = audio_grad.norm() / flow_grad.norm().clamp_min(_GRAD_NORM_EPS)
-    cosine = functional.cosine_similarity(audio_grad.flatten(), flow_grad.flatten(), dim=0)
-    return ratio, cosine
+    return GradientBalance(
+        ratio=audio_grad.norm() / flow_grad.norm().clamp_min(_GRAD_NORM_EPS),
+        cosine=functional.cosine_similarity(audio_grad.flatten(), flow_grad.flatten(), dim=0),
+        audio_row_norms=audio_grad.flatten(start_dim=1).norm(dim=-1),
+    )
+
+
+@jaxtyped(typechecker=beartype)
+def time_bucket_means(
+    values: Float[Tensor, _BATCH_SHAPE],
+    t: Float[Tensor, _BATCH_TIME_SHAPE],
+    num_buckets: int = _TIME_BUCKETS,
+) -> Float[Tensor, _BUCKETS_SHAPE]:
+    """Average per-row values inside equal-width flow-time buckets spanning ``[0, 1]``.
+
+    :param values: One value per row.
+    :param t: Flow time shaped ``(batch, 1)``.
+    :param num_buckets: Number of equal-width buckets.
+    :returns: Per-bucket mean shaped ``(num_buckets,)``; NaN where no row landed.
+    """
+    bucket = (t.squeeze(-1) * num_buckets).long().clamp(0, num_buckets - 1)
+    totals = torch.zeros(num_buckets, device=values.device, dtype=values.dtype)
+    counts = torch.zeros_like(totals)
+    totals.index_add_(0, bucket, values)
+    counts.index_add_(0, bucket, torch.ones_like(values))
+    # 0/0 marks an empty bucket as NaN, which the caller skips rather than logging a zero.
+    return totals / counts
 
 
 @jaxtyped(typechecker=beartype)
