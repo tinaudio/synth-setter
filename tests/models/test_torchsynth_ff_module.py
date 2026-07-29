@@ -197,12 +197,11 @@ def test_test_step_updates_lsd_and_logs_named_parameter_mse(
     torch.testing.assert_close(logged["test/param_mse"], expected_mse)
 
 
-def test_test_step_param_mse_excludes_the_pinned_note_columns() -> None:
-    """The reported parameter error covers the inferable synth columns only.
+def test_test_step_param_mse_includes_the_sampled_note_columns() -> None:
+    """The reported parameter error scores the whole encoded row.
 
-    The online dataset pins pitch and the note window to the render configuration, so including
-    those constant columns would deflate the mean and break comparability with parameter-error
-    numbers recorded before they entered the row.
+    Pitch and the note window are sampled per row, so they are real prediction targets that carry
+    real error rather than constants that would deflate the mean.
     """
     spec = TORCHSYNTH_FULL_PARAM_SPEC
     module = _make_module(net=nn.Linear(_SIGNAL_LENGTH, spec.encoded_width))
@@ -217,7 +216,7 @@ def test_test_step_param_mse_excludes_the_pinned_note_columns() -> None:
     module.test_step((inputs, note_shifted, torch.randn_like(targets), lambda p: p), 0)
 
     logged = [call.args[1] for call in log_mock.call_args_list if call.args[0] == "test/param_mse"]
-    torch.testing.assert_close(logged[0], logged[1])
+    assert not torch.isclose(logged[0], logged[1])
 
 
 def test_on_train_start_resets_validation_metric(tiny_net: nn.Module) -> None:

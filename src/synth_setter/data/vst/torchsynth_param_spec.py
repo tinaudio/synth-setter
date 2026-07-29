@@ -188,8 +188,8 @@ PARAM_SPEC: tuple[TorchSynthParam, ...] = (
     TorchSynthParam("vco_2", "initial_phase", -3.1415927410125732, 3.1415927410125732, 1.0, False),
     TorchSynthParam("vco_2", "shape", 0.0, 1.0, 1.0, False),
 )
-# The keyboard's midi_f0 and duration are fixed by the renderer (constants of the
-# task), so they are excluded from the model's positional prediction targets.
+# The keyboard's midi_f0 and duration are note conditioning, carried by the specs'
+# note params, so they are excluded from the positional synth-parameter targets.
 _FIXED_MODULES = frozenset({"keyboard"})
 INFERABLE_SPEC: tuple[TorchSynthParam, ...] = tuple(
     param for param in PARAM_SPEC if param.module not in _FIXED_MODULES
@@ -337,18 +337,28 @@ DEFAULT_PATCH: Mapping[str, float] = MappingProxyType({
     "vco_2.shape": 0.0,
 })
 
-# The baseline patch as machine-range values in ``INFERABLE_SPEC`` order.
-DEFAULT_NORMALIZED_ROW: tuple[float, ...] = tuple(
-    param.to_0to1(DEFAULT_PATCH[param.key]) for param in INFERABLE_SPEC
+# The baseline patch as machine-range values, keyed and in ``INFERABLE_SPEC`` order.
+DEFAULT_NORMALIZED_PATCH: Mapping[str, float] = MappingProxyType(
+    {param.key: param.to_0to1(DEFAULT_PATCH[param.key]) for param in INFERABLE_SPEC}
 )
-# Renderer lookups: dotted key -> positional slot, and the keyboard's pinned
-# human duration range (torchsynth asserts on out-of-range note durations).
-PARAM_INDEX: Mapping[str, int] = MappingProxyType(
-    {param.key: index for index, param in enumerate(INFERABLE_SPEC)}
-)
+# The keyboard's pinned human duration range (torchsynth asserts on out-of-range notes).
 KEYBOARD_DURATION_BOUNDS: tuple[float, float] = next(
     (param.minimum, param.maximum) for param in PARAM_SPEC if param.key == "keyboard.duration"
 )
+
+
+def note_on_duration(note_start_and_end: tuple[float, float]) -> float:
+    """Return a note window's note-on length, clamped to what the keyboard can render.
+
+    A sampled or predicted window may be degenerate or longer than the keyboard's pinned
+    range; clamping keeps every row renderable instead of tripping torchsynth's asserts.
+
+    :param note_start_and_end: Note start and end times in seconds.
+    :returns: Note-on length in seconds within ``KEYBOARD_DURATION_BOUNDS``.
+    """
+    start, end = note_start_and_end
+    minimum, maximum = KEYBOARD_DURATION_BOUNDS
+    return min(max(end - start, minimum), maximum)
 
 
 def _note_params() -> list[Parameter]:
@@ -416,6 +426,3 @@ TORCHSYNTH_FULL_PARAM_SPEC = ParamSpec(
     _continuous([param.key for param in INFERABLE_SPEC]),
     _note_params(),
 )
-# Encoded columns the renderer consumes and the parameter metric scores. Starts at 0
-# because ``encoded_slices`` lays every synth span out ahead of the note spans.
-SYNTH_COLUMNS: slice = slice(0, TORCHSYNTH_FULL_PARAM_SPEC.synth_param_length)
