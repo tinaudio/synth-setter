@@ -98,6 +98,17 @@ def test_prepare_batch_conditioning_without_stats_passes_raw_values() -> None:
     torch.testing.assert_close(conditioning, torch.from_numpy(values))
 
 
+def test_prepare_batch_conditioning_half_supplied_stats_raise() -> None:
+    """Supplying exactly one of mean/std fails loudly instead of skipping."""
+    values = _skewed_conditioning(rows=4)
+    mean, std = _channel_stats(values)
+
+    with pytest.raises(ValueError, match="together"):
+        _prepare(values, mean, None)
+    with pytest.raises(ValueError, match="together"):
+        _prepare(values, None, std)
+
+
 def test_prepare_batch_conditioning_nonpositive_std_raises() -> None:
     """A zero std channel fails loudly instead of dividing to inf."""
     values = _skewed_conditioning(rows=4)
@@ -160,6 +171,109 @@ def test_lance_datamodule_embedding_conditioning_normalizes_with_train_stats(
     mean, std = _channel_stats(train_values)
     expected = torch.from_numpy((val_values[:2] - mean) / std).to(torch.float32)
     torch.testing.assert_close(batch["conditioning"], expected, atol=1e-5, rtol=1e-5)
+
+
+def test_lance_datamodule_computed_conditioning_stats_persist_across_runs(
+    tmp_path: Path,
+) -> None:
+    """First setup writes a stats sidecar that later runs reload verbatim.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    train_values = _skewed_conditioning(rows=8, seed=1)
+    val_values = _skewed_conditioning(rows=4, seed=2)
+    _write_embedding_shard(tmp_path / "train.lance", column="emb", values=train_values)
+    _write_embedding_shard(tmp_path / "val.lance", column="emb", values=val_values)
+
+    _stats_module(tmp_path, "emb").setup("validate")
+
+    sidecar = tmp_path / "conditioning_stats_emb.npz"
+    assert sidecar.exists()
+    # Replace the train shard with differently distributed rows: the sidecar,
+    # not the new shard, must drive normalization from now on.
+    shifted = _skewed_conditioning(rows=8, seed=3) + 100.0
+    _write_embedding_shard(tmp_path / "train.lance", column="emb", values=shifted)
+    module = _stats_module(tmp_path, "emb")
+    module.setup("validate")
+    try:
+        batch = next(iter(module.val_dataloader()))
+    finally:
+        module.teardown()
+
+    mean, std = _channel_stats(train_values)
+    expected = torch.from_numpy((val_values[:2] - mean) / std).to(torch.float32)
+    torch.testing.assert_close(batch["conditioning"], expected, atol=1e-5, rtol=1e-5)
+
+
+def test_lance_datamodule_constant_conditioning_channel_normalizes_without_error(
+    tmp_path: Path,
+) -> None:
+    """A channel constant across the sample floors its std instead of raising.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    train_values = _skewed_conditioning(rows=8, seed=1)
+    train_values[:, 0, :] = 7.5
+    val_values = _skewed_conditioning(rows=4, seed=2)
+    val_values[:, 0, :] = 7.5
+    _write_embedding_shard(tmp_path / "train.lance", column="emb", values=train_values)
+    _write_embedding_shard(tmp_path / "val.lance", column="emb", values=val_values)
+    module = _stats_module(tmp_path, "emb")
+
+    module.setup("validate")
+    try:
+        batch = next(iter(module.val_dataloader()))
+    finally:
+        module.teardown()
+
+    conditioning = batch["conditioning"]
+    assert torch.isfinite(conditioning).all()
+    # Constant channel: x - mean == 0, so the floored divisor yields exact zeros.
+    torch.testing.assert_close(conditioning[:, 0], torch.zeros_like(conditioning[:, 0]))
+
+
+def test_lance_datamodule_saved_conditioning_stats_wrong_shape_raises(
+    tmp_path: Path,
+) -> None:
+    """A sidecar whose arrays cannot broadcast per-channel fails at setup.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    train_values = _skewed_conditioning(rows=8, seed=1)
+    _write_embedding_shard(tmp_path / "train.lance", column="emb", values=train_values)
+    _write_embedding_shard(
+        tmp_path / "val.lance", column="emb", values=_skewed_conditioning(rows=4, seed=2)
+    )
+    np.savez(
+        tmp_path / "conditioning_stats_emb.npz",
+        mean=np.zeros(_CHANNELS, dtype=np.float32),
+        std=np.ones(_CHANNELS, dtype=np.float32),
+    )
+    module = _stats_module(tmp_path, "emb")
+
+    with pytest.raises(ValueError, match="shape"):
+        module.setup("validate")
+
+
+def test_lance_datamodule_predict_only_setup_skips_train_shard(
+    tmp_path: Path,
+) -> None:
+    """``setup("predict")`` must not require the train shard.
+
+    :param tmp_path: Per-test dataset root holding only the predict shard.
+    """
+    _write_embedding_shard(
+        tmp_path / "test.lance", column="emb", values=_skewed_conditioning(rows=4, seed=2)
+    )
+    module = _stats_module(tmp_path, "emb")
+
+    module.setup("predict")
+    try:
+        batch = next(iter(module.predict_dataloader()))
+    finally:
+        module.teardown()
+
+    assert batch["conditioning"] is not None
 
 
 def test_lance_datamodule_saved_conditioning_stats_take_precedence(

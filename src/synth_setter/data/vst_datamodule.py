@@ -118,11 +118,16 @@ def prepare_batch(
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread modalities.
-    :raises ValueError: If stored or transformed values violate the numeric contract.
+    :raises ValueError: If stored or transformed values violate the numeric
+        contract, or exactly one of the conditioning statistics is supplied.
     """
     validation_error = _raw_batch_validation_error(raw)
     if validation_error is not None:
         raise ValueError(validation_error)
+    if (conditioning_mean is None) != (conditioning_std is None):
+        raise ValueError(
+            "conditioning_mean and conditioning_std must be supplied together"
+        )
 
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None

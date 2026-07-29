@@ -89,6 +89,15 @@ class TestSketchControlSpec:
         spec = resolve_sketch_controls({"num_frames": 401})
         assert spec == SketchControlSpec(num_frames=401)
 
+    @pytest.mark.parametrize("threshold", [-0.1, 1.5])
+    def test_pitch_zero_threshold_out_of_bounds_rejected(self, threshold: float) -> None:
+        """Thresholds outside the documented ``[0, 1]`` activation range fail.
+
+        :param threshold: Out-of-range override under test.
+        """
+        with pytest.raises(ValueError, match="pitch_zero_threshold"):
+            SketchControlSpec(num_frames=401, pitch_zero_threshold=threshold)
+
     def test_resolve_non_mapping_raises_type_error(self) -> None:
         """Non-mapping junk is rejected with a clear error."""
         with pytest.raises(TypeError, match="sketch"):
@@ -141,6 +150,23 @@ class TestSketchControlTokens:
         zeroed[:, SKETCH_LOUDNESS_ROW] = 0.0
 
         torch.testing.assert_close(module(ctrl, mask), module(zeroed, _no_drop()))
+
+    @pytest.mark.parametrize("frame", range(_NUM_FRAMES))
+    def test_forward_impulse_at_any_frame_reaches_tokens(self, frame: int) -> None:
+        """Pooling covers every stored frame: no transient can vanish.
+
+        Point-sampling resampling (linear interpolate) reads only the frames
+        adjacent to each output position, so a short event between sample
+        points would contribute nothing.
+
+        :param frame: Frame index carrying the impulse.
+        """
+        module = _tokens_module()
+        base = torch.zeros(1, NUM_SKETCH_CONTROLS, _NUM_FRAMES)
+        spike = base.clone()
+        spike[0, SKETCH_PITCH_SLICE.start, frame] = 1.0
+        spike[0, SKETCH_LOUDNESS_ROW, frame] = 1.0
+        assert not torch.allclose(module(base, _no_drop(1)), module(spike, _no_drop(1)))
 
     def test_forward_wrong_channel_count_raises_shape_error(self) -> None:
         """Jaxtyping rejects a wrong channel count at the call boundary."""

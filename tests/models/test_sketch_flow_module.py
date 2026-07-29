@@ -36,12 +36,14 @@ def _module(
     *,
     sketch_dropout_rate: float = 0.2,
     sketch_all_dropout_rate: float = 0.2,
+    cfg_dropout_rate: float = 0.1,
 ) -> VSTFlowMatchingModule:
     """Build a tiny CPU flow module.
 
     :param sketch: Sketch-control spec, or ``None`` for the baseline model.
     :param sketch_dropout_rate: Independent per-control drop probability.
     :param sketch_all_dropout_rate: Probability of dropping every control.
+    :param cfg_dropout_rate: Audio-conditioning CFG drop probability.
     :returns: Module ready for ``_train_step``.
     """
     torch.manual_seed(0)
@@ -73,6 +75,7 @@ def _module(
         sketch_controls=sketch,
         sketch_dropout_rate=sketch_dropout_rate,
         sketch_all_dropout_rate=sketch_all_dropout_rate,
+        cfg_dropout_rate=cfg_dropout_rate,
         validation_sample_steps=2,
     )
 
@@ -160,6 +163,50 @@ def test_sketch_drop_mask_full_joint_rate_drops_every_control() -> None:
         sketch_all_dropout_rate=1.0,
     )
     assert module._sketch_drop_mask(4, torch.device("cpu")).all()  # noqa: SLF001
+
+
+def test_sketch_drop_mask_force_drop_rows_drop_every_control() -> None:
+    """Forced rows come back all-dropped even at zero configured rates."""
+    module = _module(
+        SketchControlSpec(num_frames=_NUM_FRAMES),
+        sketch_dropout_rate=0.0,
+        sketch_all_dropout_rate=0.0,
+    )
+    force = torch.tensor([[True], [False], [True], [False]])
+
+    mask = module._sketch_drop_mask(  # noqa: SLF001
+        4, torch.device("cpu"), force_drop=force
+    )
+
+    assert mask[0].all() and mask[2].all()
+    assert not mask[1].any() and not mask[3].any()
+
+
+def test_train_step_audio_cfg_drop_forces_all_sketch_controls_dropped() -> None:
+    """Rows whose audio conditioning is CFG-dropped also drop every control.
+
+    ``call_with_cfg`` queries the unconditional branch with no control tokens
+    at all, so training must present that exact joint state.
+    """
+    module = _module(
+        SketchControlSpec(num_frames=_NUM_FRAMES),
+        sketch_dropout_rate=0.0,
+        sketch_all_dropout_rate=0.0,
+        cfg_dropout_rate=1.0,
+    )
+    assert module.sketch_tokens is not None
+    captured: dict[str, torch.Tensor] = {}
+    original_forward = module.sketch_tokens.forward
+
+    def spy(controls: torch.Tensor, drop_mask: torch.Tensor) -> torch.Tensor:
+        captured["drop_mask"] = drop_mask
+        return original_forward(controls, drop_mask)
+
+    module.sketch_tokens.forward = spy  # type: ignore[method-assign]
+
+    module._train_step(_batch(with_sketch=True))  # noqa: SLF001
+
+    assert captured["drop_mask"].all()
 
 
 def test_validation_step_with_sketch_runs_cfg_sampling() -> None:

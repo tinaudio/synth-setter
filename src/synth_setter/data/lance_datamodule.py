@@ -119,47 +119,71 @@ def _validate_embedding_column(
         )
 
 
+# Divisor floor for channels that are constant across the sampled rows:
+# (x - mean) is ~0 there, so flooring normalizes them to ~0 instead of raising.
+_CONDITIONING_STD_FLOOR = 1e-6
+
+
 # DOC502: the documented ValueError propagates from validate_channel_statistics.
 def _conditioning_statistics(  # noqa: DOC502
-    shard_path: Path, column: str
+    shard_path: Path, spec: EmbeddingConditioningSpec, *, persist: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load saved or compute deterministic per-channel conditioning statistics.
 
     A ``conditioning_stats_<column>.npz`` file beside the shard takes precedence;
-    otherwise the first ``_CONDITIONING_STATS_SAMPLE_ROWS`` rows are sampled.
+    otherwise the first ``_CONDITIONING_STATS_SAMPLE_ROWS`` rows are sampled and
+    the result is persisted (when ``persist``) so every later rank/run/eval of a
+    checkpoint reloads the identical constants.
 
     :param shard_path: Lance split whose parent may hold saved statistics.
-    :param column: Stored embedding column to normalize.
+    :param spec: Conditioning spec naming the column and its per-row shape.
+    :param persist: Whether freshly computed statistics are written beside the shard.
     :returns: Per-channel ``(mean, std)`` arrays with the row axis dropped
         (``(channels, 1)`` for time-major columns, ``(channels,)`` for vectors).
-    :raises ValueError: If statistics are non-finite or stds are not positive.
+    :raises ValueError: If statistics are mis-shaped, non-finite, or not positive.
     """
-    stats_file = shard_path.parent / f"conditioning_stats_{column}.npz"
+    expected_shape = (spec.input_shape[0], *(1 for _ in spec.input_shape[1:]))
+    stats_file = shard_path.parent / f"conditioning_stats_{spec.column}.npz"
     if stats_file.exists():
         with np.load(stats_file) as stats:
             mean, std = stats["mean"], stats["std"]
+        for label, array in (("mean", mean), ("std", std)):
+            if array.shape != expected_shape:
+                raise ValueError(
+                    f"saved conditioning {label} in {stats_file} has shape "
+                    f"{array.shape}, expected {expected_shape} for column "
+                    f"{spec.column!r} of shape {spec.input_shape}"
+                )
         validate_channel_statistics(mean, std, label="conditioning")
         return mean, std
 
     dataset = lance.dataset(str(shard_path))
     rows = min(dataset.count_rows(), _CONDITIONING_STATS_SAMPLE_ROWS)
-    sample = dataset.take(range(rows), columns=[column]).combine_chunks()
+    sample = dataset.take(range(rows), columns=[spec.column]).combine_chunks()
     values = torch.cat(
         [
-            batch_to_shaped_tensors(record_batch)[column]
+            batch_to_shaped_tensors(record_batch)[spec.column]
             for record_batch in sample.to_batches()
         ],
         dim=0,
     ).numpy()
-    # Per-channel over the row axis and any trailing (e.g. time) axes.
+    # Per-channel over the row axis and any trailing (e.g. time) axes; the
+    # population std over this pinned sample is the persisted definition.
     axes = (0, *range(2, values.ndim))
     mean = values.mean(axis=axes, keepdims=True)[0]
-    std = values.std(axis=axes, keepdims=True)[0]
+    std = np.maximum(values.std(axis=axes, keepdims=True)[0], _CONDITIONING_STD_FLOOR)
     validate_channel_statistics(mean, std, label="conditioning")
+    if persist:
+        # Atomic publish: concurrent ranks compute identical arrays, so the
+        # last replace is harmless.
+        # The temp name keeps the .npz suffix so np.savez does not append one.
+        temp_file = stats_file.with_suffix(".tmp.npz")
+        np.savez(temp_file, mean=mean, std=std)
+        temp_file.replace(stats_file)
     logger.info(
         "computed conditioning stats for column %r from %d rows: "
         "mean per channel %s, std per channel %s",
-        column,
+        spec.column,
         rows,
         np.array2string(mean.ravel(), precision=4, threshold=16),
         np.array2string(std.ravel(), precision=4, threshold=16),
@@ -652,9 +676,15 @@ class LanceVSTDataModule(VSTDataModule):
                         and self.predict_file.parent == self.dataset_root
                         else load_dataset_statistics(self.predict_file)
                     )
-            else:
+            elif any(name != "predict" for name in split_names):
                 conditioning_stats = _conditioning_statistics(
-                    train_shard, self.embedding_conditioning.column
+                    train_shard, self.embedding_conditioning
+                )
+            else:
+                # Predict-only setup must not touch the train shard; a training
+                # run's sidecar beside the predict file still takes precedence.
+                conditioning_stats = _conditioning_statistics(
+                    self.predict_file, self.embedding_conditioning, persist=False
                 )
         shard_paths = {
             "train": train_shard,

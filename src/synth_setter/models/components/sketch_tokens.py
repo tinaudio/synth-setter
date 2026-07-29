@@ -21,13 +21,20 @@ _CONTROL_CHANNELS = {
 }
 # Drop-mask column order; each name keys one projection and one channel group.
 CONTROL_GROUPS = tuple(_CONTROL_CHANNELS)
+# Pooling covers every stored frame (point-sampling would skip sub-stride
+# transients); max for near-impulsive pitch activations, mean elsewhere.
+_POOLING = {
+    "loudness": F.adaptive_avg_pool1d,
+    "centroid": F.adaptive_avg_pool1d,
+    "pitch": F.adaptive_max_pool1d,
+}
 
 
 class SketchControlTokens(nn.Module):
     """Resample sketch controls to control tokens carrying a temporal PE.
 
-    Each control group is zeroed when dropped, linearly resampled from the
-    stored frame grid to ``num_ctrl_tokens`` positions, and projected by a
+    Each control group is zeroed when dropped, adaptively pooled from the
+    stored frame grid to ``num_ctrl_tokens`` bins, and projected by a
     zero-initialized bias-free linear layer (FlashFoley ``input_add``): at
     initialization — and forever for a dropped control — the projections
     contribute exactly nothing, so training starts at the unconditioned model.
@@ -77,6 +84,6 @@ class SketchControlTokens(nn.Module):
         for group_index, group in enumerate(CONTROL_GROUPS):
             channels = controls[:, _CONTROL_CHANNELS[group]]
             channels = channels * keep[:, group_index, None, None]
-            resampled = F.interpolate(channels, size=num_tokens, mode="linear", align_corners=True)
+            resampled = _POOLING[group](channels, num_tokens)
             tokens = tokens + self.projections[group](resampled.transpose(1, 2))
         return tokens

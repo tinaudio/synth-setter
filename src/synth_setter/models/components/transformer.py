@@ -5,6 +5,7 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
+from jaxtyping import Bool
 
 
 class PositionalEncoding(nn.Module):
@@ -410,14 +411,23 @@ class ApproxEquivTransformer(nn.Module):
         self.projection_penalty = projection_penalty
         self.outer_residual = outer_residual
 
-    def apply_dropout(self, z: torch.tensor, rate: float = 0.1):
-        if rate == 0.0:
-            return z
-
-        dropout_mask = torch.rand(z.shape[0], 1, device=z.device) > rate
+    def apply_dropout(
+        self,
+        z: torch.tensor,
+        rate: float = 0.1,
+        drop_mask: Bool[torch.Tensor, "batch 1"] | None = None,
+    ):
+        # drop_mask: (batch, 1) True-drops rows; supplied when the caller
+        # coordinates this drop with other conditioning signals (sketch CFG).
+        if drop_mask is None:
+            if rate == 0.0:
+                return z
+            keep_mask = torch.rand(z.shape[0], 1, device=z.device) > rate
+        else:
+            keep_mask = ~drop_mask
         if z.ndim == 3:
-            dropout_mask = dropout_mask.unsqueeze(-1)
-        return z.where(dropout_mask, self.cfg_dropout_token)
+            keep_mask = keep_mask.unsqueeze(-1)
+        return z.where(keep_mask, self.cfg_dropout_token)
 
     def penalty(self) -> torch.Tensor:
         penalty = 0.0

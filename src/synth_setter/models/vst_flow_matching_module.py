@@ -105,7 +105,10 @@ class VSTFlowMatchingModule(LightningModule):
         :param encoder_num_heads: Model-owned attention head count for sequence encoders.
         :param encoder_output_dim: Configured encoder width consumed by the vector field.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
-        :param cfg_dropout_rate: Probability of dropping conditioning during training (CFG).
+        :param cfg_dropout_rate: Probability of dropping conditioning during
+            training (CFG); with sketch controls configured, these rows also
+            drop every control so the trained state matches the CFG
+            unconditional branch.
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
         :param validation_sample_steps: RK4 integration steps used at validation.
         :param validation_cfg_strength: Classifier-free-guidance strength at validation.
@@ -177,34 +180,47 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def _sketch_drop_mask(
-        self, batch_size: int, device: torch.device
+        self,
+        batch_size: int,
+        device: torch.device,
+        force_drop: Bool[torch.Tensor, "batch 1"] | None = None,
     ) -> Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"]:
         """Draw the per-control CFG drop mask for one training step.
 
         :param batch_size: Rows in the current batch.
         :param device: Device the mask is drawn on.
+        :param force_drop: Rows whose controls are all dropped regardless of the
+            configured rates (audio-CFG coupling), or ``None``.
         :returns: ``(batch_size, len(CONTROL_GROUPS))`` boolean mask; ``True`` drops a control.
         """
         num_groups = len(CONTROL_GROUPS)
         drop = torch.rand(batch_size, num_groups, device=device) < self.hparams.sketch_dropout_rate
         drop_all = torch.rand(batch_size, 1, device=device) < self.hparams.sketch_all_dropout_rate
+        if force_drop is not None:
+            drop_all = drop_all | force_drop
         return drop | drop_all
 
     @jaxtyped(typechecker=beartype)
     def _sketch_tokens_from_batch(
-        self, batch: dict[str, Shaped[torch.Tensor, "..."] | None], *, training: bool
+        self,
+        batch: dict[str, Shaped[torch.Tensor, "..."] | None],
+        *,
+        training: bool,
+        force_drop: Bool[torch.Tensor, "batch 1"] | None = None,
     ) -> Float[torch.Tensor, "batch tokens d_model"] | None:
         """Tokenize the batch's sketch controls when a spec is configured.
 
         :param batch: Model batch; must carry ``sketch_ctrl`` when configured.
         :param training: Whether to draw the CFG drop mask; inference keeps all.
+        :param force_drop: Training rows whose controls are all dropped
+            (audio-CFG coupling), or ``None``.
         :returns: Control tokens, or ``None`` without a configured spec.
         """
         if self.sketch_tokens is None:
             return None
         controls = batch["sketch_ctrl"]
         drop_mask = (
-            self._sketch_drop_mask(controls.shape[0], controls.device)
+            self._sketch_drop_mask(controls.shape[0], controls.device, force_drop=force_drop)
             if training
             else torch.zeros(
                 controls.shape[0], len(CONTROL_GROUPS), dtype=torch.bool, device=controls.device
@@ -218,8 +234,23 @@ class VSTFlowMatchingModule(LightningModule):
         noise = batch["noise"]
 
         conditioning = self.encoder(conditioning)
-        z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
-        ctrl_tokens = self._sketch_tokens_from_batch(batch, training=True)
+        if self.sketch_tokens is None:
+            z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
+            ctrl_tokens = None
+        else:
+            # Sketch2Sound-style coupling: rows whose audio conditioning is
+            # CFG-dropped also drop every control, so training presents the
+            # exact all-unconditioned state call_with_cfg queries at inference.
+            joint_drop = (
+                torch.rand(conditioning.shape[0], 1, device=conditioning.device)
+                < self.hparams.cfg_dropout_rate
+            )
+            z = self.vector_field.apply_dropout(
+                conditioning, self.hparams.cfg_dropout_rate, drop_mask=joint_drop
+            )
+            ctrl_tokens = self._sketch_tokens_from_batch(
+                batch, training=True, force_drop=joint_drop
+            )
 
         with torch.no_grad():
             t = self._sample_time(params.shape[0], params.device)

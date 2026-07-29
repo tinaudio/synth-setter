@@ -123,7 +123,9 @@ class SketchControlSpec(BaseModel):
     column: str = Field(default=SKETCH_CTRL_FIELD, min_length=1)
     num_frames: PositiveInt
     num_ctrl_tokens: PositiveInt = 32
-    pitch_zero_threshold: float = 0.1
+    # Bounded to the documented [0, 1] activation range: a negative threshold
+    # silently disables binning and one above 1 zeroes the whole pitch block.
+    pitch_zero_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 SketchControls = SketchControlSpec | Mapping[str, object] | None
