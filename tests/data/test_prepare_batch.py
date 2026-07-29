@@ -69,7 +69,7 @@ def _reference_prepare_batch(
     :param rescale_params: Whether to map params ``[0, 1] -> [-1, 1]``.
     :param ot: Whether to Hungarian-match noise to params.
     :param seed: Seed for the golden's own noise generator.
-    :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` tensors.
+    :returns: ``{"mel", "m2l", "params", "noise", "audio"}`` tensors.
     """
     audio_raw = raw.get("audio")
     if audio_raw is not None:
@@ -79,12 +79,12 @@ def _reference_prepare_batch(
 
     mel_raw = raw.get("mel_spec")
     if mel_raw is not None:
-        mel_spec = mel_raw
+        mel = mel_raw
         if mean is not None and std is not None:
-            mel_spec = (mel_spec - mean) / std
-        mel_spec = torch.from_numpy(mel_spec).to(dtype=torch.float32)
+            mel = (mel - mean) / std
+        mel = torch.from_numpy(mel).to(dtype=torch.float32)
     else:
-        mel_spec = None
+        mel = None
 
     m2l_raw = raw.get("music2latent")
     if m2l_raw is not None:
@@ -98,12 +98,12 @@ def _reference_prepare_batch(
     param_array = torch.from_numpy(param_raw).to(dtype=torch.float32)
     noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
     if ot:
-        noise, param_array, mel_spec, m2l, audio = _hungarian_match(
-            noise, param_array, mel_spec, m2l, audio
+        noise, param_array, mel, m2l, audio = _hungarian_match(
+            noise, param_array, mel, m2l, audio
         )
 
     return dict(
-        mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
+        mel=mel.contiguous() if mel is not None else None,
         m2l=m2l.contiguous() if m2l is not None else None,
         params=param_array.contiguous(),
         noise=noise.contiguous(),
@@ -334,7 +334,7 @@ def test_prepare_batch_is_pure_and_pinned() -> None:
         generator=torch.Generator().manual_seed(seed),
     )
 
-    for key in ("mel_spec", "params", "noise", "audio"):
+    for key in ("mel", "params", "noise", "audio"):
         # atol=rtol=0: every step (affine mel norm, x*2-1, seeded noise, integer
         # row permutation from Hungarian) is exact, so bit-equality must hold.
         torch.testing.assert_close(out[key], golden[key], atol=0.0, rtol=0.0)
@@ -367,7 +367,7 @@ def test_prepare_batch_same_seed_yields_identical_output(ot: bool) -> None:
         ot=ot,
         generator=torch.Generator().manual_seed(42),
     )
-    for key in ("params", "noise", "mel_spec"):
+    for key in ("params", "noise", "mel"):
         torch.testing.assert_close(first[key], second[key], atol=0.0, rtol=0.0)
     # The unread slots must stay None across calls, not silently materialize.
     assert first["audio"] is None and second["audio"] is None
@@ -418,7 +418,7 @@ def test_prepare_batch_modality_slots_match_read_flags(
         generator=torch.Generator().manual_seed(0),
     )
     assert set(out.keys()) == {
-        "mel_spec",
+        "mel",
         "m2l",
         "conditioning",
         "params",
@@ -426,7 +426,7 @@ def test_prepare_batch_modality_slots_match_read_flags(
         "audio",
     }
     assert out["conditioning"] is None
-    assert (out["mel_spec"] is not None) == read_mel
+    assert (out["mel"] is not None) == read_mel
     assert (out["m2l"] is not None) == read_m2l
     assert (out["audio"] is not None) == read_audio
     assert _unwrap(out["params"]).shape == (_BATCH, _NUM_PARAMS)
@@ -483,7 +483,7 @@ def test_prepare_batch_normalizes_mel_only_when_mean_and_std_set(
             rescale_params=False,
             ot=False,
             generator=torch.Generator().manual_seed(0),
-        )["mel_spec"]
+        )["mel"]
     )
     expected = (3.0 - 1.0) / 2.0 if (mean_set and std_set) else 3.0
     assert torch.allclose(out, torch.full_like(out, expected))
@@ -538,7 +538,7 @@ def test_prepare_batch_ot_true_matches_reference_hungarian() -> None:
         ot=True,
         generator=torch.Generator().manual_seed(seed),
     )
-    for key in ("noise", "params", "mel_spec", "audio"):
+    for key in ("noise", "params", "mel", "audio"):
         torch.testing.assert_close(out[key], golden[key], atol=0.0, rtol=0.0)
 
 
@@ -560,7 +560,7 @@ def test_prepare_batch_ot_false_passes_through_unpermuted() -> None:
     expected_mel = torch.from_numpy(_unwrap_array(raw.get("mel_spec"))).to(dtype=torch.float32)
     expected_audio = torch.from_numpy(_unwrap_array(raw.get("audio"))).to(dtype=torch.float32)
     torch.testing.assert_close(out["params"], expected_params, atol=0.0, rtol=0.0)
-    torch.testing.assert_close(out["mel_spec"], expected_mel, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(out["mel"], expected_mel, atol=0.0, rtol=0.0)
     torch.testing.assert_close(out["audio"], expected_audio, atol=0.0, rtol=0.0)
     # randn here vs empty_like().normal_() in production: bit-equality is
     # guarded by test_noise_draw_apis_same_seed_bit_identical.

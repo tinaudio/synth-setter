@@ -226,13 +226,13 @@ def collate_vst_dict(
 ) -> TorchSynthBatch:
     """Collate online rows into the mel-capable VST batch contract.
 
-    ``mel_spec`` uses the dataset generator's frontend so online and Lance-hydrated
+    ``mel`` uses the dataset generator's frontend so online and Lance-hydrated
     batches share shape and scaling.
 
     :param batch: Rows carrying audio shaped ``(1, samples)`` and params shaped
         ``(1, NUM_PARAMS)`` in ``[0, 1]``.
     :param sample_rate: Audio sample rate in Hz for the mel frontend.
-    :returns: The audio-conditioned contract plus float32 ``mel_spec`` shaped
+    :returns: The audio-conditioned contract plus float32 ``mel`` shaped
         ``(batch, 1, mels, frames)``.
     """
     from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
@@ -244,7 +244,7 @@ def collate_vst_dict(
             for row in collated["audio"]
         ]
     ).unsqueeze(1)
-    collated["mel_spec"] = mel.to(torch.float32)
+    collated["mel"] = mel.to(torch.float32)
     return collated
 
 

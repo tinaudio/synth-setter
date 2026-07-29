@@ -71,6 +71,6 @@ def test_prepare_data_live_r2_materializes_splits_and_feeds_dataloader(
     finally:
         module.teardown()
     params = batch["params"]
-    mel_spec = batch["mel_spec"]
+    mel = batch["mel"]
     assert params is not None and params.shape[0] == _BATCH_SIZE
-    assert mel_spec is not None and mel_spec.shape[0] == _BATCH_SIZE
+    assert mel is not None and mel.shape[0] == _BATCH_SIZE

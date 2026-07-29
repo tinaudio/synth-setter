@@ -322,7 +322,7 @@ def _assert_map_loader_round_trip(
     encoded_width = len(resolve_param_spec(param_spec_name))
     seen = 0
     for batch in datamodule.train_dataloader():
-        mel, params = batch["mel_spec"], batch["params"]
+        mel, params = batch["mel"], batch["params"]
         assert params.shape[1] == encoded_width
         assert mel.shape[0] == params.shape[0]
         assert mel.dtype == params.dtype

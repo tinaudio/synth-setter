@@ -13,12 +13,7 @@ from jaxtyping import Float, jaxtyped
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
-from synth_setter.conditioning import (
-    Conditioning,
-    raw_conditioning_key,
-    resolve_embedding_conditioning,
-    select_conditioning,
-)
+from synth_setter.conditioning import Conditioning, conditioning_batch_key
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
 
 _BATCH_SHAPE = "batch"
@@ -163,8 +158,7 @@ class VSTFlowMatchingModule(LightningModule):
             # Only `compiled` is known here; world_size is re-checked against the real
             # trainer in on_train_start. Must fail before setup() compiles (#2585).
             validate_audio_feedback_runtime(compiled=True, world_size=1)
-        self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
-        self._raw_conditioning_key = raw_conditioning_key(conditioning)
+        self._conditioning_key = conditioning_batch_key(conditioning)
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
@@ -219,7 +213,7 @@ class VSTFlowMatchingModule(LightningModule):
         return target
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return select_conditioning(batch, self._embedding_conditioning, self._raw_conditioning_key)
+        return batch[self._conditioning_key]
 
     @jaxtyped(typechecker=beartype)
     def _should_probe_gradient_balance(self) -> bool:

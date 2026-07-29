@@ -8,7 +8,7 @@ shapes that downstream callbacks depend on (``PredictionWriter`` unpacks
 ``predict_step``'s tuple; ``LogPerParamMSE`` reads ``per_param_mse`` from the
 val/test step dicts).
 
-Shapes are deliberately tiny — the oracle ignores both ``mel_spec`` shape and
+Shapes are deliberately tiny — the oracle ignores both ``mel`` shape and
 the AST-style production sizes — so the tests run in milliseconds.
 """
 
@@ -31,11 +31,11 @@ _MEL_N_FRAMES = 5
 
 
 def _make_batch(batch_size: int, *, mel_seed: int = 0) -> dict[str, torch.Tensor]:
-    """Build a synthetic batch with deterministic ``params`` and seedable ``mel_spec``.
+    """Build a synthetic batch with deterministic ``params`` and seedable ``mel``.
 
     :param batch_size: First-axis length for every tensor in the batch.
     :param mel_seed: Seed for the mel-spec RNG so callers can request batches that
-        share ``params`` but differ in ``mel_spec`` (used to verify mel-independence
+        share ``params`` but differ in ``mel`` (used to verify mel-independence
         of the oracle's predictions).
 
     :return: Batch dict with the keys the Lightning module's step functions consume.
@@ -45,7 +45,7 @@ def _make_batch(batch_size: int, *, mel_seed: int = 0) -> dict[str, torch.Tensor
         batch_size, _NUM_PARAMS
     )
     generator = torch.Generator().manual_seed(mel_seed)
-    mel_spec = torch.randn(
+    mel = torch.randn(
         batch_size,
         _MEL_CHANNELS,
         _MEL_N_MELS,
@@ -53,7 +53,7 @@ def _make_batch(batch_size: int, *, mel_seed: int = 0) -> dict[str, torch.Tensor
         generator=generator,
     )
     audio = torch.zeros(batch_size, _MEL_CHANNELS, 16)
-    return {"params": params, "mel_spec": mel_spec, "audio": audio}
+    return {"params": params, "mel": mel, "audio": audio}
 
 
 def _make_module() -> VSTFakeOracleModule:
@@ -94,25 +94,25 @@ def test_predict_step_ignores_mel_spec(batch_size: int) -> None:
     preds_a, _ = module.predict_step(batch_a, batch_idx=0)
     preds_b, _ = module.predict_step(batch_b, batch_idx=0)
 
-    assert not torch.equal(batch_a["mel_spec"], batch_b["mel_spec"])
+    assert not torch.equal(batch_a["mel"], batch_b["mel"])
     assert torch.equal(preds_a, preds_b)
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])
 def test_model_step_returns_four_tuple_with_oracle_preds(batch_size: int) -> None:
-    """``model_step`` returns ``(loss, preds, targets, mel_spec)`` with preds == targets == params.
+    """``model_step`` returns ``(loss, preds, targets, mel)`` with preds == targets == params.
 
     :param batch_size: Parametrized batch dimension exercised by this test.
     """
     module = _make_module()
     batch = _make_batch(batch_size)
 
-    loss, preds, targets, mel_spec = module.model_step(batch)
+    loss, preds, targets, mel = module.model_step(batch)
 
     assert loss.shape == ()
     assert preds.shape == (batch_size, _NUM_PARAMS)
     assert targets.shape == (batch_size, _NUM_PARAMS)
-    assert mel_spec.shape == (batch_size, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
+    assert mel.shape == (batch_size, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES)
     assert torch.equal(preds, batch["params"])
     assert torch.equal(targets, batch["params"])
 
@@ -160,7 +160,7 @@ def test_training_step_returns_zero_loss_with_grad(batch_size: int) -> None:
     assert loss.requires_grad
     loss.backward()
     # The dummy parameter is the *only* reason loss carries a grad path — if a
-    # refactor drops the `self.net(mel_spec)` call from model_step, loss.backward()
+    # refactor drops the `self.net(mel)` call from model_step, loss.backward()
     # would still pass on a detached zero tensor, but no grad would land on dummy.
     assert module.net.dummy.grad is not None
 

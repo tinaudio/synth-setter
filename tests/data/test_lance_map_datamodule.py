@@ -160,7 +160,7 @@ class TestPrepareBatchCollate:
         batch = collate(self._raw_batch(num_rows=4))
         assert _unwrap(batch["params"]).shape == (4, NUM_PARAMS)
         assert _unwrap(batch["noise"]).shape == (4, NUM_PARAMS)
-        for key in ("mel_spec", "m2l", "params", "noise", "audio"):
+        for key in ("mel", "m2l", "params", "noise", "audio"):
             assert _unwrap(batch[key]).dtype == torch.float32, key
 
     def test_collate_missing_optional_columns_map_to_none(self) -> None:
@@ -171,7 +171,7 @@ class TestPrepareBatchCollate:
         batch = collate(raw)
         assert batch["audio"] is None
         assert batch["m2l"] is None
-        assert _unwrap(batch["mel_spec"]).shape == (4, *MEL_SHAPE)
+        assert _unwrap(batch["mel"]).shape == (4, *MEL_SHAPE)
 
     def test_collate_normalizes_mel_with_mean_and_std(self) -> None:
         """``(mel - mean) / std`` is applied when stats are provided."""
@@ -183,7 +183,7 @@ class TestPrepareBatchCollate:
         )
         raw = self._raw_batch()
         raw["mel_spec"] = torch.full((4, *MEL_SHAPE), 3.0)
-        mel = _unwrap(collate(raw)["mel_spec"])
+        mel = _unwrap(collate(raw)["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
     def test_collate_rescale_params_centers_to_minus_one_one(self) -> None:
@@ -407,7 +407,7 @@ class TestLanceMapDataModuleSetup:
             module.teardown()
 
         assert (module.dataset_root / "stats.npz").is_file()
-        assert batch["mel_spec"].shape[0] == 2
+        assert batch["mel"].shape[0] == 2
 
     def test_prepare_data_without_uri_leaves_local_root_unchanged(self, tmp_path: Path) -> None:
         """The conservative default performs no implicit remote download.
@@ -591,7 +591,7 @@ class TestLanceMapDataModuleSetup:
         module.setup(stage="test")
         try:
             batch = next(iter(module.test_dataloader()))
-            mel = _unwrap(batch["mel_spec"])
+            mel = _unwrap(batch["mel"])
             assert torch.allclose(mel, torch.ones_like(mel))
             with pytest.raises(RuntimeError, match="train.*setup.*test"):
                 module.train_dataloader()
@@ -618,7 +618,7 @@ class TestLanceMapDataModuleSetup:
         module.setup(stage="validate")
         try:
             batch = next(iter(module.val_dataloader()))
-            mel = _unwrap(batch["mel_spec"])
+            mel = _unwrap(batch["mel"])
             assert torch.allclose(mel, torch.ones_like(mel))
         finally:
             module.teardown()
@@ -649,7 +649,7 @@ class TestLanceMapDataModuleSetup:
         module.setup(stage="predict")
         try:
             batch = next(iter(module.predict_dataloader()))
-            mel = _unwrap(batch["mel_spec"])
+            mel = _unwrap(batch["mel"])
             assert torch.allclose(mel, torch.ones_like(mel))
             assert _unwrap(batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         finally:
@@ -777,7 +777,7 @@ class TestLanceMapDataModuleFlows:
             dataset_root=dataset_root, batch_size=2, ot=False, conditioning=spec
         ) as module:
             batch = next(iter(module.val_dataloader()))
-        assert batch["mel_spec"] is None
+        assert batch["mel"] is None
         assert batch["m2l"] is None
         np.testing.assert_array_equal(
             _unwrap(batch["conditioning"]).numpy(),
@@ -795,7 +795,7 @@ class TestLanceMapDataModuleFlows:
             write_seeded_lance_shard(root / f"{split}.lance", num_rows=4, mel_fill=3.0)
         write_mel_stats(root, mean=1.0, std=2.0)
         with _set_up_map_module(dataset_root=root, batch_size=2, ot=False) as module:
-            mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
+            mel = _unwrap(next(iter(module.val_dataloader()))["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
     def test_predict_file_outside_root_uses_its_own_stats(self, tmp_path: Path) -> None:
@@ -818,7 +818,7 @@ class TestLanceMapDataModuleFlows:
             ot=False,
             predict_file=predict_dir / "predict.lance",
         ) as module:
-            mel = _unwrap(next(iter(module.predict_dataloader()))["mel_spec"])
+            mel = _unwrap(next(iter(module.predict_dataloader()))["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
     def test_batches_are_float32_contiguous_and_writable(self, dataset_root: Path) -> None:
@@ -828,7 +828,7 @@ class TestLanceMapDataModuleFlows:
         """
         with _set_up_map_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             batch = next(iter(module.predict_dataloader()))
-        for key in ("mel_spec", "params", "noise", "audio"):
+        for key in ("mel", "params", "noise", "audio"):
             tensor = _unwrap(batch[key])
             assert tensor.dtype == torch.float32, key
             assert tensor.is_contiguous(), key
@@ -880,7 +880,7 @@ class TestLanceMapDataModuleModes:
         finally:
             module.teardown()
 
-        assert val_batch["mel_spec"] is None
+        assert val_batch["mel"] is None
         assert _unwrap(val_batch["m2l"]).shape == (2, 128, 42)
         assert _unwrap(val_batch["params"]).shape == (2, len(param_specs["surge_4"]))
         assert _unwrap(val_batch["noise"]).shape == _unwrap(val_batch["params"]).shape
@@ -906,7 +906,7 @@ class TestLanceMapDataModuleModes:
 
         first = draw()
         second = draw()
-        for key in ("mel_spec", "params", "noise"):
+        for key in ("mel", "params", "noise"):
             assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
 
     @pytest.mark.parametrize(
@@ -931,7 +931,7 @@ class TestLanceMapDataModuleModes:
             first = next(iterator)
             second = next(iterator)
 
-        for key in ("mel_spec", "params", "noise"):
+        for key in ("mel", "params", "noise"):
             assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
 
     def test_repeat_first_batch_every_train_batch_is_the_first(self, dataset_root: Path) -> None:
@@ -993,7 +993,7 @@ class TestLanceMapDataModuleModes:
         with _set_up_map_module(
             dataset_root=root, batch_size=2, ot=False, use_saved_mean_and_variance=False
         ) as module:
-            mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
+            mel = _unwrap(next(iter(module.val_dataloader()))["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 3.0))
 
     def test_repeat_first_batch_folds_val_but_never_predict(self, dataset_root: Path) -> None:
@@ -1185,7 +1185,7 @@ class _FlowProbe(LightningModule):
         """
         params = batch["params"]
         noise = batch["noise"]
-        mel = batch["mel_spec"]
+        mel = batch["mel"]
         assert params is not None and params.shape[1] == self.num_params
         assert noise is not None and noise.shape == params.shape
         assert mel is not None and mel.shape[0] == params.shape[0]

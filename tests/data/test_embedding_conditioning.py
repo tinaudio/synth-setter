@@ -109,7 +109,7 @@ def test_conditioning_spec_clap_column_routes_to_batch(tmp_path: Path) -> None:
     finally:
         module.teardown()
 
-    assert batch["mel_spec"] is None
+    assert batch["mel"] is None
     assert batch["m2l"] is None
     torch.testing.assert_close(batch["conditioning"], torch.from_numpy(values[:2]))
 

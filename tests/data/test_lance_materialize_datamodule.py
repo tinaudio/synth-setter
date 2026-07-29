@@ -569,7 +569,7 @@ class TestMaterializePrepareData:
             actual_params = materialized.scanner(columns=["param_array"]).to_table()
             assert actual_params.equals(expected_params)
         assert batch["params"].shape == (2, NUM_PARAMS)
-        assert batch["mel_spec"] is not None
+        assert batch["mel"] is not None
 
     def test_prepare_data_materialized_root_feeds_train_dataloader(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -604,7 +604,7 @@ class TestMaterializePrepareData:
             module.teardown()
 
         assert batch["params"].shape == (2, NUM_PARAMS)
-        assert batch["mel_spec"] is not None
+        assert batch["mel"] is not None
 
     def test_prepare_data_materialize_external_predict_file_omits_audio(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

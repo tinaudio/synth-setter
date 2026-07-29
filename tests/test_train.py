@@ -544,8 +544,8 @@ def test_train_row_limited_file_uri_hydration_without_txids(
         datamodule.teardown("fit")
     assert batch["params"].shape[0] == 2
     assert torch.isfinite(batch["params"]).all()
-    assert batch["mel_spec"] is not None
-    assert torch.isfinite(batch["mel_spec"]).all()
+    assert batch["mel"] is not None
+    assert torch.isfinite(batch["mel"]).all()
 
 
 @pytest.mark.dataloader_multiprocess
@@ -720,7 +720,7 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
     no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
     ``surge/fake_oracle`` leg additionally pins ``train/loss`` to exactly zero (the
-    oracle constructs its loss as ``0.0 * net(mel_spec).sum()`` — any drift means the
+    oracle constructs its loss as ``0.0 * net(mel).sum()`` — any drift means the
     oracle stopped being an oracle); meaningful loss-progression coverage comes from
     the ``surge/ffn_full`` leg. Both train through the real Surge XT render.
 

@@ -39,11 +39,11 @@ def _datamodule() -> TorchSynthDataModule:
 def test_dict_batch_carries_the_vst_module_keys() -> None:
     """The dict format supplies everything the VST modules index off the batch."""
     batch = next(iter(_datamodule().train_dataloader()))
-    assert set(batch) == {"params", "noise", "mel_spec", "audio"}
+    assert set(batch) == {"params", "noise", "mel", "audio"}
     assert batch["params"].shape == (_BATCH, _NUM_PARAMS)
     assert batch["noise"].shape == (_BATCH, _NUM_PARAMS)
     assert batch["audio"].shape == (_BATCH, _SIGNAL_LENGTH)
-    assert batch["mel_spec"].shape[:2] == (_BATCH, 1)
+    assert batch["mel"].shape[:2] == (_BATCH, 1)
     assert all(batch[key].dtype == torch.float32 for key in batch)
 
 
@@ -102,11 +102,11 @@ def test_collate_vst_dict_composes_mel_with_audio_batch_contract() -> None:
     """Mel collation adds the Lance-compatible mel tensor to the audio batch."""
     batch = collate_vst_dict(_known_rows(signal_length=4_410), sample_rate=_SAMPLE_RATE)
 
-    assert set(batch) == {"params", "noise", "mel_spec", "audio"}
+    assert set(batch) == {"params", "noise", "mel", "audio"}
     assert batch["params"].shape == (2, 2)
     assert batch["noise"].shape == (2, 2)
     assert batch["audio"].shape == (2, 4_410)
-    assert batch["mel_spec"].shape == (2, 1, 128, 11)
+    assert batch["mel"].shape == (2, 1, 128, 11)
     assert all(value.dtype == torch.float32 for value in batch.values())
 
 
@@ -114,7 +114,7 @@ def test_vst_flow_matching_module_trains_on_an_online_torchsynth_batch() -> None
     """The production flow module consumes the online batch and produces real gradients."""
     torch.manual_seed(0)
     batch = next(iter(_datamodule().train_dataloader()))
-    n_mels, n_frames = batch["mel_spec"].shape[-2:]
+    n_mels, n_frames = batch["mel"].shape[-2:]
     num_layers = 4
     vector_field = ConditionalResidualMLP(
         n_params=_NUM_PARAMS, d_model=64, d_enc=64, conditioning_dim=64, num_layers=num_layers

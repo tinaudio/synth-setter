@@ -1,16 +1,18 @@
 """Conditioning contracts shared across data and model layers."""
 
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Literal, cast
 
-import torch
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 ConditioningMode = Literal["mel", "m2l", "audio"]
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
-# Batch key each non-embedding mode observes. "audio" serves online-render synths, which
-# have no stored mel column because their audio only exists at training time.
-_RAW_CONDITIONING_KEYS: dict[str, str] = {"mel": "mel_spec", "audio": "audio"}
+# Modes read straight from the model-batch entry of the same name. "audio" serves
+# online-render synths, which have no stored mel because their audio only exists
+# at training time.
+RAW_CONDITIONING_MODES: frozenset[str] = frozenset({"mel", "audio"})
+# Every cached embedding is collated here, whatever its stored column.
+EMBEDDING_BATCH_KEY = "conditioning"
 
 
 class EmbeddingConditioningSpec(BaseModel):
@@ -38,46 +40,30 @@ class EmbeddingConditioningSpec(BaseModel):
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]
 
 
-def raw_conditioning_key(conditioning: Conditioning) -> str:
-    """Return the batch key a non-embedding conditioning mode observes.
+def conditioning_batch_key(conditioning: Conditioning) -> str:
+    """Return the model-batch key holding the configured conditioning tensor.
 
-    :param conditioning: Configured conditioning mode or embedding spec.
-    :returns: Batch key; ``"mel_spec"`` for embeddings, which ignore it.
+    :param conditioning: Configured mode literal, parsed spec, or Hydra mapping.
+    :returns: Batch key; a raw mode names its own entry, embeddings share one.
     """
-    if isinstance(conditioning, str):
-        return _RAW_CONDITIONING_KEYS.get(conditioning, "mel_spec")
-    return "mel_spec"
-
-
-def select_conditioning(
-    batch: Mapping[str, torch.Tensor],
-    embedding: EmbeddingConditioningSpec | None,
-    raw_key: str = "mel_spec",
-) -> torch.Tensor:
-    """Select the raw-observation or canonical cached-conditioning tensor.
-
-    :param batch: Model batch containing the configured conditioning tensor.
-    :param embedding: Resolved cached-embedding spec, or ``None`` for a raw observation.
-    :param raw_key: Batch key for the raw observation; see :func:`raw_conditioning_key`.
-    :returns: The tensor selected for model conditioning.
-    """
-    if embedding is None:
-        return batch[raw_key]
-    return batch["conditioning"]
+    if resolve_embedding_conditioning(conditioning) is not None:
+        return EMBEDDING_BATCH_KEY
+    # Only RAW_CONDITIONING_MODES resolve to no embedding, and each names its key.
+    return cast(str, conditioning)
 
 
 def resolve_embedding_conditioning(
     conditioning: Conditioning,
 ) -> EmbeddingConditioningSpec | None:
-    """Resolve generic embedding configuration while leaving mel on its legacy path.
+    """Resolve generic embedding configuration while leaving raw modes unrouted.
 
     :param conditioning: Legacy literal, parsed spec, or Hydra mapping.
-    :returns: Fixed-shape embedding spec, or ``None`` for legacy mel.
+    :returns: Fixed-shape embedding spec, or ``None`` for a raw observation.
     :raises TypeError: If ``conditioning`` is neither a supported literal nor mapping.
     :raises ValueError: If an unsupported string literal is provided.
     """
     if isinstance(conditioning, str):
-        if conditioning in _RAW_CONDITIONING_KEYS:
+        if conditioning in RAW_CONDITIONING_MODES:
             return None
         if conditioning == "m2l":
             return EmbeddingConditioningSpec(

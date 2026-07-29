@@ -8,9 +8,8 @@ from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import (
     Conditioning,
-    raw_conditioning_key,
+    conditioning_batch_key,
     resolve_embedding_conditioning,
-    select_conditioning,
 )
 
 
@@ -31,7 +30,7 @@ class VSTFeedForwardModule(LightningModule):
     ):
         """Wire the regression net and persist the optimizer/scheduler hyperparameters.
 
-        :param net: Feature extractor mapping ``mel_spec`` to predicted parameters.
+        :param net: Feature extractor mapping ``mel`` to predicted parameters.
         :param optimizer: ``functools.partial``-style optimizer factory (Hydra
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
@@ -47,7 +46,7 @@ class VSTFeedForwardModule(LightningModule):
         super().__init__()
 
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
-        self._raw_conditioning_key = raw_conditioning_key(conditioning)
+        self._conditioning_key = conditioning_batch_key(conditioning)
         if self._embedding_conditioning is not None:
             if encoder is None:
                 raise ValueError("cached conditioning requires an encoder")
@@ -61,7 +60,7 @@ class VSTFeedForwardModule(LightningModule):
         pass
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return select_conditioning(batch, self._embedding_conditioning, self._raw_conditioning_key)
+        return batch[self._conditioning_key]
 
     def model_step(self, batch: dict[str, torch.Tensor]):
         target_params = batch["params"]
