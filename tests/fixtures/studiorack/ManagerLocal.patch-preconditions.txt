@@ -1,0 +1,16 @@
+// Minimal @open-audio-stack/core 0.1.55 contract required by patch-core.mjs.
+import path from 'path';
+        if (this.isPackageInstalled(slug, versionNum)) {
+            this.log(`Package ${slug} version ${versionNum} already installed`);
+            pkgVersion.installed = true;
+            return pkgVersion;
+        }
+        const system = getSystem();
+        const files = packageCompatibleFiles(pkgVersion, [getArchitecture()], [getSystem()], excludedFormats);
+        if (!files.length) throw new Error('none');
+        if (!isAdmin() && !isTests()) {
+            await runCliAsAdmin({
+                appDir: this.config.get('appDir'),
+                operation: 'install',
+            });
+        }

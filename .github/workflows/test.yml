@@ -9,7 +9,12 @@ on:
       - "tests/**"
       - "src/synth_setter/configs/**"
       - "scripts/**"
+      - "package*.json"
       - "pyproject.toml"
+      - "studiorack-cardinal.json"
+      - "studiorack-cardinal.lock.json"
+      - "studiorack.json"
+      - "studiorack.lock.json"
       - "codecov.yml"
       - "agent/_shared/**"
       - "agent/hooks/**"
@@ -22,12 +27,24 @@ on:
       - "tests/**"
       - "src/synth_setter/configs/**"
       - "scripts/**"
+      - "package*.json"
       - "pyproject.toml"
+      - "studiorack-cardinal.json"
+      - "studiorack-cardinal.lock.json"
+      - "studiorack.json"
+      - "studiorack.lock.json"
       - "codecov.yml"
       - "agent/_shared/**"
       - "agent/hooks/**"
       - "agent/skills/**"
       - ".github/workflows/test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   run_tests_ubuntu:
@@ -44,6 +61,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install and test patched Studiorack core
+        run: |
+          npm ci
+          npm test
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
