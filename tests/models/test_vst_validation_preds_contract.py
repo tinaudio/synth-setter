@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
+from typing import cast
 
 import pytest
 import torch
+from lightning import Trainer
+from torch.utils.data import DataLoader, Dataset
 
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
@@ -22,8 +25,11 @@ from synth_setter.models.vst_fake_oracle_module import FakeOracleNet, VSTFakeOra
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
+from synth_setter.utils.callbacks import LogPerParamMSE
 
-_VstModule = VSTFeedForwardModule | VSTFakeOracleModule | VSTFlowMatchingModule | VSTFlowVAEModule
+type _VstModule = (
+    VSTFeedForwardModule | VSTFakeOracleModule | VSTFlowMatchingModule | VSTFlowVAEModule
+)
 
 _NUM_PARAMS = 7
 _BATCH = 3
@@ -198,6 +204,23 @@ def test_flow_vae_validation_step_returns_per_param_mse() -> None:
     torch.testing.assert_close(
         outputs["per_param_mse"], torch.tensor([1.0, 4.0, 9.0, 16.0, 25.0, 36.0, 49.0])
     )
+
+
+def test_flow_vae_validation_loop_emits_per_param_metric() -> None:
+    """Lightning dispatches Flow-VAE outputs through the default callback contract."""
+    trainer = Trainer(
+        accelerator="cpu",
+        callbacks=[LogPerParamMSE("surge_4")],
+        devices=1,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        logger=False,
+    )
+
+    dataloader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], [_batch()]), batch_size=None)
+    trainer.validate(_flow_vae_module(), dataloaders=dataloader)
+
+    assert torch.isfinite(trainer.callback_metrics["per_param_mse/a_amp_eg_attack"])
 
 
 def test_validation_step_preds_are_the_feed_forward_nets_predictions() -> None:
