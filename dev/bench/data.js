@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785292114436,
+  "lastUpdate": 1785294862877,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11922,6 +11922,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.035831987857818604,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c40e0d4081424be1f8e3bcd8fe28f78355da091",
+          "message": "internal-feat(data-pipeline): render Cardinal VST3 through DawDreamer (#2546)\n\n* internal-feat(data-pipeline): onboard Cardinal VST3 through DawDreamer\n\nCardinal's curated controls are generic host slots whose meaning comes from\nthe HostParametersMap module inside its committed Rack patch. Route it through\nthe DawDreamer backend, which needs no change to the shared Pedalboard render\ncore and no new render-config field.\n\nTwo host behaviours drive the configuration. Cardinal restores preset state on\nits audio thread, so parameters written before the first processBlock are\nsilently dropped; DawDreamerRenderer now renders and discards a short settle\nbuffer after every preset load. Its Rack engine also free-runs, so only\nplugin_reload_cadence: render is reproducible.\n\nCLAP provenance becomes optional on SynthParamMap because Cardinal ships no\nCLAP build in this toolchain and the render path never reads it.\n\nRefs #2543\nCloses #2376\n\n* internal-fix(data-pipeline): retrigger PR title check\n\n* internal-fix(data-pipeline): share one Cardinal host per shard\n\nPer-render plugin reload would isolate Cardinal's free-running Rack engine,\nbut reloading a DawDreamer plugin between librosa mel computations segfaults\nthe worker, so a shard shares one host instead.\n\nRendering through the settled host pairs each row's audio with its own\nparameters, verified against per-draw renders on fresh instances, so the\nshared host costs reproducibility margin rather than label correctness.\n\nAdds the operator smoke experiment that exercises this end to end.\n\nRefs #2549\n\n* internal-fix(ci-automation): keep install-plugins to the image set\n\ninstall-plugins provisions exactly what the runtime docker image ships, which\nis the contract its infra test asserts. Cardinal is not in the image, so\nadding it there made the aggregate attempt a real download and time out.\n\ninstall-cardinal stays available on its own for local and CI use.\n\n* internal-fix(data-pipeline): warm the mel backend before plugin loads\n\nCardinal crashes when a shared library is dlopen'd between two plugin\ninstantiations, and librosa loads its submodules lazily on first call. The\nrender loop therefore warmed the mel path mid-flight, killing the worker on\nthe second row.\n\nWarming the spectrogram backend before the renderer is constructed removes\nthe mid-loop dlopen, which restores per-render reload. Two independent\n40-row runs of the smoke experiment now agree bit for bit.\n\nRefs #2549\n\n* internal-fix(training): pin ffn encoder width for audio predict jobs\n\nmodel/vst_ffn.yaml reads encoder_output_dim from the datamodule's\nparam_spec_name, but the FSD50K and NSynth predict jobs pair this checkpoint\nwith audio datamodules that declare no such key, so Hydra failed to resolve\nthe config.\n\nPin the width in the wandb_checkpoint overlay, matching how net.d_out and\nlog_per_param_mse.param_spec are already pinned there. vst_flow and\nvst_flowmlp derive the width from the vector field, which is why only the\nffn jobs failed.\n\nFixes #2558\n\n* internal-fix(training): accept named encoder plumbing in baseline diffs\n\n#2508 added model.encoder_num_heads and model.encoder_output_dim, which are\nabsent from the v0.0.0 published-results snapshot, so every pinned surge and\npredict config compared unequal.\n\nThe complete leaf diff is those two keys and nothing else, and both resolve to\nvalues the encoder already used (n_heads 8, d_model 512) — the built model is\nunchanged, the keys only name the wiring. That is the mechanical-migration case\nACCEPTED_DIFFS exists for, so the published-results anchor stays put.\n\nFixes #2563\n\n* internal-fix(training): retrigger PR title check\n\n* internal-fix(ci-automation): raise the wandb service wait in cpu-slow\n\nFive slow tests fail with WandbServiceConnectionError on the runner while\npassing locally in 29s. The SDK waits 30s for its service process even in\noffline mode, which a loaded runner can exceed.\n\nWANDB__SERVICE_WAIT maps onto the private x_service_wait setting, so raising\nit to 120s tests that explanation directly: if the service is failing to spawn\nrather than starting slowly, the lane stays red and the wait is not the cause.\n\nRefs #2564\n\n* internal-fix(testing): mark the checkpoint-upload test integration_r2\n\nThe test drives train() through the real upload path, which calls\nr2_io.ensure_r2_env_loaded. That preflight validates credentials, pings the\nremote, and projects rclone settings back into the environment — overwriting\nthe RCLONE_CONFIG_R2_TYPE=local the test sets, so the fake local remote cannot\nstand in for R2 and the assertions are unreachable without credentials.\n\nPR runs deliberately carry no storage secrets, so the test failed there while\npassing wherever real credentials happen to exist. integration_r2 is the marker\nfor exactly that: auto-skipped without R2 creds, run in its own workflow.\n\nRefs #2564\n\n* internal-feat(data-pipeline): rerun CI on the stacked base\n\n* internal-fix(data-pipeline): isolate Cardinal host finalization\n\nPedalboard's temporary Cardinal version probe leaves cyclic native wrappers.\nA later collection finalized that host while DawDreamer still owned another\nCardinal instance, clearing DPF process-global state and crashing the next\nreload.\n\nSuspend cyclic collection for the DawDreamer render session, then collect\nafter the renderer frame releases its native objects. This removes the\nmisleading librosa warm-up and adds a subprocess e2e regression that requires\na clean worker exit.\n\nRefs #2549",
+          "timestamp": "2026-07-28T19:21:38-07:00",
+          "tree_id": "c4299b2d0ba417d6beba88c1dbbbf87d2ceb6f22",
+          "url": "https://github.com/tinaudio/synth-setter/commit/3c40e0d4081424be1f8e3bcd8fe28f78355da091"
+        },
+        "date": 1785294861291,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.8458969593048096,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.188676596786827,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.025629259645938873,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.028433263301849365,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.6068248748779297,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 9.495880804666664,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.291515827178955,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.665233307592571,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.031901102513074875,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03957730531692505,
             "unit": "1-cos"
           },
           {
