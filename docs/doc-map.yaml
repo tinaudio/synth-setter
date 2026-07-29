@@ -16,7 +16,7 @@ docs:
     description: uv sync command surface, relock cadence, Linux resync flip
     sources:
       - pattern: "pyproject.toml"
-        covers: "[project.dependencies] (lite closure: pydantic/python-dotenv/pyyaml), [project.optional-dependencies] backend extras (cpu, cu128), [dependency-groups] heavy runtime (torch/config/compute/data/audio/metrics/util + runtime meta + dev/docs), [tool.uv].default-groups+conflicts, [[tool.uv.index]], [tool.uv.sources]"
+        covers: "Dependency groups and the commit-pinned stable-audio-3 runtime."
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
@@ -46,6 +46,14 @@ docs:
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
         covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools + devcontainer-tools-dev-user publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission"
+      - pattern: "studiorack.json"
+        covers: "Exact image VST3 package versions and bundle names"
+      - pattern: "package*.json"
+        covers: "Locked Studiorack CLI and core dependency graph"
+      - pattern: "src/synth_setter/plugin_manager.py"
+        covers: "Managed bundle resolution and stable alias creation"
+      - pattern: "src/synth_setter/cli/plugins.py"
+        covers: "Studiorack install and link commands used by image builds"
 
   # ── W&B integration reference ───────────────────────────────────
   - doc: docs/reference/wandb-integration.md
@@ -106,7 +114,7 @@ docs:
       - pattern: "src/synth_setter/cli/finalize_dataset.py"
         covers: "Dataset finalization orchestration and completion signaling"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
-        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (the materialized spec's canonical under-prefix `input_spec.json` URI, computed by the `synth-setter-spec-uri` console script — see `src/synth_setter/pipeline/ci/spec_uri.py`) consumed by validate-dataset-shards"
+        covers: "Reusable dataset-generation launcher for supported providers"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: ".github/workflows/nightly-parallel-datagen.yml"
@@ -118,7 +126,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/spec_io.py"
         covers: "`input_spec.json` read/write/upload/discover helpers"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Generic VST render defaults and per-synth identity composition"
+        covers: "Backend-named render groups carrying generic render defaults and backend knobs"
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Canonical pipeline artifact names and staging keys"
       - pattern: "src/synth_setter/renderer_backend.py"
@@ -146,9 +154,19 @@ docs:
       - pattern: "src/synth_setter/model_cache.py"
         covers: "XDG-aware shared cache paths for embedding model artifacts."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "Post-finalize registry-driven Lance column augmentation (EMBEDDING_REGISTRY keys: clap/m2l/same_s/same_l/t5gemma) via the `add_embeddings(config)` endpoint; each spec's `input_field` selects its source column."
+        covers: "Registry-driven Lance embedding augmentation, including strict Stable Audio 3 SAME checkpoint loading."
+      - pattern: "src/synth_setter/pipeline/data/ssondo.py"
+        covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
-        covers: "Stable Audio 3 prompt conditioner behind the `sa3` extra — frozen T5Gemma at float32 with the checkpoint's learned padding embedding substituted at pad positions."
+        covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
+      - pattern: "tests/pipeline/data/test_same_encoder_e2e.py"
+        covers: "SAME-S and SAME-L production-loader parity against legacy references at immutable HF revisions."
+      - pattern: "tests/helpers/same_reference.py"
+        covers: "Immutable SAME checkpoint identities and deterministic parity input provenance."
+      - pattern: "tests/fixtures/same/**"
+        covers: "Legacy SAME parity tensors with embedded generation provenance."
+      - pattern: ".github/workflows/test-same-encoder.yml"
+        covers: "Sequential CPU jobs validating SAME-S and SAME-L through the normal heavy runtime."
       - pattern: "src/synth_setter/data/vst/param_text.py"
         covers: "Param-spec text normalizers rendering encoded param rows as conditioning captions; `param_names` joins the spec's parameter names."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"
@@ -185,7 +203,7 @@ docs:
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
-    description: SkyPilot dispatch for the data pipeline — single generic launcher consumed by every `synth-setter-*` entrypoint with compute support (RunPod + Vast + OCI smoke)
+    description: SkyPilot integration design for supported compute providers
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
         covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`, and preflight-verified worker commit pinning. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`). RunPod balance preflight gate (`_check_runpod_balance`) aborts before job submission on a sub-floor balance; skipped under a remote API server; fail-open when unverifiable."
@@ -194,23 +212,21 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/gpu_tier.py"
         covers: "`GpuTier` enum, per-SKU minimum-tier classification, and `allowed_gpu_skus`/`filter_gpu_skus` (cumulative narrowing with unclassified-SKU and empty-intersection ValueErrors)."
       - pattern: "src/synth_setter/pipeline/schemas/compute.py"
-        covers: "Strict `ComputeConfig` and `ComputeResources` validation for SkyPilot-shaped resource lists, task-level Kubernetes config, run sources, image delivery, and provider preflights."
+        covers: "Strict `ComputeConfig` and `ComputeResources` validation for supported SkyPilot resources"
       - pattern: "src/synth_setter/configs/skypilot_launch/compute/runpod/*.yaml"
         covers: "RunPod compute options (smoke / training pools); image_id pinned per-launch from `sky_cfg.worker_image_tag` at task construction."
       - pattern: "src/synth_setter/configs/skypilot_launch/compute/vast/smoke.yaml"
         covers: "Vast.ai smoke option. Vast auth is `~/.config/vastai/vast_api_key` (written by write_provider_creds.sh --provider vast); header documents the vastai-sdk 1.x `api_key_access` breakage and the controller-side pin."
       - pattern: "src/synth_setter/configs/launch/train-vast-smoke.yaml"
         covers: "Launch config dispatching the 10-step junk train through the vast/smoke option — Vast.ai analogue of train-runpod-smoke.yaml (checkpoint upload + W&B artifact, num_workers=0)."
-      - pattern: "src/synth_setter/configs/skypilot_launch/compute/oci/cpu.yaml"
-        covers: "OCI CPU option (Flex shapes, docker-in-run image delivery — OCI rejects `docker:<image>` image_id; the worker image is fed via the `WORKER_IMAGE` env into the oci-docker-run.sh wrapper)."
       - pattern: "src/synth_setter/configs/skypilot_launch/compute/scripts/*.sh"
-        covers: "Packaged setup/run bash for compute options: worker-ready echo, operator-SSH authorized_keys decode (#2297), OCI docker install + docker-in-run wrapper (`${WORKER_CMD}` sentinel, --privileged hammer for Xvfb/dbus #776), and the debug-variant canaries."
+        covers: "Compute-option shell helpers"
       - pattern: "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
-        covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
+        covers: "Restore the Studiorack-pinned Surge alias after a workspace bind mount"
       - pattern: "scripts/sync_worker_checkout.sh"
         covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install --group runtime -e .` helper invoked by the launcher-built worker cmd on every provider. The launcher always supplies a preflight-verified ref; full transitive resolve handles commits that add new top-level packages."
       - pattern: "scripts/skypilot/write_provider_creds.sh"
-        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=vast writes ~/.config/vastai/vast_api_key (path pinned by SkyPilot's Vast adaptor); PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
+        covers: "Credential writer for RunPod and Vast.ai"
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
@@ -226,7 +242,7 @@ docs:
       - pattern: "scripts/skypilot/capture-state.sh"
         covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
       - pattern: "pyproject.toml"
-        covers: "skypilot[runpod,oci,kubernetes,vast]==0.12.0 listed under [project.dependencies] — required, not optional. vastai-sdk==0.2.5 pinned alongside it (1.x drops VastAI.api_key_access, which SkyPilot 0.12's Vast provisioner still calls)."
+        covers: "skypilot[runpod,kubernetes,vast]==0.12.0 listed under [project.dependencies] — required, not optional. vastai-sdk==0.2.5 pinned alongside it (1.x drops VastAI.api_key_access, which SkyPilot 0.12's Vast provisioner still calls)."
         scope: "skypilot"
 
   # ── Storage provenance spec ─────────────────────────────────────
@@ -333,12 +349,10 @@ docs:
         covers: "Evaluation config entry point, Hydra defaults, evaluation: gates, render: composition entry"
       - pattern: "src/synth_setter/utils/utils.py"
         covers: "`${wandb:...}` OmegaConf resolver `_resolve_wandb_checkpoint` — lazily downloads a `model-{config_id}` artifact to `$PROJECT_ROOT/.cache/checkpoints/` and returns the local ckpt path"
-      - pattern: "src/synth_setter/configs/experiment/surge/wandb_checkpoint/*.yaml"
-        covers: "Predict-only overlays pinning `ckpt_path: ${wandb:tinaudio/synth-setter/model-<config_id>:latest}` over the shared `surge/<id>` experiment; kept off the train path so training never resolves the artifact. Replaces get-ckpt-from-wandb.sh"
       - pattern: "jobs/predict/*.sh"
-        covers: "Per-variant predict launchers — compose `experiment=surge/wandb_checkpoint/<x>` (config-pinned `${wandb:...}` ckpt_path) plus `mode=predict`"
+        covers: "Predict commands with explicit W&B checkpoint overrides"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Render-group composed by eval.yaml defaults; supplies the synth identity (param_spec_name, plugin_state_path, optional plugin_path) via SynthSpec.from_render_cfg, consumed by _run_predict_postprocessing in cli/eval.py"
+        covers: "Render-group composed by eval.yaml defaults; backend knobs joined with the root synth identity via RenderConfig.from_cfg_nodes, consumed by _run_predict_postprocessing in cli/eval.py"
       - pattern: "src/synth_setter/configs/callbacks/eval_vst.yaml"
         covers: "Eval-specific callback config, prediction writer setup"
       - pattern: "src/synth_setter/configs/callbacks/prediction_writer.yaml"
@@ -359,6 +373,15 @@ docs:
         scope: "local-dev"
       - pattern: "Makefile"
         covers: "Pinned plugin installation targets."
+        scope: "local-dev"
+      - pattern: "studiorack.json"
+        covers: "Local VST3 package and bundle pins"
+        scope: "local-dev"
+      - pattern: "package*.json"
+        covers: "Pinned Studiorack CLI installation"
+        scope: "local-dev"
+      - pattern: ".github/actions/setup-surge-xt/action.yml"
+        covers: "Managed Surge provisioning on macOS CI"
         scope: "local-dev"
       - pattern: "Makefile"
         covers: "Worktree plugin, thought, and skill-linking targets."
@@ -430,7 +453,7 @@ docs:
       - pattern: "tests/claude_hooks/conftest.py"
         covers: "Autouse gate-override env scrub (GATE_OVERRIDE_ENV_VARS) so hook subprocesses see their documented default modes"
       - pattern: "tests/_vst.py"
-        covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS, TEST_SYNTH_VERSION (composed live from render/synth/<synth>.yaml at import, not hardcoded)"
+        covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS, TEST_SYNTH_VERSION (composed live from the root configs/synth/<synth>.yaml group at import, not hardcoded)"
       - pattern: "tests/data/vst/test_synth_version_pins.py"
         covers: "Synth-version pin tests"
       - pattern: "tests/test_train.py"
@@ -448,7 +471,7 @@ docs:
       - pattern: ".github/workflows/test.yml"
         covers: "Default PR CI — runs make test-ci-unit (marker filter centralized in the Makefile, #1353)"
       - pattern: ".github/workflows/cpu-slow.yml"
-        covers: "Post-merge slow CPU-only lane — runs make test-ci-slow (#1353); runner sized to avoid PyTorch CPU OOM; auto-files a ci-automation Bug on post-merge failure"
+        covers: "Slow CPU lanes: full test-ci-slow with R2 after merge/dispatch; R2-excluded test-ci-slow-pr on qualifying PRs"
       - pattern: ".github/workflows/test-mps.yml"
         covers: "Pre-submit MPS lane on macos-latest (-m mps), triggered on src/synth_setter/configs/ PRs"
       - pattern: ".github/workflows/test-gpu.yml"
@@ -542,7 +565,7 @@ docs:
     description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)
     sources:
       - pattern: "tart/**"
-        covers: "Packer template, packer variables (synth_setter_git_ref/python_version/uv_version/vm_name/surge_xt_version/codex_version/base_image_digest), provisioner steps, brew packages (git/gh/jq/rclone/bats-core/tmux/zellij/node), Codex CLI + Antigravity (agy) installs, venv layout via `uv sync --frozen` (MPS-capable torch from PyPI), VST3 path, smoke tests, .zshrc auto-activation, ~/.zprofile env defaults (HYDRA_FULL_ERROR/PYTHONDONTWRITEBYTECODE/PYTHONFAULTHANDLER/PYTHONUNBUFFERED/WANDB_DATA_DIR), prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow, local validate/build helper (build.sh)"
+        covers: "Packer provisioning for the developer environment"
         scope: "tart"
 
   - doc: docs/guides/vst-interactive.md
@@ -567,13 +590,17 @@ docs:
     description: Onboard a new VST3 synth — introspect, hand-tune the spec, register, generate
     sources:
       - pattern: "src/synth_setter/cli/introspect_plugin.py"
-        covers: "synth-setter-introspect-plugin CLI contract and its draft-spec, baseline-preset, and CSV-triage outputs"
+        covers: "Managed and explicit-path plugin registration"
+      - pattern: "studiorack.json"
+        covers: "Package identity used by managed registration"
+      - pattern: "src/synth_setter/plugin_manager.py"
+        covers: "Managed package resolution and checkout alias creation"
       - pattern: "src/synth_setter/data/vst/introspect.py"
         covers: "Draft generation behind the CLI: parameter classification and emission of the draft spec module, baseline preset, and CSV triage table"
       - pattern: "src/synth_setter/data/vst/registration.py"
         covers: "The --register wiring that registers a drafted spec into the checkout: SYNTHS identity row, param-spec registry entry, render + synth config groups, and artifact paths"
       - pattern: "src/synth_setter/synth_spec.py"
-        covers: "SynthSpec / SYNTHS — the authoring table for a synth's identity (param spec, plugin, baseline preset), plus the from_render_cfg Hydra bridge that cli/train.py and cli/eval.py read it through"
+        covers: "SynthSpec / SYNTHS — the authoring table for a synth's identity (param spec, plugin, baseline preset), plus validate_synth_identity, the compose-time guard on the root synth group"
       - pattern: "src/synth_setter/data/vst/verification.py"
         covers: "The --verify post-draft battery that gates a freshly registered spec and fails on any BLOCK"
       - pattern: "src/synth_setter/data/vst/param_spec_registry.py"
@@ -581,13 +608,13 @@ docs:
       - pattern: "src/synth_setter/data/vst/param_spec.py"
         covers: "ParamSpec and the parameter-type constructors a hand-tuned spec is built from"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Per-synth VST identity configs selected by render=<name> and inheriting generic render defaults"
+        covers: "Backend-named render configs selected by render=<backend>, inheriting generic render defaults; identity lives in the root configs/synth group"
       - pattern: "src/synth_setter/data/vst/*_param_spec.py"
         covers: "Hand-tuned reference specs (VST3 synths) or pinned code-derived specs (torchsynth), with the per-synth synth_params and encoded-width counts"
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"
         covers: "Headless X11/Xvfb wrapper for GUI-heavy VST3 plugins that need a display during introspection or rendering"
       - pattern: "docker/ubuntu22_04/Dockerfile"
-        covers: "vst3-synths-fetch stage — sha256-pinned amd64-only synth fetch + headless-X11 load check + plugins/ symlink referenced by the optional Docker baking step"
+        covers: "Studiorack package installation and per-bundle load verification"
 
   # ── Config reference (autogenerated mkdocstrings pages) ────────
   - doc: docs/config_reference/dataset_spec.md
@@ -649,6 +676,16 @@ docs:
       - pattern: "Makefile"
         covers: "make mutmut target; macOS fork-safety workaround"
         scope: "mutmut"
+
+  # ── Test-quality reference ──────────────────────────────────────
+  - doc: docs/testing/test-quality.md
+    description: Test-value bar, audited anti-patterns, patterns worth copying
+    sources:
+      - pattern: "AGENTS.md"
+        covers: "Testing section pointer to the quality bar"
+        scope: "test"
+      - pattern: "tests/_meta/**"
+        covers: "Suite-level invariant tests cited as the invariants-over-enumeration pattern"
 
   # ── GitHub Actions reference ─────────────────────────────────────
   - doc: docs/reference/github-actions.md

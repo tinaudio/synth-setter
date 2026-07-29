@@ -147,207 +147,35 @@ install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, se
 	@echo ""
 	@echo "Next: source .venv/bin/activate"
 
-SURGE_XT_VERSION := 1.3.4
-SURGE_XT_CACHE := $(HOME)/.cache/synth-setter/surge-xt-$(SURGE_XT_VERSION)
-SURGE_XT_RELEASE_URL := https://github.com/surge-synthesizer/releases-xt/releases/download/$(SURGE_XT_VERSION)
-SURGE_XT_LINUX_ASSET := surge-xt-linux-$(SURGE_XT_VERSION)-pluginsonly.tar.gz
-SURGE_XT_LINUX_MD5 := 0180f06ec7a8445b1c749471e29c702b
-SURGE_XT_MACOS_ASSET := surge-xt-macos-$(SURGE_XT_VERSION)-pluginsonly.zip
-SURGE_XT_MACOS_MD5 := 8afca4159d9b417c5e07ebc1a5e96ed3
+STUDIORACK := uv run synth-setter-plugins
 
-install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already present)
-	@set -e; \
-	DEST="plugins/Surge XT.vst3"; \
-	if [ -e "$$DEST" ]; then \
-		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
-		exit 0; \
-	fi; \
-	OS=$$(uname -s); ARCH=$$(uname -m); \
-	case "$$OS" in \
-		Linux) \
-			if [ "$$ARCH" != "x86_64" ]; then \
-				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)." >&2; \
-				echo "Install via your package manager (e.g. apt install surge-xt) or build from source," >&2; \
-				echo "then symlink it: ln -s /path/to/Surge XT.vst3 plugins/" >&2; \
-				exit 1; \
-			fi; \
-			ASSET="$(SURGE_XT_LINUX_ASSET)"; EXPECTED_MD5="$(SURGE_XT_LINUX_MD5)" ;; \
-		Darwin) \
-			ASSET="$(SURGE_XT_MACOS_ASSET)"; EXPECTED_MD5="$(SURGE_XT_MACOS_MD5)" ;; \
-		*) echo "ERROR: Unsupported platform: $$OS" >&2; exit 1 ;; \
-	esac; \
-	mkdir -p "$(SURGE_XT_CACHE)" plugins; \
-	ARCHIVE="$(SURGE_XT_CACHE)/$$ASSET"; \
-	if [ ! -f "$$ARCHIVE" ]; then \
-		echo "Downloading $(SURGE_XT_RELEASE_URL)/$$ASSET"; \
-		curl -fSL -o "$$ARCHIVE" "$(SURGE_XT_RELEASE_URL)/$$ASSET"; \
-	else \
-		echo "Using cached $$ARCHIVE"; \
-	fi; \
-	if command -v md5sum >/dev/null 2>&1; then \
-		ACTUAL_MD5=$$(md5sum "$$ARCHIVE" | awk '{print $$1}'); \
-	elif command -v md5 >/dev/null 2>&1; then \
-		ACTUAL_MD5=$$(md5 -q "$$ARCHIVE"); \
-	else \
-		echo "ERROR: neither 'md5sum' (Linux) nor 'md5' (macOS) is available — cannot verify checksum" >&2; \
-		exit 1; \
-	fi; \
-	if [ "$$ACTUAL_MD5" != "$$EXPECTED_MD5" ]; then \
-		echo "ERROR: md5 mismatch for $$ARCHIVE" >&2; \
-		echo "  expected: $$EXPECTED_MD5" >&2; \
-		echo "  actual:   $$ACTUAL_MD5" >&2; \
-		echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; \
-		exit 1; \
-	fi; \
-	echo "md5 OK. Extracting Surge XT.vst3 into plugins/..."; \
-	case "$$OS" in \
-		Linux) tar -xzf "$$ARCHIVE" -C plugins/ "./Surge XT.vst3" ;; \
-		Darwin) unzip -q "$$ARCHIVE" "Surge XT.vst3/*" -d plugins/ ;; \
-	esac; \
-	echo "Installed $$DEST"
+install-studiorack: ## Install the pinned Studiorack CLI and its locked dependencies
+	npm ci
 
-# Plugin pins mirror the ARGs in docker/ubuntu22_04/Dockerfile;
-# tests/infra/test_install_plugins_targets.py fails when either side drifts.
-DEXED_VERSION := 0.9.8
-DEXED_SHA256 := 5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
-OBXF_VERSION := v1.0.3
-OBXF_SHA256 := 72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
-SIX_SINES_VERSION := v1.1.0
-SIX_SINES_ASSET := six-sines-linux-2025-03-18-43d10b2.tgz
-SIX_SINES_SHA256 := fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
-CARDINAL_VERSION := 26.02
-CARDINAL_ASSET_X86_64 := Cardinal-linux-x86_64-26.02.tar.gz
-CARDINAL_SHA256_X86_64 := 657df0beeec04184de7359cbd3e173a36eeab78077e1e26da81405632f98ec25
-CARDINAL_ASSET_AARCH64 := Cardinal-linux-aarch64-26.02.tar.gz
-CARDINAL_SHA256_AARCH64 := b36b6d5b04e55bb808bc4b99ac3e08007b1dc48df7e75dbda25664ab974f7a98
-ULTRAMASTER_KR106_VERSION := v2.5.13
-ULTRAMASTER_KR106_GIT_REF := bc15caee5843ab238a25d0969e68d57db2b1615f
+install-surge-xt: install-studiorack ## Install pinned Surge XT through Studiorack
+	$(STUDIORACK) install --plugin surge-synthesizer/surge
 
-# $(call install_fetched_synth,<Bundle>,<x86_64-url>,<x86_64-sha256>[,<aarch64-url>,<aarch64-sha256>]):
-# fetch the pinned asset, verify its sha256, extract plugins/<Bundle>.vst3. Hosts skip unless the
-# upstream project publishes an asset for their architecture (the image's amd64 gate).
+install-cardinal: install-studiorack ## Install pinned Cardinal through its optional Studiorack manifest
+	$(STUDIORACK) --manifest studiorack-cardinal.json install --plugin distrho/cardinal
 
-# Deliberately separate from install-surge-xt (per-OS assets, md5 upstream checksums there);
-# the cache is flat — no per-synth subdir — because asset filenames embed their version.
-define install_fetched_synth
-@set -e; \
-DEST="plugins/$(1).vst3"; \
-if [ -e "$$DEST" ]; then \
-	echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
-	exit 0; \
-fi; \
-OS=$$(uname -s); ARCH=$$(uname -m); \
-if [ "$$OS" != "Linux" ]; then \
-	echo "skipping $(1): Linux assets only (host: $$OS/$$ARCH)."; \
-	exit 0; \
-fi; \
-case "$$ARCH" in \
-	x86_64) URL="$(2)"; SHA256="$(3)" ;; \
-	aarch64|arm64) \
-		if [ -z "$(4)" ]; then \
-			echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; exit 0; \
-		fi; \
-		URL="$(4)"; SHA256="$(5)" ;; \
-	*) echo "skipping $(1): unsupported Linux architecture $$ARCH."; exit 0 ;; \
-esac; \
-CACHE="$(HOME)/.cache/synth-setter"; \
-ASSET="$${URL##*/}"; \
-mkdir -p "$$CACHE" plugins; \
-ARCHIVE="$$CACHE/$$ASSET"; \
-if [ ! -f "$$ARCHIVE" ]; then \
-	echo "Downloading $$URL"; \
-	curl -fSL -o "$$ARCHIVE" "$$URL"; \
-else \
-	echo "Using cached $$ARCHIVE"; \
-fi; \
-command -v sha256sum >/dev/null 2>&1 || { \
-	echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
-echo "$$SHA256  $$ARCHIVE" | sha256sum -c - || { \
-	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
-TMP="$$(mktemp -d)"; \
-trap 'rm -rf "$$TMP"' EXIT; \
-case "$$ASSET" in \
-	*.zip) unzip -q "$$ARCHIVE" -d "$$TMP" ;; \
-	*.tgz|*.tar.gz) tar -xzf "$$ARCHIVE" -C "$$TMP" ;; \
-	*) echo "ERROR: unsupported archive type: $$ASSET" >&2; exit 1 ;; \
-esac; \
-SRC="$$(find "$$TMP" -type d -name "$(1).vst3" | head -n 1)"; \
-if [ -z "$$SRC" ]; then \
-	echo "ERROR: $(1).vst3 not found in $$ASSET" >&2; exit 1; \
-fi; \
-mv "$$SRC" "$$DEST"; \
-echo "Installed $$DEST"
-endef
+install-dexed: install-studiorack ## Install pinned Dexed through Studiorack
+	$(STUDIORACK) install --plugin asb2m10/dexed
 
-install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256),,)
+install-obxf: install-studiorack ## Install pinned OB-Xf through Studiorack
+	$(STUDIORACK) install --plugin surge-synthesizer/ob-xf
 
-# Not in ``install-plugins``: the runtime image does not ship Cardinal yet, and that
-# aggregate's contract is the image's bundle set.
-install-cardinal: ## Download Cardinal Synth VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,CardinalSynth,https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_X86_64),$(CARDINAL_SHA256_X86_64),https://github.com/DISTRHO/Cardinal/releases/download/$(CARDINAL_VERSION)/$(CARDINAL_ASSET_AARCH64),$(CARDINAL_SHA256_AARCH64))
+install-six-sines: install-studiorack ## Install pinned Six Sines through Studiorack
+	$(STUDIORACK) install --plugin baconpaul/six-sines
 
-install-obxf: ## Download OB-Xf VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,OB-Xf,https://github.com/surge-synthesizer/OB-Xf/releases/download/$(OBXF_VERSION)/ob-xf-Linux-$(OBXF_VERSION).zip,$(OBXF_SHA256),,)
+install-ultramaster-kr106: install-studiorack ## Install pinned Ultramaster KR-106 through Studiorack
+	$(STUDIORACK) install --plugin kayrockscreenprinting/ultramaster-kr106
 
-install-six-sines: ## Download Six Sines VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,Six Sines,https://github.com/baconpaul/six-sines/releases/download/$(SIX_SINES_VERSION)/$(SIX_SINES_ASSET),$(SIX_SINES_SHA256),,)
+install-plugins: install-studiorack ## Install every VST3 pinned in studiorack.json
+	$(STUDIORACK) install
 
-install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipped if already present)
-	@set -e; \
-	DEST="plugins/Ultramaster KR-106.vst3"; \
-	if [ -e "$$DEST" ]; then \
-		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
-		exit 0; \
-	fi; \
-	OS=$$(uname -s); ARCH=$$(uname -m); \
-	if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
-		echo "skipping Ultramaster KR-106: x86_64 Linux source build only (host: $$OS/$$ARCH)."; \
-		exit 0; \
-	fi; \
-	command -v cmake >/dev/null 2>&1 || { echo "ERROR: cmake not found" >&2; exit 1; }; \
-	command -v git >/dev/null 2>&1 || { echo "ERROR: git not found" >&2; exit 1; }; \
-	CACHE="$(HOME)/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
-	SRC="$$CACHE/src"; BUILD="$$CACHE/build"; \
-	if ! git -C "$$SRC" rev-parse --git-dir >/dev/null 2>&1; then \
-		rm -rf "$$SRC" "$$BUILD"; mkdir -p "$$SRC"; \
-		git -C "$$SRC" init; \
-		git -C "$$SRC" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
-	fi; \
-	git -C "$$SRC" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
-	git -C "$$SRC" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
-	git -C "$$SRC" checkout --detach FETCH_HEAD; \
-	git -C "$$SRC" reset --hard FETCH_HEAD; \
-	git -C "$$SRC" submodule update --init --recursive --depth 1; \
-	cmake -S "$$SRC" -B "$$BUILD" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
-	MAKEFLAGS= cmake --build "$$BUILD" --config Release --target KR106_VST3 --parallel "$$(nproc)"; \
-	SRC_BUNDLE="$$BUILD/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3"; \
-	if [ ! -d "$$SRC_BUNDLE" ]; then \
-		echo "ERROR: $$SRC_BUNDLE not found after build" >&2; exit 1; \
-	fi; \
-	mkdir -p plugins; \
-	cp -a "$$SRC_BUNDLE" "$$DEST"; \
-	echo "Installed $$DEST"
-
-install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
-
-link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
-	@set -e; \
-	primary="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir)")" && pwd)"; \
-	here="$$(git rev-parse --show-toplevel)"; \
-	if [ "$$primary" = "$$here" ]; then \
-		echo "In primary checkout — nothing to link."; exit 0; \
-	fi; \
-	if [ ! -d "$$primary/plugins" ]; then \
-		echo "No $$primary/plugins to mirror — run 'make install-surge-xt' in the primary first."; exit 0; \
-	fi; \
-	mkdir -p "$$here/plugins"; \
-	for entry in "$$primary"/plugins/*; do \
-		[ -e "$$entry" ] || [ -L "$$entry" ] || continue; \
-		name="$$(basename "$$entry")"; \
-		ln -sfn "$$entry" "$$here/plugins/$$name"; \
-		echo "linked plugins/$$name -> $$entry"; \
-	done
+link-plugins: ## Link installed Studiorack packages into the checkout's plugins/ namespace
+	@$(STUDIORACK) link
+	@$(STUDIORACK) --manifest studiorack-cardinal.json link
 
 # Symlink this worktree's gitignored thoughts/ to the primary's central thoughts/
 # so qrspi docs from every worktree converge; migrates pre-existing files first.

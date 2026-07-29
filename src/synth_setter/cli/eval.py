@@ -34,7 +34,6 @@ from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
-from synth_setter.synth_spec import SynthSpec
 from synth_setter.utils import (
     RankedLogger,
     extras,
@@ -192,7 +191,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
         if cfg.get("render") is None:
             raise ValueError(
                 "evaluation.render_vst=true requires a render config group "
-                "(e.g. `render=surge_xt`); cfg.render is unset."
+                "(e.g. `synth=surge_xt render=vst`); cfg.render is unset."
             )
         if not predictions_dir.is_dir():
             raise ValueError(
@@ -205,16 +204,7 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             if sys.platform == "linux":
                 wrapper_path = Path(stack.enter_context(as_file(vst_headless_wrapper())))
                 args.append(str(wrapper_path))
-            render_values = OmegaConf.to_container(cfg.render, resolve=True)
-            if not isinstance(render_values, dict):
-                raise TypeError("cfg.render must resolve to a mapping")
-            synth = SynthSpec.from_render_cfg(cfg.render)
-            if synth is None:
-                raise ValueError("render group names no param spec; cannot re-render audio")
-            for legacy_key in ("param_spec_name", "plugin_path", "plugin_state_path"):
-                render_values.pop(legacy_key, None)
-            render_values["synth"] = synth.model_dump()
-            render_config = RenderConfig.model_validate(render_values)
+            render_config = RenderConfig.from_cfg_nodes(cfg.render, cfg.get("synth"))
             args += [
                 sys.executable,
                 "-m",

@@ -14,6 +14,7 @@ cmd: >-
   bash scripts/sync_worker_checkout.sh &&
   exec src/synth_setter/scripts/run-linux-vst-headless.sh
   synth-setter-eval
-  experiment=surge/wandb_checkpoint/ffn_simple
+  experiment=surge/ffn_simple
+  "ckpt_path=\${wandb:tinaudio/synth-setter/model-ffn_simple:latest}"
   trainer.limit_test_batches=2
   hydra.run.dir=/home/build/synth-setter/eval-run

@@ -16,7 +16,6 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 from pydantic import ValidationError
 
-from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.resources import configs_dir
 from synth_setter.schemas.datamodule_config import DataModuleConfig
 from synth_setter.schemas.paths_config import PathsConfig
@@ -52,70 +51,49 @@ class TestDataModuleConfigAcceptsEveryConfig:
 
     def test_target_field_typed(self) -> None:
         """``_target_`` lands on ``target_`` with the expected datamodule path."""
-        datamodule_subtree = compose_subtree("datamodule", "ksin")
+        datamodule_subtree = compose_subtree("datamodule", "torchsynth")
         parsed = DataModuleConfig.model_validate(datamodule_subtree)
-        assert parsed.target_.endswith("KSinDataModule")
+        assert parsed.target_.endswith("TorchSynthDataModule")
 
 
 class TestSurgeDatamoduleOverlays:
     """The thin surge instances overlay ``vst`` and target ``VSTDataModule``."""
 
-    def test_surge_mini_overlays_param_spec_name_surge_4(self) -> None:
-        """``surge_mini`` overrides ``param_spec_name`` to ``surge_4`` over the ``vst`` base."""
-        subtree = compose_subtree("datamodule", "surge_mini")
-        assert subtree["param_spec_name"] == "surge_4"
-        assert subtree["_target_"].endswith("VSTDataModule")
-
-    def test_surge_simple_overlays_param_spec_name_surge_simple(self) -> None:
-        """``surge_simple`` overrides ``param_spec_name`` over the ``vst`` base."""
-        subtree = compose_subtree("datamodule", "surge_simple")
-        assert subtree["param_spec_name"] == "surge_simple"
-        assert subtree["_target_"].endswith("VSTDataModule")
-
-    def test_surge_declares_param_spec_name_surge_xt(self) -> None:
-        """``surge`` sets ``param_spec_name: surge_xt`` over the abstract ``vst`` base."""
-        subtree = compose_subtree("datamodule", "surge")
-        assert subtree["param_spec_name"] == "surge_xt"
-        assert subtree["_target_"].endswith("VSTDataModule")
-
-    def test_surge_debug_sets_repeat_first_batch_and_declares_spec(self) -> None:
-        """``surge_debug`` flips ``repeat_first_batch`` and declares ``surge_xt`` explicitly."""
-        subtree = compose_subtree("datamodule", "surge_debug")
-        assert subtree["repeat_first_batch"] is True
-        assert subtree["param_spec_name"] == "surge_xt"
-        assert subtree["_target_"].endswith("VSTDataModule")
-
-
-class TestParamSpecNameIsExplicit:
-    """``param_spec_name`` must be chosen deliberately, never inherited from a base default."""
-
-    def test_vst_base_leaves_param_spec_name_mandatory(self) -> None:
-        """The abstract ``vst`` base carries the ``???`` sentinel, not a synth default."""
-        subtree = compose_subtree("datamodule", "vst")
-        assert subtree["param_spec_name"] == "???"
-
-    # The abstract ``vst`` base is excluded: its mandatory sentinel is pinned above.
     @pytest.mark.parametrize(
         "datamodule_name",
-        [name for name in _all_datamodule_config_names() if name != "vst"],
+        ["surge", "surge_simple", "surge_mini", "surge_lance"],
     )
-    def test_vst_family_config_resolves_param_spec_name_to_registered_spec(
-        self, datamodule_name: str
-    ) -> None:
-        """Every concrete VST-family config composes to a registered ``param_spec_name``.
+    def test_surge_variant_targets_vst_datamodule(self, datamodule_name: str) -> None:
+        """Each surge variant composes over ``vst`` onto a VST datamodule target.
 
-        Guards new configs that inherit ``vst`` without declaring a spec: they
-        compose to the literal ``"???"`` and fail here instead of at run time.
+        :param datamodule_name: Surge datamodule group member under test.
+        """
+        subtree = compose_subtree("datamodule", datamodule_name)
+        assert subtree["_target_"].endswith("VSTDataModule")
+
+    def test_surge_debug_sets_repeat_first_batch(self) -> None:
+        """``surge_debug`` flips ``repeat_first_batch`` over the ``vst`` base."""
+        subtree = compose_subtree("datamodule", "surge_debug")
+        assert subtree["repeat_first_batch"] is True
+        assert subtree["_target_"].endswith("VSTDataModule")
+
+
+class TestParamSpecNameFlowsFromSynthGroup:
+    """Identity is owned by the root ``synth`` group (#2565), never the datamodule."""
+
+    @pytest.mark.parametrize("datamodule_name", _all_datamodule_config_names())
+    def test_vst_family_interpolates_param_spec_from_synth(self, datamodule_name: str) -> None:
+        """Every VST-family datamodule carries the verbatim rootward interpolation.
+
+        Guards new configs that restate identity locally: a literal
+        ``param_spec_name`` would silently decouple from the selected synth.
 
         :param datamodule_name: Parametrized YAML stem under ``configs/datamodule/``.
         """
         subtree = compose_subtree("datamodule", datamodule_name)
         if "param_spec_name" not in subtree:
             pytest.skip("not a VST-family datamodule")
-        assert subtree["param_spec_name"] in param_specs, (
-            f"datamodule/{datamodule_name}.yaml must declare an explicit, registered "
-            f"param_spec_name; composed to {subtree['param_spec_name']!r}"
-        )
+        assert subtree["param_spec_name"] == "${synth.param_spec_name}"
 
 
 class TestPathsConfigResolvedInterpolation:
@@ -137,7 +115,7 @@ class TestPathsConfigResolvedInterpolation:
                 config_name="train.yaml",
                 return_hydra_config=True,
                 overrides=[
-                    "datamodule=ksin",
+                    "datamodule=torchsynth",
                     "model=ffn",
                     "trainer=cpu",
                     "paths.output_dir=/tmp/x/out",  # noqa: S108

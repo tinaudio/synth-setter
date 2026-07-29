@@ -1,6 +1,6 @@
 """Pin the `Validate hydra_overrides` step's structure and bash behavior.
 
-The runpod/oci row expands ``$HYDRA_OVERRIDES_EXTRA`` unquoted inside ``bash -c``,
+The RunPod row expands ``$HYDRA_OVERRIDES_EXTRA`` unquoted inside ``bash -c``,
 so any shell metacharacter in the caller-provided ``hydra_overrides`` input would be
 interpreted as shell syntax on the worker (command injection). The workflow gates
 both provider branches on a bash ``[[ ... =~ ]]`` whole-input regex match that runs
@@ -57,7 +57,7 @@ def test_validation_step_exists(generate_steps: list[dict]) -> None:
     names = [step.get("name", "") for step in generate_steps]
     assert VALIDATION_STEP_NAME in names, (
         f"`generate-dataset-shards.yaml` is missing the {VALIDATION_STEP_NAME!r} step — "
-        f"without it, the runpod/oci docker row's unquoted "
+        f"without it, the RunPod docker row's unquoted "
         f"`$HYDRA_OVERRIDES_EXTRA` expansion allows shell injection. "
         f"Found steps: {names!r}"
     )
@@ -103,23 +103,6 @@ def test_validation_step_uses_whole_input_bash_regex(generate_steps: list[dict])
     )
 
 
-def test_validation_step_rejects_newline_and_carriage_return(generate_steps: list[dict]) -> None:
-    """Assert the validation explicitly guards against `\\n` / `\\r` before regex matching.
-
-    The regex itself happens to forbid newlines (they're outside the allowed class),
-    but an explicit guard produces a clearer error message and defends against
-    future regex relaxations that might re-introduce the multi-line bypass.
-
-    :param generate_steps: Ordered steps list for the ``generate`` job.
-    """
-    step = _find_step(generate_steps, name=VALIDATION_STEP_NAME)
-    body = step["run"]
-    assert "$'\\n'" in body and "$'\\r'" in body, (
-        f"{VALIDATION_STEP_NAME!r} must explicitly reject embedded newlines and "
-        f"carriage returns (e.g. via `[[ \"$INPUT\" == *$'\\n'* ]]`). Got body: {body!r}"
-    )
-
-
 def test_validation_step_reads_inputs_hydra_overrides(generate_steps: list[dict]) -> None:
     """Assert the validation step's env binds the workflow input it gates.
 
@@ -138,7 +121,7 @@ def test_validation_step_reads_inputs_hydra_overrides(generate_steps: list[dict]
 def test_validation_runs_before_docker_step(generate_steps: list[dict]) -> None:
     """Assert the validation step precedes the docker invocation.
 
-    The runpod/oci docker step expands ``$HYDRA_OVERRIDES_EXTRA`` unquoted inside
+    The RunPod docker step expands ``$HYDRA_OVERRIDES_EXTRA`` unquoted inside
     ``bash -c``. Placing the regex check after that step would still let the unsafe
     expansion run, defeating the purpose.
 

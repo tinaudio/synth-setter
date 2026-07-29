@@ -28,7 +28,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import Trainer, seed_everything
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationResolutionError
 from pedalboard.io import AudioFile
 
@@ -46,6 +46,7 @@ from tests.conftest import (
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embeddings,
     augment_lance_splits_with_same,
+    augment_lance_splits_with_ssondo,
     build_surge_xt_embedding_train_cfg,
 )
 from tests.helpers.eval_fakes import (
@@ -85,14 +86,15 @@ def test_eval_faust_render_group_resolves_production_renderer_contract() -> None
             cfg = compose(
                 config_name="eval.yaml",
                 overrides=[
-                    "datamodule=ksin",
+                    "datamodule=torchsynth",
                     "model=ffn",
                     "trainer=cpu",
                     "ckpt_path=.",
-                    "render=faust_bright_organ",
+                    "synth=faust_bright_organ",
+                    "render=faust",
                 ],
             )
-        render = RenderConfig.model_validate(OmegaConf.to_container(cfg.render, resolve=True))
+        render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
     finally:
         GlobalHydra.instance().clear()
 
@@ -200,13 +202,20 @@ def _audio_prediction_cli_args(
     :param output_dir: Directory where PredictionWriter emits artifacts.
     :returns: Complete subprocess argv.
     """
+    # Mirrors the shipped jobs/predict scripts: non-VAE checkpoints select the
+    # per-param MSE callback group alongside eval_surge; the VAE lane omits it.
+    callbacks = (
+        "callbacks=eval_surge"
+        if case.experiment == "vae_full"
+        else "callbacks=[eval_surge,log_per_param_mse]"
+    )
     return [
         sys.executable,
         "-m",
         "synth_setter.cli.eval",
-        f"experiment=surge/wandb_checkpoint/{case.experiment}",
+        f"experiment=surge/{case.experiment}",
         f"datamodule={case.datamodule}",
-        "callbacks=eval_surge",
+        callbacks,
         "mode=predict",
         "trainer=cpu",
         "logger=wandb",
@@ -235,7 +244,7 @@ def _save_audio_prediction_checkpoint(case: _AudioPredictionCase, path: Path) ->
         cfg = compose(
             config_name="eval.yaml",
             overrides=[
-                f"experiment=surge/wandb_checkpoint/{case.experiment}",
+                f"experiment=surge/{case.experiment}",
                 f"datamodule={case.datamodule}",
                 "trainer=cpu",
                 *case.model_overrides,
@@ -289,6 +298,9 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
     _save_audio_prediction_checkpoint(case, checkpoint)
     output_dir = tmp_path / f"{case.experiment}-output"
 
+    # Drop WANDB_SERVICE: earlier in-process offline runs leave a service token in
+    # the session env, and connecting to that dead socket aborts wandb.init (#2564).
+    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
     result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
         _audio_prediction_cli_args(
             case,
@@ -299,6 +311,7 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
         capture_output=True,
         text=True,
         timeout=300,
+        env=subprocess_env,
     )
 
     assert result.returncode == 0, result.stderr
@@ -477,7 +490,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
                 "trainer=cpu",
                 # The experiment defaults to mode=predict; this invariant is test-mode.
                 "mode=test",
-                "datamodule.param_spec_name=surge_4",
+                "synth=surge_4",
             ],
         )
 
@@ -668,12 +681,12 @@ def test_evaluate_loads_compiled_cpu_training_checkpoint(
     """Uncompiled CPU evaluation loads a checkpoint written by compiled training.
 
     :param tmp_path: Shared training and evaluation output directory.
-    :param cfg_train: Tiny KSin CPU training configuration.
-    :param cfg_eval: Matching KSin CPU evaluation configuration.
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
     """
     for cfg in (cfg_train, cfg_eval):
         with open_dict(cfg):
-            cfg.datamodule.signal_length = 64
+            cfg.datamodule.signal_length = 512
             cfg.model.net.channels = 2
             cfg.model.net.encoder_blocks = 1
             cfg.model.net.hidden_dim = 8
@@ -707,12 +720,12 @@ def test_evaluate_legacy_wrapped_checkpoint_hints_migration_cli_which_recovers(
     """A legacy ``_orig_mod`` checkpoint fails with the migration command, which fixes it.
 
     :param tmp_path: Shared training and evaluation output directory.
-    :param cfg_train: Tiny KSin CPU training configuration.
-    :param cfg_eval: Matching KSin CPU evaluation configuration.
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
     """
     for cfg in (cfg_train, cfg_eval):
         with open_dict(cfg):
-            cfg.datamodule.signal_length = 64
+            cfg.datamodule.signal_length = 512
             cfg.model.net.channels = 2
             cfg.model.net.encoder_blocks = 1
             cfg.model.net.hidden_dim = 8
@@ -816,7 +829,7 @@ def _compose_fake_oracle_eval_cfg(
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", f"mode={mode}"]
+            overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
             + ([f"datamodule={datamodule}"] if datamodule else []),
         )
     with open_dict(cfg):
@@ -824,7 +837,6 @@ def _compose_fake_oracle_eval_cfg(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.param_spec_name = param_spec_name
         # None lets the datamodule derive ``test.<its shard suffix>`` under dataset_root.
         cfg.datamodule.predict_file = None
         cfg.datamodule.batch_size = 1
@@ -1169,7 +1181,7 @@ def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
 def test_evaluate_unregistered_param_spec_name_raises_resolution_error(
     tmp_path: Path,
 ) -> None:
-    """An unregistered ``datamodule.param_spec_name`` fails during model resolution.
+    """An unregistered ``synth.param_spec_name`` fails during model resolution.
 
     The model width resolver rejects an unknown spec before model construction or
     dataset access.
@@ -1179,7 +1191,7 @@ def test_evaluate_unregistered_param_spec_name_raises_resolution_error(
     """
     cfg = _compose_fake_oracle_eval_cfg(tmp_path, tmp_path / "missing-datasets", mode="validate")
     with open_dict(cfg):
-        cfg.datamodule.param_spec_name = "does_not_exist"
+        cfg.synth.param_spec_name = "does_not_exist"
 
     HydraConfig().set_config(cfg)
     try:
@@ -1266,27 +1278,31 @@ def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_w
             assert isinstance(value, float) and math.isfinite(value)
 
 
-@pytest.mark.parametrize("render_group", ["surge_simple", "surge_xt"])
-def test_eval_render_group_exposes_postprocessing_keys(render_group: str) -> None:
-    """Composing ``render=<group>`` into eval exposes the three keys postprocessing reads.
+@pytest.mark.parametrize("synth_group", ["surge_simple", "surge_xt"])
+def test_eval_synth_group_exposes_postprocessing_keys(synth_group: str) -> None:
+    """Composing ``synth=<group>`` into eval exposes the three keys postprocessing reads.
 
-    ``_run_predict_postprocessing`` resolves identity via ``SynthSpec.from_render_cfg``
-    to build the renderer argv. This composition test pins that both shipped render
-    groups supply the whole identity, so a future rename in a ``render/*.yaml``
-    surfaces here rather than mid-eval.
+    ``_run_predict_postprocessing`` resolves identity via
+    ``RenderConfig.from_cfg_nodes`` to build the renderer argv. This composition
+    test pins that both shipped synth groups supply the whole identity, so a
+    future rename in a ``synth/*.yaml`` surfaces here rather than mid-eval.
 
-    :param render_group: Render config group composed into the eval cfg.
+    :param synth_group: Synth config group composed into the eval cfg.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", f"render={render_group}"],
+            overrides=[
+                "experiment=surge/fake_oracle",
+                f"synth={synth_group}",
+                "render=vst",
+            ],
         )
     try:
-        assert cfg.render.synth.param_spec_name
-        assert cfg.render.synth.plugin_state_path
-        assert cfg.render.synth.plugin_path
+        assert cfg.synth.param_spec_name
+        assert cfg.synth.plugin_state_path
+        assert cfg.synth.plugin_path
     finally:
         GlobalHydra.instance().clear()
 
@@ -1307,9 +1323,9 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
 ) -> None:
     """Predict eval resolves ckpt_path via ``${wandb:...}`` from the live registry, loads it, and runs inference.
 
-    The full wandb_checkpoint contract end to end: train a real checkpoint, publish it to
-    ``tinaudio/synth-setter-citest``, then pin ``ckpt_path: ${wandb:...}`` (no CLI path, the form
-    the ``surge/wandb_checkpoint/<id>`` overlay produces) and run ``evaluate()`` in predict mode.
+    The full W&B checkpoint contract end to end: train a real checkpoint, publish it to
+    ``tinaudio/synth-setter-citest``, then pass ``ckpt_path=${wandb:...}`` explicitly and run
+    ``evaluate()`` in predict mode.
     The resolver downloads the artifact, Lightning loads the weights, and predict-mode inference
     writes finite per-sample predictions — the contract a fake-stub test cannot prove.
 
@@ -1425,6 +1441,7 @@ def test_evaluate_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
                 return_hydra_config=True,
                 overrides=[
                     "datamodule=surge_simple",
+                    "synth=surge_simple",
                     "model=ffn",
                     "trainer=cpu",
                     "ckpt_path=.",
@@ -1453,6 +1470,7 @@ def _compose_fake_t5gemma_ffn_eval_cfg(
             return_hydra_config=True,
             overrides=[
                 "model=vst_ffn",
+                f"synth={param_spec_name}",
                 "conditioning=t5gemma",
                 "datamodule=surge_lance",
                 "trainer=cpu",
@@ -1473,7 +1491,6 @@ def _compose_fake_t5gemma_ffn_eval_cfg(
         cfg.paths.log_dir = str(output_dir)
         cfg.datamodule.fake = True
         cfg.datamodule.dataset_root = str(output_dir)
-        cfg.datamodule.param_spec_name = param_spec_name
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
         cfg.trainer.limit_val_batches = 1
@@ -1542,7 +1559,7 @@ def _assert_conditioning_train_validate_finite(
     :param tmp_path: The temporary output/log path shared by train and eval.
     :param dataset_root: Dataset root already augmented with the profile's column.
     :param param_spec_name: Param spec driving model width and callback labels.
-    :param conditioning: Conditioning profile group (``m2l``/``clap``/``same_s``/``same_l``).
+    :param conditioning: Cached-conditioning profile group.
     """
     cfg_train = build_surge_xt_embedding_train_cfg(
         tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
@@ -1559,6 +1576,7 @@ def _assert_conditioning_train_validate_finite(
             return_hydra_config=True,
             overrides=[
                 "experiment=surge/flow_simple",
+                f"synth={param_spec_name}",
                 f"conditioning={conditioning}",
                 "trainer=cpu",
                 "datamodule=surge_lance",
@@ -1574,7 +1592,6 @@ def _assert_conditioning_train_validate_finite(
         cfg_eval.datamodule.fake = False
         cfg_eval.datamodule.dataset_root = str(dataset_root)
         cfg_eval.datamodule.predict_file = str(dataset_root / "test.lance")
-        cfg_eval.datamodule.param_spec_name = param_spec_name
         cfg_eval.datamodule.batch_size = 1
         cfg_eval.datamodule.num_workers = 0
         cfg_eval.datamodule.use_saved_mean_and_variance = True
@@ -1618,6 +1635,35 @@ def test_train_eval_embedding_conditioning_real_e2e(
     )
 
 
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+def test_evaluate_ssondo_conditioning_real_e2e(
+    local_embedding_checkpoints: dict[str, str],
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Compose eval independently and validate a real S-SONDO checkpoint.
+
+    :param local_embedding_checkpoints: Preflighted real model checkpoints.
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_ssondo(
+        surge_xt_embedding_smoke_datasets,
+        local_embedding_checkpoints["ssondo"],
+    )
+
+    _assert_conditioning_train_validate_finite(
+        tmp_path,
+        dataset_root,
+        param_spec_name,
+        "ssondo",
+    )
+
+
 _SAME_CONDITIONING_PROFILES = ("same_s", "same_l")
 
 
@@ -1627,7 +1673,6 @@ _SAME_CONDITIONING_PROFILES = ("same_s", "same_l")
 @pytest.mark.same_e2e
 @pytest.mark.parametrize("conditioning", _SAME_CONDITIONING_PROFILES)
 def test_train_eval_same_conditioning_real_e2e(
-    require_same_extra: None,
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     param_spec_name: str,
@@ -1636,13 +1681,11 @@ def test_train_eval_same_conditioning_real_e2e(
     """Train the flow model then validate its checkpoint over a real SAME dataset.
 
     The SAME sibling of :func:`test_train_eval_embedding_conditioning_real_e2e`:
-    renders a Surge XT dataset, appends the ``same_s``/``same_l`` column via the real
-    ``add_embeddings`` SAME endpoint (real ``stable_audio_tools`` encoder — no mocks),
-    trains ``experiment=surge/flow_simple`` one step to a checkpoint, then drives
-    ``evaluate(mode=validate)`` and asserts a finite ``val/param_mse``. Needs the
-    optional ``same`` extra, so it carries ``same_e2e`` and runs in that lane.
+    renders a Surge XT dataset, appends the ``same_s``/``same_l`` column through the
+    production Stable Audio 3 encoder, trains ``experiment=surge/flow_simple`` one
+    step to a checkpoint, then drives ``evaluate(mode=validate)`` and asserts a
+    finite ``val/param_mse``.
 
-    :param require_same_extra: Skips before the render when the ``same`` extra is absent.
     :param tmp_path: The temporary output/log path shared by train and eval.
     :param surge_xt_smoke_datasets: Real-VST Lance dataset root (``{train,val,test}.lance``).
     :param param_spec_name: Param spec driving model width and callback labels.

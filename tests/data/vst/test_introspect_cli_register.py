@@ -2,10 +2,10 @@
 
 Register mode wires a drafted spec into a checkout, so these tests run the CLI
 against checkout copies built in tmp dirs — a skeleton (the real registry +
-render config files) for the focused behaviors, and a full copy of the
+the vst render base config) for the focused behaviors, and a full copy of the
 installed ``synth_setter`` source tree for the end-to-end test, which then
 imports the modified registry in a clean subprocess and composes the generated
-render config exactly the way ``generate_dataset`` would.
+identity config against ``render=vst`` exactly the way ``generate_dataset`` would.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ def _register(checkout: Path, *extra: str, spec_name: str = "fake_synth") -> Res
 def test_register_writes_all_artifacts_into_the_checkout_layout(
     checkout: Path, fake_plugin: IntrospectFakePlugin
 ) -> None:
-    """Register mode lands spec, preset, csv, and render config at the conventional paths.
+    """Register mode lands spec, preset, csv, and identity config at the conventional paths.
 
     :param checkout: Skeleton checkout fixture.
     :param fake_plugin: Patches the plugin-load boundary.
@@ -121,7 +121,14 @@ def test_register_writes_all_artifacts_into_the_checkout_layout(
         checkout / "presets/fake_synth-base.vstpreset"
     ).read_bytes() == b"VST3\x01\x00fake-state"
     assert (checkout / "fake_synth_params.csv").exists()
-    assert (checkout / "src/synth_setter/configs/render/fake_synth.yaml").exists()
+    identity = OmegaConf.load(checkout / "src/synth_setter/configs/synth/fake_synth.yaml")
+    assert identity == {
+        "name": "fake_synth",
+        "param_spec_name": "fake_synth",
+        "plugin_path": "plugins/fake.vst3",
+        "plugin_state_path": "presets/fake_synth-base.vstpreset",
+        "synth_version": "9.9.9",
+    }
 
 
 def test_register_adds_spec_to_the_registry_module(
@@ -159,9 +166,7 @@ def test_register_synth_config_pins_relative_plugin_path_and_version(
     """
     _register(checkout)
 
-    cfg = OmegaConf.load(checkout / "src/synth_setter/configs/render/fake_synth.yaml")
-    synth = OmegaConf.load(checkout / "src/synth_setter/configs/render/synth/fake_synth.yaml")
-    assert cfg.defaults == ["vst", {"synth": "fake_synth"}, "_self_"]
+    synth = OmegaConf.load(checkout / "src/synth_setter/configs/synth/fake_synth.yaml")
     assert synth.synth_version == "9.9.9"
     assert synth.plugin_path == "plugins/fake.vst3"
     assert synth.param_spec_name == "fake_synth"
@@ -178,7 +183,7 @@ def test_register_reports_the_generate_dataset_next_step(
     """
     result = _register(checkout)
 
-    assert "render=fake_synth" in result.output
+    assert "synth=fake_synth render=vst" in result.output
 
 
 def test_register_warns_when_synth_version_is_unknown(
@@ -211,7 +216,7 @@ def test_register_warns_when_synth_version_is_unknown(
 
     assert result.exit_code == 0, result.output
     assert "WARNING: synth_version" in result.output
-    synth = OmegaConf.load(checkout / "src/synth_setter/configs/render/synth/fake_synth.yaml")
+    synth = OmegaConf.load(checkout / "src/synth_setter/configs/synth/fake_synth.yaml")
     assert synth.synth_version == "unknown"
 
 
@@ -294,21 +299,6 @@ def test_register_conflicting_spec_name_fails_before_plugin_load(checkout: Path)
     assert "surge_xt" in result.output
 
 
-@pytest.mark.parametrize("spec_name", ["vst", "VST"])
-def test_register_reserved_render_group_fails_before_plugin_load(
-    checkout: Path, spec_name: str
-) -> None:
-    """The generic ``vst`` render-group name cannot be registered as a synth.
-
-    :param checkout: Skeleton checkout fixture.
-    :param spec_name: Exact or case-variant reserved group name.
-    """
-    result = _register(checkout, spec_name=spec_name)
-
-    assert result.exit_code != 0
-    assert "reserved for a render config" in result.output
-
-
 def test_register_rejects_explicit_out_paths(checkout: Path) -> None:
     """``--register`` owns the destinations; combining it with ``--out-*`` is an error.
 
@@ -346,7 +336,7 @@ def test_register_autodetects_repo_root_from_cwd(
     )
 
     assert result.exit_code == 0, result.output
-    assert (checkout / "src/synth_setter/configs/render/fake_synth.yaml").exists()
+    assert (checkout / "src/synth_setter/configs/synth/fake_synth.yaml").exists()
 
 
 def test_register_outside_a_checkout_fails_with_guidance(
@@ -370,7 +360,7 @@ def test_register_outside_a_checkout_fails_with_guidance(
     assert "--repo-root" in result.output
 
 
-def test_register_capture_failure_leaves_registry_and_render_config_unwritten(
+def test_register_capture_failure_leaves_registry_and_identity_config_unwritten(
     checkout: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed preset capture must not leave a half-wired checkout behind.
@@ -419,7 +409,7 @@ def test_register_capture_failure_leaves_registry_and_render_config_unwritten(
     assert result.exit_code != 0
     registry_after = (checkout / "src/synth_setter/data/vst/param_spec_registry.py").read_text()
     assert registry_after == registry_before
-    assert not (checkout / "src/synth_setter/configs/render/fake_synth.yaml").exists()
+    assert not (checkout / "src/synth_setter/configs/synth/fake_synth.yaml").exists()
 
 
 def test_verify_without_register_is_an_error(tmp_path: Path) -> None:
@@ -497,8 +487,8 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
 
     - a clean subprocess (``PYTHONPATH`` pointed at the copy) imports the
       modified ``param_spec_registry`` and samples the new spec;
-    - the parent composes ``render=fake_synth`` from the copy's Hydra configs
-      and validates it into a strict ``RenderConfig``.
+    - the parent composes ``synth=fake_synth render=vst`` from the copy's Hydra
+      configs and validates it into a strict ``RenderConfig``.
 
     :param tmp_path: Parent for the checkout copy.
     :param fake_plugin: Patches the plugin-load boundary.
@@ -523,7 +513,9 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     assert "# Introspection verification — `fake_synth`" in verify_report
     assert "## BLOCK" not in verify_report
     assert "registry import + sample() OK" in verify_report
-    assert "Hydra render=fake_synth composes into a valid RenderConfig" in verify_report
+    assert "Hydra synth=fake_synth render=vst composes into a valid RenderConfig" in (
+        verify_report
+    )
 
     probe = textwrap.dedent(
         """
@@ -561,10 +553,8 @@ def test_register_end_to_end_wires_a_runnable_synth_into_a_full_checkout_copy(
     with initialize_config_dir(
         config_dir=str(root / "src/synth_setter/configs"), version_base="1.3"
     ):
-        cfg = compose(overrides=["+render=fake_synth"])
-    raw = OmegaConf.to_container(cfg.render, resolve=True)
-    assert isinstance(raw, dict)
-    render = RenderConfig(**{k: v for k, v in raw.items() if isinstance(k, str)})
+        cfg = compose(overrides=["+render=vst", "+synth=fake_synth"])
+    render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
     assert render.param_spec_name == "fake_synth"
     assert render.plugin_path == "plugins/fake.vst3"
     assert render.plugin_state_path == "presets/fake_synth-base.vstpreset"

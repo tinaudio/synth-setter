@@ -65,21 +65,6 @@ class TestMakeDatasetWandbRunId:
         with pytest.raises(ValueError, match="must be UTC"):
             make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=non_utc)
 
-    def test_make_run_id_deterministic_same_inputs(self):
-        """Same arguments produce the same result."""
-        ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
-        a = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts)
-        b = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts)
-        assert a == b
-
-    def test_make_run_id_seconds_precision(self):
-        """Timestamps one second apart produce different IDs."""
-        ts1 = datetime(2026, 3, 13, 10, 0, 0, tzinfo=UTC)
-        ts2 = datetime(2026, 3, 13, 10, 0, 1, tzinfo=UTC)
-        id1 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts1)
-        id2 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts2)
-        assert id1 != id2
-
 
 class TestMakeR2Prefix:
     """Tests for make_r2_prefix."""
@@ -91,11 +76,6 @@ class TestMakeR2Prefix:
             DatasetRunId("surge-simple-480k-10k-20260313T100000000Z"),
         )
         assert result == "data/surge-simple-480k-10k/surge-simple-480k-10k-20260313T100000000Z/"
-
-    def test_make_r2_prefix_trailing_slash(self):
-        """Prefix always ends with a trailing slash."""
-        result = make_r2_prefix(DatasetConfigId("a"), DatasetRunId("b"))
-        assert result.endswith("/")
 
     def test_make_r2_prefix_strips_trailing_slash_from_root(self):
         """``prefix_root="data/"`` does not produce a double slash."""

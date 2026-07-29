@@ -53,7 +53,7 @@ def test_finalization_workflow_runs_static_and_queue_lance_scenarios(
     """
     generate = finalization_workflow["jobs"]["smoke-pipeline"]
     rows = generate["strategy"]["matrix"]["include"]
-    assert [row["scenario"] for row in rows] == ["static", "queue"]
+    assert {row["scenario"] for row in rows} == {"static", "queue"}
     assert "matrix.scenario == 'queue'" in generate["with"]["hydra_overrides"]
     assert "use_shard_queue=true" in generate["with"]["hydra_overrides"]
     assert "matrix.scenario" in generate["with"]["artifact_name"]
@@ -73,9 +73,11 @@ def test_generate_job_has_output_format_matrix_axis(workflow: dict, job_name: st
     """
     job = workflow["jobs"][job_name]
     matrix = job["strategy"]["matrix"]
-    assert "output_format" in matrix, (
-        f"{job_name}.strategy.matrix is missing the `output_format` axis — "
-        f"found keys: {sorted(matrix.keys())}"
+    # The axis is fed at runtime from the setup job, so pin the wiring rather than
+    # the formats: a rename of that output would silently collapse the fan-out.
+    assert matrix.get("output_format") == "${{ fromJSON(needs.setup.outputs.output_formats) }}", (
+        f"{job_name}.strategy.matrix.output_format is not wired to setup.outputs."
+        f"output_formats — found: {matrix.get('output_format')!r}"
     )
 
 

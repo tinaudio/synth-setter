@@ -10,7 +10,6 @@ CLI: ``synth-setter-add-embeddings lance_uri=DATASET.lance embeddings=[clap,m2l]
 
 from __future__ import annotations
 
-import importlib.util
 import math
 import os
 import sys
@@ -33,10 +32,17 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    SSONDO_FIELD,
     T5GEMMA_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.ssondo import (
+    DEFAULT_SSONDO_CHECKPOINT,
+    SSONDO_EMBEDDING_DIM,
+    SSONDOEncodeFn,
+    load_ssondo_audio_encoder,
+)
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -71,15 +77,16 @@ PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 SAME_EMBEDDING_DIM: int = 256
 SAME_SAMPLE_RATE: int = 44100
 SAME_DOWNSAMPLING_RATIO: int = 4096
-SAME_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
+SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
+type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn
+type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 
@@ -103,12 +110,17 @@ class IndexSpec:
     .. attribute :: vector_column
 
         Companion vector column, or ``None`` to index the embedding column.
+
+    .. attribute :: vector_dim
+
+        Static vector width for config validation, or ``None`` when output-derived.
     """
 
     metric: str = DEFAULT_INDEX_METRIC
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS
     pool: Literal["none", "mean", "attention"] = "none"
     vector_column: str | None = None
+    vector_dim: int | None = None
 
 
 @dataclass(frozen=True)
@@ -126,10 +138,6 @@ class EmbeddingSpec:
     .. attribute :: default_checkpoint
 
         Checkpoint source used without a keyed config override.
-
-    .. attribute :: requires_extra
-
-        Optional uv extra required before loading, or ``None``.
 
     .. attribute :: co_resident
 
@@ -155,7 +163,6 @@ class EmbeddingSpec:
     name: str
     column: str
     default_checkpoint: str
-    requires_extra: str | None
     co_resident: bool
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
@@ -238,18 +245,39 @@ def _encode_clap_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -
     return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
 
 
-def same_num_latent_frames(num_samples: int, sample_rate: int) -> int:
-    """Return SAME's padded latent-frame count after resampling to 44.1 kHz.
+def _same_resampled_samples(num_samples: int, sample_rate: int) -> int:
+    """Return the ceiling sample count after resampling to SAME's 44.1 kHz input rate.
 
     :param num_samples: Positive source clip length in samples.
     :param sample_rate: Positive source sample rate in Hz.
-    :returns: Even latent-frame count after resampling and two-hop padding.
+    :returns: Resampled clip length in samples.
     :raises ValueError: Either input is non-positive.
     """
     if num_samples < 1 or sample_rate < 1:
         raise ValueError(f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}")
-    resampled = math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
-    return 2 * math.ceil(resampled / SAME_PAD_BLOCK_SAMPLES)
+    return math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
+
+
+def same_s_num_latent_frames(num_samples: int, sample_rate: int) -> int:
+    """Return SAME-S's even frame count after resampling and two-hop padding.
+
+    :param num_samples: Positive source clip length in samples.
+    :param sample_rate: Positive source sample rate in Hz.
+    :returns: Two frames per complete or partial 8192-sample block.
+    """
+    resampled = _same_resampled_samples(num_samples, sample_rate)
+    return 2 * math.ceil(resampled / SAME_S_PAD_BLOCK_SAMPLES)
+
+
+def same_l_num_latent_frames(num_samples: int, sample_rate: int) -> int:
+    """Return SAME-L's frame count after resampling to its 4096-sample hop.
+
+    :param num_samples: Positive source clip length in samples.
+    :param sample_rate: Positive source sample rate in Hz.
+    :returns: One frame per complete or partial 4096-sample block.
+    """
+    resampled = _same_resampled_samples(num_samples, sample_rate)
+    return math.ceil(resampled / SAME_DOWNSAMPLING_RATIO)
 
 
 def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -278,13 +306,21 @@ def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return prepared
 
 
-def _encode_same_column(field: str, audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
-    """Encode one audio batch as a fixed-shape SAME tensor column.
+def _encode_same_column(
+    audio: np.ndarray,
+    sample_rate: int,
+    encoder: Encoder,
+    *,
+    field: str,
+    frame_count: SameFrameCountFn,
+) -> pa.Array:
+    """Encode one audio batch under the selected SAME model's frame contract.
 
-    :param field: SAME target column.
     :param audio: ``(B, C, T)`` source audio.
     :param sample_rate: Source sample rate in Hz.
     :param encoder: SAME encoder over prepared stereo audio.
+    :param field: SAME target column.
+    :param frame_count: Model-specific latent-frame calculation.
     :returns: Fixed-shape tensor array.
     :raises ValueError: The encoder returns the wrong shape or non-finite values.
     """
@@ -296,7 +332,7 @@ def _encode_same_column(field: str, audio: np.ndarray, sample_rate: int, encoder
     expected_shape = (
         len(audio),
         SAME_EMBEDDING_DIM,
-        same_num_latent_frames(prepared.shape[-1], SAME_SAMPLE_RATE),
+        frame_count(prepared.shape[-1], SAME_SAMPLE_RATE),
     )
     if latents.shape != expected_shape:
         raise ValueError(f"{field} encoder produced shape {latents.shape}, expected {expected_shape}")
@@ -311,7 +347,13 @@ def _encode_same_s_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     :param encoder: SAME-S encoder.
     :returns: Fixed-shape tensor array.
     """
-    return _encode_same_column(SAME_S_FIELD, audio, sample_rate, encoder)
+    return _encode_same_column(
+        audio,
+        sample_rate,
+        encoder,
+        field=SAME_S_FIELD,
+        frame_count=same_s_num_latent_frames,
+    )
 
 
 def _encode_same_l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
@@ -322,7 +364,13 @@ def _encode_same_l_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     :param encoder: SAME-L encoder.
     :returns: Fixed-shape tensor array.
     """
-    return _encode_same_column(SAME_L_FIELD, audio, sample_rate, encoder)
+    return _encode_same_column(
+        audio,
+        sample_rate,
+        encoder,
+        field=SAME_L_FIELD,
+        frame_count=same_l_num_latent_frames,
+    )
 
 
 def _load_m2l_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -356,6 +404,16 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_same_audio_encoder(checkpoint, config.device)
 
 
+def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load S-SONDO through its pinned checkpoint adapter.
+
+    :param checkpoint: Pinned Hugging Face repo id or hash-identical local artifact.
+    :param config: Run config supplying the device.
+    :returns: S-SONDO encoder over source audio.
+    """
+    return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
+
+
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -386,6 +444,25 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
+def _encode_ssondo_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as fixed-width S-SONDO vectors.
+
+    :param audio: ``(B, C, T)`` source audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: S-SONDO encoder over source audio.
+    :returns: Fixed-size-list float32 array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    encode = cast("SSONDOEncodeFn", encoder)
+    vectors = _finite_embedding(SSONDO_FIELD, encode(audio, sample_rate))
+    expected_shape = (len(audio), SSONDO_EMBEDDING_DIM)
+    if vectors.shape != expected_shape:
+        raise ValueError(
+            f"{SSONDO_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
+        )
+    return _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)
+
+
 def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
     """Encode one param batch as a fixed-shape text-embedding tensor column.
 
@@ -408,17 +485,13 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
     return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
 
 
-# Extras whose distribution name differs from the module they install.
-_EXTRA_IMPORT_NAMES: dict[str, str] = {"same": "stable_audio_tools", "sa3": "stable_audio_3"}
-
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "clap": EmbeddingSpec(
         name="clap",
         column=CLAP_FIELD,
         default_checkpoint=DEFAULT_CLAP_CHECKPOINT,
-        requires_extra=None,
         co_resident=True,
-        index=IndexSpec(pool="none"),
+        index=IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM),
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
     ),
@@ -426,7 +499,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="m2l",
         column=M2L_FIELD,
         default_checkpoint=DEFAULT_M2L_CHECKPOINT,
-        requires_extra=None,
         co_resident=True,
         index=IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
         load_encoder=_load_m2l_spec_encoder,
@@ -436,7 +508,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="same_s",
         column=SAME_S_FIELD,
         default_checkpoint=DEFAULT_SAME_S_CHECKPOINT,
-        requires_extra="same",
         co_resident=False,
         index=IndexSpec(pool="mean", vector_column=f"{SAME_S_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
@@ -446,11 +517,19 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="same_l",
         column=SAME_L_FIELD,
         default_checkpoint=DEFAULT_SAME_L_CHECKPOINT,
-        requires_extra="same",
         co_resident=False,
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
+    ),
+    "ssondo": EmbeddingSpec(
+        name="ssondo",
+        column=SSONDO_FIELD,
+        default_checkpoint=DEFAULT_SSONDO_CHECKPOINT,
+        co_resident=True,
+        index=IndexSpec(pool="none", vector_dim=SSONDO_EMBEDDING_DIM),
+        load_encoder=_load_ssondo_spec_encoder,
+        encode_column=_encode_ssondo_column,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.
@@ -458,7 +537,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         name="t5gemma",
         column=T5GEMMA_FIELD,
         default_checkpoint=DEFAULT_T5GEMMA_CHECKPOINT,
-        requires_extra="sa3",
         co_resident=False,
         index=None,
         load_encoder=_load_t5gemma_spec_encoder,
@@ -492,26 +570,6 @@ def _guard_existing_columns(
     existing = target_columns & set(dataset.schema.names)
     if existing:
         raise ValueError(f"dataset already has embedding column(s): {sorted(existing)}")
-
-
-def _require_extras(specs: Sequence[EmbeddingSpec]) -> None:
-    """Fail before checkpoint downloads when a selected optional extra is absent.
-
-    :param specs: Selected embedding policies.
-    :raises ImportError: A selected embedding's optional dependency is unavailable.
-    """
-    required = {spec.requires_extra for spec in specs if spec.requires_extra is not None}
-    for extra in sorted(required):
-        module = _EXTRA_IMPORT_NAMES.get(extra, extra)
-        try:
-            available = importlib.util.find_spec(module) is not None
-        except (ImportError, ValueError):
-            available = False
-        if not available:
-            raise ImportError(
-                f"embedding selection requires the optional `{extra}` extra — "
-                f"install it with `uv sync --extra {extra}`"
-            )
 
 
 def _validate_write_source(
@@ -670,19 +728,26 @@ def _write_columns(
     :raises ValueError: Policies are empty or dataset write preconditions fail.
     """
     import lance
+    import torch
 
     if not specs:
         raise ValueError("no embedding specs given; nothing to write")
     _guard_existing_columns(dataset, specs)
     input_fields = sorted({spec.input_field for spec in specs})
     total_rows = _validate_write_source(dataset, config.batch_size, input_fields)
-    encoders = _load_encoders(specs, config)
+    # Model construction must not consume the seed governing stochastic encoders.
+    with torch.random.fork_rng():
+        encoders = _load_encoders(specs, config)
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info("inferring_embedding_schema", columns=output_columns)
     sample = next(dataset.to_batches(columns=input_fields, limit=1))
-    sample_output = _encode_columns(_decoded_sources(sample, input_fields), sample_rate, specs, encoders)
+    # Schema probing must not perturb stochastic encoders' persisted outputs.
+    with torch.random.fork_rng():
+        sample_output = _encode_columns(
+            _decoded_sources(sample, input_fields), sample_rate, specs, encoders
+        )
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
@@ -803,6 +868,57 @@ def build_index(
     return True
 
 
+def _index_exists(dataset: lance.LanceDataset, spec: EmbeddingSpec) -> bool:
+    """Return whether Lance reports an index over the policy's vector column.
+
+    :param dataset: Open dataset.
+    :param spec: Registry policy whose index is checked.
+    :returns: Whether the target column has an index.
+    """
+    if spec.index is None:
+        return False
+    target = spec.index.vector_column or spec.column
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    return any(entry.get("fields") == [target] for entry in indices)
+
+
+def _resume_missing_indexes(
+    dataset: lance.LanceDataset,
+    specs: Sequence[EmbeddingSpec],
+    config: AddEmbeddingsConfig,
+) -> bool:
+    """Build missing indexes when every selected output column already exists.
+
+    :param dataset: Open dataset that may contain a completed embedding write.
+    :param specs: Selected registry policies.
+    :param config: Index settings for the rerun.
+    :returns: Whether index-only recovery completed.
+    """
+    expected = {column for spec in specs for column in _output_columns(spec)}
+    present = expected & set(dataset.schema.names)
+    if not present:
+        return False
+    if present != expected or not config.build_index or dataset.count_rows() < MIN_ROWS_FOR_INDEX:
+        _guard_existing_columns(dataset, specs)
+
+    missing = [
+        (spec, index)
+        for spec in specs
+        if (index := spec.index) is not None and not _index_exists(dataset, spec)
+    ]
+    if not missing:
+        _guard_existing_columns(dataset, specs)
+
+    logger.info(
+        "embedding_index_resume_started",
+        columns=[index.vector_column or spec.column for spec, index in missing],
+    )
+    for spec, index in missing:
+        target = index.vector_column or spec.column
+        build_index(dataset, target, index=index, config=config)
+    return True
+
+
 def add_embeddings(config: AddEmbeddingsConfig) -> None:
     """Append the registry entries selected by ``config.embeddings``.
 
@@ -813,11 +929,13 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    output_columns = [column for spec in specs for column in _output_columns(spec)]
+    if _resume_missing_indexes(dataset, specs, config):
+        logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
+        return
+
     _guard_existing_columns(dataset, specs)
     _validate_write_source(dataset, config.batch_size)
-    _require_extras(specs)
-    output_columns = [column for spec in specs for column in _output_columns(spec)]
-
     logger.info(
         "adding_embeddings",
         uri=config.lance_uri,
@@ -989,27 +1107,19 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
     :param checkpoint: Local directory, R2 mirror, or HuggingFace repo id.
     :param device: Torch device, or ``None`` for automatic selection.
     :returns: Encoder producing ``(B, SAME_EMBEDDING_DIM, T_lat)`` latents.
-    :raises ImportError: The optional ``same`` extra is unavailable.
     """
     import json
 
     import torch
     from safetensors.torch import load_file
-
-    try:
-        from stable_audio_tools.models.factory import create_model_from_config
-    except ImportError as exc:
-        raise ImportError(
-            "loading SAME encoders requires the optional `same` extra — "
-            "install it with `uv sync --extra same`"
-        ) from exc
+    from stable_audio_3.factory import create_autoencoder_from_config
 
     checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
     resolved_device = _resolve_torch_device(device)
     logger.info("loading_same_checkpoint", checkpoint=checkpoint, device=resolved_device)
     model_config = json.loads((checkpoint_dir / "model_config.json").read_text())
-    model = create_model_from_config(model_config)
-    model.load_state_dict(load_file(checkpoint_dir / "model.safetensors"))
+    model = create_autoencoder_from_config(model_config["model"], model_config["sample_rate"])
+    model.load_state_dict(load_file(checkpoint_dir / "model.safetensors"), strict=True)
     model = model.to(resolved_device).eval().requires_grad_(False)
 
     @torch.no_grad()

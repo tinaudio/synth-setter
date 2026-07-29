@@ -501,21 +501,29 @@ def test_run_id_from_run_dir_ignores_malformed_newer_wandb_dir(tmp_path: Path) -
     assert decision.wandb_run_id == "ffn_simple-20260715T225004231Z"
 
 
-def test_run_id_from_run_dir_malformed_wandb_dirname_returns_none(tmp_path: Path) -> None:
+def test_run_id_from_run_dir_malformed_wandb_dirname_returns_none(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A wandb dir whose name lacks the ``run-<ts>-<id>`` shape yields no run id.
 
     :param tmp_path: Pytest tmp dir holding the test's fake directories.
+    :param caplog: Pytest log capture fixture, used to prove the candidate was not skipped.
     """
     run_dir = tmp_path / "ffn-prior"
     (run_dir / "wandb" / "run-onlyoneseg").mkdir(parents=True)
+    # Without .hydra the candidate is skipped before the dirname is ever parsed,
+    # so this test would pass no matter how malformed names were handled.
+    (run_dir / ".hydra").mkdir()
     ckpt = run_dir / "checkpoints" / "last.ckpt"
     ckpt.parent.mkdir(parents=True)
     ckpt.write_bytes(b"ckpt")
     current = tmp_path / "ffn-current"
     current.mkdir()
 
-    decision = discover_local_checkpoint(current, config_id="ffn_simple")
+    with caplog.at_level(logging.DEBUG, logger="synth_setter.utils.resume"):
+        decision = discover_local_checkpoint(current, config_id="ffn_simple")
 
+    assert "not a Hydra run directory" not in caplog.text
     # A malformed name yields no run id, so identity falls to (absent) Hydra state.
     assert decision is None
 
@@ -573,7 +581,7 @@ def test_composed_train_config_ships_resume_keys() -> None:
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
-            overrides=["datamodule=ksin", "model=ffn", "trainer=cpu"],
+            overrides=["datamodule=torchsynth", "model=ffn", "trainer=cpu"],
         )
 
     assert OmegaConf.select(cfg, "training.resume") is None

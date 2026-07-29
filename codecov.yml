@@ -42,7 +42,7 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
-    # Real-weights SAME encoder lane; the only suite executing the SAME loader.
+    # Real-weight SA3 parity lane for independently selected SAME-S and SAME-L.
     - name: same-e2e
       paths:
         - src/synth_setter/pipeline/data/add_embeddings.py

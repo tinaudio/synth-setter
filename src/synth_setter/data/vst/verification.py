@@ -4,7 +4,7 @@ Re-runs, in one pass, the checks that previously required a manual sweep
 after every draft (issue #1596 verification loop): the repo's pre-commit
 gates (codespell labels, oversized files), spec-text sanity (size, sweep-wide
 onehots, duplicate names), registry import + ``sample()``, Hydra
-``render=<name>`` composition into a strict ``RenderConfig``, provenance
+``synth=<name> render=vst`` composition into a strict ``RenderConfig``, provenance
 portability, and a classifier audit against the live plugin. Findings carry a
 BLOCK / WARN / PASS severity and render to a markdown report.
 
@@ -133,7 +133,13 @@ def registered_artifacts(paths: RegistrationPaths) -> list[Path]:
     :param paths: The registered checkout destinations.
     :returns: All five artifact paths.
     """
-    return [paths.spec_module, paths.preset, paths.csv, paths.render_config, paths.registry]
+    return [
+        paths.spec_module,
+        paths.preset,
+        paths.csv,
+        paths.identity_config,
+        paths.registry,
+    ]
 
 
 def verify_registration(
@@ -245,15 +251,13 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         spec.sample()
 
         from hydra import compose, initialize_config_dir
-        from omegaconf import OmegaConf
 
         from synth_setter.pipeline.schemas.spec import RenderConfig
 
         with initialize_config_dir(config_dir={str(root / "src/synth_setter/configs")!r},
                                    version_base="1.3"):
-            cfg = compose(overrides=["+render=" + {spec_name!r}])
-        raw = OmegaConf.to_container(cfg.render, resolve=True)
-        render = RenderConfig(**{{k: v for k, v in raw.items() if isinstance(k, str)}})
+            cfg = compose(overrides=["+render=vst", "+synth=" + {spec_name!r}])
+        render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
         print(json.dumps({{
             "encoded_width": spec.encoded_width,
             "plugin_path": render.plugin_path,
@@ -274,7 +278,7 @@ def _check_runtime(root: Path, spec_name: str, report: VerificationReport) -> No
         return
     probe_result = json.loads(proc.stdout)
     report.ok(f"registry import + sample() OK (encoded width {probe_result['encoded_width']})")
-    report.ok(f"Hydra render={spec_name} composes into a valid RenderConfig")
+    report.ok(f"Hydra synth={spec_name} render=vst composes into a valid RenderConfig")
     if Path(probe_result["plugin_path"]).is_absolute():
         report.warn(
             f"render plugin_path is absolute and host-specific: {probe_result['plugin_path']!r} "

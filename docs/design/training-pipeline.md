@@ -307,12 +307,14 @@ dataset_root: ${paths.output_dir}/data # shipped default (per-run Hydra dir)
 
 Behavior:
 
-- Local-only by default
-- If `download_dataset_root_uri` is specified, no-clobber-copy the dataset before training
-- If `download_dataset_txids` or `download_dataset_row_limit` is set, each split is instead rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`); txids pin source snapshots when supplied, otherwise row-limited hydration uses the latest snapshots, and only non-Lance sidecars still download via `download_dir_no_overwrite`
-- No-txid hydration is intentionally non-reproducible and reserved for disposable smoke/tuning runs; splits resolve independently without an atomic cross-split snapshot, while resumable or reproducible runs must supply per-split txids
-- Unpinned cache hits fail closed when the source cannot be reopened and identity-checked; local data is never treated as current after an unverifiable remote read
-- No hidden default R2 fetch
+- Local-only by default; no hidden default R2 fetch
+- If `download_dataset_root_uri` is specified, every split is rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`) — only the columns the loaders read (`param_array` + the conditioning column, plus `audio` for the split serving prediction) cross the wire. There is no whole-dataset copy mode; only non-Lance sidecars still download via `download_dir_no_overwrite`
+- The source must expose `dataset.complete` plus the `train`/`val`/`test` `.lance` split layout. Hydration checks the finalize marker before writing any local split; an incomplete root is a hard failure, not a fallback to a raw copy
+- Splits land in `dataset_root/<prefix>-<digest>/`, where `<prefix>` is the conditioning column truncated to `_DIRNAME_PREFIX_CHARS` and the digest covers the source URI, txids, per-split projection, and row limit (see `subset_dirname` in `lance_materialize.py`). The name is derivable from configuration alone so rank-0 `prepare_data` and all-rank `setup` agree without a source read, and changing conditioning hydrates a sibling subset instead of colliding with the old one. `predict_file` naming the configured root rebases onto the subset
+- Nothing reclaims stale subsets yet; a persistent `dataset_root` accumulates one per distinct request (#2569)
+- `download_dataset_txids` pins per-split source snapshots; without them hydration uses each split's latest version, resolved independently — there is no atomic cross-split snapshot. That is accepted: reproducible or resumable runs supply txids
+- Each staged subset contains its request manifest, so one directory rename atomically publishes the Lance data and matching local transaction identity; concurrent identical writers converge on that winner. Cache hits retry transient metadata reads, verify that identity, and run Lance's structural validation. Unpinned caches additionally require the source to reopen and retain the same snapshot identity; legacy or unverifiable caches fail closed
+- `download_dataset_row_limit` accepts only positive first-N row caps for disposable smoke/tuning runs
 
 ### 6.2 Checkpoint Durability via R2
 

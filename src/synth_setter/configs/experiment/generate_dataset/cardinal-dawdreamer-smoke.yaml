@@ -4,7 +4,8 @@
 # validating the mapped Rack patch end to end before larger runs.
 
 defaults:
-  - override /datamodule: cardinal
+  - override /datamodule: vst
+  - override /synth: cardinal
   - override /render: cardinal
   - _self_
 

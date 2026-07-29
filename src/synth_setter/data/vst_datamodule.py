@@ -1,12 +1,13 @@
 """Shared VST datamodule configuration and model-batch preparation."""
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NotRequired, Self, TypedDict
 
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
     Conditioning,
@@ -16,7 +17,7 @@ from synth_setter.conditioning import (
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import materialize_splits
+from synth_setter.pipeline.data.lance_materialize import materialize_splits, subset_dirname
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 _MATERIALIZE_SPLITS = ("train", "val", "test")
@@ -209,7 +210,7 @@ class _MaterializeConfig(BaseModel):
 
     download_dataset_root_uri: str | None
     download_dataset_txids: dict[str, str] | None
-    download_dataset_row_limit: int | None
+    download_dataset_row_limit: PositiveInt | None
 
     @model_validator(mode="after")
     def validate_consistency(self) -> Self:
@@ -273,15 +274,19 @@ class VSTDataModule(LightningDataModule):
     ) -> None:
         """Store configuration shared by concrete VST datamodules.
 
-        :param dataset_root: Local directory holding per-split datasets.
-        :param download_dataset_root_uri: R2 or file URI used to hydrate ``dataset_root``.
+        :param dataset_root: Local directory holding per-split datasets. When
+            hydrating, the splits land in a request-addressed subdirectory and
+            ``self.dataset_root`` becomes that subdirectory.
+        :param download_dataset_root_uri: R2 or file URI hydrated as a projected
+            column subset; the loaders' read set is the only thing transferred.
         :param use_saved_mean_and_variance: Whether to apply saved mel statistics.
         :param batch_size: Samples per model batch.
         :param ot: Whether training batches use optimal-transport matching.
         :param num_workers: Worker processes per dataloader.
         :param fake: Whether to synthesize samples instead of reading Lance.
         :param repeat_first_batch: Whether non-predict loaders repeat their first full batch.
-        :param predict_file: Prediction split; defaults to ``test.lance``.
+        :param predict_file: Prediction split; defaults to ``test.lance``. A path
+            naming the configured ``dataset_root`` rebases onto the subset directory.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
@@ -302,7 +307,7 @@ class VSTDataModule(LightningDataModule):
             download_dataset_root_uri=download_dataset_root_uri,
         )
         super().__init__()
-        self.dataset_root = Path(dataset_root)
+        configured_root = Path(dataset_root)
         self.download_dataset_root_uri = materialize_config.download_dataset_root_uri
         self.use_saved_mean_and_variance = use_saved_mean_and_variance
         self.batch_size = batch_size
@@ -310,11 +315,6 @@ class VSTDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.fake = fake
         self.repeat_first_batch = repeat_first_batch
-        self.predict_file = (
-            Path(predict_file)
-            if predict_file is not None
-            else self.dataset_root / f"test{self.shard_suffix}"
-        )
         self.conditioning: Conditioning = conditioning
         self.embedding_conditioning: EmbeddingConditioningSpec | None = (
             resolve_embedding_conditioning(conditioning)
@@ -323,6 +323,10 @@ class VSTDataModule(LightningDataModule):
         self.param_spec_name = param_spec_name
         self.download_dataset_txids = materialize_config.download_dataset_txids
         self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
+        predict_split = self._predict_split(predict_file, configured_root)
+        self.projection = self._derive_projection(predict_split)
+        self.dataset_root = self._resolve_dataset_root(configured_root, self.projection)
+        self.predict_file = self._resolve_predict_file(predict_file, predict_split)
 
     def _conditioning_column(self) -> str:
         """Return the stored column backing the configured conditioning.
@@ -331,6 +335,74 @@ class VSTDataModule(LightningDataModule):
         """
         spec = self.embedding_conditioning
         return "mel_spec" if spec is None else spec.column
+
+    def _predict_split(
+        self, predict_file: str | Path | None, configured_root: Path
+    ) -> str | None:
+        """Identify which materialized split, if any, also serves prediction.
+
+        Resolved against the configured root rather than the subset directory,
+        because the subset's name depends on this answer.
+
+        :param predict_file: Configured prediction split, or ``None`` for the default.
+        :param configured_root: Dataset root exactly as configured.
+        :returns: Split name serving prediction, or ``None`` when served elsewhere.
+        """
+        if predict_file is None:
+            return "test"
+        path = Path(predict_file)
+        if path.parent != configured_root:
+            return None
+        split_of = {f"{split}{self.shard_suffix}": split for split in _MATERIALIZE_SPLITS}
+        return split_of.get(path.name)
+
+    def _derive_projection(self, predict_split: str | None) -> dict[str, list[str]]:
+        """Derive the columns to materialize for every split.
+
+        :param predict_split: Split that also serves prediction, or ``None``.
+        :returns: Columns the loaders read, keyed by split.
+        """
+        return {
+            split: self._loader_columns(read_audio=split == predict_split)
+            for split in _MATERIALIZE_SPLITS
+        }
+
+    def _resolve_dataset_root(
+        self, configured_root: Path, projection: Mapping[str, Sequence[str]]
+    ) -> Path:
+        """Place the splits in a request-addressed subset directory when hydrating.
+
+        :param configured_root: Dataset root exactly as configured.
+        :param projection: Columns to materialize per split.
+        :returns: Directory the split loaders read from.
+        """
+        if not self.download_dataset_root_uri:
+            return configured_root
+        return configured_root / subset_dirname(
+            self._conditioning_column(),
+            self.download_dataset_root_uri,
+            txids=self.download_dataset_txids,
+            projection=projection,
+            row_limit=self.download_dataset_row_limit,
+        )
+
+    def _resolve_predict_file(
+        self, predict_file: str | Path | None, predict_split: str | None
+    ) -> Path:
+        """Rebase a configured prediction split onto the resolved dataset root.
+
+        Only a path naming a split this datamodule materializes moves; anything
+        else is served from wherever it was configured.
+
+        :param predict_file: Configured prediction split, or ``None`` for the default.
+        :param predict_split: Split serving prediction, or ``None`` when served elsewhere.
+        :returns: Prediction split path; defaults to the test split.
+        """
+        if predict_file is None:
+            return self.dataset_root / f"test{self.shard_suffix}"
+        if predict_split is not None:
+            return self.dataset_root / f"{predict_split}{self.shard_suffix}"
+        return Path(predict_file)
 
     def _loader_columns(self, *, read_audio: bool) -> list[str]:
         """Derive the stored columns the split loaders read.
@@ -344,43 +416,19 @@ class VSTDataModule(LightningDataModule):
         return columns
 
     def prepare_data(self) -> None:
-        """Hydrate ``dataset_root`` from R2 or a mounted directory when configured."""
+        """Rematerialize the projected splits under ``dataset_root`` when a source is configured."""
         if not self.download_dataset_root_uri:
             return
         if r2_io.is_r2_uri(self.download_dataset_root_uri):
             r2_io.ensure_r2_env_loaded()
-        if (
-            self.download_dataset_txids is not None
-            or self.download_dataset_row_limit is not None
-        ):
-            self._materialize_splits(self.download_dataset_root_uri)
-            return
-        r2_io.download_dir_no_overwrite(self.download_dataset_root_uri, self.dataset_root)
-
-    def _materialize_splits(self, source_root_uri: str) -> None:
-        """Rematerialize each split locally, then rclone the sidecars.
-
-        :param source_root_uri: Hydration source holding the split datasets.
-        """
         materialize_splits(
-            source_root_uri,
+            self.download_dataset_root_uri,
             self.dataset_root,
             txids=self.download_dataset_txids,
-            columns_for=self._materialized_columns,
+            projection=self.projection,
             row_limit=self.download_dataset_row_limit,
             shard_suffix=self.shard_suffix,
         )
-
-    def _materialized_columns(self, split: str) -> list[str]:
-        """Derive one split's projection from the datamodule's own read set.
-
-        :param split: Split name among ``train`` / ``val`` / ``test``.
-        :returns: Columns the loaders read from this split.
-        """
-        # A split that doubles as the predict file must retain the predict
-        # loader's audio column.
-        serves_predict = self.dataset_root / f"{split}{self.shard_suffix}" == self.predict_file
-        return self._loader_columns(read_audio=serves_predict)
 
 
 

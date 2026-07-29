@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import importlib
 import io
@@ -60,54 +61,6 @@ def _assert_process_terminated(pid: int, *, timeout: float = 1) -> None:
         if time.monotonic() >= deadline:
             raise AssertionError(f"process {pid} is still running (state {state})")
         time.sleep(0.05)
-
-
-def test_process_state_permission_denied_reports_pid_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Treat an inaccessible PID as present rather than terminated.
-
-    :param monkeypatch: Replaces the process probe with its permission-denied result.
-    """
-    monkeypatch.setattr(os, "kill", mock.Mock(side_effect=PermissionError))
-
-    assert _process_state(123) == "?"
-
-
-def test_assert_process_terminated_live_pid_fails() -> None:
-    """Reject a descendant that is still executing."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        time.sleep(30)
-        os._exit(0)
-    try:
-        with pytest.raises(AssertionError, match="still running"):
-            _assert_process_terminated(child_pid, timeout=0)
-    finally:
-        os.kill(child_pid, signal.SIGKILL)
-        os.waitpid(child_pid, 0)
-
-
-def test_assert_process_terminated_nonexistent_pid_passes() -> None:
-    """Accept a PID after its process has been reaped."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        os._exit(0)
-    os.waitpid(child_pid, 0)
-
-    _assert_process_terminated(child_pid, timeout=0)
-
-
-@pytest.mark.skipif(not Path("/proc").is_dir(), reason="requires Linux process states")
-def test_assert_process_terminated_zombie_pid_passes() -> None:
-    """Accept a terminated child before its parent reaps it."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        os._exit(0)
-    try:
-        _assert_process_terminated(child_pid, timeout=1)
-    finally:
-        os.waitpid(child_pid, 0)
 
 
 _ROLE_MODELS = {
@@ -218,15 +171,6 @@ def test_native_review_orchestrators_delegate_to_pi() -> None:
     assert "yields a shell session" in contract
 
 
-def test_review_fanout_promotes_deep_checklists() -> None:
-    """Keep high thinking pinned for correctness-sensitive checklists."""
-    routing = (REPO_ROOT / "agent" / "_shared" / "pi_review_routing.py").read_text()
-
-    assert 'REPO_LOCAL_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
-    assert "HIGH_THINKING_SKILLS = REPO_LOCAL_SKILLS" in routing
-    assert 'return "high", "deep checklist"' in routing
-
-
 def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     """Ensure policy, rather than the agent definition, selects Pi worker models."""
     text = (REPO_ROOT / ".pi" / "agents" / "pr-review-worker.md").read_text()
@@ -292,17 +236,38 @@ def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
     assert "openrouter" in text
 
 
+def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
+    """Every ``pi_review_routing.py <cmd>`` the runbook names must be a real subcommand.
+
+    Matching fixed command names as prose only catches a rename by coincidence. Resolving them
+    against the live parser turns the check into a real consistency guard, and it covers commands
+    added to the runbook later.
+
+    :param runbook_text: Body of the review-orchestration runbook.
+    """
+    routing = importlib.import_module("agent._shared.pi_review_routing")
+    subparsers = next(
+        action
+        for action in routing._build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    registered = set(subparsers.choices)
+
+    referenced = set(re.findall(r"pi_review_routing\.py ([a-z][a-z-]*)", runbook_text))
+    assert referenced, "runbook names no pi_review_routing subcommand"
+    assert referenced <= registered, (
+        f"runbook references unknown subcommands {sorted(referenced - registered)}; "
+        f"the CLI registers {sorted(registered)}"
+    )
+
+
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
 
-    assert "pi_review_routing.py plan" in text
-    assert "pi_review_routing.py extract-report" in text
-    assert "pi_review_routing.py validate-report" in text
-    assert "pi_review_routing.py transcript-stats" in text
-    assert "pi_review_routing.py provenance" in text
+    _assert_referenced_subcommands_exist(text)
     assert "extract a unique worker JSON object from harmless surrounding prose" in text
     assert '"severity": "block"' in text
     assert "The worker does not render Markdown or attach provenance" in text

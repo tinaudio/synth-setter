@@ -21,6 +21,7 @@ from synth_setter.data.vst.param_spec_registry import (
     resolve_param_spec_width,
 )
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.synth_spec import SYNTHS
 
 if TYPE_CHECKING:
 
@@ -130,9 +131,14 @@ def test_public_param_specs_view_rejects_mutation() -> None:
         operator.delitem(readonly, name)
 
 
-def test_every_param_spec_has_a_plugin_state_path() -> None:
-    """``param_specs`` and ``plugin_state_paths`` cover the same keys — no spec lacks a preset."""
-    assert set(param_specs) == set(plugin_state_paths)
+def test_every_param_spec_is_used_by_a_registered_synth() -> None:
+    """Every spec is reachable through a ``SYNTHS`` row and vice versa (#2565).
+
+    ``plugin_state_paths`` is keyed by synth name, which is a superset of the
+    spec names since the surgepy rendering variants share their base's spec.
+    """
+    assert {synth.param_spec_name for synth in SYNTHS.values()} == set(param_specs)
+    assert set(plugin_state_paths) == set(SYNTHS)
 
 
 def test_obxf_is_registered_with_an_existing_preset() -> None:

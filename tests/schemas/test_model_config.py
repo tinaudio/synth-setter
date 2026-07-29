@@ -88,7 +88,7 @@ class TestModelConfigCommonFields:
         """``_target_``, ``optimizer``, ``compile`` come through with the right types."""
         model_subtree = compose_subtree("model", "ffn")
         parsed = ModelConfig.model_validate(model_subtree)
-        assert parsed.target_.endswith("KSinFeedForwardModule")
+        assert parsed.target_.endswith("TorchSynthFeedForwardModule")
         assert isinstance(parsed.optimizer, OptimizerConfig)
         assert parsed.compile is True
 

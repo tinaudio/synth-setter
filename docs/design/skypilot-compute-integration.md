@@ -100,7 +100,6 @@ src/synth_setter/configs/skypilot_launch/compute/
 │   ├── network-volume/       # training / training-hclass / staging with the persistent volume mount
 │   └── debug/                # 8 canary variants inheriting the smoke pool, each with its own run script
 ├── vast/smoke.yaml           # Vast.ai GPU (marketplace on-demand alternative; use_spot: false)
-├── oci/cpu.yaml              # OCI x86 CPU Flex (second smoke target; docker-in-run image delivery)
 ├── local/kind.yaml           # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ├── local/debug-rclone.yaml   # kind rclone canary
 └── scripts/                  # packaged setup/run bash (.sh files, shellcheck-covered)
@@ -116,9 +115,9 @@ provider-specific credential setup in CI. Future targets follow the same
 pattern.
 
 `build_task_doc` sets the task's `run` block from the launcher's injected
-`cmd` (or the option's `run_wrapper` with `${WORKER_CMD}` substituted, or a
-debug option's verbatim `run_script`). SkyPilot parses the resulting mapping;
-the launcher then applies the per-launch image and rank-specific environment.
+`cmd` or a debug option's verbatim `run_script`. SkyPilot parses the resulting
+mapping; the launcher then applies the per-launch image and rank-specific
+environment.
 
 #### 4.1.1 Launch mode (`sky_cfg.tail`)
 
@@ -229,7 +228,7 @@ envs their worker entrypoint needs.
 
 Source of truth: the GitHub-Actions runner's process env, populated from `secrets.*` and passed into the container via `docker run -e ...`. **No `.env` file is ever written to the runner's filesystem.** The default `sky_cfg.env_file` path (`<repo_root>/.env`) doesn't resolve, the `.env` branch is silently skipped, and resolution falls through to the container's process env.
 
-The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (only fires on `runpod` / `oci` matrix cells; same-repo PRs run a non-SkyPilot `local` cell — see [github-actions.md](../reference/github-actions.md)):
+The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (only fires on `runpod` matrix cells; same-repo PRs run a non-SkyPilot `local` cell — see [github-actions.md](../reference/github-actions.md)):
 
 ```yaml
 - name: Launch SkyPilot job
@@ -260,14 +259,14 @@ Notes:
 
 #### Why each key lives where it does
 
-| Where                                  | What                                                                                              | Why                                                                                                                                                                                                                                                                                                                                                                                                  |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Workflow YAML `env:` block             | `secrets.R2_*`, `secrets.WANDB_API_KEY`                                                           | GitHub-side secret materialization. Visible only to same-repo PRs (gated by the `if:` on the `generate` job).                                                                                                                                                                                                                                                                                        |
-| `docker run -e ...` flags              | Passes `SYNTH_SETTER_STORAGE_*`; launcher projects rclone env only at the worker-backend boundary | Container env is the natural place for runtime secrets. No file persists on the runner.                                                                                                                                                                                                                                                                                                              |
-| Launcher's `_WORKER_ENV_KEYS`          | projected rclone env, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env)    | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_launch_one_rank` and passed into the task env at construction.                                                                                                    |
-| Launcher's client settings             | `SKYPILOT_API_SERVER_ENDPOINT`, optional `SKYPILOT_SERVICE_ACCOUNT_TOKEN`                         | Resolves from the same `.env` before process env, projects into the launcher process, and clears SkyPilot's import-time endpoint cache before provisioning.                                                                                                                                                                                                                                          |
-| Task env before submission             | Same keys, real values                                                                            | The launcher calls `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`; compute options need no placeholder declarations.                                                                                                                                                                                                                                                                 |
-| `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                                  | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL ([#785](https://github.com/tinaudio/synth-setter/issues/785)). |
+| Where                                  | What                                                                                              | Why                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workflow YAML `env:` block             | `secrets.R2_*`, `secrets.WANDB_API_KEY`                                                           | GitHub-side secret materialization. Visible only to same-repo PRs (gated by the `if:` on the `generate` job).                                                                                                                                                                                                                          |
+| `docker run -e ...` flags              | Passes `SYNTH_SETTER_STORAGE_*`; launcher projects rclone env only at the worker-backend boundary | Container env is the natural place for runtime secrets. No file persists on the runner.                                                                                                                                                                                                                                                |
+| Launcher's `_WORKER_ENV_KEYS`          | projected rclone env, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env)    | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_launch_one_rank` and passed into the task env at construction.                                      |
+| Launcher's client settings             | `SKYPILOT_API_SERVER_ENDPOINT`, optional `SKYPILOT_SERVICE_ACCOUNT_TOKEN`                         | Resolves from the same `.env` before process env, projects into the launcher process, and clears SkyPilot's import-time endpoint cache before provisioning.                                                                                                                                                                            |
+| Task env before submission             | Same keys, real values                                                                            | The launcher calls `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`; compute options need no placeholder declarations.                                                                                                                                                                                                   |
+| `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                                  | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL. |
 
 #### Failure modes
 
@@ -352,7 +351,7 @@ Note: `DatasetSpec` is the single spec type. It's composed via Hydra — `spec_f
 **Delivered** (superseded by §4.1 — the actual shape differs from the original spot/ondemand plan):
 
 - `skypilot_launch/compute/vast/smoke.yaml` — a single on-demand option (`use_spot: false`), not separate spot/ondemand variants.
-- `pyproject.toml` — `vast` added to the required `skypilot[runpod,oci,kubernetes,vast]` extra (not an optional dependency).
+- `pyproject.toml` — `vast` is part of the required `skypilot[runpod,kubernetes,vast]` extra (not an optional dependency).
 
 ### Phase C: Pipeline CLI + SkyPilot integration
 

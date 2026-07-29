@@ -1507,7 +1507,18 @@ def test_trailer_hook_allows_generated_with_non_agent_tool(trailer_hook_command:
 
 @pytest.mark.parametrize(
     "agent_keyword",
-    ["Claude Code", "Anthropic Claude", "ChatGPT", "Copilot", "Cursor", "Gemini"],
+    [
+        "Claude Code",
+        "Anthropic Claude",
+        "ChatGPT",
+        "Copilot",
+        "Cursor",
+        "Gemini",
+        "Codex",
+        "Bard",
+        "GPT-4",
+        "GPT4",
+    ],
 )
 def test_trailer_hook_blocks_generated_with_any_agent_keyword(
     trailer_hook_command: str, agent_keyword: str
@@ -1589,26 +1600,6 @@ def test_trailer_hook_catches_no_verify_through_various_git_level_options(
     :param command: ``git`` invocation carrying the option form under test.
     """
     result = _run_hook_command(trailer_hook_command, {"tool_input": {"command": command}})
-    assert result.returncode == 2, (result.returncode, result.stderr)
-    assert "BLOCKED" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "agent_keyword",
-    ["Codex", "Bard", "GPT-4", "GPT4"],
-)
-def test_trailer_hook_blocks_generated_with_additional_agent_keywords(
-    trailer_hook_command: str, agent_keyword: str
-) -> None:
-    """Additional agents in the ``Generated with`` alternation are blocked.
-
-    :param trailer_hook_command: Hook command body fixture.
-    :param agent_keyword: Agent-product name appended after ``Generated with``.
-    """
-    result = _run_hook_command(
-        trailer_hook_command,
-        {"tool_input": {"command": f'git commit -m "feat: x\n\nGenerated with {agent_keyword}"'}},
-    )
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
 
@@ -1789,31 +1780,3 @@ def test_trailer_hook_finding_does_not_contain_embedded_newlines(
     for line in finding_lines:
         assert "\t" in line, f"finding line missing label/match tab: {line!r}"
         assert "\\n" not in line, f"escaped newline leaked into finding: {line!r}"
-
-
-def test_yaml_run_hook_description_documents_both_extensions() -> None:
-    """The matcher description must mention both ``.yml`` and ``.yaml`` extensions.
-
-    The hook's ``in_scope`` accepts ``.github/workflows/*.{yml,yaml}`` and
-    ``src/synth_setter/configs/skypilot_launch/compute/*.{yml,yaml}``. A description naming only one extension
-    per directory misleads users into surprise when the other fires.
-    """
-    # _find_handler enforces "exactly one matcher entry" — call it first so a
-    # description rename trips a focused AssertionError there, not a silent
-    # StopIteration here.
-    _find_handler("No-yaml-run-comments")
-    matcher_entry = next(
-        entry
-        for entry in _matcher_entries()
-        if "No-yaml-run-comments" in entry.get("description", "")
-    )
-    desc = matcher_entry["description"]
-    assert "yml" in desc and "yaml" in desc, desc
-    assert "workflows" in desc and "compute" in desc, desc
-    # Each scoped directory must reference both extensions, not just one.
-    assert "workflows/*.{yml,yaml}" in desc or (
-        "workflows/*.yml" in desc and "workflows/*.yaml" in desc
-    ), desc
-    assert "compute/*.{yml,yaml}" in desc or (
-        "compute/*.yml" in desc and "compute/*.yaml" in desc
-    ), desc

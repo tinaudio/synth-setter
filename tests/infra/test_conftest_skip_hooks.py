@@ -6,7 +6,6 @@ to verify both the skip-inserted and run-through branches for each marker.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -57,40 +56,22 @@ class _FakeItem:
 
 
 @pytest.mark.infra
-def test_same_e2e_selected_without_same_extra_errors_with_remediation(
+def test_same_e2e_selected_loader_item_without_vst_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicitly selected SAME lane errors when its Python extra is absent.
+    """A selected loader-only SAME item does not require a VST plugin.
 
-    :param monkeypatch: Simulates an unavailable ``stable_audio_tools`` package.
+    :param monkeypatch: Simulates an unavailable VST plugin.
     """
-    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: None)
-    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", True)
-
-    with pytest.raises(pytest.UsageError, match=r"uv sync --extra same"):
-        conftest_module.pytest_collection_modifyitems(
-            config=cast(pytest.Config, _FakeConfig("same_e2e")), items=[]
-        )
-
-
-@pytest.mark.infra
-def test_same_e2e_selected_encoder_only_without_vst_runs_items(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An encoder-only SAME lane does not require an unrelated VST plugin.
-
-    :param monkeypatch: Simulates an available SAME extra and unavailable VST.
-    """
-    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
-    same_item = _FakeItem({"same_e2e": pytest.mark.same_e2e})
+    item = _FakeItem({"same_e2e": pytest.mark.same_e2e})
 
     conftest_module.pytest_collection_modifyitems(
         config=cast(pytest.Config, _FakeConfig("same_e2e")),
-        items=cast(list[pytest.Item], [same_item]),
+        items=cast(list[pytest.Item], [item]),
     )
 
-    assert same_item.added_markers == []
+    assert item.added_markers == []
 
 
 @pytest.mark.infra
@@ -99,11 +80,9 @@ def test_same_e2e_marker_expression_excluding_vst_collects_encoder_tests(
 ) -> None:
     """Real pytest selection excludes VST-backed SAME tests before prerequisite validation.
 
-    :param monkeypatch: Supplies the optional SAME module to the child process.
-    :param tmp_path: Holds the module stub and guaranteed-absent plugin path.
+    :param monkeypatch: Sets a guaranteed-absent plugin path for the child process.
+    :param tmp_path: Parent of the guaranteed-absent plugin path.
     """
-    (tmp_path / "stable_audio_tools.py").write_text("")
-    monkeypatch.setenv("PYTHONPATH", f"{tmp_path}{os.pathsep}{os.environ.get('PYTHONPATH', '')}")
     monkeypatch.setenv("SYNTH_SETTER_PLUGIN_PATH", str(tmp_path / "absent.vst3"))
     repo_root = Path(__file__).parents[2]
 
@@ -127,21 +106,20 @@ def test_same_e2e_marker_expression_excluding_vst_collects_encoder_tests(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "test_same_s_real_weights_encode_matches_contract" in result.stdout
-    assert "test_same_s_real_weights_encode_matches_golden_latents" in result.stdout
+    assert "test_same_hydra_main_writes_legacy_matching_lance_column[same_s-12]" in result.stdout
+    assert "test_same_hydra_main_writes_legacy_matching_lance_column[same_l-11]" in result.stdout
     assert "test_train_eval_same_conditioning_real_e2e" not in result.stdout
 
 
 @pytest.mark.infra
-def test_same_e2e_selected_without_vst_errors_with_remediation(
+def test_same_e2e_selected_requires_vst_item_without_vst_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicitly selected SAME lane errors when its VST plugin is absent.
+    """A selected SAME item marked requires_vst retains fail-fast behavior.
 
     :param monkeypatch: Simulates an unavailable VST plugin.
     """
     monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
-
     item = _FakeItem(
         {
             "requires_vst": pytest.mark.requires_vst,
@@ -159,14 +137,13 @@ def test_same_e2e_selected_without_vst_errors_with_remediation(
 
 
 @pytest.mark.infra
-def test_same_e2e_selected_with_prerequisites_present_runs_items(
+def test_same_e2e_selected_requires_vst_item_with_vst_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicitly selected SAME lane remains runnable when prerequisites exist.
+    """A selected SAME VST item remains runnable when its plugin exists.
 
-    :param monkeypatch: Simulates available SAME and VST prerequisites.
+    :param monkeypatch: Simulates an available VST plugin.
     """
-    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setattr(conftest_module, "VST_AVAILABLE", True)
     item = _FakeItem(
         {
@@ -181,32 +158,6 @@ def test_same_e2e_selected_with_prerequisites_present_runs_items(
     )
 
     assert item.added_markers == []
-
-
-@pytest.mark.infra
-def test_same_e2e_not_selected_with_missing_prerequisites_keeps_skip_behavior(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Missing SAME prerequisites remain skips outside an explicitly selected lane.
-
-    :param monkeypatch: Simulates unavailable SAME and VST prerequisites.
-    """
-    monkeypatch.setattr(conftest_module.importlib.util, "find_spec", lambda name: None)
-    monkeypatch.setattr(conftest_module, "VST_AVAILABLE", False)
-    item = _FakeItem(
-        {
-            "requires_vst": pytest.mark.requires_vst,
-            "same_e2e": pytest.mark.same_e2e,
-        }
-    )
-
-    conftest_module.pytest_collection_modifyitems(
-        config=cast(pytest.Config, _FakeConfig("not slow")),
-        items=cast(list[pytest.Item], [item]),
-    )
-
-    assert len(item.added_markers) == 1
-    assert "VST plugin not found" in item.added_markers[0].kwargs["reason"]
 
 
 @pytest.mark.infra

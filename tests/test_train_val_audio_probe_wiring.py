@@ -41,15 +41,15 @@ def _cfg(
     *,
     enabled: bool | Literal["auto"],
     with_render: bool = True,
+    with_synth: bool = True,
     output_dir: str = "/runs/out",
-    datamodule: dict[str, str | None] | None = None,
 ) -> DictConfig:
     """Build the minimal train cfg slice ``_configure_val_audio_probe`` reads.
 
     :param enabled: Value for ``training.val_audio_probe``.
     :param with_render: When ``False``, omit the ``render`` group entirely.
+    :param with_synth: When ``False``, omit the root ``synth`` group (#2565).
     :param output_dir: Value for ``paths.output_dir``.
-    :param datamodule: Optional ``datamodule`` group; ``None`` omits it entirely.
     :returns: Composed cfg fragment.
     """
     cfg = OmegaConf.create(
@@ -60,19 +60,18 @@ def _cfg(
             "training": {"val_audio_probe": enabled, "val_audio_probe_samples": 5},
         }
     )
-    if datamodule is not None:
+    if with_synth:
         with open_dict(cfg):
-            cfg.datamodule = datamodule
+            cfg.synth = {
+                "name": "surge_xt",
+                "param_spec_name": "surge_xt",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "synth_version": "1.3.4",
+            }
     if with_render:
         with open_dict(cfg):
             cfg.render = {
-                "synth": {
-                    "name": "surge_xt",
-                    "param_spec_name": "surge_xt",
-                    "plugin_state_path": "presets/surge-base.vstpreset",
-                    "plugin_path": "plugins/Surge XT.vst3",
-                    "synth_version": "1.3.4",
-                },
                 "sample_rate": 44100,
                 "channels": 2,
                 "velocity": 100,
@@ -205,65 +204,20 @@ def test_configure_val_audio_probe_rejects_non_positive_int_samples(bad_samples:
         _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
-def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() -> None:
-    """A render spec that cannot decode the model's output layout fails at configure time.
-
-    A ``surge_simple`` model probed with ``render=surge_xt`` decodes 92-dim
-    predictions against the 164-param spec: every probe cycle dies in the
-    subprocess and the run silently produces no audio metrics (#1990).
-    """
-    cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
-
-    with pytest.raises(ValueError) as excinfo:
-        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
-
-    assert "render.param_spec_name is 'surge_xt'" in str(excinfo.value)
-    assert "datamodule.param_spec_name='surge_simple'" in str(excinfo.value)
-
-
-def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> None:
-    """A render spec matching the datamodule's spec wires the probe normally."""
-    callbacks: list[Callback] = []
-
-    _configure_val_audio_probe(
-        _cfg(enabled=True, datamodule={"param_spec_name": "surge_xt"}),
-        callbacks,
-        _LAUNCH_NAMESPACE,
-    )
-
-    assert len(callbacks) == 1
-    assert isinstance(callbacks[0], ValAudioProbe)
+def test_configure_val_audio_probe_raises_when_synth_group_missing() -> None:
+    """A render group without the root synth identity fails with a directed error (#2565)."""
+    with pytest.raises(ValueError, match="synth=<name>"):
+        _configure_val_audio_probe(_cfg(enabled=True, with_synth=False), [], _LAUNCH_NAMESPACE)
 
 
 def test_configure_val_audio_probe_rejects_synth_missing_param_spec_name() -> None:
-    """A malformed nested synth identity fails before probe construction."""
-    cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
+    """A malformed synth identity fails before probe construction."""
+    cfg = _cfg(enabled=True)
     with open_dict(cfg):
-        del cfg.render.synth.param_spec_name
+        del cfg.synth.param_spec_name
 
     with pytest.raises(ValidationError, match="param_spec_name"):
         _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
-
-
-@pytest.mark.parametrize(
-    "datamodule",
-    [{"batch_size": "8"}, {"param_spec_name": None}],
-    ids=["key-absent", "key-null"],
-)
-def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec(
-    datamodule: dict[str, str | None],
-) -> None:
-    """A datamodule without a ``param_spec_name`` value (non-VST) leaves the guard inert.
-
-    :param datamodule: Datamodule group variant carrying no usable spec name.
-    """
-    callbacks: list[Callback] = []
-
-    _configure_val_audio_probe(
-        _cfg(enabled=True, datamodule=datamodule), callbacks, _LAUNCH_NAMESPACE
-    )
-
-    assert len(callbacks) == 1
 
 
 def test_configure_val_audio_probe_rejects_disabled_validation() -> None:
@@ -325,11 +279,11 @@ def test_configure_val_audio_probe_auto_skips_when_validation_disabled() -> None
     assert callbacks == []
 
 
-def test_configure_val_audio_probe_auto_rejects_spec_mismatch() -> None:
-    """``auto`` still fails fast on a decode mismatch — a composed render group is intent."""
-    cfg = _cfg(enabled="auto", datamodule={"param_spec_name": "surge_simple"})
+def test_configure_val_audio_probe_auto_rejects_missing_synth() -> None:
+    """``auto`` still fails fast without identity — a composed render group is intent."""
+    cfg = _cfg(enabled="auto", with_synth=False)
 
-    with pytest.raises(ValueError, match="param_spec_name"):
+    with pytest.raises(ValueError, match="synth"):
         _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 

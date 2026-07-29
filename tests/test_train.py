@@ -14,7 +14,7 @@ import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
@@ -27,6 +27,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
+from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
@@ -253,10 +254,10 @@ def test_train_cpu_compile_writes_clean_checkpoint(
     """Compiled training persists uncompiled-layout keys evaluation loads strictly.
 
     :param tmp_path: Training output directory containing the checkpoint.
-    :param cfg_train: Tiny KSin CPU training configuration.
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
     """
     with open_dict(cfg_train):
-        cfg_train.datamodule.signal_length = 64
+        cfg_train.datamodule.signal_length = 512
         cfg_train.model.net.channels = 2
         cfg_train.model.net.encoder_blocks = 1
         cfg_train.model.net.hidden_dim = 8
@@ -435,24 +436,51 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
 
 
 @pytest.mark.slow
-def test_train_file_uri_hydrates_local_dataset_root(tmp_path: Path) -> None:
-    """The train entrypoint hydrates pod-local storage from a mounted file URI.
+def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The train entrypoint consumes projected splits from a marker-staged file URI.
 
-    :param tmp_path: Parent of the mounted source, local destination, and run output.
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
     """
-    source = tmp_path / "network-volume"
-    source.mkdir()
+    source = Path(cfg_train_lance.datamodule.dataset_root)
     (source / ".synth-setter-stage-complete").touch()
     destination = tmp_path / "local-dataset"
-    cfg = build_fake_train_cfg(tmp_path / "run", param_spec_name="surge_simple")
-    with open_dict(cfg):
-        cfg.datamodule.dataset_root = str(destination)
-        cfg.datamodule.download_dataset_root_uri = source.as_uri()
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
 
-    HydraConfig().set_config(cfg)
-    train(cfg)
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
 
-    assert (destination / ".synth-setter-stage-complete").is_file()
+    assert object_dict["trainer"].global_step > 0
+    assert torch.isfinite(metric_dict["train/loss"])
+    hydrated_root = object_dict["datamodule"].dataset_root
+    assert (hydrated_root / ".synth-setter-stage-complete").is_file()
+
+
+@pytest.mark.slow
+def test_train_file_uri_without_completion_marker_raises_before_hydration(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The training entrypoint rejects an unfinalized hydration source.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    (source / "dataset.complete").unlink()
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+
+    HydraConfig().set_config(cfg_train_lance)
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        train(cfg_train_lance)
+
+    assert not destination.exists()
 
 
 @pytest.mark.slow
@@ -548,29 +576,23 @@ def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None
     assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
 
 
-def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: Path) -> None:
-    """The real train entrypoint dies at configure time on a probe/model spec mismatch.
+def test_train_without_synth_group_fails_loudly_at_configure_time(tmp_path: Path) -> None:
+    """The real train entrypoint dies at configure time when the identity group is missing.
 
-    The guard kills a launch whose probe cannot decode the model's predictions
-    before a single training step runs (#1990).
+    Identity interpolates from the root ``synth`` group (#2565), so a probe/model
+    spec mismatch is no longer expressible; a VST launch without the group dies
+    on the first ``${synth.param_spec_name}`` read before a training step runs.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
     cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
     with open_dict(cfg):
         cfg.training.val_audio_probe = True
-        cfg.render = {
-            "synth": {
-                "name": "surge_xt",
-                "param_spec_name": "surge_xt",
-                "plugin_path": "plugins/Surge XT.vst3",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "synth_version": "1.3.4",
-            }
-        }
+        cfg.render = {"sample_rate": 44100, "channels": 2}
+        del cfg.synth
 
     HydraConfig().set_config(cfg)
-    with pytest.raises(ValueError, match="param_spec_name"):
+    with pytest.raises(InterpolationKeyError, match="synth.param_spec_name"):
         train(cfg)
 
 
@@ -842,8 +864,8 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 ) -> None:
     """Training resumes from a ``ckpt_path`` pinned as ``${wandb:...}``, downloaded from the live registry.
 
-    Exercises the exact train-side seam the wandb_checkpoint split protects: ``train.py`` reads
-    ``cfg.get("ckpt_path")`` into ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
+    Exercises the train-side checkpoint seam: ``train.py`` reads ``cfg.get("ckpt_path")`` into
+    ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
     real Lightning checkpoint, published to ``tinaudio/synth-setter-citest``; a second run pins
     that artifact via ``${wandb:...}`` and must download + resume it, advancing ``global_step``.
     Proves the resolver works through the real W&B API on the train entrypoint, not just a fake.
@@ -1258,7 +1280,7 @@ def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
 ) -> None:
     """Prove a periodic upload precedes the final flush and preserves checkpoint bytes.
 
-    :param cfg_train: Tiny CPU training cfg (ksin/ffn, ``save_last``).
+    :param cfg_train: Tiny CPU TorchSynth config with ``save_last`` enabled.
     :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
     :param monkeypatch: Stubs the R2 auth-ping and wraps the upload to record URIs.
     """
@@ -1394,7 +1416,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     )
     probe_samples = 2
     with open_dict(cfg_surge_real_train):
-        cfg_surge_real_train.render.synth = probe_synth.model_dump(mode="json")
+        cfg_surge_real_train.synth = probe_synth.model_dump(mode="json")
         # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
         # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
@@ -1523,10 +1545,10 @@ def test_train_same_config_launches_upload_isolated_val_audio_probes(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(audio_probe, "_run_captured", _materialize_fake_probe_stage)
     with open_dict(cfg_surge_fake_train):
-        cfg_surge_fake_train.render.synth.name = param_spec_name
-        cfg_surge_fake_train.render.synth.param_spec_name = param_spec_name
-        cfg_surge_fake_train.render.synth.plugin_state_path = "presets/fake.vstpreset"
-        cfg_surge_fake_train.render.synth.plugin_path = "plugins/fake.vst3"
+        cfg_surge_fake_train.synth.name = param_spec_name
+        cfg_surge_fake_train.synth.param_spec_name = param_spec_name
+        cfg_surge_fake_train.synth.plugin_state_path = "presets/fake.vstpreset"
+        cfg_surge_fake_train.synth.plugin_path = "plugins/fake.vst3"
         cfg_surge_fake_train.render.sample_rate = _SURGE_FIXTURE_SAMPLE_RATE
         cfg_surge_fake_train.render.channels = _SURGE_FIXTURE_CHANNELS
         cfg_surge_fake_train.render.velocity = 100
@@ -1905,7 +1927,40 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
+_ALL_EMBEDDING_CONDITIONING_PROFILES = (
+    "clap",
+    "m2l",
+    "same_s",
+    "same_l",
+    "ssondo",
+    "t5gemma",
+)
+
+
+def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
+    """Validate a trained embedding-conditioned checkpoint.
+
+    :param cfg: Training config that produced the checkpoint.
+    :param output_dir: Training output directory containing ``last.ckpt``.
+    """
+    checkpoint_path = output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    eval_cfg = cfg.copy()
+    eval_output_dir = output_dir / "evaluation"
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(eval_output_dir)
+        eval_cfg.paths.log_dir = str(eval_output_dir)
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+        eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(eval_cfg)
+    try:
+        eval_metric_dict, _ = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
 def _assert_t5gemma_feed_forward_checkpoint_validates(
@@ -1958,15 +2013,40 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
+def _assert_model_predictions_depend_on_cached_conditioning(
+    object_dict: dict[str, Any],
+) -> None:
+    """Assert the trained model keeps a gradient path from cached vectors.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch["conditioning"].detach().requires_grad_(True)
+    predictions = model._sample(
+        conditioning,
+        torch.zeros_like(batch["params"]),
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    gradient = torch.autograd.grad(predictions.square().sum(), conditioning)[0]
+
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_train_all_embedding_conditioning_real_e2e(
+def test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e(
     local_embedding_checkpoints: dict[str, str],
     tmp_path: Path,
     surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
-    """Train every profile, then load a real T5Gemma FF checkpoint for validation.
+    """Train every profile and validate S-SONDO and T5Gemma checkpoints.
 
     :param local_embedding_checkpoints: Preflighted real model directories.
     :param tmp_path: Per-profile training output parent.
@@ -1998,6 +2078,9 @@ def test_train_all_embedding_conditioning_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
+        if conditioning == "ssondo":
+            _assert_model_predictions_depend_on_cached_conditioning(object_dict)
+            _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(
         tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name

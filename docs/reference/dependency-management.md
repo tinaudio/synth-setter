@@ -118,6 +118,11 @@ hand-picked deps) plus an import smoke-guard. Full installs that cannot honor
 
 Only the `cpu`/`cu128` backend-routing extras remain in
 `[project.optional-dependencies]`, because `[tool.uv.sources]` keys on extras.
+The commit-pinned `stable-audio-3` runtime and `ssondo==0.3.1` belong to the
+`torch` group, so normal heavy installs support SAME, S-SONDO, and T5Gemma
+encoders without feature extras. The Stable Audio 3 package-scoped uv metadata
+override relaxes upstream's torch and
+torchaudio pins while retaining the numpy floor and backend index routing.
 
 ## Adding a new extra or dependency group
 

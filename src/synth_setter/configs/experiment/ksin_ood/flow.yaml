@@ -1,7 +1,0 @@
-# @package _global_
-
-defaults:
-  - ksin_ood/base
-  - override /model: ksin_flow
-
-run_name: flow

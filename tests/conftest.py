@@ -32,9 +32,9 @@ from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
-from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 from tests._vst import PLUGIN_PATH, VST_AVAILABLE
 from tests.data.vst._fake_plugin import FakeVST3Plugin
+from tests.helpers.same_reference import SAME_HF_CHECKPOINTS
 from tests.pipeline.conftest import fake_r2_remote  # noqa: F401 — pytest fixture re-export
 
 # These values must match the explicit RenderConfig fixture arguments.
@@ -124,24 +124,19 @@ _SURGEPY_AVAILABLE = importlib.util.find_spec("surgepy") is not None
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Validate selected SAME e2e prerequisites and apply resource skip markers.
+    """Fail fast for selected SAME VST tests and apply resource skip markers.
 
     :param config: Active pytest configuration containing the marker expression.
     :param items: Mutated in place to insert skip markers for missing resources.
-    :raises pytest.UsageError: If an explicitly selected SAME lane lacks a prerequisite.
+    :raises pytest.UsageError: A selected SAME item requires an unavailable VST.
     """
-    if "same_e2e" in config.getoption("-m"):
-        missing = []
-        if importlib.util.find_spec("stable_audio_tools") is None:
-            missing.append("stable_audio_tools (install with `uv sync --extra same`)")
-        selected_lane_requires_vst = any("requires_vst" in item.keywords for item in items)
-        if selected_lane_requires_vst and not VST_AVAILABLE:
-            missing.append(
-                f"VST plugin at {PLUGIN_PATH!r} "
-                "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
-            )
-        if missing:
-            raise pytest.UsageError("same_e2e missing prerequisites:\n- " + "\n- ".join(missing))
+    same_e2e_selected = "same_e2e" in config.getoption("-m")
+    selected_requires_vst = any("requires_vst" in item.keywords for item in items)
+    if same_e2e_selected and selected_requires_vst and not VST_AVAILABLE:
+        raise pytest.UsageError(
+            f"same_e2e requires VST plugin at {PLUGIN_PATH!r} "
+            "(set SYNTH_SETTER_PLUGIN_PATH or place the plugin at that path)"
+        )
 
     skip_vst = pytest.mark.skip(
         reason=f"VST plugin not found at {PLUGIN_PATH!r} "
@@ -266,10 +261,9 @@ def _apply_common_train_eval_overrides(cfg: DictConfig) -> None:
     cfg.trainer.log_every_n_steps = 1
     cfg.trainer.devices = 1
     cfg.trainer.deterministic = True
-    cfg.datamodule.pin_memory = False
     cfg.datamodule.batch_size = 1
+    cfg.datamodule.signal_length = 4_410
     cfg.datamodule.train_val_test_sizes = [2, 2, 2]
-    cfg.datamodule.break_symmetry = True
     cfg.model.compile = False
     cfg.logger = None
     _set_workspace_root(cfg)
@@ -285,7 +279,7 @@ def cfg_train_global() -> DictConfig:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=ksin", "model=ffn", "trainer=cpu"],
+            overrides=["datamodule=torchsynth", "model=ffn", "trainer=cpu"],
         )
 
         # set defaults for all tests
@@ -312,7 +306,7 @@ def cfg_eval_global() -> DictConfig:
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "datamodule=ksin",
+                "datamodule=torchsynth",
                 "model=ffn",
                 "trainer=cpu",
                 "ckpt_path=.",
@@ -447,7 +441,7 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 @pytest.fixture(scope="function")
 def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose ``dataset.yaml`` with ``render=obxf`` for entrypoint OB-Xf coverage.
+    """Compose ``dataset.yaml`` with ``synth=obxf render=vst`` for entrypoint OB-Xf coverage.
 
     The Hydra config-initializer lives here, not in ``tests/test_generate_dataset.py``,
     so that module stays free of the imports banned by
@@ -456,13 +450,13 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
 
     :param tmp_path: Per-test output/work/log root.
 
-    :yields DictConfig: ``render=obxf`` cfg with ``tmp_path``-pinned paths;
+    :yields DictConfig: OB-Xf cfg with ``tmp_path``-pinned paths;
         teardown clears Hydra's global singleton.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/smoke-shard", "render=obxf"],
+            overrides=["experiment=generate_dataset/smoke-shard", "synth=obxf", "render=vst"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -487,7 +481,8 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
-                "render=faust_bright_organ",
+                "synth=faust_bright_organ",
+                "render=faust",
                 "render.gui_toggle_cadence=never",
             ],
         )
@@ -719,7 +714,11 @@ def _build_surge_xt_smoke_cfg(
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
-    overrides = [f"experiment={experiment}", "callbacks=[default_vst,eval_vst]"]
+    overrides = [
+        f"experiment={experiment}",
+        f"synth={param_spec_name}",
+        "callbacks=[default_vst,eval_vst,log_per_param_mse]",
+    ]
     if datamodule_group is not None:
         overrides.insert(1, f"datamodule={datamodule_group}")
 
@@ -747,7 +746,6 @@ def _build_surge_xt_smoke_cfg(
 
             # The smoke fixture writes one sample, so use a one-row training batch.
             cfg.datamodule.batch_size = 1
-            cfg.datamodule.param_spec_name = param_spec_name
             cfg.datamodule.pin_memory = False
             cfg.datamodule.ot = False
             # Smoke fixture writes stats.npz via masked get_dataset_stats — see #1002.
@@ -806,9 +804,12 @@ def build_fake_train_cfg(
             return_hydra_config=True,
             overrides=[
                 "experiment=surge/fake_oracle",
+                f"synth={param_spec_name}",
                 "trainer=cpu",
                 f"model={model_group}",
-                f"callbacks={callbacks_group}",
+                # Replacing the experiment's callbacks group must keep its
+                # log_per_param_mse selection (asserted by consumers).
+                f"callbacks=[{callbacks_group},log_per_param_mse]",
             ],
         )
         with open_dict(cfg):
@@ -818,7 +819,6 @@ def build_fake_train_cfg(
             cfg.paths.output_dir = str(output_dir)
             cfg.paths.log_dir = str(output_dir)
             cfg.datamodule.fake = True
-            cfg.datamodule.param_spec_name = param_spec_name
             cfg.datamodule.batch_size = 2
             cfg.datamodule.num_workers = 0
             cfg.datamodule.use_saved_mean_and_variance = False
@@ -827,9 +827,6 @@ def build_fake_train_cfg(
             cfg.logger = None
             if "lr_monitor" in cfg.callbacks:
                 del cfg.callbacks.lr_monitor
-            # log_per_param_mse keys its spec off ${render.param_spec_name}; pin it
-            # concretely — this train path composes no render group.
-            cfg.callbacks.log_per_param_mse.param_spec = param_spec_name
     return cfg
 
 
@@ -1077,18 +1074,15 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
 
 @pytest.fixture(scope="function")
-def local_embedding_checkpoints(
-    require_sa3_extra: None, require_same_extra: None
-) -> dict[str, str]:
+def local_embedding_checkpoints() -> dict[str, str]:
     """Return complete local checkpoints or skip before rendering the E2E fixture.
 
-    :param require_sa3_extra: Ensures the real SA3 conditioner is installed.
-    :param require_same_extra: Ensures the real SAME model implementation is installed.
     :returns: Local checkpoint directories keyed by embedding registry name.
     """
-    del require_sa3_extra, require_same_extra
     from huggingface_hub import snapshot_download
     from music2latent.inference import download_model, load_path_inference_default
+
+    from synth_setter.pipeline.data.ssondo import resolve_ssondo_checkpoint
 
     download_model()
     snapshot_download(
@@ -1126,7 +1120,9 @@ def local_embedding_checkpoints(
         if os.environ.get("SYNTH_SETTER_REQUIRE_EMBEDDING_E2E") == "true":
             pytest.fail(message)
         pytest.skip(message)
-    return {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints = {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints["ssondo"] = str(resolve_ssondo_checkpoint())
+    return checkpoints
 
 
 @pytest.fixture(scope="function")
@@ -1242,6 +1238,7 @@ def build_surge_xt_embedding_train_cfg(
             return_hydra_config=True,
             overrides=[
                 f"experiment={experiment}",
+                f"synth={param_spec_name}",
                 f"conditioning={conditioning}",
                 "trainer=cpu",
                 "datamodule=surge_lance",
@@ -1269,7 +1266,6 @@ def build_surge_xt_embedding_train_cfg(
             cfg.datamodule.fake = fake
             cfg.datamodule.dataset_root = str(dataset_root)
             cfg.datamodule.predict_file = str(dataset_root / "test.lance")
-            cfg.datamodule.param_spec_name = param_spec_name
             cfg.datamodule.batch_size = 1
             cfg.datamodule.num_workers = 0
             cfg.datamodule.pin_memory = False
@@ -1412,14 +1408,17 @@ def _apply_smoke_train_paths(
     :param variant: Dataset-format arm selecting the predict-split suffix.
     :param tmp_path: Shared output/log directory (and checkpoint parent for eval).
     """
+    render_values = _surge_smoke_render_config(
+        str(cfg.datamodule.param_spec_name), variant.plugin_path
+    )
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
         cfg.datamodule.predict_file = str(dataset_root / f"test{variant.split_ext}")
-        cfg.render = _surge_smoke_render_config(
-            str(cfg.datamodule.param_spec_name), variant.plugin_path
-        )
+        # Identity lives in the root synth group (#2565); knobs stay under render.
+        cfg.synth = render_values.pop("synth")
+        cfg.render = render_values
 
 
 @pytest.fixture(scope="function")
@@ -1510,7 +1509,7 @@ def augment_lance_splits_with_all_embeddings(
         "-m",
         "synth_setter.pipeline.data.add_embeddings",
         f"lance_uri={train_uri}",
-        "embeddings=[clap,m2l,same_s,same_l,t5gemma]",
+        "embeddings=[clap,m2l,same_s,same_l,ssondo,t5gemma]",
         f"param_spec_name={param_spec_name}",
         "device=cpu",
         "build_index=false",
@@ -1518,6 +1517,34 @@ def augment_lance_splits_with_all_embeddings(
     ]
     subprocess.run(  # noqa: S603 — validated local paths passed to the project CLI
         command, check=True, timeout=3600
+    )
+    for split in ("val", "test"):
+        destination = dataset_root / f"{split}.lance"
+        shutil.rmtree(destination)
+        shutil.copytree(train_uri, destination)
+    return dataset_root
+
+
+def augment_lance_splits_with_ssondo(dataset_root: Path, checkpoint: str) -> Path:
+    """Append real S-SONDO vectors to identical smoke-dataset splits.
+
+    :param dataset_root: Directory holding finalized local Lance splits.
+    :param checkpoint: Verified local S-SONDO checkpoint path.
+    :returns: Augmented dataset root.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    train_uri = dataset_root / "train.lance"
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(train_uri),
+            embeddings=("ssondo",),
+            checkpoints={"ssondo": checkpoint},
+            device="cpu",
+            batch_size=1,
+            build_index=False,
+        )
     )
     for split in ("val", "test"):
         destination = dataset_root / f"{split}.lance"
@@ -1541,6 +1568,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         PARAM_ARRAY_FIELD,
         SAME_L_FIELD,
         SAME_S_FIELD,
+        SSONDO_FIELD,
         T5GEMMA_FIELD,
     )
     from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
@@ -1549,7 +1577,14 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "ssondo",
+        "t5gemma",
+    }
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
@@ -1558,12 +1593,21 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         M2L_FIELD,
         SAME_S_FIELD,
         SAME_L_FIELD,
+        SSONDO_FIELD,
         T5GEMMA_FIELD,
     } <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
     table = dataset.to_table(
-        columns=[AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD, T5GEMMA_FIELD]
+        columns=[
+            AUDIO_FIELD,
+            CLAP_FIELD,
+            M2L_FIELD,
+            SAME_S_FIELD,
+            SAME_L_FIELD,
+            SSONDO_FIELD,
+            T5GEMMA_FIELD,
+        ]
     )
     for column in table.columns:
         assert column.null_count == 0
@@ -1573,6 +1617,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
     same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
     same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
+    ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
     t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
 
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
@@ -1582,6 +1627,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         ("m2l", m2l, (_EMBEDDING_E2E_ROWS, 128, 42)),
         ("same_s", same_s, (_EMBEDDING_E2E_ROWS, 256, 44)),
         ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
+        ("ssondo", ssondo, (_EMBEDDING_E2E_ROWS, 960)),
     ):
         assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
         assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"
@@ -1602,52 +1648,32 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     np.testing.assert_array_equal(t5gemma[0], t5gemma[1])
 
 
-# Public HuggingFace checkpoints let SAME e2e run without R2 credentials.
-_SAME_E2E_HF_CHECKPOINTS: dict[str, str] = {
-    "same_s": "stabilityai/SAME-S",
-    "same_l": "stabilityai/SAME-L",
-}
-
-
-@pytest.fixture(scope="function")
-def require_sa3_extra() -> None:
-    """Resolve the SA3 import before expensive VST rendering starts."""
-    pytest.importorskip("stable_audio_3")
-
-
-@pytest.fixture(scope="function")
-def require_same_extra() -> None:
-    """Skip a test unless the optional ``same`` extra (``stable_audio_tools``) is installed.
-
-    Requested first by the SAME-e2e tests so the Surge render never runs when the
-    writer dependency is absent (a slow/VST lane without the ``same`` extra).
-    """
-    pytest.importorskip("stable_audio_tools")
-
-
 def augment_lance_splits_with_same(dataset_root: Path, conditioning: str) -> Path:
     """Add a real SAME (``same_s``/``same_l``) column to a rendered smoke dataset's splits.
 
     The SAME sibling of :func:`augment_lance_splits_with_embeddings`: runs the real
-    ``add_embeddings`` SAME dispatch (real ``stable_audio_tools`` encoder, public HF
-    checkpoint, no mocks) pinned at ``train.lance``, then clones the augmented
-    ``train.lance`` over the ``val``/``test`` clones so the encoder loads once.
-    Requires the optional ``same`` extra plus network access (HF weight download).
+    ``add_embeddings`` SAME dispatch with Stable Audio 3 and an immutable public HF
+    checkpoint, then clones the augmented ``train.lance`` over ``val``/``test`` so
+    the encoder loads once. Requires network access for the HF weight download.
 
     :param dataset_root: Dir holding ``{train,val,test}.lance`` from
         :func:`surge_xt_smoke_datasets`; each split is augmented in place.
     :param conditioning: SAME conditioning profile (``"same_s"`` / ``"same_l"``).
     :returns: ``dataset_root`` for call-site chaining.
     """
+    from huggingface_hub import snapshot_download
+
     from synth_setter.pipeline.data.add_embeddings import add_embeddings
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
+    repo_id, revision = SAME_HF_CHECKPOINTS[conditioning]
+    checkpoint_dir = snapshot_download(repo_id, revision=revision)
     train_uri = dataset_root / "train.lance"
     add_embeddings(
         AddEmbeddingsConfig(
             lance_uri=str(train_uri),
             embeddings=(conditioning,),
-            checkpoints={conditioning: _SAME_E2E_HF_CHECKPOINTS[conditioning]},
+            checkpoints={conditioning: checkpoint_dir},
             device="cpu",
         )
     )
@@ -2230,12 +2256,18 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
         mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
         std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
     )
+    (dataset_root / "dataset.complete").touch()
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["datamodule=surge_lance", "model=vst_ffn", "trainer=cpu"],
+            overrides=[
+                "datamodule=surge_lance",
+                f"synth={_LANCE_SMOKE_PARAM_SPEC}",
+                "model=vst_ffn",
+                "trainer=cpu",
+            ],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -2251,7 +2283,6 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             cfg.trainer.max_steps = 1
             cfg.datamodule.dataset_root = str(dataset_root)
             cfg.datamodule.batch_size = 1
-            cfg.datamodule.param_spec_name = _LANCE_SMOKE_PARAM_SPEC
             cfg.datamodule.ot = False
             cfg.datamodule.num_workers = 0
             cfg.datamodule.pin_memory = False

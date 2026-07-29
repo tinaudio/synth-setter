@@ -1,104 +1,130 @@
-"""Real-weights e2e tests for :func:`load_same_audio_encoder` (SAME-S).
-
-Unlike the stub-driven registry suite in ``test_add_embeddings.py``, these tests
-download the public ``stabilityai/SAME-S`` checkpoint (~433 MB, no credentials)
-through ``huggingface_hub``'s default cache and run the real encoder on CPU, so
-they carry ``same_e2e`` and run in their own GHA workflow, not the fast lane.
-"""
+"""Run the public SAME Hydra pipeline against legacy reference archives."""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+import lance
 import numpy as np
 import pytest
+import torch
+from huggingface_hub import snapshot_download
 
-pytest.importorskip("stable_audio_tools")
-
-from synth_setter.pipeline.data.add_embeddings import (  # noqa: E402
+from synth_setter.pipeline.data.add_embeddings import (
     SAME_EMBEDDING_DIM,
     SAME_SAMPLE_RATE,
-    SameEncodeFn,
-    load_same_audio_encoder,
-    same_num_latent_frames,
+    main,
+)
+from synth_setter.workspace import operator_workspace
+from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
+from tests.helpers.same_reference import (
+    SAME_HF_CHECKPOINTS,
+    SAME_REFERENCE_DIR,
+    SAME_REFERENCE_RANDOM_SEED,
+    SAME_REFERENCE_ROWS,
+    same_reference_audio,
 )
 
 pytestmark = [pytest.mark.slow, pytest.mark.network, pytest.mark.same_e2e]
 
-_SAME_S_HF_REPO = "stabilityai/SAME-S"
-_FIXTURE_SECONDS = 1.0
-_FIXTURE_ROWS = 2
-_GOLDEN_PATH = Path(__file__).parents[2] / "fixtures" / "same" / "same_s_golden_latents.npz"
+_PARITY_ATOL = 3e-4
+_PARITY_RTOL = 1e-4
 
 
-def sine_sweep_fixture() -> np.ndarray:
-    """Build the deterministic stereo sine-sweep batch both e2e tests encode.
+def _write_same_reference_shard(uri: Path) -> None:
+    """Write the archived float32 audio input as a production-schema Lance shard.
 
-    :returns: ``(2, 2, 44100)`` float32 batch at ``SAME_SAMPLE_RATE``; row 0
-        sweeps 110→880 Hz, row 1 sweeps 1760→220 Hz, right channel detuned so
-        the stereo field is non-trivial.
+    :param uri: Destination Lance dataset.
     """
-    num_samples = int(_FIXTURE_SECONDS * SAME_SAMPLE_RATE)
-    time = np.arange(num_samples, dtype=np.float64) / SAME_SAMPLE_RATE
-    rows = []
-    for start_hz, end_hz in ((110.0, 880.0), (1760.0, 220.0)):
-        # Linear chirp: phase integrates the linearly interpolated frequency.
-        freq = start_hz + (end_hz - start_hz) * time / _FIXTURE_SECONDS
-        phase = 2.0 * np.pi * np.cumsum(freq) / SAME_SAMPLE_RATE
-        left = np.sin(phase)
-        right = np.sin(phase * 1.01)
-        rows.append(np.stack([left, right]))
-    return (0.5 * np.stack(rows)).astype(np.float32)
+    base_spec = build_lance_smoke_spec()
+    render = base_spec.render.model_copy(
+        update={
+            "audio_dtype": "float32",
+            "sample_rate": SAME_SAMPLE_RATE,
+            "samples_per_render_batch": SAME_REFERENCE_ROWS,
+            "samples_per_shard": SAME_REFERENCE_ROWS,
+            "signal_duration_seconds": 1.0,
+        }
+    )
+    spec = build_lance_smoke_spec(
+        task_name="same-parity",
+        train_val_test_sizes=(SAME_REFERENCE_ROWS, 0, 0),
+        render=render,
+    )
+    write_minimal_lance_shard(
+        uri,
+        spec,
+        audio=same_reference_audio(SAME_SAMPLE_RATE),
+    )
 
 
-@pytest.fixture(scope="module")
-def same_s_encode() -> SameEncodeFn:
-    """Load the real SAME-S encoder once per module, pinned to CPU.
-
-    :returns: Encode callable over prepared stereo 44.1 kHz batches.
-    """
-    return load_same_audio_encoder(_SAME_S_HF_REPO, device="cpu")
-
-
-def test_same_s_real_weights_encode_matches_contract(same_s_encode: SameEncodeFn) -> None:
-    """Real SAME-S latents honor the (rows, 256, T) float32 finite contract.
-
-    :param same_s_encode: Real CPU encoder over the public checkpoint.
-    """
-    audio = sine_sweep_fixture()
-    expected_frames = same_num_latent_frames(audio.shape[2], SAME_SAMPLE_RATE)
-
-    latents = same_s_encode(audio)
-
-    assert latents.shape == (_FIXTURE_ROWS, SAME_EMBEDDING_DIM, expected_frames)
-    assert latents.dtype == np.float32
-    assert np.isfinite(latents).all()
-    # Degenerate (constant/zero) output would satisfy shape+finite alone.
-    assert latents.std() > 0.0
-    assert not np.allclose(latents[0], latents[1])
-
-
-def test_same_s_real_weights_encode_matches_golden_latents(
-    same_s_encode: SameEncodeFn,
+@pytest.mark.parametrize(
+    ("model_name", "expected_frames"),
+    [("same_s", 12), ("same_l", 11)],
+)
+def test_same_hydra_main_writes_legacy_matching_lance_column(
+    model_name: str,
+    expected_frames: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Real SAME-S latents match the committed golden within loose tolerances.
+    """The real CLI persists finite SA3 latents within measured legacy drift.
 
-    Guards against silent numerical drift of the encode path under future lock
-    or upstream bumps. The golden was generated on this repo's lock (torch
-    2.11.0+cu128 wheel running on CPU, Linux x86_64) via
-    ``tests/pipeline/data/generate_same_golden.py``; using a current-lock
-    golden as a proxy for upstream-pinned behavior is licensed by an
-    independent measurement that SAME-S latents agree between upstream's
-    torch 2.7.1 pin and this lock (max_abs_diff 9.5e-5, mean_abs_diff 8.7e-6
-    on latents with std 1.795; allclose at rtol=atol=1e-4). Tolerances are
-    calibrated for cross-platform CPU variance (the workflow may run on
-    arm64 macOS), not ulp noise: the failure mode guarded is gross drift.
-
-    :param same_s_encode: Real CPU encoder over the public checkpoint.
+    :param model_name: Registry key selecting one SAME checkpoint and column.
+    :param expected_frames: Model-specific one-second latent width.
+    :param tmp_path: Scratch space for the input shard and Hydra logs.
+    :param monkeypatch: Fixture supplying the user-visible process arguments.
     """
-    golden = np.load(_GOLDEN_PATH)["latents"]
+    repo_id, revision = SAME_HF_CHECKPOINTS[model_name]
+    checkpoint_dir = Path(snapshot_download(repo_id, revision=revision))
+    uri = tmp_path / f"{model_name}.lance"
+    _write_same_reference_shard(uri)
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-add-embeddings",
+            f"lance_uri={uri}",
+            f"embeddings=[{model_name}]",
+            f"checkpoints.{model_name}={checkpoint_dir}",
+            "device=cpu",
+            "batch_size=2",
+            "build_index=false",
+            f"paths.log_dir={tmp_path}",
+            f"hydra.run.dir={tmp_path / 'hydra'}",
+        ],
+    )
+    torch.manual_seed(SAME_REFERENCE_RANDOM_SEED)
 
-    latents = same_s_encode(sine_sweep_fixture())
+    main()
 
-    assert latents.shape == golden.shape
-    np.testing.assert_allclose(latents, golden, rtol=1e-2, atol=1e-3)
+    column = (
+        lance.dataset(str(uri))
+        .to_table(columns=[model_name])
+        .column(model_name)
+        .combine_chunks()
+    )
+    actual = column.to_numpy_ndarray()
+    with np.load(
+        SAME_REFERENCE_DIR / f"{model_name}_legacy_reference.npz", allow_pickle=False
+    ) as archive:
+        reference = archive["latents"]
+        assert archive["hf_repo"].item() == repo_id
+        assert archive["hf_revision"].item() == revision
+        assert archive["reference_runtime"].item() == "stable-audio-tools==0.0.20"
+        assert archive["torch_version"].item() == "2.12.0+cpu"
+        assert archive["platform_system"].item() == "Linux"
+        assert archive["platform_machine"].item() == "x86_64"
+        assert archive["random_seed"].item() == SAME_REFERENCE_RANDOM_SEED
+
+    assert actual.shape == reference.shape
+    assert actual.shape == (SAME_REFERENCE_ROWS, SAME_EMBEDDING_DIM, expected_frames)
+    assert actual.dtype == np.float32
+    assert np.isfinite(actual).all()
+    assert actual.std() > 0.0
+    assert not np.array_equal(actual[0], actual[1])
+    # Local output is exact; 3e-4 covers the 2.13e-4 cross-runner SAME-S drift
+    # measured in PR #2537 while remaining far below the latent scale.
+    np.testing.assert_allclose(actual, reference, rtol=_PARITY_RTOL, atol=_PARITY_ATOL)

@@ -74,7 +74,7 @@ Reference: `data-pipeline.md` §14.5 (finalize stage)
 ### 2.3 Training
 
 ```
-train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, render, ...)
+train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, synth, render, ...)
   → Hydra composes DictConfig
     → hydra.utils.instantiate() → LightningModule, DataModule, Trainer
       → trainer.fit(model, datamodule)
@@ -89,9 +89,17 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
   (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
 - VST configs set `datamodule.persistent_workers=true`; it is effective only when
   `num_workers > 0`, so CPU debugging with `num_workers=0` needs no extra override
-- `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
+- `datamodule.download_dataset_root_uri` hydrates a finalized `r2://` or absolute
+  `file://` root into a request-addressed child of `dataset_root`. The source must
+  contain `dataset.complete`; optional per-split transaction pins select snapshots,
+  and `download_dataset_row_limit` must be positive when set
+- `render:` defaults to `null`; a render group (e.g. `render=vst`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one
+- `synth:` defaults to `null`; VST runs select the root identity group
+  (e.g. `synth=surge_xt`, usually via the experiment's defaults) that VST
+  datamodules, models, callbacks, and the render pipeline all resolve —
+  identity's single home (#2565)
 
 Reference: `training-pipeline.md` §4–5
 
@@ -100,13 +108,14 @@ Reference: `training-pipeline.md` §4–5
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
   + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_seed}
-  + render: {synth: {name, param_spec_name, plugin_path, plugin_state_path}}   # required when render_vst=true
+  + synth: {name, param_spec_name, plugin_path, plugin_state_path, synth_version}  # required when render_vst=true
+  + render: {backend knobs}                                                       # required when render_vst=true
   → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)
 ```
 
 - Experiment config pins everything: model checkpoint (W&B artifact ref), data config, eval settings
 - `evaluation:` block (in `src/synth_setter/configs/eval.yaml`) gates the in-process render and metrics phases — both default off so `mode=test`/`mode=validate` runs are unchanged
-- `render:` defaults entry composes a renderer config group (e.g. `render=surge_xt`) and supplies the VST plugin/preset/param-spec that `_run_predict_postprocessing` forwards to the render subprocess
+- `render:` composes a backend-knob group and the root `synth:` group supplies the VST plugin/preset/param-spec (`synth=surge_xt render=vst`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess
 - No eval spec — configs are the source of truth
 - Full provenance in R2 path: `eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/`
 
@@ -131,7 +140,7 @@ synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smok
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
     → sky_cfg.extra_envs["WORKER_SPEC_URI"] = spec.r2.input_spec_uri()
     → dispatch_via_skypilot(sky_cfg)
-      → SkyPilot provisions pod (RunPod, OCI, kubernetes via `sky local up`)
+      → SkyPilot provisions compute (RunPod, Vast.ai, or local Kubernetes via `sky local up`)
         → pod runs: cd /home/build/synth-setter
                     && bash scripts/sync_worker_checkout.sh
                     && exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>
@@ -199,8 +208,8 @@ mapping consumed by `sky.Task.from_yaml_config`.
 (see the file for the full option):
 
 The builder pins `image_id: docker:<image>` per-launch from
-`sky_cfg.worker_image_tag` (default `"devcontainer-tools"`) for non-OCI
-backends, so the option carries no literal image pin. Worker env
+`sky_cfg.worker_image_tag` (default `"devcontainer-tools"`) for RunPod and
+Vast.ai, so the option carries no literal image pin. Worker env
 (`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`, `WORKER_GIT_REF`, per-rank
 `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) rides in the task
 env at construction — no placeholder `envs:` block is needed.
@@ -285,11 +294,11 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.3 Data Portability
 
-| Input                                  | Type           | What's Needed                                                                                                                        | Reference                                                 |
-| -------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                               | training-pipeline.md §6.1                                 |
-| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` or absolute `file://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
-| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                        | `nsynth.yaml` / `fsd.yaml`                                |
+| Input                                  | Type           | What's Needed                                                                                                                                                                           | Reference                                                 |
+| -------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                                                                                  | training-pipeline.md §6.1                                 |
+| `datamodule.download_dataset_root_uri` | string \| null | Optional finalized `r2://` or absolute `file://` root; `prepare_data()` projects its loader columns into a request-addressed child of `dataset_root` after verifying `dataset.complete` | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
+| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                                                                           | `nsynth.yaml` / `fsd.yaml`                                |
 
 ### 5.4 Hardware & Compute
 
@@ -309,7 +318,7 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 | --------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | RunPod config                                       | Hydra compute option | Smoke, training, and persistent network-volume options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume`; launch configs select the mounted volume (and thus the data center) via `network_volume` / `--network-volume` | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
 | Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                                                                                                                                                                                                       | new provider                                                                                  |
-| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast, OCI, local kind)                                                                                                                                                                                                                                                  | —                                                                                             |
+| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast.ai, local Kubernetes)                                                                                                                                                                                                                                              | —                                                                                             |
 | `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                                                                                                                                                                                                          | training-pipeline.md §2                                                                       |
 | `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
 | `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |

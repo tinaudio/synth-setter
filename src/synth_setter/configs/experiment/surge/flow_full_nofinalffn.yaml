@@ -4,6 +4,8 @@ defaults:
   - surge/base
   - override /model: vst_flow
   - override /datamodule: surge
+  - override /synth: surge_xt
+  - override /callbacks: [default_vst, log_per_param_mse]
   - _self_
 
 run_name: flow-nofinalffn
@@ -16,8 +18,3 @@ model:
 
 tags:
   - surge
-
-callbacks:
-  log_per_param_mse:
-    _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: ${datamodule.param_spec_name}

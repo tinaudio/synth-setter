@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gc
-import importlib.util
 import os
 import subprocess
 import sys
@@ -11,7 +10,7 @@ import weakref
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import lance
@@ -52,13 +51,12 @@ from synth_setter.pipeline.data.add_embeddings import (
     IndexSpec,
     ParamTextEncodeFn,
     _configure_lance_logging,
+    _downmix_to_mono,
     _encode_t5gemma_column,
     _load_clap_spec_encoder,
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
-    _downmix_to_mono,
-    _require_extras,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _write_columns,
@@ -68,7 +66,8 @@ from synth_setter.pipeline.data.add_embeddings import (
     load_m2l_audio_encoder,
     load_same_audio_encoder,
     same_encoder_input,
-    same_num_latent_frames,
+    same_l_num_latent_frames,
+    same_s_num_latent_frames,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.workspace import operator_workspace
@@ -128,15 +127,19 @@ def _temporal_m2l(audio: np.ndarray) -> np.ndarray:
     return vectors[:, :, None] + offsets[None, None, :]
 
 
-def _fake_same(fill: float) -> Callable[[np.ndarray], np.ndarray]:
-    """Build a deterministic SAME encoder.
+def _fake_same(
+    fill: float,
+    frame_count: Callable[[int, int], int] = same_s_num_latent_frames,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Build a deterministic SAME encoder with the selected model's frame contract.
 
     :param fill: Constant value used for every latent cell.
+    :param frame_count: SAME model's latent-frame calculation.
     :returns: Encoder over prepared stereo audio.
     """
 
     def encode(stereo: np.ndarray) -> np.ndarray:
-        frames = same_num_latent_frames(stereo.shape[2], SAME_SAMPLE_RATE)
+        frames = frame_count(stereo.shape[2], SAME_SAMPLE_RATE)
         return np.full((len(stereo), SAME_EMBEDDING_DIM, frames), fill, dtype=np.float32)
 
     return encode
@@ -152,7 +155,9 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_m2l
     if name == "clap":
         return _fake_clap
-    return _fake_same(0.25 if name == "same_s" else 0.75)
+    if name == "same_s":
+        return _fake_same(0.25)
+    return _fake_same(0.75, same_l_num_latent_frames)
 
 
 def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
@@ -169,7 +174,7 @@ def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
             events.append(f"load:{name}")
         return _encoder_for(name)
 
-    return replace(EMBEDDING_REGISTRY[name], requires_extra=None, load_encoder=load)
+    return replace(EMBEDDING_REGISTRY[name], load_encoder=load)
 
 
 def _install_fake_specs(
@@ -273,8 +278,15 @@ def test_downmix_to_mono_with_any_channel_count_averages_to_float32(
 
 def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None:
     """The registry is the single source of truth for all supported embeddings."""
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
-    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
+    assert set(EMBEDDING_REGISTRY) == {
+        "clap",
+        "m2l",
+        "same_l",
+        "same_s",
+        "ssondo",
+        "t5gemma",
+    }
+    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none", vector_dim=512)
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
     )
@@ -284,15 +296,14 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_l"].index == IndexSpec(
         pool="mean", vector_column=f"{SAME_L_FIELD}_vec"
     )
+    assert EMBEDDING_REGISTRY["ssondo"].index == IndexSpec(pool="none", vector_dim=960)
     assert EMBEDDING_REGISTRY["t5gemma"].index is None
     assert EMBEDDING_REGISTRY["t5gemma"].input_field == PARAM_ARRAY_FIELD
-    assert EMBEDDING_REGISTRY["t5gemma"].requires_extra == "sa3"
-    assert EMBEDDING_REGISTRY["same_s"].requires_extra == "same"
-    assert EMBEDDING_REGISTRY["same_l"].requires_extra == "same"
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
+    assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
 
 
@@ -494,6 +505,11 @@ def test_same_embedding_spec_prepares_stereo_before_encoder_call() -> None:
             "same_s",
             lambda stereo: np.zeros((len(stereo), 128, 1), dtype=np.float32),
             r"expected \(2, 256, 2\)",
+        ),
+        (
+            "same_l",
+            lambda stereo: np.zeros((len(stereo), 256, 2), dtype=np.float32),
+            r"expected \(2, 256, 1\)",
         ),
     ],
 )
@@ -968,23 +984,6 @@ def test_write_columns_with_debug_logs_progress_and_versions(
     )
 
 
-def test_require_extras_with_missing_same_dependency_names_uv_sync_hint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A missing optional dependency fails with its install command.
-
-    :param monkeypatch: Fixture hiding the SAME dependency.
-    """
-    real_find_spec = importlib.util.find_spec
-
-    def find_spec(name: str) -> object:
-        return None if name == "stable_audio_tools" else real_find_spec(name)
-
-    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
-    with pytest.raises(ImportError, match="uv sync --extra same"):
-        _require_extras([EMBEDDING_REGISTRY["same_s"]])
-
-
 def test_add_embeddings_with_mixed_selection_writes_exact_columns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1103,7 +1102,7 @@ def test_add_embeddings_with_two_same_specs_releases_first_before_second_load(
         gc.collect()
         assert first_encoder is not None
         assert first_encoder() is None
-        return _fake_same(0.75)
+        return _fake_same(0.75, same_l_num_latent_frames)
 
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
@@ -1203,7 +1202,7 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
             8,
             "l2",
         ),
-        (CLAP_FIELD, IndexSpec(pool="none"), 4, 8, "l2"),
+        (CLAP_FIELD, IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM), 4, 8, "l2"),
         (
             f"{M2L_FIELD}_vec",
             IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
@@ -1214,13 +1213,75 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     ]
 
 
-def test_add_embeddings_existing_mixed_target_guards_all_loads(
+def test_add_embeddings_after_index_failure_rerun_builds_index_without_reencoding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A split rerun resumes a missing index from committed vectors.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a fake encoder and one index failure.
+    """
+    uri = tmp_path / "index-resume.lance"
+    audio = np.random.default_rng(0).uniform(-1, 1, (300, 2, 3_200)).astype(np.float32)
+    write_minimal_lance_shard(
+        uri,
+        build_lance_smoke_spec(train_val_test_sizes=(300, 0, 0)),
+        num_rows=300,
+        audio=audio,
+    )
+    loads: list[str] = []
+    _install_fake_specs(monkeypatch, ("clap",), loads)
+    real_build_index = build_index
+    attempts = 0
+
+    def fail_first_index(
+        dataset: lance.LanceDataset,
+        column: str,
+        *,
+        index: IndexSpec,
+        config: AddEmbeddingsConfig,
+    ) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient index failure")
+        return real_build_index(dataset, column, index=index, config=config)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.build_index", fail_first_index
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("clap",),
+        num_partitions=4,
+        num_sub_vectors=16,
+    )
+
+    with pytest.raises(RuntimeError, match="transient index failure"):
+        add_embeddings(config)
+    vectors_before = lance.dataset(str(uri)).to_table(columns=[CLAP_FIELD])
+
+    add_embeddings(config)
+
+    dataset = lance.dataset(str(uri))
+    assert loads == ["load:clap"]
+    assert dataset.to_table(columns=[CLAP_FIELD]).equals(vectors_before)
+    indices = cast("list[dict[str, Any]]", dataset.list_indices())
+    assert any(entry["fields"] == [CLAP_FIELD] for entry in indices)
+    with pytest.raises(ValueError, match="already has embedding"):
+        add_embeddings(config)
+    assert loads == ["load:clap"]
+
+
+@pytest.mark.parametrize("build_index", [False, True])
+def test_add_embeddings_existing_mixed_target_guards_all_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build_index: bool
 ) -> None:
     """Any existing selected column blocks every model download.
 
     :param tmp_path: Scratch directory for the finalized shard.
     :param monkeypatch: Fixture installing dependency-free recording specs.
+    :param build_index: Whether a rerun requests index creation.
     """
     uri = tmp_path / "guard.lance"
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
@@ -1236,7 +1297,7 @@ def test_add_embeddings_existing_mixed_target_guards_all_loads(
     with pytest.raises(ValueError, match="same_s"):
         add_embeddings(
             AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=False
+                lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=build_index
             )
         )
 
@@ -1457,9 +1518,27 @@ def test_same_encoder_input_with_more_than_two_channels_raises() -> None:
         same_encoder_input(surround, SAME_SAMPLE_RATE)
 
 
-def test_same_num_latent_frames_for_standard_render_returns_44() -> None:
-    """The standard four-second render produces the conditioning profile width."""
-    assert same_num_latent_frames(4 * SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 44
+def test_same_s_num_latent_frames_for_one_second_returns_12() -> None:
+    """SAME-S pads one second to six two-frame blocks."""
+    assert same_s_num_latent_frames(SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 12
+
+
+def test_same_l_num_latent_frames_for_one_second_returns_11() -> None:
+    """SAME-L emits one frame per complete or partial 4096-sample hop."""
+    assert same_l_num_latent_frames(SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 11
+
+
+@pytest.mark.parametrize(
+    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
+)
+def test_same_num_latent_frames_for_four_second_conditioning_returns_44(
+    frame_count: Callable[[int, int], int],
+) -> None:
+    """Both SAME models retain the 44-frame conditioning profile contract.
+
+    :param frame_count: SAME model's latent-frame calculation.
+    """
+    assert frame_count(4 * SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 44
     assert SAME_LATENT_FRAMES == 44
 
 
@@ -1467,30 +1546,33 @@ def test_same_num_latent_frames_for_standard_render_returns_44() -> None:
     ("num_samples", "sample_rate", "expected"),
     [
         (2 * SAME_DOWNSAMPLING_RATIO, SAME_SAMPLE_RATE // 2, 4),
-        (SAME_SAMPLE_RATE, SAME_SAMPLE_RATE, 12),
         (SAME_DOWNSAMPLING_RATIO, SAME_SAMPLE_RATE, 2),
     ],
 )
-def test_same_num_latent_frames_resamples_and_pads_even_blocks(
+def test_same_s_num_latent_frames_resamples_and_pads_two_frame_blocks(
     num_samples: int, sample_rate: int, expected: int
 ) -> None:
-    """SAME frame math follows resampling and two-hop padding.
+    """SAME-S frame math follows resampling and two-hop padding.
 
     :param num_samples: Source clip length.
     :param sample_rate: Source rate in Hz.
     :param expected: Expected even latent-frame count.
     """
-    assert same_num_latent_frames(num_samples, sample_rate) == expected
+    assert same_s_num_latent_frames(num_samples, sample_rate) == expected
 
 
+@pytest.mark.parametrize(
+    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
+)
 @pytest.mark.parametrize(
     ("num_samples", "sample_rate"), [(0, SAME_SAMPLE_RATE), (SAME_SAMPLE_RATE, 0)]
 )
 def test_same_num_latent_frames_with_nonpositive_input_raises(
-    num_samples: int, sample_rate: int
+    frame_count: Callable[[int, int], int], num_samples: int, sample_rate: int
 ) -> None:
-    """Zero clip lengths and rates fail with both received values.
+    """Both SAME frame contracts reject non-positive lengths and rates.
 
+    :param frame_count: SAME model's latent-frame calculation.
     :param num_samples: Invalid source length candidate.
     :param sample_rate: Invalid source rate candidate.
     """
@@ -1498,7 +1580,7 @@ def test_same_num_latent_frames_with_nonpositive_input_raises(
         ValueError,
         match=f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}",
     ):
-        same_num_latent_frames(num_samples, sample_rate)
+        frame_count(num_samples, sample_rate)
 
 
 def test_same_profile_shape_feeds_embedding_pool() -> None:
@@ -1744,19 +1826,129 @@ def test_resolve_same_checkpoint_dir_with_existing_local_path_returns_it(
     assert _resolve_same_checkpoint_dir(str(tmp_path)) == tmp_path
 
 
-def test_load_same_audio_encoder_without_extra_names_install_command(
+def test_resolve_same_checkpoint_dir_with_repo_id_uses_hub_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The direct SAME loader reports the optional-extra install command.
+    """A HuggingFace repo ID resolves to its downloaded snapshot directory.
 
-    :param monkeypatch: Fixture hiding the optional dependency.
-    :param tmp_path: Local checkpoint placeholder.
+    :param monkeypatch: Fixture replacing the Hub download.
+    :param tmp_path: Downloaded snapshot directory.
     """
-    monkeypatch.setitem(sys.modules, "stable_audio_tools", None)
-    monkeypatch.setitem(sys.modules, "stable_audio_tools.models", None)
-    monkeypatch.setitem(sys.modules, "stable_audio_tools.models.factory", None)
+    downloads: list[str] = []
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda repo_id: downloads.append(repo_id) or str(tmp_path),
+    )
 
-    with pytest.raises(ImportError, match="uv sync --extra same"):
+    resolved = _resolve_same_checkpoint_dir("org/same-checkpoint")
+
+    assert resolved == tmp_path
+    assert downloads == ["org/same-checkpoint"]
+
+
+def _install_sa3_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    factory: Callable[[dict[str, object], int], torch.nn.Module],
+) -> None:
+    """Install a local SA3 factory module at the external dependency boundary.
+
+    :param monkeypatch: Fixture restoring imported modules after the test.
+    :param factory: Autoencoder factory exposed by the test module.
+    """
+    factory_module = ModuleType("stable_audio_3.factory")
+    factory_module.create_autoencoder_from_config = factory  # type: ignore[attr-defined]
+    package = ModuleType("stable_audio_3")
+    package.factory = factory_module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "stable_audio_3", package)
+    monkeypatch.setitem(sys.modules, "stable_audio_3.factory", factory_module)
+
+
+class _RecordingSameAutoencoder(torch.nn.Module):
+    """Record observable inference state for the SAME loader contract test."""
+
+    def __init__(self) -> None:
+        """Create a one-parameter encoder with inference-state logs."""
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(2.0))
+        self.chunk_sizes: list[int] = []
+        self.grad_enabled: list[bool] = []
+        self.training_states: list[bool] = []
+        self.parameter_grad_states: list[bool] = []
+
+    def encode(self, audio: torch.Tensor) -> torch.Tensor:
+        """Encode one chunk while recording model and autograd state.
+
+        :param audio: Prepared stereo audio.
+        :returns: Float64 first-channel values scaled by the loaded parameter.
+        """
+        self.chunk_sizes.append(len(audio))
+        self.grad_enabled.append(torch.is_grad_enabled())
+        self.training_states.append(self.training)
+        self.parameter_grad_states.append(self.scale.requires_grad)
+        return (audio[:, :1] * self.scale).double()
+
+
+def _write_same_checkpoint(checkpoint_dir: Path, weights: dict[str, torch.Tensor]) -> None:
+    """Write a minimal SA3-shaped checkpoint directory for loader tests.
+
+    :param checkpoint_dir: Destination directory.
+    :param weights: Safetensors state dictionary.
+    """
+    import json
+
+    from safetensors.torch import save_file
+
+    (checkpoint_dir / "model_config.json").write_text(
+        json.dumps({"model": {"family": "same"}, "sample_rate": SAME_SAMPLE_RATE})
+    )
+    save_file(weights, checkpoint_dir / "model.safetensors")
+
+
+def test_load_same_audio_encoder_uses_sa3_factory_and_preserves_inference_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The SA3 loader preserves config, batching, frozen inference, and output contracts.
+
+    :param monkeypatch: Fixture installing the external SA3 factory boundary.
+    :param tmp_path: Local checkpoint directory.
+    """
+    model = _RecordingSameAutoencoder()
+    factory_calls: list[tuple[dict[str, object], int]] = []
+
+    def factory(config: dict[str, object], sample_rate: int) -> torch.nn.Module:
+        factory_calls.append((config, sample_rate))
+        return model
+
+    _install_sa3_factory(monkeypatch, factory)
+    _write_same_checkpoint(tmp_path, model.state_dict())
+    encode = load_same_audio_encoder(str(tmp_path), device="cpu")
+    audio = np.ones((17, 2, 8), dtype=np.float32)
+
+    latents = encode(audio)
+
+    assert factory_calls == [({"family": "same"}, SAME_SAMPLE_RATE)]
+    assert model.chunk_sizes == [16, 1]
+    assert model.grad_enabled == [False, False]
+    assert model.training_states == [False, False]
+    assert model.parameter_grad_states == [False, False]
+    assert next(model.parameters()).device.type == "cpu"
+    assert latents.shape == (17, 1, 8)
+    assert latents.dtype == np.float32
+    np.testing.assert_array_equal(latents, np.full((17, 1, 8), 2.0, dtype=np.float32))
+
+
+def test_load_same_audio_encoder_with_incompatible_state_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing and unexpected checkpoint keys fail strict SA3 state loading.
+
+    :param monkeypatch: Fixture installing the external SA3 factory boundary.
+    :param tmp_path: Local checkpoint directory.
+    """
+    _install_sa3_factory(monkeypatch, lambda config, sample_rate: torch.nn.Linear(2, 2))
+    _write_same_checkpoint(tmp_path, {"unexpected": torch.ones(1)})
+
+    with pytest.raises(RuntimeError, match=r"(?s)Missing key\(s\).*Unexpected key\(s\)"):
         load_same_audio_encoder(str(tmp_path), device="cpu")
 
 
@@ -2119,13 +2311,6 @@ def test_add_embeddings_main_with_registry_selection_writes_requested_columns(
     assert checkpoints == ["custom/same-s"]
 
 
-def test_registry_default_checkpoints_match_public_sources() -> None:
-    """Checkpoint-backed registry entries preserve their established defaults."""
-    assert EMBEDDING_REGISTRY["clap"].default_checkpoint == DEFAULT_CLAP_CHECKPOINT
-    assert EMBEDDING_REGISTRY["same_s"].default_checkpoint == DEFAULT_SAME_S_CHECKPOINT
-    assert EMBEDDING_REGISTRY["same_l"].default_checkpoint == DEFAULT_SAME_L_CHECKPOINT
-
-
 def _install_fake_t5gemma(
     monkeypatch: pytest.MonkeyPatch, seen: list[np.ndarray] | None = None
 ) -> None:
@@ -2148,25 +2333,8 @@ def _install_fake_t5gemma(
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "t5gemma",
-        replace(EMBEDDING_REGISTRY["t5gemma"], requires_extra=None, load_encoder=load),
+        replace(EMBEDDING_REGISTRY["t5gemma"], load_encoder=load),
     )
-
-
-def test_require_extras_with_missing_sa3_dependency_names_uv_sync_hint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The sa3 extra gates on the stable_audio_3 import name, not the extra name.
-
-    :param monkeypatch: Fixture hiding the SA3 dependency.
-    """
-    real_find_spec = importlib.util.find_spec
-
-    def find_spec(name: str) -> object:
-        return None if name == "stable_audio_3" else real_find_spec(name)
-
-    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
-    with pytest.raises(ImportError, match="uv sync --extra sa3"):
-        _require_extras([EMBEDDING_REGISTRY["t5gemma"]])
 
 
 def test_add_embeddings_with_param_array_spec_feeds_encoder_param_rows_not_audio(

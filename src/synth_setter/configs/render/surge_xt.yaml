@@ -1,4 +1,0 @@
-defaults:
-  - vst
-  - synth: surge_xt
-  - _self_

@@ -44,7 +44,7 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
 
  Infrastructure:
    Storage:   Cloudflare R2 (data, coordination)
-   Compute:   RunPod (on-demand workers)
+   Compute:   SkyPilot (RunPod, Vast.ai, local Kubernetes)
    Tracking:  Weights & Biases (metrics, artifacts, lineage)
    Config:    Hydra (composable YAML configs)
    Training:  PyTorch Lightning
@@ -53,11 +53,11 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
 ## Data Flow
 
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
-   count, shard size, parameter spec). The synth is selected by a `render`
-   group override (e.g. `render=surge_xt`, `render=obxf`, or
-   `render=faust_bright_organ`); each render config names the backend, selects
-   its `synth` group, and declares any backend-specific resources. The synth
-   group carries the registered parameter spec, preset, and plugin path. Hydra
+   count, shard size, parameter spec). The synth is selected by the root
+   `synth` group (`synth=surge_xt`, `synth=obxf`, ...), which carries the
+   registered parameter spec, preset, plugin path, and version; the paired
+   `render` group override (e.g. `render=vst`) names the backend and
+   declares backend-specific knobs only. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
@@ -85,8 +85,9 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    through sample-indexed native `lance.torch` map datasets. The sequential native
    loader remains available for streaming workflows — see
    [training-pipeline.md §6.1](design/training-pipeline.md#61-dataset-access). The datamodule class is
-   param-count-agnostic, though the `surge*` configs pin `param_spec_name`, so
-   training a non-Surge dataset overrides `datamodule.param_spec_name=<name>`.
+   param-count-agnostic; synth identity is selected once at the config root via
+   the `synth` group (`synth=<name>`), which VST datamodules, models, and
+   callbacks all resolve through `${synth.param_spec_name}`.
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),
@@ -107,7 +108,7 @@ synth-setter/
 │   │   ├── generate_dataset.py  # Dataset-generation entrypoint
 │   │   └── ...
 │   ├── metrics.py          #   Metric definitions
-│   ├── data/               #   DataModules (Surge, K-Sin, K-Osc, etc.)
+│   ├── data/               #   DataModules (TorchSynth, VST, Lance, audio folders)
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
 │   │   └── components/     #     Model building blocks (VAE, networks)
 │   ├── utils/              #   Logging, config helpers
@@ -123,7 +124,7 @@ synth-setter/
 │       ├── train.yaml      #     Root training config
 │       ├── dataset.yaml    #     Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
 │       ├── experiment/     #     Experiment configs — training (compose datamodule + model + trainer) and datagen (composes dataset.yaml)
-│       ├── compute/        #     SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
+│       ├── compute/        #     SkyPilot compute options (RunPod, Vast.ai, local Kubernetes)
 │       ├── render/         #     Renderer configs (RenderConfig sub-model)
 │       ├── datamodule/     #     DataModule configs (paths, splits, batch size)
 │       ├── model/          #     Model architecture configs
@@ -142,17 +143,20 @@ synth-setter/
 
 **Synth-agnostic core, registry as the contract.** A synth's identity — which
 `ParamSpec`, which plugin, which baseline preset — is authored once in
-`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and
-`src/synth_setter/configs/render/synth/<name>.yaml` are projections of it,
-pinned against the table by `tests/test_synth_spec.py`. Render configs in
-`src/synth_setter/configs/render/<name>.yaml` select an identity and declare
-backend-specific settings. The `ParamSpec` objects themselves live in
+`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and the
+root identity group `src/synth_setter/configs/synth/<name>.yaml` are
+projections of it, pinned against the table by `tests/test_synth_spec.py` and
+`tests/schemas/test_synth_config.py`. Render configs in
+`src/synth_setter/configs/render/<name>.yaml` declare backend-specific
+settings only and are paired with a `synth=<name>` selection. The `ParamSpec` objects themselves live in
 `src/synth_setter/data/vst/param_spec_registry.py`. The rendering, Lance
 storage, mel features, distributed workers, and models all read width and
 behavior from the resolved spec, never from a synth literal. Faust entries use
-an empty state path and resolve checked-in source by the same identity. Onboarding a new VST3 synth is additive: scaffold a spec with
-`synth-setter-introspect-plugin`, hand-tune it, register it, and write a render
-config — no core edits. See
+an empty state path and resolve checked-in source by the same identity.
+`studiorack.json`, `plugin_manager.py`, and `synth-setter-plugins` manage exact
+VST3 packages beneath the stable `plugins/*.vst3` identity paths. Onboarding a
+new VST3 synth is additive: install its package, scaffold and hand-tune a spec,
+then register it against the generic `render=vst` backend. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 **R2 as source of truth.** Pipeline state is determined by file existence and

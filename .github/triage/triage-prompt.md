@@ -81,7 +81,7 @@ Pick exactly one of these four buckets and record your reasoning in
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `flake`               | Test passes on re-run / known-flaky pattern (network blip, transient API 5xx, single matrix cell on a job that succeeded elsewhere). | Path C: re-run and exit.                                                          |
 | `resource_starvation` | OOM kill, disk full, runner timeout, GHA cancel. Look for `signal 9`, `Disk space`, `The runner has received a shutdown signal`.     | Path A (telemetry) if root cause is clear, else Path B.                           |
-| `auth`                | 401/403 from R2/RunPod/OCI, missing secret, expired OAuth token. Look for `permission denied`, `Unauthorized`, `secret * not set`.   | Path B (auth/secret issues need human attention — never auto-rotate credentials). |
+| `auth`                | 401/403 from R2/RunPod/Vast, missing secret, expired OAuth token. Look for `permission denied`, `Unauthorized`, `secret * not set`.  | Path B (auth/secret issues need human attention — never auto-rotate credentials). |
 | `real_bug`            | Application or test code raised an exception, type error, assertion failed. Reproducible determinism.                                | Path A if reproducible AND root cause is clear, else Path B.                      |
 
 When in doubt, prefer Path B over Path A. A noisy issue is recoverable; a bad

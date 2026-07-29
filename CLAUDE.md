@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-synth-setter: synth inversion, sound matching, and preset-exploration tools — Python 3.12.13, PyTorch Lightning, Hydra, with a distributed data pipeline on SkyPilot-managed compute (RunPod + Vast + OCI) stored in Cloudflare R2.
+synth-setter: synth inversion, sound matching, and preset-exploration tools — Python 3.12.13, PyTorch Lightning, Hydra, with a distributed data pipeline on SkyPilot-managed compute (RunPod + Vast + local Kubernetes) stored in Cloudflare R2.
 
 Shared agent instructions for Claude and Codex; AGENTS.md is the canonical source. Architecture: [docs/architecture.md](docs/architecture.md).
 
@@ -13,7 +13,7 @@ Shared agent instructions for Claude and Codex; AGENTS.md is the canonical sourc
 
 <important if="you hit an error or clearly-wrong behavior outside your current task's scope">
 
-Out-of-scope error (red test on `main`, unrelated crash, silently-wrong result, stale doc, misfiring hook)? Don't fix it inline (scope creep) or drop it silently — **file a bug** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a sub-issue of the relevant Phase — ask which if none fits), then continue your task; note what you saw, expected, and how to reproduce, and surface the `[#N](…)` in your reply. The higher the impact, the more this matters. If it blocks you, ask how to proceed.
+Out-of-scope error (red test on `main`, unrelated crash, silently-wrong result, stale doc, misfiring hook)? Don't fix it inline (scope creep) or drop it silently — **file a bug in `tinaudio/synth-setter`** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a sub-issue of the relevant Phase — ask which if none fits), then continue your task; note what you saw, expected, and how to reproduce, and surface the `[#N](…)` in your reply. **Never create GitHub issues in external repositories.** Report external defects to the user and, when tracking is needed, file locally; reference an upstream issue only after verifying it already exists. The higher the impact, the more this matters. If it blocks you, ask how to proceed.
 </important>
 
 <important if="you need to run commands to build, test, lint, or format">
@@ -58,6 +58,10 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 
 - Test names: `test_<what>_<condition>_<expected>`.
 - `@pytest.mark.slow` marks slow tests.
+- A test must be able to fail for exactly one interesting reason. Don't test
+  helpers defined in the test file, freeze config into literals, or assert that
+  a mock returned its own `return_value` —
+  [docs/testing/test-quality.md](docs/testing/test-quality.md).
 - Mutation testing: [docs/testing/mutmut.md](docs/testing/mutmut.md).
 
 </important>

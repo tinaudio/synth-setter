@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "10.7.0"
+version = "10.9.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -50,22 +50,6 @@ cu128 = [
   "torchvision>=0.15.0",
   "torchaudio>=2.0.0",
 ]
-# SAME (Stability AI) encoder runtime for the add_embeddings --same mode.
-# Pinned exactly: 0.0.20 is the release validated for numerical equivalence
-# between upstream's torch pin and this project's lock (see PR #2283). Its
-# stale transitive pins are relaxed in [[tool.uv.dependency-metadata]].
-same = [
-  "stable-audio-tools==0.0.20",
-]
-# Stable Audio 3 text conditioning for the add_embeddings `t5gemma` mode.
-# Commit-pinned: upstream has no PyPI release and no tags, so a branch ref
-# would silently re-resolve. Its torch==2.7.1 / torchaudio==2.7.1 pins are
-# relaxed in [[tool.uv.dependency-metadata]] so the cpu/cu128 index routing
-# keeps choosing this project's locked wheel.
-sa3 = [
-  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
-]
-
 # Only the cpu/cu128 backend-routing extras remain here — [tool.uv.sources] keys
 # on extras, not groups. Heavy runtime lives in [dependency-groups] (#1139).
 
@@ -80,6 +64,7 @@ synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
 synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-migrate-checkpoint = "synth_setter.cli.migrate_checkpoint:main"
+synth-setter-plugins = "synth_setter.cli.plugins:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
@@ -156,6 +141,10 @@ torch = [
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
+  "ssondo==0.3.1",
+  # Commit-pinned: upstream has no PyPI release or Git tags. Package-scoped metadata
+  # below relaxes its torch pins without changing cpu/cu128 wheel routing.
+  "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
   # Shape-checked tensor annotations; jaxtyping only checks under a runtime
   # typechecker, so beartype is not optional here.
   "jaxtyping>=0.2.36",
@@ -172,12 +161,11 @@ config = [
 # keeps `uv sync --frozen` self-sufficient.
 # Pin: kubernetes>=36 breaks SkyPilot pod_config validation — see #1239.
 compute = [
-  "skypilot[runpod,oci,kubernetes,vast]==0.12.0",
+  "skypilot[runpod,kubernetes,vast]==0.12.0",
   # Pin: vastai-sdk 1.x removes VastAI.api_key_access, which SkyPilot 0.12's Vast
   # provisioner still calls (sky/provision/vast/utils.py) — 1.x breaks every launch.
   "vastai-sdk==0.2.5",
   "runpod==1.8.1",
-  "oci",
   "kubernetes==35.0.0",
 ]
 data = [
@@ -201,7 +189,6 @@ metrics = [
   "pesto-pitch==2.0.1",
   "dtw-python==1.7.4",
   "kymatio==0.3.0",
-  "POT",
   "einops",
 ]
 notebooks = [
@@ -241,9 +228,9 @@ dev = [
   "pytest-randomly",
   "pytest-repeat",
   "pytest-xdist",
-  # Required only by the v0.0.0 baseline `src/{train,eval}.py` that
-  # tests/test_compare_baseline_configs.py runs through the live Python.
-  # Not used by `synth_setter/` itself — see #1268.
+  # Provides the `semantic-release` binary that
+  # tests/infra/test_release_lock_refresh.py drives; not imported by
+  # `synth_setter/` itself — see #1268.
   "python-semantic-release==9.21.2",
   "rootutils",
   "ruff",
@@ -268,53 +255,8 @@ conflicts = [
     { extra = "cu128" },
   ],
 ]
-# stable-audio-tools 0.0.20 hard-pins torch==2.7.1 / torchaudio==2.7.1, two
-# packages with no py3.12 wheels (sentencepiece 0.1.99, PyWavelets 1.4.1), and
-# importlib-resources==5.12.0 (collides with the dev group's semantic-release).
-# This static metadata replaces ONLY that package's declared deps, relaxing the
-# stale pins to floors so the existing lock (and cpu/cu128 index routing) keeps
-# choosing the torch version. A global override-dependencies would instead
-# rewrite the project's own extra-conditioned torch requirements and collapse
-# the cpu/cu128 fork. The SAME-S encode path is numerically equivalent across
-# torch 2.7.1 and the locked torch (max_abs_diff 9.5e-5 on latents with
-# std 1.8; see PR #2283).
-[[tool.uv.dependency-metadata]]
-name = "stable-audio-tools"
-version = "0.0.20"
-requires-dist = [
-  "alias-free-torch==0.0.6",
-  "dill",
-  "einops",
-  "einops-exts",
-  "huggingface_hub",
-  "importlib-resources>=6.0",
-  "nnAudio",
-  "PyWavelets>=1.6",
-  "safetensors",
-  "scipy",
-  "sentencepiece>=0.2.0",
-  "setuptools",
-  "soxr",
-  "torch>=2.0.0",
-  "torchaudio>=2.0.0",
-  "torchsde",
-  "tqdm",
-  "transformers",
-  "v-diffusion-pytorch==0.0.2",
-  "vector-quantize-pytorch==1.14.41",
-]
-
-# stable-audio-3 0.1.0 hard-pins torch==2.7.1 / torchaudio==2.7.1. As with
-# stable-audio-tools above, this static metadata replaces ONLY that package's
-# declared deps, relaxing the two pins to floors so the existing lock (and the
-# cpu/cu128 index routing) keeps choosing the torch version; a global
-# override-dependencies would rewrite the project's own extra-conditioned torch
-# requirements and collapse the cpu/cu128 fork. Every other floor it declares
-# is already satisfied by the lock. The T5Gemma prompt-conditioner path is
-# bitwise identical across torch 2.7.1 and the locked torch at float32
-# (max_abs_diff 0.0 over 22 prompts, embedding std 1.75; scripts/dev/
-# sa3_t5gemma_parity.py). At the checkpoint's declared bfloat16 the same
-# comparison diverges by 11.5, which is why the encoder is pinned to float32.
+# Package-scoped metadata relaxes SA3's torch pins without collapsing cpu/cu128 routing;
+# float32 parity evidence lives in scripts/dev/sa3_t5gemma_parity.py.
 [[tool.uv.dependency-metadata]]
 name = "stable-audio-3"
 version = "0.1.0"
@@ -426,7 +368,7 @@ markers = [
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
   "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
-  "same_e2e: SAME encoder tests needing the `same` extra + HF weight download (own GHA workflow)",
+  "same_e2e: real-weight SAME encoder tests with immutable HF checkpoints (own GHA workflow)",
 ]
 minversion = "6.0"
 pythonpath = ["src"]
@@ -466,7 +408,6 @@ known-third-party = ["wandb"]
 "src/synth_setter/pipeline/data/add_music2latent.py" = ["S605", "D102", "D103", "D107"]
 "src/synth_setter/evaluation/compute_audio_metrics.py" = ["T201", "ANN001", "D102", "D103", "D107"]
 "src/synth_setter/pipeline/data/stats.py" = ["E402", "T201", "ANN001"]
-"src/synth_setter/tools/sig_perf.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/tools/model_from_wandb.py" = ["E402", "D102", "D103", "D107"]
 "src/synth_setter/tools/paramspec_to_table.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/tools/plot_param2tok.py" = ["E402", "E741", "F841", "T201", "D102", "D103", "D107"]
@@ -477,9 +418,6 @@ known-third-party = ["wandb"]
 "src/synth_setter/pipeline/data/reshard.py" = ["T201"]
 "src/synth_setter/pipeline/data/rewrite_to_latest.py" = ["ANN001", "D102", "D103", "D107"]
 "src/synth_setter/data/audio_datamodule.py" = ["D102", "D103", "D107"]
-"src/synth_setter/data/fm_datamodule.py" = ["D102", "D103", "D107"]
-"src/synth_setter/data/kosc_datamodule.py" = ["D102", "D103", "D107"]
-"src/synth_setter/data/ksin_datamodule.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/core.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/generate_vst_dataset.py" = ["D102", "D103", "D107"]
 "src/synth_setter/data/vst/param_spec.py" = ["D102", "D103", "D107"]
@@ -491,7 +429,6 @@ known-third-party = ["wandb"]
 "tests/pipeline/schemas/test_dataset_spec.py" = ["ANN001", "D102", "D103", "D107"]
 "tests/pipeline/schemas/test_prefix.py" = ["ANN001", "D102", "D103", "D107"]
 "tests/test_benchmarks.py" = ["ANN001", "D102", "D103", "D107"]
-"tests/test_compare_baseline_configs.py" = ["D102", "D103", "D107"]
 "tests/test_configs.py" = ["ANN001", "D102", "D103", "D107"]
 "tests/test_logging_utils.py" = ["D102", "D103", "D107"]
 "src/synth_setter/cli/eval.py" = ["E402", "F841", "D102", "D103", "D107"]
@@ -499,7 +436,6 @@ known-third-party = ["wandb"]
 # New code under synth_setter/models/ should still annotate; remove this entry once legacy
 # callsites are cleaned up.
 "src/synth_setter/models/**" = ["ANN001"]
-"src/synth_setter/models/components/loss.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/cnn.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/embed_pool.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/components/residual_mlp.py" = ["D102", "D103", "D107"]
@@ -507,9 +443,7 @@ known-third-party = ["wandb"]
 "src/synth_setter/models/components/transformer.py" = ["F841", "D102", "D103", "D107"]
 "src/synth_setter/models/components/vae.py" = ["E402", "T201", "D102", "D103", "D107"]
 "src/synth_setter/models/components/vector_field.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/ksin_ff_module.py" = ["F821", "D102", "D103", "D107"]
 "src/synth_setter/models/vst_ff_module.py" = ["D102", "D103", "D107"]
-"src/synth_setter/models/ksin_flow_matching_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/vst_flow_matching_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/models/vst_flowvae_module.py" = ["D102", "D103", "D107"]
 "src/synth_setter/cli/train.py" = ["E402", "D102", "D103", "D107"]
@@ -571,10 +505,9 @@ baseline = ".pydoclint-baseline.txt"
 # outcome that's hard to reason about. Tracked under #938.
 auto-regenerate-baseline = false
 # Path-level exclude regex (verbose). Infra-only after the baseline swap —
-# tests/fixtures/ retained because tests/fixtures/baseline_repo and diff_repo
-# are mock-repo data shelled out to by the test suite (conceptually adjacent
-# to notebooks/: code-but-not-production-code), not legacy violations to
-# clean up via the baseline.
+# tests/fixtures/ holds mock data shelled out to by the test suite
+# (conceptually adjacent to notebooks/: code-but-not-production-code), not
+# legacy violations to clean up via the baseline.
 exclude = '''(?x)
     (^|/)\.git(/|$)
   | (^|/)\.tox(/|$)

@@ -17,7 +17,13 @@ from pydantic import ValidationError
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
-from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec, resolve_synth
+from synth_setter.synth_spec import (
+    SYNTHS,
+    SynthName,
+    SynthSpec,
+    resolve_synth,
+    validate_synth_identity,
+)
 
 _ALL_SYNTHS = sorted(SYNTHS)
 
@@ -134,7 +140,7 @@ class TestSynthsTable:
     def test_dawdreamer_capable_synths_ship_a_parameter_map(self, name: str) -> None:
         """A synth is DawDreamer-renderable exactly when its param map is packaged.
 
-        ``DawDreamerRenderer`` requires the map, so this pins which synths that
+        ``DawDreamerRenderer`` requires the map, so this pins which specs that
         backend actually supports instead of leaving it to a mid-shard failure.
 
         :param name: Registry key under test.
@@ -146,56 +152,28 @@ class TestSynthsTable:
             files("synth_setter") / "data" / "vst" / f"{synth.param_spec_name}_param_map.json"
         ).is_file()
 
-        assert packaged == (name in {"cardinal", "surge_4", "surge_simple", "surge_xt"})
+        assert packaged == (
+            synth.param_spec_name in {"cardinal", "surge_4", "surge_simple", "surge_xt"}
+        )
 
+    @pytest.mark.parametrize(
+        "variant", ["surge_xt_surgepy", "surge_simple_surgepy", "surge_4_surgepy"]
+    )
+    def test_surgepy_variant_shares_its_base_param_spec(self, variant: str) -> None:
+        """Each surgepy rendering variant reuses its base synth's spec identity.
 
-class TestFromRenderCfg:
-    """The Hydra bridge every raw-config identity read goes through."""
-
-    @pytest.mark.parametrize("name", _ALL_SYNTHS)
-    def test_composed_render_group_yields_the_registered_identity(self, name: str) -> None:
-        """Each shipped render group resolves to the identity the table declares.
-
-        This is the check that catches a render YAML drifting from ``SYNTHS``.
-
-        :param name: Render group / registry key under test.
+        :param variant: surgepy registry key under test.
         """
-        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            render = compose(config_name=f"render/{name}").render
+        base = SYNTHS[SynthName(variant.removesuffix("_surgepy"))]
+        surgepy = SYNTHS[SynthName(variant)]
 
-        assert SynthSpec.from_render_cfg(render) == SYNTHS[SynthName(name)]
-
-    def test_absent_render_group_yields_none(self) -> None:
-        """A missing render node reports absence rather than raising."""
-        assert SynthSpec.from_render_cfg(None) is None
-
-    def test_generic_vst_scaffold_yields_none(self) -> None:
-        """``render=vst`` carries knobs but no synth identity, so it resolves to nothing."""
-        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            render = compose(config_name="render/vst").render
-
-        assert SynthSpec.from_render_cfg(render) is None
-
-    def test_per_run_plugin_path_override_survives(self) -> None:
-        """An overridden plugin path reaches the identity, not the registry default.
-
-        Dataset tests swap in a stub bundle so the renderer-version gate passes without a real
-        install; reading the registry instead would discard that.
-        """
-        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            render = compose(
-                config_name="render/obxf",
-                overrides=["render.synth.plugin_path=plugins/TestPlugin.vst3"],
-            ).render
-
-        synth = SynthSpec.from_render_cfg(render)
-
-        assert synth is not None
-        assert synth.plugin_path == "plugins/TestPlugin.vst3"
+        assert surgepy.param_spec_name == base.param_spec_name
+        assert surgepy.plugin_path == "surgepy"
+        assert surgepy.plugin_state_path.endswith(".fxp")
 
 
 class TestSynthConfigGroup:
-    """``configs/render/synth`` is a generated artifact of ``SYNTHS``, pinned here."""
+    """``configs/synth`` is a generated artifact of ``SYNTHS``, pinned here."""
 
     @pytest.mark.parametrize("name", _ALL_SYNTHS)
     def test_synth_group_matches_the_table(self, name: str) -> None:
@@ -208,13 +186,101 @@ class TestSynthConfigGroup:
         :param name: Registry key / synth group under test.
         """
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            group = compose(config_name=f"render/synth/{name}").render.synth
+            group = compose(config_name=f"synth/{name}").synth
 
         assert OmegaConf.to_container(group) == SYNTHS[SynthName(name)].model_dump()
 
     def test_group_covers_every_registered_synth(self) -> None:
         """No table entry lacks a config group, and no group lacks a table entry."""
-        group_dir = files("synth_setter") / "configs" / "render" / "synth"
+        group_dir = files("synth_setter") / "configs" / "synth"
         shipped = {p.name.removesuffix(".yaml") for p in group_dir.iterdir()}
 
         assert shipped == set(SYNTHS)
+
+    def test_per_run_plugin_path_override_survives(self) -> None:
+        """An overridden plugin path reaches the identity, not the registry default.
+
+        Dataset tests swap in a stub bundle so the renderer-version gate passes without a real
+        install; pinning binding fields to the registry would discard that.
+        """
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="synth/obxf",
+                overrides=["synth.plugin_path=plugins/TestPlugin.vst3"],
+            )
+        synth = validate_synth_identity(cfg)
+
+        assert synth is not None
+        assert synth.plugin_path == "plugins/TestPlugin.vst3"
+
+
+def _synth_node(row: str, **overrides: str) -> dict[str, str]:
+    """Return the ``SYNTHS`` row for ``row`` as a plain composed-node dict.
+
+    :param row: Registry key.
+    :param **overrides: Field values replacing the registry row's.
+    :returns: Five-field mapping mirroring ``configs/synth/<row>.yaml``.
+    """
+    return {**SYNTHS[SynthName(row)].model_dump(), **overrides}
+
+
+class TestValidateSynthIdentity:
+    """Compose-time guard for the root ``synth`` identity group (#2565)."""
+
+    def test_registered_identity_returns_composed_spec(self) -> None:
+        """A well-formed selection validates and returns the composed identity."""
+        cfg = OmegaConf.create({"synth": _synth_node("surge_xt")})
+        assert validate_synth_identity(cfg) == SYNTHS[SynthName("surge_xt")]
+
+    def test_absent_synth_node_is_a_noop(self) -> None:
+        """Audio/legacy configs compose no synth group and must pass untouched."""
+        assert validate_synth_identity(OmegaConf.create({"datamodule": {"k": 8}})) is None
+
+    def test_unregistered_name_raises(self) -> None:
+        """A name with no ``SYNTHS`` row is rejected at validation time."""
+        cfg = OmegaConf.create({"synth": _synth_node("surge_xt", name="nope")})
+        with pytest.raises(ValueError, match="nope"):
+            validate_synth_identity(cfg)
+
+    def test_param_spec_mismatching_registry_row_raises(self) -> None:
+        """A spec that contradicts the registry row is rejected."""
+        cfg = OmegaConf.create({"synth": _synth_node("surge_xt", param_spec_name="surge_4")})
+        with pytest.raises(ValueError, match="surge_4"):
+            validate_synth_identity(cfg)
+
+    def test_overridden_binding_fields_pass_and_survive(self) -> None:
+        """Plugin binding stays per-run overridable; only identity is registry-pinned."""
+        cfg = OmegaConf.create(
+            {"synth": _synth_node("surge_xt", plugin_path="plugins/TestPlugin.vst3")}
+        )
+        spec = validate_synth_identity(cfg)
+
+        assert spec is not None
+        assert spec.plugin_path == "plugins/TestPlugin.vst3"
+
+    def test_extra_key_in_synth_node_raises(self) -> None:
+        """The group mirrors ``SynthSpec`` exactly; stray keys are a config error."""
+        cfg = OmegaConf.create({"synth": {**_synth_node("surge_xt"), "width": "300"}})
+        with pytest.raises(ValidationError, match="width"):
+            validate_synth_identity(cfg)
+
+    def test_datamodule_literal_spec_mismatch_raises(self) -> None:
+        """A CLI-forced datamodule spec that skews from the synth fails loudly."""
+        cfg = OmegaConf.create(
+            {
+                "synth": _synth_node("surge_xt"),
+                "datamodule": {"param_spec_name": "surge_4"},
+            }
+        )
+        with pytest.raises(ValueError, match="surge_4"):
+            validate_synth_identity(cfg)
+
+    def test_datamodule_interpolated_spec_matches_and_passes(self) -> None:
+        """The shipped rootward interpolation always agrees with the synth node."""
+        cfg = OmegaConf.create(
+            {
+                "synth": _synth_node("surge_4"),
+                "datamodule": {"param_spec_name": "${synth.param_spec_name}"},
+            }
+        )
+        assert validate_synth_identity(cfg) == SYNTHS[SynthName("surge_4")]

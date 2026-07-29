@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from hydra import compose, initialize_config_module
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -56,6 +56,16 @@ def _compose_render_group(group: str) -> DictConfig:
         return compose(config_name=f"render/{group}").render
 
 
+def _compose_synth_group(group: str) -> DictConfig:
+    """Compose one root synth identity group through Hydra.
+
+    :param group: Synth group name below ``configs/synth``.
+    :returns: The composed ``synth`` node.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return compose(config_name=f"synth/{group}").synth
+
+
 def test_vst_render_group_contains_only_generic_render_fields() -> None:
     """``render=vst`` provides generic knobs without selecting a synth identity."""
     cfg = _compose_render_group("vst")
@@ -63,22 +73,22 @@ def test_vst_render_group_contains_only_generic_render_fields() -> None:
     assert set(cfg) == _GENERIC_RENDER_FIELDS
 
 
-def test_vst_render_group_accepts_appended_synth_identity() -> None:
-    """A generic VST eval scaffold composes with caller-supplied synth identity."""
+def test_vst_render_group_composes_with_root_synth_identity() -> None:
+    """A generic VST eval scaffold composes with a caller-selected root synth group."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval",
             overrides=[
                 "experiment=surge/fake_oracle",
                 "render=vst",
-                "+render/synth=obxf",
+                "synth=obxf",
             ],
         )
 
-    assert cfg.render.synth.param_spec_name == "obxf"
-    assert cfg.render.synth.plugin_state_path == "presets/obxf-base.vstpreset"
-    assert cfg.render.synth.plugin_path == "plugins/OB-Xf.vst3"
-    assert cfg.render.synth.synth_version == "1.0.3"
+    assert cfg.synth.param_spec_name == "obxf"
+    assert cfg.synth.plugin_state_path == "presets/obxf-base.vstpreset"
+    assert cfg.synth.plugin_path == "plugins/OB-Xf.vst3"
+    assert cfg.synth.synth_version == "1.0.3"
     assert cfg.render.plugin_reload_cadence == "once"
 
 
@@ -154,12 +164,12 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     [("torchsynth_adsr", 8), ("torchsynth_simple", 19), ("torchsynth_full", 79)],
 )
 def test_render_torchsynth_composes_into_valid_render_config(name: str, num_params: int) -> None:
-    """Each ``render=torchsynth_*`` group composes into a valid in-process ``RenderConfig``.
+    """Each torchsynth identity composes with ``render=torchsynth`` into a valid ``RenderConfig``.
 
-    :param name: Render group / param-spec registry key under test.
+    :param name: Synth group / param-spec registry key under test.
     :param num_params: Expected encoded parameter width.
     """
-    spec = _spec_from_dataset_overrides([f"render={name}"])
+    spec = _spec_from_dataset_overrides([f"synth={name}", "render=torchsynth"])
 
     assert spec.render.param_spec_name == name
     assert spec.render.renderer_backend == "torchsynth"
@@ -175,26 +185,28 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
 
 
 @pytest.mark.parametrize(
-    ("name", "num_params", "channels"),
+    ("name", "num_params", "channels", "render_group"),
     [
-        ("faust_bright_organ", 13, 2),
-        ("faust_bubble", 10, 2),
-        ("faust_church_organ", 16, 2),
-        ("faust_filter_osc", 6, 1),
+        ("faust_bright_organ", 13, 2, "faust"),
+        ("faust_bubble", 10, 2, "faust"),
+        ("faust_church_organ", 16, 2, "faust"),
+        ("faust_filter_osc", 6, 1, "faust_filter_osc"),
     ],
 )
 def test_render_faust_composes_into_valid_render_config(
     name: str,
     num_params: int,
     channels: int,
+    render_group: str,
 ) -> None:
-    """Each Faust group resolves checked-in source/spec identity without paths.
+    """Each Faust identity resolves checked-in source/spec identity without paths.
 
-    :param name: Render group and Faust registry identity.
+    :param name: Synth group and Faust registry identity.
     :param num_params: Expected encoded synth-and-note width.
     :param channels: Native source output channel count.
+    :param render_group: Backend render group paired with the identity.
     """
-    spec = _spec_from_dataset_overrides([f"render={name}"])
+    spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
 
     assert spec.render.param_spec_name == name
     assert spec.render.renderer_backend == "dawdreamer_faust"
@@ -207,8 +219,8 @@ def test_render_faust_composes_into_valid_render_config(
 
 
 def test_render_obxf_composes_into_valid_render_config() -> None:
-    """``render=obxf`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
-    spec = _spec_from_dataset_overrides(["render=obxf"])
+    """``synth=obxf render=vst`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
+    spec = _spec_from_dataset_overrides(["synth=obxf", "render=vst"])
 
     assert spec.render.param_spec_name == "obxf"
     assert spec.render.synth.synth_version == "1.0.3"
@@ -219,7 +231,7 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
 
 
 @pytest.mark.parametrize(
-    ("group", "param_spec_name", "plugin_state_path"),
+    ("synth_group", "param_spec_name", "plugin_state_path"),
     [
         ("surge_4_surgepy", "surge_4", "presets/surge-mini.fxp"),
         ("surge_simple_surgepy", "surge_simple", "presets/surge-simple.fxp"),
@@ -227,21 +239,21 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
     ],
 )
 @pytest.mark.requires_surgepy
-def test_surgepy_render_groups_compose_to_validated_isolated_configs(
-    group: str,
+def test_surgepy_render_group_composes_to_validated_isolated_configs(
+    synth_group: str,
     param_spec_name: str,
     plugin_state_path: str,
 ) -> None:
-    """Shipped SurgePy groups satisfy the strict runtime lifecycle contract.
+    """``render=surgepy`` satisfies the strict runtime lifecycle contract for each identity.
 
-    :param group: SurgePy render group.
+    :param synth_group: SurgePy synth identity group.
     :param param_spec_name: Expected Surge parameter specification.
     :param plugin_state_path: Expected FXP patch resource.
     """
     import surgepy
 
-    config = RenderConfig.model_validate(
-        OmegaConf.to_container(_compose_render_group(group), resolve=True)
+    config = RenderConfig.from_cfg_nodes(
+        _compose_render_group("surgepy"), _compose_synth_group(synth_group)
     )
 
     assert config.synth.synth_version == surgepy.getVersion()
@@ -260,28 +272,27 @@ def test_surgepy_render_groups_compose_to_validated_isolated_configs(
         ("surge_simple", "surge_simple", "presets/surge-simple.vstpreset"),
     ],
 )
-def test_surge_subset_render_groups_keep_surge_xt_identity(
+def test_surge_subset_synth_groups_keep_surge_xt_identity(
     group: str, param_spec_name: str, plugin_state_path: str
 ) -> None:
-    """Surge subset groups override only their spec and preset identity.
+    """Surge subset synth groups override only their spec and preset identity.
 
-    :param group: Surge subset render group.
+    :param group: Surge subset synth group.
     :param param_spec_name: Expected subset ParamSpec registry key.
     :param plugin_state_path: Expected subset preset path.
     """
-    cfg = _compose_render_group(group)
-    surge_xt = _compose_render_group("surge_xt")
+    synth = _compose_synth_group(group)
+    surge_xt = _compose_synth_group("surge_xt")
 
-    assert cfg.synth.param_spec_name == param_spec_name
-    assert cfg.synth.plugin_state_path == plugin_state_path
-    assert cfg.synth.plugin_path == surge_xt.synth.plugin_path
-    assert cfg.synth.synth_version == surge_xt.synth.synth_version
-    assert cfg.plugin_reload_cadence == surge_xt.plugin_reload_cadence
+    assert synth.param_spec_name == param_spec_name
+    assert synth.plugin_state_path == plugin_state_path
+    assert synth.plugin_path == surge_xt.plugin_path
+    assert synth.synth_version == surge_xt.synth_version
 
 
-def test_render_cardinal_selects_dawdreamer_with_per_render_reload() -> None:
-    """``render=cardinal`` routes Cardinal through DawDreamer on a reproducible host lifetime."""
-    spec = _spec_from_dataset_overrides(["render=cardinal"])
+def test_cardinal_identity_uses_dawdreamer_with_per_render_reload() -> None:
+    """Cardinal composes its root identity with the reproducible DawDreamer profile."""
+    spec = _spec_from_dataset_overrides(["synth=cardinal", "render=cardinal"])
 
     assert spec.render.synth.name == "cardinal"
     assert spec.render.param_spec_name == "cardinal"
@@ -289,5 +300,4 @@ def test_render_cardinal_selects_dawdreamer_with_per_render_reload() -> None:
     assert spec.render.plugin_state_path == "presets/cardinal-base.vstpreset"
     assert spec.render.renderer_backend == "dawdreamer"
     assert spec.render.gui_toggle_cadence == "never"
-    # Cardinal's Rack engine free-runs, so only a per-render instance is reproducible.
     assert spec.render.plugin_reload_cadence == "render"

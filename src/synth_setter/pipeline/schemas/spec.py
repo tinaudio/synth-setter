@@ -364,6 +364,37 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         normalized.pop("renderer_version", None)
         return normalized
 
+    @classmethod
+    def from_cfg_nodes(cls, render: Any, synth: Any) -> RenderConfig:
+        """Build from composed root ``render`` and ``synth`` nodes (#2565).
+
+        The Hydra ``render`` group carries backend knobs only; identity lives in
+        the root ``synth`` group, so every render-config construction from a
+        composed cfg joins the two here. Duck-typed with a lazy omegaconf import
+        like :meth:`DatasetSpec.from_hydra_cfg`.
+
+        :param render: Composed ``render`` node.
+        :param synth: Composed root ``synth`` node.
+        :returns: Validated render config with the identity nested under ``synth``.
+        :raises TypeError: Either node did not resolve to a mapping.
+        :raises ValueError: No ``synth`` group is composed.
+        """
+        if synth is None:
+            raise ValueError(
+                "no synth identity selected; pass `synth=<name>` alongside the render group"
+            )
+        # Lazy import: omegaconf is absent from the minimal-env CI install.
+        from omegaconf import OmegaConf
+
+        values = OmegaConf.to_container(render, resolve=True)
+        if not isinstance(values, dict):
+            raise TypeError("cfg.render must resolve to a mapping")
+        synth_values = OmegaConf.to_container(synth, resolve=True)
+        if not isinstance(synth_values, dict):
+            raise TypeError("cfg.synth must resolve to a mapping")
+        values["synth"] = synth_values
+        return cls.model_validate(values)
+
     @property
     def param_spec_name(self) -> ValidatedParamSpecName:
         """Key into the param-spec registry, resolved inside the worker.
@@ -849,7 +880,8 @@ class DatasetSpec(BaseModel):
         never evaluated, so the spec resolves under a plain ``compose()`` too.
 
         :param cfg: Composed dataset cfg; only keys matching ``cls.model_fields``
-            survive the mask, so non-spec groups need not resolve.
+            (plus the root ``synth`` identity group, #2565) survive the mask,
+            so non-spec groups need not resolve.
         :returns: Validated spec built from the masked, resolved mapping.
         :raises TypeError: ``cfg`` is not mapping-shaped (e.g. a ``ListConfig``,
             which ``masked_copy`` rejects with ``ValueError``) or the masked cfg
@@ -859,7 +891,9 @@ class DatasetSpec(BaseModel):
         # runs `validate_spec`, which imports this module but never calls this.
         from omegaconf import OmegaConf
 
-        spec_keys = [k for k in cfg if isinstance(k, str) and k in cls.model_fields]
+        spec_keys = [
+            k for k in cfg if isinstance(k, str) and (k in cls.model_fields or k == "synth")
+        ]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
         except ValueError as exc:
@@ -867,6 +901,13 @@ class DatasetSpec(BaseModel):
         raw = OmegaConf.to_container(masked, resolve=True)
         if not isinstance(raw, dict):
             raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
+        # The root ``synth`` group owns identity (#2565); nest it under render
+        # so the serialized spec keeps its ``render.synth`` shape. Without a
+        # ``render`` node the identity is dropped and pydantic's "render field
+        # required" error carries the failure.
+        synth = raw.pop("synth", None)
+        if synth is not None and "render" in raw:
+            raw["render"]["synth"] = synth
         return cls(**{k: v for k, v in raw.items() if isinstance(k, str)})
 
     @model_validator(mode="before")

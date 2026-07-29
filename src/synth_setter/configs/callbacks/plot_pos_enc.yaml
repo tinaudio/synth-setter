@@ -1,2 +1,0 @@
-plot_pos_enc:
-  _target_: synth_setter.utils.callbacks.PlotPositionalEncodingSimilarity

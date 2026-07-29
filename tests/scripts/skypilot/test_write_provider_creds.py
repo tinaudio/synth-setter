@@ -6,10 +6,7 @@ The script writes per-provider SkyPilot credentials before `sky check` /
 - R2 (always, regardless of provider): writes ``~/.cloudflare/r2.credentials``
   + ``~/.cloudflare/accountid`` for SkyPilot's R2 storage adaptor.
 - RunPod (when --provider runpod): ``~/.runpod/config.toml``.
-- OCI (when --provider oci): ``~/.oci/config`` + ``~/.oci/oci_api_key.pem``.
-  SkyPilot's OCI backend defaults to the root compartment when
-  ``oci.default.compartment_ocid`` is unset, so this script no longer manages
-  ``~/.sky/config.yaml`` — see PR #876.
+- Vast (when --provider vast): ``~/.config/vastai/vast_api_key``.
 
 The kind / kubernetes ("local") provider is handled directly in the CI
 workflow (the launcher skips this script for that case) — no `--provider
@@ -43,20 +40,6 @@ R2_ENV: dict[str, str] = {
 RUNPOD_ENV: dict[str, str] = {"RUNPOD_API_KEY": "rp-test-key"}
 
 VAST_ENV: dict[str, str] = {"VAST_API_KEY": "vast-test-key"}
-
-# Build a fake PEM at runtime — the source must not contain literal PEM
-# headers, otherwise the detect-private-key pre-commit hook flags this file.
-_PEM_HEADER = "-----BEGIN " + "PRIVATE" + " KEY-----"
-_PEM_FOOTER = "-----END " + "PRIVATE" + " KEY-----"
-_FAKE_PEM = f"{_PEM_HEADER}\nFAKE\n{_PEM_FOOTER}"
-
-OCI_ENV: dict[str, str] = {
-    "OCI_USER_OCID": "ocid1.user.oc1..xxxx",
-    "OCI_TENANCY_OCID": "ocid1.tenancy.oc1..yyyy",
-    "OCI_FINGERPRINT": "aa:bb:cc:dd",
-    "OCI_REGION": "us-ashburn-1",
-    "OCI_API_KEY_PEM": _FAKE_PEM,
-}
 
 
 def _run(
@@ -104,11 +87,6 @@ class TestNoStdoutLeak:
     def test_runpod_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
         """RunPod-mode invocation emits zero bytes on stdout (no leak surface)."""
         result = _run(tmp_path, {**R2_ENV, **RUNPOD_ENV}, "--provider", "runpod")
-        assert result.stdout == ""
-
-    def test_oci_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
-        """OCI-mode invocation emits zero bytes on stdout (no leak surface)."""
-        result = _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert result.stdout == ""
 
     def test_vast_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
@@ -163,9 +141,12 @@ class TestR2CredentialsFile:
         assert R2_ENV["R2_ACCOUNT_ID"] in accountid.read_text()
         assert _file_mode(accountid) == 0o600
 
-    def test_runs_unconditionally_for_oci_provider(self, tmp_path: Path) -> None:
-        """R2 cred files are written even when ``--provider`` is ``oci``."""
-        _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
+    def test_runs_unconditionally_for_vast_provider(self, tmp_path: Path) -> None:
+        """R2 cred files are written when ``--provider`` is ``vast``.
+
+        :param tmp_path: Pytest fixture providing a fresh HOME directory.
+        """
+        _run(tmp_path, {**R2_ENV, **VAST_ENV}, "--provider", "vast")
         assert (tmp_path / ".cloudflare" / "r2.credentials").is_file()
         assert (tmp_path / ".cloudflare" / "accountid").is_file()
 
@@ -244,25 +225,14 @@ class TestProviderGating:
         assert result.returncode != 0
         assert "VAST_API_KEY" in result.stderr
 
-    def test_oci_writes_oci_config_and_key(self, tmp_path: Path) -> None:
-        """OCI provider writes ~/.oci/config and ~/.oci/oci_api_key.pem (mode 600)."""
-        _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
-        assert (tmp_path / ".oci" / "config").is_file()
-        assert (tmp_path / ".oci" / "oci_api_key.pem").is_file()
-        assert _file_mode(tmp_path / ".oci" / "config") == 0o600
-        assert _file_mode(tmp_path / ".oci" / "oci_api_key.pem") == 0o600
+    def test_oci_provider_is_rejected(self, tmp_path: Path) -> None:
+        """Reject the removed OCI provider instead of falling back.
 
-    def test_oci_does_not_touch_sky_config(self, tmp_path: Path) -> None:
-        """OCI provider must not write to ``~/.sky/config.yaml``.
-
-        SkyPilot's OCI backend defaults to the root compartment when
-        ``oci.default.compartment_ocid`` is unset, so the script has nothing to
-        upsert (see PR #876).
+        :param tmp_path: Pytest fixture providing a fresh HOME directory.
         """
-        _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
-        assert not (tmp_path / ".sky" / "config.yaml").exists(), (
-            "OCI bootstrap should no longer touch ~/.sky/config.yaml"
-        )
+        result = _run(tmp_path, R2_ENV, "--provider", "oci", expect_success=False)
+        assert result.returncode != 0
+        assert "unknown provider: oci" in result.stderr
 
     def test_local_provider_is_rejected(self, tmp_path: Path) -> None:
         """Reject ``--provider local`` loudly so stale callers don't silently no-op.
@@ -309,14 +279,6 @@ class TestRequiredVarValidation:
         result = _run(tmp_path, R2_ENV, "--provider", "runpod", expect_success=False)
         assert result.returncode != 0
         assert "RUNPOD_API_KEY" in result.stderr
-
-    def test_oci_missing_user_ocid_fails(self, tmp_path: Path) -> None:
-        """OCI mode without OCI_USER_OCID exits non-zero and names the missing var."""
-        env = {**R2_ENV, **OCI_ENV}
-        del env["OCI_USER_OCID"]
-        result = _run(tmp_path, env, "--provider", "oci", expect_success=False)
-        assert result.returncode != 0
-        assert "OCI_USER_OCID" in result.stderr
 
 
 @pytest.mark.parametrize(

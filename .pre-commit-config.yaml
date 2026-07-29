@@ -46,9 +46,21 @@ repos:
       - id: ruff-format
         types_or: [python, jupyter]
 
-  # pyright: static type checker for Python (local hook)
+  # Project-specific static analysis (local hooks).
   - repo: local
     hooks:
+      - id: model-typing
+        name: model-typing
+        entry: uv run python scripts/lint_model_typing.py
+        language: system
+        pass_filenames: false
+        files: >-
+          (?x)^(
+            \.model-typing-baseline\.txt|
+            scripts/lint_model_typing\.py|
+            src/synth_setter/models/.*\.py|
+            tests/scripts/test_lint_model_typing\.py
+          )$
       - id: pyright
         name: pyright
         entry: uv run pyright
@@ -66,8 +78,6 @@ repos:
             src/synth_setter/evaluation/predict_vst_audio\.py|
             src/synth_setter/pipeline/data/reshard\.py|
             src/synth_setter/pipeline/data/rewrite_to_latest\.py|
-            src/synth_setter/data/fm_datamodule\.py|
-            src/synth_setter/data/kosc_datamodule\.py|
             src/synth_setter/data/ot\.py|
             src/synth_setter/data/vst_datamodule\.py|
             src/synth_setter/data/vst/core\.py|
@@ -79,8 +89,6 @@ repos:
             src/synth_setter/models/components/transformer\.py|
             src/synth_setter/models/components/vae\.py|
             src/synth_setter/models/components/vector_field\.py|
-            src/synth_setter/models/ksin_ff_module\.py|
-            src/synth_setter/models/ksin_flow_matching_module\.py|
             src/synth_setter/models/vst_ff_module\.py|
             src/synth_setter/models/vst_flow_matching_module\.py|
             src/synth_setter/models/vst_flowvae_module\.py|
@@ -154,16 +162,12 @@ repos:
             src/synth_setter/pipeline/data/add_music2latent\.py|
             src/synth_setter/evaluation/compute_audio_metrics\.py|
             src/synth_setter/pipeline/data/stats\.py|
-            src/synth_setter/tools/sig_perf\.py|
             src/synth_setter/tools/model_from_wandb\.py|
             src/synth_setter/tools/paramspec_to_table\.py|
             src/synth_setter/tools/plot_param2tok\.py|
             src/synth_setter/evaluation/predict_vst_audio\.py|
             src/synth_setter/pipeline/data/reshard\.py|
             src/synth_setter/data/audio_datamodule\.py|
-            src/synth_setter/data/fm_datamodule\.py|
-            src/synth_setter/data/kosc_datamodule\.py|
-            src/synth_setter/data/ksin_datamodule\.py|
             src/synth_setter/data/ot\.py|
             src/synth_setter/data/vst_datamodule\.py|
             src/synth_setter/data/vst/core\.py|
@@ -172,14 +176,11 @@ repos:
             src/synth_setter/data/vst/surge_xt_param_spec\.py|
             src/synth_setter/metrics\.py|
             src/synth_setter/models/components/cnn\.py|
-            src/synth_setter/models/components/loss\.py|
             src/synth_setter/models/components/residual_mlp\.py|
             src/synth_setter/models/components/sinkhorn\.py|
             src/synth_setter/models/components/transformer\.py|
             src/synth_setter/models/components/vae\.py|
             src/synth_setter/models/components/vector_field\.py|
-            src/synth_setter/models/ksin_ff_module\.py|
-            src/synth_setter/models/ksin_flow_matching_module\.py|
             src/synth_setter/models/vst_ff_module\.py|
             src/synth_setter/models/vst_flow_matching_module\.py|
             src/synth_setter/models/vst_flowvae_module\.py|
@@ -231,7 +232,6 @@ repos:
             jobs/predict/vae-nsynth\.sh|
             jobs/predict/vae-simple\.sh|
             jobs/render/render-audio\.sh|
-            jobs/train/kosc/train\.sh|
             jobs/train/surge/train\.sh|
             renderscript\.sh
           )$
@@ -267,7 +267,6 @@ repos:
         exclude: >-
           (?x)^(
             CHANGELOG\.md|
-            src/synth_setter/models/ksin_flow_matching_module\.py|
             src/synth_setter/data/vst/[A-Za-z0-9_]+_param_spec\.py|
             \.claude/.*
           )$

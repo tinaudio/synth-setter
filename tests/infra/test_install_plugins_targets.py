@@ -1,106 +1,38 @@
-"""`make install-plugins` provisions every VST3 bundle the runtime docker image ships.
-
-The image (docker/ubuntu22_04/Dockerfile) installs Surge XT plus three SHA256-pinned prebuilt
-synths (Dexed, OB-Xf, Six Sines) and source-builds Ultramaster KR-106. The Makefile mirrors those
-pins for local installs; these tests fail when either side drifts.
-
-The download-path tests never touch the network: they seed the archive cache under a throwaway
-``HOME`` and pass the fixture's real sha256 as a command-line make-variable override.
-"""
+"""Studiorack is the source of truth for local and image VST3 provisioning."""
 
 from __future__ import annotations
 
-import hashlib
-import io
-import os
-import platform
+import json
 import re
-import shutil
-import subprocess
-import tarfile
-import zipfile
-from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = PROJECT_ROOT / "Makefile"
-DOCKERFILE = PROJECT_ROOT / "docker" / "ubuntu22_04" / "Dockerfile"
-APT_REFRESH_SCRIPT = PROJECT_ROOT / "scripts" / "docker" / "run_after_apt_update.sh"
+DOCKERFILE = PROJECT_ROOT / "docker/ubuntu22_04/Dockerfile"
+CARDINAL_MANIFEST = PROJECT_ROOT / "studiorack-cardinal.json"
+MANIFEST = PROJECT_ROOT / "studiorack.json"
+PACKAGE_LOCK = PROJECT_ROOT / "package-lock.json"
+SETUP_SURGE_ACTION = PROJECT_ROOT / ".github/actions/setup-surge-xt/action.yml"
+TART_TEMPLATE = PROJECT_ROOT / "tart/macos.pkr.hcl"
 
 pytestmark = pytest.mark.infra
 
-# Bound subprocess calls so a hung make can't wedge the suite.
-_TIMEOUT_S = 60
-
-# Every VST3 bundle staged into the runtime image, by plugins/ basename.
-_IMAGE_BUNDLES = (
-    "Surge XT.vst3",
-    "Dexed.vst3",
-    "OB-Xf.vst3",
-    "Six Sines.vst3",
-    "Ultramaster KR-106.vst3",
-)
-
-_LINUX_X86_64_PLUGIN_TARGETS = (
-    "install-dexed",
-    "install-obxf",
-    "install-six-sines",
-    "install-ultramaster-kr106",
-)
-
-# Pins that must stay identical between the Makefile and the Dockerfile ARGs.
-_SHARED_PINS = (
-    "DEXED_VERSION",
-    "DEXED_SHA256",
-    "OBXF_VERSION",
-    "OBXF_SHA256",
-    "SIX_SINES_VERSION",
-    "SIX_SINES_ASSET",
-    "SIX_SINES_SHA256",
-    "ULTRAMASTER_KR106_VERSION",
-    "ULTRAMASTER_KR106_GIT_REF",
-)
-
-# The prebuilt fetch and source-build recipes gate on x86_64 Linux, so their install branches are
-# only reachable on such hosts.
-requires_x86_64_linux = pytest.mark.skipif(
-    platform.system() != "Linux" or platform.machine() != "x86_64",
-    reason="plugin install targets skip on non-x86_64 hosts",
-)
-
-if shutil.which("make") is None:
-    pytest.skip("make not on PATH", allow_module_level=True)
-
-
-def _makefile_var(name: str) -> str:
-    """Return the value of a simple `NAME := value` Makefile assignment.
-
-    :param name: variable name to look up.
-    :returns: the assigned value, surrounding whitespace stripped.
-    """
-    match = re.search(rf"^{name}\s*:?=\s*(.+?)\s*$", MAKEFILE.read_text(), re.MULTILINE)
-    assert match, f"Makefile does not define {name}"
-    return match.group(1)
-
-
-def _dockerfile_arg(name: str) -> str:
-    """Return the default value of an `ARG NAME=value` Dockerfile instruction.
-
-    :param name: build-arg name to look up.
-    :returns: the default value, surrounding whitespace stripped.
-    """
-    match = re.search(rf"^ARG {name}=(.+?)\s*$", DOCKERFILE.read_text(), re.MULTILINE)
-    assert match, f"Dockerfile does not define ARG {name}"
-    return match.group(1)
+_EXPECTED_PLUGINS = {
+    "asb2m10/dexed": ("0.9.8", "Dexed.vst3"),
+    "baconpaul/six-sines": ("1.1.0", "Six Sines.vst3"),
+    "kayrockscreenprinting/ultramaster-kr106": ("2.5.13", "Ultramaster KR-106.vst3"),
+    "surge-synthesizer/ob-xf": ("1.0.3", "OB-Xf.vst3"),
+    "surge-synthesizer/surge": ("1.3.4", "Surge XT.vst3"),
+}
 
 
 def _dockerfile_stage_text(stage_name: str) -> str:
     """Return Dockerfile text from ``stage_name`` until the next stage.
 
     :param stage_name: Docker stage alias.
-    :returns: the selected stage text.
+    :returns: Selected stage text.
     """
     text = DOCKERFILE.read_text()
     match = re.search(rf"^FROM .+ AS {re.escape(stage_name)}\n", text, re.MULTILINE)
@@ -110,601 +42,93 @@ def _dockerfile_stage_text(stage_name: str) -> str:
     return text[match.start() : end]
 
 
-def _run_make(
-    cwd: Path,
-    target: str,
-    *makevars: str,
-    env: Mapping[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run a make target in ``cwd`` without raising on failure.
+def test_studiorack_manifest_pins_runtime_plugin_set() -> None:
+    """The project manifest is the single source for shipped plugin versions."""
+    payload = json.loads(MANIFEST.read_text())
 
-    :param cwd: directory holding the Makefile under test.
-    :param target: make target to invoke.
-    :param *makevars: ``NAME=value`` command-line overrides for Makefile variables.
-    :param env: full environment for the subprocess; inherits os.environ when None.
-    :returns: the completed process, stdout/stderr captured as text.
-    """
-    git_ref_override = "CURRENT_LOCAL_GIT_REF=0000000000000000000000000000000000000000"
-    return subprocess.run(  # noqa: S603 — fixed argv, no shell
-        ["make", target, git_ref_override, *makevars],  # noqa: S607 — make on PATH
-        cwd=cwd,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=_TIMEOUT_S,
-    )
+    assert payload["type"] == "project"
+    assert {
+        package: (version, payload["vst3Bundles"][package])
+        for package, version in payload["plugins"].items()
+    } == _EXPECTED_PLUGINS
 
 
-def _docker_executable_or_skip() -> str:
-    """Return the Docker executable when its daemon is reachable.
+def test_cardinal_manifest_pins_optional_plugin() -> None:
+    """Cardinal stays installable without joining the runtime image plugin set."""
+    payload = json.loads(CARDINAL_MANIFEST.read_text())
 
-    :returns: Absolute Docker executable path.
-    """
-    docker = shutil.which("docker")
-    if docker is None:
-        pytest.skip("docker binary not available")
-    info = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [docker, "info"],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    if info.returncode != 0:
-        pytest.skip("Docker daemon unavailable")
-    return docker
+    assert payload["plugins"] == {"distrho/cardinal": "2026.2.0"}
+    assert payload["vst3Bundles"] == {"distrho/cardinal": "CardinalSynth.vst3"}
 
 
-def _run_clean_docker_build(
-    target: str, platform_name: str, timeout: int
-) -> subprocess.CompletedProcess[str]:
-    """Build one Dockerfile target without reusing cached layers.
+def test_package_lock_pins_studiorack_cli_and_core() -> None:
+    """The npm lock fixes both the CLI and its behavior-defining core version."""
+    lock = json.loads(PACKAGE_LOCK.read_text())
 
-    :param target: Dockerfile stage to build.
-    :param platform_name: BuildKit platform such as ``linux/amd64``.
-    :param timeout: Maximum build duration in seconds.
-    :returns: Completed build process with captured output.
-    """
-    docker = _docker_executable_or_skip()
-    return subprocess.run(  # noqa: S603 — fixed argv, no shell
-        [
-            docker,
-            "buildx",
-            "build",
-            "--no-cache",
-            "--platform",
-            platform_name,
-            "--target",
-            target,
-            "--build-arg",
-            "BUILD_MODE=prebuilt",
-            "-f",
-            str(DOCKERFILE),
-            ".",
-        ],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    assert lock["packages"]["node_modules/@studiorack/cli"]["version"] == "3.0.6"
+    assert lock["packages"]["node_modules/@open-audio-stack/core"]["version"] == "0.1.55"
 
 
-def _fake_apt_environment(tmp_path: Path, update_exit_code: int) -> tuple[dict[str, str], Path]:
-    """Create a PATH-prefixed fake apt-get and return its environment and call log.
+def test_make_plugin_targets_delegate_to_studiorack_cli() -> None:
+    """Every public Make target delegates package installation to Studiorack."""
+    makefile = MAKEFILE.read_text()
 
-    :param tmp_path: Scratch directory containing the fake executable and log.
-    :param update_exit_code: Exit code returned for ``apt-get update``.
-    :returns: Subprocess environment and path recording apt-get arguments.
-    """
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    calls = tmp_path / "apt-calls"
-    apt_get = fake_bin / "apt-get"
-    apt_get.write_text(
-        '#!/bin/bash\nprintf "%s\\n" "$*" >> "${APT_CALLS}"\n'
-        'if [[ "${1}" == update ]]; then exit "${APT_UPDATE_EXIT}"; fi\n'
-    )
-    apt_get.chmod(0o755)
-    env = {
-        **os.environ,
-        "APT_CALLS": str(calls),
-        "APT_UPDATE_EXIT": str(update_exit_code),
-        "PATH": f"{fake_bin}:{os.defpath}",
-    }
-    return env, calls
+    assert "install-studiorack:" in makefile
+    assert "npm ci" in makefile
+    for package in _EXPECTED_PLUGINS:
+        assert f"install --plugin {package}" in makefile
+    plugin_section = makefile[makefile.index("STUDIORACK :=") : makefile.index("link-thoughts:")]
+    assert not re.search(r"\b(curl|wget|git clone|tar -|unzip)\b", plugin_section)
 
 
-def _zip_containing(inner_dir: str) -> bytes:
-    """Build an in-memory .zip whose payload lives under ``inner_dir``.
+def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
+    """The image installs plugins through the same locked CLI as local hosts."""
+    stage = _dockerfile_stage_text("builder-install-studiorack-plugins")
 
-    :param inner_dir: archive-internal directory path, e.g. ``x-lnx/Dexed.vst3``.
-    :returns: the zip file's bytes.
-    """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(f"{inner_dir}/Contents/x86_64-linux/plugin.so", b"fake plugin binary")
-    return buf.getvalue()
+    assert "COPY --from=synth-setter-src /home/build/synth-setter/package.json" in stage
+    assert "COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json" in stage
+    assert "npm ci" in stage
+    assert "python -m synth_setter.cli.plugins" in stage
+    assert "update-alternatives --install /usr/bin/gcc" in DOCKERFILE.read_text()
+    assert "studiorack.json" in stage
 
 
-def _targz_containing(inner_dir: str) -> bytes:
-    """Build an in-memory .tgz whose payload lives under ``inner_dir``.
+def test_docker_alias_restore_runs_from_mounted_source() -> None:
+    """Snapshot images restore aliases without requiring the new console script."""
+    helper = (PROJECT_ROOT / "docker/ubuntu22_04/ensure_plugin_symlinks.sh").read_text()
 
-    :param inner_dir: archive-internal directory path, e.g. ``./Six Sines.vst3``.
-    :returns: the gzipped tarball's bytes.
-    """
-    payload = io.BytesIO(b"fake plugin binary")
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        info = tarfile.TarInfo(f"{inner_dir}/Contents/x86_64-linux/plugin.so")
-        info.size = len(payload.getvalue())
-        tf.addfile(info, payload)
-    return buf.getvalue()
+    assert '"PYTHONPATH=${repo_root}/src" python -m synth_setter.cli.plugins' in helper
+    assert "adopt \\\n    --plugin surge-synthesizer/surge" in helper
 
 
-def _home_env(checkout: Path) -> tuple[Path, dict[str, str]]:
-    """Create a throwaway HOME under ``checkout`` and an env pointing at it.
+def test_docker_fetched_plugins_have_no_manual_download_stage() -> None:
+    """Archive synths no longer have parallel Docker download recipes."""
+    dockerfile = DOCKERFILE.read_text()
 
-    :param checkout: test checkout the HOME directory nests under.
-    :returns: ``(home_path, env)`` for `_run_make` calls that must isolate the cache.
-    """
-    home = checkout / "home"
-    return home, {**os.environ, "HOME": str(home)}
+    assert "AS vst3-synths-fetch" not in dockerfile
+    assert "DEXED_SHA256" not in dockerfile
+    assert "OBXF_SHA256" not in dockerfile
+    assert "SIX_SINES_SHA256" not in dockerfile
 
 
-def _seed_cache(home: Path, asset_name: str, payload: bytes) -> str:
-    """Place a fake cached archive under ``home`` and return its real sha256.
+def test_macos_provisioners_install_surge_through_studiorack() -> None:
+    """CI and Tart use the manifest instead of Homebrew's rolling cask."""
+    action = SETUP_SURGE_ACTION.read_text()
+    tart = TART_TEMPLATE.read_text()
 
-    :param home: throwaway HOME whose ``.cache/synth-setter/`` receives the archive.
-    :param asset_name: archive filename the recipe will look for.
-    :param payload: archive bytes to write.
-    :returns: hex sha256 of ``payload``.
-    """
-    cache = home / ".cache" / "synth-setter"
-    cache.mkdir(parents=True, exist_ok=True)
-    (cache / asset_name).write_bytes(payload)
-    return hashlib.sha256(payload).hexdigest()
+    assert "npm ci" in action
+    assert '"CI="' in action
+    assert "synth-setter-plugins" in action
+    assert "brew install --cask surge-xt" not in action
+    assert "npm ci" in tart
+    assert "synth-setter-plugins" in tart
+    assert "brew install --cask surge-xt" not in tart
 
 
-@pytest.fixture
-def makefile_checkout(tmp_path: Path) -> Path:
-    """Provide a throwaway directory holding only the project Makefile.
+def test_docker_keeps_source_fallback_only_for_incompatible_registry_artifacts() -> None:
+    """Source builds remain documented compatibility fallbacks, not package pins."""
+    dockerfile = DOCKERFILE.read_text()
 
-    :param tmp_path: pytest scratch dir that receives the Makefile copy.
-    :returns: the directory, ready for `make <target>` runs against it.
-    """
-    shutil.copy(MAKEFILE, tmp_path / "Makefile")
-    return tmp_path
-
-
-@pytest.mark.parametrize("pin", _SHARED_PINS)
-def test_makefile_pin_matches_dockerfile_arg(pin: str) -> None:
-    """Each fetched-synth pin in the Makefile equals the Dockerfile ARG default.
-
-    :param pin: pin variable name present in both files.
-    """
-    assert _makefile_var(pin) == _dockerfile_arg(pin), (
-        f"{pin} drifted between Makefile and {DOCKERFILE.relative_to(PROJECT_ROOT)}"
-    )
-
-
-def test_surge_version_matches_dockerfile_prebuilt_package() -> None:
-    """The Makefile's Surge pin names the same release the image's prebuilt path installs."""
-    version = _makefile_var("SURGE_XT_VERSION")
-    assert f"{version}/surge-xt-linux-x64-{version}.deb" in DOCKERFILE.read_text(), (
-        f"Dockerfile prebuilt Surge package does not match Makefile SURGE_XT_VERSION={version}"
-    )
-
-
-def test_runtime_image_installs_unzip_for_plugin_install_targets() -> None:
-    """The runtime image has the zip extractor that Makefile plugin targets invoke."""
-    stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
-    assert re.search(r"apt-get install\b[\s\S]*\bunzip\b", stage)
-
-
-def test_runtime_apt_update_failure_prevents_package_install(tmp_path: Path) -> None:
-    """The runtime package transaction stops before install when index refresh fails.
-
-    :param tmp_path: Scratch directory containing the fake apt boundary and call log.
-    """
-    env, calls = _fake_apt_environment(tmp_path, update_exit_code=42)
-    install_marker = tmp_path / "install-ran"
-
-    result = subprocess.run(  # noqa: S603 — fake apt-get is isolated under tmp_path
-        ["bash", str(APT_REFRESH_SCRIPT), "touch", str(install_marker)],  # noqa: S607
-        cwd=PROJECT_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-        check=False,
-    )
-
-    assert result.returncode == 42
-    assert calls.read_text().splitlines() == ["update --error-on=any"]
-    assert not install_marker.exists()
-
-
-def test_runtime_apt_update_success_runs_package_install(tmp_path: Path) -> None:
-    """The runtime package transaction runs install after index refresh succeeds.
-
-    :param tmp_path: Scratch directory containing the fake apt boundary and marker.
-    """
-    env, calls = _fake_apt_environment(tmp_path, update_exit_code=0)
-    install_marker = tmp_path / "install-ran"
-
-    result = subprocess.run(  # noqa: S603 — fake apt-get is isolated under tmp_path
-        ["bash", str(APT_REFRESH_SCRIPT), "touch", str(install_marker)],  # noqa: S607
-        cwd=PROJECT_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=_TIMEOUT_S,
-        check=False,
-    )
-
-    assert result.returncode == 0
-    assert calls.read_text().splitlines() == ["update --error-on=any"]
-    assert install_marker.exists()
-
-
-def test_base_images_select_azure_ubuntu_mirror_before_apt_update() -> None:
-    """Independent base-image stages switch to the Azure-local Ubuntu mirror before apt update."""
-    mirror_rewrite = (
-        "sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' "
-        "/etc/apt/sources.list"
-    )
-    for stage_name in ("builder-base", "vst3-synths-fetch"):
-        stage = _dockerfile_stage_text(stage_name)
-        replace_index = stage.index(mirror_rewrite)
-        update_index = stage.index("apt-get update --error-on=any")
-        assert replace_index < update_index
-
-
-def test_runtime_image_validates_surge_with_standalone_loader() -> None:
-    """The pre-install Surge check does not import the unavailable project package."""
-    stage = _dockerfile_stage_text("builder-install-synth-setter-deps")
-    copy_index = stage.index("load_vst3_check.py /artifacts/")
-    validation_index = stage.index("python -X faulthandler load_vst3_check.py")
-    assert copy_index < validation_index
-    assert "from core import load_plugin" not in stage
-
-
-def test_builder_base_configures_timezone_without_debconf_pipe() -> None:
-    """The shared image base uses Docker-safe noninteractive timezone setup."""
-    stage = _dockerfile_stage_text("builder-base")
-    assert "ENV TZ=Etc/UTC" in stage
-    assert "debconf-set-selections" not in stage
-
-
-def test_ultramaster_docker_build_logs_version_with_git_ref() -> None:
-    """The KR-106 Docker build surfaces the version label with the pinned ref."""
-    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
-    assert re.search(
-        r"echo\b.*\$\{ULTRAMASTER_KR106_VERSION\}.*\$\{ULTRAMASTER_KR106_GIT_REF\}",
-        stage,
-    )
-
-
-def test_ultramaster_docker_build_gates_dependencies_by_arch() -> None:
-    """The KR-106 Docker stage skips build dependencies before apt runs."""
-    stage = _dockerfile_stage_text("builder-build-ultramaster-kr106")
-    skip_idx = stage.find('if [ "${TARGETARCH:-}" != "amd64" ]')
-    apt_idx = stage.find("apt-get update")
-    assert skip_idx != -1, stage
-    assert apt_idx != -1, stage
-    assert skip_idx < apt_idx
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize("target", ("builder-base", "vst3-synths-fetch"))
-def test_base_stage_resolves_apt_packages_from_azure_mirror(target: str) -> None:
-    """A clean BuildKit run completes each independent base-stage package installation.
-
-    :param target: Independent Dockerfile stage whose Ubuntu mirror is rewritten.
-    """
-    result = _run_clean_docker_build(target, "linux/amd64", 300)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-@pytest.mark.slow
-def test_runtime_dependency_stage_runs_apt_refresh_wrapper() -> None:
-    """A clean runtime dependency build executes the guarded apt transaction."""
-    result = _run_clean_docker_build("builder-install-synth-setter-deps", "linux/amd64", 1800)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-@pytest.mark.slow
-def test_ultramaster_docker_arm64_target_skips_source_build() -> None:
-    """BuildKit can execute the arm64 KR-106 stage without source-build deps."""
-    result = _run_clean_docker_build("builder-build-ultramaster-kr106", "linux/arm64", 900)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_install_plugins_all_bundles_present_skips_every_download(
-    makefile_checkout: Path,
-) -> None:
-    """`make install-plugins` covers every image bundle and is a no-op when all exist.
-
-    Pre-creating every bundle proves the aggregate target visits each image plugin without touching
-    the network.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    plugins = makefile_checkout / "plugins"
-    plugins.mkdir()
-    for name in _IMAGE_BUNDLES:
-        (plugins / name).mkdir()
-
-    result = _run_make(makefile_checkout, "install-plugins")
-
-    assert result.returncode == 0, result.stderr
-    for name in _IMAGE_BUNDLES:
-        assert f"plugins/{name} already exists" in result.stdout, f"{name} not visited"
-
-
-@pytest.mark.parametrize("target", _LINUX_X86_64_PLUGIN_TARGETS)
-def test_linux_x86_64_plugin_target_non_x86_64_skips_without_installing(
-    makefile_checkout: Path, target: str
-) -> None:
-    """On a non-x86_64 host every x86_64 plugin target skips, mirroring the image gate.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    :param target: plugin install make target under test.
-    """
-    bindir = makefile_checkout / "bin"
-    bindir.mkdir()
-    fake_uname = bindir / "uname"
-    fake_uname.write_text(
-        '#!/bin/sh\nif [ "$1" = "-m" ]; then echo aarch64; else echo Linux; fi\n'
-    )
-    fake_uname.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
-
-    result = _run_make(makefile_checkout, target, env=env)
-
-    assert result.returncode == 0, result.stderr
-    assert "skipping" in result.stdout
-    assert not (makefile_checkout / "plugins").exists()
-
-
-@requires_x86_64_linux
-def test_install_dexed_cached_archive_verifies_and_installs_bundle(
-    makefile_checkout: Path,
-) -> None:
-    """A cached archive with a matching sha256 is verified and extracted into plugins/.
-
-    Exercises the full verify → extract → move path plus the 'Using cached' reuse branch, with the
-    cache isolated under a throwaway HOME and the pin overridden to the fixture's real hash.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    version = _makefile_var("DEXED_VERSION")
-    payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
-    digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
-
-    result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={digest}", env=env)
-
-    assert result.returncode == 0, result.stderr
-    assert "Using cached" in result.stdout
-    installed = makefile_checkout / "plugins" / "Dexed.vst3"
-    assert (installed / "Contents" / "x86_64-linux" / "plugin.so").is_file()
-
-
-@requires_x86_64_linux
-def test_install_six_sines_cached_targz_verifies_and_installs_bundle(
-    makefile_checkout: Path,
-) -> None:
-    """The .tgz extraction branch handles the space-containing Six Sines bundle name.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    asset = _makefile_var("SIX_SINES_ASSET")
-    payload = _targz_containing("./Six Sines.vst3")
-    digest = _seed_cache(home, asset, payload)
-
-    result = _run_make(
-        makefile_checkout, "install-six-sines", f"SIX_SINES_SHA256={digest}", env=env
-    )
-
-    assert result.returncode == 0, result.stderr
-    installed = makefile_checkout / "plugins" / "Six Sines.vst3"
-    assert (installed / "Contents" / "x86_64-linux" / "plugin.so").is_file()
-
-
-@requires_x86_64_linux
-def test_install_plugins_mixed_presence_installs_only_missing_bundle(
-    makefile_checkout: Path,
-) -> None:
-    """The aggregate target skips present bundles and installs the missing one in one run.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    plugins = makefile_checkout / "plugins"
-    plugins.mkdir()
-    for name in (
-        "Surge XT.vst3",
-        "OB-Xf.vst3",
-        "Six Sines.vst3",
-        "Ultramaster KR-106.vst3",
-    ):
-        (plugins / name).mkdir()
-    version = _makefile_var("DEXED_VERSION")
-    payload = _zip_containing(f"dexed-{version}-lnx/Dexed.vst3")
-    digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
-
-    result = _run_make(makefile_checkout, "install-plugins", f"DEXED_SHA256={digest}", env=env)
-
-    assert result.returncode == 0, result.stderr
-    assert "plugins/Surge XT.vst3 already exists" in result.stdout
-    assert "Installed plugins/Dexed.vst3" in result.stdout
-    assert (plugins / "Dexed.vst3" / "Contents" / "x86_64-linux" / "plugin.so").is_file()
-
-
-@requires_x86_64_linux
-def test_install_ultramaster_existing_cache_refreshes_pinned_ref(
-    makefile_checkout: Path,
-) -> None:
-    """An existing KR-106 cache still fetches and checks out the requested pin.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    cache = home / ".cache" / "synth-setter" / "ultramaster-kr106-test"
-    (cache / "src" / ".git").mkdir(parents=True)
-
-    bindir = makefile_checkout / "bin"
-    bindir.mkdir()
-    log = makefile_checkout / "tool.log"
-    fake_git = bindir / "git"
-    fake_git.write_text('#!/bin/sh\nprintf "git %s\\n" "$*" >> "$TOOL_LOG"\n')
-    fake_git.chmod(0o755)
-    fake_cmake = bindir / "cmake"
-    fake_cmake.write_text(
-        "#!/bin/sh\n"
-        'printf "cmake %s\\n" "$*" >> "$TOOL_LOG"\n'
-        'if [ "$1" = "--build" ]; then\n'
-        '  mkdir -p "$2/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3/Contents"\n'
-        "fi\n"
-    )
-    fake_cmake.chmod(0o755)
-    env = {**env, "PATH": f"{bindir}{os.pathsep}{env['PATH']}", "TOOL_LOG": str(log)}
-
-    result = _run_make(
-        makefile_checkout,
-        "install-ultramaster-kr106",
-        "ULTRAMASTER_KR106_VERSION=test",
-        "ULTRAMASTER_KR106_GIT_REF=abc123",
-        env=env,
-    )
-
-    assert result.returncode == 0, result.stderr
-    tool_log = log.read_text()
-    assert "fetch --depth 1 origin abc123" in tool_log
-    assert "checkout --detach FETCH_HEAD" in tool_log
-    assert "reset --hard FETCH_HEAD" in tool_log
-    assert (makefile_checkout / "plugins" / "Ultramaster KR-106.vst3").is_dir()
-
-
-@requires_x86_64_linux
-def test_install_ultramaster_invalid_cache_reinitializes_checkout(
-    makefile_checkout: Path,
-) -> None:
-    """A malformed KR-106 cache is discarded before fetching the pinned ref.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    cache = home / ".cache" / "synth-setter" / "ultramaster-kr106-test"
-    (cache / "src" / ".git").mkdir(parents=True)
-
-    bindir = makefile_checkout / "bin"
-    bindir.mkdir()
-    log = makefile_checkout / "tool.log"
-    fake_git = bindir / "git"
-    fake_git.write_text(
-        "#!/bin/sh\n"
-        'workdir="$PWD"\n'
-        'if [ "$1" = "-C" ]; then workdir="$2"; shift 2; fi\n'
-        'printf "git -C %s %s\\n" "$workdir" "$*" >> "$TOOL_LOG"\n'
-        'case "$1 $2" in\n'
-        '  "rev-parse --git-dir") [ -f "$workdir/.git/valid" ]; exit $? ;;\n'
-        '  "remote set-url") [ -f "$workdir/.git/valid" ]; exit $? ;;\n'
-        "esac\n"
-        'if [ "$1" = "init" ]; then mkdir -p "$workdir/.git"; touch "$workdir/.git/valid"; fi\n'
-    )
-    fake_git.chmod(0o755)
-    fake_cmake = bindir / "cmake"
-    fake_cmake.write_text(
-        "#!/bin/sh\n"
-        'printf "cmake %s\\n" "$*" >> "$TOOL_LOG"\n'
-        'if [ "$1" = "--build" ]; then\n'
-        '  mkdir -p "$2/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3/Contents"\n'
-        "fi\n"
-    )
-    fake_cmake.chmod(0o755)
-    env = {**env, "PATH": f"{bindir}{os.pathsep}{env['PATH']}", "TOOL_LOG": str(log)}
-
-    result = _run_make(
-        makefile_checkout,
-        "install-ultramaster-kr106",
-        "ULTRAMASTER_KR106_VERSION=test",
-        "ULTRAMASTER_KR106_GIT_REF=abc123",
-        env=env,
-    )
-
-    assert result.returncode == 0, result.stderr
-    tool_log = log.read_text()
-    assert "rev-parse --git-dir" in tool_log
-    assert "init" in tool_log
-    assert (
-        "remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git"
-        in tool_log
-    )
-    assert "fetch --depth 1 origin abc123" in tool_log
-    assert (makefile_checkout / "plugins" / "Ultramaster KR-106.vst3").is_dir()
-
-
-@requires_x86_64_linux
-def test_install_dexed_checksum_mismatch_fails_without_installing(
-    makefile_checkout: Path,
-) -> None:
-    """A cached archive whose hash differs from the pin aborts before extraction.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    version = _makefile_var("DEXED_VERSION")
-    _seed_cache(home, f"dexed-{version}-lnx.zip", _zip_containing("x/Dexed.vst3"))
-
-    result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={'0' * 64}", env=env)
-
-    assert result.returncode != 0
-    assert "Remove the cached file and retry" in result.stderr
-    assert not (makefile_checkout / "plugins" / "Dexed.vst3").exists()
-
-
-@requires_x86_64_linux
-def test_install_six_sines_unsupported_archive_type_fails(makefile_checkout: Path) -> None:
-    """An asset name with an unknown extension fails after checksum, before extraction.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    payload = b"not an archive"
-    digest = _seed_cache(home, "six-sines.rar", payload)
-
-    result = _run_make(
-        makefile_checkout,
-        "install-six-sines",
-        "SIX_SINES_ASSET=six-sines.rar",
-        f"SIX_SINES_SHA256={digest}",
-        env=env,
-    )
-
-    assert result.returncode != 0
-    assert "unsupported archive type" in result.stderr
-    assert not (makefile_checkout / "plugins" / "Six Sines.vst3").exists()
-
-
-@requires_x86_64_linux
-def test_install_dexed_archive_missing_bundle_fails(makefile_checkout: Path) -> None:
-    """An archive that lacks `<Bundle>.vst3` fails with a clear error and installs nothing.
-
-    :param makefile_checkout: throwaway checkout holding the Makefile.
-    """
-    home, env = _home_env(makefile_checkout)
-    version = _makefile_var("DEXED_VERSION")
-    payload = _zip_containing(f"dexed-{version}-lnx/NotThePlugin.vst3")
-    digest = _seed_cache(home, f"dexed-{version}-lnx.zip", payload)
-
-    result = _run_make(makefile_checkout, "install-dexed", f"DEXED_SHA256={digest}", env=env)
-
-    assert result.returncode != 0
-    assert "Dexed.vst3 not found" in result.stderr
-    assert not (makefile_checkout / "plugins" / "Dexed.vst3").exists()
+    assert "AS builder-install-surge-from-source" in dockerfile
+    assert "AS builder-build-ultramaster-kr106" in dockerfile
+    assert "open-audio-stack/open-audio-stack-core/issues/82" in dockerfile

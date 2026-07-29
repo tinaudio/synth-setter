@@ -4,15 +4,12 @@ defaults:
   - /experiment/surge/base
   - override /model: vst_ffn
   - override /datamodule: surge_lance
+  - override /synth: surge_4
+  - override /callbacks: [default_vst, log_per_param_mse]
   - _self_
 
 run_name: ffn
 experiment_name: surge-4-toy
-datamodule:
-  param_spec_name: surge_4
 
 callbacks:
-  log_per_param_mse:
-    _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: ${datamodule.param_spec_name}
   plot_proj_ii: null

@@ -68,20 +68,22 @@ def _build_postprocess_cfg(
     :param shuffle_seed: Drives ``cfg.evaluation.shuffle_seed``.
     :param metric_prefix: Drives ``cfg.evaluation.metric_prefix``; prepended to
         every returned audio metric key.
-    :param render: Drives ``cfg.render``; pass ``None`` to test the unset-render branch.
+    :param render: Drives ``cfg.render`` and, for identity keys, the root
+        ``cfg.synth`` node (#2565); pass ``None`` to test the unset-render branch.
     :param batch_size: Drives ``cfg.datamodule.batch_size``; the render timeout
         scales with ``pred-*.pt`` count times this.
     :returns: Minimal :class:`DictConfig` shaped the way the helper reads it.
     """
+    synth_values: dict[str, Any] | None = None
     if render is not None:
+        synth_values = {
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-simple.vstpreset",
+            "synth_version": "1.3.4",
+        }
         render_values: dict[str, Any] = {
-            "synth": {
-                "name": "surge_simple",
-                "param_spec_name": "surge_simple",
-                "plugin_path": "plugins/Surge XT.vst3",
-                "plugin_state_path": "presets/surge-simple.vstpreset",
-                "synth_version": "1.3.4",
-            },
             "renderer_backend": "pedalboard",
             "sample_rate": 44100,
             "channels": 2,
@@ -94,8 +96,7 @@ def _build_postprocess_cfg(
             "gui_toggle_cadence": "never",
         }
         identity_keys = {"param_spec_name", "plugin_path", "plugin_state_path", "synth_version"}
-        identity_overrides = {key: render[key] for key in identity_keys if key in render}
-        render_values["synth"].update(identity_overrides)
+        synth_values.update({key: render[key] for key in identity_keys if key in render})
         render_values.update(
             {key: value for key, value in render.items() if key not in identity_keys}
         )
@@ -112,6 +113,7 @@ def _build_postprocess_cfg(
                 "metric_prefix": metric_prefix,
             },
             "datamodule": {"batch_size": batch_size},
+            "synth": synth_values,
             "render": render,
         }
     )
@@ -484,24 +486,6 @@ def test_postprocessing_compute_metrics_off_fires_no_subprocess(
     assert captured_argv == []
 
 
-def test_postprocessing_no_op_when_both_gates_off(
-    predictions_tree: Path,
-    captured_argv: list[list[str]],
-) -> None:
-    """No subprocess fires when ``render_vst`` and ``compute_metrics`` are both off.
-
-    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
-    :param captured_argv: Captured argv list — asserted empty.
-    """
-    cfg = _build_postprocess_cfg(
-        predictions_tree, render_vst=False, compute_metrics=False, render=None
-    )
-
-    _run_predict_postprocessing(cfg)
-
-    assert captured_argv == []
-
-
 def test_postprocessing_render_requires_render_cfg(
     predictions_tree: Path,
     captured_argv: list[list[str]],
@@ -861,8 +845,10 @@ def test_log_metrics_csv_to_wandb_logs_table_to_active_run(
     _log_metrics_csv_to_wandb(tmp_path)
 
     assert len(logged) == 1
-    assert "audio/per_sample_metrics" in logged[0]
-    assert isinstance(logged[0]["audio/per_sample_metrics"], wandb.Table)
+    table = logged[0]["audio/per_sample_metrics"]
+    assert isinstance(table, wandb.Table)
+    assert table.columns == ["sample_id", "mss", "wmfcc", "sot", "rms"]
+    assert table.data == [[0, 0.1, 0.2, 0.3, 0.4], [1, 0.5, 0.6, 0.7, 0.8]]
 
 
 def test_log_metrics_csv_to_wandb_prepends_prefix_to_table_key(

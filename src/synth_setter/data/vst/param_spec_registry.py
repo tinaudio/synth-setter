@@ -86,9 +86,9 @@ def resolve_param_spec_width(param_spec_name: str) -> int:
 
 
 def default_plugin_path() -> str:
-    """Return ``$SYNTH_SETTER_PLUGIN_PATH`` if set and non-empty, else the bundled Surge XT path.
+    """Return an explicit override or the managed Surge XT checkout alias.
 
-    ``or`` (not a ``get`` default) so an empty override also falls back to the bundle.
+    ``or`` (not a ``get`` default) makes an empty override fall back to the alias.
 
     :returns: Resolved VST3 plugin path.
     """

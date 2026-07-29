@@ -16,7 +16,7 @@ name: Generate Dataset Shards
 #
 # Optional `hydra_overrides` input — whitespace-separated Hydra `key=value`
 # tokens appended to the launcher invocation. Tokens must not contain embedded
-# spaces; the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted
+# spaces; the RunPod docker row expands `$HYDRA_OVERRIDES_EXTRA` unquoted
 # inside the worker container, so any whitespace inside a token splits it into
 # separate arguments. The "Validate hydra_overrides" step rejects any input
 # that doesn't match `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` so shell
@@ -32,7 +32,7 @@ name: Generate Dataset Shards
 #     controller pod fits on kind, then invokes against the `local/kind`
 #     compute option. The launcher detects the kubernetes backend and skips
 #     its cred bootstrap. Always tears down kind in `if: always()`.
-#   * `runpod` / `oci` — in-container invocation against the matching
+#   * `runpod` — in-container invocation against the `runpod/smoke`
 #     `skypilot_launch/compute` option. The launcher's `_run_cred_bootstrap`
 #     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
 #     is set, the bootstrap is skipped (the remote API server holds creds).
@@ -41,8 +41,6 @@ name: Generate Dataset Shards
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every provider.
 #   RUNPOD_API_KEY — runpod row.
-#   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
-#     OCI_API_KEY_PEM — oci row.
 #   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, launcher skips local
 #     cred bootstrap.
 #   WANDB_API_KEY (optional) — forwarded to the worker.
@@ -51,7 +49,7 @@ on:
   workflow_call:
     inputs:
       provider:
-        description: "skypilot-local, runpod, or oci"
+        description: "skypilot-local or runpod"
         required: true
         type: string
       dataset_config:
@@ -88,7 +86,7 @@ on:
         type: string
         default: "run-metadata"
       hydra_overrides:
-        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=lance`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
+        description: "Extra whitespace-separated Hydra `key=value` overrides appended to the launcher invocation (e.g. `render.gui_toggle_cadence=always_on output_format=lance`). Validated against `^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$` — any shell metacharacter (`;`, `&&`, `|`, `$()`, ...) fails the workflow because the RunPod docker row expands `$HYDRA_OVERRIDES_EXTRA` unquoted inside the worker container."
         required: false
         type: string
         default: ""
@@ -114,7 +112,6 @@ on:
         options:
           - skypilot-local
           - runpod
-          - oci
       dataset_config:
         description: "Hydra experiment name under src/synth_setter/configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
@@ -183,9 +180,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate provider
+        env:
+          PROVIDER: ${{ inputs.provider }}
+        run: |
+          set -euo pipefail
+          case "${PROVIDER}" in
+            skypilot-local|runpod) ;;
+            *)
+              echo "::error::unsupported provider: ${PROVIDER}" >&2
+              exit 1
+              ;;
+          esac
+
       # setup-r2 exports RCLONE_CONFIG_R2_* for every downstream consumer; only
       # skypilot-local runs `rclone copyto` on the runner, so only it installs
-      # rclone — runpod/oci run it in the worker container/pod.
+      # rclone — RunPod runs it in the worker container.
       - name: Set up R2
         uses: ./.github/actions/setup-r2
         with:
@@ -195,7 +205,7 @@ jobs:
           install-rclone: ${{ inputs.provider == 'skypilot-local' }}
 
       # Reject hydra_overrides containing anything outside the allowed character
-      # class. The docker (runpod/oci) row expands `$HYDRA_OVERRIDES_EXTRA`
+      # class. The RunPod docker row expands `$HYDRA_OVERRIDES_EXTRA`
       # unquoted inside `bash -c`, so an unrestricted value like
       # `render.gui_toggle_cadence=always_on; rm -rf /` would be interpreted as
       # shell syntax on the worker. Validating at the entry point fails both
@@ -213,7 +223,7 @@ jobs:
           set -euo pipefail
           REGEX='^[A-Za-z0-9._=,/-]*( [A-Za-z0-9._=,/-]+)*$'
           if [[ "$INPUT_HYDRA_OVERRIDES" == *$'\n'* || "$INPUT_HYDRA_OVERRIDES" == *$'\r'* ]]; then
-            echo "::error::hydra_overrides contains newline/carriage-return; only single-line input is accepted."
+            echo "::error::hydra_overrides contains a newline or carriage return; only single-line input is accepted."
             exit 1
           fi
           if ! [[ "$INPUT_HYDRA_OVERRIDES" =~ $REGEX ]]; then
@@ -239,7 +249,7 @@ jobs:
           fi
           SKY_REGEX='^[a-zA-Z]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$'
           if ! [[ "$CLUSTER_NAME" =~ $SKY_REGEX ]]; then
-            echo "::error::cluster_name '${CLUSTER_NAME}' fails SkyPilot regex ${SKY_REGEX}. Cluster names must start with a letter, contain only alphanumerics/dashes/underscores/periods, and end alphanumeric. Leave the dispatch input empty to autogenerate a valid name."
+            echo "::error::cluster_name '${CLUSTER_NAME}' fails SkyPilot regex ${SKY_REGEX}. Cluster names must start with a letter, contain only alphanumerics, dashes, underscores, or periods, and end alphanumeric. Leave the dispatch input empty to autogenerate a valid name."
             exit 1
           fi
           echo "name=${CLUSTER_NAME}" >> "${GITHUB_OUTPUT}"
@@ -291,7 +301,7 @@ jobs:
       # install + Python / uv setup can run in parallel. The pull only fills
       # the host Docker cache; nothing downstream of this step reads from it
       # until `kind load docker-image` (skypilot-local row) or
-      # `docker run "${IMAGE}"` (runpod / oci row).
+      # `docker run "${IMAGE}"` (runpod row).
       #
       # `wait` doesn't cross GHA steps (each step gets a fresh bash), so the
       # background child writes its exit code to a sentinel file. A later
@@ -489,7 +499,7 @@ jobs:
           shopt -s nullglob
           specs=("${GITHUB_WORKSPACE}"/run/data/*/*/metadata/input_spec.json)
           if [[ "${#specs[@]}" -ne 1 ]]; then
-            echo "::error::expected exactly one materialized spec under run/data/*/*/metadata/, found ${#specs[@]}"
+            echo "::error::expected exactly one materialized spec in the run directory, found ${#specs[@]}"
             printf '%s\n' "${specs[@]}"
             exit 1
           fi
@@ -533,11 +543,10 @@ jobs:
           echo "=== snapshot sizes ==="
           du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
-      # A2 (#1164): mirror of the skypilot-local wait step, gated on the
-      # runpod / oci providers so the `docker run` below sees a fully-pulled
-      # image.
-      - name: Wait for image pull (runpod / oci row)
-        if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
+      # A2 (#1164): mirror of the skypilot-local wait step so the RunPod
+      # `docker run` below sees a fully-pulled image.
+      - name: Wait for image pull (runpod row)
+        if: ${{ inputs.provider == 'runpod' }}
         timeout-minutes: 10
         env:
           PULL_LOG: ${{ runner.temp }}/docker-pull.log
@@ -555,7 +564,7 @@ jobs:
           fi
           echo "docker pull completed for ${IMAGE}"
 
-      # ----- runpod / oci row: in-container synth-setter-generate-dataset
+      # Run the RunPod worker container.
       # Optional Hydra overrides are pre-rendered into env-var strings at the
       # outer step (keeping GHA expression evaluation out of the bash
       # block-scalar) and expanded unquoted inside docker so empty values
@@ -564,19 +573,14 @@ jobs:
       # is mounted at /home/build/synth-setter, so the canonical spec the CLI
       # writes inside the container is the same host-side file the outer step
       # resolves as `spec_path`.
-      - name: Run synth-setter-generate-dataset (runpod / oci row; in container)
+      - name: Run synth-setter-generate-dataset (runpod row; in container)
         id: gen_docker
-        if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
+        if: ${{ inputs.provider == 'runpod' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          COMPUTE_OPTION: ${{ inputs.provider == 'oci' && 'oci/cpu' || 'runpod/smoke' }}
+          COMPUTE_OPTION: runpod/smoke
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -597,11 +601,6 @@ jobs:
             -e CLUSTER_NAME \
             -e IMAGE_TAG \
             -e RUNPOD_API_KEY \
-            -e OCI_USER_OCID \
-            -e OCI_TENANCY_OCID \
-            -e OCI_FINGERPRINT \
-            -e OCI_REGION \
-            -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
             -e WORKER_GIT_REF \
             -e SYNTH_SETTER_STORAGE_PROVIDER \
@@ -638,7 +637,7 @@ jobs:
           shopt -s nullglob
           specs=("${GITHUB_WORKSPACE}"/run/data/*/*/metadata/input_spec.json)
           if [[ "${#specs[@]}" -ne 1 ]]; then
-            echo "::error::expected exactly one materialized spec under run/data/*/*/metadata/, found ${#specs[@]}"
+            echo "::error::expected exactly one materialized spec in the run directory, found ${#specs[@]}"
             printf '%s\n' "${specs[@]}"
             exit 1
           fi
@@ -709,7 +708,7 @@ jobs:
       # src/synth_setter/pipeline/ci/validate_shard.py) iterates `spec.shards`
       # and pulls each shard from R2 for the structural + shape + value +
       # row-count checks. Runs inside the dev-snapshot image (already pulled
-      # above for runpod/oci, locally loaded into kind for skypilot-local) so
+      # above for RunPod, locally loaded into kind for skypilot-local) so
       # heavy deps need no host-side install. Re-pulling the image when only
       # kind has it is a no-op against the docker cache.
       #

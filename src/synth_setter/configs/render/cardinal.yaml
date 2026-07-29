@@ -1,6 +1,5 @@
 defaults:
   - vst
-  - synth: cardinal
   - _self_
 
 renderer_backend: dawdreamer

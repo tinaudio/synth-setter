@@ -193,7 +193,7 @@ def test_markdown_report_carries_verdict_findings_and_artifacts(tmp_path: Path) 
     report = VerificationReport("fake_synth")
     report.block("spec module is oversized")
     report.warn("synth_version is 'unknown'")
-    report.ok("Hydra render=fake_synth composes into a valid RenderConfig")
+    report.ok("Hydra synth=fake_synth render=vst composes into a valid RenderConfig")
 
     text = report.to_markdown([tmp_path / "fake_synth_param_spec.py"])
 
@@ -218,6 +218,6 @@ def test_registered_artifacts_cover_every_file_register_writes(tmp_path: Path) -
         paths.spec_module,
         paths.preset,
         paths.csv,
-        paths.render_config,
+        paths.identity_config,
         paths.registry,
     ]

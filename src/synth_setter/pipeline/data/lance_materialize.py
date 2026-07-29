@@ -2,9 +2,9 @@
 
 Streams a projected scan of one source snapshot into a fresh local Lance
 dataset, so hydration transfers only the columns and rows a training run
-reads instead of the whole dataset directory. A sidecar manifest beside
-the destination records the request and gates cache reuse: a rerun with the
-same request reuses the local copy; any drift fails loudly.
+reads instead of the whole dataset directory. A manifest inside the
+materialized directory records the request and gates cache reuse: a rerun with
+the same request reuses the local copy; any drift fails loudly.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from uuid import uuid4
 
 import lance
 import structlog
@@ -28,11 +29,20 @@ from tenacity import (
 )
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
+from synth_setter.pipeline.data.lance_shard import (
+    LANCE_DATA_STORAGE_VERSION,
+    LANCE_MAX_BYTES_PER_FILE,
+)
 from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 logger = structlog.get_logger(__name__)
 
-_SIDECAR_SUFFIX = ".materialize.json"
+_SIDECAR_FILENAME = "_materialize.json"
+# Long enough that two live subsets under one root never collide, short enough
+# to stay readable next to the prefix.
+_DIRNAME_DIGEST_CHARS = 8
+_DIRNAME_PREFIX_CHARS = 8
 _MAX_LANCE_READ_ATTEMPTS = 3
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
@@ -128,6 +138,10 @@ class MaterializeManifest(BaseModel):
 
         Transaction uuid identifying the selected source snapshot when recorded.
 
+    .. attribute :: materialized_txid
+
+        Transaction uuid identifying the local materialized dataset.
+
     .. attribute :: columns
 
         Projected column names, in scan order.
@@ -147,9 +161,20 @@ class MaterializeManifest(BaseModel):
     txid: str | None
     resolved_version: int
     resolved_txid: str | None = None
+    materialized_txid: str | None = None
     columns: tuple[str, ...]
     limit: int | None
     request_hash: str
+
+
+def _digest(payload: Mapping[str, object]) -> str:
+    """Hash a request payload through one canonical JSON encoding.
+
+    :param payload: JSON-encodable request fields.
+    :returns: sha256 hex digest, stable across dict ordering.
+    """
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def request_hash(
@@ -168,27 +193,60 @@ def request_hash(
     :param limit: First-N row cap, or ``None`` for all rows.
     :returns: sha256 hex digest over the canonical JSON encoding of the fields.
     """
-    payload = json.dumps(
+    return _digest(
         {
             "source_uri": source_uri,
             "txid": txid,
             "resolved_version": resolved_version,
             "columns": list(columns),
             "limit": limit,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
+        }
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def subset_dirname(
+    prefix: str,
+    source_root_uri: str,
+    *,
+    txids: Mapping[str, str] | None,
+    projection: Mapping[str, Sequence[str]],
+    row_limit: int | None,
+) -> str:
+    """Name the directory addressing one whole-root materialization request.
+
+    Derived from configuration alone so every rank computes the same directory
+    without a source read — ``prepare_data`` runs on one rank, ``setup`` on all.
+    The resolved source version is deliberately excluded: drift within a
+    directory is the sidecar manifest's job, not the path's.
+
+    :param prefix: Readable leading token, truncated to keep the name short.
+    :param source_root_uri: Hydration root as the caller passed it.
+    :param txids: Per-split transaction pins, or ``None`` for latest snapshots.
+    :param projection: Columns to materialize per split.
+    :param row_limit: First-N row cap per split, or ``None`` for all rows.
+    :returns: ``<prefix>-<digest>`` directory name.
+    """
+    digest = _digest(
+        {
+            "source_root_uri": source_root_uri,
+            "txids": dict(txids) if txids is not None else None,
+            "projection": {split: list(columns) for split, columns in projection.items()},
+            "row_limit": row_limit,
+        }
+    )
+    return f"{prefix[:_DIRNAME_PREFIX_CHARS]}-{digest[:_DIRNAME_DIGEST_CHARS]}"
 
 
 def sidecar_path(dest_path: Path) -> Path:
-    """Return the manifest path beside a materialized dataset directory.
+    """Return the manifest path inside a materialized dataset directory.
+
+    Keeping the identity record inside the staged directory makes publication
+    atomic when the directory is renamed into place.
 
     :param dest_path: Materialized Lance dataset directory.
-    :returns: ``<dest>.materialize.json`` in the same parent directory.
+    :returns: Materialization manifest within ``dest_path``.
     """
-    return dest_path.parent / (dest_path.name + _SIDECAR_SUFFIX)
+    return dest_path / _SIDECAR_FILENAME
 
 
 def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
@@ -226,7 +284,7 @@ def _open_source(source_uri: str) -> lance.LanceDataset:
     if r2_io.is_r2_uri(source_uri):
         open_uri, storage_options = r2_io.lance_target(source_uri)
     elif is_file_uri(source_uri):
-        open_uri, storage_options = str(file_uri_to_path(source_uri)), None
+        open_uri, storage_options = file_uri_to_path(source_uri).as_uri(), None
     else:
         open_uri, storage_options = source_uri, None
     return _retry_lance_read(
@@ -295,6 +353,42 @@ def _manifest_matches_request(
     )
 
 
+def _validate_materialized_destination(
+    dest_path: Path, manifest: MaterializeManifest
+) -> None:
+    """Verify that a cache still names the Lance dataset originally published.
+
+    :param dest_path: Existing local materialized dataset.
+    :param manifest: Parsed cache sidecar.
+    :raises ValueError: The sidecar lacks destination identity, the dataset was replaced, or Lance
+        reports structural corruption.
+    """
+    if manifest.materialized_txid is None:
+        raise ValueError(
+            f"materialized dataset {dest_path} sidecar has no destination identity; "
+            "delete the dataset and re-materialize"
+        )
+    try:
+        destination = _retry_lance_read(
+            "destination_open", lambda: lance.dataset(str(dest_path))
+        )
+        transaction = _retry_lance_read(
+            "destination_transaction_read",
+            lambda: destination.read_transaction(destination.version),
+        )
+        _retry_lance_read("destination_validate", destination.validate)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"materialized dataset {dest_path} failed Lance validation; "
+            "delete the dataset and re-materialize"
+        ) from exc
+    if transaction is None or transaction.uuid != manifest.materialized_txid:
+        raise ValueError(
+            f"materialized dataset {dest_path} identity differs from its sidecar; "
+            "delete the dataset and re-materialize"
+        )
+
+
 def _reuse_or_raise(
     dest_path: Path,
     *,
@@ -319,9 +413,8 @@ def _reuse_or_raise(
     :param resolved_version: Current latest version for an unpinned request.
     :param resolved_txid: Current source transaction uuid for an unpinned request.
     :returns: ``dest_path`` on a cache hit.
-    :raises ValueError: The sidecar is missing/unparsable, its stored hash
-        does not cover its own fields, or the request diverges from it —
-        never silently reuse a stale local subset.
+    :raises ValueError: The sidecar or local Lance dataset is invalid, or the
+        request diverges from the recorded source and destination identities.
     """
     manifest_path = sidecar_path(dest_path)
     if not manifest_path.is_file():
@@ -342,6 +435,7 @@ def _reuse_or_raise(
             f"source={source_uri!r} txid={txid!r} columns={columns} limit={limit} — "
             "delete the dataset and re-materialize"
         )
+    _validate_materialized_destination(dest_path, manifest)
     logger.info(
         "lance_materialize.cache_hit",
         dest_path=str(dest_path),
@@ -365,6 +459,8 @@ def _write_materialized_snapshot(
     :param manifest: Validated request and source identity to persist.
     :param batch_size: Scan batch size in rows.
     :returns: ``dest_path``.
+    :raises OSError: Manifest writing or atomic publication fails without a winner.
+    :raises ValueError: The written dataset has no transaction identity.
     """
     scanner = snapshot.scanner(
         columns=list(manifest.columns), limit=manifest.limit, batch_size=batch_size
@@ -379,9 +475,7 @@ def _write_materialized_snapshot(
         limit=manifest.limit,
     )
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    staging_path = dest_path.parent / f".{dest_path.name}.partial"
-    if staging_path.exists():
-        shutil.rmtree(staging_path)
+    staging_path = dest_path.parent / f".{dest_path.name}.{uuid4().hex}.partial"
     transaction_properties = (
         {"cloned_from_txn": manifest.txid}
         if manifest.txid is not None
@@ -392,10 +486,37 @@ def _write_materialized_snapshot(
         str(staging_path),
         schema=scanner.projected_schema,
         transaction_properties=transaction_properties,
+        data_storage_version=LANCE_DATA_STORAGE_VERSION,
+        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
     )
     row_count = written.count_rows()
-    sidecar_path(dest_path).write_text(manifest.model_dump_json(), encoding="utf-8")
-    staging_path.replace(dest_path)
+    transaction = written.read_transaction(written.version)
+    if transaction is None:
+        raise ValueError(f"materialized dataset {staging_path} has no transaction record")
+    published_manifest = manifest.model_copy(
+        update={"materialized_txid": transaction.uuid}
+    )
+    try:
+        sidecar_path(staging_path).write_text(
+            published_manifest.model_dump_json(), encoding="utf-8"
+        )
+        staging_path.replace(dest_path)
+    except OSError:
+        winner_exists = dest_path.exists()
+        shutil.rmtree(staging_path, ignore_errors=True)
+        if not winner_exists:
+            raise
+        return _reuse_or_raise(
+            dest_path,
+            source_uri=manifest.source_uri,
+            txid=manifest.txid,
+            columns=manifest.columns,
+            limit=manifest.limit,
+            resolved_version=(
+                manifest.resolved_version if manifest.txid is None else None
+            ),
+            resolved_txid=manifest.resolved_txid,
+        )
     logger.info(
         "lance_materialize.done",
         dest_path=str(dest_path),
@@ -476,12 +597,36 @@ def materialize_lance_subset(  # noqa: DOC502
     )
 
 
+def _require_dataset_complete(source_root_uri: str) -> None:
+    """Require the finalize marker before reading any split from a dataset root.
+
+    :param source_root_uri: R2 URI, file URI, or local dataset root.
+    :raises FileNotFoundError: The dataset completion marker is absent.
+    """
+    if r2_io.is_r2_uri(source_root_uri):
+        marker = f"{source_root_uri.rstrip('/')}/{DATASET_COMPLETE_FILENAME}"
+        marker_exists = r2_io.object_size(marker) is not None
+    else:
+        source_root = (
+            file_uri_to_path(source_root_uri)
+            if is_file_uri(source_root_uri)
+            else Path(source_root_uri)
+        )
+        marker_path = source_root / DATASET_COMPLETE_FILENAME
+        marker = str(marker_path)
+        marker_exists = marker_path.is_file()
+    if not marker_exists:
+        raise FileNotFoundError(
+            f"dataset completion marker {marker} is missing; finalize the dataset before hydration"
+        )
+
+
 def materialize_splits(
     source_root_uri: str,
     dest_root: Path,
     *,
     txids: Mapping[str, str] | None,
-    columns_for: Callable[[str], Sequence[str]],
+    projection: Mapping[str, Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
 ) -> None:
@@ -492,21 +637,18 @@ def materialize_splits(
     :param dest_root: Local destination root; each split lands at
         ``dest_root / f"{split}{shard_suffix}"``.
     :param txids: Per-split transaction uuids, or ``None`` to use latest snapshots.
-    :param columns_for: Callback returning the columns to project for a given split name.
+    :param projection: Columns to materialize per split.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
     """
-    if txids is None:
-        split_txids = ((split, None) for split in ("train", "val", "test"))
-    else:
-        split_txids = txids.items()
-    for split, txid in split_txids:
+    _require_dataset_complete(source_root_uri)
+    for split, columns in projection.items():
         name = f"{split}{shard_suffix}"
         materialize_lance_subset(
             f"{source_root_uri.rstrip('/')}/{name}",
             dest_root / name,
-            txid=txid,
-            columns=columns_for(split),
+            txid=txids[split] if txids is not None else None,
+            columns=columns,
             limit=row_limit,
         )
     # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;

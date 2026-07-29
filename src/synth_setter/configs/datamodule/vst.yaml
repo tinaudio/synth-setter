@@ -1,5 +1,7 @@
 _target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
 dataset_root: ${paths.output_dir}/data
+# Hydrates as a projected column subset into a request-addressed subdirectory of
+# dataset_root; the source must carry the train/val/test .lance split layout.
 download_dataset_root_uri: null
 use_saved_mean_and_variance: true
 batch_size: 128
@@ -16,6 +18,6 @@ predict_file: null
 download_dataset_txids: null
 # First-N rows per split; without txids, intended for disposable smoke/tuning runs.
 download_dataset_row_limit: null
-# Mandatory: each concrete config declares its synth's spec — a default here
-# would silently pair the wrong spec with the dataset.
-param_spec_name: ???
+# Identity flows from the root synth group (#2565); selecting a VST datamodule
+# without `synth=<name>` fails loudly at first resolution.
+param_spec_name: ${synth.param_spec_name}

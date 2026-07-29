@@ -40,7 +40,7 @@ Training models for these tasks requires large-scale datasets: 500k–15M audio 
 
 ### Prior Work
 
-The core generation and training infrastructure was built by benhayes@: the VST rendering engine (`generate_vst_dataset.py`), a comprehensive parameter specification system covering Surge XT's full parameter space (`param_spec.py`, `surge_xt_param_spec.py` — ~1300 lines of sampling, encoding, and semantic representation), plugin loading with audio and mel extraction (`core.py`), and the PyTorch Lightning DataModule (`vst_datamodule.py`). Beyond the generation code, benhayes@ built an extensive Hydra configuration system — 40+ composable experiment configs across multiple datasets (Surge, k-osc, k-sin, FM, FSD, NSynth), multi-logger support (W&B, TensorBoard, MLflow), Optuna integration for hyperparameter search, and SGE job scripts for QMUL's HPC cluster with proper resource management, array jobs, and W&B checkpoint retrieval. This is a well-structured research codebase with strong configuration practices, and it remains the foundation the distributed pipeline builds on.
+The core generation and training infrastructure was built by benhayes@: the VST rendering engine (`generate_vst_dataset.py`), a comprehensive parameter specification system covering Surge XT's full parameter space (`param_spec.py`, `surge_xt_param_spec.py` — ~1300 lines of sampling, encoding, and semantic representation), plugin loading with audio and mel extraction (`core.py`), and the PyTorch Lightning DataModule (`vst_datamodule.py`). Beyond the generation code, benhayes@ built an extensive Hydra configuration system — composable experiment configs across multiple datasets and synthesizers (Surge, TorchSynth, FSD, NSynth), multi-logger support (W&B, TensorBoard, MLflow), Optuna integration for hyperparameter search, and SGE job scripts for QMUL's HPC cluster with proper resource management, array jobs, and W&B checkpoint retrieval. This is a well-structured research codebase with strong configuration practices, and it remains the foundation the distributed pipeline builds on.
 
 On top of this, ktinubu@ added sequential orchestration (`run_dataset_pipeline.py`), cloud storage integration via rclone (`uploader.py`), a containerized execution environment with Docker, a first parallelization attempt with per-instance shards (`generate_shards.py`), RunPod scaling (`runpod_launch.py`), and post-generation finalization (`finalize_shards.py`).
 
@@ -87,7 +87,7 @@ RunPod is used because it's the platform where GPUs are already available and co
 #    as `experiment=` is `generate_dataset/<stem>`.
 #    Hydra composes the final DatasetSpec from src/synth_setter/configs/dataset.yaml + this overlay.
 cat src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
-# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: surge_simple, ...], ...
+# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: vst, ...], ...
 
 # 2. Run multi-shard generation on a single worker (default sequential loop;
 #    `render.parallel=true` opts into thread-pool parallel dispatch).
@@ -1125,18 +1125,28 @@ Additional stages could follow the same contract (§5) without modifying existin
 `add-embeddings` is now implemented as the `synth-setter-add-embeddings` Hydra
 endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 `configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): it augments
-a finalized Lance dataset in place with a `clap` (LAION-CLAP)
-`FixedSizeList<float32, 512>` vector column and sequence embeddings (`m2l`,
-`same_s`, and `same_l`) stored as fixed-shape tensors, all derived from the audio
+a finalized Lance dataset in place with global vector columns for `clap`
+(LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
+dimensions), plus sequence embeddings (`m2l`, `same_s`, and `same_l`) stored as
+fixed-shape tensors, all derived from the audio
 column and selectable via `embeddings=` (the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
-are each loaded and written in their own sequential pass). Each sequence
-embedding also writes a mean-pooled `FixedSizeList<float32, D>` companion
+are each loaded and written in their own sequential pass). SAME-S and SAME-L
+use Stable Audio 3's autoencoder factory with strict safetensors state loading;
+local directories, R2 mirrors, and HuggingFace repo IDs retain the same
+checkpoint-resolution behavior. Each sequence embedding also writes a
+mean-pooled `FixedSizeList<float32, D>` companion
 (`m2l_vec`, `same_s_vec`, or `same_l_vec`); when `build_index=true`, IVF_PQ
-indexes `clap` and the selected companion columns for `nearest=` search. An
-optional `resume_cache=<path>` caches per-batch encoder outputs so an
-interrupted run can resume without re-encoding already-processed rows (see
-`add_embeddings.py`). The default CLAP and SAME sources hydrate under
+indexes `clap`, `ssondo`, and the selected companion columns for `nearest=`
+search. S-SONDO audio is downmixed, resampled to 32 kHz, and right-padded to its
+10-second input window; longer clips fail instead of silently losing a partial
+tail. Its PyPI runtime is pinned to `ssondo==0.3.1`, and the MIT checkpoint is
+pinned by Hugging Face revision and SHA-256 before the package's pickle-based
+Lightning loader runs. If index creation fails after vectors commit, rerunning
+the same split builds only missing indexes without re-encoding complete
+columns. An optional `resume_cache=<path>` caches per-batch encoder outputs so
+an interrupted write can resume without re-encoding already-processed rows
+(see `add_embeddings.py`). The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 
@@ -1145,8 +1155,9 @@ Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`
 renders each row to text through the `param_text_normalizer` strategy
 (`data/vst/param_text.py`; the shipped `param_names` joins the spec's parameter
 names with commas and ignores values), and encodes the captions with Stable
-Audio 3's frozen T5Gemma prompt conditioner behind the optional `sa3` extra
-(`pipeline/data/t5gemma.py`). `param_spec_name=` is required whenever it is
+Audio 3's frozen T5Gemma prompt conditioner (`pipeline/data/t5gemma.py`).
+Stable Audio 3 is part of the normal heavy runtime's `torch` dependency group.
+`param_spec_name=` is required whenever it is
 selected, and the encoded width must match that spec. Captions past the
 checkpoint's 256-token budget are truncated exactly as SA3 truncates them, so
 the wider specs keep only their leading names (`surge_simple` 31 of 91,
@@ -1427,7 +1438,7 @@ A run starts from a Hydra experiment YAML composed against `src/synth_setter/con
 
 defaults:
   - override /datamodule: surge_simple
-  - override /render: surge_simple
+  - override /render: vst
   - _self_
 
 task_name: surge-simple-480k-10k
@@ -1525,8 +1536,10 @@ src/synth_setter/configs/
   datamodule/          # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
-  render/              # Generic renderer settings and per-synth selectors
-    synth/              # Synth identity groups, including synth_version
+  render/              # Backend-named render groups (generic knobs + backend selectors)
+    vst.yaml
+    surgepy.yaml
+  synth/               # Root synth identity groups, including synth_version
     surge_simple.yaml
     surge_xt.yaml
   r2/                  # R2 bucket + prefix root
@@ -1540,8 +1553,8 @@ src/synth_setter/configs/
   # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
   #   generate_dataset/
   #     surge-simple-480k-10k.yaml
-  # render/              # Renderer settings plus nested synth identity groups
-  #   surge_xt.yaml
+  # render/              # Backend-named renderer settings; identity lives in the root synth/ group
+  #   vst.yaml
   # r2/                  # R2 bucket + prefix_root
   #   default.yaml
 ```

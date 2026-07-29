@@ -47,10 +47,12 @@ on:
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
       - "tests/conftest.py"
+      - "tests/test_eval.py"
       - "tests/test_train.py"
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/ssondo.py"
       - "src/synth_setter/pipeline/data/t5gemma.py"
       # Cadence cross-field coverage the retired render-matrix gated — the
       # parallel-render cells below now cover it under real Surge (#1354).
@@ -75,10 +77,12 @@ on:
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
       - "tests/conftest.py"
+      - "tests/test_eval.py"
       - "tests/test_train.py"
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/ssondo.py"
       - "src/synth_setter/pipeline/data/t5gemma.py"
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
@@ -125,11 +129,9 @@ jobs:
               tests/data/vst/test_run_with_editor_held_open_real_plugin.py
               tests/data/vst/test_pedalboard_threading_contract.py
               tests/integration/test_parallel_shard_render_linux.py
-            uv_extra_args: --extra same --extra sa3
           - synth: obxf
             plugin_path: /usr/lib/vst3/OB-Xf.vst3
             pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
-            uv_extra_args: ""
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
@@ -212,7 +214,6 @@ jobs:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
           TEST_SYNTH: ${{ matrix.synth }}
           PYTEST_TARGETS: ${{ matrix.pytest_targets }}
-          UV_EXTRA_ARGS: ${{ matrix.uv_extra_args }}
         run: |
           mkdir -p /tmp/bench
           image_id="$(docker image inspect --format '{{.Id}}' "${IMAGE}")"
@@ -229,20 +230,19 @@ jobs:
             -e "PYTEST_TARGETS=${PYTEST_TARGETS}" \
             -e "RUN_EMBEDDING_E2E=${RUN_EMBEDDING_E2E}" \
             -e "SYNTH_SETTER_REQUIRE_EMBEDDING_E2E=${RUN_EMBEDDING_E2E}" \
-            -e "UV_EXTRA_ARGS=${UV_EXTRA_ARGS}" \
             -e XDG_CACHE_HOME=/home/build/synth-setter/.ci-model-cache \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              read -ra uv_extra_args <<< "${UV_EXTRA_ARGS}"
               UV_PROJECT_ENVIRONMENT="${VIRTUAL_ENV}" \
-                uv sync --frozen --extra cu128 "${uv_extra_args[@]}" --no-default-groups --group dev --no-install-project
+                uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
               uv pip install --no-deps -e .
               read -ra targets <<< "${PYTEST_TARGETS}"
               if [ "${RUN_EMBEDDING_E2E}" = "true" ]; then
-                targets+=(tests/test_train.py::test_train_all_embedding_conditioning_real_e2e)
+                targets+=(tests/test_eval.py::test_evaluate_ssondo_conditioning_real_e2e)
+                targets+=(tests/test_train.py::test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e)
               fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \

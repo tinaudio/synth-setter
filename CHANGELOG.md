@@ -1,6 +1,1745 @@
 # CHANGELOG
 
 
+## v10.9.0 (2026-07-29)
+
+### Features
+
+- **code-health**: Manage VST plugins with Studiorack
+  ([#2632](https://github.com/tinaudio/synth-setter/pull/2632),
+  [`dcc0ca0`](https://github.com/tinaudio/synth-setter/commit/dcc0ca02e8371a4cb2313d8ad7cdbdab54ef11ca))
+
+* internal-feat(code-health): manage VST plugins with Studiorack
+
+* internal-fix(code-health): preserve CI plugin provisioning
+
+* internal-fix(code-health): restore aliases in snapshot images
+
+* test(code-health): cover plugin management boundaries
+
+* internal-fix(code-health): support Studiorack installer layouts
+
+* internal-fix(code-health): detect root DMG installers
+
+* internal-fix(code-health): support mixed plugin archives
+
+* internal-fix(code-health): prefer portable plugin archives
+
+* internal-fix(code-health): install native plugin dependencies
+
+* internal-fix(code-health): retain Make in validation image
+
+* docs(agents): forbid external issue creation
+
+### Internal-Feat
+
+- **data-pipeline**: Add S-SONDO embedding support
+  ([#2635](https://github.com/tinaudio/synth-setter/pull/2635),
+  [`280b2c2`](https://github.com/tinaudio/synth-setter/commit/280b2c2e1e07002a85dd30cddf0300531315ea38))
+
+* internal-feat(data-pipeline): add S-SONDO embeddings
+
+* internal-fix(data-pipeline): close S-SONDO review gaps
+
+* internal-fix(data-pipeline): harden S-SONDO preprocessing
+
+* internal-fix(data-pipeline): resolve S-SONDO review findings
+
+### Internal-Fix
+
+- **data-pipeline**: Harden training hydration integrity
+  ([#2644](https://github.com/tinaudio/synth-setter/pull/2644),
+  [`90b9ae7`](https://github.com/tinaudio/synth-setter/commit/90b9ae784e5b366f0620127ba6d3e3dc2b699c80))
+
+* internal-fix(data-pipeline): harden training hydration integrity
+
+* internal-fix(data-pipeline): make cache publication atomic
+
+### Testing
+
+- **infra**: Assert wiring and behavior instead of key presence
+  ([#2641](https://github.com/tinaudio/synth-setter/pull/2641),
+  [`50d2e4a`](https://github.com/tinaudio/synth-setter/commit/50d2e4ac30af115dfa1bf544f1282c37e9f38aa3))
+
+Existence and substring checks in the infra and hook suites passed for configurations that would not
+  work. Replaced with the invariant each test was named for; every expected value measured against
+  the live files.
+
+- devcontainer: postCreateCommand, remoteUser and workspaceFolder were truthiness checks, so a
+  placeholder or a stale path passed. Now the post-create script must actually be invoked,
+  remoteUser must stay ${localEnv:DEVCONTAINER_USER:<default>} so per-developer attach keeps
+  working, and workspaceFolder must be the in-image checkout path. - gh auth: the token env var was
+  matched anywhere in post-create.sh, including a comment, so deleting the auth call would not have
+  failed it. Now the token must be piped into `gh auth login --with-token`. - dataset-generation
+  matrix: the output_format axis is populated at runtime from the setup job, so key-presence said
+  nothing. Now the axis must be wired to setup.outputs.output_formats, catching a rename that would
+  silently collapse the fan-out. Scenario rows compare as sets — GitHub gives no ordering guarantee
+  for matrix.include, so the ordered compare broke on a harmless reorder. - finalize metrics: a bare
+  assert_called_once on the warning left the message unchecked. Now the loguru template and both
+  interpolated arguments, so a broken interpolation fails.
+
+Also merges two identical trailer-hook tests whose only difference was which half of the
+  agent-keyword list they carried.
+
+Refs #2603
+
+- **infra**: Resolve runbook subcommands against the live routing CLI
+  ([#2642](https://github.com/tinaudio/synth-setter/pull/2642),
+  [`72c169f`](https://github.com/tinaudio/synth-setter/commit/72c169fd8c078727135e99675eac3f024663d2d8))
+
+The review runbook test matched five fixed `pi_review_routing.py <cmd>` strings as prose. That only
+  catches a renamed subcommand by coincidence: the assertion is satisfied by the words being
+  present, not by the command existing.
+
+Resolve the referenced commands against the parser instead. Every `pi_review_routing.py <cmd>` the
+  runbook names must be a registered subparser, so a rename fails with the offending name, and
+  commands added to the runbook later are covered without touching the test.
+
+Verified by renaming the `provenance` subparser: the new check fails, the prose match it replaced
+  did not.
+
+Refs #2603
+
+
+## v10.8.1 (2026-07-28)
+
+### Chores
+
+- **evaluation**: Remove checkpoint experiment Hydra configs
+  ([#2591](https://github.com/tinaudio/synth-setter/pull/2591),
+  [`025a211`](https://github.com/tinaudio/synth-setter/commit/025a211898cdc2a2e187a4a462621addda2a93b0))
+
+* chore(evaluation): remove checkpoint experiment configs
+
+* chore(evaluation): address checkpoint config review
+
+### Documentation
+
+- **ci-automation**: Document the cpu-slow PR lane
+  ([#2596](https://github.com/tinaudio/synth-setter/pull/2596),
+  [`07e453d`](https://github.com/tinaudio/synth-setter/commit/07e453df07e9eea91880d425d11d08cbfcaa6aef))
+
+- **testing**: Add the test-quality bar and audited anti-patterns
+  ([#2604](https://github.com/tinaudio/synth-setter/pull/2604),
+  [`ed92e9c`](https://github.com/tinaudio/synth-setter/commit/ed92e9ce5458a5b9e1d895a108ca0526906a8a3e))
+
+* docs(testing): add test-quality bar and audited anti-patterns
+
+Static audit of all 3,738 tests found no written standard for what a test here must earn its place
+  by doing, so weak patterns get replicated by new contributors and agents.
+
+Document the bar (a test must be able to fail for exactly one interesting reason), the five
+  anti-patterns the audit surfaced, and four patterns from the existing suite worth copying. Point
+  AGENTS.md and CLAUDE.md at it.
+
+Refs #2603
+
+* docs(testing): scope the frozen-literal anti-pattern to unjustified pins
+
+The first draft used _ROLE_MODELS as the example, but that table enforces cross-provider parity
+  across the .claude/.codex/.opencode role definitions, which nothing else covers. The rclone argv
+  assertions are likewise pinning a real invariant (flag order and the mandatory --checksum).
+
+Replace the misattributed example with a generic one and state the test: if the literal and the
+  config disagree, is that a bug or a stale test.
+
+### Internal-Feat
+
+- **code-health**: Enforce jaxtyping in modeling code
+  ([#2654](https://github.com/tinaudio/synth-setter/pull/2654),
+  [`3ed8cf8`](https://github.com/tinaudio/synth-setter/commit/3ed8cf8009e85a44b39843050460b611d59de46c))
+
+* internal-feat(code-health): enforce model tensor typing
+
+* internal-fix(code-health): close model typing lint bypasses
+
+* internal-fix(code-health): harden model typing name resolution
+
+* internal-fix(code-health): resolve model typing scopes
+
+* internal-fix(code-health): cover model typing binding edges
+
+* internal-fix(code-health): resolve nested model typing aliases
+
+* internal-fix(code-health): resolve model typing base in CI
+
+- **data-pipeline**: Add TinyMU MATPAC audio embeddings
+  ([#2528](https://github.com/tinaudio/synth-setter/pull/2528),
+  [`e55eda9`](https://github.com/tinaudio/synth-setter/commit/e55eda9fb529b9580d2f3d43d07953cff0421cbd))
+
+* internal-feat(data-pipeline): add TinyMU audio embeddings
+
+* internal-fix(data-pipeline): clear TinyMU review gates
+
+* internal-fix(data-pipeline): resolve TinyMU review warnings
+
+* internal-fix(data-pipeline): cover TinyMU adapter behavior
+
+* internal-feat(data-pipeline): complete MATPAC dataset lifecycle
+
+* test(data-pipeline): cover MATPAC root R2 artifacts
+
+* internal-fix(data-pipeline): anchor MATPAC producer identity
+
+* internal-fix(data-pipeline): integrate TinyMU package directly
+
+- **training**: Chain vst_ffn net.d_out from model.encoder_output_dim instead of re-resolving the
+  spec width ([#2583](https://github.com/tinaudio/synth-setter/pull/2583),
+  [`9692c92`](https://github.com/tinaudio/synth-setter/commit/9692c925bbca7a4eb89c6f15f3d0cf8a44c75a41))
+
+* internal-feat(training): select log_per_param_mse as a callbacks group
+
+Eight surge experiments carried inline callbacks.log_per_param_mse blocks byte-identical to
+  configs/callbacks/log_per_param_mse.yaml, which nothing composed. Select the group in each
+  experiment's defaults list instead and delete the inline copies.
+
+CLI compositions that override the callbacks group on top of these experiments would now silently
+  drop the callback, so the full-model predict job scripts, the surge smoke-cfg fixture builder, and
+  the two mirroring tests add log_per_param_mse to their group lists — resolved configs are
+  unchanged for every entry point. vae/simple experiments intentionally keep no per-param MSE
+  callback.
+
+Refs #2580
+
+* internal-feat(training): chain vst_ffn net.d_out from encoder_output_dim
+
+vst_ffn.yaml resolved param_spec_width twice from the synth selection. Chain net.d_out to
+  model.encoder_output_dim instead, mirroring vst_flowvae's net.latent_dim chain, so the spec width
+  is resolved in one place. Resolved values are unchanged (surge_4 -> 7, surge_xt -> 300).
+
+Refs #2581
+
+- **training**: Collapse render aliases into backend groups
+  ([#2599](https://github.com/tinaudio/synth-setter/pull/2599),
+  [`c7baf67`](https://github.com/tinaudio/synth-setter/commit/c7baf670fbefc8a39c6068103aeb46ba4fdeca6c))
+
+* internal-feat(training): collapse render aliases into backend groups
+
+Since the synth-identity hoist (#2565), configs/render/* carries backend knobs only, leaving 8 of 15
+  files as empty aliases with identity-implying names. Collapse the group to backend-named configs:
+  keep vst, rename faust_bright_organ->faust and torchsynth_full->torchsynth, merge the three
+  identical surge_*_surgepy variants into one surgepy group, rebase faust_filter_osc on faust, and
+  delete the pure aliases. Migrate experiment defaults, tests, CLI hints, and docs to synth=<name>
+  render=<backend>; --register stops emitting per-synth render configs and the verification probe
+  composes render=vst.
+
+Fixes #2598
+
+* internal-fix(training): fix planned-tree render comment in pipeline doc
+
+The 'Planned' directory-tree comment still described render/ as nesting synth identity groups,
+  contradicting the current tree above it after the identity hoist (#2565) and the backend-group
+  collapse.
+
+Refs #2598
+
+- **training**: Hoist synth identity to a root config group
+  ([#2568](https://github.com/tinaudio/synth-setter/pull/2568),
+  [`32d359d`](https://github.com/tinaudio/synth-setter/commit/32d359dde0985a32cce3804bceb7fc187e94d319))
+
+* internal-feat(training): hoist synth identity to a root config group
+
+Synth identity (param_spec_name) was owned by the datamodule, so model and callback configs reached
+  sideways via ${datamodule.param_spec_name}. Swapping in an audio datamodule for predict tore out
+  that interpolation root (#2558), and the tactical fix pinned widths per-key in every
+  wandb_checkpoint overlay.
+
+Declare identity once at the config root instead: a new configs/synth group (one file per SYNTHS
+  registry row, generated by the introspect-plugin scaffolder) selected via synth=<name>. VST
+  datamodules, models, and callbacks now interpolate ${synth.param_spec_name}; dataset.yaml mirrors
+  identity from its render group, which stays authoritative there. The overlay width pins are
+  deleted — the train experiment's synth selection survives any datamodule swap.
+
+A compose-time validator (SynthIdentityConfig / validate_synth_identity, wired into utils.extras)
+  rejects a synth node that contradicts its registry row and a CLI-forced datamodule.param_spec_name
+  that skews from the synth selection.
+
+Contract tests pin the group/registry bijection, the rootward-only interpolation (no
+  ${datamodule.param_spec_name} anywhere in configs), the per-experiment resolved identities, and
+  compose-level swap invariance for the audio predict overlays. The v0.0.0 baseline comparison
+  absorbs the new root node via ACCEPTED_DIFFS; resolved widths and labels are unchanged by design.
+
+Fixes #2558
+
+Fixes #2565
+
+* internal-fix(training): migrate bright-organ e2e to synth override
+
+The new identity validator correctly rejects the e2e's CLI-forced datamodule.param_spec_name; select
+  synth=faust_bright_organ at the root instead. Also fold the root synth group into the docs the
+  doc-drift advisory flagged: the SYNTHS projection lists, the --register artifact list, the
+  hand-registration walkthrough, the train defaults reference, and the stale datamodule-overlay
+  example in eval-pipeline.md.
+
+Refs #2565
+
+* internal-fix(ci-automation): unblock the cpu-slow lane on this branch
+
+Mirror three hunks verbatim from PR #2562 so its eventual rebase merges clean:
+  WANDB__SERVICE_WAIT=120 on both slow steps (W&B service-start timeouts, #2564), integration_r2 on
+  the checkpoint-upload metadata test (needs real R2 creds), and the
+  encoder_num_heads/encoder_output_dim ACCEPTED_DIFFS rows (#2508 keys absent from the v0.0.0
+  anchor).
+
+With the identity hoist the overlay pins that produced the remaining baseline drift are gone: the
+  full predict + surge-train equality suites pass locally (26 passed in 190s), so no anchor
+  regeneration is needed.
+
+Refs #2558
+
+* internal-feat(training): unify synth identity into one root synth group
+
+The #2565 hoist left identity in two parallel generated groups (configs/synth 2-field,
+  configs/render/synth 5-field) bridged by a hand-written mirror block in dataset.yaml. Collapse
+  them: the root synth group now carries all five SynthSpec fields and is identity's only home;
+  render groups keep backend knobs only, and runs that render select both (synth=X render=X —
+  experiments pair the overrides).
+
+- surgepy rendering variants become SYNTHS rows (surge_*_surgepy), the first with name !=
+  param_spec_name; their render roots shrink to backend/cadence settings. -
+  RenderConfig.from_cfg_nodes joins knobs + identity everywhere a composed cfg builds a render
+  config; DatasetSpec.from_hydra_cfg nests the root node so serialized specs keep their render.synth
+  shape. - validate_synth_identity pins name/param_spec_name to the registry and leaves binding
+  fields per-run overridable; skew is otherwise structurally impossible, so
+  SynthSpec.from_render_cfg, SynthIdentityConfig, and _validate_probe_spec_match are deleted. -
+  identity_group_yaml takes the SynthSpec row and the checked-in group files are pinned
+  byte-for-byte as generator output; --verify now gates the identity config too.
+
+- **training**: Select log_per_param_mse as a callbacks group
+  ([#2582](https://github.com/tinaudio/synth-setter/pull/2582),
+  [`d481fe1`](https://github.com/tinaudio/synth-setter/commit/d481fe13c444ca29f523f4f9e838dd660045681f))
+
+* internal-feat(training): select log_per_param_mse as a callbacks group
+
+Eight surge experiments carried inline callbacks.log_per_param_mse blocks byte-identical to
+  configs/callbacks/log_per_param_mse.yaml, which nothing composed. Select the group in each
+  experiment's defaults list instead and delete the inline copies.
+
+CLI compositions that override the callbacks group on top of these experiments would now silently
+  drop the callback, so the full-model predict job scripts, the surge smoke-cfg fixture builder, and
+  the two mirroring tests add log_per_param_mse to their group lists — resolved configs are
+  unchanged for every entry point. vae/simple experiments intentionally keep no per-param MSE
+  callback.
+
+Refs #2580
+
+* chore(ci-automation): retrigger title gate after PR title edit
+
+### Internal-Fix
+
+- **ci-automation**: Pin binfmt qemu-v9.2.2 for arm64 buildx
+  ([#2578](https://github.com/tinaudio/synth-setter/pull/2578),
+  [`f471566`](https://github.com/tinaudio/synth-setter/commit/f4715669eea02a3bf87bdeecbc11cbcaa9e31665))
+
+* internal-fix(ci-automation): pin binfmt qemu-v9.2.2 for arm64 buildx
+
+test_ultramaster_docker_arm64_target_skips_source_build fails on cpu-slow with exit code 100 from
+  the builder-base apt step: qemu user-mode emulation segfaults ('qemu: uncaught target signal 11')
+  while dpkg configures libc-bin, so the apt transaction dies. The buildx banner in the assertion
+  message is only the first captured output line, not the failure.
+
+The Set up QEMU step floats on docker.io/tonistiigi/binfmt:latest, which has rolled to qemu v10.2.3;
+  the failure appeared without any repo change and is intermittent across same-day runs, consistent
+  with upstream image drift plus per-runner caching. Pin the last known-good emulator generation,
+  qemu-v9.2.2, in both workflows that register the aarch64 handler (cpu-slow and nightly).
+
+The same test file's amd64 timeout flakes on main
+  (test_base_stage_resolves_apt_packages_from_azure_mirror[builder-base],
+  test_runtime_dependency_stage_runs_apt_refresh_wrapper) have a different mechanism (mirror/runner
+  throughput) and stay tracked on the issue.
+
+Refs #2577
+
+* chore: retrigger checks after PR title edit
+
+- **training**: Preserve absolute file URI hydration paths
+  ([#2597](https://github.com/tinaudio/synth-setter/pull/2597),
+  [`08dceda`](https://github.com/tinaudio/synth-setter/commit/08dceda28ed52febcc648ed92bb08fd958d4ac04))
+
+### Refactoring
+
+- **code-health**: Remove obsolete KSin, kOsc, and FM paths
+  ([#2594](https://github.com/tinaudio/synth-setter/pull/2594),
+  [`3821127`](https://github.com/tinaudio/synth-setter/commit/38211270ac6ae9bf0851b1f688bf6339982be3fc))
+
+* refactor(code-health): remove obsolete synthetic synth paths
+
+* refactor(code-health): remove legacy token losses
+
+* chore(lint): remove deleted synthetic loss exemptions
+
+### Revert
+
+- **data-pipeline**: Remove TinyMU MATPAC audio embeddings
+  ([#2653](https://github.com/tinaudio/synth-setter/pull/2653),
+  [`e17a040`](https://github.com/tinaudio/synth-setter/commit/e17a04036c5bb0951915199b61258b97c3fb6dda))
+
+Reverts e55eda9fb529b9580d2f3d43d07953cff0421cbd.
+
+### Testing
+
+- Assert exact values where a weak assertion admitted wrong answers
+  ([#2638](https://github.com/tinaudio/synth-setter/pull/2638),
+  [`cc4ac72`](https://github.com/tinaudio/synth-setter/commit/cc4ac72ff17a5698fffbdd2571dd2f472849c562))
+
+Each of these passed for almost any wrong result. Every replacement value was measured against the
+  running code rather than inferred.
+
+- test_r2_io: r2_storage_options asserted one key of five; now the whole dict, so the
+  endpoint/aws_endpoint/region derivations are covered. Its two failure tests both matched the
+  generic wrapper prefix, making a timeout and a nonzero exit indistinguishable; each now matches
+  its own chained reason. - test_shard_claims: a subset-plus-positivity check over a fully
+  deterministic scenario, so swapping a claimed row for a done row passed. Now the exact {available:
+  1, claimed: 1, done: 1}. - test_subprocess_stream: monotonicity on an exact linear formula that
+  four sibling tests already pin; now the two exact values. - test_compute: `config is not None` on
+  a rich dict; now the dict. - test_eval_postprocessing: asserted the logged value was a wandb.Table
+  without checking it. Now columns and rows — which caught that the index column is renamed to
+  sample_id, something nothing verified. - test_checkpoint_uploader: a fresh ModelCheckpoint already
+  carries 0, so the assertion held against a hardcoded `return 0`. Now a non-default token, plus the
+  absent-field branch that returns None. - test_logger_config: len > 1 passed with a logger silently
+  dropped; now the exact csv/tensorboard/wandb set. - test_paths_config: truthiness on five
+  interpolation templates; now the literal templates.
+
+test_resume's malformed-wandb-dirname test never reached that branch — the run dir had no .hydra, so
+  discovery skipped the candidate first and the test would have passed however malformed names were
+  handled. It now creates .hydra and asserts the skip log is absent, so the branch is really
+  covered.
+
+Refs #2603
+
+- Remove eleven more tests subsumed by a stronger sibling
+  ([#2629](https://github.com/tinaudio/synth-setter/pull/2629),
+  [`b102bd0`](https://github.com/tinaudio/synth-setter/commit/b102bd06c9a9f5f193d9e1c85af2632f0d1d2981))
+
+Second verification pass over the audit's remaining deletion candidates. Each was re-read against
+  the production code and the sibling said to supersede it.
+
+Redundant with a strictly stronger sibling:
+
+- test_prefix: determinism and seconds-precision on a pure formatter given an explicit timestamp,
+  where a sibling pins the exact output string and another already disambiguates at millisecond
+  resolution; plus a trailing-slash check two siblings cover by full-string equality. -
+  test_spec_io: isinstance(..., Path) where the sibling compares against a Path, which already
+  requires the type. - test_file_uri: restates FILE_URI_SCHEME, whose only consumer is covered by
+  every is_file_uri case. - test_image_config: same fixture and call as test_all_fields_populated,
+  which asserts the same image_config_id.
+
+Tautological by construction:
+
+- test_lite_dependency_base: the intersection with HEAVY_DEPS cannot be non-empty once a sibling
+  pins the set to LITE_CLOSURE, which is disjoint from it.
+
+Library round-trips with no project transformation:
+
+- test_seed_debug, test_lance_attempt.
+
+Prose and source text rather than behavior:
+
+- test_install_plugins_targets: regexes an echo line in a Dockerfile stage. -
+  test_generate_dataset_shards_hydra_overrides_validation: matches the literal $'\n' idiom in a
+  workflow run block, where a sibling proves the behavior by executing the bash.
+
+Six further candidates were rejected on verification and kept — see the PR body for why each still
+  earns its place.
+
+Refs #2603
+
+- Remove the baseline-config drift comparator
+  ([#2607](https://github.com/tinaudio/synth-setter/pull/2607),
+  [`45cc44c`](https://github.com/tinaudio/synth-setter/commit/45cc44c01935ff35e2b148c1941569bb933e16d3))
+
+test_compare_baseline_configs.py materialized a detached git worktree per case, ran each jobs/
+  script there under a PATH shim to capture resolved Hydra YAML, and diffed it against the live tree
+  — over the network, marked slow.
+
+Its guard had inverted. ACCEPTED_DIFFS grew to 24 entries citing 10 PRs, and excluded the whole
+  `training`, `evaluation`, and `r2` subtrees, so the diff it still checked no longer covered the
+  reproducibility it was written to protect. What remained was a tax on every deliberate config
+  change: add the key, then add its allowlist entry.
+
+Compose-level coverage of the same experiments stays in test_configs.py, which resolves each
+  jobs/predict/ config and asserts model and callback identity without a worktree or the network.
+
+Drops the sole consumers with it: _baseline_worktree.py, the baseline_repo / diff_repo / noop_repo
+  fixtures, and the conftest fixture re-export. python-semantic-release stays —
+  test_release_lock_refresh.py drives that binary; its pyproject comment is corrected to say so.
+
+Refs #2603
+
+- Remove twelve tests that cannot fail for an interesting reason
+  ([#2609](https://github.com/tinaudio/synth-setter/pull/2609),
+  [`998ba6a`](https://github.com/tinaudio/synth-setter/commit/998ba6abe73e05175d0f34d67cd10f26ef1d4bbb))
+
+A semantic audit read all 3,738 tests. These twelve were then re-verified individually against the
+  production code they claim to cover.
+
+Structurally incapable of failing:
+
+- test_skypilot_launch: two subset assertions over constants built by tuple spread (_WORKER_ENV_KEYS
+  = (*RCLONE_ENV_KEYS, ...)), so the subset relation holds by syntax no matter what the constants
+  contain. - test_add_embeddings: compares EMBEDDING_REGISTRY[x].default_checkpoint to the same
+  imported constant production assigns it from. - test_xdist_scheduling: asserts a same-file helper
+  returns the f-string it builds from its own arguments. The helper stays; a real test uses it.
+
+Redundant with a sibling that already asserts more:
+
+- test_generate_vst_dataset: duplicates the num_retries=0 case of the parametrize three tests above
+  it, same call_count assertion. - test_param_spec: asserts one span that the adjacent test already
+  pins as part of the full ordered span list. - test_dataset_spec: same assertion as the test two
+  above it, and its docstring justifies itself by a NotImplementedError gate no longer in spec.py. -
+  test_eval_postprocessing: byte-identical cfg and assertion to the test directly above it. -
+  test_lite_dependency_base is untouched — see the PR body for what was rejected on review.
+
+Testing a library or prose rather than our behavior:
+
+- test_shard_metadata: Pydantic JSON round-trip over plain int/float fields with no custom
+  serializer. - test_format_dispatch: StrEnum's own __str__ contract; the sibling
+  test_value_is_the_lowercase_token already requires it. - test_settings_hooks: asserts wording
+  inside a settings.json description string; both extensions are already covered behaviorally in the
+  same file. - test_pr_review_model_routing: greps production source text for literal lines
+  including quote style, so ruff-format alone could break it.
+
+Refs #2603
+
+- Scrub stale WANDB_SERVICE from eval subprocesses
+  ([#2574](https://github.com/tinaudio/synth-setter/pull/2574),
+  [`6d56a52`](https://github.com/tinaudio/synth-setter/commit/6d56a52647b3c84fdeaa2bc0d6e8a5e3aa163df9))
+
+The four slow test_audio_dataset_predict_entrypoint_writes_artifacts params fail on the cpu-slow
+  lane with WandbServiceConnectionError: every eval subprocess inherits the same WANDB_SERVICE token
+  (one dead socket path across all 24 log occurrences), minted by an earlier in-process offline
+  wandb run in the pytest session and left behind after its service exited. wandb 0.26's
+  connect_to_service() short-circuits to the env token instead of starting a service, so
+  WANDB__SERVICE_WAIT never applies and wandb.init dies on FileNotFoundError connecting to the dead
+  socket.
+
+Drop WANDB_SERVICE from the subprocess env so each eval CLI run starts its own offline service.
+  Reproduced red locally by exporting a dead token; green with the scrub for flow_full /
+  flow_mlp_full / vae_full (ffn_full stays red on main for the unrelated datamodule.param_spec_name
+  interpolation, #2565).
+
+Refs #2564
+
+- **data-pipeline**: Pin the behavior each CLI test is named for
+  ([#2647](https://github.com/tinaudio/synth-setter/pull/2647),
+  [`aaf9760`](https://github.com/tinaudio/synth-setter/commit/aaf9760038ca15bc98594078a378b949ce5b4355))
+
+Three tests asserted an outcome that is identical whether the behavior they name works or not.
+
+- add_preview_columns: --bitrate-kbps was only checked via exit code and column presence, both
+  unchanged when the flag is dropped and the default bitrate is used. The encoder call now records
+  the bitrate it received. Verified by forcing the default through: the test fails with {128} ==
+  {64}. - add_music2latent: the name claims mutually exclusive selectors exit before the encoder
+  loads, but only the exit code was asserted, so loading first and failing later would pass. The
+  loader is now a tripwire that fails if reached, matching the pattern a sibling test in the file
+  already uses. - generate_dataset: >= 1 floors on num_shards and samples_per_shard would hold if
+  the partitioner collapsed the fan-out. smoke-shard fans 10 samples over 3 shards at 4 per shard,
+  so pin those.
+
+Refs #2603
+
+- **evaluation**: Pin symmetry and separation ordering for audio metrics
+  ([#2636](https://github.com/tinaudio/synth-setter/pull/2636),
+  [`373271f`](https://github.com/tinaudio/synth-setter/commit/373271fbb15bac9e75ceb7151933baef32ea0bd1))
+
+compute_mss had a symmetry test; compute_wmfcc and compute_sot had none, and every "different
+  inputs" test asserted only positivity, which passes for almost any wrong answer.
+
+Add the properties that actually hold, each verified by measurement first:
+
+- compute_wmfcc and compute_sot are symmetric. wMFCC's is the interesting one — DTW distance is
+  symmetric only when the local cost and step pattern are, so an argument-order dependence would
+  mean the step pattern changed. - compute_mss and compute_sot grow with frequency separation. -
+  compute_f0 an octave apart is strictly positive, not merely finite.
+
+No monotonicity assertion for wMFCC: measured across 440 Hz to 7 kHz it is not monotonic, dipping at
+  3.5 kHz. compute_mss saturates above ~3.5 kHz too, so its ordering test stays inside one-to-two
+  octaves.
+
+Also pins compute_f0 returning NaN when no frame clears the 0.85 confidence gate on both signals —
+  current behavior, not desired; see #2634.
+
+Refs #2603
+
+- **infra**: Drop self-tests of the process-assertion helpers
+  ([#2606](https://github.com/tinaudio/synth-setter/pull/2606),
+  [`cb2f946`](https://github.com/tinaudio/synth-setter/commit/cb2f9469b237459942978f7121a39f1ec51ac216))
+
+Four tests in test_pr_review_model_routing.py took `_process_state` and `_assert_process_terminated`
+  as their subject. Both are assertion helpers defined in that same file with no production callers,
+  so a failure meant the test file disagreed with itself rather than that any shipped behavior
+  broke.
+
+Three of them forked real processes to do it, inside the default CPU loop.
+
+The helpers stay — three real tests still use them at their call sites, which is where their
+  behavior is covered.
+
+Refs #2603
+
+
+## v10.8.0 (2026-07-27)
+
+### Documentation
+
+- **pipeline**: Document SynthSpec as the synth identity authoring point
+  ([#2443](https://github.com/tinaudio/synth-setter/pull/2443),
+  [`2cddfa1`](https://github.com/tinaudio/synth-setter/commit/2cddfa1c5e7805da54068b01001445b8cb099321))
+
+* internal-feat(pipeline): add SynthSpec as the synth identity table
+
+A synth's identity — which ParamSpec, which plugin, which baseline preset — was restated across the
+  two param_spec_registry dicts, the configs/render groups, the registration scaffolder and the
+  packaged parameter maps, with nothing cross-checking any pair. A right spec with a wrong preset
+  renders silently-wrong audio on the pedalboard path.
+
+Add synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only like
+  param_spec_name and renderer_backend: it holds no ParamSpec and imports no data.vst module, so
+  pipeline.schemas.spec can depend on it without pulling pedalboard onto the launcher's import path.
+
+name and param_spec_name are separate fields so preset variants can share one ParamSpec; every
+  shipped entry currently has them equal, so the split is inert until the first variant is
+  registered.
+
+Route the raw-DictConfig identity reads in cli/train.py and cli/eval.py through
+  SynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read the composed cfg
+  directly and need a shared accessor of their own.
+
+plugin_state_paths stays a literal dict for now because registration.registry_with_spec rewrites it
+  by line anchor; a test pins it against SYNTHS until that transform learns to write the new table.
+
+Refs #2434
+
+* internal-feat(pipeline): nest synth identity in RenderConfig
+
+RenderConfig carried param_spec_name, plugin_path and plugin_state_path as three independent flat
+  fields, so nothing tied them together and a right spec with a wrong preset validated cleanly.
+  Replace them with one nested SynthSpec.
+
+Read access is preserved by plain properties, leaving the ~125 read sites untouched. They must be
+  plain properties rather than computed_field: the worker argv is built by flattening model_dump(),
+  and _GenerateCliArgs is extra="forbid", so re-emitted flat keys would hard-fail the renderer
+  subprocess at parse.
+
+Specs already written to R2 carry the flat keys, so a mode="before" validator lifts them onto synth.
+  It pops rather than copies, since extra="forbid" rejects leftovers, and refuses a payload carrying
+  both shapes instead of silently preferring one. Code that constructs a RenderConfig now passes
+  synth= — pyright enforces that, keeping the lift scoped to deserializing old JSON.
+
+Worker argv JSON-encodes non-scalars. Every field was scalar before, so str(value) happened to
+  round-trip; a nested model would emit a single-quoted Python repr that CliSettingsSource's
+  json.loads rejects. bool is an int subclass, so flags keep their existing spelling and all 22
+  scalar fields are byte-identical in argv.
+
+validate_spec checks identity shape-aware rather than by presence: validate-dataset-shards.yaml has
+  a workflow_dispatch taking an arbitrary spec_uri, so archived specs must still validate. Exempting
+  synth outright would have made identity optional in both shapes.
+
+* test(pipeline): cover the shape-aware synth identity check
+
+The legacy-shape branch of validate_spec's identity read and the shape-aware presence check were
+  both uncovered, so the back-compat path this change claims to preserve was unverified. Switch the
+  shared spec fixture to the nested shape the pipeline now writes and add a flat variant alongside
+  it, so both are exercised.
+
+* test(tooling): cover the captured-patch render config
+
+The RenderConfig construction in vst_interactive sat inline in a long main() in a file with no
+  coverage at all, so migrating it to the nested synth field landed unverified. Extract it as
+  make_dataset_render_cfg and pin what it records: the auditioned synth identity, the patch count as
+  the shard size, the session audio settings, and that identity validation still runs.
+
+* internal-feat(pipeline): compose synth identity as a Hydra group
+
+The render groups restated a synth's identity as three literal fields each, duplicating SYNTHS with
+  nothing checking the two agreed. Replace them with a configs/render/synth group that each render
+  group selects.
+
+The group YAML is a checked-in generated artifact of SYNTHS, not a second authoring point: a
+  parametrized test asserts every shipped group equals its table entry, and that the two cover the
+  same set of names. It stays as YAML rather than being registered from SYNTHS at startup because
+  the --register flow composes render groups from a temp checkout without importing its Python.
+
+The composed node is a mapping, not a scalar, so every existing override is a mechanical rename
+  rather than a lost capability: the dataset tests still swap in a stub bundle via
+  render.synth.plugin_path to pass the renderer-version gate without a real install.
+
+The two cadence sweeps now select render=<synth> instead of poking two of the three identity fields,
+  which could previously disagree with the third.
+
+from_render_cfg reads the nested node, falling back to the flat keys so a hand-written or archived
+  config still resolves.
+
+* internal-fix(testing): rename the integration render overrides
+
+Two Hydra override strings still used the flat render.plugin_path path, so the spec-URI and wandb
+  e2e jobs failed at compose with "Could not override 'render.plugin_path'". Both live in
+  integration tests that only run in their own CI jobs, so the local suites did not reach them.
+
+* internal-fix(testing): route renderer fixtures through --synth
+
+The conftest renderer-argv fixture and the torchsynth e2e still spelled identity as three flat
+  flags, so every test shelling out to generate_vst_dataset exited 2 at argument parse. Encode it as
+  the JSON --synth value build_generate_args emits, behind a helper that names why.
+
+Two composed-cfg reads also still used the flat keys: the inline oracle-eval config assertion and
+  the eval render-group composition test. Both read a DictConfig rather than a RenderConfig, so the
+  back-compat properties do not reach them.
+
+These only run under slow / requires_vst marks, which the default loop deselects; found by CI.
+
+* internal-feat(tooling): register synths into the SynthSpec table
+
+--register wrote a synth's identity into param_spec_registry.plugin_state_paths and restated it
+  again in the generated render config, leaving SYNTHS to be edited by hand. A synth registered by
+  following the tool alone passed --verify and then failed the cross-registry tests in CI.
+
+Teach the transform to write the identity row and its config group, and derive plugin_state_paths
+  from SYNTHS so there is nothing left to keep in sync.
+
+_synth_rows holds flat one-line literals rather than nested SynthSpec calls: the transform extends
+  the dict by line anchor and reads back a single key line for idempotency, so a constructor call
+  would reflow under ruff-format and break the --force convergence path.
+
+render_config_yaml now selects the synth group instead of restating the three identity fields, and
+  every generated scalar is JSON-quoted so a YAML 1.1 literal name (on, true) survives as a string.
+
+The reserved-name set stays the shipped-group list rather than being derived from SYNTHS: deriving
+  it would make every registered synth reserved, so registration_paths would raise on
+  re-registration and kill --force convergence.
+
+* docs(pipeline): document SynthSpec as the synth identity authoring point
+
+The guide's registration steps described only the param-spec registry, so a synth registered by
+  following them would pass --verify and then fail the cross-registry tests with no clue why. It
+  also showed the flat render-config shape and told readers to hand-edit plugin_state_paths, which
+  is now derived.
+
+Name SYNTHS as the authoring point across the guide, the architecture overview, the data-pipeline
+  RenderConfig sketch, and the eval config reference, and record synth_spec.py in doc-map so future
+  changes to it trip the drift check.
+
+The inlined RenderConfig field list in data-pipeline.md collapses to the nested synth field rather
+  than restating three names that just moved.
+
+* docs(evaluation): describe the eval render group's nested synth identity
+
+eval-pipeline.md still described the flat cfg.render keys and claimed surge_simple.yaml overlays
+  vst.yaml overriding param_spec_name. It now inherits surge_xt and swaps the synth group. Point at
+  SynthSpec.from_render_cfg rather than re-listing keys that just moved.
+
+### Features
+
+- **training**: Download only the Lance columns training reads
+  ([#2571](https://github.com/tinaudio/synth-setter/pull/2571),
+  [`5d12f5a`](https://github.com/tinaudio/synth-setter/commit/5d12f5a797127f088af13062821a69d2a4575e15))
+
+* internal-feat(training): always hydrate a projected Lance column subset
+
+download_dataset_root_uri now rematerializes only the columns the loaders read instead of
+  rclone-copying the whole dataset directory. The 440k Surge Simple train split is 486 GiB on the
+  wire; a mel-conditioned run reads 35% of that and an embedding-conditioned run under 4%.
+
+Splits land in dataset_root/<conditioning-column>-<digest>/, digested over the source URI, txids,
+  per-split projection, and row limit. The name is derivable from configuration alone because
+  prepare_data runs on rank 0 while setup runs on every rank, so the resolved source version stays
+  out of the path and in the sidecar manifest. Changing conditioning hydrates a sibling subset
+  rather than colliding with the previous one, and a pre-existing whole-dataset copy at the root no
+  longer blocks hydration.
+
+Materialized datasets now carry the pipeline's pinned Lance storage version and per-file byte cap
+  instead of the pylance defaults.
+
+ffn_smoke moves to a finalized surge_xt Lance root; the HDF5-only fixture it used never carried the
+  train/val/test .lance split layout the datamodule requires.
+
+* chore(ci): retrigger PR title check after retitle
+
+* docs(training): point the subset-dir prefix at its length constant
+
+* test(training): pin the projection's contribution to the subset digest
+
+Mutation testing found the gap: replacing the projection with a constant in subset_dirname's payload
+  left the whole TestMaterializedSubsetLayout suite green. The sibling-subset test varies
+  conditioning, which moves the directory prefix as well, so it passed for the wrong reason.
+
+Two runs with the same conditioning but different predict_file have the same prefix and different
+  read sets. Without the projection in the digest they share a directory and collide on the sidecar
+  hash.
+
+### Internal-Feat
+
+- **ci-automation**: Add deep pre-merge validation
+  ([#2467](https://github.com/tinaudio/synth-setter/pull/2467),
+  [`2eb3877`](https://github.com/tinaudio/synth-setter/commit/2eb387708fad3935595f8355d10e3f7306c8fdc5))
+
+- **data-pipeline**: Add SurgePy host parity backend
+  ([#2498](https://github.com/tinaudio/synth-setter/pull/2498),
+  [`d7950f7`](https://github.com/tinaudio/synth-setter/commit/d7950f7c096c8c142c9b1b7ead428f0a3f39b465))
+
+* internal-feat(data-pipeline): add SurgePy renderer parity
+
+* chore(ci): refresh checks after PR title fix
+
+* internal-fix(data-pipeline): align SurgePy synth identity
+
+* internal-fix(data-pipeline): address SurgePy backend review findings
+
+Resolves the 11 findings from the multi-skill review of #2498:
+
+- gate every real-engine test behind a `requires_surgepy` marker with a conftest auto-skip, so the
+  CPU suite no longer imports a Linux-x86_64-only extension on macOS or arm64 - collapse the
+  parallel Surge FX label tables into one semantic-key table and derive the per-host projections
+  from it - make `_resolve_surgepy_param`'s lookup context keyword-only and drop the test-only
+  positional wrapper around `join_param_map` - pin the duplicated `test-vst-slow.yml`
+  push/pull_request path lists with a trigger-parity test (GitHub Actions rejects YAML anchors) -
+  assert continuous, integer, and Boolean normalization through a new public
+  `native_parameter_values` seam instead of three private helpers - cover malformed `render()`
+  input: unknown parameter keys and note intervals outside the signal - assert parameter-column
+  shape, dtype, finiteness, and normalized range at the Lance boundary of the three-host parity test
+  - assert every shipped SurgePy render config's `synth_version` against the live engine version, so
+  a dependency bump cannot ship stale configs - pin that clipped SurgePy audio stays retryable at
+  the generation gate (#2001) rather than failing the shard in the renderer
+
+Refs #2469
+
+* internal-fix(testing): pin fixture plugin version in the BadWindow test
+
+`renderer_version` moved into the synth identity earlier in this branch, and the spec validator now
+  drops the old top-level field, so this test's override no longer reached the version guard: the
+  composed spec kept the Surge default `1.3.4` while the fixture plugin reports `1.0.0-test`,
+  failing `run_tests_ubuntu`, `run_tests_conda`, and `run_tests_macos`.
+
+Set `render.synth.synth_version`, matching every other fixture-plugin test.
+
+- **data-pipeline**: Block CI on Faust production path
+  ([#2456](https://github.com/tinaudio/synth-setter/pull/2456),
+  [`d7295df`](https://github.com/tinaudio/synth-setter/commit/d7295df2ca70d291005b25cbf8f2a032f7657ffd))
+
+- **data-pipeline**: Define Faust parameter specs
+  ([#2452](https://github.com/tinaudio/synth-setter/pull/2452),
+  [`da7d755`](https://github.com/tinaudio/synth-setter/commit/da7d75564058f16a6d13418931b1d16a08decca1))
+
+- **data-pipeline**: Migrate SAME encoders to SA3 runtime
+  ([#2537](https://github.com/tinaudio/synth-setter/pull/2537),
+  [`54c09aa`](https://github.com/tinaudio/synth-setter/commit/54c09aa345c4d7e97120bdd8d95b7988b7050293))
+
+* internal-feat(data-pipeline): migrate SAME encoders to SA3
+
+* internal-fix(data-pipeline): preserve SAME model frame contracts
+
+* test(data-pipeline): calibrate SAME parity tolerance
+
+- **data-pipeline**: Register Faust source strings
+  ([#2449](https://github.com/tinaudio/synth-setter/pull/2449),
+  [`0370657`](https://github.com/tinaudio/synth-setter/commit/0370657d1fb2b9a160dfe134c6bf8b91fe6e8366))
+
+- **data-pipeline**: Render Faust through DawDreamer
+  ([#2454](https://github.com/tinaudio/synth-setter/pull/2454),
+  [`281d59e`](https://github.com/tinaudio/synth-setter/commit/281d59e3e6bda400e7c52c6aa798580bed3f6d51))
+
+* internal-feat(data-pipeline): render Faust through DawDreamer
+
+* internal-fix(data-pipeline): cover Faust renderer on Linux
+
+- **data-pipeline**: Sa3 T5Gemma param-text conditioning
+  ([#2439](https://github.com/tinaudio/synth-setter/pull/2439),
+  [`82648af`](https://github.com/tinaudio/synth-setter/commit/82648af075f677cedc7ad3f2bcd562bdfe9297d1))
+
+* internal-feat(data-pipeline): add sa3 extra for SA3 text conditioning
+
+Commit-pins stable-audio-3 and neutralizes its torch==2.7.1 / torchaudio==2.7.1 pins via
+  [[tool.uv.dependency-metadata]], mirroring the stable-audio-tools block. Lock diff adds only
+  stable-audio-3, jaxtyping, beartype, and wadler-lindig; torch, torchaudio, torchvision, and numpy
+  are byte-identical on the cpu, cu128, and macOS branches.
+
+Refs #2433
+
+* internal-feat(data-pipeline): SA3 T5Gemma text encoder
+
+Adds the param-spec text normalizer registry (one strategy: comma-joined parameter names) and the
+  SA3 prompt-conditioner loader. Conditioner settings come from the checkpoint's model_config.json
+  and a non-learned padding_mode is rejected, since the class default 'zero' would silently produce
+  embeddings that are not SA3's. Tokenization, truncation, and padding all come from stable_audio_3
+  rather than being reimplemented.
+
+* internal-feat(data-pipeline): t5gemma embedding mode reading param_array
+
+EmbeddingSpec gains an input_field so a policy can source param rows instead of audio; the write
+  path reads the union of selected input fields. The t5gemma entry renders each row through a
+  configured param-text normalizer and encodes the captions, guarding against a param spec whose
+  width does not describe the dataset. Index is left unset because every row shares one caption
+  today.
+
+* internal-feat(data-pipeline): pin T5Gemma conditioning to float32
+
+The checkpoint declares bfloat16, whose SDPA kernels differ between torch releases enough to move
+  these embeddings by up to 11.5 against an embedding std of 1.75 (min cosine 0.971 over 22
+  prompts). At float32 the same comparison is bitwise identical across torch 2.7.1 and the locked
+  torch, so a persisted column stays reproducible and the relaxed torch pin is justified. Adds the
+  parity script producing that evidence and a reference-parity test against SA3's own conditioner.
+
+* docs(data-pipeline): document the t5gemma param-text embedding mode
+
+Records the param-sourced input_field, the normalizer strategy, SA3's truncation behavior and its
+  effect on the wider param specs, why padding is learned rather than zeroed, and why the encoder
+  runs at float32.
+
+* internal-feat(data-pipeline): shape-check the T5Gemma encode path
+
+Annotates the encoder's chunk and batch outputs with jaxtyping under beartype, so a conditioner
+  returning the wrong rank or dtype fails at the boundary rather than at the Arrow write.
+
+* test(data-pipeline): pin documented T5Gemma truncation counts
+
+The retained-name counts in the pipeline doc had nothing keeping them honest; they move with the
+  tokenizer, the checkpoint's max_length, or a spec's parameter names. Pinning them also corrected
+  the totals: captions render ParamSpec.names, so they cover note params too (91 and 164, not 89 and
+  162).
+
+* test(data-pipeline): cover the T5Gemma loader without real weights
+
+codecov/patch failed at 77.6% because the conditioner loader and the changed registry adapters only
+  execute in the slow lane, which skips in CI with no checkpoint present. Adds fixture-free tests
+  driving the real loader against a stand-in conditioner and a tiny written safetensors, plus the
+  device-threading adapters and the malformed-output guard. t5gemma.py reaches 100% and every line
+  this PR adds is now covered.
+
+* internal-fix(testing): run T5Gemma loader tests without the sa3 extra
+
+The new loader tests patched stable_audio_3 in place, so they errored in CI, where no optional
+  extras are installed. They now inject the module chain into sys.modules instead. Verified by
+  running the suite with stable_audio_3 imports blocked at the meta-path.
+
+* test(data-pipeline): cover T5Gemma against real R2
+
+Extends the production-path add-embeddings integration test to load the mirrored SA3 checkpoint and
+  write T5Gemma conditioning into a real remote Lance dataset. It validates shape, dtype,
+  finiteness, nonzero content, and row stability.
+
+- **data-pipeline**: Support native parameter specs
+  ([#2451](https://github.com/tinaudio/synth-setter/pull/2451),
+  [`be56b7a`](https://github.com/tinaudio/synth-setter/commit/be56b7af20ca3bce2542a53e3c24510429a4170e))
+
+- **monitoring**: Track BadWindow failures in W&B
+  ([#2477](https://github.com/tinaudio/synth-setter/pull/2477),
+  [`a4fa78d`](https://github.com/tinaudio/synth-setter/commit/a4fa78d10df17975886a6f44262edd7bcaae959b))
+
+* internal-feat(monitoring): track BadWindow failures in W&B
+
+The transient X11 BadWindow crash currently appears only in renderer logs, making its incidence
+  difficult to quantify across generation runs.
+
+Recognize the narrow BadWindow plus X_GetProperty signature and emit one
+  generation/badwindow_failures history row before retrying or propagating the renderer failure.
+
+Refs #1717
+
+* internal-fix(monitoring): tighten BadWindow metric contract
+
+Name the X11 output signatures, defer warning formatting, and verify the failed offline W&B run
+  closes before its metric history is inspected. Near-miss tests keep either signature fragment from
+  being classified alone.
+
+* internal-fix(monitoring): expose BadWindow run incidence
+
+Define the W&B event marker with max summary aggregation so dashboards show whether a run
+  encountered any BadWindow attempt without misreporting the latest row as a failure count. Drive
+  the worker from_hydra entrypoint through the failure path to pin logger construction and
+  failed-run finalization.
+
+* test(monitoring): cover BadWindow metric logging outage
+
+Keep the classifier on the byte-output contract supplied by the streamed subprocess helper and prove
+  a logger failure cannot mask the original renderer exception.
+
+* test(pipeline): run BadWindow coverage without rclone
+
+- **pipeline**: Add SynthSpec as the synth identity table
+  ([#2438](https://github.com/tinaudio/synth-setter/pull/2438),
+  [`5854dec`](https://github.com/tinaudio/synth-setter/commit/5854decf2a7013e558aeb2d85957ab6c47e1ae46))
+
+A synth's identity — which ParamSpec, which plugin, which baseline preset — was restated across the
+  two param_spec_registry dicts, the configs/render groups, the registration scaffolder and the
+  packaged parameter maps, with nothing cross-checking any pair. A right spec with a wrong preset
+  renders silently-wrong audio on the pedalboard path.
+
+Add synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only like
+  param_spec_name and renderer_backend: it holds no ParamSpec and imports no data.vst module, so
+  pipeline.schemas.spec can depend on it without pulling pedalboard onto the launcher's import path.
+
+name and param_spec_name are separate fields so preset variants can share one ParamSpec; every
+  shipped entry currently has them equal, so the split is inert until the first variant is
+  registered.
+
+Route the raw-DictConfig identity reads in cli/train.py and cli/eval.py through
+  SynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read the composed cfg
+  directly and need a shared accessor of their own.
+
+plugin_state_paths stays a literal dict for now because registration.registry_with_spec rewrites it
+  by line anchor; a test pins it against SYNTHS until that transform learns to write the new table.
+
+Refs #2434
+
+- **pipeline**: Composable GPU tier filter for compute options
+  ([#2422](https://github.com/tinaudio/synth-setter/pull/2422),
+  [`9e69237`](https://github.com/tinaudio/synth-setter/commit/9e69237557367b4e9825d42037fe4154e76b91c7))
+
+* internal-feat(pipeline): add composable GPU tier filtering
+
+* docs(pipeline): document GPU tier filter in compute integration design
+
+* chore(pipeline): retrigger PR title check
+
+* internal-fix(pipeline): document GpuTier enum members for pydoclint
+
+- **pipeline**: Move synth version into synth identity
+  ([#2501](https://github.com/tinaudio/synth-setter/pull/2501),
+  [`f5c4a8f`](https://github.com/tinaudio/synth-setter/commit/f5c4a8f33090dfaf329ea192b89e598bb6e980ba))
+
+- **pipeline**: Nest synth identity in RenderConfig
+  ([#2440](https://github.com/tinaudio/synth-setter/pull/2440),
+  [`16c447a`](https://github.com/tinaudio/synth-setter/commit/16c447a8e56cc32df39e791f5b346f7dfabdbd50))
+
+* internal-feat(pipeline): add SynthSpec as the synth identity table
+
+A synth's identity — which ParamSpec, which plugin, which baseline preset — was restated across the
+  two param_spec_registry dicts, the configs/render groups, the registration scaffolder and the
+  packaged parameter maps, with nothing cross-checking any pair. A right spec with a wrong preset
+  renders silently-wrong audio on the pedalboard path.
+
+Add synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only like
+  param_spec_name and renderer_backend: it holds no ParamSpec and imports no data.vst module, so
+  pipeline.schemas.spec can depend on it without pulling pedalboard onto the launcher's import path.
+
+name and param_spec_name are separate fields so preset variants can share one ParamSpec; every
+  shipped entry currently has them equal, so the split is inert until the first variant is
+  registered.
+
+Route the raw-DictConfig identity reads in cli/train.py and cli/eval.py through
+  SynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read the composed cfg
+  directly and need a shared accessor of their own.
+
+plugin_state_paths stays a literal dict for now because registration.registry_with_spec rewrites it
+  by line anchor; a test pins it against SYNTHS until that transform learns to write the new table.
+
+Refs #2434
+
+* internal-feat(pipeline): nest synth identity in RenderConfig
+
+RenderConfig carried param_spec_name, plugin_path and plugin_state_path as three independent flat
+  fields, so nothing tied them together and a right spec with a wrong preset validated cleanly.
+  Replace them with one nested SynthSpec.
+
+Read access is preserved by plain properties, leaving the ~125 read sites untouched. They must be
+  plain properties rather than computed_field: the worker argv is built by flattening model_dump(),
+  and _GenerateCliArgs is extra="forbid", so re-emitted flat keys would hard-fail the renderer
+  subprocess at parse.
+
+Specs already written to R2 carry the flat keys, so a mode="before" validator lifts them onto synth.
+  It pops rather than copies, since extra="forbid" rejects leftovers, and refuses a payload carrying
+  both shapes instead of silently preferring one. Code that constructs a RenderConfig now passes
+  synth= — pyright enforces that, keeping the lift scoped to deserializing old JSON.
+
+Worker argv JSON-encodes non-scalars. Every field was scalar before, so str(value) happened to
+  round-trip; a nested model would emit a single-quoted Python repr that CliSettingsSource's
+  json.loads rejects. bool is an int subclass, so flags keep their existing spelling and all 22
+  scalar fields are byte-identical in argv.
+
+validate_spec checks identity shape-aware rather than by presence: validate-dataset-shards.yaml has
+  a workflow_dispatch taking an arbitrary spec_uri, so archived specs must still validate. Exempting
+  synth outright would have made identity optional in both shapes.
+
+* test(pipeline): cover the shape-aware synth identity check
+
+The legacy-shape branch of validate_spec's identity read and the shape-aware presence check were
+  both uncovered, so the back-compat path this change claims to preserve was unverified. Switch the
+  shared spec fixture to the nested shape the pipeline now writes and add a flat variant alongside
+  it, so both are exercised.
+
+* test(tooling): cover the captured-patch render config
+
+The RenderConfig construction in vst_interactive sat inline in a long main() in a file with no
+  coverage at all, so migrating it to the nested synth field landed unverified. Extract it as
+  make_dataset_render_cfg and pin what it records: the auditioned synth identity, the patch count as
+  the shard size, the session audio settings, and that identity validation still runs.
+
+* test(data-pipeline): nest synth identity in MPS fixtures
+
+- **tooling**: Register synths into the SynthSpec table
+  ([#2442](https://github.com/tinaudio/synth-setter/pull/2442),
+  [`e48c3e9`](https://github.com/tinaudio/synth-setter/commit/e48c3e9621c5f85fbadda4922f846ffc6dcd7507))
+
+* internal-feat(pipeline): add SynthSpec as the synth identity table
+
+A synth's identity — which ParamSpec, which plugin, which baseline preset — was restated across the
+  two param_spec_registry dicts, the configs/render groups, the registration scaffolder and the
+  packaged parameter maps, with nothing cross-checking any pair. A right spec with a wrong preset
+  renders silently-wrong audio on the pedalboard path.
+
+Add synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only like
+  param_spec_name and renderer_backend: it holds no ParamSpec and imports no data.vst module, so
+  pipeline.schemas.spec can depend on it without pulling pedalboard onto the launcher's import path.
+
+name and param_spec_name are separate fields so preset variants can share one ParamSpec; every
+  shipped entry currently has them equal, so the split is inert until the first variant is
+  registered.
+
+Route the raw-DictConfig identity reads in cli/train.py and cli/eval.py through
+  SynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read the composed cfg
+  directly and need a shared accessor of their own.
+
+plugin_state_paths stays a literal dict for now because registration.registry_with_spec rewrites it
+  by line anchor; a test pins it against SYNTHS until that transform learns to write the new table.
+
+Refs #2434
+
+* internal-feat(pipeline): nest synth identity in RenderConfig
+
+RenderConfig carried param_spec_name, plugin_path and plugin_state_path as three independent flat
+  fields, so nothing tied them together and a right spec with a wrong preset validated cleanly.
+  Replace them with one nested SynthSpec.
+
+Read access is preserved by plain properties, leaving the ~125 read sites untouched. They must be
+  plain properties rather than computed_field: the worker argv is built by flattening model_dump(),
+  and _GenerateCliArgs is extra="forbid", so re-emitted flat keys would hard-fail the renderer
+  subprocess at parse.
+
+Specs already written to R2 carry the flat keys, so a mode="before" validator lifts them onto synth.
+  It pops rather than copies, since extra="forbid" rejects leftovers, and refuses a payload carrying
+  both shapes instead of silently preferring one. Code that constructs a RenderConfig now passes
+  synth= — pyright enforces that, keeping the lift scoped to deserializing old JSON.
+
+Worker argv JSON-encodes non-scalars. Every field was scalar before, so str(value) happened to
+  round-trip; a nested model would emit a single-quoted Python repr that CliSettingsSource's
+  json.loads rejects. bool is an int subclass, so flags keep their existing spelling and all 22
+  scalar fields are byte-identical in argv.
+
+validate_spec checks identity shape-aware rather than by presence: validate-dataset-shards.yaml has
+  a workflow_dispatch taking an arbitrary spec_uri, so archived specs must still validate. Exempting
+  synth outright would have made identity optional in both shapes.
+
+* test(pipeline): cover the shape-aware synth identity check
+
+The legacy-shape branch of validate_spec's identity read and the shape-aware presence check were
+  both uncovered, so the back-compat path this change claims to preserve was unverified. Switch the
+  shared spec fixture to the nested shape the pipeline now writes and add a flat variant alongside
+  it, so both are exercised.
+
+* test(tooling): cover the captured-patch render config
+
+The RenderConfig construction in vst_interactive sat inline in a long main() in a file with no
+  coverage at all, so migrating it to the nested synth field landed unverified. Extract it as
+  make_dataset_render_cfg and pin what it records: the auditioned synth identity, the patch count as
+  the shard size, the session audio settings, and that identity validation still runs.
+
+* internal-feat(pipeline): compose synth identity as a Hydra group
+
+The render groups restated a synth's identity as three literal fields each, duplicating SYNTHS with
+  nothing checking the two agreed. Replace them with a configs/render/synth group that each render
+  group selects.
+
+The group YAML is a checked-in generated artifact of SYNTHS, not a second authoring point: a
+  parametrized test asserts every shipped group equals its table entry, and that the two cover the
+  same set of names. It stays as YAML rather than being registered from SYNTHS at startup because
+  the --register flow composes render groups from a temp checkout without importing its Python.
+
+The composed node is a mapping, not a scalar, so every existing override is a mechanical rename
+  rather than a lost capability: the dataset tests still swap in a stub bundle via
+  render.synth.plugin_path to pass the renderer-version gate without a real install.
+
+The two cadence sweeps now select render=<synth> instead of poking two of the three identity fields,
+  which could previously disagree with the third.
+
+from_render_cfg reads the nested node, falling back to the flat keys so a hand-written or archived
+  config still resolves.
+
+* internal-fix(testing): rename the integration render overrides
+
+Two Hydra override strings still used the flat render.plugin_path path, so the spec-URI and wandb
+  e2e jobs failed at compose with "Could not override 'render.plugin_path'". Both live in
+  integration tests that only run in their own CI jobs, so the local suites did not reach them.
+
+* internal-fix(testing): route renderer fixtures through --synth
+
+The conftest renderer-argv fixture and the torchsynth e2e still spelled identity as three flat
+  flags, so every test shelling out to generate_vst_dataset exited 2 at argument parse. Encode it as
+  the JSON --synth value build_generate_args emits, behind a helper that names why.
+
+Two composed-cfg reads also still used the flat keys: the inline oracle-eval config assertion and
+  the eval render-group composition test. Both read a DictConfig rather than a RenderConfig, so the
+  back-compat properties do not reach them.
+
+These only run under slow / requires_vst marks, which the default loop deselects; found by CI.
+
+* internal-feat(tooling): register synths into the SynthSpec table
+
+--register wrote a synth's identity into param_spec_registry.plugin_state_paths and restated it
+  again in the generated render config, leaving SYNTHS to be edited by hand. A synth registered by
+  following the tool alone passed --verify and then failed the cross-registry tests in CI.
+
+Teach the transform to write the identity row and its config group, and derive plugin_state_paths
+  from SYNTHS so there is nothing left to keep in sync.
+
+_synth_rows holds flat one-line literals rather than nested SynthSpec calls: the transform extends
+  the dict by line anchor and reads back a single key line for idempotency, so a constructor call
+  would reflow under ruff-format and break the --force convergence path.
+
+render_config_yaml now selects the synth group instead of restating the three identity fields, and
+  every generated scalar is JSON-quoted so a YAML 1.1 literal name (on, true) survives as a string.
+
+The reserved-name set stays the shipped-group list rather than being derived from SYNTHS: deriving
+  it would make every registered synth reserved, so registration_paths would raise on
+  re-registration and kill --force convergence.
+
+- **training**: Log per-param best-swap MSE
+  ([#2540](https://github.com/tinaudio/synth-setter/pull/2540),
+  [`95b3ca0`](https://github.com/tinaudio/synth-setter/commit/95b3ca0cf318289f8be427ba52bcac917fc14577))
+
+Attribute sorted best-swap residuals back to target parameter dimensions. Expose them through the
+  existing validation callback while preserving modules that only emit plain per-parameter MSE.
+
+Refs #2538
+
+- **training**: Train feed-forward models on cached embeddings
+  ([#2508](https://github.com/tinaudio/synth-setter/pull/2508),
+  [`1090ad4`](https://github.com/tinaudio/synth-setter/commit/1090ad4023b3183b29c6ffc1bc0d874cb438c1b7))
+
+* internal-feat(training): support cached feed-forward conditioning
+
+* internal-feat(training): complete cached conditioning parity
+
+* chore: refresh PR metadata checks
+
+* internal-fix(training): preserve Python 3.11 config parsing
+
+### Internal-Fix
+
+- **ci**: Scope Pi subagent model selectors
+  ([#2389](https://github.com/tinaudio/synth-setter/pull/2389),
+  [`6537bd4`](https://github.com/tinaudio/synth-setter/commit/6537bd459e305cf9928aea0aaa2f20afe2c9e900))
+
+- **ci-automation**: Bound evaluation prediction mutation shards
+  ([#2522](https://github.com/tinaudio/synth-setter/pull/2522),
+  [`af2cdfc`](https://github.com/tinaudio/synth-setter/commit/af2cdfc5b2b9b6ebc89b7887d2f8ee5158f7610c))
+
+- **ci-automation**: Bound evaluation prediction mutation shards
+  ([#2532](https://github.com/tinaudio/synth-setter/pull/2532),
+  [`a254c26`](https://github.com/tinaudio/synth-setter/commit/a254c26a657d282423fe5479e7199ef751a7f782))
+
+- **ci-automation**: Bound GPU tests through SkyPilot
+  ([#2545](https://github.com/tinaudio/synth-setter/pull/2545),
+  [`1838103`](https://github.com/tinaudio/synth-setter/commit/183810396d8d0c3a476876f60b5e295f6c6eab6f))
+
+* internal-fix(ci-automation): bound GPU workflow completion
+
+* internal-fix(ci-automation): invoke fixture wrapper through bash
+
+* internal-fix(ci-automation): restore GPU worker runtime tools
+
+* refactor(ci-automation): dispatch GPU tests via the SkyPilot launcher
+
+The workflow re-implemented dispatch_via_skypilot inline: a Python heredoc that hand-rolled task
+  construction, cluster launch, status polling, log tailing and verified teardown, reaching past the
+  module boundary for the private _override_image_id. Replace it with one `python -m
+  synth_setter.pipeline.skypilot_launch` call against a checked-in launch config, matching how
+  eval.yml and train.yml already dispatch.
+
+tier, worker_image_tag, tail, and the cred/balance preflight are existing launcher features, so they
+  move into the config. WORKER_GIT_REF replaces workdir sync as the code-delivery path: syncing the
+  workdir is what dropped the executable bit on run-linux-vst-headless.sh, and it also bypassed the
+  image's baked plugin symlinks and SYNTH_SETTER_PLUGIN_PATH. The worker body moves to a
+  shellcheck-covered script, and coverage retrieval uses rclone moveto so the run-scoped object
+  cannot leak.
+
+The tests now drive the real config loaders — load_launch_config, apply_tier_filter, build_task_doc
+  — instead of asserting on workflow substrings, so they fail when the dispatch actually breaks.
+
+Refs #2460
+
+- **ci-automation**: Harden mutmut selector portability coverage
+  ([#2535](https://github.com/tinaudio/synth-setter/pull/2535),
+  [`d5d4421`](https://github.com/tinaudio/synth-setter/commit/d5d442154fd7fa03eb6ccf4f6c188ddb602a56d1))
+
+- **ci-automation**: Harden SkyPilot GPU test dispatch
+  ([#2550](https://github.com/tinaudio/synth-setter/pull/2550),
+  [`218a17f`](https://github.com/tinaudio/synth-setter/commit/218a17f1ff62cffa768ad0cb6d4a789e04505552))
+
+* internal-fix(ci-automation): harden GPU launcher dispatch
+
+* internal-fix(ci-automation): verify GPU coverage teardown
+
+* internal-fix(ci-automation): preserve launcher-managed W&B env
+
+* internal-fix(ci-automation): exercise GPU worker teardown
+
+* internal-fix(ci-automation): exercise GPU credential handoff
+
+* style(ci-automation): tighten GPU worker contract comments
+
+* internal-fix(ci-automation): skip rclone round trip when unavailable
+
+- **ci-automation**: Install rclone in slow CPU PR lane
+  ([#2485](https://github.com/tinaudio/synth-setter/pull/2485),
+  [`b7678e7`](https://github.com/tinaudio/synth-setter/commit/b7678e7e64e272d45f0cb56c6c6d69507e5d950d))
+
+- **ci-automation**: Rclone rule parsing and Node before tests
+  ([#2429](https://github.com/tinaudio/synth-setter/pull/2429),
+  [`c25f42c`](https://github.com/tinaudio/synth-setter/commit/c25f42cfe20a39b539147f5971f2fea7c69d90de))
+
+* internal-fix(storage): parse rclone config show from builds before 1.56
+
+rclone before 1.56 — including the 1.53 apt build in the Ubuntu 22.04 image — frames `config show
+  <remote>` in `--------------------` rules. configparser rejects the leading rule as a missing
+  section header, so the rclone fallback in _storage_config_from_rclone was discarded and every
+  caller on such a host got "Object storage settings unresolved after dotenv load" despite a valid
+  remote.
+
+Drop the rules before parsing. The test drives the real subprocess boundary via a stand-in rclone on
+  PATH that emits verbatim 1.53 output, so it fails for the reason the bug exists rather than
+  pinning the parser's internals.
+
+Fixes #2428
+
+* internal-fix(ci-automation): install Node before the in-image pytest run
+
+The `dev-base` pytest layer runs the Pi hook suite, which needs a Node that strips TypeScript inline
+  (--experimental-strip-types, Node >= 22.6). Node 22 was copied only into the later
+  `devcontainer-tools` stage, so test_agent_hooks_bash_suite_passes_under_codex_skill_layout failed
+  the image build with "install Node with TypeScript stripping support".
+
+Move the node binary COPY ahead of the test layer; `devcontainer-tools` keeps the npm module tree it
+  needs for the Codex CLI and inherits the binary.
+
+Fixes #2425
+
+* docs(ci-automation): attribute the Node binary to the dev-base stage
+
+The binary now lands in dev-base for the in-image pytest run; devcontainer-tools only layers the npm
+  tree on top.
+
+Refs #2425
+
+* internal-fix(storage): read rclone config dump, keep failure reason
+
+Two defects behind #2428, found reviewing why it presented as an unexplained CI failure rather than
+  a parse error.
+
+_storage_config_from_rclone screen-scraped `rclone config show`, whose pretty-printed framing is not
+  a stability contract — the pre-1.56 rule lines were that non-guarantee biting. `config dump` emits
+  JSON that is byte-identical on v1.53.3 and v1.68.2, so parse it instead and drop the
+  rule-stripping shim.
+
+_storage_config_from_sources caught the fallback's RuntimeError and raised `... or a configured r2
+  remote` while chaining the *env* error, so `raise ... from` suppressed the rclone reason out of
+  the traceback entirely. Callers with a valid remote were pointed at the wrong cause. Chain the
+  rclone failure and name it in the message; give each failure mode (binary absent, timeout,
+  non-zero exit, bad JSON, absent remote, bad fields) a distinct string, none of which interpolate
+  credential values.
+
+Fixes #2431 Fixes #2432
+
+* test(storage): cover the rclone-absent and unparsable-dump branches
+
+codecov/patch flagged r2_io.py:104 and 114-115 — two error branches added with the config-dump
+  switch and left untested. Drive both through the real subprocess boundary: an empty PATH for the
+  missing binary, a stand-in that prints non-JSON for the parse failure.
+
+Refs #2431
+
+- **ci-automation**: Shard mutmut over pipeline.data.t5gemma
+  ([#2502](https://github.com/tinaudio/synth-setter/pull/2502),
+  [`fc74775`](https://github.com/tinaudio/synth-setter/commit/fc74775d75a3d2c1611841c281fd0b5eef205213))
+
+* internal-fix(ci-automation): shard mutmut over pipeline.data.t5gemma
+
+`t5gemma.py` sits under `[tool.mutmut].paths_to_mutate` but matched no `_MUTANT_SHARDS` pattern, so
+  its four top-level functions were assigned to zero mutation jobs — and the exactly-one-match guard
+  added in #2468 has been red on `main` ever since, failing every PR's `run_tests_conda` leg.
+
+Adds the missing `pipeline-t5gemma` shard to both the workflow matrix and the test's mirror of it.
+  The guard itself needs no change: it detected the drift correctly, it just had nothing to match.
+
+Fixes #2499
+
+* docs(testing): stop re-encoding the mutmut shard count
+
+The doc named "twelve" shards, a number the prior sharding PR set and this branch's new
+  `pipeline-t5gemma` shard invalidates. Points at the workflow's `matrix.include` instead, so the
+  next shard split does not silently stale it.
+
+Refs #2499
+
+- **ci-automation**: Stabilize mutation testing workflow
+  ([#2468](https://github.com/tinaudio/synth-setter/pull/2468),
+  [`4c3becc`](https://github.com/tinaudio/synth-setter/commit/4c3becc3db6912ce0b911bf268d716751543b6e9))
+
+* internal-fix(ci-automation): stabilize mutation testing workflow
+
+* internal-fix(ci-automation): split oversized mutation shards
+
+* internal-fix(ci-automation): bound add-data mutation shards
+
+- **ci-automation**: Stabilize nightly VST sweep
+  ([#2491](https://github.com/tinaudio/synth-setter/pull/2491),
+  [`0ba0efc`](https://github.com/tinaudio/synth-setter/commit/0ba0efce8dc1268312e87c3e8093cef5f35be09c))
+
+- **data-pipeline**: Align Faust E2E Tyro flags
+  ([#2504](https://github.com/tinaudio/synth-setter/pull/2504),
+  [`5b9962f`](https://github.com/tinaudio/synth-setter/commit/5b9962fadea7f7d8c0f7d43eec16250f8a3ee28c))
+
+- **data-pipeline**: Harden T5Gemma embedding coverage
+  ([#2486](https://github.com/tinaudio/synth-setter/pull/2486),
+  [`b3975b6`](https://github.com/tinaudio/synth-setter/commit/b3975b6ffbfd14dbb4318acb432d7071c1c1c4f1))
+
+Make prompt embeddings independent of batch shape and reject checkpoints that would alter the
+  persisted tensor contract.
+
+Expose T5Gemma as a training conditioning profile. Extend the real all-embedding Hydra/VST/model
+  path and select it in trusted VST CI.
+
+Refs #2433
+
+- **data-pipeline**: Repair Hydra BadWindow synth version
+  ([#2527](https://github.com/tinaudio/synth-setter/pull/2527),
+  [`ddf0559`](https://github.com/tinaudio/synth-setter/commit/ddf055932a40d4511eb59b2307fe5ca68ec4f9e4))
+
+- **data-pipeline**: Update BadWindow synth version access
+  ([#2515](https://github.com/tinaudio/synth-setter/pull/2515),
+  [`06f92c5`](https://github.com/tinaudio/synth-setter/commit/06f92c5d89a14f8e542c1970994e0f3d2cc5d74c))
+
+- **evaluation**: Use configured renderer for prediction audio
+  ([#2447](https://github.com/tinaudio/synth-setter/pull/2447),
+  [`1beb9a9`](https://github.com/tinaudio/synth-setter/commit/1beb9a9f61bd7eaede135a5d6cbee469740114a5))
+
+* internal-fix(evaluation): route audio through renderer factory
+
+* internal-fix(evaluation): preserve renderer lifecycle during prediction
+
+* internal-fix(evaluation): forward GUI cadence to oracle eval
+
+* test(evaluation): cover renderer factory dispatch
+
+* test(evaluation): skip unsupported Darwin GUI cadence
+
+* test(evaluation): assert oracle GUI cadence transport
+
+- **storage**: Mark missing lineage edges, describe checkpoints
+  ([#2490](https://github.com/tinaudio/synth-setter/pull/2490),
+  [`ed725ac`](https://github.com/tinaudio/synth-setter/commit/ed725acaa47301b4e85506abe836dda5c8ddfc4d))
+
+* internal-fix(storage): mark runs whose dataset lineage edge is missing
+
+A training run that could not record its `use_artifact` edge finished green: `use_input_artifacts`
+  warned into a 100k-step log and returned, so the model artifact hung off the run with no upstream
+  dataset node and nothing said so.
+
+`use_input_artifacts` now reports the refs it failed to record, and `record_input_lineage` (train +
+  eval) writes `summary.lineage_incomplete`, `summary.lineage_missing`, and the `lineage-incomplete`
+  run tag when any consumed input has no edge — including a configured dataset root whose frozen
+  spec will not parse, which previously produced zero refs and zero signal.
+
+The model artifact's R2 reference is `checksum=False` against an endpoint W&B cannot reach, so it
+  renders as a 0-byte entry. `_checkpoint_metadata` now records `ckpt_uri`, `ckpt_bytes`, `epoch`,
+  `global_step`, `monitor`, and `monitor_score` so the referenced checkpoint is identifiable in the
+  UI.
+
+Refs #2424
+
+* internal-fix(storage): exempt offline W&B runs from the lineage marker
+
+`use_artifact` raises outright in offline mode ("Cannot use artifact when in offline mode"), so
+  every offline run was marked `lineage-incomplete` for a gap it can never close — found by driving
+  the real entrypoint against a real offline `WandbLogger`. Offline runs now skip the refs entirely.
+
+Adds the two offline-wandb e2e tests that caught it: an unresolvable dataset root marks the run
+  (marker read back out of wandb's own datastore binary), a resolvable one leaves it unmarked.
+
+Applies the doc-drift findings on PR #2490: the metadata table in artifact-provenance-reference §3
+  no longer contradicts §4, and doc-map covers `_checkpoint_metadata`.
+
+* internal-fix(storage): e2e the checkpoint artifact metadata offline
+
+Drives the real entrypoint through a real rclone upload and reads the artifact metadata back out of
+  the wandb datastore binary, cross-checking ckpt_bytes against the uploaded object.
+
+* ci(storage): retrigger PR checks after the title fix
+
+The four check-pr-title failures recorded on the previous SHA predate the title edit; a new SHA
+  re-runs every check against the corrected title.
+
+- **testing**: Align DawDreamer fixture preset
+  ([#2495](https://github.com/tinaudio/synth-setter/pull/2495),
+  [`4ac720b`](https://github.com/tinaudio/synth-setter/commit/4ac720b2726341f5ff879581677134a43df4d32b))
+
+- **testing**: Align parallel shard preset provenance
+  ([#2518](https://github.com/tinaudio/synth-setter/pull/2518),
+  [`1f3e7b6`](https://github.com/tinaudio/synth-setter/commit/1f3e7b693b9f1438585ea69ca7d12028fd8b5d3b))
+
+- **testing**: Fail fast on missing same_e2e prerequisites
+  ([#2421](https://github.com/tinaudio/synth-setter/pull/2421),
+  [`e92f4cd`](https://github.com/tinaudio/synth-setter/commit/e92f4cd318fb7fcb746da9da9c5515f8275264dc))
+
+- **testing**: Load presets with their owning synth
+  ([#2496](https://github.com/tinaudio/synth-setter/pull/2496),
+  [`de76ca1`](https://github.com/tinaudio/synth-setter/commit/de76ca136448649d35ad8204cb9bc7292704622d))
+
+- **testing**: Repair SynthSpec VST sweep contracts
+  ([#2517](https://github.com/tinaudio/synth-setter/pull/2517),
+  [`2c0fd4d`](https://github.com/tinaudio/synth-setter/commit/2c0fd4da7afe4f4e3320878a46a906cb930638bd))
+
+- **testing**: Scope SAME E2E prerequisites
+  ([#2481](https://github.com/tinaudio/synth-setter/pull/2481),
+  [`6330180`](https://github.com/tinaudio/synth-setter/commit/6330180b6b823d89a52385510f1500c05f459c8e))
+
+Require a VST only when a selected SAME E2E test carries the requires_vst marker. Encoder-only SAME
+  workflow tests can now run with the public checkpoint and optional extra alone.
+
+Fixes #2472
+
+- **testing**: Source renderer_version from render configs
+  ([#2436](https://github.com/tinaudio/synth-setter/pull/2436),
+  [`ea5c837`](https://github.com/tinaudio/synth-setter/commit/ea5c837c693cd98378bbe9524c44b577eb634ed7))
+
+* internal-fix(testing): source renderer_version from the render configs
+
+tests/_vst.py mirrored renderer_version in a four-entry dict that nothing checked against the
+  shipped configs/render/<synth>.yaml groups, and that covered only the VST synths — selecting a
+  torchsynth backend via SYNTH_SETTER_TEST_SYNTH raised KeyError at import of the shared test
+  helper.
+
+Read the pin through Hydra instead, so all seven registered synths resolve and the constant cannot
+  disagree with the group it claims to mirror.
+
+Add tests pinning each group's renderer_version against the artifact it describes: the VST groups
+  against the version read off the plugin bundle (requires_vst), the torchsynth groups against the
+  installed package version. generate_dataset already cross-checks this at worker startup; checking
+  it here fails a stale pin before a shard reaches a worker.
+
+Refs #2434
+
+* docs(testing): record the renderer-version pins in the testing primer
+
+The testing primer's VST row implied everything under tests/data/vst/ is requires_vst-gated; the new
+  pin tests are mixed, with only the plugin-bundle comparison needing a binary. Also extend the
+  doc-map entry for tests/_vst.py, whose TEST_RENDERER_VERSION now composes render/<synth>.yaml at
+  import rather than reading a static dict.
+
+- **training**: Align per-param MSE labels to encoded columns
+  ([#2435](https://github.com/tinaudio/synth-setter/pull/2435),
+  [`a6923dc`](https://github.com/tinaudio/synth-setter/commit/a6923dca64702a2188fa7a4e42103dbc0ed43fa3))
+
+* internal-fix(training): index per-param metrics by encoded column
+
+LogPerParamMSE zipped ParamSpec.names (one entry per Parameter) against the modules' per_param_mse
+  vector (one entry per encoded column). Those widths never match: note_start_and_end alone spans
+  two columns, so every spec has len(names) == encoded_width - 1 at minimum, and each onehot
+  parameter widens the gap further (surge_xt 164 vs 300, obxf 96 vs 187, surge_4 6 vs 7). Non-strict
+  zip truncated silently, dropping trailing columns and shifting every label past the first
+  multi-column parameter onto the wrong parameter.
+
+Add ParamSpec.encoded_slices() as the single name-to-column-span accessor and route the three
+  existing hand-rolled pointer walks (ParamSpec.decode, vae.param_loss, plot_param2tok.get_labels)
+  through it, so no caller can index encoded columns by name position again.
+
+Refs #2434
+
+* test(training): cover get_labels' encoded-column interval layout
+
+plot_param2tok had no test coverage at all, so routing get_labels through ParamSpec.encoded_slices()
+  landed unverified. Pin the invariant the function exists to satisfy: the (label, width) intervals
+  must tile the encoded row exactly, since a short or long total misaligns every label after the
+  gap.
+
+* internal-fix(training): defer param loss slice routing
+
+### Refactoring
+
+- Compose synth identity as a Hydra group
+  ([#2441](https://github.com/tinaudio/synth-setter/pull/2441),
+  [`aed7f2d`](https://github.com/tinaudio/synth-setter/commit/aed7f2dffafdb30ecb78b196d8d5769e45d38f05))
+
+* internal-feat(pipeline): add SynthSpec as the synth identity table
+
+A synth's identity — which ParamSpec, which plugin, which baseline preset — was restated across the
+  two param_spec_registry dicts, the configs/render groups, the registration scaffolder and the
+  packaged parameter maps, with nothing cross-checking any pair. A right spec with a wrong preset
+  renders silently-wrong audio on the pedalboard path.
+
+Add synth_spec.py holding SynthSpec and the SYNTHS table. It is interpreter-only like
+  param_spec_name and renderer_backend: it holds no ParamSpec and imports no data.vst module, so
+  pipeline.schemas.spec can depend on it without pulling pedalboard onto the launcher's import path.
+
+name and param_spec_name are separate fields so preset variants can share one ParamSpec; every
+  shipped entry currently has them equal, so the split is inert until the first variant is
+  registered.
+
+Route the raw-DictConfig identity reads in cli/train.py and cli/eval.py through
+  SynthSpec.from_render_cfg. Those sites never build a RenderConfig, so they read the composed cfg
+  directly and need a shared accessor of their own.
+
+plugin_state_paths stays a literal dict for now because registration.registry_with_spec rewrites it
+  by line anchor; a test pins it against SYNTHS until that transform learns to write the new table.
+
+Refs #2434
+
+* internal-feat(pipeline): nest synth identity in RenderConfig
+
+RenderConfig carried param_spec_name, plugin_path and plugin_state_path as three independent flat
+  fields, so nothing tied them together and a right spec with a wrong preset validated cleanly.
+  Replace them with one nested SynthSpec.
+
+Read access is preserved by plain properties, leaving the ~125 read sites untouched. They must be
+  plain properties rather than computed_field: the worker argv is built by flattening model_dump(),
+  and _GenerateCliArgs is extra="forbid", so re-emitted flat keys would hard-fail the renderer
+  subprocess at parse.
+
+Specs already written to R2 carry the flat keys, so a mode="before" validator lifts them onto synth.
+  It pops rather than copies, since extra="forbid" rejects leftovers, and refuses a payload carrying
+  both shapes instead of silently preferring one. Code that constructs a RenderConfig now passes
+  synth= — pyright enforces that, keeping the lift scoped to deserializing old JSON.
+
+Worker argv JSON-encodes non-scalars. Every field was scalar before, so str(value) happened to
+  round-trip; a nested model would emit a single-quoted Python repr that CliSettingsSource's
+  json.loads rejects. bool is an int subclass, so flags keep their existing spelling and all 22
+  scalar fields are byte-identical in argv.
+
+validate_spec checks identity shape-aware rather than by presence: validate-dataset-shards.yaml has
+  a workflow_dispatch taking an arbitrary spec_uri, so archived specs must still validate. Exempting
+  synth outright would have made identity optional in both shapes.
+
+* test(pipeline): cover the shape-aware synth identity check
+
+The legacy-shape branch of validate_spec's identity read and the shape-aware presence check were
+  both uncovered, so the back-compat path this change claims to preserve was unverified. Switch the
+  shared spec fixture to the nested shape the pipeline now writes and add a flat variant alongside
+  it, so both are exercised.
+
+* test(tooling): cover the captured-patch render config
+
+The RenderConfig construction in vst_interactive sat inline in a long main() in a file with no
+  coverage at all, so migrating it to the nested synth field landed unverified. Extract it as
+  make_dataset_render_cfg and pin what it records: the auditioned synth identity, the patch count as
+  the shard size, the session audio settings, and that identity validation still runs.
+
+* internal-feat(pipeline): compose synth identity as a Hydra group
+
+The render groups restated a synth's identity as three literal fields each, duplicating SYNTHS with
+  nothing checking the two agreed. Replace them with a configs/render/synth group that each render
+  group selects.
+
+The group YAML is a checked-in generated artifact of SYNTHS, not a second authoring point: a
+  parametrized test asserts every shipped group equals its table entry, and that the two cover the
+  same set of names. It stays as YAML rather than being registered from SYNTHS at startup because
+  the --register flow composes render groups from a temp checkout without importing its Python.
+
+The composed node is a mapping, not a scalar, so every existing override is a mechanical rename
+  rather than a lost capability: the dataset tests still swap in a stub bundle via
+  render.synth.plugin_path to pass the renderer-version gate without a real install.
+
+The two cadence sweeps now select render=<synth> instead of poking two of the three identity fields,
+  which could previously disagree with the third.
+
+from_render_cfg reads the nested node, falling back to the flat keys so a hand-written or archived
+  config still resolves.
+
+* internal-fix(testing): rename the integration render overrides
+
+Two Hydra override strings still used the flat render.plugin_path path, so the spec-URI and wandb
+  e2e jobs failed at compose with "Could not override 'render.plugin_path'". Both live in
+  integration tests that only run in their own CI jobs, so the local suites did not reach them.
+
+* internal-fix(testing): route renderer fixtures through --synth
+
+The conftest renderer-argv fixture and the torchsynth e2e still spelled identity as three flat
+  flags, so every test shelling out to generate_vst_dataset exited 2 at argument parse. Encode it as
+  the JSON --synth value build_generate_args emits, behind a helper that names why.
+
+Two composed-cfg reads also still used the flat keys: the inline oracle-eval config assertion and
+  the eval render-group composition test. Both read a DictConfig rather than a RenderConfig, so the
+  back-compat properties do not reach them.
+
+These only run under slow / requires_vst marks, which the default loop deselects; found by CI.
+
+- **data-pipeline**: Remove Oracle Cloud Infrastructure support
+  ([#2555](https://github.com/tinaudio/synth-setter/pull/2555),
+  [`4f99caa`](https://github.com/tinaudio/synth-setter/commit/4f99caa2aa93bf2fe429d6ebe335038ef7d4aa48))
+
+* refactor(data-pipeline): remove OCI launch support
+
+Delete the OCI compute option, nested-Docker path, credential writer, and SDK dependency. Stale OCI
+  inputs now fail instead of falling back.
+
+* refactor(ci-automation): remove OCI workflow support
+
+* docs(pipeline): remove OCI provider guidance
+
+* refactor(ci-automation): reject unsupported providers
+
+Validate reusable and manual provider inputs explicitly. Removed or unknown providers can no longer
+  fall through to a successful no-op.
+
+* internal-fix(data-pipeline): address OCI removal review
+
+Cover Vast credential checks, execute provider validation in Bash, and exercise the removed compute
+  option through the real generation CLI.
+
+* internal-fix(data-pipeline): address final OCI removal review
+
+### Testing
+
+- Improve feed-forward cached-conditioning test coverage
+  ([`0a5ae04`](https://github.com/tinaudio/synth-setter/commit/0a5ae04ed7417eaaa571a2e90bdd56989e909b32))
+
+* test(training): cover cached-conditioning gaps from the #2508 review
+
+Adds the behavioral coverage the multi-skill review of #2508 flagged as missing for feed-forward
+  cached-embedding conditioning:
+
+- an eval-entrypoint regression loading a feed-forward `conditioning=t5gemma` checkpoint through
+  `evaluate(mode=validate)` - single-batch overfit tests, so a model that cannot learn the mapping
+  no longer passes on a finite first-step loss alone - a decode-domain test proving unbounded cached
+  predictions still land inside the param-spec domain at the `decode_model_output` boundary -
+  `predict_step` coverage for a cached-only batch, plus input-dependence and full-gradient
+  assertions a disconnected encoder would fail
+
+Test-length findings are addressed by extracting the T5Gemma compose helper in `test_configs.py` and
+  the feed-forward train/validate phase in `test_train.py`.
+
+The repo-wide pyright hook blocks every commit off current main, so the stale
+  `spec.render.renderer_version` stub is pointed at the synth identity alongside its four siblings
+  in the same file.
+
+* test(training): tighten cached-conditioning test structure
+
+Splits the gradient-reach assertions out of the finite-loss test, shares the flow/feed-forward
+  parametrization through one marker, and extracts the eval-side compose helper so the new
+  regression stays inside the length guide.
+
+* test(training): bind the overfit loss before the training loop
+
+A zero-step loop raised UnboundLocalError instead of failing the near-zero assertion, hiding what
+  the test actually pins.
+
+- **training**: Unbreak CPU Slow Tests after #2360 config drift
+  ([#2444](https://github.com/tinaudio/synth-setter/pull/2444),
+  [`d156de7`](https://github.com/tinaudio/synth-setter/commit/d156de7e9bf5a0f17bef73fac7f9662cd62fcd49))
+
+* test(training): accept #2360 subset-hydration keys in baseline diff
+
+CPU Slow Tests has been red on main since #2360 added download_dataset_row_limit and
+  download_dataset_txids to the datamodule config: the v0.0.0 anchor has neither, so all 8
+  surge_train and 10 predict parametrizations diverge.
+
+Both keys resolve to null — the whole dataset is hydrated, so training sees the v0.0.0 row set. That
+  is an inert addition, which ACCEPTED_DIFFS exists to absorb; MODEL_BASELINE stays pinned because
+  it anchors published results and is meant to move only when the model snapshot is regenerated.
+
+Fixes #1989
+
+* chore(ci-automation): retrigger checks after title fix
+
+
 ## v10.7.0 (2026-07-24)
 
 ### Continuous Integration

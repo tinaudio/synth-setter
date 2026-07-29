@@ -228,15 +228,8 @@ def load_t5gemma_text_encoder(checkpoint: str, device: str) -> TextEncodeFn:
     :param checkpoint: Local directory, R2 mirror, or HuggingFace repo id.
     :param device: Resolved Torch device.
     :returns: Encoder producing ``(B, T5GEMMA_EMBEDDING_DIM, max_length)`` embeddings.
-    :raises ImportError: The optional ``sa3`` extra is unavailable.
     """
-    try:
-        from stable_audio_3.models.conditioners import T5GemmaConditioner
-    except ImportError as exc:
-        raise ImportError(
-            "loading T5Gemma text encoders requires the optional `sa3` extra — "
-            "install it with `uv sync --extra sa3`"
-        ) from exc
+    from stable_audio_3.models.conditioners import T5GemmaConditioner
 
     checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
     config = _read_conditioner_config(checkpoint_dir)
