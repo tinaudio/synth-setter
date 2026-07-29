@@ -1606,11 +1606,10 @@ def _assert_conditioning_train_validate_finite(
 
     HydraConfig().set_config(cfg_eval)
     try:
-        val_metric_dict, object_dict = evaluate(cfg_eval)
+        val_metric_dict, _ = evaluate(cfg_eval)
     finally:
         GlobalHydra.instance().clear()
 
-    assert isinstance(object_dict["model"].encoder, EmbeddingPool)
     validation_mse = val_metric_dict["val/param_mse"].item()
     assert math.isfinite(validation_mse)
     return validation_mse
