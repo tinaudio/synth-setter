@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -43,6 +44,84 @@ def two_version_source(tmp_path: Path) -> tuple[str, str]:
     transaction = ds.read_transaction(1)
     assert transaction is not None
     return source, transaction.uuid
+
+
+def test_materialize_lance_subset_evicts_written_data_files(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Published Lance data files are advised out of the filesystem cache.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Records the OS advice boundary while preserving real materialization.
+    """
+    source, txid = two_version_source
+    advised_fds: list[int] = []
+
+    def record_advice(fd: int, offset: int, length: int, advice: int) -> None:
+        advised_fds.append(fd)
+        assert offset == 0
+        assert length == 0
+        assert advice == os.POSIX_FADV_DONTNEED
+
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert advised_fds
+    assert lance.dataset(str(destination)).count_rows() == 3
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "posix_fadvise") or not hasattr(os, "POSIX_FADV_DONTNEED"),
+    reason="POSIX_FADV_DONTNEED is unavailable on this platform",
+)
+def test_materialize_lance_subset_real_cache_evict_remains_consumable(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+) -> None:
+    """The real OS eviction path preserves the published Lance dataset.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    """
+    source, txid = two_version_source
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert lance.dataset(str(destination)).to_table().to_pydict() == {
+        "a": [1, 2, 3]
+    }
+
+
+def test_materialize_lance_subset_cache_advice_error_remains_consumable(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OS advice failure does not invalidate the published dataset.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Injects the advisory syscall failure.
+    """
+    source, txid = two_version_source
+
+    def fail_advice(*_args: int) -> None:
+        raise OSError(5, "advice failed")
+
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", fail_advice, raising=False)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert lance.dataset(str(destination)).count_rows() == 3
 
 
 def test_resolve_txid_version_known_txid_returns_matching_version(

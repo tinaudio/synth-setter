@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -445,6 +446,30 @@ def _reuse_or_raise(
     return dest_path
 
 
+def _evict_lance_data_cache(dataset_path: Path) -> None:
+    """Release clean pages for a completed local Lance dataset.
+
+    :param dataset_path: Published dataset whose data-file pages should be evicted.
+    """
+    advise = getattr(os, "posix_fadvise", None)
+    dontneed = getattr(os, "POSIX_FADV_DONTNEED", None)
+    if advise is None or dontneed is None:
+        return
+    for data_path in (dataset_path / "data").rglob("*"):
+        if not data_path.is_file():
+            continue
+        try:
+            with data_path.open("rb", buffering=0) as stream:
+                os.fsync(stream.fileno())
+                advise(stream.fileno(), 0, 0, dontneed)
+        except OSError as error:
+            logger.warning(
+                "lance_materialize.cache_evict_failed",
+                path=str(data_path),
+                errno=error.errno,
+            )
+
+
 def _write_materialized_snapshot(
     snapshot: lance.LanceDataset,
     *,
@@ -517,6 +542,7 @@ def _write_materialized_snapshot(
             ),
             resolved_txid=manifest.resolved_txid,
         )
+    _evict_lance_data_cache(dest_path)
     logger.info(
         "lance_materialize.done",
         dest_path=str(dest_path),
