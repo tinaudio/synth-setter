@@ -3069,6 +3069,32 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, poisoned)
 
 
+def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
+    """Memory-capped chunking preserves control values within float32 kernel jitter.
+
+    Torch picks batch-shape-dependent reduction kernels, so values were already Lance-batch-size-
+    dependent at ~1e-6 scale before chunking existed.
+    """
+    from synth_setter.pipeline.data.add_embeddings import (
+        SKETCH_ENCODE_MAX_BATCH,
+        _sketch_encode,
+    )
+
+    rows = SKETCH_ENCODE_MAX_BATCH + 3
+    # Clips long enough for PESTO's CQT and the loudness STFT windows.
+    samples = 8192
+    audio = (
+        (np.random.default_rng(23).random((rows, 1, samples)) - 0.5) * 0.8
+    ).astype(np.float32)
+
+    chunked = _sketch_encode(audio, _SAMPLE_RATE)
+
+    full = (
+        extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE).cpu().numpy()
+    )
+    np.testing.assert_allclose(chunked, full, atol=1e-5)
+
+
 def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
     """The sketch closure rejects outputs off the shared mel frame grid."""
     audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
@@ -3135,6 +3161,31 @@ def test_write_columns_appends_sketch_struct_to_existing_dataset(
         "pa.FixedShapeTensorArray", pitch_only.column(0).combine_chunks()
     ).to_numpy_ndarray()
     np.testing.assert_array_equal(projected, expected[:, SKETCH_PITCH_SLICE])
+
+
+def test_write_columns_with_noop_add_columns_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write pass whose commit silently lands nothing fails hard, never cleanly.
+
+    Guards the observed field failure mode where a run logs
+    ``embedding_write_started`` and exits without committing (#2707).
+
+    :param tmp_path: Scratch directory for the dataset.
+    :param monkeypatch: Fixture stubbing the Lance commit to a no-op.
+    """
+    uri = tmp_path / "sketch-noop.lance"
+    _audio_dataset(uri, rows=4)
+    dataset = lance.dataset(str(uri))
+    monkeypatch.setattr(dataset, "add_columns", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="without committing"):
+        _write_columns(
+            dataset,
+            [_fake_spec("sketch")],
+            _SAMPLE_RATE,
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
+        )
 
 
 def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:

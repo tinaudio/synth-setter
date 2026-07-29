@@ -106,6 +106,9 @@ SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
 SKETCH_INDEX_SUB_VECTORS: int = 2
+# PESTO's per-clip intermediates scale with batch size: a full 128-row Lance
+# batch peaked at ~8.8 GiB RSS and drew earlyoom SIGTERMs in the field (#2707).
+SKETCH_ENCODE_MAX_BATCH: int = 32
 # Dotted path of the nested IVF companion inside the sketch struct (#2707).
 # Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
 # per-child schema evolution (unused here) is the 2.2-only operation.
@@ -680,7 +683,11 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
 def _sketch_encode(
     audio: Float[np.ndarray, "batch channel time"], sample_rate: int
 ) -> Float[np.ndarray, "batch control frame"]:
-    """Extract sketch controls for one audio batch.
+    """Extract sketch controls for one audio batch in memory-capped chunks.
+
+    Every track is per-clip independent, so chunking only moves values within
+    float32 kernel jitter (~1e-6, already batch-size-dependent) while bounding
+    extraction RSS at the default Lance batch size.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
@@ -691,7 +698,13 @@ def _sketch_encode(
     from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
-    return extract_sketch_controls_batch(batch, sample_rate).cpu().numpy()
+    chunks = [
+        extract_sketch_controls_batch(batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate)
+        .cpu()
+        .numpy()
+        for start in range(0, len(batch), SKETCH_ENCODE_MAX_BATCH)
+    ]
+    return np.concatenate(chunks, axis=0)
 
 
 def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -1139,6 +1152,8 @@ def _write_columns(
     :param sample_rate: Dataset sample rate in Hz.
     :param config: Batch, checkpoint, logging, and resume settings.
     :raises ValueError: Policies are empty or dataset write preconditions fail.
+    :raises RuntimeError: ``add_columns`` returns without committing every
+        target column (a silent no-op write).
     """
     import lance
     import torch
@@ -1224,11 +1239,23 @@ def _write_columns(
         source_version=dataset.version,
     )
     dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+    # A silent no-op commit must be impossible: after add_columns returns, every
+    # target column must exist (rows_processed alone can be 0 on a cache replay).
+    uncommitted = [
+        column for column in output_columns if column not in dataset.schema.names
+    ]
+    if uncommitted:
+        raise RuntimeError(
+            f"add_columns returned without committing column(s) {uncommitted} "
+            f"(rows_processed={rows_processed} of {total_rows}); refusing to "
+            "treat the write as done"
+        )
     _delete_resume_cache(resume_cache)
     logger.info(
         "wrote_embeddings",
         columns=output_columns,
         total_rows=total_rows,
+        rows_processed=rows_processed,
         committed_version=dataset.version,
     )
     encoders.clear()
