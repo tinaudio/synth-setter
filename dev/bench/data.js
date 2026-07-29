@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785348600248,
+  "lastUpdate": 1785348602892,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -23622,6 +23622,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.03700834512710571,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4121069cfbfb913022bad26c1b9cb7aec00ca890",
+          "message": "internal-fix(evaluation): forward sample_rate through mss, sot and wmfcc (#2702)\n\ncompute_mss, compute_sot and compute_wmfcc each call a helper that takes a\nsample_rate, but none of them forwarded one, so the helper's 44100.0 default\nalways won. compute_rms already took and used a sample rate, so the four\nmetrics disagreed the moment audio was not 44.1 kHz.\n\nAt 22.05 kHz every analysis window covered twice its intended real-time\nduration. Nothing raised; the returned float just described a different\ntransform than the caller asked for.\n\nThe new parameter defaults to 44100.0, so every existing call site keeps its\ncurrent behaviour exactly.\n\nNote this does not make the metrics rate-invariant: the frequency axis still\nchanges with the sample rate, so scores from different rates remain\nincomparable. It only lets a caller size the windows for the audio it has.\n\nFixes #2700",
+          "timestamp": "2026-07-29T09:21:01-07:00",
+          "tree_id": "79ebb65c232f0153e2be58eb8be62ebb551b2c79",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4121069cfbfb913022bad26c1b9cb7aec00ca890"
+        },
+        "date": 1785348602343,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 12.929048030566673,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 3.232262007641668,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 5.715133135900002,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.4287832839750005,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.2879598216999966,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.07198995542499916,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 7.891151428222656,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.610310077667236,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.03809480369091034,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 6.879462166037411,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.041541337966918945,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 7.6771931648254395,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.455970287322998,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.032278526574373245,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.803127342909574,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.04065185785293579,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 8.537444114685059,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 4.9198198318481445,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.03631582111120224,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 6.428872823119163,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.030066370964050293,
             "unit": "1-cos"
           }
         ]
