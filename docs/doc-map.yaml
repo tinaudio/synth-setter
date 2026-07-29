@@ -172,7 +172,7 @@ docs:
       - pattern: "src/synth_setter/features/**"
         covers: "Sketch-control tracks on the mel frame grid."
       - pattern: "src/synth_setter/conditioning.py"
-        covers: "Canonical SKETCH_* storage-layout constants, SketchControlSpec, and the embedding-conditioning specs shared by data and model layers."
+        covers: "Sketch-control storage constants and conditioning specifications."
       - pattern: "tests/pipeline/data/test_same_encoder_e2e.py"
         covers: "SAME-S and SAME-L production-loader parity against legacy references at immutable HF revisions."
       - pattern: "tests/helpers/same_reference.py"

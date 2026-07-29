@@ -286,6 +286,9 @@ def _empty_audio_dataset(uri: Path) -> None:
     )
 
 
+_REAL_ADD_COLUMNS = lance.LanceDataset.add_columns
+
+
 def _run_udf_in_process(
     dataset: lance.LanceDataset,
     udf: Callable[[pa.RecordBatch], pa.RecordBatch],
@@ -293,15 +296,22 @@ def _run_udf_in_process(
     read_columns: list[str],
     batch_size: int,
 ) -> None:
-    """Run a Lance batch UDF synchronously for deterministic assertions.
+    """Run a Lance batch UDF synchronously, then commit its outputs.
+
+    Committing keeps the writer's post-commit column check satisfied while the UDF invocations stay
+    observable in-process.
 
     :param dataset: Local dataset supplying batches.
     :param udf: Batch transform under test.
     :param read_columns: Source columns supplied to the transform.
     :param batch_size: Maximum rows per invocation.
     """
-    for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
+    outputs = [
         udf(batch)
+        for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size)
+    ]
+    reader = pa.RecordBatchReader.from_batches(outputs[0].schema, outputs)
+    _REAL_ADD_COLUMNS(dataset, reader, batch_size=batch_size)
 
 
 def _compose_add_embeddings(*overrides: str) -> DictConfig:
@@ -3069,11 +3079,43 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, poisoned)
 
 
+def test_sketch_encode_never_exceeds_extraction_batch_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every extractor invocation stays within SKETCH_ENCODE_MAX_BATCH.
+
+    :param monkeypatch: Fixture recording extractor input batch sizes.
+    """
+    import synth_setter.features.sketch_controls as sketch_controls
+    from synth_setter.pipeline.data.add_embeddings import (
+        SKETCH_ENCODE_MAX_BATCH,
+        _sketch_encode,
+    )
+
+    seen_sizes: list[int] = []
+
+    def record(batch: torch.Tensor, sample_rate: int) -> torch.Tensor:
+        del sample_rate
+        seen_sizes.append(len(batch))
+        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
+
+    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
+    rows = 2 * SKETCH_ENCODE_MAX_BATCH + 5
+    audio = np.zeros((rows, 1, _FIXTURE_SAMPLES), dtype=np.float32)
+
+    controls = _sketch_encode(audio, _SAMPLE_RATE)
+
+    assert len(controls) == rows
+    assert sum(seen_sizes) == rows
+    assert max(seen_sizes) == SKETCH_ENCODE_MAX_BATCH
+    assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
+
+
+@pytest.mark.slow
 def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
     """Memory-capped chunking preserves control values within float32 kernel jitter.
 
-    Torch picks batch-shape-dependent reduction kernels, so values were already Lance-batch-size-
-    dependent at ~1e-6 scale before chunking existed.
+    Torch reduction kernels can vary by batch shape at approximately 1e-6.
     """
     from synth_setter.pipeline.data.add_embeddings import (
         SKETCH_ENCODE_MAX_BATCH,
@@ -3179,7 +3221,7 @@ def test_write_columns_with_noop_add_columns_raises(
     dataset = lance.dataset(str(uri))
     monkeypatch.setattr(dataset, "add_columns", lambda *args, **kwargs: None)
 
-    with pytest.raises(RuntimeError, match="0 of 4 rows without committing"):
+    with pytest.raises(RuntimeError, match="without committing"):
         _write_columns(
             dataset,
             [_fake_spec("sketch")],

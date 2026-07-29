@@ -868,12 +868,7 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
 
 
 def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
-    """The prelim 1k A/B arms share pin, seed, and cadence; only sketch flips.
-
-    Pins the one-selector A/B contract (#2196, #2707): both arms compose the same immutable 1k
-    dataset root, shared seed, and 10k-step cadence so the comparison isolates the nested sketch-
-    control conditioning, whose 401-frame grid matches the dataset's 44.1 kHz 4 s render.
-    """
+    """The preliminary A/B arms differ only in sketch conditioning."""
     base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
     sketch = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
 

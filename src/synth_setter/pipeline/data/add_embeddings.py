@@ -1239,16 +1239,15 @@ def _write_columns(
         source_version=dataset.version,
     )
     dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
-    # A silent no-op must be impossible: zero UDF batches with nothing committed
-    # is the observed field failure. A resume-cache replay can legitimately show
-    # zero batches, but then the committed schema carries the columns.
+    # A zero-batch replay is valid only when the target columns are already committed.
     uncommitted = [
         column for column in output_columns if column not in dataset.schema.names
     ]
-    if rows_processed == 0 and uncommitted:
+    if uncommitted:
         raise RuntimeError(
-            f"add_columns returned after 0 of {total_rows} rows without "
-            f"committing column(s) {uncommitted}; refusing to treat the write as done"
+            f"add_columns returned without committing column(s) {uncommitted} "
+            f"(rows_processed={rows_processed} of {total_rows}); refusing to "
+            "treat the write as done"
         )
     _delete_resume_cache(resume_cache)
     logger.info(
