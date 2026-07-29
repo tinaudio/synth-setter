@@ -1,7 +1,7 @@
 # @package _global_
 
 # The torchsynth flow arm with the differentiable audio-feedback term attached.
-# Requires drop_last=True, model.compile=false and a single device — see
+# Requires model.compile=false and a single device — see
 # https://github.com/tinaudio/synth-setter/issues/2585.
 defaults:
   - torchsynth/flow
@@ -10,6 +10,3 @@ defaults:
 
 run_name: flow_audio
 tags: [torchsynth, flow, audio_loss]
-
-datamodule:
-  drop_last: true

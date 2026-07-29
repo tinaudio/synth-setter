@@ -2,10 +2,8 @@
 
 import pytest
 import torch
-from lightning.pytorch.utilities.combined_loader import CombinedLoader
-from torch.utils.data import DataLoader, TensorDataset
 
-from synth_setter.data.torchsynth_datamodule import render_torchsynth
+from synth_setter.data.torchsynth_datamodule import _make_renderer, render_torchsynth
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
@@ -21,13 +19,17 @@ _SAMPLE_RATE = 44_100
 _SIGNAL_LENGTH = 4_410
 _MIDI_PITCH = 60
 _BATCH = 4
+# Large enough that torchsynth's seeded (batch, buffer) noise fill crosses torch's
+# parallel-RNG grain size, where the drawn realization starts tracking the batch length.
+_NOISE_SENSITIVE_BATCH = 32
 _NUM_PARAMS = 76
 
 
-def _render(params01: torch.Tensor) -> torch.Tensor:
+def _render(params01: torch.Tensor, render_batch_size: int = _BATCH) -> torch.Tensor:
     """Render a parameter batch without gradients.
 
     :param params01: Parameters in ``[0, 1]``.
+    :param render_batch_size: Fixed row count of the voice the render runs on.
     :returns: Rendered audio.
     """
     with torch.no_grad():
@@ -36,6 +38,7 @@ def _render(params01: torch.Tensor) -> torch.Tensor:
             sample_rate=_SAMPLE_RATE,
             signal_length=_SIGNAL_LENGTH,
             midi_pitch=_MIDI_PITCH,
+            render_batch_size=render_batch_size,
         )
 
 
@@ -51,17 +54,9 @@ def _loss(**kwargs: object) -> AudioFeedbackLoss:
         "sample_rate": _SAMPLE_RATE,
         "signal_length": _SIGNAL_LENGTH,
         "midi_pitch": _MIDI_PITCH,
+        "render_batch_size": _BATCH,
     }
     return AudioFeedbackLoss(**(settings | kwargs))
-
-
-def _drop_last_loader(drop_last: bool) -> DataLoader:
-    """Build a plain loader exposing the requested partial-batch policy.
-
-    :param drop_last: Loader policy under test.
-    :returns: One-row tensor loader.
-    """
-    return DataLoader(TensorDataset(torch.tensor([0.0])), batch_size=1, drop_last=drop_last)
 
 
 def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
@@ -132,22 +127,28 @@ def test_grad_render_output_matches_the_documented_audio_contract() -> None:
     assert audio.abs().max() <= 1.0
 
 
-def test_grad_render_of_a_batch_matches_the_per_row_production_render_bitwise() -> None:
-    """The training render reproduces the stored targets sample for sample.
+def _noise_heavy_params(rows: int) -> torch.Tensor:
+    """Draw parameter rows whose noise oscillator dominates the mix.
 
-    :class:`TorchSynthDataset` renders one row at a time, so every target sees
-    torchsynth ``Noise`` chunk 0; the batched render broadcasts that same chunk.
-    Drop the broadcast and rows past the first carry a different noise realization,
-    leaving the audio loss chasing a target it can never reach.
+    A mismatched noise realization would otherwise hide under the tonal oscillators.
+
+    :param rows: Number of parameter rows to draw.
+    :returns: Parameters in ``[0, 1]`` shaped ``(rows, NUM_PARAMS)``.
     """
-    params = torch.rand(_BATCH, _NUM_PARAMS, generator=torch.Generator().manual_seed(0))
+    params = torch.rand(rows, _NUM_PARAMS, generator=torch.Generator().manual_seed(0))
     for index, spec in enumerate(INFERABLE_SPEC):
         if "noise" in spec.name:
-            # Turn the noise path up so a mismatched realization cannot hide under the oscillators.
             params[:, index] = 0.9
+    return params
 
-    batched = _render(params)
-    per_row = torch.cat(
+
+def _per_row_targets(params: torch.Tensor) -> torch.Tensor:
+    """Render each row the way :class:`TorchSynthDataset` stores its targets.
+
+    :param params: Parameters in ``[0, 1]`` shaped ``(rows, NUM_PARAMS)``.
+    :returns: Audio shaped ``(rows, signal_length)``.
+    """
+    return torch.cat(
         [
             render_torchsynth(
                 params[row : row + 1],
@@ -155,12 +156,63 @@ def test_grad_render_of_a_batch_matches_the_per_row_production_render_bitwise() 
                 signal_length=_SIGNAL_LENGTH,
                 midi_pitch=_MIDI_PITCH,
             )
-            for row in range(_BATCH)
+            for row in range(len(params))
         ],
         dim=0,
     )
 
-    assert torch.equal(batched, per_row)
+
+@pytest.mark.parametrize("rows", [_BATCH, _BATCH - 1, 1])
+def test_grad_render_of_a_batch_matches_the_per_row_production_render_bitwise(
+    rows: int,
+) -> None:
+    """The training render reproduces the stored targets sample for sample.
+
+    :class:`TorchSynthDataset` renders one row at a time, so every target sees
+    torchsynth ``Noise`` chunk 0; the batched render broadcasts that same chunk.
+    Drop the broadcast and rows past the first carry a different noise realization,
+    leaving the audio loss chasing a target it can never reach. A batch shorter than
+    the renderer's fixed size is padded up and sliced back, which must leave the live
+    rows untouched.
+
+    :param rows: Live row count handed to the fixed-size renderer.
+    """
+    params = _noise_heavy_params(rows)
+
+    assert torch.equal(_render(params), _per_row_targets(params))
+
+
+def test_grad_render_of_a_short_batch_matches_those_rows_in_a_full_batch_bitwise() -> None:
+    """The noise realization must not depend on how many rows the batch carries.
+
+    ``Noise`` pre-draws a seeded ``(batch, buffer)`` block, and torch's CPU RNG splits
+    that fill across threads once it is large enough, so the realization used to shift
+    with the live row count. ``_NOISE_SENSITIVE_BATCH`` sizes the block past that
+    threshold; padding pins the render to the voice's configured size instead.
+    """
+    params = _noise_heavy_params(_NOISE_SENSITIVE_BATCH)
+    short_rows = _NOISE_SENSITIVE_BATCH - 1
+
+    full = _render(params, render_batch_size=_NOISE_SENSITIVE_BATCH)
+    short = _render(params[:short_rows], render_batch_size=_NOISE_SENSITIVE_BATCH)
+
+    assert torch.equal(short, full[:short_rows])
+
+
+def test_grad_render_cache_holds_one_voice_across_distinct_batch_lengths() -> None:
+    """Distinct batch lengths must not each retain their own torchsynth voice (#1820)."""
+    _make_renderer.cache_clear()
+    params = _noise_heavy_params(_BATCH)
+    for rows in range(1, _BATCH + 1):
+        _render(params[:rows])
+
+    assert _make_renderer.cache_info().currsize == 1
+
+
+def test_grad_render_of_more_rows_than_the_configured_size_raises() -> None:
+    """A batch the fixed-size voice cannot hold must fail loudly, not silently truncate."""
+    with pytest.raises(ValueError, match="render_batch_size"):
+        _render(_noise_heavy_params(_BATCH + 1))
 
 
 def test_grad_render_each_output_row_depends_only_on_matching_parameter_row() -> None:
@@ -173,6 +225,7 @@ def test_grad_render_each_output_row_depends_only_on_matching_parameter_row() ->
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         midi_pitch=_MIDI_PITCH,
+        render_batch_size=_BATCH,
     )
 
     for output_row in range(2):
@@ -200,6 +253,7 @@ def test_grad_render_of_saturated_parameters_still_backprops_nonzero_gradient() 
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         midi_pitch=_MIDI_PITCH,
+        render_batch_size=1,
     )
     (gradient,) = torch.autograd.grad(audio.square().mean(), params)
 
@@ -241,6 +295,7 @@ def test_grad_render_parameter_gradients_match_the_pinned_baseline() -> None:
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         midi_pitch=_MIDI_PITCH,
+        render_batch_size=2,
     )
 
     energy = audio.square().mean()
@@ -405,6 +460,20 @@ def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
     assert value.item() == pytest.approx(0.0, abs=1e-6)
 
 
+def test_latent_loss_of_a_batch_shorter_than_the_render_size_is_finite() -> None:
+    """A trailing partial batch trains: the render pads it and slices the padding off."""
+    torch.manual_seed(0)
+    rows = _BATCH - 1
+    params = torch.rand(rows, _NUM_PARAMS).clamp(0.01, 0.99)
+    target_audio = _render(params)
+
+    value = _loss().forward(
+        params * 2 - 1, torch.full((rows, 1), 0.9), target_audio, encoder=_linear_encoder()
+    )
+
+    assert value.item() == pytest.approx(0.0, abs=1e-6)
+
+
 def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
     """Token-emitting encoders must still yield one distance per sample, not per token."""
 
@@ -517,61 +586,6 @@ def test_gradient_balance_with_a_detached_flow_loss_is_finite() -> None:
     assert torch.isfinite(cosine)
 
 
-def test_validate_runtime_with_plain_drop_last_false_loader_raises() -> None:
-    """An explicit partial-batch leaf is unsupported."""
-    loader = _drop_last_loader(False)
-
-    with pytest.raises(ValueError, match="drop_last=False"):
-        validate_audio_feedback_runtime(train_dataloader=loader, compiled=False, world_size=1)
-
-
-def test_validate_runtime_with_plain_drop_last_true_loader_is_accepted() -> None:
-    """A plain fixed-batch loader exposes sufficient metadata."""
-    loader = _drop_last_loader(True)
-
-    validate_audio_feedback_runtime(train_dataloader=loader, compiled=False, world_size=1)
-
-
-def test_validate_runtime_with_mixed_nested_loaders_raises() -> None:
-    """One explicit partial-batch leaf invalidates the nested loader tree."""
-    loaders = {
-        "conditioned": _drop_last_loader(True),
-        "reference": [_drop_last_loader(False)],
-    }
-
-    with pytest.raises(ValueError, match="drop_last=False"):
-        validate_audio_feedback_runtime(train_dataloader=loaders, compiled=False, world_size=1)
-
-
-def test_validate_runtime_with_all_true_nested_loaders_is_accepted() -> None:
-    """Every true leaf in a list/dict loader tree satisfies the fixed-batch contract."""
-    loaders = {
-        "conditioned": _drop_last_loader(True),
-        "reference": [_drop_last_loader(True)],
-    }
-
-    validate_audio_feedback_runtime(train_dataloader=loaders, compiled=False, world_size=1)
-
-
-def test_validate_runtime_with_combined_loader_inspects_nested_leaves() -> None:
-    """Lightning's CombinedLoader wrapper does not hide leaf metadata."""
-    loaders = CombinedLoader(
-        {
-            "conditioned": _drop_last_loader(True),
-            "reference": _drop_last_loader(False),
-        }
-    )
-
-    with pytest.raises(ValueError, match="drop_last=False"):
-        validate_audio_feedback_runtime(train_dataloader=loaders, compiled=False, world_size=1)
-
-
-def test_validate_runtime_with_attribute_less_input_reports_indeterminate_metadata() -> None:
-    """Missing metadata is distinct from an explicit partial-batch loader."""
-    with pytest.raises(ValueError, match="could not determine"):
-        validate_audio_feedback_runtime(train_dataloader=object(), compiled=False, world_size=1)
-
-
 def test_validate_runtime_with_torch_compile_raises() -> None:
     """Compiling over the functional_call render graph-breaks or miscompiles."""
     with pytest.raises(ValueError, match="compile"):
@@ -585,5 +599,5 @@ def test_validate_runtime_with_multiple_devices_raises() -> None:
 
 
 def test_validate_runtime_accepts_a_supported_configuration() -> None:
-    """A pre-trainer compile check can omit loader metadata."""
+    """An uncompiled single-device run is the supported configuration."""
     validate_audio_feedback_runtime(compiled=False, world_size=1)

@@ -300,7 +300,7 @@ def test_datamodule_multiprocessing_workers_render_finite_batches() -> None:
 def test_render_torchsynth_multirow_preserves_shape_and_bounds() -> None:
     """A multi-row renderer call preserves batch shape and numeric contracts."""
     params = torch.rand((3, NUM_PARAMS), generator=torch.Generator().manual_seed(0))
-    audio = render_torchsynth(params, **_RENDER_KWARGS)
+    audio = render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=3)
 
     assert audio.shape == (3, _RENDER_KWARGS["signal_length"])
     assert type(audio) is torch.Tensor
@@ -321,7 +321,7 @@ def test_render_torchsynth_deterministic_across_processes() -> None:
     """
     params = torch.full((2, NUM_PARAMS), 0.3)
     reference_hash = hashlib.sha256(
-        render_torchsynth(params, **_RENDER_KWARGS).numpy().tobytes()
+        render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=2).numpy().tobytes()
     ).hexdigest()
     script = (
         "import hashlib, torch;"
@@ -329,7 +329,7 @@ def test_render_torchsynth_deterministic_across_processes() -> None:
         f"audio = render_torchsynth(torch.full((2, {NUM_PARAMS}), 0.3),"
         f" sample_rate={_RENDER_KWARGS['sample_rate']},"
         f" signal_length={_RENDER_KWARGS['signal_length']},"
-        f" midi_pitch={_RENDER_KWARGS['midi_pitch']});"
+        f" midi_pitch={_RENDER_KWARGS['midi_pitch']}, render_batch_size=2);"
         "print(hashlib.sha256(audio.numpy().tobytes()).hexdigest())"
     )
     result = subprocess.run(  # noqa: S603
@@ -420,6 +420,6 @@ def test_render_torchsynth_out_of_range_note_duration_raises(duration: float) ->
 def test_render_torchsynth_preserves_gpu_device() -> None:
     """Render on the device used by the default GPU experiment."""
     params = torch.rand((2, NUM_PARAMS), device="cuda")
-    audio = render_torchsynth(params, **_RENDER_KWARGS)
+    audio = render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=2)
     assert audio.device == params.device
     assert torch.isfinite(audio).all()

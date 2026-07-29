@@ -11,7 +11,6 @@ from __future__ import annotations
 import pytest
 import torch
 from lightning.pytorch import Trainer
-from torch.utils.data import DataLoader
 
 from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule, _make_renderer
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
@@ -55,6 +54,7 @@ def _audio_loss() -> AudioFeedbackLoss:
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         midi_pitch=_MIDI_PITCH,
+        render_batch_size=_BATCH,
     )
 
 
@@ -88,21 +88,21 @@ def _module(
     )
 
 
-def _datamodule(batch_size: int = _BATCH) -> TorchSynthDataModule:
+def _datamodule(batch_size: int = _BATCH, train_size: int = 8) -> TorchSynthDataModule:
     """Build a tiny online datamodule already set up for fitting.
 
     :param batch_size: Number of online examples per batch.
+    :param train_size: Number of online training rows per epoch.
     :returns: The datamodule.
     """
     datamodule = TorchSynthDataModule(
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         midi_pitch=_MIDI_PITCH,
-        train_val_test_sizes=(8, 4, 4),
+        train_val_test_sizes=(train_size, 4, 4),
         train_val_test_seeds=(1, 2, 3),
         batch_size=batch_size,
         num_workers=0,
-        drop_last=True,
     )
     datamodule.setup("fit")
     return datamodule
@@ -266,6 +266,7 @@ def test_grad_render_matches_the_row_at_a_time_production_render() -> None:
             sample_rate=_SAMPLE_RATE,
             signal_length=_SIGNAL_LENGTH,
             midi_pitch=_MIDI_PITCH,
+            render_batch_size=_BATCH,
         ).clamp(-1, 1)
 
     assert torch.allclose(batched, row_targets, atol=1e-5)
@@ -277,19 +278,21 @@ def test_module_with_audio_loss_and_torch_compile_raises_at_construction() -> No
         _module(audio_loss=_audio_loss(), compile=True)
 
 
-def test_fit_with_audio_loss_and_non_drop_last_loader_raises() -> None:
-    """A trailing partial batch would miss the renderer cache; fit must refuse it."""
+def test_fit_with_audio_loss_over_a_trailing_partial_batch_completes() -> None:
+    """A split that does not divide the batch size trains: the render pads the remainder."""
+    torch.manual_seed(0)
     module = _module(audio_loss=_audio_loss())
-    batch = _synthetic_batch()
-    rows = [{key: value[i] for key, value in batch.items()} for i in range(_BATCH)]
-    # A plain list is a valid map-style dataset; pyright's stub only admits Dataset.
-    loader = DataLoader(rows, batch_size=_BATCH, drop_last=False)  # pyright: ignore[reportArgumentType]
     trainer = Trainer(
-        fast_dev_run=True, accelerator="cpu", logger=False, enable_checkpointing=False
+        max_epochs=1,
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=False,
+        limit_val_batches=0,
     )
 
-    with pytest.raises(ValueError, match="drop_last"):
-        trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
+    trainer.fit(module, datamodule=_datamodule(train_size=_BATCH + 1))
+
+    assert trainer.state.finished
 
 
 def test_fit_with_audio_loss_on_the_online_datamodule_completes_one_step() -> None:

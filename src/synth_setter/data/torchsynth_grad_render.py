@@ -9,6 +9,7 @@ Typical usage:
         sample_rate=44_100,
         signal_length=176_400,
         midi_pitch=60,
+        render_batch_size=32,
     )
 """
 
@@ -24,6 +25,7 @@ from torch.func import functional_call
 from synth_setter.data.torchsynth_datamodule import (
     _PARAM_CLAMP_EPS,
     _make_renderer,
+    _pad_to_render_size,
 )
 from synth_setter.data.vst.torchsynth_param_spec import (
     INFERABLE_SPEC,
@@ -86,6 +88,7 @@ def render_torchsynth_grad(
     sample_rate: int,
     signal_length: int,
     midi_pitch: int,
+    render_batch_size: int,
     note_duration_seconds: float | None = None,
 ) -> torch.Tensor:
     """Render normalized TorchSynth parameters with autograd connected.
@@ -96,11 +99,15 @@ def render_torchsynth_grad(
     :param sample_rate: Audio sample rate in Hz.
     :param signal_length: Number of output samples.
     :param midi_pitch: Fixed MIDI note rendered for every parameter row.
+    :param render_batch_size: Fixed row count of the voice this render runs on; a
+        shorter batch is padded up and sliced back, so a trailing partial batch
+        neither allocates a second voice nor shifts the render.
     :param note_duration_seconds: Note-on length before release; ``None`` holds
         the note for the whole buffer.
     :returns: Float32 audio shaped ``(batch, signal_length)``, differentiable
         w.r.t. ``params``.
-    :raises ValueError: Wrong parameter width or an out-of-range note duration.
+    :raises ValueError: Wrong parameter width, an out-of-range note duration, or a
+        batch exceeding ``render_batch_size``.
     """
     validate_torchsynth_params(params)
     duration = (
@@ -112,25 +119,27 @@ def render_torchsynth_grad(
             f"note duration {duration}s outside the keyboard's pinned range "
             f"[{minimum_duration}, {maximum_duration}]s"
         )
-    renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
+    rows = len(params)
+    padded = _pad_to_render_size(params, render_batch_size)
+    renderer = _make_renderer(sample_rate, signal_length, render_batch_size, str(params.device))
     voice = renderer.voice
     with renderer.lock, _aligned_noise(voice):
         all_parameters = voice.get_parameters()
         for name, value in (("midi_f0", float(midi_pitch)), ("duration", duration)):
             keyboard = all_parameters[("keyboard", name)]
-            keyboard.to_0to1(torch.full((len(params),), value, device=params.device))
+            keyboard.to_0to1(torch.full((render_batch_size,), value, device=params.device))
         name_by_id = {
             id(parameter): f"voice.{name}" for name, parameter in voice.named_parameters()
         }
         # Straight-through: the renderer only accepts the open interval, but a hard clamp
         # would zero gradient on saturated rows, stranding a diverged estimate out of range.
-        in_range = params.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
-        clamped = params + (in_range - params).detach()
+        in_range = padded.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
+        clamped = padded + (in_range - padded).detach()
         overrides = {}
         for column, spec in zip(clamped.unbind(dim=1), INFERABLE_SPEC, strict=True):
             original = all_parameters[(spec.module, spec.name)]
             overrides[name_by_id[id(original)]] = _as_substitute(column, original)
-        audio = functional_call(_VoiceOutputShim(voice), overrides)
+        audio = functional_call(_VoiceOutputShim(voice), overrides)[:rows]
     if not torch.isfinite(audio).all():
         # Mirrors render_torchsynth's output guard: one non-finite render would
         # otherwise write NaN into every weight on the next backward pass.

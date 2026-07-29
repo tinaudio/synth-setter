@@ -86,27 +86,49 @@ class _Renderer:
     """
 
     voice: Voice
+    # Context and removal criteria: https://github.com/tinaudio/synth-setter/issues/2659.
     lock: threading.Lock
 
 
-# Production caches only batch_size=1 items and metric re-render val batch sizes.
-# Batch/GPU rendering needs eviction or a fixed renderer size — see #1820.
+def _pad_to_render_size(params: torch.Tensor, render_batch_size: int) -> torch.Tensor:
+    """Fill a short parameter batch up to the renderer's fixed row count.
+
+    Row 0 is repeated because it is already a valid parameter row; the caller slices
+    the padding rows back off the rendered audio.
+
+    :param params: Parameter rows shaped ``(batch, NUM_PARAMS)``.
+    :param render_batch_size: Fixed row count the renderer's voice was built for.
+    :returns: Rows shaped ``(render_batch_size, NUM_PARAMS)``.
+    :raises ValueError: ``params`` carries more rows than the renderer can hold.
+    """
+    missing = render_batch_size - len(params)
+    if missing < 0:
+        raise ValueError(
+            f"render_batch_size={render_batch_size} cannot hold {len(params)} parameter rows"
+        )
+    if missing == 0:
+        return params
+    return torch.cat([params, params[:1].detach().expand(missing, -1)])
+
+
+# One voice per configured render size, never per observed batch length, so a partial
+# batch neither allocates a second voice nor changes the render — see #1820.
 @cache
 def _make_renderer(
-    sample_rate: int, signal_length: int, batch_size: int = 1, device: str = "cpu"
+    sample_rate: int, signal_length: int, render_batch_size: int = 1, device: str = "cpu"
 ) -> _Renderer:
     """Return the process-local renderer for one audio geometry and device.
 
     :param sample_rate: Audio sample rate in Hz.
     :param signal_length: Number of output samples.
-    :param batch_size: Voice batch size.
+    :param render_batch_size: Fixed voice batch size; shorter batches pad up to it.
     :param device: Torch device string.
     :returns: Cached voice and its mutation lock.
     """
     synth_config, voice = _torchsynth_types()
     instance = voice(
         synthconfig=synth_config(
-            batch_size=batch_size,
+            batch_size=render_batch_size,
             sample_rate=sample_rate,
             buffer_size_seconds=signal_length / sample_rate,
             reproducible=False,
@@ -122,6 +144,7 @@ def render_torchsynth(
     signal_length: int,
     midi_pitch: int,
     note_duration_seconds: float | None = None,
+    render_batch_size: int = 1,
 ) -> torch.Tensor:
     """Render normalized TorchSynth parameters into a mono audio batch.
 
@@ -133,10 +156,12 @@ def render_torchsynth(
     :param note_duration_seconds: Note-on length before the release stage; ``None``
         holds the note for the whole buffer. Must lie within the keyboard
         parameter's pinned human range (``KEYBOARD_DURATION_BOUNDS``).
+    :param render_batch_size: Fixed row count of the voice this render runs on;
+        defaults to the row-at-a-time target render.
     :returns: Float32 audio shaped ``(batch, signal_length)``.
     :raises ValueError: The parameter width, a non-finite parameter, an
-        out-of-range note duration, or the rendered audio violates the data
-        contract.
+        out-of-range note duration, a batch exceeding ``render_batch_size``, or the
+        rendered audio violates the data contract.
     """
     if not torch.isfinite(params).all():
         raise ValueError("TorchSynth params must be finite")
@@ -155,21 +180,22 @@ def render_torchsynth(
             f"note duration {duration}s outside the keyboard's pinned range "
             f"[{minimum_duration}, {maximum_duration}]s"
         )
-    renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
+    padded = _pad_to_render_size(params, render_batch_size)
+    renderer = _make_renderer(sample_rate, signal_length, render_batch_size, str(params.device))
     voice = renderer.voice
     with renderer.lock:
         all_parameters = voice.get_parameters()
         native = [all_parameters[(spec.module, spec.name)] for spec in INFERABLE_SPEC]
-        for values, parameter in zip(params.T, native, strict=True):
+        for values, parameter in zip(padded.T, native, strict=True):
             parameter.data.copy_(values.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS))
         for name, value in (
             ("midi_f0", float(midi_pitch)),
             ("duration", duration),
         ):
             keyboard = all_parameters[("keyboard", name)]
-            keyboard.to_0to1(torch.full((len(params),), value, device=params.device))
+            keyboard.to_0to1(torch.full((render_batch_size,), value, device=params.device))
         with torch.no_grad():
-            audio = voice.output()
+            audio = voice.output()[: len(params)]
     if not torch.isfinite(audio).all():
         raise ValueError("TorchSynth audio must be finite")
     return audio.as_subclass(torch.Tensor).clamp(-1, 1)
@@ -398,9 +424,8 @@ class TorchSynthDataModule(LightningDataModule):
         :param dataset: Online split to load.
         :param shuffle: Whether to shuffle logical row indices; exclusive with ``sampler``.
         :param sampler: Index sampler overriding the default order.
-        :param drop_last: Whether to drop a trailing partial batch. Set on training only:
-            the renderer caches per batch size, and a partial final batch misses that
-            cache. Evaluation keeps its remainder rather than silently losing rows.
+        :param drop_last: Whether to drop a trailing partial batch. Set on training only;
+            evaluation keeps its remainder rather than silently losing rows.
         :returns: Batched online data loader.
         """
         # persistent_workers / pin_memory are unset — per-epoch worker Voice rebuilds
@@ -425,7 +450,7 @@ class TorchSynthDataModule(LightningDataModule):
 
         :returns: Batched online training data.
         """
-        # Undersized splits remain nonempty so the audio-feedback runtime guard fails loudly.
+        # An undersized split must still yield its single partial batch, not nothing.
         drop_last = self.drop_last and len(self.train) >= self.batch_size
         if self.resample_train_per_epoch:
             return self._loader(

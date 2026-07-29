@@ -10,12 +10,10 @@ Typical usage:
 """
 
 import math
-from collections.abc import Mapping
 
 import torch
 from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
-from lightning.pytorch.utilities.combined_loader import CombinedLoader
 from torch import Tensor, nn
 from torch.nn import functional
 
@@ -36,55 +34,16 @@ _SCALAR_SHAPE = ""
 
 
 @jaxtyped(typechecker=beartype)
-def _drop_last_metadata(train_dataloader: object) -> tuple[bool | None, ...]:
-    """Collect drop-last metadata from every loader leaf.
-
-    :param train_dataloader: Plain or nested loader structure to inspect.
-    :returns: One explicit boolean or indeterminate marker per leaf.
-    """
-    if isinstance(train_dataloader, CombinedLoader):
-        return _drop_last_metadata(train_dataloader.iterables)
-    if isinstance(train_dataloader, Mapping):
-        return tuple(
-            status
-            for loader in train_dataloader.values()
-            for status in _drop_last_metadata(loader)
-        )
-    if isinstance(train_dataloader, (list, tuple)):
-        return tuple(
-            status for loader in train_dataloader for status in _drop_last_metadata(loader)
-        )
-    drop_last = getattr(train_dataloader, "drop_last", None)
-    return (drop_last if isinstance(drop_last, bool) else None,)
-
-
-@jaxtyped(typechecker=beartype)
-def validate_audio_feedback_runtime(
-    *, train_dataloader: object | None = None, compiled: bool, world_size: int
-) -> None:
+def validate_audio_feedback_runtime(*, compiled: bool, world_size: int) -> None:
     """Reject runtime configurations the differentiable renderer cannot serve.
 
     Each condition fails loudly rather than degrading silently — see
     https://github.com/tinaudio/synth-setter/issues/2585.
 
-    :param train_dataloader: Trainer loader metadata, or ``None`` before trainer attachment.
     :param compiled: Whether the module is wrapped by ``torch.compile``.
     :param world_size: Number of distributed training processes.
     :raises ValueError: Any unsupported condition holds.
     """
-    if train_dataloader is not None:
-        drop_last_metadata = _drop_last_metadata(train_dataloader)
-        if False in drop_last_metadata:
-            # The renderer caches per (sample_rate, signal_length, batch, device) — #1820. A
-            # trailing partial batch changes the batch dim and silently misses that cache.
-            raise ValueError(
-                "audio feedback requires drop_last=True on every train dataloader leaf; found "
-                "drop_last=False (see https://github.com/tinaudio/synth-setter/issues/2585)"
-            )
-        if not drop_last_metadata or None in drop_last_metadata:
-            raise ValueError(
-                "audio feedback could not determine drop_last for every train dataloader leaf"
-            )
     if compiled:
         # torch.compile traces through functional_call into torchsynth's Voice, where it
         # graph-breaks or miscompiles; wrong gradients are worse than no run.
@@ -178,6 +137,7 @@ class AudioFeedbackLoss(nn.Module):
         sample_rate: int,
         signal_length: int,
         midi_pitch: int,
+        render_batch_size: int,
     ) -> None:
         """Configure the render geometry and the term's weighting.
 
@@ -186,7 +146,10 @@ class AudioFeedbackLoss(nn.Module):
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row.
         :param midi_pitch: Fixed MIDI note rendered for every row.
-        :raises ValueError: Non-finite/non-positive ``lambda_audio`` or out-of-range ``t_min``.
+        :param render_batch_size: Rows the renderer's voice holds; must cover the
+            training batch size, which shorter batches pad up to.
+        :raises ValueError: Non-finite/non-positive ``lambda_audio``, out-of-range
+            ``t_min``, or non-positive ``render_batch_size``.
         """
         super().__init__()
         if not math.isfinite(lambda_audio) or lambda_audio <= 0.0:
@@ -196,11 +159,14 @@ class AudioFeedbackLoss(nn.Module):
             )
         if not 0.0 <= t_min < 1.0:
             raise ValueError(f"t_min must lie in [0, 1), got {t_min}")
+        if render_batch_size <= 0:
+            raise ValueError(f"render_batch_size must be positive, got {render_batch_size}")
         self.lambda_audio = lambda_audio
         self.t_min = t_min
         self.sample_rate = sample_rate
         self.signal_length = signal_length
         self.midi_pitch = midi_pitch
+        self.render_batch_size = render_batch_size
 
     @jaxtyped(typechecker=beartype)
     def audio_weight(
@@ -246,6 +212,7 @@ class AudioFeedbackLoss(nn.Module):
             sample_rate=self.sample_rate,
             signal_length=self.signal_length,
             midi_pitch=self.midi_pitch,
+            render_batch_size=self.render_batch_size,
         )
         # The stored target was hard-clamped by render_torchsynth; a straight-through
         # clamp matches that contract without zeroing gradient on clipped samples.

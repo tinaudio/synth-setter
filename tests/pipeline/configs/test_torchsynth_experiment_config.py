@@ -238,7 +238,7 @@ def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> No
     assert cfg.model.audio_loss.sample_rate == 44_100
     assert cfg.model.audio_loss.signal_length == 176_400
     assert cfg.model.audio_loss.midi_pitch == 60
-    assert cfg.datamodule.drop_last is True
+    assert cfg.model.audio_loss.render_batch_size == cfg.datamodule.batch_size
     # torch.compile traces through the renderer's functional_call and miscompiles.
     assert cfg.model.compile is False
 
@@ -273,7 +273,7 @@ def test_torchsynth_audio_experiment_collation_returns_exact_keys(experiment: st
 
 
 def test_torchsynth_flow_audio_tiny_split_retains_partial_batch() -> None:
-    """The audio-loss arm keeps an undersized split for the runtime guard to reject."""
+    """An undersized split still yields its partial batch; the render pads it up."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
