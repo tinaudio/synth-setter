@@ -315,18 +315,11 @@ class ParamSpec:
         synth_params = np.concatenate(
             [p.encode(synth_param_dict[p.name]) for p in self.synth_params]
         ).astype(np.float32)
+        note_params = np.concatenate(
+            [p.encode(note_param_dict[p.name]) for p in self.note_params]
+        ).astype(np.float32)
 
-        return np.concatenate((synth_params, self._encode_note_params(note_param_dict)))
-
-    def _encode_note_params(self, note_param_dict: Mapping[str, object]) -> np.ndarray:
-        """Encode just the note-param tail of a row.
-
-        :param note_param_dict: Values keyed by note-parameter name.
-        :returns: Encoded note columns, ``note_param_length`` wide, in ``[0, 1]``.
-        """
-        return np.concatenate([p.encode(note_param_dict[p.name]) for p in self.note_params]).astype(
-            np.float32
-        )
+        return np.concatenate((synth_params, note_params))
 
     def encoded_to_model(self, encoded: np.ndarray) -> np.ndarray:
         """Rescale encoded values onto the ``[-1, 1]`` scale the model predicts in.

@@ -205,7 +205,7 @@ def test_flow_vae_validation_step_returns_per_param_mse() -> None:
     module = _flow_vae_module()
     batch = _batch()
     offsets = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]).repeat(_BATCH, 1)
-    batch["params"] = module.net(batch["mel_spec"]).x_hat.detach() + offsets
+    batch["params"] = module.net(batch["mel"]).x_hat.detach() + offsets
 
     outputs = module.validation_step(batch, batch_idx=0)
 
