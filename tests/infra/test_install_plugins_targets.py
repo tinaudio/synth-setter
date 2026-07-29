@@ -93,6 +93,15 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
     assert "studiorack.json" in stage
 
 
+def test_docker_plugin_stage_provisions_cardinal_at_configured_path() -> None:
+    """The image installs and links Cardinal into the checkout plugin namespace."""
+    stage = _dockerfile_stage_text("builder-install-studiorack-plugins")
+
+    assert "studiorack-cardinal.json" in stage
+    assert "--plugin distrho/cardinal" in stage
+    assert '"CardinalSynth|"' in stage
+
+
 def test_docker_alias_restore_runs_from_mounted_source() -> None:
     """Snapshot images restore aliases without requiring the new console script."""
     helper = (PROJECT_ROOT / "docker/ubuntu22_04/ensure_plugin_symlinks.sh").read_text()

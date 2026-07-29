@@ -235,6 +235,31 @@ class TestEncodedSlices:
         assert row[spans["mode"]].tolist() == [0.0, 1.0]
 
 
+class TestSynthColumns:
+    """The synth/note split renderers use to keep note columns away from the voice."""
+
+    def test_span_covers_the_synth_params_and_stops_before_the_note_params(self) -> None:
+        """The span ends where the first note parameter's own span begins."""
+        spec = _tiny_spec()
+        spans = dict((param.name, sl) for param, sl in spec.encoded_slices())
+
+        assert spec.synth_columns == slice(spans["cutoff"].start, spans["mode"].stop)
+        assert spec.synth_columns.stop == spans["pitch"].start
+
+    def test_indexing_a_row_by_the_span_drops_every_note_column(self) -> None:
+        """A row sliced by the span keeps exactly the synth parameters' encoded width."""
+        spec = _tiny_spec()
+        row = spec.encode({"cutoff": 0.5, "mode": 0.75}, {"pitch": 60, "note_start_and_end": (0, 1)})
+
+        assert len(row[spec.synth_columns]) == spec.synth_param_length
+
+    def test_note_only_spec_has_an_empty_span(self) -> None:
+        """A spec with no synth params yields an empty span rather than an index error."""
+        note_only = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
+
+        assert note_only.synth_columns == slice(0, 0)
+
+
 class TestDecodeModelOutput:
     """The rescale-then-clip contract, pinned independently of any caller."""
 

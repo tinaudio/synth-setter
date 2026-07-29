@@ -16,7 +16,6 @@ from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
-    DEFAULT_NUM_SUB_VECTORS,
     EMBEDDING_REGISTRY,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -115,8 +114,8 @@ class AddEmbeddingsConfig(BaseModel):
     num_partitions: int | None = Field(
         default=None, ge=1, description="IVF partition override; null derives it from rows."
     )
-    num_sub_vectors: int = Field(
-        default=DEFAULT_NUM_SUB_VECTORS, ge=1, description="PQ sub-vector override."
+    num_sub_vectors: int | None = Field(
+        default=None, ge=1, description="PQ sub-vector override; null uses each spec's default."
     )
     metric: str = Field(default=DEFAULT_INDEX_METRIC, description="Vector metric override.")
     resume_cache: Path | None = Field(
@@ -274,6 +273,8 @@ class AddEmbeddingsConfig(BaseModel):
         :returns: Validated config unchanged.
         :raises ValueError: The count cannot evenly split a selected vector.
         """
+        if self.num_sub_vectors is None:
+            return self
         for name in self.embeddings:
             index = EMBEDDING_REGISTRY[name].index
             dim = None if index is None else index.vector_dim

@@ -33,7 +33,14 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    SKETCH_CTRL_FIELD,
     T5GEMMA_FIELD,
+    dataset_field_shapes,
+)
+from synth_setter.features.sketch_controls import (
+    NUM_SKETCH_CONTROLS,
+    extract_sketch_controls_batch,
+    sketch_num_frames,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
@@ -43,6 +50,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_SAME_L_CHECKPOINT,
     DEFAULT_SAME_S_CHECKPOINT,
     EMBEDDING_REGISTRY,
+    SKETCH_INDEX_SUB_VECTORS,
     SAME_DOWNSAMPLING_RATIO,
     SAME_EMBEDDING_DIM,
     SAME_LATENT_FRAMES,
@@ -154,6 +162,24 @@ def _fake_same(
     return encode
 
 
+def _fake_sketch(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Encode audio as deterministic sketch-control matrices.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Sample rate deciding the frame grid.
+    :returns: Deterministic in-bounds ``(B, NUM_SKETCH_CONTROLS, F)`` controls.
+    """
+    frames = sketch_num_frames(audio.shape[-1], sample_rate)
+    # Row steps dominate the clip term, keeping every cell inside [0, 1) while
+    # each (clip, row) pair stays distinct.
+    rows = np.arange(NUM_SKETCH_CONTROLS, dtype=np.float32) / NUM_SKETCH_CONTROLS
+    per_clip = np.clip(audio.mean(axis=(1, 2), dtype=np.float32), -0.5, 0.5) / (
+        2 * NUM_SKETCH_CONTROLS
+    )
+    cells = per_clip[:, None, None] + rows[None, :, None]
+    return np.ascontiguousarray(np.repeat(cells, frames, axis=2))
+
+
 def _fake_tinymu(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Encode audio as deterministic MATPAC-shaped sequences.
 
@@ -179,6 +205,8 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_m2l
     if name == "clap":
         return _fake_clap
+    if name == "sketch":
+        return _fake_sketch
     if name == "same_s":
         return _fake_same(0.25)
     if name == "same_l":
@@ -316,10 +344,18 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "param_shift",
         "same_l",
         "same_s",
+        "sketch",
         "ssondo",
         "t5gemma",
         "tinymu",
     }
+    assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
+        pool="mean",
+        num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
+        vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+        vector_dim=NUM_SKETCH_CONTROLS,
+    )
+    assert EMBEDDING_REGISTRY["sketch"].co_resident is True
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(
         pool="none", vector_dim=CLAP_EMBEDDING_DIM
     )
@@ -361,7 +397,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert cfg.batch_size == DEFAULT_LANCE_BATCH_SIZE
         assert cfg.build_index is True
         assert cfg.num_partitions is None
-        assert cfg.num_sub_vectors == 16
+        assert cfg.num_sub_vectors is None
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
         assert cfg.debug is False
@@ -1481,7 +1517,7 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
     selected = ("same_l", "clap", "m2l")
     _install_fake_specs(monkeypatch, selected)
-    calls: list[tuple[str, IndexSpec, int, int, str]] = []
+    calls: list[tuple[str, IndexSpec, int, int | None, str]] = []
 
     def record_index(
         dataset: lance.LanceDataset,
@@ -2930,3 +2966,227 @@ def test_encode_t5gemma_column_with_malformed_encoder_output_raises(
         _encode_t5gemma_column(
             {PARAM_ARRAY_FIELD: params}, 44100, lambda _: np.zeros(shape, dtype=np.float32)
         )
+
+
+def test_sketch_encode_column_builds_fixed_shape_tensor_array() -> None:
+    """The sketch closure preserves the fake encoder's exact control values."""
+    audio = np.random.default_rng(7).random((3, 2, _FIXTURE_SAMPLES)).astype(np.float16)
+    spec = EMBEDDING_REGISTRY["sketch"]
+
+    array = spec.encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, _fake_sketch)[spec.column]
+
+    assert isinstance(array.type, pa.FixedShapeTensorType)
+    assert array.type.value_type == pa.float32()
+    values = pa.chunked_array([array]).combine_chunks().to_numpy_ndarray()
+    np.testing.assert_allclose(values, _fake_sketch(audio, _SAMPLE_RATE))
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf])
+def test_sketch_encode_column_with_nonfinite_output_raises(value: float) -> None:
+    """Non-finite control cells never land in the dataset.
+
+    :param value: Non-finite cell value emitted by the encoder.
+    """
+    audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
+
+    def poisoned(batch: np.ndarray, sample_rate: int) -> np.ndarray:
+        output = _fake_sketch(batch, sample_rate)
+        output.flat[0] = value
+        return output
+
+    with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} embeddings contain non-finite values"):
+        EMBEDDING_REGISTRY["sketch"].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
+
+
+@pytest.mark.parametrize(
+    ("row", "value"),
+    [(0, 1.2), (0, -1.2), (2, -0.1), (2, 1.2)],
+    ids=["affine-high", "affine-low", "pitch-negative", "pitch-high"],
+)
+def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: float) -> None:
+    """Finite control cells outside the documented bounds never land in the dataset.
+
+    :param row: Control row receiving the out-of-bounds cell.
+    :param value: Finite cell value outside that row's documented range.
+    """
+    audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
+
+    def poisoned(batch: np.ndarray, sample_rate: int) -> np.ndarray:
+        output = _fake_sketch(batch, sample_rate)
+        output[0, row, 0] = value
+        return output
+
+    with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} controls out of bounds"):
+        EMBEDDING_REGISTRY["sketch"].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
+
+
+def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
+    """The sketch closure rejects outputs off the shared mel frame grid."""
+    audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
+
+    def off_grid(batch: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        return np.zeros((len(batch), NUM_SKETCH_CONTROLS, 5), np.float32)
+
+    with pytest.raises(ValueError, match=r"expected \(2, 386, 1\)"):
+        EMBEDDING_REGISTRY["sketch"].encode_columns({AUDIO_FIELD: audio}, _SAMPLE_RATE, off_grid)
+
+
+def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(
+    tmp_path: Path,
+) -> None:
+    """The writer stores the control matrix plus its time-axis mean vector.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "sketch.lance"
+    audio = _audio_dataset(uri, rows=4)
+
+    _write_columns(
+        lance.dataset(str(uri)),
+        [_fake_spec("sketch")],
+        _SAMPLE_RATE,
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
+    )
+
+    dataset = lance.dataset(str(uri))
+    assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
+    ctrl_type = cast("pa.FixedShapeTensorType", dataset.schema.field(SKETCH_CTRL_FIELD).type)
+    assert isinstance(ctrl_type, pa.FixedShapeTensorType)
+    assert ctrl_type.value_type == pa.float32()
+    frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
+    assert list(ctrl_type.shape) == [NUM_SKETCH_CONTROLS, frames]
+    vec_type = cast(
+        "pa.FixedSizeListType", dataset.schema.field(f"{SKETCH_CTRL_FIELD}_vec").type
+    )
+    assert pa.types.is_fixed_size_list(vec_type)
+    assert vec_type.list_size == NUM_SKETCH_CONTROLS
+    assert vec_type.value_type == pa.float32()
+    table = dataset.to_table(columns=[SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"])
+    controls = (
+        pa.chunked_array([table.column(SKETCH_CTRL_FIELD).chunk(0)])
+        .combine_chunks()
+        .to_numpy_ndarray()
+    )
+    expected = _fake_sketch(audio, _SAMPLE_RATE)
+    np.testing.assert_allclose(controls, expected)
+    pooled = np.asarray(
+        table.column(f"{SKETCH_CTRL_FIELD}_vec").combine_chunks().to_pylist(), dtype=np.float32
+    )
+    np.testing.assert_allclose(pooled, expected.mean(axis=-1), rtol=1e-6)
+
+
+def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real Hydra entrypoint lands sketch controls from the CLI selection.
+
+    :param tmp_path: Scratch directory for the shard and Hydra run.
+    :param monkeypatch: Fixture installing the entrypoint argv.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    uri = tmp_path / "sketch-cli.lance"
+    spec = build_lance_smoke_spec(task_name="sketch-cli-e2e")
+    write_minimal_lance_shard(uri, spec)
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-add-embeddings",
+            f"lance_uri={uri}",
+            "embeddings=[sketch]",
+            "build_index=false",
+            f"paths.log_dir={tmp_path}",
+            f"hydra.run.dir={tmp_path / 'run'}",
+        ],
+    )
+
+    main()
+
+    dataset = lance.dataset(str(uri))
+    assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
+    controls = (
+        pa.chunked_array([dataset.to_table(columns=[SKETCH_CTRL_FIELD]).column(SKETCH_CTRL_FIELD).chunk(0)])
+        .combine_chunks()
+        .to_numpy_ndarray()
+    )
+    render = spec.render_for_shard(spec.shards[0])
+    audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
+    frames = sketch_num_frames(audio_shape[-1], int(render.sample_rate))
+    assert controls.shape == (audio_shape[0], NUM_SKETCH_CONTROLS, frames)
+    assert np.isfinite(controls).all()
+    assert controls.min() >= -1.0 and controls.max() <= 1.0
+
+
+def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> None:
+    """The real extraction path lands controls matching direct extraction.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "sketch-real.lance"
+    spec = build_lance_smoke_spec(task_name="sketch-real-e2e")
+    render = spec.render_for_shard(spec.shards[0])
+    audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
+    rng = np.random.default_rng(11)
+    audio = ((rng.random(audio_shape) - 0.5) * 0.8).astype(np.float16)
+    write_minimal_lance_shard(uri, spec, audio=audio)
+
+    add_embeddings(
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False)
+    )
+
+    controls = (
+        pa.chunked_array(
+            [lance.dataset(str(uri)).to_table(columns=[SKETCH_CTRL_FIELD]).column(SKETCH_CTRL_FIELD).chunk(0)]
+        )
+        .combine_chunks()
+        .to_numpy_ndarray()
+    )
+    sample_rate = int(render.sample_rate)
+    expected = extract_sketch_controls_batch(
+        torch.from_numpy(audio.astype(np.float32)), sample_rate
+    ).numpy()
+    frames = sketch_num_frames(audio_shape[-1], sample_rate)
+    assert controls.shape == (audio_shape[0], NUM_SKETCH_CONTROLS, frames)
+    np.testing.assert_allclose(controls, expected, atol=1e-5)
+    assert np.isfinite(controls).all()
+    assert controls.min() >= -1.0 and controls.max() <= 1.0
+
+
+def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Path) -> None:
+    """A spec's PQ split applies unset-override runs and serves ANN self-queries.
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    uri = tmp_path / "sketch-index.lance"
+    rng = np.random.default_rng(3)
+    vectors = rng.random((300, NUM_SKETCH_CONTROLS)).astype(np.float32)
+    flat = pa.array(vectors.reshape(-1), pa.float32())
+    column = pa.FixedSizeListArray.from_arrays(flat, NUM_SKETCH_CONTROLS)
+    rows = pa.array(np.arange(len(vectors)), pa.int32())
+    lance.write_dataset(
+        pa.table({f"{SKETCH_CTRL_FIELD}_vec": column, "row": rows}), str(uri)
+    )
+    dataset = lance.dataset(str(uri))
+    spec_index = EMBEDDING_REGISTRY["sketch"].index
+    assert spec_index is not None
+
+    built = build_index(
+        dataset,
+        f"{SKETCH_CTRL_FIELD}_vec",
+        index=spec_index,
+        config=AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",)),
+    )
+
+    assert built is True
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    index_fields = [index["fields"] for index in indices]
+    assert [f"{SKETCH_CTRL_FIELD}_vec"] in index_fields
+    target_row = 137
+    hits = dataset.to_table(
+        nearest={"column": f"{SKETCH_CTRL_FIELD}_vec", "q": vectors[target_row], "k": 1},
+        columns=["row"],
+    )
+    assert hits.column("row")[0].as_py() == target_row

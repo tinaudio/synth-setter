@@ -23,8 +23,8 @@ batch_size: 128
 build_index: true
 # IVF partition count; null uses round(sqrt(rows)).
 num_partitions: null
-# PQ sub-vector count; must divide each indexed column's vector width.
-num_sub_vectors: 16
+# PQ sub-vector override; must divide the vector width. Null uses each spec's default.
+num_sub_vectors: null
 # Vector-index distance metric.
 metric: cosine
 # Per-batch UDF-output cache enabling resume of an interrupted run; deleted on success.

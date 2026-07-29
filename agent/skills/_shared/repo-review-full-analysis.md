@@ -155,9 +155,11 @@ skip `lance-review`.
 
 Pi uses a flat fan-out: the main agent runs Steps 1–7 and launches every pass
 with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
-`run_in_background: true`, and `max_turns: <plan.max_turns>` from that pass's
-helper output. Tintin removes `Agent` from subagents, so do not spawn a Pi
-orchestrator and then ask it to nest workers.
+`description: "<skill> <pass>"`, `run_in_background: true`, and
+`max_turns: <plan.max_turns>` from that pass's helper output. `description` is
+required by the tool; a call without it is rejected before the worker starts.
+Tintin removes `Agent` from subagents, so do not spawn a Pi orchestrator and
+then ask it to nest workers.
 
 Generate one complete assignment file per selected skill before the launch. Use
 the deterministic absolute directory derived from the known handoff path; never
