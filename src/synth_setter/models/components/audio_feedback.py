@@ -93,8 +93,8 @@ def validate_audio_feedback_runtime(
             "(see https://github.com/tinaudio/synth-setter/issues/2585)"
         )
     if world_size > 1:
-        # The render runs inside the loss on the training device behind a process-local
-        # lock; distributed training is unvalidated and must not run silently.
+        # The render mutates one cached Voice per process, so multi-rank behaviour is
+        # unvalidated — https://github.com/tinaudio/synth-setter/issues/2659.
         raise ValueError(
             f"audio feedback is single-device only, got world_size={world_size} "
             "(see https://github.com/tinaudio/synth-setter/issues/2585)"
@@ -110,11 +110,10 @@ def gradient_balance(
 ) -> tuple[Float[Tensor, _SCALAR_SHAPE], Float[Tensor, _SCALAR_SHAPE]]:
     """Measure how two loss terms contribute gradient at a tensor they both reach.
 
-    Loss magnitude is a poor proxy for gradient magnitude, so a weight tuned against loss curves
-    does not transfer. EnCodec's balancer instead reads the weight as a fraction of total gradient,
-    sampled at one shared intermediate tensor rather than at every parameter. The cosine is REPA's
-    conflict diagnostic: it turns negative once the auxiliary term starts fighting the primary
-    objective. Both gradients retain the graph, so the caller's own backward pass is unaffected.
+    Loss magnitude is a poor proxy for gradient magnitude, so tune ``lambda_audio`` against the
+    ratio and read the cosine as a conflict signal — rationale and citations in
+    https://github.com/tinaudio/synth-setter/issues/2628#issuecomment-5111367681. Both gradients
+    retain the graph, so the caller's own backward pass is unaffected.
 
     :param flow_loss: Scalar flow-matching loss.
     :param audio_term: Scalar weighted audio loss.
@@ -229,9 +228,9 @@ class AudioFeedbackLoss(nn.Module):
         :param t: Flow time shaped ``(batch, 1)``.
         :param target_audio: Observed audio shaped ``(batch, signal_length)``.
         :param encoder: Encoder defining the latent space the distance is measured in.
-        :param keep: Optional per-row mask shaped ``(batch,)``; rows at ``False`` are
-            zero-weighted (CFG-dropped rows must not train the unconditional branch on
-            row-specific targets).
+        :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are
+            zero-weighted because their estimate is drawn from the marginal, making the
+            residual against that row's own audio near-arbitrary.
         :returns: Scalar weighted audio loss.
         """
         params = differentiable_decode(theta_hat)

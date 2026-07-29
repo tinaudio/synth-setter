@@ -184,6 +184,29 @@ def test_grad_render_each_output_row_depends_only_on_matching_parameter_row() ->
         assert torch.equal(gradient[1 - output_row], torch.zeros_like(gradient[1 - output_row]))
 
 
+def test_grad_render_of_saturated_parameters_still_backprops_nonzero_gradient() -> None:
+    """Straight-through clamp: rows arriving at/over ``[0, 1]`` keep a pull-back gradient.
+
+    A hard clamp zeroes gradient for every saturated entry, so a diverged estimate can
+    never be pulled back into range by the audio loss.
+    """
+    params = torch.rand(1, _NUM_PARAMS, generator=torch.Generator().manual_seed(11))
+    saturated = torch.arange(0, _NUM_PARAMS, 2)
+    params[:, saturated] = (torch.arange(len(saturated)) % 2).float()
+    params.requires_grad_()
+
+    audio = render_torchsynth_grad(
+        params,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        midi_pitch=_MIDI_PITCH,
+    )
+    (gradient,) = torch.autograd.grad(audio.square().mean(), params)
+
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient[:, saturated]).item() > 0
+
+
 def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -> None:
     """A concurrent caller must never observe a swapped process-global ``SynthModule.p``.
 

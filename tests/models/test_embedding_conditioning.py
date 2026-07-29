@@ -46,14 +46,16 @@ class _TinyVectorField(torch.nn.Module):
         super().__init__()
         self.projection = torch.nn.Linear(7, 2)
 
-    def apply_dropout(self, conditioning: torch.Tensor, dropout_rate: float) -> torch.Tensor:
+    def apply_dropout(
+        self, conditioning: torch.Tensor, dropout_rate: float
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return conditioning unchanged for deterministic training.
 
         :param conditioning: Encoded conditioning vectors.
         :param dropout_rate: Unused classifier-free guidance dropout probability.
-        :returns: The unchanged vectors.
+        :returns: The unchanged vectors and an all-keep mask.
         """
-        return conditioning
+        return conditioning, torch.ones(conditioning.shape[0], dtype=torch.bool)
 
     def forward(
         self, params: torch.Tensor, time: torch.Tensor, conditioning: torch.Tensor

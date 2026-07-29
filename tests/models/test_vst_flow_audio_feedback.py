@@ -127,16 +127,16 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> N
     module = _module(audio_loss=_audio_loss())
     batch = next(iter(_datamodule().train_dataloader()))
 
-    loss, audio_term, _, _ = module._train_step(batch)
-    assert audio_term is not None
+    outputs = module._train_step(batch)
+    assert outputs.audio_term is not None
     encoder_gradients = torch.autograd.grad(
-        loss, tuple(module.encoder.parameters()), retain_graph=True, allow_unused=True
+        outputs.loss, tuple(module.encoder.parameters()), retain_graph=True, allow_unused=True
     )
-    total = loss + audio_term
+    total = outputs.loss + outputs.audio_term
     total.backward()
 
     assert torch.isfinite(total)
-    assert audio_term.item() > 0.0
+    assert outputs.audio_term.item() > 0.0
     assert any(
         gradient is not None
         and torch.isfinite(gradient).all()
@@ -167,19 +167,19 @@ def _overfit_one_fixed_example() -> tuple[float, float]:
     initial_total: float | None = None
 
     for _ in range(_OVERFIT_STEPS):
-        loss, audio_term, _, _ = module._train_step(batch)
-        assert audio_term is not None
-        total = loss + audio_term
+        outputs = module._train_step(batch)
+        assert outputs.audio_term is not None
+        total = outputs.loss + outputs.audio_term
         if initial_total is None:
             initial_total = total.item()
         optimizer.zero_grad()
         total.backward()
         optimizer.step()
 
-    final_loss, final_audio, _, _ = module._train_step(batch)
+    final = module._train_step(batch)
     assert initial_total is not None
-    assert final_audio is not None
-    return initial_total, (final_loss + final_audio).item()
+    assert final.audio_term is not None
+    return initial_total, (final.loss + final.audio_term).item()
 
 
 @pytest.mark.slow
@@ -196,10 +196,10 @@ def test_train_step_without_audio_loss_returns_no_audio_term() -> None:
     torch.manual_seed(0)
     module = _module()
 
-    loss, audio_term, _, _ = module._train_step(_synthetic_batch())
+    outputs = module._train_step(_synthetic_batch())
 
-    assert audio_term is None
-    assert torch.isfinite(loss)
+    assert outputs.audio_term is None
+    assert torch.isfinite(outputs.loss)
 
 
 def test_module_with_audio_loss_and_nonzero_sigma_min_raises() -> None:

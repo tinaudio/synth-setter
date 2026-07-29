@@ -89,26 +89,25 @@ class VectorField(nn.Module):
                 for i in range(num_blocks)
             ]
         )
-        # We use this to replace conditioning vectors for some proportion of training
-        # inputs. This enables us to use classifier free guidance at inference.
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
     def apply_dropout(
         self,
         z: Float[Tensor, _BATCH_ANY_SHAPE],
         rate: float = 0.1,
-        keep_mask: Shaped[Tensor, _BATCH_SHAPE] | None = None,
-    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
-        if rate == 0.0:
-            return z
+    ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
+        """Replace a random subset of conditioning rows with the CFG token.
 
-        # keep_mask lets the caller pre-sample which rows keep conditioning (True = keep),
-        # so a co-located loss can observe the same CFG decision.
-        if keep_mask is None:
-            dropout_mask = torch.rand(z.shape[0], 1, device=z.device) > rate
-        else:
-            dropout_mask = keep_mask.unsqueeze(-1)
-        return z.where(dropout_mask, self.cfg_dropout_token)
+        :param z: Conditioning rows.
+        :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
+        :returns: The conditioning after dropout, and the keep mask that produced it
+            (True = row kept its conditioning; all-True when ``rate`` is zero).
+        """
+        if rate == 0.0:
+            return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
+
+        keep = torch.rand(z.shape[0], device=z.device) > rate
+        return z.where(keep.unsqueeze(-1), self.cfg_dropout_token), keep
 
     def forward(
         self,

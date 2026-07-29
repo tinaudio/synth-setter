@@ -138,27 +138,29 @@ class ConditionalResidualMLP(nn.Module):
         self,
         z: Float[Tensor, _BATCH_ANY_SHAPE],
         rate: float = 0.1,
-        keep_mask: Shaped[Tensor, _BATCH_SHAPE] | None = None,
-    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
-        if rate == 0.0:
-            return z
+    ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
+        """Replace a random subset of conditioning rows with the CFG token.
 
-        # keep_mask lets the caller pre-sample which rows keep conditioning (True = keep),
-        # so a co-located loss can observe the same CFG decision.
-        if keep_mask is None:
-            dropout_mask = torch.rand(z.shape[0], device=z.device) > rate
-        else:
-            dropout_mask = keep_mask
+        :param z: Conditioning rows, rank 2 or rank 3.
+        :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
+        :returns: The conditioning after dropout, and the keep mask that produced it
+            (True = row kept its conditioning; all-True when ``rate`` is zero).
+        :raises ValueError: ``z`` is neither rank 2 nor rank 3.
+        """
+        if rate == 0.0:
+            return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
+
+        keep = torch.rand(z.shape[0], device=z.device) > rate
         if z.ndim == 2:
-            dropout_mask = dropout_mask[..., None]
+            broadcast_keep = keep[..., None]
             dropout_token = self.cfg_dropout_token[0]
         elif z.ndim == 3:
-            dropout_mask = dropout_mask[..., None, None]
+            broadcast_keep = keep[..., None, None]
             dropout_token = self.cfg_dropout_token
         else:
             raise ValueError("unexpected z shape")
 
-        return torch.where(dropout_mask, z, dropout_token)
+        return torch.where(broadcast_keep, z, dropout_token), keep
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, c: torch.Tensor | None) -> torch.Tensor:
         if c is None:

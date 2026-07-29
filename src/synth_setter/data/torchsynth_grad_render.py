@@ -92,7 +92,7 @@ def render_torchsynth_grad(
 
     :param params: Float32 parameter rows shaped ``(batch, NUM_PARAMS)`` in
         ``[0, 1]``; may carry ``requires_grad``. Values clamp strictly inside
-        ``(0, 1)`` (clamped entries get zero gradient).
+        ``(0, 1)`` straight-through, so saturated entries keep their gradient.
     :param sample_rate: Audio sample rate in Hz.
     :param signal_length: Number of output samples.
     :param midi_pitch: Fixed MIDI note rendered for every parameter row.
@@ -122,7 +122,10 @@ def render_torchsynth_grad(
         name_by_id = {
             id(parameter): f"voice.{name}" for name, parameter in voice.named_parameters()
         }
-        clamped = params.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
+        # Straight-through: the renderer only accepts the open interval, but a hard clamp
+        # would zero gradient on saturated rows, stranding a diverged estimate out of range.
+        in_range = params.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
+        clamped = params + (in_range - params).detach()
         overrides = {}
         for column, spec in zip(clamped.unbind(dim=1), INFERABLE_SPEC, strict=True):
             original = all_parameters[(spec.module, spec.name)]

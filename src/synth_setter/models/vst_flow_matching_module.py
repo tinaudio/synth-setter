@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,33 @@ from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+
+
+@dataclass(frozen=True)
+class TrainStepOutputs:
+    """Loss terms produced by one training step.
+
+    .. attribute :: loss
+
+       Flow-matching loss; the only term every configuration produces.
+
+    .. attribute :: audio_term
+
+       Weighted audio-feedback loss, or ``None`` without an attached audio loss.
+
+    .. attribute :: penalty
+
+       Vector-field regularization penalty, or ``None`` for fields that define none.
+
+    .. attribute :: grad_balance
+
+       Audio-to-flow gradient-norm ratio and cosine, or ``None`` off the probe cadence.
+    """
+
+    loss: torch.Tensor
+    audio_term: torch.Tensor | None
+    penalty: torch.Tensor | None
+    grad_balance: tuple[torch.Tensor, torch.Tensor] | None
 
 
 def call_with_cfg(
@@ -196,31 +224,18 @@ class VSTFlowMatchingModule(LightningModule):
         every = self.trainer.log_every_n_steps
         return every > 0 and self.trainer.global_step % every == 0
 
-    def _train_step(
-        self, batch: dict[str, torch.Tensor]
-    ) -> tuple[
-        torch.Tensor,
-        torch.Tensor | None,
-        torch.Tensor | None,
-        tuple[torch.Tensor, torch.Tensor] | None,
-    ]:
+    def _train_step(self, batch: dict[str, torch.Tensor]) -> TrainStepOutputs:
+        """Run one training forward pass and assemble every term the logger consumes.
+
+        :param batch: Online or stored batch carrying params, noise, and audio.
+        :returns: Flow loss plus whichever optional terms this configuration produces.
+        """
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
 
         conditioning = self.encoder(conditioning)
-        keep = None
-        if self.audio_loss is not None and self.hparams.cfg_dropout_rate > 0.0:
-            # Sample the CFG mask here so the audio term can skip dropped rows: the
-            # unconditional branch must not be trained on row-specific targets.
-            keep = torch.rand(params.shape[0], device=params.device) > (
-                self.hparams.cfg_dropout_rate
-            )
-            z = self.vector_field.apply_dropout(
-                conditioning, self.hparams.cfg_dropout_rate, keep_mask=keep
-            )
-        else:
-            z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
+        z, keep = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
 
         with torch.no_grad():
             t = self._sample_time(params.shape[0], params.device)
@@ -239,18 +254,20 @@ class VSTFlowMatchingModule(LightningModule):
         loss = loss.mean()
 
         audio_term = None
-        balance = None
+        grad_balance = None
         if self.audio_loss is not None:
             # One-step estimate of x1 from the current field; rendering it keeps
             # autograd connected so latent audio error reaches the field's weights.
             theta_hat = x_t + (1 - t) * prediction
+            # `keep` zeroes CFG-dropped rows: their estimate comes from the marginal, so
+            # its residual against that row's own audio is high-variance noise, not signal.
             audio_term = self.audio_loss(
                 theta_hat, t, batch["audio"], encoder=self.encoder, keep=keep
             )
             if self._should_probe_gradient_balance():
                 from synth_setter.models.components.audio_feedback import gradient_balance
 
-                balance = gradient_balance(
+                grad_balance = gradient_balance(
                     flow_loss=loss, audio_term=audio_term, shared=prediction
                 )
 
@@ -258,27 +275,31 @@ class VSTFlowMatchingModule(LightningModule):
         if hasattr(self.vector_field, "penalty"):
             penalty = self.vector_field.penalty()
 
-        return loss, audio_term, penalty, balance
+        return TrainStepOutputs(
+            loss=loss, audio_term=audio_term, penalty=penalty, grad_balance=grad_balance
+        )
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        loss, audio_term, penalty, balance = self._train_step(batch)
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        outputs = self._train_step(batch)
+        self.log("train/loss", outputs.loss, on_step=True, on_epoch=True, prog_bar=True)
 
-        total = loss
-        if audio_term is not None:
-            self.log("train/audio_loss", audio_term, on_step=True, on_epoch=True, prog_bar=True)
-            total = total + audio_term
+        total = outputs.loss
+        if outputs.audio_term is not None:
+            self.log(
+                "train/audio_loss", outputs.audio_term, on_step=True, on_epoch=True, prog_bar=True
+            )
+            total = total + outputs.audio_term
 
-        if balance is not None:
+        if outputs.grad_balance is not None:
             # Set lambda_audio from the ratio, not the loss value; watch the cosine turn
             # negative for the point the audio term starts fighting the flow objective.
-            ratio, cosine = balance
+            ratio, cosine = outputs.grad_balance
             self.log("train/audio_grad_ratio", ratio, on_step=True, on_epoch=False)
             self.log("train/audio_grad_cosine", cosine, on_step=True, on_epoch=False)
 
-        if penalty is not None:
-            self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
-            total = total + penalty
+        if outputs.penalty is not None:
+            self.log("train/penalty", outputs.penalty, on_step=True, on_epoch=True, prog_bar=True)
+            total = total + outputs.penalty
 
         return total
 
