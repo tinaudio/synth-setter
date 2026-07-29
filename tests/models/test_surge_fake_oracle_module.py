@@ -34,7 +34,7 @@ def _make_batch(batch_size: int, *, mel_seed: int = 0) -> dict[str, torch.Tensor
     """Build a synthetic batch with deterministic ``params`` and seedable ``mel``.
 
     :param batch_size: First-axis length for every tensor in the batch.
-    :param mel_seed: Seed for the mel-spec RNG so callers can request batches that
+    :param mel_seed: Seed for the mel RNG so callers can request batches that
         share ``params`` but differ in ``mel`` (used to verify mel-independence
         of the oracle's predictions).
 

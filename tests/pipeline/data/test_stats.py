@@ -8,6 +8,7 @@ from types import ModuleType
 
 import numpy as np
 import pytest
+from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, dataset_field_shapes
 from synth_setter.pipeline.data import stats as _stats_module
@@ -450,6 +451,36 @@ def test_get_stats_lance_writes_sibling_stats_npz_with_mel_inner_shape(
         assert loaded["mean"].dtype == np.float32
         assert loaded["std"].shape == mel_inner
         assert loaded["std"].dtype == np.float32
+
+
+def test_get_stats_directory_reads_audio_dataset_mel_key(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Audio-directory statistics consume the model-ready ``mel`` entry.
+
+    :param stats_script: Imported stats module under test.
+    :param tmp_path: Directory receiving a real WAV and its computed statistics.
+    """
+    sample_rate = 8_000
+    samples = np.arange(sample_rate, dtype=np.float32)
+    tone_a = np.sin(2 * np.pi * 220 * samples / sample_rate).astype(np.float32)
+    tone_b = np.sin(2 * np.pi * 440 * samples / sample_rate).astype(np.float32)
+    with AudioFile(
+        str(tmp_path / "tone-a.wav"), "w", samplerate=sample_rate, num_channels=1
+    ) as audio_file:
+        audio_file.write(tone_a[None, :])
+    with AudioFile(
+        str(tmp_path / "tone-b.wav"), "w", samplerate=sample_rate, num_channels=1
+    ) as audio_file:
+        audio_file.write(tone_b[None, :])
+
+    stats_script.get_stats_directory(str(tmp_path), mask_degenerate=True)
+
+    with np.load(tmp_path / "stats.npz") as stats:
+        assert stats["mean"].shape == (2, 128, 401)
+        assert stats["std"].shape == (2, 128, 401)
+        assert np.isfinite(stats["mean"]).all()
+        assert np.isfinite(stats["std"]).all()
 
 
 def test_get_stats_lance_no_shards_in_directory_raises(

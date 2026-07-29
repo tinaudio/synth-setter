@@ -64,26 +64,29 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                        | Metric                                              | Step | Epoch |
-| ----------------------------- | --------------------------------------------------- | ---- | ----- |
-| `VSTFlowMatchingModule`       | `train/loss`                                        | yes  | yes   |
-|                               | `train/penalty`                                     | yes  | yes   |
-|                               | `val/param_mse`                                     | —    | yes   |
-|                               | `test/param_mse`                                    | —    | yes   |
-|                               | `vector_field/*_norm`                               | yes  | —     |
-|                               | `encoder/*_norm`                                    | yes  | —     |
-| `VSTFlowVAEModule`            | `train/loss`, `train/param_mean`, `train/param_std` | yes  | yes   |
-|                               | `train/{reconstruction,latent,param}_loss`          | yes  | yes   |
-|                               | `train/beta`                                        | yes  | —     |
-|                               | `val/{reconstruction,latent,param}_loss`            | —    | yes   |
-|                               | `val/param_mean`, `val/param_std`                   | —    | yes   |
-|                               | `test/{reconstruction,latent,param}_loss`           | —    | yes   |
-|                               | `net/*` gradient norms                              | yes  | —     |
-| `VSTFeedForwardModule`        | `train/loss`                                        | yes  | yes   |
-|                               | `val/param_mse`, `test/param_mse`                   | —    | yes   |
-| `TorchSynthFeedForwardModule` | `train/loss`                                        | yes  | yes   |
-|                               | `val/lsd`, `val/loss`                               | —    | yes   |
-|                               | `test/lsd`, `test/loss`, `test/param_mse`           | —    | yes   |
+| Module                  | Metric                                              | Step | Epoch |
+| ----------------------- | --------------------------------------------------- | ---- | ----- |
+| `VSTFlowMatchingModule` | `train/loss`                                        | yes  | yes   |
+|                         | `train/audio_loss` (when `model/audio_loss` is set) | yes  | yes   |
+|                         | `train/audio_grad_ratio` (audio/flow gradient norm) | yes  | —     |
+|                         | `train/audio_grad_cosine` (gradient alignment)      | yes  | —     |
+|                         | `train/penalty`                                     | yes  | yes   |
+|                         | `val/param_mse`                                     | —    | yes   |
+|                         | `test/param_mse`                                    | —    | yes   |
+|                         | `vector_field/*_norm`                               | yes  | —     |
+|                         | `encoder/*_norm`                                    | yes  | —     |
+| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std` | yes  | yes   |
+|                         | `train/{reconstruction,latent,param}_loss`          | yes  | yes   |
+|                         | `train/beta`                                        | yes  | —     |
+|                         | `val/{reconstruction,latent,param}_loss`            | —    | yes   |
+|                         | `val/param_mean`, `val/param_std`                   | —    | yes   |
+|                         | `test/{reconstruction,latent,param}_loss`           | —    | yes   |
+|                         | `net/*` gradient norms                              | yes  | —     |
+| `VSTFeedForwardModule`  | `train/loss`                                        | yes  | yes   |
+|                         | `val/param_mse`, `test/param_mse`                   | —    | yes   |
+
+The two audio-gradient diagnostics are emitted only when audio feedback is enabled, once per
+`trainer.log_every_n_steps` cadence. They are step-only metrics and have no epoch aggregate.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 

@@ -184,7 +184,8 @@ def test_datamodule_test_dataloader_yields_finite_batch() -> None:
         num_workers=0,
     )
     datamodule.setup("test")
-    audio, params, *_ = next(iter(datamodule.test_dataloader()))
+    batch = next(iter(datamodule.test_dataloader()))
+    audio, params = batch["audio"], batch["params"]
     assert audio.shape[0] == params.shape[0] == 2
     assert params.shape[1] == datamodule.num_params
     assert torch.isfinite(audio).all()
@@ -202,7 +203,7 @@ def test_datamodule_validate_stage_builds_only_validation_split() -> None:
     assert hasattr(datamodule, "val")
     assert not hasattr(datamodule, "train")
     assert not hasattr(datamodule, "test")
-    audio, *_ = next(iter(datamodule.val_dataloader()))
+    audio = next(iter(datamodule.val_dataloader()))["audio"]
     assert torch.isfinite(audio).all()
 
 
@@ -220,13 +221,60 @@ def test_datamodule_loaders_shuffle_only_training_rows() -> None:
     assert isinstance(datamodule.test_dataloader().sampler, SequentialSampler)
 
 
+def test_datamodule_default_retains_train_remainder() -> None:
+    """The default loader keeps a trailing partial training batch."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(3, 1, 1),
+        batch_size=2,
+        num_workers=0,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert loader.drop_last is False
+    assert [len(batch["audio"]) for batch in loader] == [2, 1]
+
+
+def test_datamodule_drop_last_discards_train_remainder() -> None:
+    """An opted-in loader discards a trailing partial training batch."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(3, 1, 1),
+        batch_size=2,
+        num_workers=0,
+        drop_last=True,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert loader.drop_last is True
+    assert [len(batch["audio"]) for batch in loader] == [2]
+
+
+def test_datamodule_drop_last_tiny_split_retains_partial_batch() -> None:
+    """An undersized opted-in split remains nonempty so runtime validation can reject it."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 1, 1),
+        batch_size=2,
+        num_workers=0,
+        drop_last=True,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+
+    assert loader.drop_last is False
+    assert len(next(iter(loader))["audio"]) == 1
+
+
 def _epoch_param_rows(loader: DataLoader[TorchSynthBatch]) -> list[tuple[float, ...]]:
     """Collect one epoch of parameter rows as hashable tuples.
 
     :param loader: Batched loader over one online split.
     :returns: One flattened parameter tuple per batch, in iteration order.
     """
-    return [tuple(params.flatten().tolist()) for _, params, *_ in loader]
+    return [tuple(batch["params"].flatten().tolist()) for batch in loader]
 
 
 def test_datamodule_resample_train_per_epoch_yields_fresh_rows_each_epoch() -> None:
@@ -317,7 +365,8 @@ def test_datamodule_multiprocessing_workers_render_finite_batches() -> None:
     batches = list(datamodule.train_dataloader())
 
     assert len(batches) == 2
-    for audio, params, *_ in batches:
+    for batch in batches:
+        audio, params = batch["audio"], batch["params"]
         assert audio.shape[0] == params.shape[0] == 2
         assert params.shape[1] == datamodule.num_params
         assert torch.isfinite(audio).all()
@@ -344,7 +393,7 @@ def test_render_torchsynth_renders_each_row_at_its_own_pitch() -> None:
     low = _encoded_row(0, _PITCH_PARAM.min, window)
     high = _encoded_row(0, _PITCH_PARAM.max, window)
 
-    batch = render_torchsynth(torch.cat((low, high)), **_RENDER_KWARGS)
+    batch = render_torchsynth(torch.cat((low, high)), **_RENDER_KWARGS, render_batch_size=2)
 
     assert torch.equal(batch[0], render_torchsynth(low, **_RENDER_KWARGS)[0])
     assert torch.equal(batch[1], render_torchsynth(high, **_RENDER_KWARGS)[0])
@@ -356,7 +405,7 @@ def test_render_torchsynth_renders_each_row_at_its_own_note_duration() -> None:
     short = _encoded_row(0, 60, (0.0, 0.02))
     held = _encoded_row(0, 60, (0.0, _BUFFER_SECONDS))
 
-    batch = render_torchsynth(torch.cat((short, held)), **_RENDER_KWARGS)
+    batch = render_torchsynth(torch.cat((short, held)), **_RENDER_KWARGS, render_batch_size=2)
 
     assert torch.equal(batch[0], render_torchsynth(short, **_RENDER_KWARGS)[0])
     assert torch.equal(batch[1], render_torchsynth(held, **_RENDER_KWARGS)[0])
@@ -370,7 +419,7 @@ def test_render_torchsynth_note_start_delays_each_row_independently() -> None:
     at_zero = _encoded_row(0, 60, (0.0, _BUFFER_SECONDS))
     delayed = _encoded_row(0, 60, (offset_seconds, offset_seconds + _BUFFER_SECONDS))
 
-    batch = render_torchsynth(torch.cat((at_zero, delayed)), **_RENDER_KWARGS)
+    batch = render_torchsynth(torch.cat((at_zero, delayed)), **_RENDER_KWARGS, render_batch_size=2)
 
     assert torch.equal(batch[1, :offset_samples], torch.zeros(offset_samples))
     assert torch.equal(
@@ -408,7 +457,7 @@ def test_render_torchsynth_synth_only_width_raises() -> None:
 def test_render_torchsynth_multirow_preserves_shape_and_bounds() -> None:
     """A multi-row renderer call preserves batch shape and numeric contracts."""
     params = torch.rand((3, _ENCODED_WIDTH), generator=torch.Generator().manual_seed(0))
-    audio = render_torchsynth(params, **_RENDER_KWARGS)
+    audio = render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=3)
 
     assert audio.shape == (3, _RENDER_KWARGS["signal_length"])
     assert type(audio) is torch.Tensor
@@ -429,14 +478,14 @@ def test_render_torchsynth_deterministic_across_processes() -> None:
     """
     params = torch.full((2, _ENCODED_WIDTH), 0.3)
     reference_hash = hashlib.sha256(
-        render_torchsynth(params, **_RENDER_KWARGS).numpy().tobytes()
+        render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=2).numpy().tobytes()
     ).hexdigest()
     script = (
         "import hashlib, torch;"
         "from synth_setter.data.torchsynth_datamodule import render_torchsynth;"
         f"audio = render_torchsynth(torch.full((2, {_ENCODED_WIDTH}), 0.3),"
         f" sample_rate={_RENDER_KWARGS['sample_rate']},"
-        f" signal_length={_RENDER_KWARGS['signal_length']});"
+        f" signal_length={_RENDER_KWARGS['signal_length']}, render_batch_size=2);"
         "print(hashlib.sha256(audio.numpy().tobytes()).hexdigest())"
     )
     result = subprocess.run(  # noqa: S603
@@ -497,6 +546,6 @@ def test_render_torchsynth_out_of_range_synth_params_clamp_to_valid_domain() -> 
 def test_render_torchsynth_preserves_gpu_device() -> None:
     """Render on the device used by the default GPU experiment."""
     params = torch.rand((2, _ENCODED_WIDTH), device="cuda")
-    audio = render_torchsynth(params, **_RENDER_KWARGS)
+    audio = render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=2)
     assert audio.device == params.device
     assert torch.isfinite(audio).all()

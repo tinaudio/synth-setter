@@ -6,6 +6,7 @@ import math
 
 import numpy as np
 import pytest
+import torch
 
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
@@ -362,3 +363,22 @@ class TestDecodeModelOutput:
         _, note_params = decode_model_output(row, _tiny_spec())
 
         assert len(note_params["note_start_and_end"]) == 1
+
+
+class TestModelSpaceConversion:
+    """The single-owner width splice and ``[-1, 1]`` <-> ``[0, 1]`` affine."""
+
+    def test_model_to_encoded_inverts_encoded_to_model(self) -> None:
+        """Round-tripping an in-range encoded row returns it unchanged."""
+        spec = _tiny_spec()
+        encoded = np.linspace(0.0, 1.0, spec.encoded_width)
+
+        assert spec.model_to_encoded(spec.encoded_to_model(encoded)) == pytest.approx(encoded)
+
+    def test_model_to_encoded_clips_predictions_outside_the_model_range(self) -> None:
+        """Out-of-range predictions saturate at the encoded domain's bounds."""
+        spec = _tiny_spec()
+
+        encoded = spec.model_to_encoded(np.array([-3.0, 3.0]))
+
+        assert encoded.tolist() == [0.0, 1.0]
