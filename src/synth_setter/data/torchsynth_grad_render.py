@@ -15,7 +15,6 @@ Typical usage:
 from __future__ import annotations
 
 import contextlib
-import math
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, cast
 
@@ -34,10 +33,6 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 
 if TYPE_CHECKING:
     from torchsynth.parameter import ModuleParameter
-
-# Logit slope (dimensionless) placing the model-space working range [-1, 1] on
-# [_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS], the interval the renderer accepts.
-_DECODE_GAIN = math.log((1 - _PARAM_CLAMP_EPS) / _PARAM_CLAMP_EPS)
 
 
 class _VoiceOutputShim(torch.nn.Module):
@@ -180,14 +175,15 @@ def validate_torchsynth_params(params: torch.Tensor) -> None:
 
 
 def differentiable_decode(theta: torch.Tensor) -> torch.Tensor:
-    """Map model space ``[-1, 1]`` onto renderable ``[eps, 1 - eps]``, keeping gradient.
+    """Map model space ``[-1, 1]`` to renderable ``[eps, 1 - eps]``, keeping gradient.
 
-    Monotone squashing rather than a clamp: out-of-range entries keep a nonzero
-    (exponentially small) gradient the audio loss can pull back into range. The cost
-    is a nonlinear interior, so this no longer matches the linear ``(theta + 1) / 2``
-    map that the parameter loss and dataset targets use.
+    The forward clamp preserves valid renderer input while the straight-through
+    backward pass lets saturated entries receive gradients, so an audio loss can
+    pull them back into range where a plain ``clamp`` would zero them.
 
     :param theta: Params in model space shaped ``(batch, NUM_PARAMS)``.
-    :returns: Params in torchsynth space, inside ``(0, 1)`` up to float resolution.
+    :returns: Params in torchsynth space, strictly inside ``(0, 1)``.
     """
-    return torch.sigmoid(theta * _DECODE_GAIN)
+    params01 = (theta + 1) / 2
+    clamped = params01.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
+    return params01 + (clamped - params01).detach()

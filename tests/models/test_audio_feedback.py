@@ -6,7 +6,6 @@ from lightning.pytorch.utilities.combined_loader import CombinedLoader
 from torch.utils.data import DataLoader, TensorDataset
 
 from synth_setter.data.torchsynth_grad_render import (
-    _DECODE_GAIN,
     differentiable_decode,
     render_torchsynth_grad,
 )
@@ -77,67 +76,36 @@ def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
     return encoder
 
 
-def test_differentiable_decode_maps_theta_zero_to_the_midpoint() -> None:
-    """The squashing map keeps the model-space origin at the renderer's midpoint."""
-    decoded = differentiable_decode(torch.tensor([[0.0]]))
-    assert decoded.item() == pytest.approx(0.5)
+def test_differentiable_decode_matches_the_linear_map_across_the_working_range() -> None:
+    """Inside the clamp bounds the decode is exactly the ``(theta + 1) / 2`` param map.
+
+    Agreement is what keeps the audio path's parameters identical to the ones
+    ``val/param_mse`` and the dataset targets are expressed in.
+    """
+    # 4e-4 = 2 * _PARAM_CLAMP_EPS in theta units, clear of float32 rounding onto the bound.
+    theta = torch.linspace(-1.0 + 4e-4, 1.0 - 4e-4, 401).unsqueeze(0)
+    assert torch.equal(differentiable_decode(theta), (theta + 1) / 2)
 
 
 def test_differentiable_decode_at_the_working_range_edges_hits_the_clamp_bounds() -> None:
-    """The gain is calibrated so ``theta = +-1`` lands on ``[eps, 1 - eps]``."""
+    """``theta = +-1`` lands on ``[eps, 1 - eps]``, the interval the renderer accepts."""
     decoded = differentiable_decode(torch.tensor([[-1.0, 1.0]]))
     assert decoded[0, 0].item() == pytest.approx(1e-4, abs=1e-6)
     assert decoded[0, 1].item() == pytest.approx(1 - 1e-4, abs=1e-6)
 
 
-def test_differentiable_decode_is_monotone_in_theta() -> None:
-    """A monotone decode keeps the renderer's parameter ordering intact."""
-    decoded = differentiable_decode(torch.tensor([[-3.0, -1.0, -0.2, 0.0, 0.2, 1.0, 3.0]]))
-    assert (decoded.diff() > 0).all()
-
-
-def test_differentiable_decode_over_the_working_range_stays_strictly_inside_zero_one() -> None:
-    """Every model-space value the flow is trained to emit renders in the open interval."""
-    decoded = differentiable_decode(torch.linspace(-1.0, 1.0, 401).unsqueeze(0))
+def test_differentiable_decode_of_far_out_of_range_theta_stays_strictly_inside_zero_one() -> None:
+    """Even a diverged estimate renders inside the open interval the renderer accepts."""
+    decoded = differentiable_decode(torch.tensor([[-1e3, -5.0, 0.0, 5.0, 1e3]]))
     assert (decoded > 0.0).all()
     assert (decoded < 1.0).all()
 
 
-def test_differentiable_decode_at_theta_minus_five_keeps_a_nonzero_gradient() -> None:
-    """Far-below-range entries still receive pull-back gradient a hard clamp would zero."""
-    theta = torch.tensor([[-5.0]], requires_grad=True)
+def test_differentiable_decode_gradient_is_the_linear_slope_even_when_saturated() -> None:
+    """Straight-through backward: saturated entries keep the pull-back gradient a clamp zeros."""
+    theta = torch.tensor([[-5.0, 0.0, 5.0]], requires_grad=True)
     (gradient,) = torch.autograd.grad(differentiable_decode(theta).sum(), theta)
-    assert gradient.item() > 0.0
-
-
-def test_differentiable_decode_above_theta_two_saturates_in_float32() -> None:
-    """Float32 resolution near 1.0 caps the smooth decode's reach at the upper end.
-
-    The exponentially small headroom the map leaves above ``theta = 1`` falls below
-    ``1 - nextafter(1.0)``, so the forward value pins to 1.0 and the gradient vanishes.
-    """
-    theta = torch.tensor([[2.0]], requires_grad=True)
-    decoded = differentiable_decode(theta)
-    (gradient,) = torch.autograd.grad(decoded.sum(), theta)
-
-    assert decoded.item() == 1.0
-    assert gradient.item() == 0.0
-
-
-@pytest.mark.parametrize(
-    ("theta", "deviation"),
-    [(-0.5, 0.2401), (0.5, 0.2401), (-0.9, 0.04975), (0.9, 0.04975)],
-)
-def test_differentiable_decode_interior_deviates_from_the_linear_parameter_map(
-    theta: float, deviation: float
-) -> None:
-    """The render decode no longer agrees with the linear map the param targets assume.
-
-    :param theta: Interior model-space value under test.
-    :param deviation: Expected absolute gap to ``(theta + 1) / 2``.
-    """
-    decoded = differentiable_decode(torch.tensor([[theta]])).item()
-    assert abs(decoded - (theta + 1) / 2) == pytest.approx(deviation, abs=1e-4)
+    assert torch.equal(gradient, torch.full_like(gradient, 0.5))
 
 
 def test_audio_weight_below_t_min_is_zero() -> None:
@@ -373,10 +341,9 @@ def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
     torch.manual_seed(0)
     params = torch.rand(_BATCH, _NUM_PARAMS).clamp(0.01, 0.99)
     target_audio = _render(params)
-    theta = torch.logit(params) / _DECODE_GAIN
 
     value = _loss().forward(
-        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
+        params * 2 - 1, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
     )
 
     assert value.item() == pytest.approx(0.0, abs=1e-6)
