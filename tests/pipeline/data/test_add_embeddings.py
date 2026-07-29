@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import os
+import shutil
 import subprocess
 import sys
 import weakref
@@ -64,6 +65,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _resolve_artifact_identity,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
+    _resume_source_identity,
     _versioned_artifact_identity,
     _write_columns,
     add_embeddings,
@@ -843,6 +845,41 @@ def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
     )
 
 
+def test_resume_source_identity_changes_with_input_contract(tmp_path: Path) -> None:
+    """Output-affecting source settings cannot share cached UDF batches.
+
+    :param tmp_path: Scratch directory for the Lance source.
+    """
+    uri = tmp_path / "source.lance"
+    _audio_dataset(uri, rows=4)
+    dataset = lance.dataset(uri)
+    baseline = _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE,
+        batch_size=2,
+        input_fields=[AUDIO_FIELD],
+    )
+
+    assert baseline != _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE // 2,
+        batch_size=2,
+        input_fields=[AUDIO_FIELD],
+    )
+    assert baseline != _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE,
+        batch_size=1,
+        input_fields=[AUDIO_FIELD],
+    )
+    assert baseline != _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE,
+        batch_size=2,
+        input_fields=[PARAM_ARRAY_FIELD],
+    )
+
+
 def test_prepare_resume_cache_without_identity_discards_legacy_batches(
     tmp_path: Path,
 ) -> None:
@@ -854,7 +891,7 @@ def test_prepare_resume_cache_without_identity_discards_legacy_batches(
     resume_cache.write_bytes(b"legacy cached batches")
 
     with capture_logs() as logs:
-        _prepare_resume_cache(resume_cache, {"clap": "artifact-a"})
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-a:v1")
 
     assert not resume_cache.exists()
     assert resume_cache.with_name("resume.cache.identity").is_file()
@@ -870,11 +907,62 @@ def test_prepare_resume_cache_with_different_artifact_rejects_stale_batches(
     :param tmp_path: Scratch directory for cache files.
     """
     resume_cache = tmp_path / "resume.cache"
-    _prepare_resume_cache(resume_cache, {"clap": "artifact-a"})
+    _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-a:v1")
     resume_cache.write_bytes(b"cached Lance batches")
 
-    with pytest.raises(ValueError, match="artifact identity .*does not match"):
-        _prepare_resume_cache(resume_cache, {"clap": "artifact-b"})
+    with pytest.raises(ValueError, match="resume identity .*does not match"):
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-b"}, "dataset-a:v1")
+
+
+def test_add_embeddings_with_recreated_source_rejects_stale_resume_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache cannot resume after its Lance source is deleted and recreated.
+
+    :param tmp_path: Scratch directory for the source and cache.
+    :param monkeypatch: Fixture installing dependency-free registry policies.
+    """
+    uri = tmp_path / "source.lance"
+    resume_cache = tmp_path / "resume.cache"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    base_spec = _fake_spec("m2l")
+    calls = 0
+
+    def load_crashing(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
+        del checkpoint, device
+        encoder = _encoder_for("m2l")
+
+        def encode(*args: object) -> np.ndarray:
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise RuntimeError("simulated crash")
+            return encoder(*args)
+
+        return encode
+
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("m2l",),
+        batch_size=1,
+        resume_cache=resume_cache,
+        build_index=False,
+    )
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY, "m2l", replace(base_spec, load_encoder=load_crashing)
+    )
+    with pytest.raises(OSError, match="simulated crash"):
+        add_embeddings(config)
+    assert resume_cache.exists()
+
+    shutil.rmtree(uri)
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    monkeypatch.setitem(EMBEDDING_REGISTRY, "m2l", base_spec)
+
+    with pytest.raises(ValueError, match="resume identity .*does not match"):
+        add_embeddings(config)
+    assert M2L_FIELD not in lance.dataset(uri).schema.names
 
 
 def test_write_columns_after_success_removes_resume_cache(tmp_path: Path) -> None:
