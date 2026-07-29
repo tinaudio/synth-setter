@@ -36,9 +36,14 @@ from synth_setter.data.vst.shapes import (
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.param_shift import (
+    ROW_ID_FIELD,
     assigned_param_index,
+    encode_param_shift_columns,
+    load_param_shifter,
+    param_shift_policy_values,
     shift_encoded_row,
 )
+from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SynthName, SynthSpec
@@ -231,3 +236,95 @@ def test_param_shift_audio_is_the_patch_the_row_claims(shifted_dataset: Path) ->
         assert np.array_equal(
             rendered.astype(committed_audio.dtype), committed_audio[index]
         ), f"row {index} audio does not match a re-render of its recorded shift"
+
+
+def test_param_shift_in_process_encoder_reproduces_the_committed_columns(
+    shifted_dataset: Path,
+) -> None:
+    """Driving the encoder in-process yields exactly what the CLI subprocess committed.
+
+    Runs the same production entry points the CLI uses — ``load_param_shifter`` then
+    ``encode_param_shift_columns`` — against the dataset's own source columns, so the
+    Arrow column contract is pinned without going through a Lance write.
+
+    :param shifted_dataset: Augmented Lance dataset.
+    """
+    dataset = lance.dataset(str(shifted_dataset))
+    table = dataset.to_table(
+        columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD, *PARAM_SHIFT_FIELD_NAMES], with_row_id=True
+    )
+    sources = {
+        AUDIO_FIELD: table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray(),
+        PARAM_ARRAY_FIELD: table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray(),
+        ROW_ID_FIELD: np.asarray(table.column(ROW_ID_FIELD).to_pylist()),
+    }
+    shifter = load_param_shifter(
+        AddEmbeddingsConfig(
+            lance_uri=str(shifted_dataset),
+            embeddings=("param_shift",),
+            render=_render_config(),
+            param_shift_seed=_SEED,
+            build_index=False,
+        )
+    )
+
+    columns = encode_param_shift_columns(sources, _SAMPLE_RATE, shifter)
+
+    assert set(columns) == set(PARAM_SHIFT_FIELD_NAMES)
+    for field in PARAM_SHIFT_FIELD_NAMES:
+        committed = table.column(field).combine_chunks()
+        assert columns[field].equals(committed), f"{field} differs from the committed column"
+
+
+def test_load_param_shifter_without_a_render_config_raises() -> None:
+    """The loader refuses to guess a renderer even when reached outside config validation."""
+    config = AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
+
+    with pytest.raises(ValueError, match="composed render config"):
+        load_param_shifter(config)
+
+
+def test_param_shift_encoder_rejects_a_render_config_the_dataset_does_not_match(
+    shifted_dataset: Path,
+) -> None:
+    """A renderer producing another clip length fails instead of writing mismatched audio.
+
+    :param shifted_dataset: Augmented Lance dataset supplying real source columns.
+    """
+    dataset = lance.dataset(str(shifted_dataset))
+    table = dataset.to_table(columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD], with_row_id=True)
+    sources = {
+        AUDIO_FIELD: table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray(),
+        PARAM_ARRAY_FIELD: table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray(),
+        ROW_ID_FIELD: np.asarray(table.column(ROW_ID_FIELD).to_pylist()),
+    }
+    mismatched = _render_config().model_copy(update={"sample_rate": _SAMPLE_RATE * 2})
+    shifter = load_param_shifter(
+        AddEmbeddingsConfig(
+            lance_uri=str(shifted_dataset),
+            embeddings=("param_shift",),
+            render=mismatched,
+            build_index=False,
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not match the dataset"):
+        encode_param_shift_columns(sources, _SAMPLE_RATE, shifter)
+
+
+def test_param_shift_policy_values_without_a_render_config_stay_distinct() -> None:
+    """An unset render config still yields a well-formed identity, distinct from a set one."""
+    without_render = param_shift_policy_values(
+        AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
+    )
+    with_render = param_shift_policy_values(
+        AddEmbeddingsConfig(
+            lance_uri="x.lance",
+            embeddings=("param_shift",),
+            render=_render_config(),
+            build_index=False,
+        )
+    )
+
+    assert without_render != with_render
+    assert all(isinstance(value, str) for value in without_render)
