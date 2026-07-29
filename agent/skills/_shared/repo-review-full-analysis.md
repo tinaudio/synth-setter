@@ -385,24 +385,26 @@ entire skill. If the free-pool pass is unavailable in the foreground, continue
 with its successful Codex peer, disclose `Free-pool review deferred to aftercare.` in `review_body`, and preserve the attempt chain in the audit.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
-changes this flow, run both host harnesses against the PR from the worktree:
+changes this flow, run the live smoke against the PR from the worktree. The
+launcher is the Pi-native entry point every host harness calls, so invoke it
+directly rather than through a nested host session:
 
 ```bash
-claude -p --dangerously-skip-permissions --no-session-persistence --model haiku \
-  --effort low --output-format text \
-  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
-codex exec --dangerously-bypass-approvals-and-sandbox \
-  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
+bash agent/_shared/run_pi_review.sh repo-review-full-no-comments --target <PR>
 ```
 
-After each command, verify the sentinel audit contains every planned
+Smoke the no-comments mode only; `repo-review-full` posts inline threads to the
+PR, which is an author's decision rather than a verification step. Both modes
+share Steps 1–6, so the no-comments run exercises everything but delivery.
+
+After the command, verify the sentinel audit contains every planned
 Codex/free-pool pass, bounded turn/runtime/token columns, an existing
 transcript path for each launched attempt, and the current full HEAD from
 `review_sentinel.py parse`. This live L1 smoke is mandatory in addition to
 helper CLI tests.
 
-- [ ] Record both authenticated host commands, their exit status, parsed
-  sentinel HEAD, and fallback audit result in the PR verification comment.
+- [ ] Record the launcher command, its exit status, parsed sentinel HEAD, and
+  fallback audit result in the PR verification comment.
 
 Attribute findings from each successful report to the provider that actually
 produced it, including after within-pass fallback:
@@ -467,18 +469,29 @@ Each agent returns one JSON object and no surrounding prose. Agents work indepen
 }
 ```
 
-`severity` is exactly `block` or `warn`; `line` is one positive integer changed-line anchor, never a string or range. Use an empty `findings` array when there are no findings and keep `what_looks_good` non-empty. The worker does not render Markdown or attach provenance. Aim each agent at a 1500-word ceiling across string values so results stay scannable.
+`severity` is exactly `block`, `warn`, or `nit`; `line` is one positive integer changed-line anchor, never a string or range. Use an empty `findings` array when there are no findings and keep `what_looks_good` non-empty. The worker does not render Markdown or attach provenance. Aim each agent at a 1500-word ceiling across string values so results stay scannable.
+
+Severity semantics, uniform across every checklist:
+
+- `block` — must fix before merge; a reachable defect or a hard AGENTS.md rule.
+- `warn` — should fix; latent, lower-confidence, or advisory-but-substantive.
+- `nit` — stylistic preference only. Never blocks, never gates, and carries no
+  obligation to act. Emit `nit` rather than `warn` whenever a reviewer could
+  reasonably decline the change without harming the codebase.
 
 ## Step 5: Aggregate findings
 
-Once every parallel agent returns, ingest each validated worker result's structured `findings`. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
+Once every parallel agent returns, ingest each validated worker result's structured `findings`. **BLOCK and WARN become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
 
-Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
+**NIT findings go to the `## Nits` section of `review_body`, never to the `findings` array.** That is what makes NIT non-blocking in practice: under "Conversations must be resolved" branch protection an inline thread is a merge obligation, so an inline NIT would be a WARN by another name. The body bullet is the whole point — visible, ignorable.
+
+Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]` / `[<short-tag>:nit]`), not the full skill name.
 
 Severity → severity tag:
 
 - `BLOCK` → `block`
 - `WARN` → `warn`
+- `NIT` → `nit`
 
 Skill → tag (short form for comment body):
 
@@ -497,7 +510,7 @@ Skill → tag (short form for comment body):
 | `lance-review`                   | `lance`           |
 | `correctness-review`             | `correctness`     |
 
-Each finding (BLOCK or WARN) becomes one entry in the `findings` array, with `<severity>` set to `block` or `warn`:
+Each BLOCK or WARN becomes one entry in the `findings` array, with `<severity>` set to `block` or `warn`:
 
 ```json
 {
@@ -509,11 +522,17 @@ Each finding (BLOCK or WARN) becomes one entry in the `findings` array, with `<s
 
 The shape is identical for both severities — only the tag changes. `post_review.py` anchors the entry, posts it as an inline review comment on the GitHub review, and leaves the thread unresolved.
 
+Each NIT becomes one bullet under `## Nits` in `review_body`, carrying its own `path:line` because it has no inline anchor to supply one:
+
+```markdown
+- **[<short-tag>:nit]** `<path>:<line>` — <description>
+```
+
 Do NOT dedupe findings across skills (e.g. `shell-style` and `synth-setter-project-standards` both flagging the same `[ ]` vs `[[ ]]` issue at `scripts/run.sh:42`) — keep each finding's signal independent, as its own inline thread. Two short threads from two checklists tell the reviewer more than one merged thread that hides which checklist surfaced it; the cost of a near-duplicate inline comment is much smaller than the cost of misattributing a finding.
 
 ## Step 6: Build the findings JSON
 
-Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the PR-health BLOCKs from Step 2 are folded into `review_body` separately because they aren't anchored to diff lines.
+Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the Step 5 NITs and the PR-health BLOCKs from Step 2 are folded into `review_body` separately because neither is anchored to a diff line.
 
 Before writing any other `review_body` content, inspect the audit rows for
 `authentication` and `quota/capacity` statuses. If either status occurred,
@@ -532,9 +551,11 @@ status/model/diagnostic triples. This incident summary must appear before every
 other `review_body` section, including the review lead-in, `## PR health`, and
 `## Pi review audit`. Omit it only when neither status occurred.
 
-`review_body` carries one optional appended section, `## PR health` (Step 2 BLOCKs). Omit it if Step 2 produced nothing.
+`review_body` carries two optional appended sections in this order: `## PR health` (Step 2 BLOCKs) then `## Nits` (Step 5 NITs). Omit either section when its source produced nothing. `## Nits` goes last because it is the only advisory section — nothing below it is a merge obligation.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Insert a `## PR health` section after the `## Provider incidents` summary when present, listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+
+**Fold the Step 5 NITs into `review_body`** as a `## Nits` section placed after `## PR health` (or after the lead-in when PR health is absent), one bullet per NIT in the Step 5 format. Omit the section when no checklist emitted a NIT.
 
 Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[<calling-skill>:block]** `, leaving the `[pr-health] …` body unchanged. Substitute `<calling-skill>` with the calling skill's name (`repo-review-full` or `repo-review-full-no-comments`). For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…` when called from `repo-review-full`.
 
@@ -542,7 +563,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 {
   "pr_number": <N>,
   "repo": "<owner>/<repo>",
-  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Each finding below (BLOCK or WARN) is posted as an individual unresolved inline thread so it can't be scrolled past without an explicit reply or resolution. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.\n\n## PR health\n\n- **[<calling-skill>:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[<calling-skill>:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123",
+  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Each BLOCK and WARN below is posted as an individual unresolved inline thread so it can't be scrolled past without an explicit reply or resolution; NITs are listed in the body and block nothing. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.\n\n## PR health\n\n- **[<calling-skill>:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[<calling-skill>:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123\n\n## Nits\n\n- **[comment-hygiene:nit]** `src/foo.py:9` — comment restates the assignment.",
   "findings": [
     {"path": "src/foo.py", "line": 42, "body": "**[code-health:warn]** Function exceeds the length budget; consider extracting a helper."},
     {"path": "src/foo.py", "line": 7,  "body": "**[comment-hygiene:warn]** Docstring restates the signature; tighten to the contract."}
@@ -550,9 +571,9 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
+The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` and `## Nits` section formats. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
 
-When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
+When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN or NIT exists, else `APPROVE`. A NIT-only review is `COMMENT`, not `APPROVE` — there is something to say — and `COMMENT` blocks nothing. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 
 Write the JSON to a temp file:
 
@@ -567,6 +588,7 @@ Return to your orchestrator brief's Step 7 for the final delivery step.
 ## Notes
 
 - WARN findings are posted inline (as their own unresolved threads) rather than collapsed into a body bullet list. The earlier collapse design optimized for keeping BLOCKs visible, but in practice body bullets were silently ignored — every review converged on `event=COMMENT` with zero inline threads, and the WARNs never got addressed. The inline form forces an explicit reply or resolution before merge under "Conversations must be resolved" branch protection, and the `[<short-tag>:<severity>]` prefix lets reviewers filter or batch-resolve.
+- NIT exists so that "ignorable" is a severity a checklist can express instead of a judgment the author has to make about every WARN. Before it existed, checklists either inflated a preference to WARN — spending an unresolved thread on it — or dropped it silently; `comment-hygiene`'s C13–C14 were dropped for exactly that reason. Body placement is the mechanism, not a presentation choice: an inline NIT would be a merge obligation under branch protection, and `pre-pr-review-gate.sh` deliberately never matches `:nit]` in either sub-gate.
 - Most of this pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled; the repo-local `lance-review` and `correctness-review` skills are the standing exceptions (they run from `agent/skills/<name>/SKILL.md` even with the plugin absent, and `correctness-review` runs on every diff). If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
 - Claude Code and Codex both invoke the Pi-native main agent → flat Tintin
   worker structure. Every harness therefore uses the same checklist,

@@ -36,6 +36,7 @@ from synth_setter.data.vst.shapes import (
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
     T5GEMMA_FIELD,
+    TINYMU_FIELD,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.add_embeddings import (
@@ -103,8 +104,7 @@ def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpe
     """Build a 1-shard Lance ``DatasetSpec`` pinned to the real test synth + R2 prefix.
 
     :param prefix: Unique R2 prefix the shard is rendered + uploaded under.
-    :param rows: Samples in the single train shard; ``>= MIN_ROWS_FOR_INDEX`` makes
-        the downstream IVF_PQ build train rather than skip.
+    :param rows: Train samples; ``>= MIN_ROWS_FOR_INDEX`` makes indexing run.
     :returns: A frozen Lance spec whose single train shard is renderable by the
         real VST and whose ``r2`` layout is safe to ``purge_prefix`` on teardown.
     """
@@ -227,6 +227,37 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     :returns: The credentialed, opened dataset.
     """
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
+
+
+def test_add_embeddings_tinymu_against_real_r2_uses_registry_path(
+    remote_lance_dataset_uri: str,
+) -> None:
+    """The public CLI writes real MATPAC columns through the common Lance target.
+
+    :param remote_lance_dataset_uri: Fixture-provided ``r2://`` Lance dataset URI.
+    """
+    result = subprocess.run(  # noqa: S603 — literal command and validated fixture URI
+        [
+            _ADD_EMBEDDINGS_CMD,
+            f"lance_uri={remote_lance_dataset_uri}",
+            "embeddings=[tinymu]",
+            "build_index=false",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_EMBED_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, (
+        f"{_ADD_EMBEDDINGS_CMD} exited {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    dataset = _open_remote_dataset(remote_lance_dataset_uri)
+    assert dataset.count_rows() == _SAMPLES_PER_SHARD
+    assert {TINYMU_FIELD, f"{TINYMU_FIELD}_vec"} <= set(dataset.schema.names)
+    values = dataset.to_table(columns=[TINYMU_FIELD]).column(TINYMU_FIELD)
+    assert np.isfinite(values.combine_chunks().to_numpy_ndarray()).all()
 
 
 def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(

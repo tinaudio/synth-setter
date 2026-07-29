@@ -74,7 +74,7 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
     preset_resource: str
     preset_sha256: str
     pedalboard: BackendSnapshot
-    clap: BackendSnapshot
+    clap: BackendSnapshot | None = None
     dawdreamer: BackendSnapshot
     surgepy_preset_resource: str | None = None
     surgepy_preset_sha256: str | None = None
@@ -119,8 +119,10 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
         """Return the legacy CLAP-only view used by capture CSV conversion.
 
         :returns: CLAP projection containing every mapped parameter.
-        :raises ValueError: If any parameter lacks a CLAP identity.
+        :raises ValueError: If the synth has no CLAP build or a parameter lacks its identity.
         """
+        if self.clap is None:
+            raise ValueError(f"{self.plugin!r} has no CLAP provenance")
         missing = sorted(name for name, identity in self.params.items() if identity.clap is None)
         if missing:
             raise ValueError(f"parameters missing CLAP identities: {', '.join(missing)}")

@@ -2,7 +2,7 @@
 name: repo-review-full-no-comments
 description: |-
   Multi-skill review (same fan-out as `/repo-review-full`) that prints the
-  aggregated BLOCK/WARN report instead of posting inline comments. Routes every
+  aggregated BLOCK/WARN/NIT report instead of posting inline comments. Routes every
   host harness through Pi and works against an open PR or local branch. Requires
   the tinaudio-synth-setter-skills plugin.
 ---
@@ -212,7 +212,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 > ## Summary
 >
-> - B BLOCK, W WARN across K skills
+> - B BLOCK, W WARN, N NIT across K skills
 > - PR-health flags: <M merge-conflict / F failing-check>  (omit if zero or in local-branch mode)
 > - Reviewed at: <full-sha-from-git-rev-parse-HEAD>
 > - <next-step tip>
@@ -234,8 +234,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > - Group inline findings by `path`, then list each finding as `**L<line>** — <body>`.
 >   Use the same `body` text you put into the JSON (`**[<short-tag>:<severity>]** <description>`).
 >
-> - Preserve the PR-health bullets from `review_body` verbatim — they are
->   important for human reviewers and easy to lose if you re-summarize.
+> - Preserve the PR-health and `## Nits` bullets from `review_body` verbatim —
+>   they are important for human reviewers and easy to lose if you re-summarize.
+>   NITs stay in the body here for the same reason they do in PR mode: the
+>   pre-PR gate must never see a `:nit]` tag it could mistake for an obligation.
 >
 > - **Pi PASS report.** When Pi has no findings or PR-health flags, preserve the
 >   complete `## Pi review audit` section from `review_body` between the PASS
@@ -258,7 +260,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 >   ## Summary
 >
->   - 0 BLOCK, 0 WARN
+>   - 0 BLOCK, 0 WARN, 0 NIT
 >   - Reviewed at: <sha>
 >   - Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count 0.
 >   ```

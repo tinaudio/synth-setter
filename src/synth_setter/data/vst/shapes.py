@@ -38,6 +38,7 @@ SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
+TINYMU_FIELD: str = "tinymu"
 SKETCH_CTRL_FIELD: str = "sketch_ctrl"
 # The pitch-row width below is a property of this PESTO checkpoint.
 DEFAULT_PESTO_CHECKPOINT: str = "mir-1k_g7"

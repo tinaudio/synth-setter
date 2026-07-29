@@ -155,6 +155,9 @@ install-studiorack: ## Install the pinned Studiorack CLI and its locked dependen
 install-surge-xt: install-studiorack ## Install pinned Surge XT through Studiorack
 	$(STUDIORACK) install --plugin surge-synthesizer/surge
 
+install-cardinal: install-studiorack ## Install pinned Cardinal through its optional Studiorack manifest
+	$(STUDIORACK) --manifest studiorack-cardinal.json install --plugin distrho/cardinal
+
 install-dexed: install-studiorack ## Install pinned Dexed through Studiorack
 	$(STUDIORACK) install --plugin asb2m10/dexed
 
@@ -172,6 +175,7 @@ install-plugins: install-studiorack ## Install every VST3 pinned in studiorack.j
 
 link-plugins: ## Link installed Studiorack packages into the checkout's plugins/ namespace
 	@$(STUDIORACK) link
+	@$(STUDIORACK) --manifest studiorack-cardinal.json link
 
 # Symlink this worktree's gitignored thoughts/ to the primary's central thoughts/
 # so qrspi docs from every worktree converge; migrates pre-existing files first.

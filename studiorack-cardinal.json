@@ -1,0 +1,10 @@
+{
+  "name": "synth-setter-cardinal",
+  "type": "project",
+  "plugins": {
+    "distrho/cardinal": "2026.2.0"
+  },
+  "vst3Bundles": {
+    "distrho/cardinal": "CardinalSynth.vst3"
+  }
+}

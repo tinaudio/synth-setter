@@ -11,6 +11,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = PROJECT_ROOT / "Makefile"
 DOCKERFILE = PROJECT_ROOT / "docker/ubuntu22_04/Dockerfile"
+CARDINAL_MANIFEST = PROJECT_ROOT / "studiorack-cardinal.json"
 MANIFEST = PROJECT_ROOT / "studiorack.json"
 PACKAGE_LOCK = PROJECT_ROOT / "package-lock.json"
 SETUP_SURGE_ACTION = PROJECT_ROOT / ".github/actions/setup-surge-xt/action.yml"
@@ -50,6 +51,14 @@ def test_studiorack_manifest_pins_runtime_plugin_set() -> None:
         package: (version, payload["vst3Bundles"][package])
         for package, version in payload["plugins"].items()
     } == _EXPECTED_PLUGINS
+
+
+def test_cardinal_manifest_pins_optional_plugin() -> None:
+    """Cardinal stays installable without joining the runtime image plugin set."""
+    payload = json.loads(CARDINAL_MANIFEST.read_text())
+
+    assert payload["plugins"] == {"distrho/cardinal": "2026.2.0"}
+    assert payload["vst3Bundles"] == {"distrho/cardinal": "CardinalSynth.vst3"}
 
 
 def test_package_lock_pins_studiorack_cli_and_core() -> None:

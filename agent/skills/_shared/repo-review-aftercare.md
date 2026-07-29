@@ -46,7 +46,9 @@ not present in the runtime manifest.
    submit one `COMMENT` review through `agent/skills/_shared/post_review.py`.
    Its body must identify late Codex-verified aftercare findings and include the
    originating skill/model audit rows. Never approve or request changes from
-   aftercare; each finding remains an unresolved inline thread.
+   aftercare; each BLOCK and WARN remains an unresolved inline thread. Late NITs
+   go under a `## Nits` body section, never inline — the same advisory contract
+   the foreground uses.
 
 8. Write exactly one strict JSON object atomically to `<manifest>.result.json`.
    The supervisor validates it with `AftercareResult`, merges its ownership
