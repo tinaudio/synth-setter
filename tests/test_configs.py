@@ -284,7 +284,7 @@ def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
     model = hydra.utils.instantiate(cfg.model)
 
     assert datamodule.sketch_controls is not None
-    assert datamodule.sketch_controls.column == "sketch_ctrl"
+    assert datamodule.sketch_controls.column == "sketch"
     assert model.sketch_tokens is not None
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
@@ -875,6 +875,32 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse"
     assert cfg.callbacks.model_checkpoint.every_n_train_steps == 1000
     assert cfg.test is False
+
+
+def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
+    """The preliminary A/B arms differ only in sketch conditioning."""
+    base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
+    sketch = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
+
+    for cfg in (base, sketch):
+        assert cfg.datamodule.download_dataset_root_uri == (
+            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
+            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/"
+        )
+        assert cfg.seed == 3407
+        assert cfg.datamodule.param_spec_name == "surge_simple"
+        assert cfg.trainer.max_steps == 10000
+        assert cfg.trainer.min_steps == 10000
+        assert cfg.trainer.val_check_interval == 1000
+        assert cfg.training.val_audio_probe is True
+        assert cfg.test is False
+    assert base.run_name == "flow1k_prelim_base"
+    assert base.model.sketch_controls is None
+    assert base.datamodule.sketch is None
+    assert sketch.run_name == "flow1k_prelim_sketch"
+    assert sketch.model.sketch_controls.column == "sketch"
+    assert sketch.model.sketch_controls.num_frames == 401
+    assert sketch.datamodule.sketch == sketch.model.sketch_controls
 
 
 def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:

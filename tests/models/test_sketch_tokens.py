@@ -71,7 +71,7 @@ class TestSketchControlSpec:
     def test_defaults_column_tokens_threshold_match_design(self) -> None:
         """Spec defaults pin the approved column, token budget, and threshold."""
         spec = SketchControlSpec(num_frames=401)
-        assert spec.column == "sketch_ctrl"
+        assert spec.column == "sketch"
         assert spec.num_ctrl_tokens == 32
         assert spec.pitch_zero_threshold == 0.1
 

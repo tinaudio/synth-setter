@@ -17,7 +17,13 @@ from torch.utils.data import DataLoader
 from synth_setter.conditioning import (
     NUM_SKETCH_CONTROLS,
     NUM_SKETCH_TRACK_ROWS,
+    SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW,
     SKETCH_CTRL_FIELD,
+    SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD,
     Conditioning,
     EmbeddingConditioningSpec,
     SketchControls,
@@ -119,6 +125,86 @@ def _validate_embedding_column(
         )
 
 
+def _sketch_child_shapes(num_frames: int) -> dict[str, tuple[int, ...]]:
+    """Return the per-row shape each stored sketch struct child must have.
+
+    :param num_frames: Mel-grid frames per stored control row.
+    :returns: Expected shapes keyed by struct child name.
+    """
+    return {
+        SKETCH_LOUDNESS_CHILD: (num_frames,),
+        SKETCH_CENTROID_CHILD: (num_frames,),
+        SKETCH_PITCH_CHILD: (SKETCH_PITCH_BINS, num_frames),
+    }
+
+
+def _stack_sketch_children(
+    loudness: np.ndarray, centroid: np.ndarray, pitch: np.ndarray
+) -> np.ndarray:
+    """Reassemble stored struct children into the flat model control stack.
+
+    Inverts the write-time split bit-for-bit: loudness and centroid land on
+    their ``SKETCH_*_ROW`` rows, pitch fills the remaining block.
+
+    :param loudness: ``(B, F)`` loudness rows.
+    :param centroid: ``(B, F)`` centroid rows.
+    :param pitch: ``(B, SKETCH_PITCH_BINS, F)`` pitch activations.
+    :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` stacked controls.
+    """
+    tracks = np.empty(
+        (len(loudness), NUM_SKETCH_TRACK_ROWS, loudness.shape[-1]), dtype=loudness.dtype
+    )
+    tracks[:, SKETCH_LOUDNESS_ROW] = loudness
+    tracks[:, SKETCH_CENTROID_ROW] = centroid
+    return np.concatenate([tracks, pitch], axis=1)
+
+
+def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None:
+    """Validate one Lance split against the nested sketch storage layout (#2707).
+
+    :param shard_path: Lance dataset selected for a Lightning split.
+    :param sketch: Configured sketch-control spec.
+    :raises KeyError: If the configured struct column is absent.
+    :raises ValueError: If the column is not the nested struct (e.g. a legacy flat dataset), a
+        child is missing or mis-shaped, the split is empty, or its sample is non-finite.
+    """
+    dataset = lance.dataset(str(shard_path))
+    column_index = dataset.schema.get_field_index(sketch.column)
+    if column_index < 0:
+        raise KeyError(f"sketch column {sketch.column!r} is absent from {shard_path}")
+    field = dataset.schema.field(column_index)
+    if not pa.types.is_struct(field.type):
+        raise ValueError(
+            f"sketch column {sketch.column!r} in {shard_path} has non-struct type "
+            f"{field.type}; this dataset stores the pre-#2707 flat layout — "
+            "re-run the sketch add-embeddings backfill to rewrite it as a struct"
+        )
+    for child, expected_shape in _sketch_child_shapes(sketch.num_frames).items():
+        child_index = field.type.get_field_index(child)
+        if child_index < 0:
+            raise ValueError(
+                f"sketch column {sketch.column!r} in {shard_path} is missing "
+                f"struct child {child!r}"
+            )
+        shape = _fixed_embedding_shape(field.type.field(child_index))
+        if shape != expected_shape:
+            raise ValueError(
+                f"sketch child {child!r} in {shard_path} has shape {shape}, "
+                f"expected {expected_shape}"
+            )
+    if dataset.count_rows() == 0:
+        raise ValueError(
+            f"sketch column {sketch.column!r} cannot be sampled from empty {shard_path}"
+        )
+    sample = dataset.take([0], columns=[sketch.column]).combine_chunks()
+    tensors = batch_to_shaped_tensors(sample.to_batches()[0])
+    for child in _sketch_child_shapes(sketch.num_frames):
+        if not torch.isfinite(tensors[f"{sketch.column}.{child}"]).all():
+            raise ValueError(
+                f"sketch child {child!r} sample in {shard_path} contains non-finite values"
+            )
+
+
 # Divisor floor for channels that are constant across the sampled rows:
 # (x - mean) is ~0 there, so flooring normalizes them to ~0 instead of raising.
 _CONDITIONING_STD_FLOOR = 1e-6
@@ -217,7 +303,8 @@ class PrepareBatchCollate:
         :param rescale_params: Whether to map parameters to ``[-1, 1]``.
         :param ot: Whether to Hungarian-match noise to parameters.
         :param conditioning_column: Generic embedding column to expose as ``conditioning``.
-        :param sketch_column: Stored sketch column to expose as ``sketch_ctrl``.
+        :param sketch_column: Stored sketch struct column whose expanded
+            children are reassembled into ``sketch_ctrl``.
         :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
             or ``None`` to pass activations through unbinned.
         :param preserve_legacy_m2l: Whether ``music2latent`` also populates ``m2l``.
@@ -280,8 +367,15 @@ class PrepareBatchCollate:
             raw_values["conditioning"] = conditioning
             if self.conditioning_column == "music2latent" and not self.preserve_legacy_m2l:
                 del raw_values["music2latent"]
-        if self.sketch_column is not None and self.sketch_column != SKETCH_CTRL_FIELD:
-            raw_values[SKETCH_CTRL_FIELD] = raw_values.pop(self.sketch_column)
+        if self.sketch_column is not None:
+            prefix = f"{self.sketch_column}."
+            loudness = raw_values.pop(f"{prefix}{SKETCH_LOUDNESS_CHILD}")
+            centroid = raw_values.pop(f"{prefix}{SKETCH_CENTROID_CHILD}")
+            pitch = raw_values.pop(f"{prefix}{SKETCH_PITCH_CHILD}")
+            # Unread companions (e.g. the vec child) never reach prepare_batch.
+            for key in [key for key in raw_values if key.startswith(prefix)]:
+                del raw_values[key]
+            raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(loudness, centroid, pitch)
         raw = cast(RawBatch, raw_values)
         return prepare_batch(
             raw,
@@ -607,13 +701,7 @@ class LanceVSTDataModule(VSTDataModule):
             _validate_embedding_column(shard_path, spec)
         sketch = self.sketch_controls
         if sketch is not None:
-            _validate_embedding_column(
-                shard_path,
-                EmbeddingConditioningSpec(
-                    column=sketch.column,
-                    input_shape=(NUM_SKETCH_CONTROLS, sketch.num_frames),
-                ),
-            )
+            _validate_sketch_column(shard_path, sketch)
         columns = self._loader_columns(read_audio=read_audio)
         mean, std = stats if stats is not None else (None, None)
         conditioning_mean, conditioning_std = (

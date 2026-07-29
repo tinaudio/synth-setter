@@ -2332,19 +2332,19 @@ def _write_sketch_lance_root(dataset_root: Path) -> None:
     # Local import: pulls in pyarrow, which the Docker VST CI images don't
     # install (no `data` dependency group) — module scope would break their
     # conftest collection.
-    from tests.helpers.lance_fixtures import write_lance_shard
+    from tests.helpers.lance_fixtures import write_lance_shard_with_sketch
 
     for seed, split in enumerate(("train", "val", "test")):
         rng = np.random.default_rng(seed)
         pitch = rng.random((4, SKETCH_PITCH_BINS, 401)).astype(np.float32)
         tracks = rng.uniform(-1.0, 1.0, (4, NUM_SKETCH_TRACK_ROWS, 401)).astype(np.float32)
-        write_lance_shard(
+        write_lance_shard_with_sketch(
             dataset_root / f"{split}.lance",
             {
                 "param_array": rng.random((4, len(param_specs["surge_4"]))).astype(np.float32),
                 "m2l": rng.standard_normal((4, 128, 42)).astype(np.float32),
-                "sketch_ctrl": np.concatenate([tracks, pitch], axis=1),
             },
+            np.concatenate([tracks, pitch], axis=1),
         )
 
 
