@@ -1,6 +1,7 @@
 """Tests that Hydra config groups compose without errors."""
 
 from collections.abc import Sequence
+from functools import partial
 from typing import Any
 
 import hydra
@@ -13,6 +14,7 @@ from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
+from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
 from synth_setter.resources import configs_dir
@@ -544,13 +546,11 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
     assert cfg.model.net.latent_dim == latent_dim
 
 
-def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
-    """A composed Flow-VAE net predicts at the resolver-derived width, not just configures it.
+@pytest.fixture(scope="module")
+def flowvae_module() -> VSTFlowVAEModule:
+    """Build a small random-weight Flow-VAE module for batch-contract tests.
 
-    Config-value assertions can't catch a decoder or regression flow that ignores
-    ``latent_dim``, so this instantiates the ``obxf`` (187-wide, odd — never a flow-VAE
-    experiment default) composition and forwards a random-weight batch. Flow depth and
-    hidden dims are shrunk for CPU speed; they don't affect output width.
+    :returns: Eval-mode module configured for the 187-wide OB-Xf parameter spec.
     """
     cfg = _compose(
         "train.yaml",
@@ -565,14 +565,46 @@ def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
             "+model.net.regression_flow_hidden_dim=16",
         ],
     )
+    module = VSTFlowVAEModule(
+        net=hydra.utils.instantiate(cfg.model.net),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        param_spec="obxf",
+    )
+    module.eval()
+    return module
 
-    net = hydra.utils.instantiate(cfg.model.net)
-    net.eval()
-    with torch.no_grad():
-        out = net(torch.randn(2, 2, 128, 401))
 
+def test_flowvae_model_step_reads_mel_batch_key(flowvae_module: VSTFlowVAEModule) -> None:
+    """The training path consumes ``mel`` and preserves its output contracts.
+
+    :param flowvae_module: Small random-weight module under test.
+    """
+    mel = torch.randn(2, 2, 128, 401)
+    params = torch.rand(2, 187)
+
+    losses, actual_mel, actual_params, out = flowvae_module.model_step(
+        {"mel": mel, "params": params}
+    )
+
+    assert set(losses) == {"reconstruction_loss", "latent_loss", "param_loss"}
+    assert actual_mel is mel
+    assert actual_params is params
     assert out.x_hat.shape == (2, 187)
     assert out.y_hat.shape == (2, 2, 128, 401)
+
+
+def test_flowvae_predict_step_reads_mel_batch_key(flowvae_module: VSTFlowVAEModule) -> None:
+    """The prediction path consumes ``mel`` and returns model-width parameters.
+
+    :param flowvae_module: Small random-weight module under test.
+    """
+    batch = {"mel": torch.randn(2, 2, 128, 401)}
+
+    predictions, actual_batch = flowvae_module.predict_step(batch, batch_idx=0)
+
+    assert predictions.shape == (2, 187)
+    assert actual_batch is batch
 
 
 @pytest.mark.parametrize(
