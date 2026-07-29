@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torchmetrics
 
+from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.residual_mlp import ResidualMLPBlock
 from synth_setter.models.torchsynth_ff_module import TorchSynthBatch, TorchSynthFeedForwardModule
 
@@ -194,6 +195,29 @@ def test_test_step_updates_lsd_and_logs_named_parameter_mse(
     predictions = module(batch[0])
     expected_mse = (predictions - batch[1]).square().mean()
     torch.testing.assert_close(logged["test/param_mse"], expected_mse)
+
+
+def test_test_step_param_mse_excludes_the_pinned_note_columns() -> None:
+    """The reported parameter error covers the inferable synth columns only.
+
+    The online dataset pins pitch and the note window to the render configuration, so including
+    those constant columns would deflate the mean and break comparability with parameter-error
+    numbers recorded before they entered the row.
+    """
+    spec = TORCHSYNTH_FULL_PARAM_SPEC
+    module = _make_module(net=nn.Linear(_SIGNAL_LENGTH, spec.encoded_width))
+    module.test_lsd = MagicMock(spec=torchmetrics.Metric)
+    log_mock = _patch_log(module)
+    inputs = torch.randn(_BATCH_SIZE, _SIGNAL_LENGTH)
+    targets = torch.rand(_BATCH_SIZE, spec.encoded_width)
+    note_shifted = targets.clone()
+    note_shifted[:, spec.synth_param_length :] += 1.0
+
+    module.test_step((inputs, targets, torch.randn_like(targets), lambda p: p), 0)
+    module.test_step((inputs, note_shifted, torch.randn_like(targets), lambda p: p), 0)
+
+    logged = [call.args[1] for call in log_mock.call_args_list if call.args[0] == "test/param_mse"]
+    torch.testing.assert_close(logged[0], logged[1])
 
 
 def test_on_train_start_resets_validation_metric(tiny_net: nn.Module) -> None:

@@ -416,3 +416,6 @@ TORCHSYNTH_FULL_PARAM_SPEC = ParamSpec(
     _continuous([param.key for param in INFERABLE_SPEC]),
     _note_params(),
 )
+# Encoded columns the renderer consumes and the parameter metric scores. Starts at 0
+# because ``encoded_slices`` lays every synth span out ahead of the note spans.
+SYNTH_COLUMNS: slice = slice(0, TORCHSYNTH_FULL_PARAM_SPEC.synth_param_length)
