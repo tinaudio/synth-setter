@@ -74,7 +74,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _resume_source_identity,
-    _versioned_artifact_identity,
     _write_columns,
     add_embeddings,
     build_index,
@@ -85,7 +84,11 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
-from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND, matpac_plus_num_latent_frames
+from synth_setter.pipeline.data.matpac_plus import (
+    MATPAC_PLUS_FRONTEND,
+    MatpacPlusEncodeFn,
+    matpac_plus_num_latent_frames,
+)
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
@@ -875,12 +878,51 @@ def test_checkpoint_tree_identity_ignores_huggingface_download_bookkeeping(
     assert _checkpoint_tree_sha256(tmp_path) == first
 
 
-def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
-    """Unrelated repository revisions do not alter artifact identity."""
-    assert (
-        _versioned_artifact_identity("matpac_plus", "checkpoint:sha256:abc")
-        == "matpac_plus:policy-v1:checkpoint:sha256:abc"
+def test_matpac_plus_artifact_identity_uses_explicit_policy_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unrelated repository revisions do not alter MATPAC++ artifact identity.
+
+    :param monkeypatch: Fixture replacing checkpoint digest resolution.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.matpac_plus_artifact_digest",
+        lambda _checkpoint: "checkpoint:sha256:abc",
     )
+    resolve_identity = EMBEDDING_REGISTRY["matpac_plus"].resolve_artifact_identity
+
+    assert resolve_identity is not None
+    assert resolve_identity("checkpoint.pt") == (
+        "matpac_plus:policy-v1:checkpoint:sha256:abc"
+    )
+
+
+def test_matpac_plus_registry_loader_threads_checkpoint_and_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry loads a usable MATPAC++ encoder with selected runtime inputs.
+
+    :param monkeypatch: Fixture replacing the heavyweight package loader.
+    """
+    seen: list[tuple[str, str]] = []
+
+    def load(checkpoint: str, *, device: str) -> Encoder:
+        seen.append((checkpoint, device))
+        return _fake_matpac_plus
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_matpac_plus_audio_encoder",
+        load,
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri="dataset.lance", embeddings=("matpac_plus",), device="cpu"
+    )
+    encoder = EMBEDDING_REGISTRY["matpac_plus"].load_encoder("checkpoint.pt", config)
+
+    encode = cast("MatpacPlusEncodeFn", encoder)
+    output = encode(np.zeros((1, 1, 2_800), dtype=np.float32), 16_000)
+    assert output.shape == (1, MATPAC_PLUS_FRONTEND.embedding_dim, 1)
+    assert seen == [("checkpoint.pt", "cpu")]
 
 
 def test_resume_source_identity_changes_with_input_contract(tmp_path: Path) -> None:
