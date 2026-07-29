@@ -252,12 +252,22 @@ class AudioRenderer(ABC):
 class PedalboardRenderer(AudioRenderer):
     """Render through the existing pedalboard implementation.
 
+    .. attribute :: expected_managed_digest
+
+       Managed identity pinned by the render config.
+
     .. attribute :: plugin
 
        Optional preloaded pedalboard plugin instance.
+
+    .. attribute :: preloaded_managed_digest
+
+       Managed identity validated when ``plugin`` was loaded.
     """
 
+    expected_managed_digest: str | None = None
     plugin: VST3Plugin | None = field(default=None, repr=False)
+    preloaded_managed_digest: str | None = field(default=None, repr=False)
 
     def render(
         self,
@@ -290,7 +300,9 @@ class PedalboardRenderer(AudioRenderer):
                 self.sample_rate,
                 self.channels,
                 plugin_state_path=self.plugin_state_path,
+                expected_managed_digest=self.expected_managed_digest,
                 plugin=self.plugin,
+                preloaded_managed_digest=self.preloaded_managed_digest,
                 warmup=warmup,
             ),
             channels=self.channels,
@@ -799,6 +811,10 @@ class DawDreamerRenderer(AudioRenderer):
 
        DawDreamer engine block size.
 
+    .. attribute :: expected_managed_digest
+
+       Managed identity pinned by the render config.
+
     .. attribute :: parameter_map
 
        Validated immutable cross-host identity map.
@@ -817,6 +833,7 @@ class DawDreamerRenderer(AudioRenderer):
     """
 
     block_size: int = DAWDREAMER_BLOCK_SIZE
+    expected_managed_digest: str | None = None
     parameter_map: SynthParamMap = field(kw_only=True)
     reload_plugin_each_render: bool = True
     engine: _DawDreamerEngine = field(init=False, repr=False)
@@ -844,7 +861,10 @@ class DawDreamerRenderer(AudioRenderer):
         from synth_setter.plugin_runtime import validated_bundle_lease
 
         self.engine = self._daw.RenderEngine(self.sample_rate, self.block_size)
-        with validated_bundle_lease(Path(self.plugin_path)) as validated_bundle:
+        with validated_bundle_lease(
+            Path(self.plugin_path),
+            expected_digest=self.expected_managed_digest,
+        ) as validated_bundle:
             self.plugin = self.engine.make_plugin_processor("synth", str(validated_bundle))
             self.engine.load_graph([(self.plugin, [])])
         self._parameter_indices = self.parameter_map.dawdreamer_indices()

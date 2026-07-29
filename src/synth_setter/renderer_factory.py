@@ -53,6 +53,7 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             channels=render_config.channels,
             signal_duration_seconds=render_config.signal_duration_seconds,
             plugin_state_path=render_config.plugin_state_path,
+            expected_managed_digest=render_config.synth.managed_plugin_digest,
             parameter_map=joint_map,
             reload_plugin_each_render=render_config.plugin_reload_cadence == "render",
         )
@@ -82,17 +83,28 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
 
     if backend == "pedalboard":
         plugin = None
+        preloaded_managed_digest = None
         if render_config.plugin_reload_cadence == "once":
             from synth_setter.data.vst.core import load_plugin, load_preset
 
-            plugin = load_plugin(render_config.plugin_path)
+            expected_digest = render_config.synth.managed_plugin_digest
+            if expected_digest is None:
+                plugin = load_plugin(render_config.plugin_path)
+            else:
+                plugin = load_plugin(
+                    render_config.plugin_path,
+                    expected_managed_digest=expected_digest,
+                )
             load_preset(plugin, render_config.plugin_state_path)
+            preloaded_managed_digest = expected_digest
         return PedalboardRenderer(
             plugin_path=render_config.plugin_path,
             sample_rate=render_config.sample_rate,
             channels=render_config.channels,
             signal_duration_seconds=render_config.signal_duration_seconds,
             plugin_state_path=render_config.plugin_state_path,
+            expected_managed_digest=render_config.synth.managed_plugin_digest,
             plugin=plugin,
+            preloaded_managed_digest=preloaded_managed_digest,
         )
     assert_never(backend)

@@ -457,6 +457,7 @@ def _locked_runtime_identity(
 
 def _validated_runtime_identity_lease(
     bundle: Path,
+    expected_digest: str | None,
 ) -> AbstractContextManager[tuple[Path, BundleSeal] | None]:
     @contextmanager
     def _leased() -> Iterator[tuple[Path, BundleSeal] | None]:
@@ -465,6 +466,10 @@ def _validated_runtime_identity_lease(
         except (FileNotFoundError, ValueError) as exc:
             raise PluginIntegrityError(f"{bundle} failed managed bundle integrity") from exc
         if candidate is None:
+            if expected_digest is not None:
+                raise PluginIntegrityError(
+                    f"{bundle} has no managed identity matching {expected_digest}"
+                )
             yield None
             return
 
@@ -481,25 +486,36 @@ def _validated_runtime_identity_lease(
                     candidate = locked_candidate
                     continue
                 _, resolved, seal = identity
+                actual_digest = integrity.bundle_identity_digest(seal)
+                if expected_digest is not None and actual_digest != expected_digest:
+                    raise PluginIntegrityError(
+                        f"managed plugin digest mismatch: expected {expected_digest}, "
+                        f"found {actual_digest} at {bundle}"
+                    )
                 yield resolved, seal
                 return
 
     return _leased()
 
 
-def validated_bundle_lease(bundle: Path) -> AbstractContextManager[Path]:
+def validated_bundle_lease(
+    bundle: Path,
+    *,
+    expected_digest: str | None = None,
+) -> AbstractContextManager[Path]:
     """Lease validated content against same-path installation replacement.
 
     Entering the returned context raises :class:`PluginIntegrityError` when managed
     ownership, provenance, or content is invalid.
 
     :param bundle: VST3 bundle or stable manager-owned alias.
+    :param expected_digest: Managed identity required by the consuming render config.
     :returns: Context manager yielding validated content or the original unmanaged path.
     """
 
     @contextmanager
     def _validated() -> Iterator[Path]:
-        with _validated_runtime_identity_lease(bundle) as identity:
+        with _validated_runtime_identity_lease(bundle, expected_digest) as identity:
             yield bundle if identity is None else identity[0]
 
     return _validated()
@@ -528,7 +544,7 @@ def managed_plugin_digest(bundle: Path) -> str | None:
     :param bundle: Managed VST3 bundle or stable alias, or an unmanaged path.
     :returns: Canonical managed identity, otherwise ``None``.
     """
-    with _validated_runtime_identity_lease(bundle) as identity:
+    with _validated_runtime_identity_lease(bundle, None) as identity:
         if identity is None:
             return None
         return integrity.bundle_identity_digest(identity[1])

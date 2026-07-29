@@ -5,13 +5,12 @@ Two console-script surfaces:
 - ``synth-setter-generate-dataset`` → :func:`main` — operator entry; runs the
   spec in-process or dispatches it to SkyPilot based on
   ``cfg.skypilot_launch.compute``.
-- ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
-  entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
+- ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — local
+  Hydra entry for in-process config composition.
 
-``synth-setter-generate-dataset-from-spec-uri`` (see
-:mod:`synth_setter.cli.generate_dataset_from_spec_uri`) is the spec-first
-counterpart: it renders an already-materialized ``input_spec.json`` by URI
-instead of composing one.
+Sky workers use ``synth-setter-generate-dataset-from-spec-uri`` (see
+:mod:`synth_setter.cli.generate_dataset_from_spec_uri`) to render the
+launcher-materialized ``input_spec.json`` without recomposing dataset identity.
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ from uuid import uuid4
 
 import hydra
 import wandb
-from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
@@ -66,15 +64,13 @@ from synth_setter.pipeline.schemas.render_metrics import (
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec, Split
 from synth_setter.pipeline.shard_claims import ShardClaims
-from synth_setter.pipeline.spec_io import (
-    upload_spec,
-    write_spec_locally,
-)
+from synth_setter.pipeline.spec_io import upload_spec, write_spec_locally
 
 # Imported under the module-local name tests already patch as the render /
 # rclone / eval subprocess seam (see tests/helpers/render_subprocess.py).
 from synth_setter.pipeline.subprocess_stream import check_call_streamed as _check_call_streamed
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
+from synth_setter.plugin_runtime import managed_plugin_digest
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.utils import extras, log_wandb_provenance, pin_wandb_run_id, register_resolvers
 from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
@@ -177,7 +173,14 @@ def _run_oracle_eval_subprocess(
         f"synth={render.synth.name}",
         *(
             f"synth.{field}={value}"
-            for field, value in render.synth.model_dump(exclude={"name"}).items()
+            for field, value in render.synth.model_dump(
+                exclude={"name", "managed_plugin_digest"}
+            ).items()
+        ),
+        *(
+            [f"+synth.managed_plugin_digest={render.synth.managed_plugin_digest}"]
+            if render.synth.managed_plugin_digest is not None
+            else []
         ),
         f"render.renderer_backend={render.renderer_backend}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
@@ -316,18 +319,26 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     ensure_dawdreamer_runtime(spec.render.renderer_backend)
     status = "success"
     try:
-        # Inside the try so a helper failure (e.g. tempfile creation in
-        # ``_log_spec_artifact``) still triggers ``finalize("failed")`` +
-        # ``wandb.finish()`` in the ``finally`` — otherwise the wandb run
-        # leaks un-closed on the helper's exception path.
+        # Keep logger setup inside the lifecycle guard so helper failures still close W&B.
         _log_hyperparams(loggers, spec)
-        # Provenance mutates the process-global ``wandb.run``; only stamp it when
-        # a ``WandbLogger`` here owns the run, mirroring ``close_loggers`` — else
-        # an empty-logger run would stamp a foreign run started elsewhere.
+        # Stamp process-global W&B provenance only when this function owns the run.
         if any(isinstance(lg, WandbLogger) for lg in loggers):
             log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
         render = spec.render
+        expected_plugin_digest = render.synth.managed_plugin_digest
+        actual_plugin_digest = managed_plugin_digest(Path(render.plugin_path))
+        if expected_plugin_digest is None and actual_plugin_digest is not None:
+            raise RuntimeError(
+                "Spec is missing managed plugin digest for manager-owned plugin at "
+                f"{render.plugin_path}."
+            )
+        if expected_plugin_digest is not None and actual_plugin_digest != expected_plugin_digest:
+            raise RuntimeError(
+                "Managed plugin digest mismatch: "
+                f"spec pins {expected_plugin_digest!r} but plugin at "
+                f"{render.plugin_path} has {actual_plugin_digest!r}."
+            )
         actual_synth_version = extract_renderer_version(Path(render.plugin_path))
         if actual_synth_version != render.synth.synth_version:
             raise RuntimeError(
@@ -933,9 +944,31 @@ def _render_and_upload_shard(
     return byte_size, rejections
 
 
+def _pin_managed_plugin_digest(spec: DatasetSpec) -> DatasetSpec:
+    """Bind launcher-validated managed content to the materialized spec.
+
+    :param spec: Purely parsed dataset spec.
+    :returns: The spec with a detected managed digest, or unchanged for unmanaged plugins.
+    :raises ValueError: A configured digest contradicts the launcher's local managed bundle.
+    """
+    detected = managed_plugin_digest(Path(spec.render.plugin_path))
+    if detected is None:
+        return spec
+    configured = spec.render.synth.managed_plugin_digest
+    if configured is not None and configured != detected:
+        raise ValueError("configured managed plugin digest does not match the validated seal")
+    synth = spec.render.synth.model_copy(update={"managed_plugin_digest": detected})
+    render = spec.render.model_copy(update={"synth": synth})
+    return spec.model_copy(update={"render": render})
+
+
 def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
-    """Build a DatasetSpec from a Hydra-composed cfg."""
-    return DatasetSpec.from_hydra_cfg(cfg)
+    """Compose and pin the launcher-owned DatasetSpec artifact identity.
+
+    :param cfg: Hydra-composed dataset config.
+    :returns: Materialized spec with managed plugin identity pinned when applicable.
+    """
+    return _pin_managed_plugin_digest(DatasetSpec.from_hydra_cfg(cfg))
 
 
 def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:
@@ -1026,35 +1059,19 @@ def _worker_python_bootstrap_cmd() -> str:
     )
 
 
-def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
-    """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
+def _build_worker_cmd() -> str:
+    """Build the worker command around the launcher's uploaded canonical spec.
 
-    Each override is shell-quoted individually so spaces/metachars survive bash
-    interpretation. ``sync_worker_checkout.sh`` applies the launcher's pinned
-    worker commit between cd and exec.
-
-    ``spec.created_at`` is pinned as a Hydra override so the worker's
-    re-compose lands on the same ``r2.prefix`` as the launcher (the
-    ``default_factory`` that produces it would otherwise fire twice and the
-    derived ``run_id`` / ``r2.prefix`` would diverge — see
-    ``_default_run_id`` / ``_fill_default_r2_prefix`` in
-    ``synth_setter.pipeline.schemas.spec``).
-
-    :param overrides: Operator's Hydra overrides (``HydraConfig.get().overrides.task``).
-    :param spec: Launcher's ``DatasetSpec``; runtime fields are pinned into
-        the worker overrides for compose determinism.
-    :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
+    :returns: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
-    pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
-    all_overrides = list(overrides) + pinned_overrides
     parts = [
         f"cd {shlex.quote(_WORKER_REPO_ROOT)}",
         _worker_python_bootstrap_cmd(),
         "bash scripts/sync_worker_checkout.sh --python-ready",
         'if [[ "${SYNTH_SETTER_WORKER_PYTHON_RECREATED:-0}" == "1" && '
         '-z "${WORKER_GIT_REF:-}" ]]; then uv pip install --group runtime -e .; fi',
-        "exec synth-setter-generate-dataset-from-hydra "
-        + " ".join(shlex.quote(o) for o in all_overrides),
+        "exec synth-setter-generate-dataset-from-spec-uri "
+        '"${WORKER_SPEC_URI:?WORKER_SPEC_URI is required}"',
     ]
     return " && ".join(parts)
 
@@ -1076,10 +1093,9 @@ def _loggers_pinned_to_spec(cfg: DictConfig, spec: DatasetSpec) -> list[Logger]:
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="dataset")
 def from_hydra(cfg: DictConfig) -> None:
-    """Worker-side @hydra.main entry: build the spec and render it in-process.
+    """Render a locally composed Hydra dataset config.
 
-    :param cfg: Composed Hydra dataset cfg supplied by ``@hydra.main`` from
-        the worker's argv overrides.
+    :param cfg: Composed Hydra dataset config used for the spec and logger settings.
     """
     extras(cfg)
     spec = spec_from_cfg(cfg)
@@ -1091,9 +1107,8 @@ def from_hydra(cfg: DictConfig) -> None:
 def main(cfg: DictConfig) -> None:
     """Operator CLI: run the composed dataset spec locally or dispatch to SkyPilot.
 
-    Worker-side overrides are replayed verbatim under ``_build_worker_cmd`` so
-    the launcher/worker composition matches byte-for-byte; ``HydraConfig`` is
-    the authoritative source for the operator's task overrides.
+    Sky workers receive the uploaded ``input_spec.json`` URI and never
+    reconstruct dataset identity from their local Hydra composition.
 
     The one schema-invalid cadence cell ``gui_toggle_cadence=always_on`` +
     ``plugin_reload_cadence!=once`` (see :func:`_unsupported_cadence_reason`) is a
@@ -1116,7 +1131,6 @@ def main(cfg: DictConfig) -> None:
         )
         return
 
-    overrides = list(HydraConfig.get().overrides.task)
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
@@ -1203,7 +1217,7 @@ def main(cfg: DictConfig) -> None:
 
     sky_cfg = sky_cfg.model_copy(
         update={
-            "cmd": _build_worker_cmd(overrides, spec),
+            "cmd": _build_worker_cmd(),
             "job_name": sky_cfg.job_name or _smoke_job_name(spec),
             "extra_envs": {WORKER_SPEC_URI_ENV: spec_uri},
         }

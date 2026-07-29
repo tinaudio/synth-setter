@@ -889,6 +889,33 @@ def test_finalize_schema_mismatch_field_drift_names_differing_fields(
     assert "audio" in message
 
 
+def test_finalize_rejects_same_version_managed_plugin_digest_rotation(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Fragments from another managed artifact cannot join the current dataset.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    artifact_a = spec.render.synth.model_copy(update={"managed_plugin_digest": "a" * 64})
+    spec_a = spec.model_copy(
+        update={"render": spec.render.model_copy(update={"synth": artifact_a})}
+    )
+    stage_all_shards(spec_a, tmp_path)
+    artifact_b = spec.render.synth.model_copy(update={"managed_plugin_digest": "b" * 64})
+    spec_b = spec.model_copy(
+        update={"render": spec.render.model_copy(update={"synth": artifact_b})}
+    )
+
+    with pytest.raises(ValueError, match="physical schema does not match") as excinfo:
+        finalize_from_spec(spec_b, tmp_path / "work")
+
+    message = str(excinfo.value)
+    assert '"managed_plugin_digest":"a' in message
+    assert '"managed_plugin_digest":"b' in message
+
+
 def test_finalize_schema_mismatch_metadata_only_drift_reports_values_and_skew_hint(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:

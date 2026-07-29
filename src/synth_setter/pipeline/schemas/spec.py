@@ -570,6 +570,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             base_seed=self.base_seed,
             sample_offset=self.sample_offset,
             attempts_per_sample=self.attempts_per_sample,
+            managed_plugin_digest=self.synth.managed_plugin_digest,
         )
 
 

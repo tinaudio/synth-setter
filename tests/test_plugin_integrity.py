@@ -1,14 +1,19 @@
 """Contract tests for the focused managed-plugin integrity boundary."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
+from omegaconf import DictConfig, OmegaConf
 from pydantic import ValidationError
 
 import synth_setter.plugin_integrity as plugin_integrity
 import synth_setter.plugin_runtime as plugin_runtime
 from synth_setter import plugin_manager
+from synth_setter.cli import generate_dataset
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.plugin_integrity import (
     ArtifactLock,
     BundleEntry,
@@ -23,7 +28,12 @@ from synth_setter.plugin_integrity import (
     locked_package_digest,
     seal_plugin_bundle,
 )
-from synth_setter.plugin_manager import PluginManifest, resolve_plugin_bundle
+from synth_setter.plugin_manager import (
+    PluginManifest,
+    adopt_plugin_bundle,
+    link_plugin,
+    resolve_plugin_bundle,
+)
 from synth_setter.plugin_runtime import (
     ManagedAliasRecord,
     managed_plugin_digest,
@@ -270,6 +280,52 @@ def test_adopt_plugin_bundle_lock_rotation_changes_explicit_identity(tmp_path: P
     assert managed_plugin_digest(first) != managed_plugin_digest(second)
 
 
+def test_remote_worker_linux_content_accepts_mac_launch_identity(
+    tmp_path: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Linux worker renders a spec pinned from the lock-equivalent macOS seal.
+
+    :param tmp_path: Scratch root for cross-platform bundles and worker output.
+    :param dataset_spec_factory: Builds the worker's canonical dataset spec.
+    :param monkeypatch: Selects an idle distributed worker rank.
+    """
+    artifact_lock = _cross_platform_lock()
+    plugin = _example_plugin()
+    mac_bundle = _bundle(tmp_path / "mac/Example Synth.vst3", payload=b"mac-arm64")
+    linux_bundle = _bundle(tmp_path / "linux/Example Synth.vst3", payload=b"linux-x64")
+    _seal_bundle(mac_bundle, plugin, artifact_lock)
+    _seal_bundle(linux_bundle, plugin, artifact_lock)
+    launch_digest = managed_plugin_digest(mac_bundle)
+    assert launch_digest is not None
+
+    base = dataset_spec_factory(
+        task_name="cross-platform-plugin",
+        run_id="cross-platform-plugin-run",
+        train_val_test_sizes=(1, 0, 0),
+        r2={"bucket": "intermediate-data", "prefix": "cross-platform-plugin/"},
+        render={"samples_per_shard": 1},
+    )
+    synth = base.render.synth.model_copy(
+        update={
+            "managed_plugin_digest": launch_digest,
+            "plugin_path": str(linux_bundle),
+            "synth_version": "1.2.3",
+        }
+    )
+    worker_spec = base.model_copy(
+        update={"render": base.render.model_copy(update={"synth": synth})}
+    )
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
+
+    generate_dataset.generate(worker_spec, tmp_path / "work", [])
+
+    assert managed_plugin_digest(linux_bundle) == launch_digest
+    assert list((tmp_path / "work").iterdir()) == []
+
+
 def test_artifact_lock_load_exact_manifest_coverage_returns_lock(tmp_path: Path) -> None:
     """The artifact lock covers every manifest package at its exact version.
 
@@ -430,6 +486,191 @@ def test_seal_plugin_bundle_records_exact_package_lock_provenance(tmp_path: Path
     assert seal["locked_package_sha256"] == (
         "ce68cc987663810c48dcd1de66953f8f278a569dc4aef0747a68b18044502c46"
     )
+
+
+def test_dataset_spec_managed_digest_matches_same_package_across_content(
+    tmp_path: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """Validated host-specific contents produce the same package identity.
+
+    :param tmp_path: Scratch root for two sealed managed bundles.
+    :param dataset_spec_factory: Builds the common dataset-spec payload.
+    """
+    first_bundle = _bundle(tmp_path / "first/Example Synth.vst3", payload=b"first")
+    second_bundle = _bundle(tmp_path / "second/Example Synth.vst3", payload=b"second")
+    _seal_bundle(first_bundle)
+    _seal_bundle(second_bundle)
+    first_stable = tmp_path / "first-system/Example Synth.vst3"
+    first_stable.parent.mkdir()
+    first_stable.symlink_to(first_bundle.absolute(), target_is_directory=True)
+    plugin_runtime.record_managed_alias(first_stable, first_bundle)
+    first_config_path = tmp_path / "first-checkout/Example Synth.vst3"
+    first_config_path.parent.mkdir()
+    first_config_path.symlink_to(first_stable.absolute(), target_is_directory=True)
+    second_stable = tmp_path / "second-system/Example Synth.vst3"
+    second_stable.parent.mkdir()
+    second_stable.symlink_to(second_bundle.absolute(), target_is_directory=True)
+    plugin_runtime.record_managed_alias(second_stable, second_bundle)
+    second_config_path = tmp_path / "second-checkout/Example Synth.vst3"
+    second_config_path.parent.mkdir()
+    second_config_path.symlink_to(second_stable.absolute(), target_is_directory=True)
+    base = dataset_spec_factory(
+        task_name="managed-content",
+        run_id="managed-content-run",
+        train_val_test_sizes=(1, 0, 0),
+        r2={"bucket": "intermediate-data", "prefix": "managed-content/"},
+        render={"samples_per_shard": 1},
+    )
+    raw = base.model_dump(
+        mode="json",
+        exclude={"shards", "num_shards", "num_params"},
+    )
+    raw["synth"] = raw["render"].pop("synth")
+
+    first_raw = json.loads(json.dumps(raw))
+    first_raw["synth"]["plugin_path"] = str(first_config_path)
+    second_raw = json.loads(json.dumps(raw))
+    second_raw["synth"]["plugin_path"] = str(second_config_path)
+    from synth_setter.cli.generate_dataset import spec_from_cfg
+
+    first_spec = spec_from_cfg(cast(DictConfig, OmegaConf.create(first_raw)))
+    second_spec = spec_from_cfg(cast(DictConfig, OmegaConf.create(second_raw)))
+
+    assert first_spec.render.synth.synth_version == second_spec.render.synth.synth_version
+    assert first_spec.render.synth.managed_plugin_digest == managed_plugin_digest(
+        first_config_path
+    )
+    assert second_spec.render.synth.managed_plugin_digest == managed_plugin_digest(
+        second_config_path
+    )
+    assert (
+        first_spec.render.synth.managed_plugin_digest
+        == second_spec.render.synth.managed_plugin_digest
+    )
+    assert first_spec.render.shard_metadata() == second_spec.render.shard_metadata()
+
+
+def test_spec_uri_worker_rejects_rotated_package_lock_before_staging(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker consumes launcher lock A and rejects local package lock B.
+
+    :param tmp_path: Scratch root for managed state and worker files.
+    :param fake_r2_remote: Local-typed R2 remote holding the canonical launcher spec.
+    :param dataset_spec_factory: Builds the common dataset-spec payload.
+    :param monkeypatch: Bypasses external auth while retaining real local rclone I/O.
+    """
+    from synth_setter.cli.generate_dataset import spec_from_cfg
+    from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+    from synth_setter.pipeline.spec_io import upload_spec
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset_from_spec_uri.r2_io.ensure_r2_env_loaded",
+        lambda: None,
+    )
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "system-vst3/Example Synth.vst3", payload=b"artifact-a")
+    managed_dir = tmp_path / "managed"
+    artifact_lock = _example_lock()
+    adopt_plugin_bundle(
+        plugin,
+        plugins_dir=managed_dir,
+        bundle=source,
+        locked_package=artifact_lock.package_for(plugin),
+    )
+    alias = link_plugin(
+        plugin,
+        artifact_lock=artifact_lock,
+        plugins_dir=managed_dir,
+        links_dir=tmp_path / "plugins",
+    )
+    base = dataset_spec_factory(
+        task_name="managed-worker",
+        run_id="managed-worker-run",
+        train_val_test_sizes=(1, 0, 0),
+        r2={"bucket": "intermediate-data", "prefix": "managed-worker/"},
+        render={"samples_per_shard": 1},
+    )
+    raw = base.model_dump(mode="json", exclude={"shards", "num_shards", "num_params"})
+    raw["synth"] = raw["render"].pop("synth")
+    raw["synth"]["plugin_path"] = str(alias)
+    launcher_spec = spec_from_cfg(OmegaConf.create(raw))
+    digest_a = launcher_spec.render.synth.managed_plugin_digest
+    assert digest_a is not None
+    upload_spec(launcher_spec)
+
+    _binary_path(source).write_bytes(_test_binary_magic() + b"artifact-b")
+    rotated_payload = artifact_lock.model_dump(mode="json")
+    rotated_payload[plugin.reference]["artifacts"][0]["sha256"] = "b" * 64
+    rotated_lock = ArtifactLock.model_validate(rotated_payload)
+    adopt_plugin_bundle(
+        plugin,
+        plugins_dir=managed_dir,
+        bundle=source,
+        locked_package=rotated_lock.package_for(plugin),
+    )
+    assert managed_plugin_digest(alias) != digest_a
+
+    with pytest.raises(RuntimeError, match="Managed plugin digest mismatch"):
+        run_from_spec_uri(launcher_spec.r2.input_spec_uri(), enable_wandb=False)
+
+    run_prefix = fake_r2_remote / launcher_spec.r2.bucket / launcher_spec.r2.prefix
+    assert (run_prefix / "input_spec.json").is_file()
+    assert not (run_prefix / "metadata/workers").exists()
+
+
+def test_worker_rejects_managed_plugin_without_digest_before_output(
+    tmp_path: Path,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """A worker cannot render manager-owned content as unmanaged provenance.
+
+    :param tmp_path: Scratch root for managed state and render output.
+    :param dataset_spec_factory: Builds the common dataset-spec payload.
+    """
+    from synth_setter.cli.generate_dataset import generate
+
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "system-vst3/Example Synth.vst3")
+    managed_dir = tmp_path / "managed"
+    artifact_lock = _example_lock()
+    adopt_plugin_bundle(
+        plugin,
+        plugins_dir=managed_dir,
+        bundle=source,
+        locked_package=artifact_lock.package_for(plugin),
+    )
+    alias = link_plugin(
+        plugin,
+        artifact_lock=artifact_lock,
+        plugins_dir=managed_dir,
+        links_dir=tmp_path / "plugins",
+    )
+    base = dataset_spec_factory(
+        task_name="managed-worker-missing",
+        run_id="managed-worker-missing-run",
+        train_val_test_sizes=(1, 0, 0),
+        r2={"bucket": "intermediate-data", "prefix": "managed-worker-missing/"},
+        render={"samples_per_shard": 1},
+    )
+    synth = base.render.synth.model_copy(
+        update={
+            "managed_plugin_digest": None,
+            "plugin_path": str(alias),
+            "synth_version": "1.2.3",
+        }
+    )
+    spec = base.model_copy(update={"render": base.render.model_copy(update={"synth": synth})})
+    work_dir = tmp_path / "work"
+
+    with pytest.raises(RuntimeError, match="missing managed plugin digest"):
+        generate(spec, work_dir, [])
+
+    assert not work_dir.exists()
 
 
 def test_resolve_plugin_bundle_modified_after_seal_rejected(tmp_path: Path) -> None:

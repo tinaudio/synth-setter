@@ -32,7 +32,9 @@ _REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(
         set(RenderConfig.model_fields) - _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS - {"synth"}
     )
 )
-_REQUIRED_SYNTH_FIELDS: tuple[str, ...] = tuple(sorted(SynthSpec.model_fields))
+_REQUIRED_SYNTH_FIELDS: tuple[str, ...] = tuple(
+    sorted(name for name, field in SynthSpec.model_fields.items() if field.is_required())
+)
 
 
 def _render_param_spec_name(render: dict[str, Any]) -> str | None:

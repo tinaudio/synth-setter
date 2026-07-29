@@ -89,6 +89,26 @@ class TestSynthSpecValidation:
         error_types = {error["type"] for error in exc_info.value.errors()}
         assert error_types == {"extra_forbidden", "missing"}
 
+    @pytest.mark.parametrize(
+        "digest",
+        ["a" * 63, "A" * 64, "g" * 64],
+        ids=["short", "uppercase", "nonhex"],
+    )
+    def test_managed_plugin_digest_invalid_shape_rejected(self, digest: str) -> None:
+        """Managed artifact identity requires exactly 64 lowercase hex characters.
+
+        :param digest: Malformed managed bundle digest.
+        """
+        with pytest.raises(ValidationError, match="managed_plugin_digest"):
+            SynthSpec(
+                name=SynthName("obxf"),
+                param_spec_name=ParamSpecName("obxf"),
+                plugin_path="plugins/OB-Xf.vst3",
+                plugin_state_path="presets/obxf-base.vstpreset",
+                synth_version="1.0.3",
+                managed_plugin_digest=digest,
+            )
+
     def test_identity_is_frozen(self) -> None:
         """Identity cannot be mutated after construction."""
         spec = resolve_synth(SynthName("obxf"))
@@ -188,7 +208,9 @@ class TestSynthConfigGroup:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             group = compose(config_name=f"synth/{name}").synth
 
-        assert OmegaConf.to_container(group) == SYNTHS[SynthName(name)].model_dump()
+        assert OmegaConf.to_container(group) == SYNTHS[SynthName(name)].model_dump(
+            exclude_none=True
+        )
 
     def test_group_covers_every_registered_synth(self) -> None:
         """No table entry lacks a config group, and no group lacks a table entry."""
