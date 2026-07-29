@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785288697970,
+  "lastUpdate": 1785292109146,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -11838,6 +11838,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04262804985046387,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dcc0ca02e8371a4cb2313d8ad7cdbdab54ef11ca",
+          "message": "feat(code-health): manage VST plugins with Studiorack (#2632)\n\n* internal-feat(code-health): manage VST plugins with Studiorack\n\n* internal-fix(code-health): preserve CI plugin provisioning\n\n* internal-fix(code-health): restore aliases in snapshot images\n\n* test(code-health): cover plugin management boundaries\n\n* internal-fix(code-health): support Studiorack installer layouts\n\n* internal-fix(code-health): detect root DMG installers\n\n* internal-fix(code-health): support mixed plugin archives\n\n* internal-fix(code-health): prefer portable plugin archives\n\n* internal-fix(code-health): install native plugin dependencies\n\n* internal-fix(code-health): retain Make in validation image\n\n* docs(agents): forbid external issue creation",
+          "timestamp": "2026-07-28T17:49:32-07:00",
+          "tree_id": "079c97da75fdf61ef42fa6ec98ed199aecd84dba",
+          "url": "https://github.com/tinaudio/synth-setter/commit/dcc0ca02e8371a4cb2313d8ad7cdbdab54ef11ca"
+        },
+        "date": 1785292107278,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.9190425872802734,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.08157357480377,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02944844216108322,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.035831987857818604,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.604085922241211,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.611232934083338,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.254066467285156,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.744850794002414,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02944844216108322,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.035831987857818604,
             "unit": "1-cos"
           },
           {
