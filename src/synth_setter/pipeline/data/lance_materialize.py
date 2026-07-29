@@ -443,6 +443,7 @@ def _reuse_or_raise(
         txid=txid,
         resolved_version=manifest.resolved_version,
     )
+    _evict_lance_data_cache(dest_path)
     return dest_path
 
 

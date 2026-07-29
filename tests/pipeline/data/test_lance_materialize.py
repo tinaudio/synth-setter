@@ -46,6 +46,10 @@ def two_version_source(tmp_path: Path) -> tuple[str, str]:
     return source, transaction.uuid
 
 
+def _raise_advice_error(*_args: int) -> None:
+    raise OSError(5, "advice failed")
+
+
 def test_materialize_lance_subset_evicts_written_data_files(
     tmp_path: Path,
     two_version_source: tuple[str, str],
@@ -112,11 +116,8 @@ def test_materialize_lance_subset_cache_advice_error_remains_consumable(
     """
     source, txid = two_version_source
 
-    def fail_advice(*_args: int) -> None:
-        raise OSError(5, "advice failed")
-
     monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
-    monkeypatch.setattr(os, "posix_fadvise", fail_advice, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", _raise_advice_error, raising=False)
     destination = tmp_path / "materialized.lance"
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
@@ -722,6 +723,34 @@ def test_materialize_writes_sidecar_manifest_fields_match_request(
     assert manifest.materialized_txid == transaction.uuid
     assert manifest.columns == ("a",)
     assert manifest.limit == 2
+
+
+def test_materialize_cache_hit_retries_data_file_eviction(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reusing a published cache retries advisory data-file eviction.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Records cache advice across initial and reused materialization.
+    """
+    source, txid = two_version_source
+    advised_fds: list[int] = []
+
+    def record_advice(fd: int, _offset: int, _length: int, _advice: int) -> None:
+        advised_fds.append(fd)
+
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
+    destination = tmp_path / "materialized.lance"
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+    advised_fds.clear()
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert advised_fds
 
 
 def test_materialize_cache_hit_same_request_returns_without_rewrite(
