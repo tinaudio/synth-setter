@@ -66,6 +66,15 @@ class SketchControlTokens(nn.Module):
         self.register_buffer("positional_encoding", make_sin_pos_enc(num_ctrl_tokens, d_model))
 
     @jaxtyped(typechecker=beartype)
+    def unconditional(self, batch_size: int) -> Float[torch.Tensor, "batch tokens d_model"]:
+        """Return the PE-only control sequence used by the CFG unconditional branch.
+
+        :param batch_size: Number of rows requiring unconditional tokens.
+        :returns: Expanded ``(batch_size, num_ctrl_tokens, d_model)`` positional encoding.
+        """
+        return self.positional_encoding.expand(batch_size, -1, -1)
+
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
         controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
@@ -80,7 +89,7 @@ class SketchControlTokens(nn.Module):
         """
         keep = (~drop_mask).to(controls.dtype)
         num_tokens = self.positional_encoding.shape[1]
-        tokens = self.positional_encoding.expand(controls.shape[0], -1, -1)
+        tokens = self.unconditional(controls.shape[0])
         for group_index, group in enumerate(CONTROL_GROUPS):
             channels = controls[:, _CONTROL_CHANNELS[group]]
             channels = channels * keep[:, group_index, None, None]

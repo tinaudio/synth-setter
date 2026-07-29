@@ -113,6 +113,14 @@ class TestSketchControlTokens:
         out = module(_controls(), _no_drop())
         assert out.shape == (_BATCH, _NUM_CTRL_TOKENS, _D_MODEL)
 
+    def test_unconditional_returns_expanded_positional_encoding(self) -> None:
+        """The unconditional sketch state is the tokenizer's PE-only sequence."""
+        module = _tokens_module()
+
+        tokens = module.unconditional(_BATCH)
+
+        torch.testing.assert_close(tokens, module.positional_encoding.expand(_BATCH, -1, -1))
+
     def test_forward_at_zero_init_outputs_exactly_the_positional_encoding(self) -> None:
         """Zero-init projections contribute nothing: output is the PE alone."""
         module = SketchControlTokens(d_model=_D_MODEL, num_ctrl_tokens=_NUM_CTRL_TOKENS)
@@ -216,6 +224,17 @@ class TestApproxEquivTransformerCtrlTokens:
         t = torch.rand(_BATCH, 1)
         z = torch.randn(_BATCH, 8)
         torch.testing.assert_close(field(x, t, z), field(x, t, z, ctrl_tokens=None))
+
+    def test_forward_rejects_positional_ctrl_tokens(self) -> None:
+        """Control tokens are keyword-only at the public field boundary."""
+        field = _field()
+        with pytest.raises(TypeError):
+            field(
+                torch.randn(_BATCH, 6),
+                torch.rand(_BATCH, 1),
+                torch.randn(_BATCH, 8),
+                torch.randn(_BATCH, _NUM_CTRL_TOKENS, _D_MODEL),  # pyright: ignore[reportCallIssue]
+            )
 
     def test_forward_with_ctrl_tokens_preserves_output_shape(self) -> None:
         """Concat injection keeps the parameter-vector output shape."""

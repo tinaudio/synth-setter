@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import torch
 from beartype import beartype
@@ -64,42 +64,80 @@ class TrainStepOutputs:
     t: torch.Tensor
 
 
+class _VectorField(Protocol):
+    """Three-argument vector-field contract used without sketch controls."""
+
+    @jaxtyped(typechecker=beartype)
+    def __call__(
+        self,
+        x: Float[torch.Tensor, "batch params"],
+        t: Float[torch.Tensor, "batch 1"],
+        conditioning: Shaped[torch.Tensor, "batch ..."] | None,
+    ) -> Float[torch.Tensor, "batch params"]: ...
+
+
+class _ControlledVectorField(Protocol):
+    """Vector-field contract with keyword-only sketch control tokens."""
+
+    @jaxtyped(typechecker=beartype)
+    def __call__(
+        self,
+        x: Float[torch.Tensor, "batch params"],
+        t: Float[torch.Tensor, "batch 1"],
+        conditioning: Shaped[torch.Tensor, "batch ..."] | None,
+        *,
+        ctrl_tokens: Float[torch.Tensor, "batch tokens d_model"],
+    ) -> Float[torch.Tensor, "batch params"]: ...
+
+
+type _AnyVectorField = _VectorField | _ControlledVectorField
+
+
 def call_with_cfg(
-    f: Callable,
+    f: _AnyVectorField,
     x: torch.Tensor,
     t: torch.Tensor,
-    conditioning: torch.Tensor,
+    conditioning: torch.Tensor | None,
     cfg_strength: float,
+    *,
     ctrl_tokens: torch.Tensor | None = None,
-):
-    # The unconditional branch drops the control tokens along with the
-    # conditioning; only ctrl-aware fields ever receive the keyword.
-    y_c = f(x, t, conditioning) if ctrl_tokens is None else f(x, t, conditioning, ctrl_tokens)
-    y_u = f(x, t, None)
-
+    unconditional_ctrl_tokens: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if (ctrl_tokens is None) != (unconditional_ctrl_tokens is None):
+        raise ValueError("ctrl_tokens and unconditional_ctrl_tokens must be supplied together")
+    field = cast(Callable[..., torch.Tensor], f)
+    if ctrl_tokens is None:
+        y_c = field(x, t, conditioning)
+        y_u = field(x, t, None)
+    else:
+        y_c = field(x, t, conditioning, ctrl_tokens=ctrl_tokens)
+        y_u = field(x, t, None, ctrl_tokens=unconditional_ctrl_tokens)
     return (1 - cfg_strength) * y_u + cfg_strength * y_c
 
 
 def rk4_with_cfg(
-    f: Callable,
+    f: _AnyVectorField,
     x: torch.Tensor,
     t: torch.Tensor,
-    dt: float,
-    conditioning: torch.Tensor,
+    dt: float | torch.Tensor,
+    conditioning: torch.Tensor | None,
     cfg_strength: float,
+    *,
     ctrl_tokens: torch.Tensor | None = None,
-):
-    f = partial(
+    unconditional_ctrl_tokens: torch.Tensor | None = None,
+) -> torch.Tensor:
+    guided_field: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = partial(
         call_with_cfg,
         f,
         conditioning=conditioning,
         cfg_strength=cfg_strength,
         ctrl_tokens=ctrl_tokens,
+        unconditional_ctrl_tokens=unconditional_ctrl_tokens,
     )
-    k1 = f(x, t)
-    k2 = f(x + dt * k1 / 2, t + dt / 2)
-    k3 = f(x + dt * k2 / 2, t + dt / 2)
-    k4 = f(x + dt * k3, t + dt)
+    k1 = guided_field(x, t)
+    k2 = guided_field(x + dt * k1 / 2, t + dt / 2)
+    k3 = guided_field(x + dt * k2 / 2, t + dt / 2)
+    k4 = guided_field(x + dt * k3, t + dt)
 
     return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
@@ -302,6 +340,19 @@ class VSTFlowMatchingModule(LightningModule):
         return self.sketch_tokens(controls, drop_mask)
 
     @jaxtyped(typechecker=beartype)
+    def _unconditional_sketch_tokens(
+        self, batch_size: int
+    ) -> Float[torch.Tensor, "batch tokens d_model"] | None:
+        """Build the PE-only control state learned on jointly dropped rows.
+
+        :param batch_size: Number of inference rows.
+        :returns: PE-only control tokens, or ``None`` when sketch support is disabled.
+        """
+        if self.sketch_tokens is None:
+            return None
+        return self.sketch_tokens.unconditional(batch_size)
+
+    @jaxtyped(typechecker=beartype)
     def _should_probe_gradient_balance(self) -> bool:
         """Whether this step pays for the probe's extra backward through the renderer.
 
@@ -349,9 +400,8 @@ class VSTFlowMatchingModule(LightningModule):
             z, keep = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
             ctrl_tokens = None
         else:
-            # Sketch2Sound-style coupling: rows whose audio conditioning is
-            # CFG-dropped also drop every control, so training presents the
-            # exact all-unconditioned state call_with_cfg queries at inference.
+            # Audio-CFG-dropped rows use the same PE-only control state as the
+            # inference-time unconditional branch.
             joint_drop = (
                 torch.rand(conditioning.shape[0], 1, device=conditioning.device)
                 < self.hparams.cfg_dropout_rate
@@ -376,7 +426,7 @@ class VSTFlowMatchingModule(LightningModule):
         if ctrl_tokens is None:
             prediction = self.vector_field(x_t, t, z)
         else:
-            prediction = self.vector_field(x_t, t, z, ctrl_tokens)
+            prediction = self.vector_field(x_t, t, z, ctrl_tokens=ctrl_tokens)
 
         loss = (prediction - target).square().mean(dim=-1)
         loss = loss * w
@@ -447,13 +497,14 @@ class VSTFlowMatchingModule(LightningModule):
         noise: torch.Tensor,
         steps: int,
         cfg_strength: float,
+        *,
         ctrl_tokens: torch.Tensor | None = None,
-    ):
+        unconditional_ctrl_tokens: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if conditioning is not None:
             conditioning = self.encoder(conditioning)
-        else:
-            # Unconditional sampling drops the sketch controls with everything else.
-            ctrl_tokens = None
+        elif unconditional_ctrl_tokens is not None:
+            ctrl_tokens = unconditional_ctrl_tokens
 
         t = torch.zeros(noise.shape[0], 1, device=noise.device)
         dt = 1.0 / steps
@@ -472,7 +523,8 @@ class VSTFlowMatchingModule(LightningModule):
                 warped_dt,
                 conditioning,
                 cfg_strength,
-                ctrl_tokens,
+                ctrl_tokens=ctrl_tokens,
+                unconditional_ctrl_tokens=unconditional_ctrl_tokens,
             )
             t = t + dt
 
@@ -485,7 +537,8 @@ class VSTFlowMatchingModule(LightningModule):
             torch.randn_like(batch["params"]),
             self.hparams.validation_sample_steps,
             self.hparams.validation_cfg_strength,
-            self._sketch_tokens_from_batch(batch, training=False),
+            ctrl_tokens=self._sketch_tokens_from_batch(batch, training=False),
+            unconditional_ctrl_tokens=self._unconditional_sketch_tokens(batch["params"].shape[0]),
         )
 
         per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
@@ -518,7 +571,8 @@ class VSTFlowMatchingModule(LightningModule):
             torch.randn_like(batch["params"]),
             self.hparams.test_sample_steps,
             self.hparams.test_cfg_strength,
-            self._sketch_tokens_from_batch(batch, training=False),
+            ctrl_tokens=self._sketch_tokens_from_batch(batch, training=False),
+            unconditional_ctrl_tokens=self._unconditional_sketch_tokens(batch["params"].shape[0]),
         )
 
         param_mse = (pred_params - batch["params"]).square().mean()
@@ -549,7 +603,8 @@ class VSTFlowMatchingModule(LightningModule):
                 ),
                 self.hparams.test_sample_steps,
                 self.hparams.test_cfg_strength,
-                self._sketch_tokens_from_batch(batch, training=False),
+                ctrl_tokens=self._sketch_tokens_from_batch(batch, training=False),
+                unconditional_ctrl_tokens=self._unconditional_sketch_tokens(conditioning.shape[0]),
             ),
             batch,
         )

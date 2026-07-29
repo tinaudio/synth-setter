@@ -27,7 +27,7 @@ SKETCH_PITCH_CHILD: str = "pitch"
 SKETCH_VEC_CHILD: str = "vec"
 # PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
 SKETCH_PITCH_BINS: int = 384
-# Rows: the two scalar tracks (loudness, centroid), then the pitch block.
+# Scalar tracks precede the pitch block.
 NUM_SKETCH_TRACK_ROWS: int = 2
 NUM_SKETCH_CONTROLS: int = NUM_SKETCH_TRACK_ROWS + SKETCH_PITCH_BINS
 SKETCH_LOUDNESS_ROW: int = 0

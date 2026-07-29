@@ -466,8 +466,20 @@ class ApproxEquivTransformer(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         conditioning: torch.Tensor | None = None,
+        *,
         ctrl_tokens: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """Predict parameters with optional control-token context.
+
+        :param x: ``(batch, num_params)`` parameter state.
+        :param t: Scalar time for each batch row.
+        :param conditioning: Shared rank-2 or per-layer rank-3 conditioning;
+            ``None`` uses the CFG token.
+        :param ctrl_tokens: Optional ``(batch, num_ctrl_tokens, d_model)`` context
+            appended to the parameter-token sequence.
+        :returns: ``(batch, num_params)`` predictions projected only from
+            parameter tokens; control-token states are excluded.
+        """
         if conditioning is None:
             conditioning = self.cfg_dropout_token.expand(x.shape[0], -1)
 

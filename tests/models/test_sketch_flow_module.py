@@ -3,6 +3,7 @@
 from functools import partial
 from typing import Literal, cast
 
+import pytest
 import torch
 
 from synth_setter.conditioning import SketchControlSpec
@@ -11,7 +12,7 @@ from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
 )
-from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule, call_with_cfg
 
 _BATCH = 2
 _D_MODEL = 16
@@ -97,6 +98,39 @@ def _batch(*, with_sketch: bool) -> dict[str, torch.Tensor]:
             (_BATCH, NUM_SKETCH_CONTROLS, _NUM_FRAMES), generator=generator
         )
     return batch
+
+
+def test_call_with_cfg_uses_pe_only_tokens_for_unconditional_branch() -> None:
+    """CFG evaluates controlled branches with their matching token states."""
+    x = torch.zeros(_BATCH, _NUM_PARAMS)
+    conditioning = torch.ones(_BATCH, 8)
+    conditional_tokens = torch.full((_BATCH, 2, _D_MODEL), 2.0)
+    unconditional_tokens = torch.full((_BATCH, 2, _D_MODEL), 3.0)
+
+    def field(
+        x: torch.Tensor,
+        t: torch.Tensor,
+        conditioning: torch.Tensor | None,
+        *,
+        ctrl_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        del t
+        value = ctrl_tokens.mean(dim=(1, 2), keepdim=False).unsqueeze(1)
+        if conditioning is not None:
+            value = value + 10.0
+        return value.expand_as(x)
+
+    guided = call_with_cfg(
+        field,
+        x,
+        torch.zeros(_BATCH, 1),
+        conditioning,
+        cfg_strength=4.0,
+        ctrl_tokens=conditional_tokens,
+        unconditional_ctrl_tokens=unconditional_tokens,
+    )
+
+    torch.testing.assert_close(guided, torch.full_like(x, 39.0))
 
 
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
@@ -185,11 +219,7 @@ def test_sketch_drop_mask_force_drop_rows_drop_every_control() -> None:
 
 
 def test_train_step_audio_cfg_drop_forces_all_sketch_controls_dropped() -> None:
-    """Rows whose audio conditioning is CFG-dropped also drop every control.
-
-    ``call_with_cfg`` queries the unconditional branch with no control tokens
-    at all, so training must present that exact joint state.
-    """
+    """Rows whose audio conditioning is CFG-dropped use PE-only control tokens."""
     module = _module(
         SketchControlSpec(num_frames=_NUM_FRAMES),
         sketch_dropout_rate=0.0,
@@ -202,13 +232,15 @@ def test_train_step_audio_cfg_drop_forces_all_sketch_controls_dropped() -> None:
 
     def spy(controls: torch.Tensor, drop_mask: torch.Tensor) -> torch.Tensor:
         captured["drop_mask"] = drop_mask
-        return original_forward(controls, drop_mask)
+        captured["tokens"] = original_forward(controls, drop_mask)
+        return captured["tokens"]
 
     module.sketch_tokens.forward = spy  # type: ignore[method-assign]
 
     module._train_step(_batch(with_sketch=True))  # noqa: SLF001
 
     assert captured["drop_mask"].all()
+    torch.testing.assert_close(captured["tokens"], module.sketch_tokens.unconditional(_BATCH))
 
 
 def test_validation_step_with_sketch_runs_cfg_sampling() -> None:
@@ -219,3 +251,41 @@ def test_validation_step_with_sketch_runs_cfg_sampling() -> None:
 
     assert torch.isfinite(out["param_mse"])
     assert out["preds"].shape == (_BATCH, _NUM_PARAMS)
+
+
+@pytest.mark.slow
+def test_sketch_conditioned_training_fixed_batch_lowers_loss_and_updates_projections() -> None:
+    """A fixed sketch batch trains the zero-init control projections."""
+    module = _module(
+        SketchControlSpec(num_frames=_NUM_FRAMES, num_ctrl_tokens=2),
+        sketch_dropout_rate=0.0,
+        sketch_all_dropout_rate=0.0,
+        cfg_dropout_rate=0.0,
+    )
+    batch = _batch(with_sketch=True)
+    assert module.sketch_tokens is not None
+    projections = module.sketch_tokens.projections.values()
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) == 0
+        for projection in projections
+    )
+
+    optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
+    torch.manual_seed(11)
+    initial_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    for _ in range(100):
+        optimizer.zero_grad(set_to_none=True)
+        loss = module._train_step(batch).loss  # noqa: SLF001
+        loss.backward()
+        optimizer.step()
+
+    torch.manual_seed(11)
+    final_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    assert final_loss < 0.01
+    assert final_loss < initial_loss / 100
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) > 0
+        for projection in module.sketch_tokens.projections.values()
+    )

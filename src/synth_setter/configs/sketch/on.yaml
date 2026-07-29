@@ -4,7 +4,7 @@
 # nested sketch struct column (#2707), reassembles it into the sketch_ctrl
 # batch tensor (zero-binning pitch below the threshold, #2614), and the flow
 # model injects zero-initialized control tokens into the vector field.
-# 401 frames = 4 s render on the 100 fps mel grid.
+# Align controls with the four-second 100 fps mel render.
 model:
   sketch_controls:
     column: sketch
