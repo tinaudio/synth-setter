@@ -280,6 +280,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text
     assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
+    # Tintin's Agent tool rejects a call without `description`; omitting it here
+    # cost every worker launch one rejected round-trip (#2683).
+    assert re.search(r"`description: [^`]+`", text)
     assert "${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments" in text
     assert re.search(r"never\s+put a glob in a worker prompt", text)
     assert re.search(r"never repair assignment paths\s+with", text)
