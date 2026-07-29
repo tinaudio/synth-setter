@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785351753472,
+  "lastUpdate": 1785351757361,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -21485,6 +21485,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 15.241766791200007,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a68e3041beb67cedeca11fd27bf29acb28cbe69",
+          "message": "refactor(data-pipeline): embeddings may declare several source columns (#2718)\n\nEmbeddingSpec declared exactly one source column per embedding, and\n_encode_columns handed the encoder that single decoded array. Every embedder\ntoday reads one column, so the contract has been sufficient — but it cannot\nexpress an embedding that has to relate two columns to each other.\n\nWidens the declaration to a tuple and passes encoders the decoded source\nmapping. Encoders still return a single Arrow array; each gains one unpack\nline and a signature/docstring update.\n\nNo behaviour change: every added line in add_embeddings.py is a signature, a\ndocstring, a `sources[...]` unpack, or the new field. The existing\ntests/pipeline/data suite exercises every registry entry and stays green with\nonly call-site updates.\n\nAlternatives rejected: arity dispatch (two paths through one registry field);\nreading param_array for every embedder (six pay I/O they do not use); having a\nmulti-input encoder reopen the dataset (breaks UDF batch alignment).\n\nCloses #2717",
+          "timestamp": "2026-07-29T10:40:32-07:00",
+          "tree_id": "20d978e6e04c113780079d41e5947717bc15bc25",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2a68e3041beb67cedeca11fd27bf29acb28cbe69"
+        },
+        "date": 1785351756589,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.060439109802246,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.012450927644968,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10068611055612564,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006401658058166504,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.313436508178711,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.786920968199956,
             "unit": "seconds"
           }
         ]
