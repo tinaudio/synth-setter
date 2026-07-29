@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -997,3 +998,44 @@ def test_main_output_dir_inside_audio_dir_explicit_seed_raises(tmp_path: Path) -
     )
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
+
+
+# ---------------------------------------------------------------------------
+# sample-rate forwarding
+# ---------------------------------------------------------------------------
+
+_RATE_AWARE_METRICS = (compute_mss, compute_sot, compute_wmfcc)
+
+
+@pytest.mark.parametrize("metric", _RATE_AWARE_METRICS, ids=lambda fn: fn.__name__)
+def test_metric_sample_rate_reaches_the_analysis_window(
+    metric: Callable[..., float],
+) -> None:
+    """A caller's sample rate changes the score, so it must be reaching the transform.
+
+    Each of these metrics sizes its window and hop from the sample rate. If the argument were
+    dropped on the way to the helper — the defect this parametrisation guards — every rate would
+    collapse onto the 44.1 kHz default and score identically.
+
+    :param metric: Metric under test.
+    """
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
+
+    assert metric(target, pred, _SR / 2) != pytest.approx(metric(target, pred, _SR))
+
+
+@pytest.mark.parametrize("metric", _RATE_AWARE_METRICS, ids=lambda fn: fn.__name__)
+def test_metric_default_sample_rate_matches_an_explicit_44100(
+    metric: Callable[..., float],
+) -> None:
+    """Omitting the sample rate keeps the historical 44.1 kHz behaviour exactly.
+
+    Every pre-existing call site relies on this: the parameter is additive, not a change.
+
+    :param metric: Metric under test.
+    """
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
+
+    assert metric(target, pred) == pytest.approx(metric(target, pred, 44100.0))
