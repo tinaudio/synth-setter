@@ -7,6 +7,7 @@ batch, committed as one dataset and compacted to a single fragment at the end.
 
 from __future__ import annotations
 
+import gc
 import shutil
 import tempfile
 from collections.abc import Callable, Sequence
@@ -26,7 +27,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-from synth_setter.data.vst.renderers import PedalboardRenderer
+from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
 from synth_setter.data.vst.shapes import (
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
@@ -125,7 +126,20 @@ def _render_in_batches(
     clipped_rejections = 0
     silent_rejections = 0
 
-    renderer = make_audio_renderer(render_cfg)
+    # Delayed host finalizers can clear DPF process-global state while DawDreamer is live (#2549).
+    suspend_gc = render_cfg.renderer_backend == "dawdreamer"
+    gc_was_enabled = gc.isenabled()
+    if suspend_gc:
+        gc.disable()
+    renderer: AudioRenderer | None = None
+    try:
+        renderer = make_audio_renderer(render_cfg)
+    finally:
+        if renderer is None and suspend_gc:
+            gc.collect()
+            if gc_was_enabled:
+                gc.enable()
+    assert renderer is not None
 
     def _render_loop() -> None:
         nonlocal clipped_rejections, silent_rejections
@@ -186,21 +200,28 @@ def _render_in_batches(
         if sample_batch:
             flush_batch(sample_batch, sample_batch_start)
 
-    # Pedalboard requires show_editor on the main thread while rendering runs on a worker.
-    if render_cfg.gui_toggle_cadence == "always_on":
-        if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
-            raise RuntimeError(
-                "always_on reached the renderer without a cached plugin; "
-                "RenderConfig validation should have rejected this combination."
-            )
-        run_with_editor_held_open(renderer.plugin, _render_loop)
-    else:
-        _render_loop()
+    try:
+        # Pedalboard requires show_editor on the main thread while rendering runs on a worker.
+        if render_cfg.gui_toggle_cadence == "always_on":
+            if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
+                raise RuntimeError(
+                    "always_on reached the renderer without a cached plugin; "
+                    "RenderConfig validation should have rejected this combination."
+                )
+            run_with_editor_held_open(renderer.plugin, _render_loop)
+        else:
+            _render_loop()
 
-    return RenderRejectionMetrics(
-        clipped=clipped_rejections,
-        silent=silent_rejections,
-    )
+        return RenderRejectionMetrics(
+            clipped=clipped_rejections,
+            silent=silent_rejections,
+        )
+    finally:
+        if suspend_gc:
+            del renderer
+            gc.collect()
+            if gc_was_enabled:
+                gc.enable()
 
 
 def make_lance_dataset(
