@@ -37,12 +37,14 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from synth_setter.cli.train import (
     _checkpoint_metadata,
     _derive_checkpoint_uri,
+    _fingerprint_guard_allows_overwrite,
     _log_model_artifact,
     _upload_best_checkpoint,
     build_model_artifact,
     train,
 )
 from synth_setter.pipeline import r2_io
+from synth_setter.utils.checkpoint_fingerprint import fingerprint_from_cfg
 from tests.helpers.wandb_offline import read_run_binary
 
 _CKPT_URI = "r2://models/model-flow-simple/best.ckpt"
@@ -491,6 +493,203 @@ def test_upload_best_checkpoint_guard_probe_failure_proceeds(
     uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
 
     assert uri == "r2://intermediate-data/checkpoints/flow-simple/model.ckpt"
+
+
+_CKPT_SLOT_URI = "r2://intermediate-data/checkpoints/flow-simple/model.ckpt"
+_SIDECAR_SLOT_URI = f"{_CKPT_SLOT_URI}.fingerprint.json"
+
+
+def _in_memory_r2(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
+    """Back the ``r2_io`` boundary with an in-memory object store (no rclone).
+
+    Coverage CI lacks the rclone binary, which skips the local-remote tests
+    above; this fake keeps every guard branch exercised there.
+
+    :param monkeypatch: Replaces the four ``r2_io`` calls the upload path makes.
+    :returns: The live ``{uri: bytes}`` store backing the fake remote.
+    """
+    store: dict[str, bytes] = {}
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(
+        r2_io, "object_size", lambda uri: len(store[uri]) if uri in store else None
+    )
+
+    def _download(uri: str, dest: Path) -> None:
+        Path(dest).write_bytes(store[uri])
+
+    monkeypatch.setattr(r2_io, "download_to_path", _download)
+
+    def _upload(path: Path, uri: str) -> None:
+        store[uri] = Path(path).read_bytes()
+
+    monkeypatch.setattr(r2_io, "upload_to_uri", _upload)
+    return store
+
+
+def _run_fingerprint(encoder_target: str) -> Any:
+    """Return the fingerprint a run with ``encoder_target`` would carry.
+
+    :param encoder_target: ``model.encoder._target_`` driving the fingerprint.
+    :returns: The extracted :class:`CheckpointFingerprint`.
+    """
+    return fingerprint_from_cfg(_guarded_cfg(encoder_target))
+
+
+def test_guard_empty_slot_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty canonical slot is writable without any sidecar checks.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    _in_memory_r2(monkeypatch)
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_A), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_A)
+    )
+
+
+def test_guard_sidecarless_slot_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-guard slot (checkpoint, no sidecar) stays writable.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_mismatched_sidecar_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stored fingerprint from another architecture blocks the overwrite.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    assert not _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_matching_sidecar_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stored fingerprint matching the run's permits the overwrite.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_A), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_A)
+    )
+
+
+def test_guard_corrupt_sidecar_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unparsable sidecar fails closed until forced.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = b"not json {"
+
+    assert not _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_force_flag_bypasses_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``training.force_checkpoint_overwrite=true`` skips the sidecar probes entirely.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B, force=True), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_probe_error_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An environmental probe failure degrades to the pre-guard (allow) behavior.
+
+    :param monkeypatch: Installs the fake remote, then breaks its size probe.
+    """
+    _in_memory_r2(monkeypatch)
+
+    def _probe_boom(*_args: object) -> NoReturn:
+        raise RuntimeError("rclone lsf returned unparsable size")
+
+    monkeypatch.setattr(r2_io, "object_size", _probe_boom)
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_A), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_A)
+    )
+
+
+def test_upload_best_checkpoint_sidecar_upload_failure_keeps_ckpt_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed sidecar write is best-effort: the checkpoint URI is still returned.
+
+    :param tmp_path: Holds the local best-checkpoint file.
+    :param monkeypatch: Installs the fake remote, failing only the sidecar write.
+    """
+    store = _in_memory_r2(monkeypatch)
+
+    def _upload(path: Path, uri: str) -> None:
+        if uri.endswith(".fingerprint.json"):
+            raise OSError("sidecar boom")
+        store[uri] = Path(path).read_bytes()
+
+    monkeypatch.setattr(r2_io, "upload_to_uri", _upload)
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
+
+    assert uri == _CKPT_SLOT_URI
+    assert store[_CKPT_SLOT_URI] == b"new-weights"
+    assert _SIDECAR_SLOT_URI not in store
+
+
+def test_upload_best_checkpoint_fake_remote_lands_ckpt_and_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full upload path (guard, checkpoint, sidecar) works on the fake remote.
+
+    :param tmp_path: Holds the local best-checkpoint file.
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
+
+    assert uri == _CKPT_SLOT_URI
+    assert store[_CKPT_SLOT_URI] == b"new-weights"
+    assert json.loads(store[_SIDECAR_SLOT_URI])["encoder_target"] == _ENCODER_A
+
+
+def test_upload_best_checkpoint_fake_remote_refusal_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A guard refusal degrades the upload to lineage-only on the fake remote.
+
+    :param tmp_path: Holds the local best-checkpoint file.
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"good-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_B), str(_new_ckpt(tmp_path)))
+
+    assert uri is None
+    assert store[_CKPT_SLOT_URI] == b"good-weights"
 
 
 def test_log_model_artifact_logs_to_wandb_logger() -> None:
