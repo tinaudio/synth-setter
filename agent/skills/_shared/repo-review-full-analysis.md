@@ -385,14 +385,13 @@ entire skill. If the free-pool pass is unavailable in the foreground, continue
 with its successful Codex peer, disclose `Free-pool review deferred to aftercare.` in `review_body`, and preserve the attempt chain in the audit.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
-changes this flow, run both host harnesses against the PR from the worktree:
+changes this flow, run both review modes against the PR from the worktree. The
+launcher is the Pi-native entry point every host harness calls, so invoke it
+directly rather than through a nested host session:
 
 ```bash
-claude -p --dangerously-skip-permissions --no-session-persistence --model haiku \
-  --effort low --output-format text \
-  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
-codex exec --dangerously-bypass-approvals-and-sandbox \
-  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
+bash agent/_shared/run_pi_review.sh repo-review-full-no-comments --target <PR>
+bash agent/_shared/run_pi_review.sh repo-review-full --target <PR>
 ```
 
 After each command, verify the sentinel audit contains every planned
@@ -401,8 +400,8 @@ transcript path for each launched attempt, and the current full HEAD from
 `review_sentinel.py parse`. This live L1 smoke is mandatory in addition to
 helper CLI tests.
 
-- [ ] Record both authenticated host commands, their exit status, parsed
-  sentinel HEAD, and fallback audit result in the PR verification comment.
+- [ ] Record both launcher commands, their exit status, parsed sentinel HEAD,
+  and fallback audit result in the PR verification comment.
 
 Attribute findings from each successful report to the provider that actually
 produced it, including after within-pass fallback:

@@ -334,8 +334,10 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"one bullet per\s+affected attempt", text)
     assert re.search(r"exact model selector and diagnostic", text)
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
-    assert "claude -p --dangerously-skip-permissions" in text
-    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
+    assert "bash agent/_shared/run_pi_review.sh repo-review-full --target <PR>" in text
+    assert "bash agent/_shared/run_pi_review.sh repo-review-full-no-comments --target <PR>" in text
+    assert "claude -p" not in text
+    assert "codex exec" not in text
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
