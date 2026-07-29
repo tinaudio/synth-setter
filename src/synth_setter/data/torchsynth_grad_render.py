@@ -15,9 +15,9 @@ Typical usage:
 from __future__ import annotations
 
 import contextlib
-import threading
+import math
 from collections.abc import Iterator
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import torch
 from torch.func import functional_call
@@ -32,9 +32,12 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     NUM_PARAMS,
 )
 
-# Serializes the process-global SynthModule.p patch: renderers are cached per geometry
-# with per-instance locks, so two geometries could otherwise interleave patch/restore.
-_PATCH_LOCK = threading.Lock()
+if TYPE_CHECKING:
+    from torchsynth.parameter import ModuleParameter
+
+# Logit slope (dimensionless) placing the model-space working range [-1, 1] on
+# [_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS], the interval the renderer accepts.
+_DECODE_GAIN = math.log((1 - _PARAM_CLAMP_EPS) / _PARAM_CLAMP_EPS)
 
 
 class _VoiceOutputShim(torch.nn.Module):
@@ -61,42 +64,25 @@ class _VoiceOutputShim(torch.nn.Module):
         return self.voice.output()  # pyright: ignore[reportCallIssue]
 
 
-@contextlib.contextmanager
-def _patched_module_p(voice: torch.nn.Module) -> Iterator[None]:
-    """Make ``SynthModule.p`` tolerate plain-tensor parameter substitutes.
+def _as_substitute(column: torch.Tensor, original: ModuleParameter) -> ModuleParameter:
+    """Dress a graph-connected column as the ``ModuleParameter`` it stands in for.
 
-    ``functional_call`` swaps ``ModuleParameter`` entries for plain tensors,
-    which lack ``.from_0to1``; the patch falls back to a side table of
-    ``ModuleParameterRange`` objects captured before substitution.
+    ``as_subclass`` rebrands without copying, so stock ``SynthModule.p`` finds the
+    ``.from_0to1`` it needs while autograd still reaches ``column``'s inputs.
 
-    :param voice: Voice whose modules are patched for the duration.
-    :yields: Control while the patch is active.
-    :ytype: None
+    :param column: Normalized parameter column shaped ``(batch,)``.
+    :param original: Voice parameter whose range and name the substitute adopts.
+    :returns: Substitute carrying ``original``'s metadata and ``column``'s graph.
     """
-    from torchsynth.module import SynthModule
     from torchsynth.parameter import ModuleParameter
 
-    ranges = {}
-    for module in voice.modules():
-        torchparameters = getattr(module, "torchparameters", None)
-        if torchparameters is None:
-            continue
-        for pid, parameter in torchparameters.items():
-            ranges[(id(module), pid)] = parameter.parameter_range
-
-    original_p = SynthModule.p
-
-    def patched_p(self: SynthModule, parameter_id: str) -> torch.Tensor:
-        value = self.torchparameters[parameter_id]
-        if isinstance(value, ModuleParameter):
-            return original_p(self, parameter_id)  # pyright: ignore[reportCallIssue]
-        return ranges[(id(self), parameter_id)].from_0to1(value)
-
-    SynthModule.p = patched_p
-    try:
-        yield
-    finally:
-        SynthModule.p = original_p
+    substitute = column.as_subclass(ModuleParameter)
+    # ModuleParameter declares these in __new__, so pyright cannot see them on the class.
+    substitute.parameter_range = original.parameter_range  # pyright: ignore[reportAttributeAccessIssue]
+    substitute.parameter_name = original.parameter_name  # pyright: ignore[reportAttributeAccessIssue]
+    # Unfrozen so a stray to_0to1 during the render raises no "Parameter is frozen".
+    substitute.frozen = False  # pyright: ignore[reportAttributeAccessIssue]
+    return substitute
 
 
 def render_torchsynth_grad(
@@ -133,7 +119,7 @@ def render_torchsynth_grad(
         )
     renderer = _make_renderer(sample_rate, signal_length, len(params), str(params.device))
     voice = renderer.voice
-    with renderer.lock, _PATCH_LOCK, _aligned_noise(voice):
+    with renderer.lock, _aligned_noise(voice):
         all_parameters = voice.get_parameters()
         for name, value in (("midi_f0", float(midi_pitch)), ("duration", duration)):
             keyboard = all_parameters[("keyboard", name)]
@@ -142,13 +128,11 @@ def render_torchsynth_grad(
             id(parameter): f"voice.{name}" for name, parameter in voice.named_parameters()
         }
         clamped = params.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
-        overrides = {
-            name_by_id[id(all_parameters[(spec.module, spec.name)])]: column
-            for column, spec in zip(clamped.unbind(dim=1), INFERABLE_SPEC, strict=True)
-        }
-        shim = _VoiceOutputShim(voice)
-        with _patched_module_p(voice):
-            audio = functional_call(shim, overrides)
+        overrides = {}
+        for column, spec in zip(clamped.unbind(dim=1), INFERABLE_SPEC, strict=True):
+            original = all_parameters[(spec.module, spec.name)]
+            overrides[name_by_id[id(original)]] = _as_substitute(column, original)
+        audio = functional_call(_VoiceOutputShim(voice), overrides)
     if not torch.isfinite(audio).all():
         # Mirrors render_torchsynth's output guard: one non-finite render would
         # otherwise write NaN into every weight on the next backward pass.
@@ -196,15 +180,14 @@ def validate_torchsynth_params(params: torch.Tensor) -> None:
 
 
 def differentiable_decode(theta: torch.Tensor) -> torch.Tensor:
-    """Map model space ``[-1, 1]`` to renderable ``[eps, 1 - eps]``, keeping gradient.
+    """Map model space ``[-1, 1]`` onto renderable ``[eps, 1 - eps]``, keeping gradient.
 
-    The forward clamp preserves valid renderer input while the straight-through
-    backward pass lets saturated entries receive gradients, so an audio loss can
-    pull them back into range where a plain ``clamp`` would zero them.
+    Monotone squashing rather than a clamp: out-of-range entries keep a nonzero
+    (exponentially small) gradient the audio loss can pull back into range. The cost
+    is a nonlinear interior, so this no longer matches the linear ``(theta + 1) / 2``
+    map that the parameter loss and dataset targets use.
 
     :param theta: Params in model space shaped ``(batch, NUM_PARAMS)``.
-    :returns: Params in torchsynth space, strictly inside ``(0, 1)``.
+    :returns: Params in torchsynth space, inside ``(0, 1)`` up to float resolution.
     """
-    params01 = (theta + 1) / 2
-    clamped = params01.clamp(_PARAM_CLAMP_EPS, 1 - _PARAM_CLAMP_EPS)
-    return params01 + (clamped - params01).detach()
+    return torch.sigmoid(theta * _DECODE_GAIN)

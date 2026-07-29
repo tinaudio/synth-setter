@@ -6,6 +6,7 @@ from lightning.pytorch.utilities.combined_loader import CombinedLoader
 from torch.utils.data import DataLoader, TensorDataset
 
 from synth_setter.data.torchsynth_grad_render import (
+    _DECODE_GAIN,
     differentiable_decode,
     render_torchsynth_grad,
 )
@@ -76,24 +77,67 @@ def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
     return encoder
 
 
-def test_differentiable_decode_in_range_input_matches_affine_map() -> None:
-    """An in-range model-space value maps to ``(theta + 1) / 2``."""
-    decoded = differentiable_decode(torch.tensor([[-0.5, 0.0, 0.5]]))
-    assert torch.allclose(decoded, torch.tensor([[0.25, 0.5, 0.75]]))
+def test_differentiable_decode_maps_theta_zero_to_the_midpoint() -> None:
+    """The squashing map keeps the model-space origin at the renderer's midpoint."""
+    decoded = differentiable_decode(torch.tensor([[0.0]]))
+    assert decoded.item() == pytest.approx(0.5)
 
 
-def test_differentiable_decode_saturated_input_keeps_gradient() -> None:
-    """Saturated entries keep gradient so the loss can pull them back into range."""
-    theta = torch.tensor([[-4.0, 4.0]], requires_grad=True)
-    (gradient,) = torch.autograd.grad(differentiable_decode(theta).sum(), theta)
-    assert torch.allclose(gradient, torch.tensor([[0.5, 0.5]]))
+def test_differentiable_decode_at_the_working_range_edges_hits_the_clamp_bounds() -> None:
+    """The gain is calibrated so ``theta = +-1`` lands on ``[eps, 1 - eps]``."""
+    decoded = differentiable_decode(torch.tensor([[-1.0, 1.0]]))
+    assert decoded[0, 0].item() == pytest.approx(1e-4, abs=1e-6)
+    assert decoded[0, 1].item() == pytest.approx(1 - 1e-4, abs=1e-6)
 
 
-def test_differentiable_decode_saturated_input_clamps_forward_value() -> None:
-    """The rendered value stays strictly inside the renderer's open interval."""
-    decoded = differentiable_decode(torch.tensor([[-4.0, 4.0]]))
+def test_differentiable_decode_is_monotone_in_theta() -> None:
+    """A monotone decode keeps the renderer's parameter ordering intact."""
+    decoded = differentiable_decode(torch.tensor([[-3.0, -1.0, -0.2, 0.0, 0.2, 1.0, 3.0]]))
+    assert (decoded.diff() > 0).all()
+
+
+def test_differentiable_decode_over_the_working_range_stays_strictly_inside_zero_one() -> None:
+    """Every model-space value the flow is trained to emit renders in the open interval."""
+    decoded = differentiable_decode(torch.linspace(-1.0, 1.0, 401).unsqueeze(0))
     assert (decoded > 0.0).all()
     assert (decoded < 1.0).all()
+
+
+def test_differentiable_decode_at_theta_minus_five_keeps_a_nonzero_gradient() -> None:
+    """Far-below-range entries still receive pull-back gradient a hard clamp would zero."""
+    theta = torch.tensor([[-5.0]], requires_grad=True)
+    (gradient,) = torch.autograd.grad(differentiable_decode(theta).sum(), theta)
+    assert gradient.item() > 0.0
+
+
+def test_differentiable_decode_above_theta_two_saturates_in_float32() -> None:
+    """Float32 resolution near 1.0 caps the smooth decode's reach at the upper end.
+
+    The exponentially small headroom the map leaves above ``theta = 1`` falls below
+    ``1 - nextafter(1.0)``, so the forward value pins to 1.0 and the gradient vanishes.
+    """
+    theta = torch.tensor([[2.0]], requires_grad=True)
+    decoded = differentiable_decode(theta)
+    (gradient,) = torch.autograd.grad(decoded.sum(), theta)
+
+    assert decoded.item() == 1.0
+    assert gradient.item() == 0.0
+
+
+@pytest.mark.parametrize(
+    ("theta", "deviation"),
+    [(-0.5, 0.2401), (0.5, 0.2401), (-0.9, 0.04975), (0.9, 0.04975)],
+)
+def test_differentiable_decode_interior_deviates_from_the_linear_parameter_map(
+    theta: float, deviation: float
+) -> None:
+    """The render decode no longer agrees with the linear map the param targets assume.
+
+    :param theta: Interior model-space value under test.
+    :param deviation: Expected absolute gap to ``(theta + 1) / 2``.
+    """
+    decoded = differentiable_decode(torch.tensor([[theta]])).item()
+    assert abs(decoded - (theta + 1) / 2) == pytest.approx(deviation, abs=1e-4)
 
 
 def test_audio_weight_below_t_min_is_zero() -> None:
@@ -137,6 +181,50 @@ def test_grad_render_each_output_row_depends_only_on_matching_parameter_row() ->
         assert torch.isfinite(gradient[output_row]).all()
         assert torch.count_nonzero(gradient[output_row]).item() > 0
         assert torch.equal(gradient[1 - output_row], torch.zeros_like(gradient[1 - output_row]))
+
+
+def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -> None:
+    """A concurrent caller must never observe a swapped process-global ``SynthModule.p``.
+
+    Sampled from inside the render, where a monkeypatch would still be installed.
+    """
+    from torchsynth.module import SynthModule
+
+    stock_p = SynthModule.p
+    seen: list[object] = []
+
+    def record(module: torch.nn.Module, *_: object) -> None:
+        seen.append(SynthModule.p)
+
+    handle = torch.nn.modules.module.register_module_forward_hook(record)
+    try:
+        _render(torch.rand(1, _NUM_PARAMS, generator=torch.Generator().manual_seed(3)))
+    finally:
+        handle.remove()
+
+    assert seen
+    assert all(observed is stock_p for observed in seen)
+    assert SynthModule.p is stock_p
+
+
+def test_grad_render_parameter_gradients_match_the_pinned_baseline() -> None:
+    """The gradient the audio loss sees is pinned against a pre-refactor measurement."""
+    params = torch.rand(
+        2, _NUM_PARAMS, generator=torch.Generator().manual_seed(11)
+    ).requires_grad_()
+    audio = render_torchsynth_grad(
+        params,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        midi_pitch=_MIDI_PITCH,
+    )
+
+    energy = audio.square().mean()
+    (gradient,) = torch.autograd.grad(energy, params)
+
+    assert energy.item() == pytest.approx(0.07681834697723389, rel=1e-5)
+    assert gradient.sum().item() == pytest.approx(1.3048763275146484, rel=1e-5)
+    assert gradient.abs().sum().item() == pytest.approx(2.6795685291290283, rel=1e-5)
 
 
 def test_latent_loss_with_all_zero_weights_skips_render_and_preserves_scalar_contract(
@@ -285,9 +373,10 @@ def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
     torch.manual_seed(0)
     params = torch.rand(_BATCH, _NUM_PARAMS).clamp(0.01, 0.99)
     target_audio = _render(params)
+    theta = torch.logit(params) / _DECODE_GAIN
 
     value = _loss().forward(
-        params * 2 - 1, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
+        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
     )
 
     assert value.item() == pytest.approx(0.0, abs=1e-6)
