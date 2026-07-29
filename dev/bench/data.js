@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785288695468,
+  "lastUpdate": 1785288697970,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -20341,6 +20341,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.195661445400003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "280b2c2e1e07002a85dd30cddf0300531315ea38",
+          "message": "internal-feat(data-pipeline): add S-SONDO embedding support (#2635)\n\n* internal-feat(data-pipeline): add S-SONDO embeddings\n\n* internal-fix(data-pipeline): close S-SONDO review gaps\n\n* internal-fix(data-pipeline): harden S-SONDO preprocessing\n\n* internal-fix(data-pipeline): resolve S-SONDO review findings",
+          "timestamp": "2026-07-28T17:46:39-07:00",
+          "tree_id": "a0586a700e729cd45e03c22c33c08837df28096f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/280b2c2e1e07002a85dd30cddf0300531315ea38"
+        },
+        "date": 1785288697358,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.98810863494873,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.582199965342879,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08638662099838257,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0030972957611083984,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.335109233856201,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.516018679199998,
             "unit": "seconds"
           }
         ]
