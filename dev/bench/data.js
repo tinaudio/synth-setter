@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785348605416,
+  "lastUpdate": 1785351749928,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -12426,6 +12426,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.031573593616485596,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a68e3041beb67cedeca11fd27bf29acb28cbe69",
+          "message": "refactor(data-pipeline): embeddings may declare several source columns (#2718)\n\nEmbeddingSpec declared exactly one source column per embedding, and\n_encode_columns handed the encoder that single decoded array. Every embedder\ntoday reads one column, so the contract has been sufficient — but it cannot\nexpress an embedding that has to relate two columns to each other.\n\nWidens the declaration to a tuple and passes encoders the decoded source\nmapping. Encoders still return a single Arrow array; each gains one unpack\nline and a signature/docstring update.\n\nNo behaviour change: every added line in add_embeddings.py is a signature, a\ndocstring, a `sources[...]` unpack, or the new field. The existing\ntests/pipeline/data suite exercises every registry entry and stays green with\nonly call-site updates.\n\nAlternatives rejected: arity dispatch (two paths through one registry field);\nreading param_array for every embedder (six pay I/O they do not use); having a\nmulti-input encoder reopen the dataset (breaks UDF batch alignment).\n\nCloses #2717",
+          "timestamp": "2026-07-29T10:40:32-07:00",
+          "tree_id": "20d978e6e04c113780079d41e5947717bc15bc25",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2a68e3041beb67cedeca11fd27bf29acb28cbe69"
+        },
+        "date": 1785351747744,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.2379472255706787,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.856098602162674,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.019633445888757706,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.01211249828338623,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.1972577571868896,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.405068400250002,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.137138843536377,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.938795711100101,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03411237150430679,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03612518310546875,
             "unit": "1-cos"
           },
           {
