@@ -53,7 +53,7 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
-_EMBEDDING_KEYS = ("clap", "m2l", "same_s", "same_l", "ssondo", "t5gemma", "tinymu")
+_EMBEDDING_KEYS = ("clap", "m2l", "same_s", "same_l", "ssondo", "t5gemma", "matpac_plus")
 _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
@@ -1650,13 +1650,13 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         AUDIO_FIELD,
         CLAP_FIELD,
         M2L_FIELD,
+        MATPAC_PLUS_FIELD,
         MEL_SPEC_FIELD,
         PARAM_ARRAY_FIELD,
         SAME_L_FIELD,
         SAME_S_FIELD,
         SSONDO_FIELD,
         T5GEMMA_FIELD,
-        TINYMU_FIELD,
     )
     from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
     from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
@@ -1675,7 +1675,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         SAME_L_FIELD,
         SSONDO_FIELD,
         T5GEMMA_FIELD,
-        TINYMU_FIELD,
+        MATPAC_PLUS_FIELD,
     } <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
@@ -1688,7 +1688,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
             SAME_L_FIELD,
             SSONDO_FIELD,
             T5GEMMA_FIELD,
-            TINYMU_FIELD,
+            MATPAC_PLUS_FIELD,
         ]
     )
     for column in table.columns:
@@ -1701,7 +1701,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
     ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
     t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
-    tinymu = table.column(TINYMU_FIELD).combine_chunks().to_numpy_ndarray()
+    matpac_plus = table.column(MATPAC_PLUS_FIELD).combine_chunks().to_numpy_ndarray()
 
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
     assert not np.array_equal(audio[0], audio[1])
@@ -1711,7 +1711,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         ("same_s", same_s, (_EMBEDDING_E2E_ROWS, 256, 44)),
         ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
         ("ssondo", ssondo, (_EMBEDDING_E2E_ROWS, 960)),
-        ("tinymu", tinymu, (_EMBEDDING_E2E_ROWS, 3840, 25)),
+        ("matpac_plus", matpac_plus, (_EMBEDDING_E2E_ROWS, 3840, 25)),
     ):
         assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
         assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"

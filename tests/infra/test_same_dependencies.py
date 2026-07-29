@@ -8,7 +8,7 @@ from typing import TypedDict, cast
 
 import pytest
 
-from synth_setter.pipeline.data.tinymu import TINYMU_PACKAGE_COMMIT
+from synth_setter.pipeline.data.matpac_plus import TINYMU_PACKAGE_COMMIT
 
 _TINYMU_REQUIREMENT = f"tinymu @ git+https://github.com/ktinubu/TinyMU@{TINYMU_PACKAGE_COMMIT}"
 _SA3_REQUIREMENT = (
