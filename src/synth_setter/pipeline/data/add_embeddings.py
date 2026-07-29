@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import hydra
 import numpy as np
@@ -40,6 +40,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.utils.logging_utils import resolve_git_sha
 from synth_setter.pipeline.data.tinymu import (
     DEFAULT_TINYMU_CHECKPOINT,
     TINYMU_CHECKPOINT_SHA256,
@@ -182,6 +183,27 @@ class EmbeddingSpec:
 EMBEDDING_POLICY_VERSION = 1
 
 
+class _Digest(Protocol):
+    """Structural hash state used by artifact identity framing."""
+
+    def update(self, value: bytes, /) -> None:
+        """Append bytes to the hash state.
+
+        :param value: Bytes to append.
+        """
+        ...
+
+
+def _update_framed_digest(digest: _Digest, value: bytes) -> None:
+    """Append one length-delimited value to a digest.
+
+    :param digest: Hash state to update.
+    :param value: Bytes whose boundary must be preserved.
+    """
+    digest.update(len(value).to_bytes(8, "big"))
+    digest.update(value)
+
+
 def _checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
     """Hash checkpoint file paths and contents in deterministic order.
 
@@ -194,7 +216,8 @@ def _checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
     if not files:
         raise ValueError(f"checkpoint directory has no files: {checkpoint_dir}")
     for path in files:
-        digest.update(path.relative_to(checkpoint_dir).as_posix().encode())
+        _update_framed_digest(digest, path.relative_to(checkpoint_dir).as_posix().encode())
+        digest.update(path.stat().st_size.to_bytes(8, "big"))
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
@@ -208,7 +231,10 @@ def _versioned_artifact_identity(name: str, digest: str) -> str:
     :param digest: Immutable package or checkpoint digest.
     :returns: Versioned identity persisted in Lance field metadata.
     """
-    return f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:{digest}"
+    return (
+        f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:"
+        f"source:{resolve_git_sha()}:{digest}"
+    )
 
 
 def _m2l_artifact_identity(checkpoint: str) -> str:
@@ -709,6 +735,40 @@ def _validate_write_source(
     return total_rows
 
 
+def _resume_identity_path(resume_cache: Path) -> Path:
+    """Return the identity sidecar path for a Lance UDF cache.
+
+    :param resume_cache: User-selected cache path.
+    :returns: Sibling identity sidecar path.
+    """
+    return resume_cache.with_name(f"{resume_cache.name}.identity")
+
+
+def _prepare_resume_cache(
+    resume_cache: Path | None, identities: Mapping[str, str]
+) -> None:
+    """Bind a Lance UDF cache to exact embedding artifact identities.
+
+    :param resume_cache: Cache path, or ``None`` for a cacheless run.
+    :param identities: Artifact identities keyed by embedding name.
+    :raises ValueError: An existing cache belongs to different artifacts.
+    """
+    if resume_cache is None:
+        return
+    digest = hashlib.sha256()
+    for name, identity in sorted(identities.items()):
+        _update_framed_digest(digest, name.encode())
+        _update_framed_digest(digest, identity.encode())
+    expected = digest.hexdigest()
+    identity_path = _resume_identity_path(resume_cache)
+    if resume_cache.exists():
+        actual = identity_path.read_text().strip() if identity_path.is_file() else None
+        if actual != expected:
+            raise ValueError("resume cache artifact identity does not match requested policy")
+        return
+    identity_path.write_text(expected)
+
+
 def _delete_resume_cache(resume_cache: Path | None) -> None:
     """Best-effort delete a consumed UDF resume cache after commit.
 
@@ -718,6 +778,7 @@ def _delete_resume_cache(resume_cache: Path | None) -> None:
         return
     try:
         resume_cache.unlink(missing_ok=True)
+        _resume_identity_path(resume_cache).unlink(missing_ok=True)
     except OSError as exc:
         logger.warning(
             "resume_cache_cleanup_failed",
@@ -852,7 +913,14 @@ def _write_columns(
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
         encoders = _load_encoders(specs, config)
+    identities = {
+        spec.name: spec.resolve_artifact_identity(
+            config.checkpoints.get(spec.name, spec.default_checkpoint)
+        )
+        for spec in specs
+    }
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
+    _prepare_resume_cache(resume_cache, identities)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info("inferring_embedding_schema", columns=output_columns)
@@ -862,7 +930,9 @@ def _write_columns(
         sample_output = _encode_columns(
             _decoded_sources(sample, input_fields), sample_rate, specs, encoders
         )
-    output_schema = _embedding_output_schema(sample_output.schema, specs, config)
+    output_schema = _embedding_output_schema(
+        sample_output.schema, specs, config, identities=identities
+    )
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
@@ -984,19 +1054,28 @@ def build_index(
 
 
 def _embedding_output_schema(
-    schema: pa.Schema, specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
+    schema: pa.Schema,
+    specs: Sequence[EmbeddingSpec],
+    config: AddEmbeddingsConfig,
+    *,
+    identities: Mapping[str, str] | None = None,
 ) -> pa.Schema:
     """Attach policy identity to every generated field.
 
     :param schema: Inferred encoder output schema.
     :param specs: Policies producing the output fields.
     :param config: Checkpoint overrides for this write.
+    :param identities: Pre-resolved artifact identities, when available.
     :returns: Schema carrying resumable embedding identity metadata.
     """
     fields = []
     for spec in specs:
         checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
-        identity = spec.resolve_artifact_identity(checkpoint)
+        identity = (
+            spec.resolve_artifact_identity(checkpoint)
+            if identities is None
+            else identities[spec.name]
+        )
         metadata = {
             _EMBEDDING_NAME_METADATA: spec.name.encode(),
             _EMBEDDING_ARTIFACT_METADATA: identity.encode(),

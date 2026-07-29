@@ -58,6 +58,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
     _matching_index_exists,
+    _prepare_resume_cache,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _write_columns,
@@ -807,6 +808,21 @@ def test_write_columns_with_missing_audio_raises(tmp_path: Path) -> None:
         )
 
 
+def test_prepare_resume_cache_with_different_artifact_rejects_stale_batches(
+    tmp_path: Path,
+) -> None:
+    """A cache created for one artifact cannot resume another artifact.
+
+    :param tmp_path: Scratch directory for cache files.
+    """
+    resume_cache = tmp_path / "resume.cache"
+    _prepare_resume_cache(resume_cache, {"clap": "artifact-a"})
+    resume_cache.write_bytes(b"cached Lance batches")
+
+    with pytest.raises(ValueError, match="artifact identity does not match"):
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-b"})
+
+
 def test_write_columns_after_success_removes_resume_cache(tmp_path: Path) -> None:
     """A committed UDF pass removes its now-consumed resume cache.
 
@@ -829,6 +845,7 @@ def test_write_columns_after_success_removes_resume_cache(tmp_path: Path) -> Non
     )
 
     assert not resume_cache.exists()
+    assert not resume_cache.with_name("resume.cache.identity").exists()
     assert M2L_FIELD in lance.dataset(str(uri)).schema.names
 
 

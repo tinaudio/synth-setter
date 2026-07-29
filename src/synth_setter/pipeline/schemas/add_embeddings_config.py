@@ -167,7 +167,7 @@ class AddEmbeddingsConfig(BaseModel):
 
     @field_validator("resume_cache", mode="before")
     @classmethod
-    def _coerce_paths(cls, value: object) -> object:
+    def _coerce_resume_cache(cls, value: object) -> object:
         """Coerce Hydra string overrides to ``Path`` under strict validation.
 
         :param value: Raw path value.

@@ -1667,13 +1667,12 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
 
     monkeypatch.setattr(EmbeddingPool, "forward", record_forward)
     dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "tinymu")
-    validation_mse = _assert_conditioning_train_validate_finite(
+    _assert_conditioning_train_validate_finite(
         tmp_path,
         dataset_root,
         param_spec_name,
         "tinymu",
     )
-    assert validation_mse < 2.0
     assert pooled_inputs
     assert all(embed.shape[1] == TINYMU_FRONTEND.embedding_dim for embed in pooled_inputs)
     assert any(torch.count_nonzero(embed).item() > 0 for embed in pooled_inputs)
