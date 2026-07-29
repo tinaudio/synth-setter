@@ -143,6 +143,10 @@ Return the standard fan-out report. **Severity:**
 - **WARN** — latent or lower-confidence: needs input the code doesn't yet
   receive, a fragile assumption that will break under a plausible change, or a
   defect you can describe but not tie to a concrete trigger.
+- **NIT** — not used by this checklist. A correctness reviewer that has a
+  concrete failure scenario owes at least a WARN; one that has no failure
+  scenario owes silence. Downgrading a defect to NIT is the failure mode this
+  posture exists to prevent.
 
 Every finding description MUST contain, in this order:
 
@@ -192,7 +196,8 @@ does not downgrade a genuine defect to WARN. Two cross-cutting disciplines from
 the steps above govern how a row's severity is finally set: a defect is BLOCK
 only when its trigger is **reachable today** (else WARN — latent; Step 3.4), and
 **every** finding must cite a concrete failure scenario or it is dropped
-(Step 2 / the Posture section). BLOCK = must fix before merge · WARN = advisory.
+(Step 2 / the Posture section). BLOCK = must fix before merge · WARN = should
+fix. This checklist never emits NIT.
 
 ## Notes
 
