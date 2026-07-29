@@ -1,13 +1,18 @@
 """Conditioning contracts shared across data and model layers."""
 
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Literal, cast
 
-import torch
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
-ConditioningMode = Literal["mel", "m2l"]
+ConditioningMode = Literal["mel", "m2l", "audio"]
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
+# Modes read straight from the model-batch entry of the same name. "audio" serves
+# online-render synths, which have no stored mel because their audio only exists
+# at training time.
+RAW_CONDITIONING_MODES: frozenset[str] = frozenset({"mel", "audio"})
+# Every cached embedding is collated here, whatever its stored column.
+EMBEDDING_BATCH_KEY = "conditioning"
 
 # Sketch-control storage contract (#2612), hosted here (``data.vst.shapes``
 # re-exports it) so model modules import it without the VST runtime package.
@@ -55,32 +60,30 @@ class EmbeddingConditioningSpec(BaseModel):
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]
 
 
-def select_conditioning(
-    batch: Mapping[str, torch.Tensor], embedding: EmbeddingConditioningSpec | None
-) -> torch.Tensor:
-    """Select the legacy mel or canonical cached-conditioning tensor.
+def conditioning_batch_key(conditioning: Conditioning) -> str:
+    """Return the model-batch key holding the configured conditioning tensor.
 
-    :param batch: Model batch containing the configured conditioning tensor.
-    :param embedding: Resolved cached-embedding spec, or ``None`` for legacy mel.
-    :returns: The tensor selected for model conditioning.
+    :param conditioning: Configured mode literal, parsed spec, or Hydra mapping.
+    :returns: Batch key; a raw mode names its own entry, embeddings share one.
     """
-    if embedding is None:
-        return batch["mel"]
-    return batch["conditioning"]
+    if resolve_embedding_conditioning(conditioning) is not None:
+        return EMBEDDING_BATCH_KEY
+    # Only RAW_CONDITIONING_MODES resolve to no embedding, and each names its key.
+    return cast(str, conditioning)
 
 
 def resolve_embedding_conditioning(
     conditioning: Conditioning,
 ) -> EmbeddingConditioningSpec | None:
-    """Resolve generic embedding configuration while leaving mel on its legacy path.
+    """Resolve generic embedding configuration while leaving raw modes unrouted.
 
     :param conditioning: Legacy literal, parsed spec, or Hydra mapping.
-    :returns: Fixed-shape embedding spec, or ``None`` for legacy mel.
+    :returns: Fixed-shape embedding spec, or ``None`` for a raw observation.
     :raises TypeError: If ``conditioning`` is neither a supported literal nor mapping.
     :raises ValueError: If an unsupported string literal is provided.
     """
     if isinstance(conditioning, str):
-        if conditioning == "mel":
+        if conditioning in RAW_CONDITIONING_MODES:
             return None
         if conditioning == "m2l":
             return EmbeddingConditioningSpec(
@@ -90,7 +93,9 @@ def resolve_embedding_conditioning(
     if isinstance(conditioning, EmbeddingConditioningSpec):
         return conditioning
     if not isinstance(conditioning, Mapping):
-        raise TypeError(f"conditioning must be 'mel', 'm2l', or a mapping, got {conditioning!r}")
+        raise TypeError(
+            f"conditioning must be 'mel', 'm2l', 'audio', or a mapping, got {conditioning!r}"
+        )
 
     values = dict(conditioning)
     input_shape = values.get("input_shape")

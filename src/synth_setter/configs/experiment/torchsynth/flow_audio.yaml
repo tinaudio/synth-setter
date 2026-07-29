@@ -1,0 +1,12 @@
+# @package _global_
+
+# The torchsynth flow arm with the differentiable audio-feedback term attached.
+# Requires model.compile=false and a single device — see
+# https://github.com/tinaudio/synth-setter/issues/2585.
+defaults:
+  - torchsynth/flow
+  - override /model/audio_loss: latent
+  - _self_
+
+run_name: flow_audio
+tags: [torchsynth, flow, audio_loss]

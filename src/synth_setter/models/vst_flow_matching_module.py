@@ -1,8 +1,11 @@
 """Lightning module for flow-matching VST parameter prediction."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from beartype import beartype
@@ -13,12 +16,52 @@ from lightning.pytorch.utilities import grad_norm
 from synth_setter.conditioning import (
     Conditioning,
     SketchControls,
-    resolve_embedding_conditioning,
+    conditioning_batch_key,
     resolve_sketch_controls,
-    select_conditioning,
 )
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
+
+_BATCH_SHAPE = "batch"
+_BATCH_TIME_SHAPE = "batch 1"
+
+if TYPE_CHECKING:
+    from synth_setter.models.components.audio_feedback import (
+        AudioFeedbackLoss,
+        GradientBalance,
+    )
+
+
+@dataclass(frozen=True)
+class TrainStepOutputs:
+    """Loss terms produced by one training step.
+
+    .. attribute :: loss
+
+       Flow-matching loss; the only term every configuration produces.
+
+    .. attribute :: audio_term
+
+       Weighted audio-feedback loss, or ``None`` without an attached audio loss.
+
+    .. attribute :: penalty
+
+       Vector-field regularization penalty, or ``None`` for fields that define none.
+
+    .. attribute :: grad_balance
+
+       Gradient diagnostics for the audio term, or ``None`` off the probe cadence.
+
+    .. attribute :: t
+
+       Flow time per row, shaped ``(batch, 1)``.
+    """
+
+    loss: torch.Tensor
+    audio_term: torch.Tensor | None
+    penalty: torch.Tensor | None
+    grad_balance: GradientBalance | None
+    t: torch.Tensor
 
 
 def call_with_cfg(
@@ -77,6 +120,7 @@ class VSTFlowMatchingModule(LightningModule):
         sketch_controls: SketchControls = None,
         sketch_dropout_rate: float = 0.2,
         sketch_all_dropout_rate: float = 0.2,
+        audio_loss: AudioFeedbackLoss | None = None,
         encoder_num_heads: int | None = None,
         encoder_output_dim: int | None = None,
         warmup_steps: int = 5000,
@@ -87,7 +131,7 @@ class VSTFlowMatchingModule(LightningModule):
         test_sample_steps: int = 100,
         test_cfg_strength: float = 4.0,
         compile: bool = False,
-    ):
+    ) -> None:
         """Wire the encoder/vector-field and persist the flow-matching hyperparameters.
 
         :param encoder: Encoder over legacy mel or a fixed-shape embedding.
@@ -102,6 +146,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param sketch_dropout_rate: Independent per-control CFG drop probability.
         :param sketch_all_dropout_rate: Probability of additionally dropping
             every control at once (Sketch2Sound-style joint dropout).
+        :param audio_loss: Optional audio-feedback term on the rendered one-step
+            estimate; requires an uncompiled, single-device, drop-last run (#2585).
         :param encoder_num_heads: Model-owned attention head count for sequence encoders.
         :param encoder_output_dim: Configured encoder width consumed by the vector field.
         :param warmup_steps: If positive, wrap the scheduler with a linear warmup.
@@ -115,6 +161,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sample_steps: RK4 integration steps used at test.
         :param test_cfg_strength: Classifier-free-guidance strength at test.
         :param compile: Whether to compile the encoder and vector field during fit setup.
+        :raises ValueError: ``audio_loss`` is combined with a nonzero
+            ``rectified_sigma_min`` or with ``compile=True`` (#2585).
         """
         super().__init__()
 
@@ -122,7 +170,6 @@ class VSTFlowMatchingModule(LightningModule):
 
         self.encoder = encoder
         self.vector_field = vector_field
-        self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
         self._sketch_controls = resolve_sketch_controls(sketch_controls)
         self.sketch_tokens = (
             SketchControlTokens(
@@ -132,12 +179,38 @@ class VSTFlowMatchingModule(LightningModule):
             if self._sketch_controls is not None
             else None
         )
+        self.audio_loss = audio_loss
+        if audio_loss is not None and rectified_sigma_min != 0.0:
+            # theta_hat = x_t + (1 - t) * prediction is the exact one-step estimate only
+            # on the sigma-free path; any other sigma silently biases the rendered params.
+            raise ValueError(
+                f"audio feedback requires rectified_sigma_min=0, got {rectified_sigma_min}"
+            )
+        if audio_loss is not None and compile:
+            from synth_setter.models.components.audio_feedback import (
+                validate_audio_feedback_runtime,
+            )
+
+            # Only `compiled` is known here; world_size is re-checked against the real
+            # trainer in on_train_start. Must fail before setup() compiles (#2585).
+            validate_audio_feedback_runtime(compiled=True, world_size=1)
+        self._conditioning_key = conditioning_batch_key(conditioning)
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
 
-    def on_train_start(self):
-        pass
+    def on_train_start(self) -> None:
+        if self.audio_loss is None:
+            return
+
+        from synth_setter.models.components.audio_feedback import (
+            validate_audio_feedback_runtime,
+        )
+
+        validate_audio_feedback_runtime(
+            compiled=self.hparams.compile,
+            world_size=self.trainer.world_size,
+        )
 
     def _sample_time(self, n: int, device: torch.device) -> torch.Tensor:
         return torch.rand(n, 1, device=device)
@@ -176,7 +249,7 @@ class VSTFlowMatchingModule(LightningModule):
         return target
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return select_conditioning(batch, self._embedding_conditioning)
+        return batch[self._conditioning_key]
 
     @jaxtyped(typechecker=beartype)
     def _sketch_drop_mask(
@@ -203,7 +276,7 @@ class VSTFlowMatchingModule(LightningModule):
     @jaxtyped(typechecker=beartype)
     def _sketch_tokens_from_batch(
         self,
-        batch: dict[str, Shaped[torch.Tensor, "..."] | None],
+        batch: dict[str, Shaped[torch.Tensor, ...] | None],
         *,
         training: bool,
         force_drop: Bool[torch.Tensor, "batch 1"] | None = None,
@@ -228,14 +301,52 @@ class VSTFlowMatchingModule(LightningModule):
         )
         return self.sketch_tokens(controls, drop_mask)
 
-    def _train_step(self, batch: dict[str, torch.Tensor]):
+    @jaxtyped(typechecker=beartype)
+    def _should_probe_gradient_balance(self) -> bool:
+        """Whether this step pays for the probe's extra backward through the renderer.
+
+        :returns: True on Lightning's own logging cadence; False when detached from a trainer.
+        """
+        # self.trainer raises when detached, so the private attribute is the only probe
+        # that works for direct _train_step calls outside a fit loop.
+        if self._trainer is None:
+            return False
+        every = self.trainer.log_every_n_steps
+        return every > 0 and self.trainer.global_step % every == 0
+
+    @jaxtyped(typechecker=beartype)
+    def _log_gradient_time_profile(
+        self,
+        audio_row_norms: Float[torch.Tensor, _BATCH_SHAPE],
+        t: Float[torch.Tensor, _BATCH_TIME_SHAPE],
+    ) -> None:
+        """Log where along the flow time axis the audio term's gradient actually lands.
+
+        :param audio_row_norms: Per-row audio gradient norm.
+        :param t: Flow time shaped ``(batch, 1)``.
+        """
+        from synth_setter.models.components.audio_feedback import time_bucket_means
+
+        for index, mean in enumerate(time_bucket_means(audio_row_norms, t)):
+            if torch.isfinite(mean):
+                self.log(
+                    f"train/audio_grad_norm_t_bucket_{index}", mean, on_step=True, on_epoch=False
+                )
+
+    def _train_step(self, batch: dict[str, torch.Tensor]) -> TrainStepOutputs:
+        """Run one training forward pass and assemble every term the logger consumes.
+
+        :param batch: Online or stored batch carrying params, noise, and audio.
+        :returns: Flow loss plus whichever optional terms this configuration produces.
+        """
+
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
 
         conditioning = self.encoder(conditioning)
         if self.sketch_tokens is None:
-            z = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
+            z, keep = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
             ctrl_tokens = None
         else:
             # Sketch2Sound-style coupling: rows whose audio conditioning is
@@ -245,7 +356,7 @@ class VSTFlowMatchingModule(LightningModule):
                 torch.rand(conditioning.shape[0], 1, device=conditioning.device)
                 < self.hparams.cfg_dropout_rate
             )
-            z = self.vector_field.apply_dropout(
+            z, keep = self.vector_field.apply_dropout(
                 conditioning, self.hparams.cfg_dropout_rate, drop_mask=joint_drop
             )
             ctrl_tokens = self._sketch_tokens_from_batch(
@@ -271,20 +382,58 @@ class VSTFlowMatchingModule(LightningModule):
         loss = loss * w
         loss = loss.mean()
 
+        audio_term = None
+        grad_balance = None
+        if self.audio_loss is not None:
+            # One-step estimate of x1 from the current field; rendering it keeps
+            # autograd connected so latent audio error reaches the field's weights.
+            theta_hat = x_t + (1 - t) * prediction
+            # `keep` zeroes CFG-dropped rows: their estimate comes from the marginal, so
+            # its residual against that row's own audio is high-variance noise, not signal.
+            audio_term = self.audio_loss(
+                theta_hat, t, batch["audio"], encoder=self.encoder, keep=keep
+            )
+            if self._should_probe_gradient_balance():
+                from synth_setter.models.components.audio_feedback import gradient_balance
+
+                grad_balance = gradient_balance(
+                    flow_loss=loss, audio_term=audio_term, shared=prediction
+                )
+
         penalty = None
         if hasattr(self.vector_field, "penalty"):
             penalty = self.vector_field.penalty()
 
-        return loss, penalty
+        return TrainStepOutputs(
+            loss=loss, audio_term=audio_term, penalty=penalty, grad_balance=grad_balance, t=t
+        )
 
-    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        loss, penalty = self._train_step(batch)
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        outputs = self._train_step(batch)
+        self.log("train/loss", outputs.loss, on_step=True, on_epoch=True, prog_bar=True)
 
-        if penalty is not None:
-            self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
+        total = outputs.loss
+        if outputs.audio_term is not None:
+            # Dominated by high-t rows, where the weight is maximal; the gradient peaks at
+            # mid t, so this scalar does not track where the term is actually teaching.
+            self.log(
+                "train/audio_loss", outputs.audio_term, on_step=True, on_epoch=True, prog_bar=True
+            )
+            total = total + outputs.audio_term
 
-        return loss + penalty
+        if outputs.grad_balance is not None:
+            # Set lambda_audio from the ratio, not the loss value; watch the cosine turn
+            # negative for the point the audio term starts fighting the flow objective.
+            ratio, cosine = outputs.grad_balance.ratio, outputs.grad_balance.cosine
+            self.log("train/audio_grad_ratio", ratio, on_step=True, on_epoch=False)
+            self.log("train/audio_grad_cosine", cosine, on_step=True, on_epoch=False)
+            self._log_gradient_time_profile(outputs.grad_balance.audio_row_norms, outputs.t)
+
+        if outputs.penalty is not None:
+            self.log("train/penalty", outputs.penalty, on_step=True, on_epoch=True, prog_bar=True)
+            total = total + outputs.penalty
+
+        return total
 
     def on_train_epoch_end(self) -> None:
         pass

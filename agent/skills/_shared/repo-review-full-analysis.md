@@ -267,8 +267,10 @@ Tintin agent id, status, and the exact transcript path from the result's
 `Output file:` field in a `## Pi review audit` section of `review_body`. Copy
 `model_tier` from the tested plan output; do not infer it from the effective
 fallback model. This audit section does not change the findings JSON shape or
-inline-comment contract. Render it as this table so the sentinel caller never
-has to inspect a process tree or transcript to understand execution:
+inline-comment contract. `post_review.py` wraps it in a collapsed details block
+for GitHub reviews; no-comments sentinels keep it expanded. Render it as this
+table so the sentinel caller never has to inspect a process tree or transcript
+to understand execution:
 
 | Skill | Model tier | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
 | ----- | ---------- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |

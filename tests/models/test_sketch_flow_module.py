@@ -103,7 +103,7 @@ def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     """Sketch-configured training consumes ``sketch_ctrl`` and stays finite."""
     module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
 
-    loss, _penalty = module._train_step(_batch(with_sketch=True))  # noqa: SLF001
+    loss = module._train_step(_batch(with_sketch=True)).loss  # noqa: SLF001
 
     assert torch.isfinite(loss)
 
@@ -112,7 +112,7 @@ def test_train_step_none_spec_ignores_sketch_free_batch() -> None:
     """The default configuration trains on batches without ``sketch_ctrl``."""
     module = _module(None)
 
-    loss, _penalty = module._train_step(_batch(with_sketch=False))  # noqa: SLF001
+    loss = module._train_step(_batch(with_sketch=False)).loss  # noqa: SLF001
 
     assert module.sketch_tokens is None
     assert torch.isfinite(loss)
@@ -129,11 +129,13 @@ def test_train_step_none_spec_matches_loss_before_sketch_support() -> None:
     batch = _batch(with_sketch=False)
 
     torch.manual_seed(11)
-    loss, _penalty = module._train_step(batch)  # noqa: SLF001
+    loss = module._train_step(batch).loss  # noqa: SLF001
 
     torch.manual_seed(11)
     field = cast(ApproxEquivTransformer, module.vector_field)
-    z = field.apply_dropout(module.encoder(batch["mel"]), module.hparams["cfg_dropout_rate"])
+    z, _keep = field.apply_dropout(
+        module.encoder(batch["mel"]), module.hparams["cfg_dropout_rate"]
+    )
     t = torch.rand(_BATCH, 1)
     x_t = batch["noise"] * (1 - t) + batch["params"] * t
     target = batch["params"] - batch["noise"]

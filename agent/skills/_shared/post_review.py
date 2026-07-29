@@ -282,6 +282,22 @@ def anchor_finding(
 
 
 _VALID_EVENTS = frozenset({"COMMENT", "REQUEST_CHANGES", "APPROVE"})
+_PI_REVIEW_AUDIT_HEADING = "## Pi review audit"
+
+
+def _collapse_pi_review_audit(review_body: str) -> str:
+    """Hide the verbose audit while keeping actionable review content visible.
+
+    :param review_body: Top-level review body with an optional final Pi audit.
+    :returns: Review body with the Pi audit in a collapsed details block.
+    """
+    summary, heading, audit = review_body.partition(_PI_REVIEW_AUDIT_HEADING)
+    if not heading:
+        return review_body
+    return (
+        f"{summary.rstrip()}\n\n<details>\n"
+        f"<summary>Pi review audit</summary>\n\n{audit.strip()}\n\n</details>"
+    )
 
 
 def build_review_payload(
@@ -305,7 +321,7 @@ def build_review_payload(
         raise ValueError(
             f"unsupported review event: {event!r}; expected one of {sorted(_VALID_EVENTS)}"
         )
-    body = review_body
+    body = _collapse_pi_review_audit(review_body)
     if orphaned:
         body += "\n\n## Findings on files outside the diff\n\n"
         for finding in orphaned:

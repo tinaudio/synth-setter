@@ -5,7 +5,11 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
-from jaxtyping import Bool
+from jaxtyping import Bool, Float, Shaped
+from torch import Tensor
+
+_BATCH_ANY_SHAPE = "batch ..."
+_BATCH_SHAPE = "batch"
 
 
 class PositionalEncoding(nn.Module):
@@ -413,21 +417,30 @@ class ApproxEquivTransformer(nn.Module):
 
     def apply_dropout(
         self,
-        z: torch.tensor,
+        z: Float[Tensor, _BATCH_ANY_SHAPE],
         rate: float = 0.1,
-        drop_mask: Bool[torch.Tensor, "batch 1"] | None = None,
-    ):
-        # drop_mask: (batch, 1) True-drops rows; supplied when the caller
-        # coordinates this drop with other conditioning signals (sketch CFG).
+        drop_mask: Bool[Tensor, "batch 1"] | None = None,
+    ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
+        """Replace a random subset of conditioning rows with the CFG token.
+
+        :param z: Conditioning rows, rank 2 or rank 3.
+        :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
+        :param drop_mask: ``(batch, 1)`` True-drops rows, supplied when the caller
+            coordinates this drop with other conditioning signals (sketch CFG);
+            overrides ``rate``.
+        :returns: The conditioning after dropout, and the keep mask that produced it
+            (True = row kept its conditioning; all-True when ``rate`` is zero).
+        """
         if drop_mask is None:
             if rate == 0.0:
-                return z
-            keep_mask = torch.rand(z.shape[0], 1, device=z.device) > rate
+                return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
+            keep = torch.rand(z.shape[0], device=z.device) > rate
         else:
-            keep_mask = ~drop_mask
+            keep = ~drop_mask.squeeze(-1)
+        broadcast_keep = keep.unsqueeze(-1)
         if z.ndim == 3:
-            keep_mask = keep_mask.unsqueeze(-1)
-        return z.where(keep_mask, self.cfg_dropout_token)
+            broadcast_keep = broadcast_keep.unsqueeze(-1)
+        return z.where(broadcast_keep, self.cfg_dropout_token), keep
 
     def penalty(self) -> torch.Tensor:
         penalty = 0.0

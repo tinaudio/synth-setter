@@ -32,6 +32,7 @@ from omegaconf.errors import InterpolationKeyError
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
@@ -188,12 +189,49 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert "train/loss" in metric_dict
     assert torch.isfinite(metric_dict["train/loss"])
     batch = next(iter(object_dict["datamodule"].train_dataloader()))
-    audio, params, *_ = batch
+    audio, params = batch["audio"], batch["params"]
     assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)
     assert audio.shape[-1] == 176_400
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
     assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
+
+
+@pytest.mark.slow
+def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
+    cfg_torchsynth_flow_audio_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Train one real audio-feedback step and retain its logged metrics and checkpoint.
+
+    :param cfg_torchsynth_flow_audio_train: Composed tiny production flow-audio config.
+    :param tmp_path: Output root containing CSV and checkpoint artifacts.
+    """
+    HydraConfig().set_config(cfg_torchsynth_flow_audio_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_flow_audio_train)
+
+    model = object_dict["model"]
+    trainer = object_dict["trainer"]
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
+    assert trainer.global_step == 1
+    for prefix in ("train/loss", "train/audio_loss"):
+        values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
+        assert values, f"no {prefix} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+
+    checkpoint = tmp_path / "checkpoints" / "last.ckpt"
+    assert checkpoint.is_file()
+    metrics_files = list(tmp_path.glob("csv/**/metrics.csv"))
+    assert len(metrics_files) == 1
+    logged = pd.read_csv(metrics_files[0])
+    for prefix in ("train/loss", "train/audio_loss"):
+        columns = [column for column in logged if column.startswith(prefix)]
+        assert columns, f"no {prefix} column in {list(logged)}"
+        values = logged[columns].to_numpy(dtype=float)
+        logged_values = values[~np.isnan(values)]
+        assert logged_values.size > 0
+        assert np.isfinite(logged_values).all()
 
 
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
