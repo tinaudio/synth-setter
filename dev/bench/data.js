@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785359369854,
+  "lastUpdate": 1785359373398,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -21771,6 +21771,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 8.694141555399995,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aced11d49d1ced75e2aa0f06711dcc808addcd1c",
+          "message": "internal-fix(training): repair mel batch-key consumers (#2720)\n\n* test(training): cover FlowVAE mel batch contract\n\nExercise the model and prediction paths with the renamed batch key.\n\n* internal-fix(training): update audio stats mel key\n\nRead directory statistics from the model-batch key.\n\nKeep Lance statistics on the persisted mel_spec column.\n\n* test(evaluation): pin mel batch key in oracle E2E\n\nDocument the existing production path that fails on a stale in-memory batch key.\n\n* test(training): update FlowVAE validation batch key",
+          "timestamp": "2026-07-29T12:38:01-07:00",
+          "tree_id": "202ff59772f531f371bec89c30ab0d8da73423b3",
+          "url": "https://github.com/tinaudio/synth-setter/commit/aced11d49d1ced75e2aa0f06711dcc808addcd1c"
+        },
+        "date": 1785359372672,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.20598030090332,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.106328307632356,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08160655945539474,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.005164980888366699,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.349630832672119,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.646234084100001,
             "unit": "seconds"
           }
         ]
