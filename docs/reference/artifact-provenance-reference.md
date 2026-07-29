@@ -53,7 +53,7 @@ ______________________________________________________________________
 | `model`        | `git_sha`, plus `_checkpoint_metadata` keys when a checkpoint uploaded |
 | `eval-results` | scalar summary metrics (`_eval_summary_metrics`) + `git_sha`           |
 
-The `model` artifact always carries `git_sha`; when the best checkpoint uploads, `_checkpoint_metadata` merges in the keys that identify it (§4), since the `s3://` reference itself renders as a 0-byte entry. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), or the upload fails, so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
+The `model` artifact always carries `git_sha`; when the best checkpoint uploads, `_checkpoint_metadata` merges in the keys that identify it (§4), since the `s3://` reference itself renders as a 0-byte entry. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), the upload fails, or the fingerprint guard refuses an architecture-incompatible overwrite of the slot (`checkpoint_fingerprint.py`, [#2588](https://github.com/tinaudio/synth-setter/issues/2588)), so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
 
 ______________________________________________________________________
 
@@ -122,16 +122,18 @@ ______________________________________________________________________
 
 ## 7. Code Map
 
-| Concern                          | Symbol                                                       | File                                       |
-| -------------------------------- | ------------------------------------------------------------ | ------------------------------------------ |
-| Dataset artifact                 | `build_dataset_artifact` / `_log_dataset_artifact`           | `src/synth_setter/cli/finalize_dataset.py` |
-| Model artifact                   | `build_model_artifact` / `_log_model_artifact`               | `src/synth_setter/cli/train.py`            |
-| Best-checkpoint R2 upload        | `_upload_best_checkpoint` / `_derive_checkpoint_uri`         | `src/synth_setter/cli/train.py`            |
-| Eval-results artifact            | `build_eval_results_artifact` / `_log_eval_results_artifact` | `src/synth_setter/cli/eval.py`             |
-| Consumed-edge refs (training)    | `_consumed_artifact_refs`                                    | `src/synth_setter/cli/train.py`            |
-| Lineage edge recording           | `record_input_lineage` / `use_input_artifacts`               | `src/synth_setter/utils/logging_utils.py`  |
-| Incomplete-lineage run marker    | `mark_lineage_incomplete`                                    | `src/synth_setter/utils/logging_utils.py`  |
-| Referenced-checkpoint metadata   | `_checkpoint_metadata`                                       | `src/synth_setter/cli/train.py`            |
-| `${wandb:…}` resolver            | `_resolve_wandb_checkpoint` / `register_resolvers`           | `src/synth_setter/utils/utils.py`          |
-| Run id / `job_type` pinning      | `pin_wandb_run_id`                                           | `src/synth_setter/utils/logging_utils.py`  |
-| Provenance fields (`github_sha`) | `log_wandb_provenance`                                       | `src/synth_setter/utils/logging_utils.py`  |
+| Concern                          | Symbol                                                                | File                                               |
+| -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------- |
+| Dataset artifact                 | `build_dataset_artifact` / `_log_dataset_artifact`                    | `src/synth_setter/cli/finalize_dataset.py`         |
+| Model artifact                   | `build_model_artifact` / `_log_model_artifact`                        | `src/synth_setter/cli/train.py`                    |
+| Best-checkpoint R2 upload        | `_upload_best_checkpoint` / `_derive_checkpoint_uri`                  | `src/synth_setter/cli/train.py`                    |
+| Checkpoint fingerprint guard     | `_fingerprint_guard_allows_overwrite` / `_upload_fingerprint_sidecar` | `src/synth_setter/cli/train.py`                    |
+| Fingerprint model / sidecar URI  | `CheckpointFingerprint` / `fingerprint_from_cfg`                      | `src/synth_setter/utils/checkpoint_fingerprint.py` |
+| Eval-results artifact            | `build_eval_results_artifact` / `_log_eval_results_artifact`          | `src/synth_setter/cli/eval.py`                     |
+| Consumed-edge refs (training)    | `_consumed_artifact_refs`                                             | `src/synth_setter/cli/train.py`                    |
+| Lineage edge recording           | `record_input_lineage` / `use_input_artifacts`                        | `src/synth_setter/utils/logging_utils.py`          |
+| Incomplete-lineage run marker    | `mark_lineage_incomplete`                                             | `src/synth_setter/utils/logging_utils.py`          |
+| Referenced-checkpoint metadata   | `_checkpoint_metadata`                                                | `src/synth_setter/cli/train.py`                    |
+| `${wandb:…}` resolver            | `_resolve_wandb_checkpoint` / `register_resolvers`                    | `src/synth_setter/utils/utils.py`                  |
+| Run id / `job_type` pinning      | `pin_wandb_run_id`                                                    | `src/synth_setter/utils/logging_utils.py`          |
+| Provenance fields (`github_sha`) | `log_wandb_provenance`                                                | `src/synth_setter/utils/logging_utils.py`          |
