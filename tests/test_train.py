@@ -653,17 +653,21 @@ def test_train_runpod_experiment_default_datamodule_advances(
         param_spec_name="surge_simple",
         experiment=experiment,
         datamodule_group=None,
+        callbacks_override=None,
     )
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(fake_surge_smoke_datasets)
+        cfg.trainer.val_check_interval = 1
 
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
+    assert torch.isfinite(metric_dict["per_param_mse/a_amp_eg_attack"])
 
 
 @pytest.mark.slow
