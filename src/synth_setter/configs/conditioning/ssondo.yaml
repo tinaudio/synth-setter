@@ -1,0 +1,17 @@
+# @package _global_
+
+# S-SONDO emits one pooled global vector, so conditioning uses direct projection.
+defaults:
+  - override /model/encoder: vector_projection
+
+model:
+  conditioning:
+    column: ssondo
+    input_shape: [960]
+  encoder:
+    input_dim: 960
+
+datamodule:
+  conditioning:
+    column: ssondo
+    input_shape: [960]
