@@ -12,7 +12,13 @@ import pytest
 import torch
 from lightning.pytorch import Trainer
 
-from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule, _make_renderer
+from synth_setter.data.torchsynth_datamodule import (
+    TorchSynthBatch,
+    TorchSynthDataModule,
+    TorchSynthDataset,
+    _make_renderer,
+    collate_audio_dict,
+)
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.vector_field import VectorField
@@ -27,6 +33,9 @@ _BATCH = 4
 _ENCODED_WIDTH = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
 _BUFFER_SECONDS = _SIGNAL_LENGTH / _SAMPLE_RATE
 _CONDITIONING_DIM = 32
+# Peak above which a rendered row counts as audible rather than an all-zero buffer.
+_AUDIBLE_PEAK = 1e-4
+_AUDIBLE_ROW_POOL = 256
 _OVERFIT_STEPS = 300
 _OVERFIT_TOTAL_THRESHOLD = 0.1
 
@@ -110,6 +119,30 @@ def _datamodule(batch_size: int = _BATCH, train_size: int = 8) -> TorchSynthData
     return datamodule
 
 
+def _audible_online_batch(rows: int = _BATCH) -> TorchSynthBatch:
+    """Collate a real online batch from rows whose note sounds inside the render buffer.
+
+    The spec draws each row's note window across a multi-second range, so on this short
+    test buffer most online rows start their note past the end and render silence. An
+    audio term measured on those rows compares silence against silence.
+
+    :param rows: Number of audible rows to collate.
+    :returns: The online batch contract: ``params``, ``noise``, and ``audio``.
+    :raises AssertionError: If the scanned pool holds fewer audible rows than requested.
+    """
+    dataset = TorchSynthDataset(
+        _AUDIBLE_ROW_POOL, seed=1, sample_rate=_SAMPLE_RATE, signal_length=_SIGNAL_LENGTH
+    )
+    audible = []
+    for index in range(_AUDIBLE_ROW_POOL):
+        item = dataset[index]
+        if item[0].abs().max() > _AUDIBLE_PEAK:
+            audible.append(item)
+            if len(audible) == rows:
+                return collate_audio_dict(audible)
+    raise AssertionError(f"only {len(audible)} of {rows} audible rows in {_AUDIBLE_ROW_POOL}")
+
+
 def _audible_rows(rows: int, seed: int) -> torch.Tensor:
     """Draw encoded rows whose note sounds across the whole render buffer.
 
@@ -153,7 +186,7 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> N
     """A real online batch produces a finite audio term with gradients in the flow."""
     torch.manual_seed(0)
     module = _module(audio_loss=_audio_loss())
-    batch = next(iter(_datamodule().train_dataloader()))
+    batch = _audible_online_batch()
 
     outputs = module._train_step(batch)
     assert outputs.audio_term is not None
@@ -266,7 +299,7 @@ def _overfit_one_fixed_example() -> tuple[float, float]:
     torch.manual_seed(0)
     module = _module(audio_loss=_audio_loss(), cfg_dropout_rate=0.0)
     module._sample_time = lambda n, device: torch.full((n, 1), 0.9, device=device)
-    batch = next(iter(_datamodule(batch_size=1).train_dataloader()))
+    batch = _audible_online_batch(rows=1)
     optimizer = torch.optim.Adam(module.parameters(), lr=3e-4)
     initial_total: float | None = None
 
@@ -331,7 +364,7 @@ def test_audio_loss_keep_mask_zeroes_cfg_dropped_rows() -> None:
     """Rows dropped by CFG must contribute nothing to the audio term."""
     torch.manual_seed(0)
     loss = _audio_loss()
-    batch = next(iter(_datamodule().train_dataloader()))
+    batch = _audible_online_batch()
     theta_hat = torch.rand(_BATCH, _ENCODED_WIDTH) * 2 - 1
     t = torch.full((_BATCH, 1), 0.9)
 

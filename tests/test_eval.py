@@ -178,6 +178,18 @@ _AUDIO_PREDICTION_CASES = (
     ),
 )
 _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT = 0.05
+# 4 s of audio at a smoke-test rate: the spec draws each row's note window across a 4 s
+# range, so a shorter buffer would start most notes past the end and render silence.
+_TORCHSYNTH_AUDIO_OVERRIDES = (
+    "datamodule.sample_rate=22050",
+    "datamodule.signal_length=88200",
+)
+# Pitch and note timing now vary per row, so a single-row overfit no longer transfers to
+# the val split; the checkpoint has to see enough rows to beat the untrained baseline.
+_TORCHSYNTH_TRAIN_ROWS = 64
+_TORCHSYNTH_BATCH_SIZE = 8
+_TORCHSYNTH_EPOCHS = 10
+_TORCHSYNTH_LR = 0.001
 
 
 def _write_audio_prediction_fixture(path: Path) -> None:
@@ -325,7 +337,7 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
     _assert_audio_prediction_artifacts(output_dir)
 
 
-def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
+def _compose_torchsynth_train_cfg(tmp_path: Path) -> DictConfig:
     """Compose the deterministic TorchSynth checkpoint smoke run.
 
     :param tmp_path: Pinned Hydra output and log directory.
@@ -338,17 +350,17 @@ def _compose_torchsynth_overfit_cfg(tmp_path: Path) -> DictConfig:
             overrides=[
                 "experiment=torchsynth/ffn",
                 "trainer=cpu",
-                "+trainer.max_epochs=10",
-                "+trainer.limit_train_batches=1",
+                f"+trainer.max_epochs={_TORCHSYNTH_EPOCHS}",
                 "+trainer.limit_val_batches=1",
                 "trainer.val_check_interval=1.0",
                 "trainer.check_val_every_n_epoch=1",
                 "datamodule.resample_train_per_epoch=false",
-                "datamodule.train_val_test_sizes=[1,1,1]",
-                "datamodule.batch_size=1",
+                *_TORCHSYNTH_AUDIO_OVERRIDES,
+                f"datamodule.train_val_test_sizes=[{_TORCHSYNTH_TRAIN_ROWS},1,1]",
+                f"datamodule.batch_size={_TORCHSYNTH_BATCH_SIZE}",
                 "datamodule.num_workers=0",
                 "model.compile=false",
-                "model.optimizer.lr=0.0001",
+                f"model.optimizer.lr={_TORCHSYNTH_LR}",
                 "logger=csv",
             ],
         )
@@ -415,8 +427,9 @@ def _compose_torchsynth_eval_cfg(tmp_path: Path, checkpoint: Path) -> DictConfig
             overrides=[
                 "experiment=torchsynth/eval_ffn",
                 "trainer=cpu",
+                *_TORCHSYNTH_AUDIO_OVERRIDES,
                 "datamodule.train_val_test_sizes=[2,32,2]",
-                "datamodule.batch_size=1",
+                f"datamodule.batch_size={_TORCHSYNTH_BATCH_SIZE}",
                 "datamodule.num_workers=0",
             ],
         )
@@ -435,7 +448,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     :param tmp_path: Shared training, checkpoint, and evaluation directory.
     """
-    train_cfg = _compose_torchsynth_overfit_cfg(tmp_path)
+    train_cfg = _compose_torchsynth_train_cfg(tmp_path)
     initial_loss = _torchsynth_initial_loss(train_cfg, stage="fit", split="train")
     HydraConfig().set_config(train_cfg)
     try:
@@ -443,9 +456,9 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     finally:
         GlobalHydra.instance().clear()
 
-    overfit_loss = train_metrics["train/loss_epoch"].item()
-    assert math.isfinite(overfit_loss)
-    assert overfit_loss < initial_loss
+    train_loss = train_metrics["train/loss_epoch"].item()
+    assert math.isfinite(train_loss)
+    assert train_loss < initial_loss
 
     checkpoint = Path(train_objects["trainer"].checkpoint_callback.best_model_path)
     assert checkpoint.is_file()
