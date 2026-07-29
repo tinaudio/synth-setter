@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import multiprocessing
 from pathlib import Path
 
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_module
 
+from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_HOST_PARAMETER_TARGETS
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 from synth_setter.data.vst.renderers import DawDreamerRenderer
+from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.resources import as_file, param_map
 from synth_setter.synth_spec import SYNTHS, SynthName
 
@@ -90,6 +94,50 @@ def test_cardinal_mapped_slot_changes_audio_through_dawdreamer() -> None:
     assert np.isfinite(quiet).all() and np.isfinite(loud).all()
     # Without the post-preset settle render the VCA slot is inert and these are equal.
     assert _rms(loud) > _rms(quiet) * 2
+
+
+def _generate_cardinal_shard(output_dir: str) -> None:
+    """Generate two real rows in an isolated process.
+
+    :param output_dir: Directory for the generated Lance shard.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/cardinal-dawdreamer-smoke",
+                "render.samples_per_shard=2",
+            ],
+        )
+    root = str(Path.cwd())
+    cfg.paths.root_dir = root
+    cfg.paths.output_dir = output_dir
+    cfg.paths.work_dir = output_dir
+    spec = spec_from_cfg(cfg)
+    make_lance_dataset(Path(output_dir) / "shard.lance", spec.render)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_cardinal_worker_survives_analysis_between_plugin_reloads(tmp_path: Path) -> None:
+    """A real shard exits cleanly after analysis runs between Cardinal reloads.
+
+    :param tmp_path: Isolates the generated Lance dataset.
+    """
+    if not Path(_PLUGIN_PATH).exists():
+        pytest.skip(f"Cardinal bundle not found at {_PLUGIN_PATH}")
+    process = multiprocessing.get_context("spawn").Process(
+        target=_generate_cardinal_shard,
+        args=(str(tmp_path),),
+    )
+
+    process.start()
+    process.join(timeout=90)
+
+    if process.is_alive():
+        process.kill()
+        pytest.fail("Cardinal generation subprocess did not finish within 90 seconds")
+    assert process.exitcode == 0
 
 
 @pytest.mark.requires_vst

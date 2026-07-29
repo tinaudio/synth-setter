@@ -91,20 +91,6 @@ class VSTDataSample:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
-# One frame at a standard rate is enough to pull in every lazily imported submodule.
-_WARMUP_SAMPLES = 4096
-_WARMUP_SAMPLE_RATE = 44_100
-
-
-def warm_spectrogram_backend() -> None:
-    """Force librosa's lazy submodule imports before any plugin is instantiated.
-
-    Hosts that rebuild process-global state on load crash when a shared library is dlopen'd between
-    two instantiations, so the mel path is warmed first (#2549).
-    """
-    make_spectrogram(np.zeros(_WARMUP_SAMPLES, dtype=np.float32), _WARMUP_SAMPLE_RATE)
-
-
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
     """Per-channel mel-spectrogram in dB; STFT params come from module-level constants."""
     spec = librosa.feature.melspectrogram(
