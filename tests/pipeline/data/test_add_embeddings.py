@@ -2535,7 +2535,11 @@ def _install_fake_t5gemma(
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "t5gemma",
-        replace(EMBEDDING_REGISTRY["t5gemma"], load_encoder=load),
+        replace(
+            EMBEDDING_REGISTRY["t5gemma"],
+            load_encoder=load,
+            resolve_artifact_identity=lambda checkpoint: f"fake:t5gemma:{checkpoint}",
+        ),
     )
 
 
