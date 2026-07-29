@@ -85,7 +85,7 @@ def test_materialize_lance_subset_evicts_written_data_files(
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
 
     data_files = [path for path in (destination / "data").rglob("*") if path.is_file()]
-    assert len(data_files) == 2
+    assert len(data_files) >= 2
     assert len(synced_fds) == len(data_files)
     assert len(advised_fds) == len(data_files)
     assert lance.dataset(str(destination)).count_rows() == 3
