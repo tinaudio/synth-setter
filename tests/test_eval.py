@@ -481,7 +481,8 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
 
     The load-bearing invariant is that ``ckpt_path=null`` survives Hydra
     composition into ``evaluate()`` and the oracle's exact-zero MSE reaches
-    the metric dict.
+    the metric dict. The production path also carries the datamodule's ``mel``
+    entry through the oracle, so a stale model-batch key fails this test.
 
     :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
     :param surge_xt_smoke_datasets: Holds ``{train,val,test}.lance`` + ``stats.npz``.
