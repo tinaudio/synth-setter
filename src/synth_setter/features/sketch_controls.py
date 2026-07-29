@@ -6,6 +6,12 @@ normalization to ``[-1, 1]`` so a sketch means the same thing for every
 checkpoint; pitch is PESTO's raw activation matrix in ``[0, 1]`` (rows
 ``SKETCH_PITCH_SLICE``), stored unthresholded so the consumption-time zero-bin
 threshold stays tunable without a re-backfill. Tracking issue: #2612.
+
+Typical usage::
+
+    controls = extract_sketch_controls(audio, sample_rate)  # (386, frames)
+    loudness = controls[SKETCH_LOUDNESS_ROW]
+    pitch_activations = controls[SKETCH_PITCH_SLICE]
 """
 
 import librosa
@@ -15,6 +21,7 @@ from beartype import beartype
 from jaxtyping import Float, jaxtyped
 
 from synth_setter.data.vst.shapes import (
+    DEFAULT_PESTO_CHECKPOINT,
     MEL_FRAMES_PER_SECOND,
     NUM_SKETCH_CONTROLS,
     SKETCH_PITCH_BINS,
@@ -24,6 +31,7 @@ from synth_setter.data.vst.shapes import (
 )
 
 __all__ = [
+    "DEFAULT_PESTO_CHECKPOINT",
     "NUM_SKETCH_CONTROLS",
     "SKETCH_CENTROID_ROW",
     "SKETCH_LOUDNESS_ROW",
@@ -31,6 +39,7 @@ __all__ = [
     "SKETCH_PITCH_SLICE",
     "extract_sketch_controls",
     "extract_sketch_controls_batch",
+    "load_pesto_model",
     "loudness_track",
     "pitch_track",
     "sketch_num_frames",
@@ -49,18 +58,39 @@ _MIN_HZ = _A4_HZ * 2.0 ** (-_MIDI_A4 / 12.0)
 # PESTO step in ms matching the 100 fps mel grid for every sample rate.
 _PESTO_STEP_MS = 1000.0 / MEL_FRAMES_PER_SECOND
 
-# FlashFoley A-weighted loudness front end (data/utils.py of the reference
-# implementation): 16 kHz STFT, dB relative to REF_DB, fixed [-100, 80] affine.
+# Match FlashFoley's A-weighted loudness front end; constants below define it.
 _LOUDNESS_SAMPLE_RATE = 16000
 _LOUDNESS_N_FFT = 1024
 _LOUDNESS_REF_DB = 20.0
 _LOUDNESS_MIN_DB = -100.0
 _LOUDNESS_MAX_DB = 80.0
-# Frames 80 dB below the clip's spectral peak are treated as that clip's floor.
+# Treat frames outside the clip-relative peak range as that clip's floor.
 _LOUDNESS_PEAK_RANGE_DB = 80.0
 
 _pesto_model = None
+_pesto_checkpoint: str | None = None
 _a_weights: torch.Tensor | None = None
+
+
+def load_pesto_model(checkpoint: str | None = None) -> torch.nn.Module:
+    """Load and cache the PESTO model on the 10 ms sketch frame grid.
+
+    Called eagerly by the pipeline's registry loader so the batch transform
+    stays free of model-file I/O; the extraction functions fall back to it
+    lazily for single-clip use.
+
+    :param checkpoint: PESTO checkpoint name; ``None`` reuses the cached model,
+        loading ``DEFAULT_PESTO_CHECKPOINT`` when none is cached yet.
+    :returns: The cached process-wide model.
+    """
+    global _pesto_model, _pesto_checkpoint
+    target = checkpoint or _pesto_checkpoint or DEFAULT_PESTO_CHECKPOINT
+    if _pesto_model is None or _pesto_checkpoint != target:
+        import pesto
+
+        _pesto_model = pesto.load_model(target, step_size=_PESTO_STEP_MS)
+        _pesto_checkpoint = target
+    return _pesto_model
 
 
 def sketch_num_frames(num_samples: int, sample_rate: int) -> int:
@@ -215,12 +245,7 @@ def _pitch_batch(
     :param sample_rate: Audio sample rate in Hz.
     :returns: Activation tracks at the PESTO step size (10 ms).
     """
-    import pesto
-
-    global _pesto_model
-    if _pesto_model is None:
-        _pesto_model = pesto.load_model("mir-1k_g7", step_size=_PESTO_STEP_MS)
-    _preds, _confidence, _, activations = _pesto_model(mono, sample_rate)
+    _preds, _confidence, _, activations = load_pesto_model()(mono, sample_rate)
     return activations.detach().to(torch.float32).transpose(1, 2)
 
 

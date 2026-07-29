@@ -21,7 +21,7 @@ from synth_setter.features.sketch_controls import (
 
 _SAMPLE_RATE = 44100
 _DURATION_S = 1.0
-# PESTO bins are 3 per semitone, so MIDI 69 (440 Hz) peaks at bin 69 * 3.
+# A4's expected PESTO bin is derived from its MIDI pitch.
 _A4_PITCH_BIN = 207
 
 
@@ -50,6 +50,26 @@ def test_sketch_num_frames_one_second_matches_mel_grid() -> None:
     """Frame counts agree with the mel hop grid."""
     samples = int(_SAMPLE_RATE * _DURATION_S)
     assert sketch_num_frames(samples, _SAMPLE_RATE) == samples // mel_hop_length(_SAMPLE_RATE) + 1
+
+
+@pytest.mark.parametrize("sample_rate", [22050, 44100])
+def test_extract_sketch_controls_other_sample_rates_keep_grid_and_bounds(
+    sample_rate: int,
+) -> None:
+    """Extraction holds its shape and bounds contract across sample rates.
+
+    :param sample_rate: Audio sample rate under test.
+    """
+    t = torch.arange(int(sample_rate * _DURATION_S)) / sample_rate
+    audio = (0.5 * torch.sin(2 * torch.pi * 440.0 * t)).expand(2, -1).to(torch.float32)
+    controls = extract_sketch_controls(audio, sample_rate)
+    assert controls.shape == (
+        NUM_SKETCH_CONTROLS,
+        sketch_num_frames(audio.shape[-1], sample_rate),
+    )
+    assert torch.isfinite(controls).all()
+    assert controls.min() >= -1.0
+    assert controls.max() <= 1.0
 
 
 def test_extract_sketch_controls_stereo_sine_returns_frame_grid_shape() -> None:
@@ -102,7 +122,7 @@ def test_spectral_centroid_track_high_sine_exceeds_low_sine() -> None:
 def test_spectral_centroid_track_sine_440_near_midi_69() -> None:
     """A 440 Hz sine centers near MIDI 69 on the normalized scale."""
     centroid = spectral_centroid_track(_sine(440.0), _SAMPLE_RATE)
-    # MIDI 69 / 127 mapped to [-1, 1]; windowing broadens the mass, so a loose tolerance.
+    # Windowing broadens the spectral mass, so retain a loose tolerance.
     assert centroid[2:-2].mean() == pytest.approx(69.0 / 127.0 * 2.0 - 1.0, abs=0.1)
 
 

@@ -30,12 +30,14 @@ from jaxtyping import Float, jaxtyped
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
+    DEFAULT_PESTO_CHECKPOINT,
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     NUM_SKETCH_CONTROLS,
     SKETCH_CTRL_FIELD,
+    SKETCH_PITCH_BINS,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
     mel_n_frames_from_samples,
@@ -521,11 +523,17 @@ def _sketch_encode(
 def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind the sketch-control extractor to the registry's uniform factory signature.
 
-    :param checkpoint: Unused; PESTO ships its bundled mir-1k_g7 weights.
+    Loads PESTO here so the batch transform stays free of model-file I/O and a missing or corrupt
+    artifact fails before any row is processed.
+
+    :param checkpoint: Bundled PESTO checkpoint name.
     :param config: Unused run config; PESTO runs on CPU, device is not plumbed.
     :returns: Encoder over the original audio batch.
     """
-    del checkpoint, config
+    from synth_setter.features.sketch_controls import load_pesto_model
+
+    del config
+    load_pesto_model(checkpoint)
     return _sketch_encode
 
 
@@ -536,7 +544,8 @@ def _encode_sketch_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param encoder: Sketch extractor over the original audio batch.
     :returns: Fixed-shape tensor array.
-    :raises ValueError: The encoder output is off the frame grid or non-finite.
+    :raises ValueError: The encoder output is off the frame grid, non-finite,
+        or outside the documented control bounds.
     """
     from synth_setter.pipeline.data.lance_shard import tensor_array
 
@@ -547,6 +556,13 @@ def _encode_sketch_column(audio: np.ndarray, sample_rate: int, encoder: Encoder)
     if controls.shape != expected:
         raise ValueError(
             f"{SKETCH_CTRL_FIELD} encoder produced shape {controls.shape}, expected {expected}"
+        )
+    affine = controls[:, : NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS]
+    pitch = controls[:, NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS :]
+    if affine.min() < -1.0 or affine.max() > 1.0 or pitch.min() < 0.0 or pitch.max() > 1.0:
+        raise ValueError(
+            f"{SKETCH_CTRL_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
+            "and pitch rows in [0, 1]"
         )
     return tensor_array(controls, np.dtype("float32"), controls.shape[1:])
 
@@ -588,12 +604,11 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
     ),
-    # num_sub_vectors: PQ sub-vectors must divide the pooled control vector's
-    # width (2 + 384 pitch bins = 2 * 193), so only 2 divides it cleanly.
+    # PQ sub-vectors must divide the pooled control-vector width.
     "sketch": EmbeddingSpec(
         name="sketch",
         column=SKETCH_CTRL_FIELD,
-        default_checkpoint="",
+        default_checkpoint=DEFAULT_PESTO_CHECKPOINT,
         co_resident=True,
         index=IndexSpec(
             pool="mean",

@@ -1155,10 +1155,10 @@ loudness, spectral-centroid, and PESTO pitch tracks
 (`features/sketch_controls.py`) from `audio` on the mel frame grid and writes
 them as a `(NUM_SKETCH_CONTROLS, F)` tensor column plus a mean-pooled
 `sketch_ctrl_vec` companion for contour-similarity search. Its `IndexSpec`
-fixes `num_sub_vectors=2` — the only PQ split (besides 1) that divides the
-pooled vector's 386-wide layout — since the CLAP-oriented default of 16
-cannot; a run config leaves `num_sub_vectors` null to let each spec's
-default apply.
+fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
+vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
+386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
+leaves `num_sub_vectors` null to let each spec's default apply.
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,

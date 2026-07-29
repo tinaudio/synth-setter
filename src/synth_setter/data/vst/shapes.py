@@ -39,6 +39,8 @@ SAME_L_FIELD: str = "same_l"
 SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
 SKETCH_CTRL_FIELD: str = "sketch_ctrl"
+# The pitch-row width below is a property of this PESTO checkpoint.
+DEFAULT_PESTO_CHECKPOINT: str = "mir-1k_g7"
 # PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
 SKETCH_PITCH_BINS: int = 384
 # Rows: loudness, centroid, then the pitch-activation block.
