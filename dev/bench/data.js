@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785348602892,
+  "lastUpdate": 1785348605416,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -21342,6 +21342,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.917344082800014,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4121069cfbfb913022bad26c1b9cb7aec00ca890",
+          "message": "internal-fix(evaluation): forward sample_rate through mss, sot and wmfcc (#2702)\n\ncompute_mss, compute_sot and compute_wmfcc each call a helper that takes a\nsample_rate, but none of them forwarded one, so the helper's 44100.0 default\nalways won. compute_rms already took and used a sample rate, so the four\nmetrics disagreed the moment audio was not 44.1 kHz.\n\nAt 22.05 kHz every analysis window covered twice its intended real-time\nduration. Nothing raised; the returned float just described a different\ntransform than the caller asked for.\n\nThe new parameter defaults to 44100.0, so every existing call site keeps its\ncurrent behaviour exactly.\n\nNote this does not make the metrics rate-invariant: the frequency axis still\nchanges with the sample rate, so scores from different rates remain\nincomparable. It only lets a caller size the windows for the audio it has.\n\nFixes #2700",
+          "timestamp": "2026-07-29T09:21:01-07:00",
+          "tree_id": "79ebb65c232f0153e2be58eb8be62ebb551b2c79",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4121069cfbfb913022bad26c1b9cb7aec00ca890"
+        },
+        "date": 1785348604862,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.533011436462402,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.303743338137865,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10294298082590103,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0021281838417053223,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.218576669692993,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.241766791200007,
             "unit": "seconds"
           }
         ]
