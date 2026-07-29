@@ -1,10 +1,8 @@
-"""Pins the ``preds`` key every VST module's ``validation_step`` must return.
+"""Pin the validation outputs consumed by VST callbacks.
 
-``ValAudioProbe`` stages ``outputs["preds"]`` to render predicted audio, so the
-key is a contract across the VST module family rather than an implementation
-detail of any one of them. Each module is built for real at tiny sizes and its
-``validation_step`` driven directly — no mocks — so a module that silently stops
-returning its predictions fails here.
+``ValAudioProbe`` stages ``outputs["preds"]`` and ``LogPerParamMSE`` consumes
+``outputs["per_param_mse"]``. Each module is built at tiny sizes and driven
+without mocks so missing or malformed callback inputs fail here.
 """
 
 from __future__ import annotations
@@ -168,10 +166,10 @@ class _TinyEncoder(torch.nn.Module):
     [_feed_forward_module, _fake_oracle_module, _flow_matching_module, _flow_vae_module],
     ids=["feed_forward", "fake_oracle", "flow_matching", "flow_vae"],
 )
-def test_validation_step_returns_preds_shaped_like_target_params(
+def test_validation_step_returns_callback_metrics_shaped_like_target_params(
     build_module: Callable[[], _VstModule],
 ) -> None:
-    """Every VST module returns its predictions under ``preds``, shaped like the targets.
+    """Every VST module returns callback inputs shaped like the target parameters.
 
     :param build_module: Factory for the module under test.
     """

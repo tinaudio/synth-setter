@@ -743,6 +743,16 @@ def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> N
     assert cfg.training.val_audio_probe == "auto"
 
 
+def test_surge_eval_composition_retains_default_per_param_mse_callback() -> None:
+    """The surge experiment default applies when composed through the eval entrypoint."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/ffn_simple", "ckpt_path=fake.ckpt", "trainer=cpu"],
+    )
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_simple"
+
+
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
     """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
 

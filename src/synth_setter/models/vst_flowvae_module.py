@@ -86,7 +86,15 @@ class VSTFlowVAEModule(LightningModule):
     def on_train_epoch_end(self) -> None:
         pass
 
-    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+    def validation_step(
+        self, batch: dict[str, torch.Tensor], batch_idx: int
+    ) -> dict[str, torch.Tensor]:
+        """Return validation predictions and per-parameter MSE for callbacks.
+
+        :param batch: Batch containing mel spectrograms and encoded target parameters.
+        :param batch_idx: Validation batch index, unused.
+        :returns: Predictions shaped ``(batch, params)`` and MSE shaped ``(params,)``.
+        """
         losses, _, target_params, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
 
