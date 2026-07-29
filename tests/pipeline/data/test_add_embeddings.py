@@ -50,6 +50,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     Encoder,
     IndexSpec,
     ParamTextEncodeFn,
+    _checkpoint_tree_sha256,
     _configure_lance_logging,
     _downmix_to_mono,
     _encode_t5gemma_column,
@@ -58,10 +59,12 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
     _matching_index_exists,
+    _missing_embedding_specs,
     _prepare_resume_cache,
     _resolve_artifact_identity,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
+    _versioned_artifact_identity,
     _write_columns,
     add_embeddings,
     build_index,
@@ -814,6 +817,51 @@ def test_write_columns_with_missing_audio_raises(tmp_path: Path) -> None:
         )
 
 
+def test_checkpoint_tree_identity_ignores_huggingface_download_bookkeeping(
+    tmp_path: Path,
+) -> None:
+    """Download timestamps do not change checkpoint content identity.
+
+    :param tmp_path: Scratch checkpoint tree.
+    """
+    model = tmp_path / "model.bin"
+    metadata = tmp_path / ".cache" / "huggingface" / "download" / "model.metadata"
+    metadata.parent.mkdir(parents=True)
+    model.write_bytes(b"weights")
+    metadata.write_text("first timestamp")
+    first = _checkpoint_tree_sha256(tmp_path)
+    metadata.write_text("different timestamp")
+
+    assert _checkpoint_tree_sha256(tmp_path) == first
+
+
+def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
+    """Unrelated repository revisions do not alter artifact identity."""
+    assert (
+        _versioned_artifact_identity("tinymu", "checkpoint:sha256:abc")
+        == "tinymu:policy-v1:checkpoint:sha256:abc"
+    )
+
+
+def test_prepare_resume_cache_without_identity_discards_legacy_batches(
+    tmp_path: Path,
+) -> None:
+    """An unverifiable legacy cache restarts instead of poisoning output metadata.
+
+    :param tmp_path: Scratch directory for cache files.
+    """
+    resume_cache = tmp_path / "resume.cache"
+    resume_cache.write_bytes(b"legacy cached batches")
+
+    with capture_logs() as logs:
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-a"})
+
+    assert not resume_cache.exists()
+    assert resume_cache.with_name("resume.cache.identity").is_file()
+    warning = next(entry for entry in logs if entry["event"] == "resume_cache_identity_missing")
+    assert warning["action"] == "discard"
+
+
 def test_prepare_resume_cache_with_different_artifact_rejects_stale_batches(
     tmp_path: Path,
 ) -> None:
@@ -825,7 +873,7 @@ def test_prepare_resume_cache_with_different_artifact_rejects_stale_batches(
     _prepare_resume_cache(resume_cache, {"clap": "artifact-a"})
     resume_cache.write_bytes(b"cached Lance batches")
 
-    with pytest.raises(ValueError, match="artifact identity does not match"):
+    with pytest.raises(ValueError, match="artifact identity .*does not match"):
         _prepare_resume_cache(resume_cache, {"clap": "artifact-b"})
 
 
@@ -1211,6 +1259,29 @@ def test_add_embeddings_after_index_failure_resumes_without_reencoding(
     assert [entry["fields"] for entry in indices] == [[f"{M2L_FIELD}_vec"]]
 
 
+def test_missing_embedding_specs_with_legacy_metadata_accepts_existing_policy(
+    tmp_path: Path,
+) -> None:
+    """Legacy columns without identity metadata remain selectable.
+
+    :param tmp_path: Scratch directory for the Lance dataset.
+    """
+    uri = tmp_path / "legacy-clap.lance"
+    audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
+    clap = np.zeros((2, CLAP_EMBEDDING_DIM), dtype=np.float32)
+    write_lance_shard(uri, {AUDIO_FIELD: audio, CLAP_FIELD: clap})
+    spec = _fake_spec("clap")
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri), embeddings=("clap",), build_index=False
+    )
+
+    with capture_logs() as logs:
+        missing = _missing_embedding_specs(lance.dataset(uri), [spec], config)
+
+    assert missing == []
+    assert any(entry["event"] == "legacy_embedding_identity_missing" for entry in logs)
+
+
 def test_add_embeddings_existing_artifact_identity_mismatch_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1402,7 +1473,7 @@ def test_add_embeddings_existing_index_config_mismatch_raises(
     """
     uri = tmp_path / "index-config-mismatch.lance"
     write_minimal_lance_shard(uri, build_lance_smoke_spec(), num_rows=256)
-    _install_fake_specs(monkeypatch, ("clap",))
+    _install_fake_specs(monkeypatch, ("clap", "m2l"))
     add_embeddings(
         AddEmbeddingsConfig(
             lance_uri=str(uri),
@@ -1416,11 +1487,13 @@ def test_add_embeddings_existing_index_config_mismatch_raises(
         add_embeddings(
             AddEmbeddingsConfig(
                 lance_uri=str(uri),
-                embeddings=("clap",),
+                embeddings=("clap", "m2l"),
                 num_partitions=2,
                 metric="cosine",
             )
         )
+
+    assert M2L_FIELD not in lance.dataset(uri).schema.names
 
 
 def test_matching_index_exists_when_matching_entry_follows_stale_entry() -> None:
@@ -2097,10 +2170,12 @@ def test_configure_lance_logging_without_debug_defaults_to_warnings(
     :param monkeypatch: Fixture clearing ambient Lance logging.
     """
     monkeypatch.delenv("LANCE_LOG", raising=False)
+    monkeypatch.delenv("LANCE_INCLUDE_VECTOR_CENTROIDS", raising=False)
 
     _configure_lance_logging(debug=False)
 
     assert os.environ["LANCE_LOG"] == "warn"
+    assert os.environ["LANCE_INCLUDE_VECTOR_CENTROIDS"] == "false"
 
 
 def test_configure_lance_logging_with_debug_enables_native_debug(

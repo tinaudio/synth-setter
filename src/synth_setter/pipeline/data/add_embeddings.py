@@ -57,7 +57,6 @@ from synth_setter.pipeline.data.tinymu import (
     load_tinymu_audio_encoder,
     tinymu_artifact_digest,
 )
-from synth_setter.utils.logging_utils import resolve_git_sha
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -225,7 +224,12 @@ def _checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
     :raises ValueError: The checkpoint directory contains no files.
     """
     digest = hashlib.sha256()
-    files = sorted(path for path in checkpoint_dir.rglob("*") if path.is_file())
+    files = sorted(
+        path
+        for path in checkpoint_dir.rglob("*")
+        if path.is_file()
+        and not path.relative_to(checkpoint_dir).parts[:2] == (".cache", "huggingface")
+    )
     if not files:
         raise ValueError(f"checkpoint directory has no files: {checkpoint_dir}")
     for path in files:
@@ -244,7 +248,7 @@ def _versioned_artifact_identity(name: str, digest: str) -> str:
     :param digest: Immutable package or checkpoint digest.
     :returns: Versioned identity persisted in Lance field metadata.
     """
-    return f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:source:{resolve_git_sha()}:{digest}"
+    return f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:{digest}"
 
 
 def _m2l_artifact_identity(checkpoint: str) -> str:
@@ -798,10 +802,21 @@ def _prepare_resume_cache(resume_cache: Path | None, identities: Mapping[str, st
         _update_framed_digest(digest, identity.encode())
     expected = digest.hexdigest()
     identity_path = _resume_identity_path(resume_cache)
+    if resume_cache.exists() and not identity_path.is_file():
+        logger.warning(
+            "resume_cache_identity_missing",
+            resume_cache=str(resume_cache),
+            identity_path=str(identity_path),
+            action="discard",
+        )
+        resume_cache.unlink()
     if resume_cache.exists():
-        actual = identity_path.read_text().strip() if identity_path.is_file() else None
+        actual = identity_path.read_text().strip()
         if actual != expected:
-            raise ValueError("resume cache artifact identity does not match requested policy")
+            raise ValueError(
+                f"resume cache {resume_cache} artifact identity in {identity_path} "
+                "does not match requested policy"
+            )
         return
     identity_path.write_text(expected)
 
@@ -1154,9 +1169,19 @@ def _missing_embedding_specs(
         if not present:
             missing.append(spec)
             continue
+        field_metadata = {
+            column: dataset.schema.field(column).metadata or {} for column in expected
+        }
+        has_identity = any(
+            _EMBEDDING_NAME_METADATA in metadata
+            or _EMBEDDING_ARTIFACT_METADATA in metadata
+            for metadata in field_metadata.values()
+        )
+        if not has_identity:
+            logger.warning("legacy_embedding_identity_missing", embedding=spec.name)
+            continue
         artifact_identity = _resolve_artifact_identity(spec, config).encode()
-        for column in expected:
-            metadata = dataset.schema.field(column).metadata or {}
+        for column, metadata in field_metadata.items():
             if (
                 metadata.get(_EMBEDDING_NAME_METADATA) != spec.name.encode()
                 or metadata.get(_EMBEDDING_ARTIFACT_METADATA) != artifact_identity
@@ -1185,6 +1210,7 @@ def _index_config_matches(
     :param metric: Requested distance metric.
     :returns: Whether every persisted index segment has the requested policy.
     """
+    os.environ.setdefault("LANCE_INCLUDE_VECTOR_CENTROIDS", "false")
     stats = dataset.index_statistics(index_name)
     segments = stats.get("indices")
     if not isinstance(segments, list) or not segments:
@@ -1221,9 +1247,13 @@ def _matching_index_exists(
     :raises ValueError: An index exists with incompatible search semantics.
     """
     rows = dataset.count_rows()
-    num_partitions = config.num_partitions or max(1, round(rows**0.5))
-    num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
-    metric = config.metric or index.metric
+    num_partitions = (
+        max(1, round(rows**0.5))
+        if config.num_partitions is None
+        else config.num_partitions
+    )
+    num_sub_vectors = config.num_sub_vectors
+    metric = config.metric
     indices = cast("list[dict[str, object]]", dataset.list_indices())
     column_indices = [entry for entry in indices if entry.get("fields") == [column]]
     for entry in column_indices:
@@ -1252,6 +1282,13 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
     pending = _missing_embedding_specs(dataset, specs, config)
+    if config.build_index:
+        for spec in specs:
+            if spec.index is None:
+                continue
+            vector_column = spec.index.vector_column or spec.column
+            if vector_column in dataset.schema.names:
+                _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
         _validate_write_source(dataset, config.batch_size)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
@@ -1286,6 +1323,7 @@ def _configure_lance_logging(*, debug: bool) -> None:
 
     :param debug: Whether to force debug-level native telemetry.
     """
+    os.environ.setdefault("LANCE_INCLUDE_VECTOR_CENTROIDS", "false")
     if debug:
         os.environ["LANCE_LOG"] = "debug"
     else:
