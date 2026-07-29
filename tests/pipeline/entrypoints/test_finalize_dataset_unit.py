@@ -161,6 +161,12 @@ def test_log_finalize_metrics_swallows_wandb_failure(monkeypatch: pytest.MonkeyP
     finalize_dataset._log_finalize_metrics([wandb_logger], {"finalize/shards_processed": 1.0})
 
     recording_logger.warning.assert_called_once()
+    # loguru brace style: the logger name and the cause arrive as args, not pre-formatted,
+    # so a broken interpolation shows up here rather than in a rendered string.
+    template, logger_name, cause = recording_logger.warning.call_args.args
+    assert template == "finalize metrics logging failed on {}: {}"
+    assert logger_name == type(wandb_logger).__name__
+    assert str(cause) == "W&B down"
 
 
 def test_finalize_from_spec_uploads_stats_then_marker_at_canonical_uris(

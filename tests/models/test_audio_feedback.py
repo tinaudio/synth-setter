@@ -1,5 +1,6 @@
 """Behaviour tests for the torchsynth audio-feedback loss and its runtime guards."""
 
+import numpy as np
 import pytest
 import torch
 
@@ -8,7 +9,10 @@ from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
-from synth_setter.data.vst.torchsynth_param_spec import INFERABLE_SPEC
+from synth_setter.data.vst.torchsynth_param_spec import (
+    INFERABLE_SPEC,
+    TORCHSYNTH_FULL_PARAM_SPEC,
+)
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
     gradient_balance,
@@ -18,12 +22,45 @@ from synth_setter.models.components.audio_feedback import (
 
 _SAMPLE_RATE = 44_100
 _SIGNAL_LENGTH = 4_410
-_MIDI_PITCH = 60
 _BATCH = 4
 # Large enough that torchsynth's seeded (batch, buffer) noise fill crosses torch's
 # parallel-RNG grain size, where the drawn realization starts tracking the batch length.
 _NOISE_SENSITIVE_BATCH = 32
-_NUM_PARAMS = 76
+_ENCODED_WIDTH = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
+_SYNTH_COLUMNS = TORCHSYNTH_FULL_PARAM_SPEC.synth_columns
+_NOTE_COLUMNS = slice(_SYNTH_COLUMNS.stop, _ENCODED_WIDTH)
+_BUFFER_SECONDS = _SIGNAL_LENGTH / _SAMPLE_RATE
+
+
+def _audible_note_columns() -> torch.Tensor:
+    """Encode a note that sounds across the whole render buffer.
+
+    Uniform-random note columns decode to a note starting anywhere in the spec's
+    multi-second range, which is past the end of this short test buffer and renders
+    silence — an audio assertion against silence passes for the wrong reason.
+
+    :returns: Encoded note columns in ``[0, 1]``.
+    """
+    synth_values, _ = TORCHSYNTH_FULL_PARAM_SPEC.sample(np.random.default_rng(0))
+    row = TORCHSYNTH_FULL_PARAM_SPEC.encode(
+        synth_values, {"pitch": 60, "note_start_and_end": (0.0, _BUFFER_SECONDS)}
+    )
+    return torch.from_numpy(row)[_NOTE_COLUMNS]
+
+
+_NOTE_TAIL = _audible_note_columns()
+
+
+def _encoded_rows(rows: int, seed: int | None = None) -> torch.Tensor:
+    """Draw encoded rows: random synth values behind one audible note window.
+
+    :param rows: Number of rows to draw.
+    :param seed: Seed for the synth columns; ``None`` draws from the global RNG.
+    :returns: Encoded rows shaped ``(rows, encoded_width)`` in ``[0, 1]``.
+    """
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    synth = torch.rand(rows, TORCHSYNTH_FULL_PARAM_SPEC.synth_param_length, generator=generator)
+    return torch.cat([synth, _NOTE_TAIL.expand(rows, -1)], dim=1)
 
 
 def _render(params01: torch.Tensor, render_batch_size: int = _BATCH) -> torch.Tensor:
@@ -38,7 +75,6 @@ def _render(params01: torch.Tensor, render_batch_size: int = _BATCH) -> torch.Te
             params01,
             sample_rate=_SAMPLE_RATE,
             signal_length=_SIGNAL_LENGTH,
-            midi_pitch=_MIDI_PITCH,
             render_batch_size=render_batch_size,
         )
 
@@ -54,7 +90,6 @@ def _loss(**kwargs: object) -> AudioFeedbackLoss:
         "t_min": 0.8,
         "sample_rate": _SAMPLE_RATE,
         "signal_length": _SIGNAL_LENGTH,
-        "midi_pitch": _MIDI_PITCH,
         "render_batch_size": _BATCH,
     }
     return AudioFeedbackLoss(**(settings | kwargs))
@@ -120,7 +155,7 @@ def test_audio_weight_at_final_time_equals_lambda() -> None:
 
 def test_grad_render_output_matches_the_documented_audio_contract() -> None:
     """The differentiable render emits finite float32 ``(batch, signal_length)`` audio in range."""
-    audio = _render(torch.rand(_BATCH, _NUM_PARAMS, generator=torch.Generator().manual_seed(0)))
+    audio = _render(_encoded_rows(_BATCH, 0))
 
     assert audio.shape == (_BATCH, _SIGNAL_LENGTH)
     assert audio.dtype == torch.float32
@@ -134,9 +169,9 @@ def _noise_heavy_params(rows: int) -> torch.Tensor:
     A mismatched noise realization would otherwise hide under the tonal oscillators.
 
     :param rows: Number of parameter rows to draw.
-    :returns: Parameters in ``[0, 1]`` shaped ``(rows, NUM_PARAMS)``.
+    :returns: Encoded rows in ``[0, 1]`` shaped ``(rows, encoded_width)``.
     """
-    params = torch.rand(rows, _NUM_PARAMS, generator=torch.Generator().manual_seed(0))
+    params = _encoded_rows(rows, 0)
     for index, spec in enumerate(INFERABLE_SPEC):
         if "noise" in spec.name:
             params[:, index] = 0.9
@@ -146,7 +181,7 @@ def _noise_heavy_params(rows: int) -> torch.Tensor:
 def _per_row_targets(params: torch.Tensor) -> torch.Tensor:
     """Render each row the way :class:`TorchSynthDataset` stores its targets.
 
-    :param params: Parameters in ``[0, 1]`` shaped ``(rows, NUM_PARAMS)``.
+    :param params: Encoded rows in ``[0, 1]`` shaped ``(rows, encoded_width)``.
     :returns: Audio shaped ``(rows, signal_length)``.
     """
     return torch.cat(
@@ -155,7 +190,6 @@ def _per_row_targets(params: torch.Tensor) -> torch.Tensor:
                 params[row : row + 1],
                 sample_rate=_SAMPLE_RATE,
                 signal_length=_SIGNAL_LENGTH,
-                midi_pitch=_MIDI_PITCH,
             )
             for row in range(len(params))
         ],
@@ -218,14 +252,11 @@ def test_grad_render_of_more_rows_than_the_configured_size_raises() -> None:
 
 def test_grad_render_each_output_row_depends_only_on_matching_parameter_row() -> None:
     """A row-local render cannot leak gradients across batch examples."""
-    params = torch.rand(
-        2, _NUM_PARAMS, generator=torch.Generator().manual_seed(11)
-    ).requires_grad_()
+    params = _encoded_rows(2, 11).requires_grad_()
     audio = render_torchsynth_grad(
         params,
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
-        midi_pitch=_MIDI_PITCH,
         render_batch_size=_BATCH,
     )
 
@@ -244,8 +275,10 @@ def test_grad_render_of_saturated_parameters_still_backprops_nonzero_gradient() 
     A hard clamp zeroes gradient for every saturated entry, so a diverged estimate can
     never be pulled back into range by the audio loss.
     """
-    params = torch.rand(1, _NUM_PARAMS, generator=torch.Generator().manual_seed(11))
-    saturated = torch.arange(0, _NUM_PARAMS, 2)
+    params = _encoded_rows(1, 11)
+    # Synth columns only: the note columns are detached by contract, so saturating them
+    # would assert a gradient the renderer is required not to produce.
+    saturated = torch.arange(_SYNTH_COLUMNS.start, _SYNTH_COLUMNS.stop, 2)
     params[:, saturated] = (torch.arange(len(saturated)) % 2).float()
     params.requires_grad_()
 
@@ -253,13 +286,35 @@ def test_grad_render_of_saturated_parameters_still_backprops_nonzero_gradient() 
         params,
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
-        midi_pitch=_MIDI_PITCH,
         render_batch_size=1,
     )
     (gradient,) = torch.autograd.grad(audio.square().mean(), params)
 
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient[:, saturated]).item() > 0
+
+
+def test_grad_render_note_columns_receive_no_gradient() -> None:
+    """Note conditioning is read off the row but never backpropagated into.
+
+    Pitch is a discrete category and the note window lands on ADSR segment boundaries
+    through integer sample arithmetic, so any gradient arriving at those columns would be
+    an artifact of treating them as continuous knobs. The render must route them through
+    ``detach()``; the synth columns are asserted alongside so a render that silently
+    stopped producing gradient at all cannot pass this test.
+    """
+    params = _encoded_rows(2, 5).requires_grad_()
+
+    audio = render_torchsynth_grad(
+        params,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        render_batch_size=2,
+    )
+    (gradient,) = torch.autograd.grad(audio.square().mean(), params)
+
+    assert torch.equal(gradient[:, _NOTE_COLUMNS], torch.zeros_like(gradient[:, _NOTE_COLUMNS]))
+    assert torch.count_nonzero(gradient[:, _SYNTH_COLUMNS]).item() > 0
 
 
 def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -> None:
@@ -277,7 +332,7 @@ def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -
 
     handle = torch.nn.modules.module.register_module_forward_hook(record)
     try:
-        _render(torch.rand(1, _NUM_PARAMS, generator=torch.Generator().manual_seed(3)))
+        _render(_encoded_rows(1, 3))
     finally:
         handle.remove()
 
@@ -288,14 +343,11 @@ def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -
 
 def test_grad_render_parameter_gradients_match_the_pinned_baseline() -> None:
     """The gradient the audio loss sees is pinned against a pre-refactor measurement."""
-    params = torch.rand(
-        2, _NUM_PARAMS, generator=torch.Generator().manual_seed(11)
-    ).requires_grad_()
+    params = _encoded_rows(2, 11).requires_grad_()
     audio = render_torchsynth_grad(
         params,
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
-        midi_pitch=_MIDI_PITCH,
         render_batch_size=2,
     )
 
@@ -321,7 +373,7 @@ def test_latent_loss_with_all_zero_weights_skips_render_and_preserves_scalar_con
     monkeypatch.setattr(
         "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fail_render
     )
-    theta = torch.zeros(_BATCH, _NUM_PARAMS, dtype=torch.float64, requires_grad=True)
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, dtype=torch.float64, requires_grad=True)
 
     value = _loss()(
         theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
@@ -350,7 +402,7 @@ def test_latent_loss_with_partially_zero_weights_still_renders(
     monkeypatch.setattr(
         "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fake_render
     )
-    theta = torch.zeros(_BATCH, _NUM_PARAMS, requires_grad=True)
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
     keep = torch.tensor([True, False, False, False])
 
     value = _loss()(
@@ -367,7 +419,7 @@ def test_latent_loss_with_partially_zero_weights_still_renders(
 
 def test_latent_loss_with_zero_weights_still_rejects_wrong_parameter_width() -> None:
     """The render skip retains the renderer's parameter-shape boundary."""
-    theta = torch.zeros(_BATCH, _NUM_PARAMS - 1, requires_grad=True)
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH - 1, requires_grad=True)
 
     with pytest.raises(ValueError, match="Expected"):
         _loss()(
@@ -377,7 +429,7 @@ def test_latent_loss_with_zero_weights_still_rejects_wrong_parameter_width() -> 
 
 def test_latent_loss_with_zero_weights_still_rejects_non_finite_parameters() -> None:
     """The render skip cannot hide a diverged parameter estimate."""
-    theta = torch.zeros(_BATCH, _NUM_PARAMS, requires_grad=True)
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
     with torch.no_grad():
         theta[0, 0] = float("nan")
 
@@ -389,7 +441,7 @@ def test_latent_loss_with_zero_weights_still_rejects_non_finite_parameters() -> 
 
 def test_latent_loss_with_all_zero_weights_backprops_zero_theta_gradients() -> None:
     """The skipped render keeps a zero autograd path to every estimate row."""
-    theta = torch.zeros(_BATCH, _NUM_PARAMS, requires_grad=True)
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
 
     value = _loss()(
         theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
@@ -401,7 +453,7 @@ def test_latent_loss_with_all_zero_weights_backprops_zero_theta_gradients() -> N
 
 def test_gradient_balance_with_all_zero_audio_weights_is_finite_zero() -> None:
     """An inactive audio term remains measurable by the training diagnostic."""
-    prediction = torch.randn(_BATCH, _NUM_PARAMS, requires_grad=True)
+    prediction = torch.randn(_BATCH, _ENCODED_WIDTH, requires_grad=True)
     flow_loss = prediction.square().mean()
     audio_term = _loss()(
         prediction,
@@ -421,8 +473,8 @@ def test_gradient_balance_with_all_zero_audio_weights_is_finite_zero() -> None:
 def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     """The latent distance differentiates through both the render and the encoder."""
     torch.manual_seed(0)
-    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
-    theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
+    target_audio = _render(_encoded_rows(_BATCH))
+    theta = (_encoded_rows(_BATCH) * 2 - 1).requires_grad_(True)
 
     value = _loss().forward(
         theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
@@ -437,9 +489,9 @@ def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
 def test_latent_loss_is_invariant_to_encoder_output_scale() -> None:
     """Cosine geometry: scaling the encoder's outputs must not move the distance."""
     torch.manual_seed(0)
-    params = torch.rand(_BATCH, _NUM_PARAMS)
+    params = _encoded_rows(_BATCH)
     target_audio = _render(params)
-    theta = torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1
+    theta = _encoded_rows(_BATCH) * 2 - 1
     t = torch.full((_BATCH, 1), 0.9)
 
     unscaled = _loss().forward(theta, t, target_audio, encoder=_linear_encoder(scale=1.0))
@@ -451,7 +503,7 @@ def test_latent_loss_is_invariant_to_encoder_output_scale() -> None:
 def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
     """An estimate that decodes to the target's own parameters renders an exact match."""
     torch.manual_seed(0)
-    params = torch.rand(_BATCH, _NUM_PARAMS).clamp(0.01, 0.99)
+    params = _encoded_rows(_BATCH).clamp(0.01, 0.99)
     target_audio = _render(params)
 
     value = _loss().forward(
@@ -465,7 +517,7 @@ def test_latent_loss_of_a_batch_shorter_than_the_render_size_is_finite() -> None
     """A trailing partial batch trains: the render pads it and slices the padding off."""
     torch.manual_seed(0)
     rows = _BATCH - 1
-    params = torch.rand(rows, _NUM_PARAMS).clamp(0.01, 0.99)
+    params = _encoded_rows(rows).clamp(0.01, 0.99)
     target_audio = _render(params)
 
     value = _loss().forward(
@@ -487,8 +539,8 @@ def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
             return self.linear(audio).reshape(audio.shape[0], 3, 8)
 
     torch.manual_seed(0)
-    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
-    theta = torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1
+    target_audio = _render(_encoded_rows(_BATCH))
+    theta = _encoded_rows(_BATCH) * 2 - 1
 
     value = _loss().forward(
         theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_TokenEncoder()
@@ -509,8 +561,8 @@ def test_latent_loss_leaves_encoder_weights_and_stats_untouched() -> None:
     assert isinstance(batch_norm, torch.nn.BatchNorm1d)
     assert batch_norm.running_mean is not None
     stats_before = batch_norm.running_mean.clone()
-    target_audio = _render(torch.rand(_BATCH, _NUM_PARAMS))
-    theta = (torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1).requires_grad_(True)
+    target_audio = _render(_encoded_rows(_BATCH))
+    theta = (_encoded_rows(_BATCH) * 2 - 1).requires_grad_(True)
 
     value = _loss().forward(theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=encoder)
     value.backward()

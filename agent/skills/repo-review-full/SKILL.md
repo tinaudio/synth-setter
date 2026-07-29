@@ -3,7 +3,8 @@ name: repo-review-full
 description: |-
   Full multi-skill PR review. Routes every host harness through Pi, fans out a
   parallel Tintin worker per applicable checklist, and posts every diff-anchored
-  BLOCK/WARN as an unresolved inline comment. Requires the
+  BLOCK/WARN as an unresolved inline comment and lists NIT findings in the
+  review body. Requires the
   tinaudio-synth-setter-skills plugin.
 ---
 
@@ -51,11 +52,12 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >   `[<calling-skill>:block]` prefixes inside the `## PR health` bullets.
 > - Write the findings JSON to `/tmp/repo-review-full-findings.json`.
 > - Phrase the `review_body` lead-in so every BLOCK/WARN reads as being posted
->   as an unresolved inline thread (sample wording is in the shared file).
+>   as an unresolved inline thread and every NIT as advisory body-only (sample
+>   wording is in the shared file).
 > - Set the top-level `"event"` field: `REQUEST_CHANGES` if any finding is a
 >   BLOCK (any `[*:block]`, including folded PR-health BLOCKs), else `COMMENT`
->   if any WARN exists, else `APPROVE`. The self-review COMMENT fallback (when
->   the bot is the PR author) is automatic in `post_review.py`.
+>   if any WARN or NIT exists, else `APPROVE`. The self-review COMMENT fallback
+>   (when the bot is the PR author) is automatic in `post_review.py`.
 > - On any terminal failure after target resolution, follow the shared
 >   **Terminal failure delivery** section with `--mode full`. Its top-level
 >   COMMENT review replaces ordinary Step 7; do not invoke `post_review.py`
@@ -75,7 +77,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > - Submits with the payload's `event` (REQUEST_CHANGES / COMMENT / APPROVE). On a self-review 422 (the bot is the PR author) it retries once as `event=COMMENT` with an event-aware intent banner prepended — `⛔ N BLOCKING finding(s) — changes required` for a REQUEST_CHANGES downgrade, `✅ No findings` for an APPROVE downgrade — so the original intent stays visible. Threads stay unresolved.
 >
 > **Return value.** Reply with ONLY the helper's `html_url` and a one-line
-> summary: `Posted N findings: B BLOCK + W WARN across K skills; PR-health flags: <M merge-conflict / F failing-check>`. If PR-health found nothing,
+> summary: `Posted N inline findings: B BLOCK + W WARN across K skills (+ X NIT in the body); PR-health flags: <M merge-conflict / F failing-check>`. If PR-health found nothing,
 > drop the trailing `; PR-health flags: ...` clause. This text is the main
 > agent's deliverable — return data, not narration.
 

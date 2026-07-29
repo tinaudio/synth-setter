@@ -53,17 +53,20 @@ def test_prepare_data_live_r2_materializes_splits_and_feeds_dataloader(
 
     module.prepare_data()
 
+    materialized_root = module.dataset_root
+    assert materialized_root.parent == destination
     for split in ("train", "val"):
-        dataset = lance.dataset(str(destination / f"{split}.lance"))
+        dataset = lance.dataset(str(materialized_root / f"{split}.lance"))
         assert dataset.schema.names == ["param_array", "mel_spec"]
         assert dataset.count_rows() == _SUBSET_ROWS
     # test.lance doubles as the default predict split, so it retains audio.
-    test_split = lance.dataset(str(destination / "test.lance"))
+    test_split = lance.dataset(str(materialized_root / "test.lance"))
     assert test_split.schema.names == ["param_array", "mel_spec", "audio"]
     assert test_split.count_rows() == _SUBSET_ROWS
-    assert (destination / "stats.npz").is_file()
+    assert (materialized_root / "dataset.complete").is_file()
+    assert (materialized_root / "stats.npz").is_file()
     # Pipeline-internal worker metadata must not ride along with the sidecars.
-    assert not (destination / "metadata").exists()
+    assert not (materialized_root / "metadata").exists()
 
     module.setup("fit")
     try:

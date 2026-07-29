@@ -13,6 +13,7 @@ import torch
 from lightning.pytorch import Trainer
 
 from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule, _make_renderer
+from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.vst_flow_matching_module import (
@@ -22,9 +23,9 @@ from synth_setter.models.vst_flow_matching_module import (
 
 _SAMPLE_RATE = 44_100
 _SIGNAL_LENGTH = 4_410
-_MIDI_PITCH = 60
 _BATCH = 4
-_NUM_PARAMS = 76
+_ENCODED_WIDTH = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
+_BUFFER_SECONDS = _SIGNAL_LENGTH / _SAMPLE_RATE
 _CONDITIONING_DIM = 32
 _OVERFIT_STEPS = 300
 _OVERFIT_TOTAL_THRESHOLD = 0.1
@@ -56,7 +57,6 @@ def _audio_loss() -> AudioFeedbackLoss:
         t_min=0.0,
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
-        midi_pitch=_MIDI_PITCH,
         render_batch_size=_BATCH,
     )
 
@@ -76,14 +76,14 @@ def _module(
     return VSTFlowMatchingModule(
         encoder=_WaveformEncoder(),
         vector_field=VectorField(
-            field_dim=_NUM_PARAMS,
+            field_dim=_ENCODED_WIDTH,
             hidden_dim=32,
             conditioning_dim=_CONDITIONING_DIM,
             num_blocks=2,
         ),
         optimizer=torch.optim.Adam,  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
-        num_params=_NUM_PARAMS,
+        num_params=_ENCODED_WIDTH,
         conditioning="audio",
         audio_loss=audio_loss,
         cfg_dropout_rate=cfg_dropout_rate,
@@ -101,7 +101,6 @@ def _datamodule(batch_size: int = _BATCH, train_size: int = 8) -> TorchSynthData
     datamodule = TorchSynthDataModule(
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
-        midi_pitch=_MIDI_PITCH,
         train_val_test_sizes=(train_size, 4, 4),
         train_val_test_seeds=(1, 2, 3),
         batch_size=batch_size,
@@ -111,6 +110,32 @@ def _datamodule(batch_size: int = _BATCH, train_size: int = 8) -> TorchSynthData
     return datamodule
 
 
+def _audible_rows(rows: int, seed: int) -> torch.Tensor:
+    """Draw encoded rows whose note sounds across the whole render buffer.
+
+    Uniform-random note columns decode to a note starting anywhere in the spec's
+    multi-second range — past the end of this short test buffer, so both sides of a
+    render comparison would be silence and agree for the wrong reason.
+
+    :param rows: Number of rows to draw.
+    :param seed: Seed for the synth columns.
+    :returns: Encoded rows shaped ``(rows, encoded_width)`` in ``[0, 1]``.
+    """
+    import numpy as np
+
+    synth_values, _ = TORCHSYNTH_FULL_PARAM_SPEC.sample(np.random.default_rng(0))
+    reference = TORCHSYNTH_FULL_PARAM_SPEC.encode(
+        synth_values, {"pitch": 60, "note_start_and_end": (0.0, _BUFFER_SECONDS)}
+    )
+    note_tail = torch.from_numpy(reference)[TORCHSYNTH_FULL_PARAM_SPEC.synth_columns.stop :]
+    synth = torch.rand(
+        rows,
+        TORCHSYNTH_FULL_PARAM_SPEC.synth_param_length,
+        generator=torch.Generator().manual_seed(seed),
+    )
+    return torch.cat([synth, note_tail.expand(rows, -1)], dim=1)
+
+
 def _synthetic_batch() -> dict[str, torch.Tensor]:
     """Build a render-free batch matching the online dict contract.
 
@@ -118,8 +143,8 @@ def _synthetic_batch() -> dict[str, torch.Tensor]:
     """
     generator = torch.Generator().manual_seed(0)
     return {
-        "params": torch.rand(_BATCH, _NUM_PARAMS, generator=generator) * 2 - 1,
-        "noise": torch.randn(_BATCH, _NUM_PARAMS, generator=generator),
+        "params": torch.rand(_BATCH, _ENCODED_WIDTH, generator=generator) * 2 - 1,
+        "noise": torch.randn(_BATCH, _ENCODED_WIDTH, generator=generator),
         "audio": torch.randn(_BATCH, _SIGNAL_LENGTH, generator=generator),
     }
 
@@ -287,14 +312,14 @@ def test_module_with_audio_loss_and_nonzero_sigma_min_raises() -> None:
         VSTFlowMatchingModule(
             encoder=_WaveformEncoder(),
             vector_field=VectorField(
-                field_dim=_NUM_PARAMS,
+                field_dim=_ENCODED_WIDTH,
                 hidden_dim=32,
                 conditioning_dim=_CONDITIONING_DIM,
                 num_blocks=2,
             ),
             optimizer=torch.optim.Adam,  # pyright: ignore[reportArgumentType]
             scheduler=None,  # pyright: ignore[reportArgumentType]
-            num_params=_NUM_PARAMS,
+            num_params=_ENCODED_WIDTH,
             conditioning="audio",
             audio_loss=_audio_loss(),
             rectified_sigma_min=0.01,
@@ -307,7 +332,7 @@ def test_audio_loss_keep_mask_zeroes_cfg_dropped_rows() -> None:
     torch.manual_seed(0)
     loss = _audio_loss()
     batch = next(iter(_datamodule().train_dataloader()))
-    theta_hat = torch.rand(_BATCH, _NUM_PARAMS) * 2 - 1
+    theta_hat = torch.rand(_BATCH, _ENCODED_WIDTH) * 2 - 1
     t = torch.full((_BATCH, 1), 0.9)
 
     encoder = _WaveformEncoder()
@@ -327,14 +352,13 @@ def test_grad_render_matches_the_row_at_a_time_production_render() -> None:
     from synth_setter.data.torchsynth_datamodule import render_torchsynth
     from synth_setter.data.torchsynth_grad_render import render_torchsynth_grad
 
-    params01 = torch.rand(_BATCH, _NUM_PARAMS, generator=torch.Generator().manual_seed(7))
+    params01 = _audible_rows(_BATCH, 7)
     row_targets = torch.cat(
         [
             render_torchsynth(
                 row.unsqueeze(0),
                 sample_rate=_SAMPLE_RATE,
                 signal_length=_SIGNAL_LENGTH,
-                midi_pitch=_MIDI_PITCH,
             )
             for row in params01
         ]
@@ -344,7 +368,6 @@ def test_grad_render_matches_the_row_at_a_time_production_render() -> None:
             params01,
             sample_rate=_SAMPLE_RATE,
             signal_length=_SIGNAL_LENGTH,
-            midi_pitch=_MIDI_PITCH,
             render_batch_size=_BATCH,
         ).clamp(-1, 1)
 

@@ -47,8 +47,9 @@ so you start from a working spec instead of a blank file.
 
 - Project Python env (`make install`; see
   [getting-started](../getting-started.md)).
-- The synth's `.vst3` bundle on disk. On Linux, run GUI-heavy plugins through
-  the headless wrapper
+- The synth installed through `make install-plugins` or another exact package
+  entry in `studiorack.json`. Unmanaged/legacy `.vst3` paths remain supported.
+  On Linux, run GUI-heavy plugins through the headless wrapper
   [`src/synth_setter/scripts/run-linux-vst-headless.sh`](../../src/synth_setter/scripts/run-linux-vst-headless.sh).
 - Most Linux-precompiled VST3 synths are x86_64-only, so plan to render and
   validate on an amd64 host.
@@ -145,6 +146,7 @@ patch:
 | Synth                        | `synth_params` | encoded width |
 | ---------------------------- | -------------- | ------------- |
 | `surge_4` (4-param toy spec) | 4              | 7             |
+| `cardinal`                   | 9              | 13            |
 | `surge_simple`               | 89             | 92            |
 | `obxf`                       | 94             | 187           |
 | `surge_xt`                   | 162            | 300           |
@@ -159,17 +161,35 @@ See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_sp
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
 for hand-tuned examples.
 
+### Hosts that restore state asynchronously
+
+Some plugins rebuild their internal graph when a preset is restored and apply
+that on the audio thread. Cardinal is one: its curated controls are generic host
+slots whose meaning comes from the `HostParametersMap` module inside
+`presets/cardinal-base.vstpreset`, and parameters written before the plugin has
+processed a single block are silently dropped. `DawDreamerRenderer` therefore
+renders and discards `PRESET_SETTLE_SECONDS` of audio after every preset load
+(#2543). Such a synth also needs `plugin_reload_cadence: render`, because a
+reused instance carries free-running engine state across samples.
+
 ## Step 3 — Register the synth
 
-Wire the spec, preset, and identity config into the checkout. The CLI does this
-for you with `--register`:
+Wire the spec, preset, and identity config into the checkout. For a package
+pinned in `studiorack.json`, use its package slug:
 
 ```bash
 synth-setter-introspect-plugin \
-  --plugin-path /path/to/MySynth.vst3 \
+  --studiorack-plugin organization/package \
   --spec-name mysynth \
   --register --verify
 ```
+
+The package must already be installed. The command resolves it from the
+checkout manifest and `STUDIORACK_PLUGINS_DIR`, creates a stable
+`plugins/MySynth.vst3` alias, and records that portable path. The managed option
+requires `--register` and is mutually exclusive with `--plugin-path`. Use
+`--plugin-path /path/to/MySynth.vst3` instead for private, unmanaged, or legacy
+bundles.
 
 `--register` writes the spec module, preset, and CSV to their conventional
 paths, generates `src/synth_setter/configs/synth/mysynth.yaml` (the root identity
@@ -257,15 +277,13 @@ This renders a small smoke dataset, proving the synth resolves through
 
 ## Optional — bake the synth into the Docker image
 
-To run the synth in CI or on distributed workers, add a fetch step to the
-`vst3-synths-fetch` stage in
-[`docker/ubuntu22_04/Dockerfile`](../../docker/ubuntu22_04/Dockerfile): download
-the release asset, pin its `sha256sum`, and unpack the `.vst3` into the staging
-dir. The synths fetched there are x86_64-only, so each step early-exits on
-non-amd64 builds. The build then runs a per-synth headless-X11 load check and
-symlinks the bundle under `plugins/`. Dataset generation resolves the plugin
-from the render config's `plugin_path`; `SYNTH_SETTER_PLUGIN_PATH` only sets the
-default for tools that don't take a render config (tests, the interactive CLIs).
+To run the synth in CI or on distributed workers, add its exact package version
+and VST3 bundle basename to `studiorack.json`. Include the package in the
+`builder-install-studiorack-plugins` selection and the Docker presence/load
+checks. Keep source-build fallbacks only when the registry has no compatible
+artifact for a supported image platform. Dataset generation resolves the stable
+alias from the synth identity; `SYNTH_SETTER_PLUGIN_PATH` only sets the default
+for tests and interactive tools that do not compose a synth config.
 
 ## See also
 

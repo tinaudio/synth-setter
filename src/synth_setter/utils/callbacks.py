@@ -647,7 +647,6 @@ class ValAudioProbe(Callback):
         probe_root: str | Path,
         probe_fn: Callable[[Path, int], dict[str, float]],
         num_samples: int = 5,
-        complete_rows: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
         """Initialize the probe.
 
@@ -657,14 +656,10 @@ class ValAudioProbe(Callback):
             verbatim (e.g. ``{"val_audio/mss_mean": ...}``). Exceptions it raises are
             logged as warnings at the next harvest and never crash the fit loop.
         :param num_samples: Upper bound on samples taken from the first val batch.
-        :param complete_rows: Widens every staged batch to the renderable encoded
-            width — :meth:`~synth_setter.data.vst.param_spec.ParamSpec.complete_model_rows`
-            bound to the run's fixed note params. ``None`` stages rows verbatim.
         """
         super().__init__()
         self.probe_root = Path(probe_root)
         self.num_samples = num_samples
-        self.complete_rows = complete_rows
         self._probe_fn = probe_fn
         # Created lazily: ddp_spawn pickles callbacks, and a live executor can't travel.
         self._pool: ThreadPoolExecutor | None = None
@@ -733,10 +728,7 @@ class ValAudioProbe(Callback):
             ("pred", outputs["preds"]),
             ("target-params", params),
         ):
-            staged = tensor[:limit].detach()
-            if self.complete_rows is not None:
-                staged = self.complete_rows(staged)
-            torch.save(staged.cpu(), predictions_dir / f"{name}-0.pt")
+            torch.save(tensor[:limit].detach().cpu(), predictions_dir / f"{name}-0.pt")
         self._staged = (probe_dir, trainer.global_step)
 
     def on_validation_epoch_end(self, trainer: "Trainer", pl_module: "LightningModule") -> None:

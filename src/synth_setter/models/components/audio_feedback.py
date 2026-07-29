@@ -187,7 +187,6 @@ class AudioFeedbackLoss(nn.Module):
         t_min: float,
         sample_rate: int,
         signal_length: int,
-        midi_pitch: int,
         render_batch_size: int,
     ) -> None:
         """Configure the render geometry and the term's weighting.
@@ -196,7 +195,6 @@ class AudioFeedbackLoss(nn.Module):
         :param t_min: Flow time at which the term switches on, in ``[0, 1)``.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row.
-        :param midi_pitch: Fixed MIDI note rendered for every row.
         :param render_batch_size: Rows the renderer's voice holds; must cover the
             training batch size, which shorter batches pad up to.
         :raises ValueError: Non-finite/non-positive ``lambda_audio``, out-of-range
@@ -216,7 +214,6 @@ class AudioFeedbackLoss(nn.Module):
         self.t_min = t_min
         self.sample_rate = sample_rate
         self.signal_length = signal_length
-        self.midi_pitch = midi_pitch
         self.render_batch_size = render_batch_size
 
     @jaxtyped(typechecker=beartype)
@@ -262,7 +259,6 @@ class AudioFeedbackLoss(nn.Module):
             params,
             sample_rate=self.sample_rate,
             signal_length=self.signal_length,
-            midi_pitch=self.midi_pitch,
             render_batch_size=self.render_batch_size,
         )
         # The stored target was hard-clamped by render_torchsynth; a straight-through

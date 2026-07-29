@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import importlib
 import io
@@ -185,7 +186,7 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "thinking" not in worker
     prompt_flat = " ".join(prompt.split())
     assert "exactly one JSON object" in prompt_flat
-    assert '"severity": "block or warn"' in prompt
+    assert '"severity": "block, warn, or nit"' in prompt
     assert '"line": 42' in prompt
     assert '"what_looks_good"' in prompt
     assert "no Markdown fence or surrounding prose" in prompt_flat
@@ -235,17 +236,38 @@ def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
     assert "openrouter" in text
 
 
+def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
+    """Every ``pi_review_routing.py <cmd>`` the runbook names must be a real subcommand.
+
+    Matching fixed command names as prose only catches a rename by coincidence. Resolving them
+    against the live parser turns the check into a real consistency guard, and it covers commands
+    added to the runbook later.
+
+    :param runbook_text: Body of the review-orchestration runbook.
+    """
+    routing = importlib.import_module("agent._shared.pi_review_routing")
+    subparsers = next(
+        action
+        for action in routing._build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    registered = set(subparsers.choices)
+
+    referenced = set(re.findall(r"pi_review_routing\.py ([a-z][a-z-]*)", runbook_text))
+    assert referenced, "runbook names no pi_review_routing subcommand"
+    assert referenced <= registered, (
+        f"runbook references unknown subcommands {sorted(referenced - registered)}; "
+        f"the CLI registers {sorted(registered)}"
+    )
+
+
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
 
-    assert "pi_review_routing.py plan" in text
-    assert "pi_review_routing.py extract-report" in text
-    assert "pi_review_routing.py validate-report" in text
-    assert "pi_review_routing.py transcript-stats" in text
-    assert "pi_review_routing.py provenance" in text
+    _assert_referenced_subcommands_exist(text)
     assert "extract a unique worker JSON object from harmless surrounding prose" in text
     assert '"severity": "block"' in text
     assert "The worker does not render Markdown or attach provenance" in text
@@ -258,6 +280,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text
     assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
+    # Tintin's Agent tool rejects a call without `description`; omitting it here
+    # cost every worker launch one rejected round-trip (#2683).
+    assert re.search(r"`description: [^`]+`", text)
     assert "${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments" in text
     assert re.search(r"never\s+put a glob in a worker prompt", text)
     assert re.search(r"never repair assignment paths\s+with", text)
@@ -312,8 +337,11 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"one bullet per\s+affected attempt", text)
     assert re.search(r"exact model selector and diagnostic", text)
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
-    assert "claude -p --dangerously-skip-permissions" in text
-    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
+    assert "bash agent/_shared/run_pi_review.sh repo-review-full-no-comments --target <PR>" in text
+    # The smoke must stay read-only: repo-review-full posts inline threads.
+    assert "run_pi_review.sh repo-review-full --target" not in text
+    assert "claude -p" not in text
+    assert "codex exec" not in text
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")

@@ -6,6 +6,5 @@ lambda_audio: 0.03
 t_min: 0.8
 sample_rate: ${datamodule.sample_rate}
 signal_length: ${datamodule.signal_length}
-midi_pitch: ${datamodule.midi_pitch}
 # The renderer's voice is allocated once at this size; shorter batches pad up to it.
 render_batch_size: ${datamodule.batch_size}

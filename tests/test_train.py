@@ -14,7 +14,7 @@ import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
@@ -53,7 +53,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
-    assert_all_embedding_columns,
+    assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_all_embeddings,
@@ -496,6 +496,29 @@ def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
     assert torch.isfinite(metric_dict["train/loss"])
     hydrated_root = object_dict["datamodule"].dataset_root
     assert (hydrated_root / ".synth-setter-stage-complete").is_file()
+
+
+@pytest.mark.slow
+def test_train_file_uri_without_completion_marker_raises_before_hydration(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The training entrypoint rejects an unfinalized hydration source.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    (source / "dataset.complete").unlink()
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+
+    HydraConfig().set_config(cfg_train_lance)
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        train(cfg_train_lance)
+
+    assert not destination.exists()
 
 
 @pytest.mark.slow
@@ -1942,7 +1965,41 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = ("clap", "m2l", "same_s", "same_l", "t5gemma")
+_ALL_EMBEDDING_CONDITIONING_PROFILES = (
+    "clap",
+    "m2l",
+    "same_s",
+    "same_l",
+    "ssondo",
+    "t5gemma",
+    "tinymu",
+)
+
+
+def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
+    """Validate a trained embedding-conditioned checkpoint.
+
+    :param cfg: Training config that produced the checkpoint.
+    :param output_dir: Training output directory containing ``last.ckpt``.
+    """
+    checkpoint_path = output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    eval_cfg = cfg.copy()
+    eval_output_dir = output_dir / "evaluation"
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(eval_output_dir)
+        eval_cfg.paths.log_dir = str(eval_output_dir)
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+        eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(eval_cfg)
+    try:
+        eval_metric_dict, _ = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
 def _assert_t5gemma_feed_forward_checkpoint_validates(
@@ -1995,15 +2052,42 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
+def _assert_model_predictions_depend_on_cached_conditioning(
+    object_dict: dict[str, Any],
+) -> None:
+    """Assert the trained model keeps a gradient path from cached vectors.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch["conditioning"].detach().requires_grad_(True)
+    predictions = model._sample(
+        conditioning,
+        torch.zeros_like(batch["params"]),
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    gradient = torch.autograd.grad(predictions.square().sum(), conditioning)[0]
+
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_train_all_embedding_conditioning_real_e2e(
+@pytest.mark.integration_r2
+@pytest.mark.r2
+def test_train_all_embedding_conditioning_and_eval_real_e2e(
     local_embedding_checkpoints: dict[str, str],
     tmp_path: Path,
     surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
-    """Train every profile, then load a real T5Gemma FF checkpoint for validation.
+    """Train every profile and validate S-SONDO and T5Gemma checkpoints.
 
     :param local_embedding_checkpoints: Preflighted real model directories.
     :param tmp_path: Per-profile training output parent.
@@ -2015,7 +2099,7 @@ def test_train_all_embedding_conditioning_real_e2e(
         local_embedding_checkpoints,
         param_spec_name,
     )
-    assert_all_embedding_columns(dataset_root)
+    assert_embedding_columns(dataset_root)
 
     for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
         cfg = build_surge_xt_embedding_train_cfg(
@@ -2035,6 +2119,9 @@ def test_train_all_embedding_conditioning_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
+        if conditioning == "ssondo":
+            _assert_model_predictions_depend_on_cached_conditioning(object_dict)
+            _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(
         tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name

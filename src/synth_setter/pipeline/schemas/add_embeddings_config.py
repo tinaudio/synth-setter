@@ -14,7 +14,6 @@ from synth_setter.data.vst.param_text import (
 )
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.pipeline.data.add_embeddings import (
-    CLAP_EMBEDDING_DIM,
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     DEFAULT_NUM_SUB_VECTORS,
@@ -36,7 +35,7 @@ class AddEmbeddingsConfig(BaseModel):
 
     .. attribute :: lance_uri
 
-        Finalized Lance dataset to augment.
+        One finalized Lance split to augment.
 
     .. attribute :: embeddings
 
@@ -44,7 +43,7 @@ class AddEmbeddingsConfig(BaseModel):
 
     .. attribute :: checkpoints
 
-        Per-registry-key checkpoint overrides.
+        Per-registry-key checkpoint overrides; unsupported for music2latent.
 
     .. attribute :: device
 
@@ -89,12 +88,13 @@ class AddEmbeddingsConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    lance_uri: str = Field(description="Finalized Lance dataset to augment.")
+    lance_uri: str = Field(description="One finalized Lance dataset to augment.")
     embeddings: tuple[str, ...] = Field(
         default=("clap", "m2l"), description="Ordered embedding registry keys to write."
     )
     checkpoints: dict[str, str] = Field(
-        default_factory=dict, description="Checkpoint overrides keyed by registry name."
+        default_factory=dict,
+        description="Checkpoint overrides keyed by registry name; m2l is unsupported.",
     )
     device: str | None = Field(default=None, description="Torch device; null auto-selects.")
     batch_size: int = Field(
@@ -159,14 +159,16 @@ class AddEmbeddingsConfig(BaseModel):
             raise ValueError(
                 f"checkpoints keys {unknown} must each be one of {sorted(EMBEDDING_REGISTRY)}"
             )
+        if "m2l" in value:
+            raise ValueError("music2latent does not support checkpoint overrides")
         return value
 
     @field_validator("resume_cache", mode="before")
     @classmethod
     def _coerce_resume_cache(cls, value: object) -> object:
-        """Coerce a Hydra string override to ``Path`` under strict validation.
+        """Coerce Hydra string overrides to ``Path`` under strict validation.
 
-        :param value: Raw resume-cache value.
+        :param value: Raw path value.
         :returns: Path for a string input, otherwise the original value.
         """
         return Path(value) if isinstance(value, str) else value
@@ -230,17 +232,19 @@ class AddEmbeddingsConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _num_sub_vectors_divides_selected_clap_dim(self) -> Self:
-        """Reject incompatible PQ splits only when CLAP is selected.
+    def _num_sub_vectors_divides_selected_fixed_vector_dims(self) -> Self:
+        """Reject incompatible PQ splits for selected fixed-width vectors.
 
         :returns: Validated config unchanged.
-        :raises ValueError: The count cannot evenly split selected CLAP vectors.
+        :raises ValueError: The count cannot evenly split a selected vector.
         """
-        if "clap" in self.embeddings and CLAP_EMBEDDING_DIM % self.num_sub_vectors != 0:
-            raise ValueError(
-                f"num_sub_vectors ({self.num_sub_vectors}) must divide the clap dim "
-                f"({CLAP_EMBEDDING_DIM})"
-            )
+        for name in self.embeddings:
+            index = EMBEDDING_REGISTRY[name].index
+            dim = None if index is None else index.vector_dim
+            if dim is not None and dim % self.num_sub_vectors != 0:
+                raise ValueError(
+                    f"num_sub_vectors ({self.num_sub_vectors}) must divide the {name} dim ({dim})"
+                )
         return self
 
     @classmethod

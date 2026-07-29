@@ -1,6 +1,322 @@
 # CHANGELOG
 
 
+## v10.10.0 (2026-07-29)
+
+### Features
+
+- **data-pipeline**: Restore resumable TinyMU embeddings
+  ([#2668](https://github.com/tinaudio/synth-setter/pull/2668),
+  [`dc7ab34`](https://github.com/tinaudio/synth-setter/commit/dc7ab34c612c06ab232367470799c587a245b08f))
+
+* internal-feat(data-pipeline): restore TinyMU through registry path
+
+* internal-fix(data-pipeline): make embedding retries resumable
+
+* internal-fix(data-pipeline): validate embedding resume identity
+
+* internal-fix(data-pipeline): pin resumable embedding identity
+
+* internal-fix(data-pipeline): resume verified embedding artifacts
+
+* internal-fix(data-pipeline): bind retries to embedding artifacts
+
+* internal-fix(data-pipeline): validate embedding input policy
+
+* test(data-pipeline): isolate text embedding artifacts
+
+* refactor(data-pipeline): isolate TinyMU adapter
+
+* internal-fix(data-pipeline): preserve compatible embedding retries
+
+* ci(data-pipeline): target renamed embedding E2E test
+
+* internal-fix(data-pipeline): preserve S-SONDO encoder coverage
+
+### Internal-Feat
+
+- **ci-automation**: Route a non-gating NIT review severity
+  ([#2678](https://github.com/tinaudio/synth-setter/pull/2678),
+  [`01755c5`](https://github.com/tinaudio/synth-setter/commit/01755c5993d75c52986e64feb73c196789f163d3))
+
+* internal-feat(ci-automation): route a non-gating NIT severity through the review flow
+
+The pipeline understood only `block` and `warn`, and both post as unresolved inline threads — so
+  under "Conversations must be resolved" every finding was a merge obligation. Checklists had no way
+  to say "optional": they inflated preferences to WARN or dropped them, as `comment-hygiene` does
+  with C13-C14.
+
+Add `nit` end to end. NITs render as `## Nits` bullets in `review_body` rather than entering the
+  `findings` array; body placement is the mechanism, since an inline NIT would be a WARN by another
+  name. The pre-PR gate matches `:nit]` in neither sub-gate, summaries count three buckets, and a
+  NIT-only review submits as COMMENT.
+
+Refs #2677
+
+* internal-chore(ci-automation): re-run checks against a clean SHA
+
+The title-length fix left three superseded check-pr-title runs and one check-pr-metadata run
+  attached to the previous SHA, which the readiness probe reads as terminal failures.
+
+* internal-fix(ci-automation): smoke the review flow via run_pi_review.sh
+
+The nested claude -p / codex exec host sessions only forwarded to agent/_shared/run_pi_review.sh;
+  invoke the launcher directly instead.
+
+* internal-fix(ci-automation): keep the live review smoke read-only
+
+repo-review-full posts inline threads to the PR, so mandating it as a verification step gave every
+  flow-change PR an unrequested bot review. Both modes share Steps 1-6; no-comments covers
+  everything but delivery.
+
+* internal-fix(ci-automation): let the worker base prompt emit nit
+
+The generated assignment permitted nit while .pi/agents/pr-review-worker.md still pinned
+  block-or-warn, handing each worker two contradictory schemas. Found by the live review smoke on PR
+  #2678.
+
+- **data-pipeline**: Render Cardinal VST3 through DawDreamer
+  ([#2546](https://github.com/tinaudio/synth-setter/pull/2546),
+  [`3c40e0d`](https://github.com/tinaudio/synth-setter/commit/3c40e0d4081424be1f8e3bcd8fe28f78355da091))
+
+* internal-feat(data-pipeline): onboard Cardinal VST3 through DawDreamer
+
+Cardinal's curated controls are generic host slots whose meaning comes from the HostParametersMap
+  module inside its committed Rack patch. Route it through the DawDreamer backend, which needs no
+  change to the shared Pedalboard render core and no new render-config field.
+
+Two host behaviours drive the configuration. Cardinal restores preset state on its audio thread, so
+  parameters written before the first processBlock are silently dropped; DawDreamerRenderer now
+  renders and discards a short settle buffer after every preset load. Its Rack engine also
+  free-runs, so only plugin_reload_cadence: render is reproducible.
+
+CLAP provenance becomes optional on SynthParamMap because Cardinal ships no CLAP build in this
+  toolchain and the render path never reads it.
+
+Refs #2543 Closes #2376
+
+* internal-fix(data-pipeline): retrigger PR title check
+
+* internal-fix(data-pipeline): share one Cardinal host per shard
+
+Per-render plugin reload would isolate Cardinal's free-running Rack engine, but reloading a
+  DawDreamer plugin between librosa mel computations segfaults the worker, so a shard shares one
+  host instead.
+
+Rendering through the settled host pairs each row's audio with its own parameters, verified against
+  per-draw renders on fresh instances, so the shared host costs reproducibility margin rather than
+  label correctness.
+
+Adds the operator smoke experiment that exercises this end to end.
+
+Refs #2549
+
+* internal-fix(ci-automation): keep install-plugins to the image set
+
+install-plugins provisions exactly what the runtime docker image ships, which is the contract its
+  infra test asserts. Cardinal is not in the image, so adding it there made the aggregate attempt a
+  real download and time out.
+
+install-cardinal stays available on its own for local and CI use.
+
+* internal-fix(data-pipeline): warm the mel backend before plugin loads
+
+Cardinal crashes when a shared library is dlopen'd between two plugin instantiations, and librosa
+  loads its submodules lazily on first call. The render loop therefore warmed the mel path
+  mid-flight, killing the worker on the second row.
+
+Warming the spectrogram backend before the renderer is constructed removes the mid-loop dlopen,
+  which restores per-render reload. Two independent 40-row runs of the smoke experiment now agree
+  bit for bit.
+
+* internal-fix(training): pin ffn encoder width for audio predict jobs
+
+model/vst_ffn.yaml reads encoder_output_dim from the datamodule's param_spec_name, but the FSD50K
+  and NSynth predict jobs pair this checkpoint with audio datamodules that declare no such key, so
+  Hydra failed to resolve the config.
+
+Pin the width in the wandb_checkpoint overlay, matching how net.d_out and
+  log_per_param_mse.param_spec are already pinned there. vst_flow and vst_flowmlp derive the width
+  from the vector field, which is why only the ffn jobs failed.
+
+Fixes #2558
+
+* internal-fix(training): accept named encoder plumbing in baseline diffs
+
+#2508 added model.encoder_num_heads and model.encoder_output_dim, which are absent from the v0.0.0
+  published-results snapshot, so every pinned surge and predict config compared unequal.
+
+The complete leaf diff is those two keys and nothing else, and both resolve to values the encoder
+  already used (n_heads 8, d_model 512) — the built model is unchanged, the keys only name the
+  wiring. That is the mechanical-migration case ACCEPTED_DIFFS exists for, so the published-results
+  anchor stays put.
+
+Fixes #2563
+
+* internal-fix(training): retrigger PR title check
+
+* internal-fix(ci-automation): raise the wandb service wait in cpu-slow
+
+Five slow tests fail with WandbServiceConnectionError on the runner while passing locally in 29s.
+  The SDK waits 30s for its service process even in offline mode, which a loaded runner can exceed.
+
+WANDB__SERVICE_WAIT maps onto the private x_service_wait setting, so raising it to 120s tests that
+  explanation directly: if the service is failing to spawn rather than starting slowly, the lane
+  stays red and the wait is not the cause.
+
+Refs #2564
+
+* internal-fix(testing): mark the checkpoint-upload test integration_r2
+
+The test drives train() through the real upload path, which calls r2_io.ensure_r2_env_loaded. That
+  preflight validates credentials, pings the remote, and projects rclone settings back into the
+  environment — overwriting the RCLONE_CONFIG_R2_TYPE=local the test sets, so the fake local remote
+  cannot stand in for R2 and the assertions are unreachable without credentials.
+
+PR runs deliberately carry no storage secrets, so the test failed there while passing wherever real
+  credentials happen to exist. integration_r2 is the marker for exactly that: auto-skipped without
+  R2 creds, run in its own workflow.
+
+* internal-feat(data-pipeline): rerun CI on the stacked base
+
+* internal-fix(data-pipeline): isolate Cardinal host finalization
+
+Pedalboard's temporary Cardinal version probe leaves cyclic native wrappers. A later collection
+  finalized that host while DawDreamer still owned another Cardinal instance, clearing DPF
+  process-global state and crashing the next reload.
+
+Suspend cyclic collection for the DawDreamer render session, then collect after the renderer frame
+  releases its native objects. This removes the misleading librosa warm-up and adds a subprocess e2e
+  regression that requires a clean worker exit.
+
+### Internal-Fix
+
+- **ci-automation**: Fetch full history in Code Quality Main
+  ([#2663](https://github.com/tinaudio/synth-setter/pull/2663),
+  [`2045aab`](https://github.com/tinaudio/synth-setter/commit/2045aab3db21df2aa36b2b1053c7dfba18fdf955))
+
+The model-typing hook (#2654) diffs its frozen baseline against origin/<base> or HEAD^1; the default
+  shallow checkout resolves neither on pull_request events, so any PR matching this workflow's path
+  filters fails with 'cannot resolve model typing base ref'.
+
+Fixes #2662
+
+- **testing**: Isolate checkpoint metadata R2 uploads
+  ([#2681](https://github.com/tinaudio/synth-setter/pull/2681),
+  [`999f225`](https://github.com/tinaudio/synth-setter/commit/999f225620633094349d9c3cdd57b2e0c09aff53))
+
+### Testing
+
+- **fix**: Release from live main after queueing
+  ([#2211](https://github.com/tinaudio/synth-setter/pull/2211),
+  [`a14b16e`](https://github.com/tinaudio/synth-setter/commit/a14b16ea3e94831019bca2574cf6d55346c4b4fa))
+
+Serialized release jobs can start after newer merges advance main. Check out the live branch tip so
+  Semantic Release creates a fast-forward release commit that contains all intervening changes.
+
+Fixes #2132
+
+
+## v10.9.0 (2026-07-29)
+
+### Features
+
+- **code-health**: Manage VST plugins with Studiorack
+  ([#2632](https://github.com/tinaudio/synth-setter/pull/2632),
+  [`dcc0ca0`](https://github.com/tinaudio/synth-setter/commit/dcc0ca02e8371a4cb2313d8ad7cdbdab54ef11ca))
+
+* internal-feat(code-health): manage VST plugins with Studiorack
+
+* internal-fix(code-health): preserve CI plugin provisioning
+
+* internal-fix(code-health): restore aliases in snapshot images
+
+* test(code-health): cover plugin management boundaries
+
+* internal-fix(code-health): support Studiorack installer layouts
+
+* internal-fix(code-health): detect root DMG installers
+
+* internal-fix(code-health): support mixed plugin archives
+
+* internal-fix(code-health): prefer portable plugin archives
+
+* internal-fix(code-health): install native plugin dependencies
+
+* internal-fix(code-health): retain Make in validation image
+
+* docs(agents): forbid external issue creation
+
+### Internal-Feat
+
+- **data-pipeline**: Add S-SONDO embedding support
+  ([#2635](https://github.com/tinaudio/synth-setter/pull/2635),
+  [`280b2c2`](https://github.com/tinaudio/synth-setter/commit/280b2c2e1e07002a85dd30cddf0300531315ea38))
+
+* internal-feat(data-pipeline): add S-SONDO embeddings
+
+* internal-fix(data-pipeline): close S-SONDO review gaps
+
+* internal-fix(data-pipeline): harden S-SONDO preprocessing
+
+* internal-fix(data-pipeline): resolve S-SONDO review findings
+
+### Internal-Fix
+
+- **data-pipeline**: Harden training hydration integrity
+  ([#2644](https://github.com/tinaudio/synth-setter/pull/2644),
+  [`90b9ae7`](https://github.com/tinaudio/synth-setter/commit/90b9ae784e5b366f0620127ba6d3e3dc2b699c80))
+
+* internal-fix(data-pipeline): harden training hydration integrity
+
+* internal-fix(data-pipeline): make cache publication atomic
+
+### Testing
+
+- **infra**: Assert wiring and behavior instead of key presence
+  ([#2641](https://github.com/tinaudio/synth-setter/pull/2641),
+  [`50d2e4a`](https://github.com/tinaudio/synth-setter/commit/50d2e4ac30af115dfa1bf544f1282c37e9f38aa3))
+
+Existence and substring checks in the infra and hook suites passed for configurations that would not
+  work. Replaced with the invariant each test was named for; every expected value measured against
+  the live files.
+
+- devcontainer: postCreateCommand, remoteUser and workspaceFolder were truthiness checks, so a
+  placeholder or a stale path passed. Now the post-create script must actually be invoked,
+  remoteUser must stay ${localEnv:DEVCONTAINER_USER:<default>} so per-developer attach keeps
+  working, and workspaceFolder must be the in-image checkout path. - gh auth: the token env var was
+  matched anywhere in post-create.sh, including a comment, so deleting the auth call would not have
+  failed it. Now the token must be piped into `gh auth login --with-token`. - dataset-generation
+  matrix: the output_format axis is populated at runtime from the setup job, so key-presence said
+  nothing. Now the axis must be wired to setup.outputs.output_formats, catching a rename that would
+  silently collapse the fan-out. Scenario rows compare as sets — GitHub gives no ordering guarantee
+  for matrix.include, so the ordered compare broke on a harmless reorder. - finalize metrics: a bare
+  assert_called_once on the warning left the message unchecked. Now the loguru template and both
+  interpolated arguments, so a broken interpolation fails.
+
+Also merges two identical trailer-hook tests whose only difference was which half of the
+  agent-keyword list they carried.
+
+Refs #2603
+
+- **infra**: Resolve runbook subcommands against the live routing CLI
+  ([#2642](https://github.com/tinaudio/synth-setter/pull/2642),
+  [`72c169f`](https://github.com/tinaudio/synth-setter/commit/72c169fd8c078727135e99675eac3f024663d2d8))
+
+The review runbook test matched five fixed `pi_review_routing.py <cmd>` strings as prose. That only
+  catches a renamed subcommand by coincidence: the assertion is satisfied by the words being
+  present, not by the command existing.
+
+Resolve the referenced commands against the parser instead. Every `pi_review_routing.py <cmd>` the
+  runbook names must be a registered subparser, so a rename fails with the offending name, and
+  commands added to the runbook later are covered without touching the test.
+
+Verified by renaming the `provenance` subparser: the new check fails, the prose match it replaced
+  did not.
+
+Refs #2603
+
+
 ## v10.8.1 (2026-07-28)
 
 ### Chores

@@ -94,6 +94,12 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 # Kept as literal tuples so ``synth-setter-introspect-plugin --register`` can
 # compare and extend the table structurally without importing renderer dependencies.
 _synth_rows: dict[str, tuple[str, str, str, str]] = {
+    "cardinal": (
+        "cardinal",
+        "plugins/CardinalSynth.vst3",
+        "presets/cardinal-base.vstpreset",
+        "0.26.2",
+    ),
     "faust_bright_organ": ("faust_bright_organ", "faust", "", "0.8.3"),
     "faust_bubble": ("faust_bubble", "faust", "", "0.8.3"),
     "faust_church_organ": ("faust_church_organ", "faust", "", "0.8.3"),

@@ -78,9 +78,15 @@ jobs:
           - name: pipeline-finalize
             patterns:
               - synth_setter.pipeline.data.finalize_progress.*
+          - name: pipeline-ssondo
+            patterns:
+              - synth_setter.pipeline.data.ssondo.*
           - name: pipeline-t5gemma
             patterns:
               - synth_setter.pipeline.data.t5gemma.*
+          - name: pipeline-tinymu
+            patterns:
+              - synth_setter.pipeline.data.tinymu.*
           - name: ci-scripts
             patterns:
               - scripts.ci.*

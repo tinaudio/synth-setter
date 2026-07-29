@@ -33,6 +33,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
 - **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
+- **Never create GitHub issues in external repositories.** Report external
+  defects to the user and, when tracking is needed, file the issue in
+  `tinaudio/synth-setter`; existing upstream issues may be referenced only
+  after verifying that they already exist.
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
   `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
   models only. Agent `model` arguments use a fully qualified
@@ -54,9 +58,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 Hit an error or clearly-wrong behavior **outside your task's scope** — a red
 test on `main`, an unrelated crash, a silently-wrong result, a stale doc, a
 misfiring hook? Don't fix it inline (scope creep) or drop it silently. **File
-a bug** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a
-sub-issue of the relevant Phase — ask which if none fits), then continue your
-task; note what you saw, expected, and how to reproduce, and surface the
+a bug in `tinaudio/synth-setter`** via `/github-taxonomy` (`type: Bug`,
+`fix(<domain>):` title, as a sub-issue of the relevant Phase — ask which if none
+fits), then continue your task. Note what you saw, expected, and how to
+reproduce, and surface the
 `[#N](…)` in your reply. The higher the impact, the more this matters. If it
 blocks you, ask how to proceed.
 
@@ -181,7 +186,8 @@ unintended shell expansion. A `PreToolUse` hook
   has the canonical title rule and examples.
 - **Pre-PR review is temporarily advisory.** Run
   `/repo-review-full-no-comments` before `gh pr create` when the review
-  automation is healthy, and address every BLOCK/WARN. The local
+  automation is healthy, and address every BLOCK/WARN (NIT findings are
+  advisory and gate nothing). The local
   `pre-pr-review-gate.sh` implementation and tests remain available for repair,
   but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
   is unresolved. Server-side tests, metadata checks, branch protection, and

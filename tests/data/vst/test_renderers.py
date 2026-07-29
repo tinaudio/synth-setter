@@ -640,6 +640,12 @@ def test_dawdreamer_renderer_rejects_provenance_drift(
             :param graph: Graph definition.
             """
 
+        def render(self, duration: float) -> None:
+            """Accept the post-preset settle render.
+
+            :param duration: Duration in seconds.
+            """
+
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
     monkeypatch.setattr("synth_setter.data.vst.core.extract_renderer_version", lambda path: "actual")
     parameter_map = _test_param_map({"cutoff": (0, "Cutoff")}, 1)

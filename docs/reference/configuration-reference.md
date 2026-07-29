@@ -89,6 +89,10 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
   (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
 - VST configs set `datamodule.persistent_workers=true`; it is effective only when
   `num_workers > 0`, so CPU debugging with `num_workers=0` needs no extra override
+- `datamodule.download_dataset_root_uri` hydrates a finalized `r2://` or absolute
+  `file://` root into a request-addressed child of `dataset_root`. The source must
+  contain `dataset.complete`; optional per-split transaction pins select snapshots,
+  and `download_dataset_row_limit` must be positive when set
 - `render:` defaults to `null`; a render group (e.g. `render=vst`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one
@@ -290,11 +294,11 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.3 Data Portability
 
-| Input                                  | Type           | What's Needed                                                                                                                        | Reference                                                 |
-| -------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                               | training-pipeline.md §6.1                                 |
-| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` or absolute `file://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
-| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                        | `nsynth.yaml` / `fsd.yaml`                                |
+| Input                                  | Type           | What's Needed                                                                                                                                                                           | Reference                                                 |
+| -------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                                                                                  | training-pipeline.md §6.1                                 |
+| `datamodule.download_dataset_root_uri` | string \| null | Optional finalized `r2://` or absolute `file://` root; `prepare_data()` projects its loader columns into a request-addressed child of `dataset_root` after verifying `dataset.complete` | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
+| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                                                                           | `nsynth.yaml` / `fsd.yaml`                                |
 
 ### 5.4 Hardware & Compute
 

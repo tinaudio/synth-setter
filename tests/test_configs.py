@@ -14,6 +14,7 @@ from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
+from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
 from synth_setter.resources import configs_dir
 from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
@@ -210,6 +211,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         pytest.param("same_s", (256, 44), id="same-s"),
         pytest.param("same_l", (256, 44), id="same-l"),
         pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
+        pytest.param("tinymu", (TINYMU_FRONTEND.embedding_dim, 25), id="tinymu"),
     ],
 )
 def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
@@ -360,6 +362,27 @@ def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
     assert datamodule.embedding_conditioning.column == "clap"
     assert encoder(torch.randn(2, 512)).shape == (2, 512)
     assert cfg.model.vector_field.conditioning_dim == 512
+
+
+def test_ssondo_conditioning_profile_projects_960_vector() -> None:
+    """The S-SONDO profile routes its global vector through projection."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "conditioning=ssondo",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert cfg.datamodule.conditioning.column == "ssondo"
+    assert tuple(cfg.datamodule.conditioning.input_shape) == (960,)
+    assert encoder(torch.randn(2, 960)).shape == (2, cfg.model.encoder_output_dim)
 
 
 def _conditioning_profile_names() -> list[str]:

@@ -8,6 +8,7 @@ from synth_setter.data.torchsynth_datamodule import (
     collate_audio_dict,
     collate_vst_dict,
 )
+from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.residual_mlp import ConditionalResidualMLP
 from synth_setter.models.components.transformer import AudioSpectrogramTransformer
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -15,7 +16,7 @@ from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 _SAMPLE_RATE = 44_100
 _SIGNAL_LENGTH = 4_410
 _BATCH = 4
-_NUM_PARAMS = 76
+_ENCODED_WIDTH = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
 
 
 def _datamodule() -> TorchSynthDataModule:
@@ -26,7 +27,6 @@ def _datamodule() -> TorchSynthDataModule:
     datamodule = TorchSynthDataModule(
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
-        midi_pitch=60,
         train_val_test_sizes=(8, 4, 4),
         train_val_test_seeds=(1, 2, 3),
         batch_size=_BATCH,
@@ -40,8 +40,8 @@ def test_dict_batch_carries_the_vst_module_keys() -> None:
     """The dict format supplies everything the VST modules index off the batch."""
     batch = next(iter(_datamodule().train_dataloader()))
     assert set(batch) == {"params", "noise", "mel", "audio"}
-    assert batch["params"].shape == (_BATCH, _NUM_PARAMS)
-    assert batch["noise"].shape == (_BATCH, _NUM_PARAMS)
+    assert batch["params"].shape == (_BATCH, _ENCODED_WIDTH)
+    assert batch["noise"].shape == (_BATCH, _ENCODED_WIDTH)
     assert batch["audio"].shape == (_BATCH, _SIGNAL_LENGTH)
     assert batch["mel"].shape[:2] == (_BATCH, 1)
     assert all(batch[key].dtype == torch.float32 for key in batch)
@@ -117,7 +117,7 @@ def test_vst_flow_matching_module_trains_on_an_online_torchsynth_batch() -> None
     n_mels, n_frames = batch["mel"].shape[-2:]
     num_layers = 4
     vector_field = ConditionalResidualMLP(
-        n_params=_NUM_PARAMS, d_model=64, d_enc=64, conditioning_dim=64, num_layers=num_layers
+        n_params=_ENCODED_WIDTH, d_model=64, d_enc=64, conditioning_dim=64, num_layers=num_layers
     )
     encoder = AudioSpectrogramTransformer(
         d_model=64,
@@ -134,7 +134,7 @@ def test_vst_flow_matching_module_trains_on_an_online_torchsynth_batch() -> None
         vector_field=vector_field,
         optimizer=torch.optim.Adam,  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
-        num_params=_NUM_PARAMS,
+        num_params=_ENCODED_WIDTH,
         conditioning="mel",
     )
 

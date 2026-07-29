@@ -279,6 +279,18 @@ class ParamSpec:
             yield param, slice(pointer, pointer + width)
             pointer += width
 
+    @property
+    def synth_columns(self) -> slice:
+        """Return the encoded columns the synth params occupy.
+
+        Read off :meth:`encoded_slices` so callers splitting an encoded row never restate
+        an assumed column order.
+
+        :returns: Contiguous span covering every synth parameter's encoded columns.
+        """
+        spans = [span for _, span in self.encoded_slices()][: len(self.synth_params)]
+        return slice(spans[0].start, spans[-1].stop) if spans else slice(0, 0)
+
     def sample(
         self, rng: np.random.Generator | None = None
     ) -> tuple[dict[str, float], NoteParams]:
@@ -336,31 +348,6 @@ class ParamSpec:
         :returns: The same values clipped into ``[0, 1]``.
         """
         return ((model + 1) / 2).clip(0, 1)
-
-    def complete_model_rows(
-        self, model_rows: "torch.Tensor", note_param_dict: Mapping[str, object]
-    ) -> "torch.Tensor":
-        """Append fixed note params, on the model scale, to synth-only model rows.
-
-        Online renderers train against the synth params alone, so their
-        predictions are ``synth_param_length`` wide while decoding needs a full
-        :attr:`encoded_width` row.
-
-        :param model_rows: ``(batch, synth_param_length)`` predictions in ``[-1, 1]``.
-        :param note_param_dict: Note values held fixed for every row.
-        :returns: ``(batch, encoded_width)`` rows in ``[-1, 1]``.
-        :raises ValueError: when ``model_rows`` is not ``synth_param_length`` wide.
-        """
-        # Local: the VST dataset workers import this module and must stay torch-free.
-        import torch
-
-        if model_rows.shape[-1] != self.synth_param_length:
-            raise ValueError(
-                f"complete_model_rows expects rows of synth_param_length "
-                f"({self.synth_param_length}); got width {model_rows.shape[-1]}."
-            )
-        suffix = torch.from_numpy(self.encoded_to_model(self._encode_note_params(note_param_dict)))
-        return torch.cat((model_rows, suffix.to(model_rows).expand(len(model_rows), -1)), dim=-1)
 
     def decode(self, params: np.ndarray) -> tuple[dict[str, float], NoteParams]:
         """Decode one encoded row of values in ``[0, 1]``.

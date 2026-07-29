@@ -236,6 +236,31 @@ class TestEncodedSlices:
         assert row[spans["mode"]].tolist() == [0.0, 1.0]
 
 
+class TestSynthColumns:
+    """The synth/note split renderers use to keep note columns away from the voice."""
+
+    def test_span_covers_the_synth_params_and_stops_before_the_note_params(self) -> None:
+        """The span ends where the first note parameter's own span begins."""
+        spec = _tiny_spec()
+        spans = dict((param.name, sl) for param, sl in spec.encoded_slices())
+
+        assert spec.synth_columns == slice(spans["cutoff"].start, spans["mode"].stop)
+        assert spec.synth_columns.stop == spans["pitch"].start
+
+    def test_indexing_a_row_by_the_span_drops_every_note_column(self) -> None:
+        """A row sliced by the span keeps exactly the synth parameters' encoded width."""
+        spec = _tiny_spec()
+        row = spec.encode({"cutoff": 0.5, "mode": 0.75}, {"pitch": 60, "note_start_and_end": (0, 1)})
+
+        assert len(row[spec.synth_columns]) == spec.synth_param_length
+
+    def test_note_only_spec_has_an_empty_span(self) -> None:
+        """A spec with no synth params yields an empty span rather than an index error."""
+        note_only = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
+
+        assert note_only.synth_columns == slice(0, 0)
+
+
 class TestDecodeModelOutput:
     """The rescale-then-clip contract, pinned independently of any caller."""
 
@@ -357,33 +382,3 @@ class TestModelSpaceConversion:
         encoded = spec.model_to_encoded(np.array([-3.0, 3.0]))
 
         assert encoded.tolist() == [0.0, 1.0]
-
-    def test_complete_model_rows_widens_synth_rows_to_the_encoded_width(self) -> None:
-        """Synth-only model rows gain the note columns the model never predicts."""
-        spec = _tiny_spec()
-        rows = torch.zeros(2, spec.synth_param_length)
-
-        completed = spec.complete_model_rows(rows, {"pitch": 60, "note_start_and_end": (0.0, 1.0)})
-
-        assert completed.shape == (2, spec.encoded_width)
-        assert torch.equal(completed[:, : spec.synth_param_length], rows)
-
-    def test_complete_model_rows_appends_decodable_note_params(self) -> None:
-        """The appended columns decode back to the note params they were built from."""
-        spec = _tiny_spec()
-        note_params = {"pitch": 72, "note_start_and_end": (0.5, 2.0)}
-
-        completed = spec.complete_model_rows(torch.zeros(1, spec.synth_param_length), note_params)
-
-        _, decoded = decode_model_output(completed[0].numpy(), spec)
-        assert decoded == note_params
-
-    def test_complete_model_rows_rejects_rows_that_are_not_synth_width(self) -> None:
-        """A full-width row is a caller error: the note columns would be duplicated."""
-        spec = _tiny_spec()
-
-        with pytest.raises(ValueError, match="synth_param_length"):
-            spec.complete_model_rows(
-                torch.zeros(1, spec.encoded_width),
-                {"pitch": 60, "note_start_and_end": (0.0, 1.0)},
-            )

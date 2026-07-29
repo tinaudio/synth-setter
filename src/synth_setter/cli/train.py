@@ -17,7 +17,6 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
-from synth_setter.data.vst import param_specs
 from synth_setter.evaluation.audio_probe import run_audio_probe
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
@@ -257,21 +256,6 @@ def _configure_val_audio_probe(
             _skip_auto_probe(f"R2 unavailable ({exc})")
             return
         raise
-    complete_rows = None
-    # Online TorchSynth omits fixed notes from its model targets; rendering decodes a full row.
-    if settings.param_spec_name == "torchsynth_full":
-        note_params = {
-            "pitch": cfg.datamodule.midi_pitch,
-            "note_start_and_end": (
-                0.0,
-                cfg.datamodule.signal_length / cfg.datamodule.sample_rate,
-            ),
-        }
-        complete_rows = partial(
-            param_specs[settings.param_spec_name].complete_model_rows,
-            note_param_dict=note_params,
-        )
-
     callbacks.append(
         ValAudioProbe(
             probe_root=Path(cfg.paths.output_dir) / "val_audio_probe",
@@ -281,7 +265,6 @@ def _configure_val_audio_probe(
                 upload_uri=_derive_probe_uri(cfg, launch_namespace),
             ),
             num_samples=num_samples,
-            complete_rows=complete_rows,
         )
     )
 

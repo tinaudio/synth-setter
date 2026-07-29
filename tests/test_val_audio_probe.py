@@ -12,7 +12,6 @@ from __future__ import annotations
 import concurrent.futures
 import subprocess
 import threading
-from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,7 +22,7 @@ from lightning.pytorch import LightningModule, Trainer
 
 from synth_setter.data.vst import TorchSynthRenderer, param_specs
 from synth_setter.data.vst.param_spec import decode_model_output
-from synth_setter.data.vst.torchsynth_param_spec import DEFAULT_NORMALIZED_ROW
+from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.utils.callbacks import ValAudioProbe, _stderr_tail
 
@@ -182,27 +181,29 @@ def test_val_audio_probe_stages_only_first_batch_up_to_num_samples(tmp_path: Pat
     assert staged == [tmp_path / "val_audio_probe" / "step-5000"]
 
 
-def test_val_audio_probe_completed_rows_are_renderable_torchsynth_rows(
+def test_val_audio_probe_staged_rows_are_renderable_torchsynth_rows(
     tmp_path: Path,
 ) -> None:
-    """Completing the staged rows makes online TorchSynth predictions renderable.
+    """Rows the probe stages verbatim decode and render as TorchSynth presets.
+
+    The model predicts the full encoded row — note columns included — so the probe stages what it
+    is handed and the renderer must accept it without any widening step.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     spec = param_specs[ParamSpecName("torchsynth_full")]
-    note_values = {"pitch": 60, "note_start_and_end": (0.0, 0.1)}
-    synth_row = torch.from_numpy(
-        spec.encoded_to_model(np.asarray(DEFAULT_NORMALIZED_ROW, dtype=np.float32))
+    synth_values, _ = TORCHSYNTH_FULL_PARAM_SPEC.sample(np.random.default_rng(0))
+    encoded = TORCHSYNTH_FULL_PARAM_SPEC.encode(
+        synth_values, {"pitch": 60, "note_start_and_end": (0.0, 0.1)}
     )
-    probe = _probe(
-        tmp_path, complete_rows=partial(spec.complete_model_rows, note_param_dict=note_values)
-    )
+    row = torch.from_numpy(spec.encoded_to_model(encoded)).unsqueeze(0)
+    probe = _probe(tmp_path)
 
     probe.on_validation_batch_end(
         _trainer(global_step=1),
         _module(),
-        {"preds": synth_row.unsqueeze(0)},
-        {"audio": None, "params": synth_row.unsqueeze(0)},
+        {"preds": row},
+        {"audio": None, "params": row},
         0,
     )
 
@@ -212,6 +213,8 @@ def test_val_audio_probe_completed_rows_are_renderable_torchsynth_rows(
     assert staged_pred.shape == staged_target.shape == (1, spec.encoded_width)
 
     synth_params, note_params = decode_model_output(staged_pred[0].numpy(), spec)
+    assert note_params["pitch"] == 60
+    assert note_params["note_start_and_end"] == pytest.approx((0.0, 0.1), abs=1e-6)
     renderer = TorchSynthRenderer(
         plugin_path="torchsynth",
         sample_rate=8_000,

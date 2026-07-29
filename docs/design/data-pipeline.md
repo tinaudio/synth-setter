@@ -1122,26 +1122,43 @@ Additional stages could follow the same contract (§5) without modifying existin
 | **add-captions**   | audio shards | shards + text column | GPU     |
 | **render-presets** | preset bank  | audio shards         | CPU     |
 
-`add-embeddings` is now implemented as the `synth-setter-add-embeddings` Hydra
+`add-embeddings` is implemented as the `synth-setter-add-embeddings` Hydra
 endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
-`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`): it augments
-a finalized Lance dataset in place with a `clap` (LAION-CLAP)
-`FixedSizeList<float32, 512>` vector column and sequence embeddings (`m2l`,
-`same_s`, and `same_l`) stored as fixed-shape tensors, all derived from the audio
-column and selectable via `embeddings=` (the selectable set is
+`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`). Each
+invocation augments one finalized Lance dataset without modifying finalize-owned
+dataset cards or completion markers. It writes global vector columns for `clap`
+(LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
+dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, and `tinymu`)
+stored as fixed-shape tensors. All are derived from the audio column and
+selectable via `embeddings=` (the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
 are each loaded and written in their own sequential pass). SAME-S and SAME-L
 use Stable Audio 3's autoencoder factory with strict safetensors state loading;
 local directories, R2 mirrors, and HuggingFace repo IDs retain the same
-checkpoint-resolution behavior. Each sequence embedding also writes a
-mean-pooled `FixedSizeList<float32, D>` companion
-(`m2l_vec`, `same_s_vec`, or `same_l_vec`); when `build_index=true`, IVF_PQ
-indexes `clap` and the selected companion columns for `nearest=` search. An
-optional `resume_cache=<path>` caches per-batch encoder outputs so an
-interrupted run can resume without re-encoding already-processed rows (see
-`add_embeddings.py`). The default CLAP and SAME sources hydrate under
+checkpoint-resolution behavior. Each sequence embedding also writes a mean-pooled
+`FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`, or
+`tinymu_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`, and the
+selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
+resampled to 32 kHz, and right-padded to its 10-second input window; longer
+clips fail instead of silently losing a partial tail. Its PyPI runtime is pinned
+to `ssondo==0.3.1`, and the MIT checkpoint is pinned by Hugging Face revision
+and SHA-256 before the package's pickle-based Lightning loader runs. If index
+creation fails after vectors commit, rerunning the same split builds only
+missing indexes without re-encoding complete columns. An optional
+`resume_cache=<path>` caches per-batch encoder outputs so an interrupted write
+can resume without re-encoding already-processed rows. Generated fields carry
+artifact and input-policy identities so retries reject incompatible output.
+The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
+
+`tinymu` runs TinyMU's frozen MATPAC encoder through its public package API,
+installed from an exact Git commit in the normal heavy runtime. The pinned R2
+checkpoint is verified by SHA-256, and each generated Lance field records that
+immutable checkpoint digest for safe retry. The integration rejects incompatible model state,
+malformed audio, shape drift, and non-finite output. The measured preprocessing,
+sequence shape, cache identity, package boundary, and `conditioning=tinymu` profile are documented
+in [TinyMU audio embeddings](../reference/tinymu-embeddings.md).
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,

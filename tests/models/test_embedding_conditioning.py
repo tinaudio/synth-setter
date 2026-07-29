@@ -13,6 +13,7 @@ from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
 
 _ModelFactory = Callable[[], VSTFeedForwardModule | VSTFlowMatchingModule]
 _BatchFactory = Callable[[], dict[str, torch.Tensor]]
@@ -117,6 +118,40 @@ def _ff_embedding_batch() -> dict[str, torch.Tensor]:
     }
 
 
+def _tinymu_flow_module() -> VSTFlowMatchingModule:
+    """Build a tiny flow module over production-shaped TinyMU conditioning.
+
+    :returns: Flow module using TinyMU's embedding width and sequence length.
+    """
+    return VSTFlowMatchingModule(
+        encoder=EmbeddingPool(
+            embed_dim=TINYMU_FRONTEND.embedding_dim,
+            d_model=4,
+            num_heads=1,
+            max_seq_len=25,
+        ),
+        vector_field=_TinyVectorField(),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        num_params=2,
+        conditioning=EmbeddingConditioningSpec(
+            column="tinymu", input_shape=(TINYMU_FRONTEND.embedding_dim, 25)
+        ),
+    )
+
+
+def _tinymu_flow_batch() -> dict[str, torch.Tensor]:
+    """Build one production-shaped TinyMU conditioning batch.
+
+    :returns: Batch containing TinyMU conditioning, targets, and flow noise.
+    """
+    return {
+        "conditioning": torch.randn(2, TINYMU_FRONTEND.embedding_dim, 25),
+        "noise": torch.randn(2, 2),
+        "params": torch.randn(2, 2),
+    }
+
+
 def _flow_embedding_batch() -> dict[str, torch.Tensor]:
     """Build a non-mel flow training batch.
 
@@ -134,8 +169,9 @@ _cached_embedding_arms = pytest.mark.parametrize(
     [
         (_flow_embedding_module, _flow_embedding_batch),
         (_ff_embedding_module, _ff_embedding_batch),
+        (_tinymu_flow_module, _tinymu_flow_batch),
     ],
-    ids=["flow", "feed_forward"],
+    ids=["flow", "feed_forward", "tinymu_flow"],
 )
 
 

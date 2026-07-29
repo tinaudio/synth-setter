@@ -167,16 +167,16 @@ def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
     :param context: Reviewed Git and progress state.
     :returns: Markdown lines for the summary section.
     """
-    blocks = review.review_body.count(":block]") + sum(
-        ":block]" in finding.body for finding in review.findings
-    )
-    warns = review.review_body.count(":warn]") + sum(
-        ":warn]" in finding.body for finding in review.findings
-    )
+    counts = {
+        severity: review.review_body.count(f":{severity}]")
+        + sum(f":{severity}]" in finding.body for finding in review.findings)
+        for severity in ("block", "warn", "nit")
+    }
     lines = [
         "## Summary",
         "",
-        f"- {blocks} BLOCK, {warns} WARN across {context.skill_count} skills",
+        f"- {counts['block']} BLOCK, {counts['warn']} WARN, {counts['nit']} NIT "
+        f"across {context.skill_count} skills",
         f"- Reviewed at: {context.head_sha}",
         "- Progress: "
         f"branch {context.head_ref}; HEAD {context.head_sha}; "
@@ -244,7 +244,7 @@ def render_zero_diff(context: RenderContext) -> str:
         "PASS — no findings across all skills (code-health, correctness, comment-hygiene, "
         "python-style, shell-style, synth-setter, tdd-impl, ml-test).\n\n"
         "## Summary\n\n"
-        "- 0 BLOCK, 0 WARN\n"
+        "- 0 BLOCK, 0 WARN, 0 NIT\n"
         f"- Reviewed at: {context.head_sha}\n"
         "- Progress: "
         f"branch {context.head_ref}; HEAD {context.head_sha}; "

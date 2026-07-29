@@ -152,7 +152,9 @@ class TestSynthsTable:
             files("synth_setter") / "data" / "vst" / f"{synth.param_spec_name}_param_map.json"
         ).is_file()
 
-        assert packaged == (synth.param_spec_name in {"surge_4", "surge_simple", "surge_xt"})
+        assert packaged == (
+            synth.param_spec_name in {"cardinal", "surge_4", "surge_simple", "surge_xt"}
+        )
 
     @pytest.mark.parametrize(
         "variant", ["surge_xt_surgepy", "surge_simple_surgepy", "surge_4_surgepy"]

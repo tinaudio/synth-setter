@@ -53,6 +53,7 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
+_EMBEDDING_KEYS = ("clap", "m2l", "same_s", "same_l", "ssondo", "t5gemma", "tinymu")
 _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
@@ -966,6 +967,7 @@ def _render_smoke_train_subprocess(
     param_spec_name: str,
     *,
     num_samples: int = NUM_FIXTURE_SAMPLES,
+    base_seed: int = 0,
 ) -> None:
     """Render a smoke ``train`` shard through the real VST subprocess.
 
@@ -973,6 +975,7 @@ def _render_smoke_train_subprocess(
         parent must already exist.
     :param param_spec_name: Parameter specification and preset selector.
     :param num_samples: Number of real VST renders to write.
+    :param base_seed: Deterministic render seed distinguishing dataset splits.
     """
     generate_dataset_args = []
     if sys.platform == "linux":
@@ -994,6 +997,7 @@ def _render_smoke_train_subprocess(
         f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
         f"--samples_per_render_batch={num_samples}",
         f"--samples_per_shard={num_samples}",
+        f"--base_seed={base_seed}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
@@ -1139,6 +1143,8 @@ def local_embedding_checkpoints() -> dict[str, str]:
     from huggingface_hub import snapshot_download
     from music2latent.inference import download_model, load_path_inference_default
 
+    from synth_setter.pipeline.data.ssondo import resolve_ssondo_checkpoint
+
     download_model()
     snapshot_download(
         "laion/clap-htsat-unfused",
@@ -1175,7 +1181,9 @@ def local_embedding_checkpoints() -> dict[str, str]:
         if os.environ.get("SYNTH_SETTER_REQUIRE_EMBEDDING_E2E") == "true":
             pytest.fail(message)
         pytest.skip(message)
-    return {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints = {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints["ssondo"] = str(resolve_ssondo_checkpoint())
+    return checkpoints
 
 
 @pytest.fixture(scope="function")
@@ -1549,7 +1557,7 @@ def cfg_surge_fake_train(
 def augment_lance_splits_with_all_embeddings(
     dataset_root: Path, checkpoints: dict[str, str], param_spec_name: str
 ) -> Path:
-    """Run the Hydra CLI for every real embedding and clone its output splits.
+    """Run the Hydra CLI for every embedding encoder and clone its output.
 
     :param dataset_root: Directory holding finalized local Lance splits.
     :param checkpoints: Complete local checkpoint directories from preflight.
@@ -1562,7 +1570,7 @@ def augment_lance_splits_with_all_embeddings(
         "-m",
         "synth_setter.pipeline.data.add_embeddings",
         f"lance_uri={train_uri}",
-        "embeddings=[clap,m2l,same_s,same_l,t5gemma]",
+        f"embeddings=[{','.join(_EMBEDDING_KEYS)}]",
         f"param_spec_name={param_spec_name}",
         "device=cpu",
         "build_index=false",
@@ -1578,7 +1586,58 @@ def augment_lance_splits_with_all_embeddings(
     return dataset_root
 
 
-def assert_all_embedding_columns(dataset_root: Path) -> None:
+def augment_lance_splits_with_embedding(dataset_root: Path, embedding: str) -> Path:
+    """Append one real registry embedding to every split for entrypoint tests.
+
+    :param dataset_root: Directory holding finalized local Lance splits.
+    :param embedding: Registry key to append.
+    :returns: Augmented dataset root.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    for split in ("train", "val", "test"):
+        add_embeddings(
+            AddEmbeddingsConfig(
+                lance_uri=str(dataset_root / f"{split}.lance"),
+                embeddings=(embedding,),
+                device="cpu",
+                batch_size=1,
+                build_index=False,
+            )
+        )
+    return dataset_root
+
+
+def augment_lance_splits_with_ssondo(dataset_root: Path, checkpoint: str) -> Path:
+    """Append real S-SONDO vectors to identical smoke-dataset splits.
+
+    :param dataset_root: Directory holding finalized local Lance splits.
+    :param checkpoint: Verified local S-SONDO checkpoint path.
+    :returns: Augmented dataset root.
+    """
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    train_uri = dataset_root / "train.lance"
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(train_uri),
+            embeddings=("ssondo",),
+            checkpoints={"ssondo": checkpoint},
+            device="cpu",
+            batch_size=1,
+            build_index=False,
+        )
+    )
+    for split in ("val", "test"):
+        destination = dataset_root / f"{split}.lance"
+        shutil.rmtree(destination)
+        shutil.copytree(train_uri, destination)
+    return dataset_root
+
+
+def assert_embedding_columns(dataset_root: Path) -> None:
     """Assert every real embedding is finite and follows its row semantics.
 
     :param dataset_root: Directory holding the augmented train split.
@@ -1593,7 +1652,9 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         PARAM_ARRAY_FIELD,
         SAME_L_FIELD,
         SAME_S_FIELD,
+        SSONDO_FIELD,
         T5GEMMA_FIELD,
+        TINYMU_FIELD,
     )
     from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
     from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
@@ -1601,7 +1662,7 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(EMBEDDING_REGISTRY) == {"clap", "m2l", "same_s", "same_l", "t5gemma"}
+    assert set(_EMBEDDING_KEYS) == set(EMBEDDING_REGISTRY)
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
@@ -1610,12 +1671,23 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         M2L_FIELD,
         SAME_S_FIELD,
         SAME_L_FIELD,
+        SSONDO_FIELD,
         T5GEMMA_FIELD,
+        TINYMU_FIELD,
     } <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
     table = dataset.to_table(
-        columns=[AUDIO_FIELD, CLAP_FIELD, M2L_FIELD, SAME_S_FIELD, SAME_L_FIELD, T5GEMMA_FIELD]
+        columns=[
+            AUDIO_FIELD,
+            CLAP_FIELD,
+            M2L_FIELD,
+            SAME_S_FIELD,
+            SAME_L_FIELD,
+            SSONDO_FIELD,
+            T5GEMMA_FIELD,
+            TINYMU_FIELD,
+        ]
     )
     for column in table.columns:
         assert column.null_count == 0
@@ -1625,7 +1697,9 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
     m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
     same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
     same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
+    ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
     t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
+    tinymu = table.column(TINYMU_FIELD).combine_chunks().to_numpy_ndarray()
 
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
     assert not np.array_equal(audio[0], audio[1])
@@ -1634,6 +1708,8 @@ def assert_all_embedding_columns(dataset_root: Path) -> None:
         ("m2l", m2l, (_EMBEDDING_E2E_ROWS, 128, 42)),
         ("same_s", same_s, (_EMBEDDING_E2E_ROWS, 256, 44)),
         ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
+        ("ssondo", ssondo, (_EMBEDDING_E2E_ROWS, 960)),
+        ("tinymu", tinymu, (_EMBEDDING_E2E_ROWS, 3840, 25)),
     ):
         assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
         assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"
@@ -2262,6 +2338,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
         mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
         std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
     )
+    (dataset_root / "dataset.complete").touch()
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(

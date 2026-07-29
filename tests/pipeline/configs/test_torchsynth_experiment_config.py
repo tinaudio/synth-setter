@@ -7,6 +7,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
+from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
 
@@ -177,12 +178,13 @@ def test_torchsynth_flow_experiment_carries_no_audio_loss() -> None:
 
 
 def test_torchsynth_flow_experiment_uses_online_parameter_width() -> None:
-    """The module and projection both match the online dataset's 76 parameters."""
+    """The module and projection both match the online dataset's encoded row width."""
     cfg = _flow_cfg()
+    width = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
 
-    assert cfg.datamodule.num_params == 76
-    assert cfg.model.num_params == 76
-    assert cfg.model.vector_field.projection.num_params == 76
+    assert cfg.datamodule.num_params == width
+    assert cfg.model.num_params == width
+    assert cfg.model.vector_field.projection.num_params == width
 
 
 def test_torchsynth_flow_experiment_resamples_training_rows() -> None:
@@ -221,7 +223,11 @@ def test_torchsynth_flow_composed_predict_step_preserves_datamodule_width() -> N
     assert isinstance(model.encoder, LogMelEncoder)
     assert isinstance(model.vector_field, ApproxEquivTransformer)
     assert isinstance(model.vector_field.projection, LearntProjection)
-    assert cfg.model.num_params == cfg.datamodule.num_params == 76
+    assert (
+        cfg.model.num_params
+        == cfg.datamodule.num_params
+        == TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
+    )
     assert predictions.shape == (2, cfg.datamodule.num_params)
     assert torch.isfinite(predictions).all()
 
@@ -237,7 +243,6 @@ def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> No
     )
     assert cfg.model.audio_loss.sample_rate == 44_100
     assert cfg.model.audio_loss.signal_length == 176_400
-    assert cfg.model.audio_loss.midi_pitch == 60
     assert cfg.model.audio_loss.render_batch_size == cfg.datamodule.batch_size
     # torch.compile traces through the renderer's functional_call and miscompiles.
     assert cfg.model.compile is False
@@ -266,8 +271,9 @@ def test_torchsynth_audio_experiment_collation_returns_exact_keys(experiment: st
     batch = next(iter(datamodule.train_dataloader()))
 
     assert set(batch) == {"params", "noise", "audio"}
-    assert batch["params"].shape == (2, 76)
-    assert batch["noise"].shape == (2, 76)
+    width = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
+    assert batch["params"].shape == (2, width)
+    assert batch["noise"].shape == (2, width)
     assert batch["audio"].shape == (2, 4_410)
     assert all(value.dtype == torch.float32 for value in batch.values())
 

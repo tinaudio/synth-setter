@@ -35,8 +35,12 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # Full history: the model-typing hook resolves its frozen baseline against
+      # origin/<base> / HEAD^1, which a shallow checkout cannot rev-parse (#2662).
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up pre-commit toolchain
         uses: ./.github/actions/setup-precommit
