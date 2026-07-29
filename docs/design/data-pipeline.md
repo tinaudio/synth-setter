@@ -1152,6 +1152,16 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
 
+`sketch` is not a learned embedding: it extracts the Sketch2Sound-style
+loudness, spectral-centroid, and PESTO pitch tracks
+(`features/sketch_controls.py`) from `audio` on the mel frame grid and writes
+them as a `(NUM_SKETCH_CONTROLS, F)` tensor column plus a mean-pooled
+`sketch_ctrl_vec` companion for contour-similarity search. Its `IndexSpec`
+fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
+vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
+386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
+leaves `num_sub_vectors` null to let each spec's default apply.
+
 `tinymu` runs TinyMU's frozen MATPAC encoder through its public package API,
 installed from an exact Git commit in the normal heavy runtime. The pinned R2
 checkpoint is verified by SHA-256, and each generated Lance field records that

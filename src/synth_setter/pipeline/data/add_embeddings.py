@@ -27,18 +27,25 @@ import hydra
 import numpy as np
 import pyarrow as pa
 import structlog
+from beartype import beartype
 from einops import rearrange
+from jaxtyping import Float, jaxtyped
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
+    DEFAULT_PESTO_CHECKPOINT,
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    NUM_SKETCH_CONTROLS,
+    SKETCH_CTRL_FIELD,
+    SKETCH_PITCH_BINS,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
     TINYMU_FIELD,
+    mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
@@ -97,9 +104,12 @@ SAME_DOWNSAMPLING_RATIO: int = 4096
 SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
+SKETCH_INDEX_SUB_VECTORS: int = 2
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
+# Structurally = ClapEncodeFn; the name documents the (B, C, T) input contract.
+type SketchEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
@@ -295,6 +305,16 @@ def _t5gemma_artifact_identity(checkpoint: str) -> str:
 
     checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
     return _versioned_artifact_identity("t5gemma", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _sketch_artifact_identity(checkpoint: str) -> str:
+    """Identify the pesto-bundled sketch extraction artifact.
+
+    :param checkpoint: Bundled PESTO checkpoint name shipping with the package.
+    :returns: Versioned installed-package and checkpoint identity.
+    """
+    version = importlib.metadata.version("pesto-pitch")
+    return _versioned_artifact_identity("sketch", f"package:{version};checkpoint:{checkpoint}")
 
 
 def _ssondo_artifact_identity(checkpoint: str) -> str:
@@ -651,6 +671,71 @@ def _encode_t5gemma_column(params: np.ndarray, sample_rate: int, encoder: Encode
     return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
 
 
+@jaxtyped(typechecker=beartype)
+def _sketch_encode(
+    audio: Float[np.ndarray, "batch channel time"], sample_rate: int
+) -> Float[np.ndarray, "batch control frame"]:
+    """Extract sketch controls for one audio batch.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate deciding the control frame grid.
+    :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
+    """
+    import torch
+
+    from synth_setter.features.sketch_controls import extract_sketch_controls_batch
+
+    batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
+    return extract_sketch_controls_batch(batch, sample_rate).cpu().numpy()
+
+
+def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Bind the sketch-control extractor to the registry's uniform factory signature.
+
+    Loads PESTO here so the batch transform stays free of model-file I/O and a missing or corrupt
+    artifact fails before any row is processed.
+
+    :param checkpoint: Bundled PESTO checkpoint name.
+    :param config: Unused run config; PESTO runs on CPU, device is not plumbed.
+    :returns: Encoder over the original audio batch.
+    """
+    from synth_setter.features.sketch_controls import load_pesto_model
+
+    del config
+    load_pesto_model(checkpoint)
+    return _sketch_encode
+
+
+def _encode_sketch_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as a fixed-shape sketch-control tensor column.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate deciding the control frame grid.
+    :param encoder: Sketch extractor over the original audio batch.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder output is off the frame grid, non-finite,
+        or outside the documented control bounds.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    encode = cast("SketchEncodeFn", encoder)
+    controls = _finite_embedding(SKETCH_CTRL_FIELD, encode(audio, sample_rate))
+    frames = mel_n_frames_from_samples(audio.shape[-1], sample_rate)
+    expected = (len(audio), NUM_SKETCH_CONTROLS, frames)
+    if controls.shape != expected:
+        raise ValueError(
+            f"{SKETCH_CTRL_FIELD} encoder produced shape {controls.shape}, expected {expected}"
+        )
+    affine = controls[:, : NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS]
+    pitch = controls[:, NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS :]
+    if affine.min() < -1.0 or affine.max() > 1.0 or pitch.min() < 0.0 or pitch.max() > 1.0:
+        raise ValueError(
+            f"{SKETCH_CTRL_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
+            "and pitch rows in [0, 1]"
+        )
+    return tensor_array(controls, np.dtype("float32"), controls.shape[1:])
+
+
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "clap": EmbeddingSpec(
         name="clap",
@@ -691,6 +776,22 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
         resolve_artifact_identity=_same_artifact_identity,
+    ),
+    # PQ sub-vectors must divide the pooled control-vector width.
+    "sketch": EmbeddingSpec(
+        name="sketch",
+        column=SKETCH_CTRL_FIELD,
+        default_checkpoint=DEFAULT_PESTO_CHECKPOINT,
+        co_resident=True,
+        index=IndexSpec(
+            pool="mean",
+            num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
+            vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+            vector_dim=NUM_SKETCH_CONTROLS,
+        ),
+        load_encoder=_load_sketch_spec_encoder,
+        encode_column=_encode_sketch_column,
+        resolve_artifact_identity=_sketch_artifact_identity,
     ),
     "ssondo": EmbeddingSpec(
         name="ssondo",
@@ -1299,7 +1400,7 @@ def _matching_index_exists(
         if config.num_partitions is None
         else config.num_partitions
     )
-    num_sub_vectors = config.num_sub_vectors
+    num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
     metric = config.metric
     indices = cast("list[dict[str, object]]", dataset.list_indices())
     column_indices = [entry for entry in indices if entry.get("fields") == [column]]
