@@ -59,6 +59,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_t5gemma_spec_encoder,
     _matching_index_exists,
     _prepare_resume_cache,
+    _resolve_artifact_identity,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
     _write_columns,
@@ -1246,6 +1247,28 @@ def test_add_embeddings_existing_artifact_identity_mismatch_raises(
                 lance_uri=str(uri), embeddings=("clap",), build_index=False
             )
         )
+
+
+def test_t5gemma_artifact_identity_includes_parameter_text_policy() -> None:
+    """Text embeddings from different parameter policies are incompatible."""
+    spec = _fake_spec("t5gemma")
+    surge_xt = AddEmbeddingsConfig(
+        lance_uri=_LANCE_URI,
+        embeddings=("t5gemma",),
+        param_spec_name="surge_xt",
+        param_text_normalizer="param_names",
+    )
+    surge_4 = surge_xt.model_copy(update={"param_spec_name": "surge_4"})
+    alternate_normalizer = surge_xt.model_copy(
+        update={"param_text_normalizer": "future_policy"}
+    )
+
+    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(
+        spec, surge_4
+    )
+    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(
+        spec, alternate_normalizer
+    )
 
 
 def test_add_embeddings_partial_policy_columns_raise(

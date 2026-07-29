@@ -910,6 +910,7 @@ def _render_smoke_train_subprocess(
     param_spec_name: str,
     *,
     num_samples: int = NUM_FIXTURE_SAMPLES,
+    base_seed: int = 0,
 ) -> None:
     """Render a smoke ``train`` shard through the real VST subprocess.
 
@@ -917,6 +918,7 @@ def _render_smoke_train_subprocess(
         parent must already exist.
     :param param_spec_name: Parameter specification and preset selector.
     :param num_samples: Number of real VST renders to write.
+    :param base_seed: Deterministic render seed distinguishing dataset splits.
     """
     generate_dataset_args = []
     if sys.platform == "linux":
@@ -938,6 +940,7 @@ def _render_smoke_train_subprocess(
         f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
         f"--samples_per_render_batch={num_samples}",
         f"--samples_per_shard={num_samples}",
+        f"--base_seed={base_seed}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is

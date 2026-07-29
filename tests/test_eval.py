@@ -45,6 +45,7 @@ from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     REAL_VST_VARIANTS,
+    _render_smoke_train_subprocess,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embedding,
     augment_lance_splits_with_embeddings,
@@ -1666,13 +1667,17 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
         return original_forward(pool, embed)
 
     monkeypatch.setattr(EmbeddingPool, "forward", record_forward)
+    validation_split = surge_xt_smoke_datasets / "val.lance"
+    shutil.rmtree(validation_split)
+    _render_smoke_train_subprocess(validation_split, param_spec_name, base_seed=1)
     dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "tinymu")
-    _assert_conditioning_train_validate_finite(
+    validation_mse = _assert_conditioning_train_validate_finite(
         tmp_path,
         dataset_root,
         param_spec_name,
         "tinymu",
     )
+    assert validation_mse < 2.0
     assert pooled_inputs
     assert all(embed.shape[1] == TINYMU_FRONTEND.embedding_dim for embed in pooled_inputs)
     assert any(torch.count_nonzero(embed).item() > 0 for embed in pooled_inputs)

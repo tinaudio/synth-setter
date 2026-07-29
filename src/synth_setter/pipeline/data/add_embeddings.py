@@ -40,7 +40,6 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
-from synth_setter.utils.logging_utils import resolve_git_sha
 from synth_setter.pipeline.data.tinymu import (
     DEFAULT_TINYMU_CHECKPOINT,
     TINYMU_CHECKPOINT_SHA256,
@@ -50,6 +49,7 @@ from synth_setter.pipeline.data.tinymu import (
     load_tinymu_audio_encoder,
     tinymu_num_latent_frames,
 )
+from synth_setter.utils.logging_utils import resolve_git_sha
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -805,6 +805,25 @@ def _resume_cache_for_specs(
     return resume_cache.with_name(f"{resume_cache.name}.{suffix}")
 
 
+def _resolve_artifact_identity(
+    spec: EmbeddingSpec, config: AddEmbeddingsConfig
+) -> str:
+    """Resolve checkpoint and input-policy identity for one embedding.
+
+    :param spec: Embedding policy to identify.
+    :param config: Checkpoint and input-policy selection.
+    :returns: Identity covering every output-affecting artifact and policy.
+    """
+    checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
+    identity = spec.resolve_artifact_identity(checkpoint)
+    if spec.input_field != PARAM_ARRAY_FIELD:
+        return identity
+    digest = hashlib.sha256()
+    for value in (config.param_spec_name or "", config.param_text_normalizer):
+        _update_framed_digest(digest, value.encode())
+    return f"{identity}:input-policy:{digest.hexdigest()}"
+
+
 def _load_encoders(
     specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
 ) -> list[Encoder]:
@@ -913,12 +932,7 @@ def _write_columns(
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
         encoders = _load_encoders(specs, config)
-    identities = {
-        spec.name: spec.resolve_artifact_identity(
-            config.checkpoints.get(spec.name, spec.default_checkpoint)
-        )
-        for spec in specs
-    }
+    identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
     resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
     _prepare_resume_cache(resume_cache, identities)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
@@ -1070,9 +1084,8 @@ def _embedding_output_schema(
     """
     fields = []
     for spec in specs:
-        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
         identity = (
-            spec.resolve_artifact_identity(checkpoint)
+            _resolve_artifact_identity(spec, config)
             if identities is None
             else identities[spec.name]
         )
@@ -1112,8 +1125,7 @@ def _missing_embedding_specs(
         if not present:
             missing.append(spec)
             continue
-        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
-        artifact_identity = spec.resolve_artifact_identity(checkpoint).encode()
+        artifact_identity = _resolve_artifact_identity(spec, config).encode()
         for column in expected:
             metadata = dataset.schema.field(column).metadata or {}
             if (
