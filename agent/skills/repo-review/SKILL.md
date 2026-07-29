@@ -77,7 +77,12 @@ For each finding emit one line:
 ```
 BLOCK: <path>:<line> — [<category>] <description>
 WARN:  <path>:<line> — [<category>] <description>
+NIT:   <path>:<line> — [<category>] <description>
 ```
+
+BLOCK = must fix before merge · WARN = should fix · NIT = optional preference
+that never gates. Emit NIT rather than WARN whenever a reviewer could decline
+the change without harming the codebase.
 
 Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `security`, `commit-style`, `pr-link`, `stale-ref`, `secret-doc`.
 
@@ -85,7 +90,7 @@ Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `secu
 
 **Comment hygiene (AGENTS.md "Comment Hygiene" + "No Comments Inside YAML run: Block-Scalars")**
 
-Rule IDs `C1`–`C12` are the full BLOCK/WARN schema in the plugin's `comment-hygiene` skill (run via `/repo-review-full` or directly when the plugin is available). The MVP repeats the same rule IDs inline so external contributors and plugin-less environments still get coverage; what the MVP omits is the plugin's per-finding `Before / After` rewrites (and the two NIT-severity items C13–C14). When in doubt about a flag, defer to the plugin's per-finding rewrites.
+Rule IDs `C1`–`C12` are the full BLOCK/WARN schema in the plugin's `comment-hygiene` skill (run via `/repo-review-full` or directly when the plugin is available). The MVP repeats the same rule IDs inline so external contributors and plugin-less environments still get coverage; what the MVP omits is the plugin's per-finding `Before / After` rewrites and its NIT-severity items C13–C14. When in doubt about a flag, defer to the plugin's per-finding rewrites.
 
 BLOCK items (hard AGENTS.md rules — always flag):
 
@@ -165,14 +170,16 @@ WARN items (bloat patterns — flag when the diff adds them):
 End the listing with:
 
 ```
-Summary: X BLOCK, Y WARN
+Summary: X BLOCK, Y WARN, Z NIT
 ```
 
 If the checklist found zero findings AND Step 2 found no PR-health BLOCKs (no merge conflict, no failing checks), output `PASS` and stop — do not post an empty review. If PR-health turned up anything, always submit so the merge-conflict / failing-check banner reaches the author.
 
 ## Step 5: Build the findings JSON
 
-Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each diff-anchored finding becomes one inline comment with a `[repo-review:<severity>]` prefix.
+Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each diff-anchored BLOCK or WARN becomes one inline comment with a `[repo-review:<severity>]` prefix.
+
+**NITs never become inline comments.** List them as `- **[repo-review:nit]** \`<path>:<line>\` — \[<category>\] <description>`bullets under a`## Nits`section appended last in`review_body\`; omit the section when there are none. An inline thread is a merge obligation under "Conversations must be resolved" branch protection, which is exactly what a NIT must not be.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
 
@@ -184,7 +191,7 @@ Example shape when both health flags fire:
 {
   "pr_number": <N>,
   "repo": "<owner>/<repo>",
-  "review_body": "Repo-review (MVP): <X> BLOCK, <Y> WARN. Inline core checklist from AGENTS.md.\n\n## PR health\n\n- **[repo-review:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[repo-review:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123",
+  "review_body": "Repo-review (MVP): <X> BLOCK, <Y> WARN, <Z> NIT. Inline core checklist from AGENTS.md.\n\n## PR health\n\n- **[repo-review:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[repo-review:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123\n\n## Nits\n\n- **[repo-review:nit]** `src/foo.py:9` — [comment-hygiene] comment restates the assignment.",
   "findings": [
     {
       "path": "<path>",
@@ -223,6 +230,6 @@ The helper prints the review's `html_url` on success. Report it back to the user
 
 ## Notes
 
-- Severity threshold: post everything (every BLOCK and every WARN). Tuning to top-N or by-category is a follow-up — see issue #778's "Out of scope" list.
+- Severity threshold: post everything (every BLOCK and WARN inline, every NIT in the body). Tuning to top-N or by-category is a follow-up — see issue #778's "Out of scope" list.
 - Idempotency: re-running the skill on the same PR posts a fresh review with fresh comment threads (duplicates by design — easy to delete a whole review, fiddly to dedupe).
 - Drift: this checklist is sourced from AGENTS.md verbatim. When AGENTS.md changes, this SKILL.md should change in the same PR — that's the contract.

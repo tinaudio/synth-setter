@@ -113,8 +113,10 @@ Return the standard fan-out report. **Severity:**
   silently dropped rows, version races, object-store retries Lance handles).
 - **WARN** — a native API would be simpler/faster but the hand-roll is correct,
   or the call uses a deprecated/superseded API the docs flag.
+- **NIT** — the native form is equivalent, not better: an idiom or argument-style
+  preference with no correctness, performance, or deprecation consequence.
 
-Every BLOCK and WARN body MUST contain, in this order:
+Every BLOCK, WARN, and NIT body MUST contain, in this order:
 
 1. The `<path>:<line>` anchor.
 2. One sentence naming the hand-roll and the native primitive that replaces it.
@@ -172,7 +174,9 @@ version):
 | 11  | **Version-matched docs** | Quoted API exists in the resolved `pylance` version                       | BLOCK    |
 | 12  | **Grounded findings**    | Every finding carries a verbatim doc quote + deep link                    | BLOCK    |
 
-BLOCK = must fix before merge · WARN = advisory.
+BLOCK = must fix before merge · WARN = should fix · NIT = optional, never gates.
+No row defaults to NIT: a checklist row fires at its tabled severity, and NIT is
+reserved for a preference that no row covers.
 
 ## Notes
 

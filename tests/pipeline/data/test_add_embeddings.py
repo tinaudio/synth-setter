@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import os
+import shutil
 import subprocess
 import sys
 import weakref
@@ -58,6 +59,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     Encoder,
     IndexSpec,
     ParamTextEncodeFn,
+    _checkpoint_tree_sha256,
     _configure_lance_logging,
     _downmix_to_mono,
     _encode_t5gemma_column,
@@ -65,8 +67,14 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
+    _matching_index_exists,
+    _missing_embedding_specs,
+    _prepare_resume_cache,
+    _resolve_artifact_identity,
     _resolve_clap_checkpoint,
     _resolve_same_checkpoint_dir,
+    _resume_source_identity,
+    _versioned_artifact_identity,
     _write_columns,
     add_embeddings,
     build_index,
@@ -77,6 +85,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND, tinymu_num_latent_frames
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
@@ -158,13 +167,31 @@ def _fake_sketch(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Sample rate deciding the frame grid.
-    :returns: Deterministic ``(B, NUM_SKETCH_CONTROLS, F)`` controls.
+    :returns: Deterministic in-bounds ``(B, NUM_SKETCH_CONTROLS, F)`` controls.
     """
     frames = sketch_num_frames(audio.shape[-1], sample_rate)
-    rows = np.arange(NUM_SKETCH_CONTROLS, dtype=np.float32)
-    per_clip = audio.mean(axis=(1, 2), dtype=np.float32)
+    # Row steps dominate the clip term, keeping every cell inside [0, 1) while
+    # each (clip, row) pair stays distinct.
+    rows = np.arange(NUM_SKETCH_CONTROLS, dtype=np.float32) / NUM_SKETCH_CONTROLS
+    per_clip = np.clip(audio.mean(axis=(1, 2), dtype=np.float32), -0.5, 0.5) / (
+        2 * NUM_SKETCH_CONTROLS
+    )
     cells = per_clip[:, None, None] + rows[None, :, None]
     return np.ascontiguousarray(np.repeat(cells, frames, axis=2))
+
+
+def _fake_tinymu(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Encode audio as deterministic MATPAC-shaped sequences.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :returns: Deterministic TinyMU-shaped embeddings.
+    """
+    frames = tinymu_num_latent_frames(audio.shape[-1], sample_rate)
+    fill = audio.astype(np.float32).mean(axis=(1, 2))
+    return np.broadcast_to(
+        fill[:, None, None], (len(audio), TINYMU_FRONTEND.embedding_dim, frames)
+    ).copy()
 
 
 def _encoder_for(name: str) -> Callable[..., np.ndarray]:
@@ -172,6 +199,7 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
 
     :param name: Embedding registry key.
     :returns: Matching fake encoder.
+    :raises ValueError: No fake is registered for ``name``.
     """
     if name == "m2l":
         return _fake_m2l
@@ -181,7 +209,11 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_sketch
     if name == "same_s":
         return _fake_same(0.25)
-    return _fake_same(0.75, same_l_num_latent_frames)
+    if name == "same_l":
+        return _fake_same(0.75, same_l_num_latent_frames)
+    if name == "tinymu":
+        return _fake_tinymu
+    raise ValueError(f"no fake encoder for {name!r}")
 
 
 def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
@@ -198,7 +230,11 @@ def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
             events.append(f"load:{name}")
         return _encoder_for(name)
 
-    return replace(EMBEDDING_REGISTRY[name], load_encoder=load)
+    return replace(
+        EMBEDDING_REGISTRY[name],
+        load_encoder=load,
+        resolve_artifact_identity=lambda checkpoint: f"fake:{name}:{checkpoint}:v1",
+    )
 
 
 def _install_fake_specs(
@@ -310,6 +346,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "sketch",
         "ssondo",
         "t5gemma",
+        "tinymu",
     }
     assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
         pool="mean",
@@ -318,7 +355,9 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         vector_dim=NUM_SKETCH_CONTROLS,
     )
     assert EMBEDDING_REGISTRY["sketch"].co_resident is True
-    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none", vector_dim=512)
+    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(
+        pool="none", vector_dim=CLAP_EMBEDDING_DIM
+    )
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
     )
@@ -337,6 +376,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
+    assert EMBEDDING_REGISTRY["tinymu"].co_resident is False
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
@@ -360,9 +400,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
         assert cfg.debug is False
-        assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(
-            lance_uri=_LANCE_URI
-        )
+        assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(lance_uri=_LANCE_URI)
     finally:
         GlobalHydra.instance().clear()
 
@@ -391,7 +429,8 @@ def test_add_embeddings_config_with_duplicate_embedding_raises() -> None:
     """A registry entry can be selected at most once."""
     with pytest.raises(ValueError, match="embeddings .* has duplicate entries"):
         AddEmbeddingsConfig(
-            lance_uri=_LANCE_URI, embeddings=["clap", "clap"]  # type: ignore[arg-type]
+            lance_uri=_LANCE_URI,
+            embeddings=["clap", "clap"],  # type: ignore[arg-type]
         )
 
 
@@ -399,6 +438,12 @@ def test_add_embeddings_config_with_empty_embedding_selection_raises() -> None:
     """An empty registry selection is rejected instead of becoming a silent no-op."""
     with pytest.raises(ValueError, match="embeddings must select at least one registry key"):
         AddEmbeddingsConfig(lance_uri=_LANCE_URI, embeddings=())
+
+
+def test_add_embeddings_config_with_m2l_checkpoint_override_raises() -> None:
+    """M2L cannot label package-owned weights as a caller-selected checkpoint."""
+    with pytest.raises(ValidationError, match="does not support checkpoint overrides"):
+        AddEmbeddingsConfig(lance_uri="dataset", checkpoints={"m2l": "replacement"})
 
 
 def test_add_embeddings_config_with_unknown_checkpoint_key_raises() -> None:
@@ -418,7 +463,8 @@ def test_add_embeddings_config_with_checkpoint_override_preserves_mapping() -> N
 def test_add_embeddings_config_with_resume_cache_string_coerces_path() -> None:
     """Hydra string paths become Path values under strict validation."""
     config = AddEmbeddingsConfig(
-        lance_uri=_LANCE_URI, resume_cache="cache/embed.cache"  # type: ignore[arg-type]
+        lance_uri=_LANCE_URI,
+        resume_cache="cache/embed.cache",  # type: ignore[arg-type]
     )
     assert config.resume_cache == Path("cache/embed.cache")
 
@@ -473,12 +519,16 @@ def test_embedding_spec_encode_column_for_valid_encoder_builds_arrow_array(name:
     assert len(array) == 3
     if name == "clap":
         assert array.type == pa.list_(pa.float32(), CLAP_EMBEDDING_DIM)
-        np.testing.assert_allclose(np.asarray(array.to_pylist()), _fake_clap(_downmix_to_mono(audio), _SAMPLE_RATE))
+        np.testing.assert_allclose(
+            np.asarray(array.to_pylist()), _fake_clap(_downmix_to_mono(audio), _SAMPLE_RATE)
+        )
     else:
         assert isinstance(array.type, pa.FixedShapeTensorType)
         assert array.type.value_type == pa.float32()
         values = pa.chunked_array([array]).combine_chunks().to_numpy_ndarray()
-        expected = encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        expected = (
+            encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        )
         np.testing.assert_allclose(values, expected)
 
 
@@ -500,7 +550,9 @@ def test_embedding_spec_encode_column_with_nonfinite_output_raises(
         output.flat[0] = value
         return output
 
-    with pytest.raises(ValueError, match=f"{EMBEDDING_REGISTRY[name].column} embeddings contain non-finite values"):
+    with pytest.raises(
+        ValueError, match=f"{EMBEDDING_REGISTRY[name].column} embeddings contain non-finite values"
+    ):
         EMBEDDING_REGISTRY[name].encode_column(audio, _SAMPLE_RATE, poisoned)
 
 
@@ -590,7 +642,9 @@ def test_write_columns_for_single_registry_spec_round_trips_column(
     else:
         values = column.to_numpy_ndarray()
         encoder = _encoder_for(name)
-        expected = encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        expected = (
+            encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        )
     np.testing.assert_allclose(values, expected)
 
 
@@ -613,9 +667,7 @@ def test_write_columns_with_mean_pool_writes_float32_companion_from_sequence(
         lance.dataset(str(uri)),
         [replace(base, load_encoder=load)],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("m2l",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
     )
 
     dataset = lance.dataset(str(uri))
@@ -648,9 +700,7 @@ def test_write_columns_with_attention_pool_raises_not_implemented(tmp_path: Path
             lance.dataset(str(uri)),
             [spec],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), build_index=False
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
         )
 
 
@@ -725,9 +775,7 @@ def test_write_columns_with_existing_target_raises_before_encoder_load(tmp_path:
     uri = tmp_path / "existing.lance"
     _audio_dataset(uri, rows=2)
     initial = _fake_spec("same_s")
-    config = AddEmbeddingsConfig(
-        lance_uri=str(uri), embeddings=("same_s",), build_index=False
-    )
+    config = AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("same_s",), build_index=False)
     _write_columns(lance.dataset(str(uri)), [initial], _SAMPLE_RATE, config)
     loads: list[str] = []
 
@@ -769,9 +817,7 @@ def test_write_columns_with_existing_companion_raises_before_encoder_load(
             lance.dataset(str(uri)),
             [_fake_spec("m2l", loads)],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), build_index=False
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
         )
 
     assert loads == []
@@ -809,6 +855,152 @@ def test_write_columns_with_missing_audio_raises(tmp_path: Path) -> None:
         )
 
 
+def test_checkpoint_tree_identity_ignores_huggingface_download_bookkeeping(
+    tmp_path: Path,
+) -> None:
+    """Download timestamps do not change checkpoint content identity.
+
+    :param tmp_path: Scratch checkpoint tree.
+    """
+    model = tmp_path / "model.bin"
+    metadata = tmp_path / ".cache" / "huggingface" / "download" / "model.metadata"
+    metadata.parent.mkdir(parents=True)
+    model.write_bytes(b"weights")
+    metadata.write_text("first timestamp")
+    first = _checkpoint_tree_sha256(tmp_path)
+    metadata.write_text("different timestamp")
+
+    assert _checkpoint_tree_sha256(tmp_path) == first
+
+
+def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
+    """Unrelated repository revisions do not alter artifact identity."""
+    assert (
+        _versioned_artifact_identity("tinymu", "checkpoint:sha256:abc")
+        == "tinymu:policy-v1:checkpoint:sha256:abc"
+    )
+
+
+def test_resume_source_identity_changes_with_input_contract(tmp_path: Path) -> None:
+    """Output-affecting source settings cannot share cached UDF batches.
+
+    :param tmp_path: Scratch directory for the Lance source.
+    """
+    uri = tmp_path / "source.lance"
+    _audio_dataset(uri, rows=4)
+    dataset = lance.dataset(uri)
+    baseline = _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE,
+        batch_size=2,
+        input_fields=[AUDIO_FIELD],
+    )
+
+    assert baseline != _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE // 2,
+        batch_size=2,
+        input_fields=[AUDIO_FIELD],
+    )
+    assert baseline != _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE,
+        batch_size=1,
+        input_fields=[AUDIO_FIELD],
+    )
+    assert baseline != _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE,
+        batch_size=2,
+        input_fields=[PARAM_ARRAY_FIELD],
+    )
+
+
+def test_prepare_resume_cache_without_identity_discards_legacy_batches(
+    tmp_path: Path,
+) -> None:
+    """An unverifiable legacy cache restarts instead of poisoning output metadata.
+
+    :param tmp_path: Scratch directory for cache files.
+    """
+    resume_cache = tmp_path / "resume.cache"
+    resume_cache.write_bytes(b"legacy cached batches")
+
+    with capture_logs() as logs:
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-a:v1")
+
+    assert not resume_cache.exists()
+    assert resume_cache.with_name("resume.cache.identity").is_file()
+    warning = next(entry for entry in logs if entry["event"] == "resume_cache_identity_missing")
+    assert warning["action"] == "discard"
+
+
+def test_prepare_resume_cache_with_different_artifact_rejects_stale_batches(
+    tmp_path: Path,
+) -> None:
+    """A cache created for one artifact cannot resume another artifact.
+
+    :param tmp_path: Scratch directory for cache files.
+    """
+    resume_cache = tmp_path / "resume.cache"
+    _prepare_resume_cache(resume_cache, {"clap": "artifact-a"}, "dataset-a:v1")
+    resume_cache.write_bytes(b"cached Lance batches")
+
+    with pytest.raises(ValueError, match="resume identity .*does not match"):
+        _prepare_resume_cache(resume_cache, {"clap": "artifact-b"}, "dataset-a:v1")
+
+
+def test_add_embeddings_with_recreated_source_rejects_stale_resume_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache cannot resume after its Lance source is deleted and recreated.
+
+    :param tmp_path: Scratch directory for the source and cache.
+    :param monkeypatch: Fixture installing dependency-free registry policies.
+    """
+    uri = tmp_path / "source.lance"
+    resume_cache = tmp_path / "resume.cache"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    base_spec = _fake_spec("m2l")
+    calls = 0
+
+    def load_crashing(checkpoint: str, device: str | None) -> Callable[..., np.ndarray]:
+        del checkpoint, device
+        encoder = _encoder_for("m2l")
+
+        def encode(*args: object) -> np.ndarray:
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise RuntimeError("simulated crash")
+            return encoder(*args)
+
+        return encode
+
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("m2l",),
+        batch_size=1,
+        resume_cache=resume_cache,
+        build_index=False,
+    )
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY, "m2l", replace(base_spec, load_encoder=load_crashing)
+    )
+    with pytest.raises(OSError, match="simulated crash"):
+        add_embeddings(config)
+    assert resume_cache.exists()
+
+    shutil.rmtree(uri)
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    monkeypatch.setitem(EMBEDDING_REGISTRY, "m2l", base_spec)
+
+    with pytest.raises(ValueError, match="resume identity .*does not match"):
+        add_embeddings(config)
+    assert M2L_FIELD not in lance.dataset(uri).schema.names
+
+
 def test_write_columns_after_success_removes_resume_cache(tmp_path: Path) -> None:
     """A committed UDF pass removes its now-consumed resume cache.
 
@@ -831,6 +1023,7 @@ def test_write_columns_after_success_removes_resume_cache(tmp_path: Path) -> Non
     )
 
     assert not resume_cache.exists()
+    assert not resume_cache.with_name("resume.cache.identity").exists()
     assert M2L_FIELD in lance.dataset(str(uri)).schema.names
 
 
@@ -962,9 +1155,7 @@ def test_write_columns_with_default_batch_size_bounds_work_and_progress(
             lance.dataset(str(uri)),
             [replace(spec, encode_column=encode)],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), build_index=False
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -995,9 +1186,7 @@ def test_write_columns_with_debug_logs_progress_and_versions(
             lance.dataset(str(uri)),
             [_fake_spec("m2l")],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), batch_size=2, debug=True
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), batch_size=2, debug=True),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -1029,9 +1218,7 @@ def test_add_embeddings_with_mixed_selection_writes_exact_columns(
     selected = ("clap", "m2l", "same_s")
     _install_fake_specs(monkeypatch, selected)
 
-    add_embeddings(
-        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False)
-    )
+    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False))
 
     names = set(lance.dataset(str(uri)).schema.names)
     assert {CLAP_FIELD, M2L_FIELD, SAME_S_FIELD} <= names
@@ -1091,9 +1278,7 @@ def test_add_embeddings_with_all_specs_commits_grouped_and_loads_same_sequential
         commits.append((source_version, dataset.version))
 
     monkeypatch.setattr(lance.LanceDataset, "add_columns", recording_add_columns)
-    add_embeddings(
-        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False)
-    )
+    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False))
 
     assert len(commits) == 3
     assert events == ["load:clap", "load:m2l", "load:same_s", "load:same_l"]
@@ -1158,6 +1343,135 @@ def test_add_embeddings_with_two_same_specs_releases_first_before_second_load(
     assert {SAME_S_FIELD, SAME_L_FIELD} <= set(lance.dataset(str(uri)).schema.names)
 
 
+def test_add_embeddings_after_index_failure_resumes_without_reencoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry skips committed columns and resumes the missing index.
+
+    :param tmp_path: Scratch directory for the Lance dataset.
+    :param monkeypatch: Fixture replacing the encoder and index boundary.
+    """
+    uri = tmp_path / "index-resume.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec(), num_rows=256)
+    loads: list[str] = []
+    monkeypatch.setitem(EMBEDDING_REGISTRY, "m2l", _fake_spec("m2l", loads))
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("m2l",),
+        num_partitions=1,
+        num_sub_vectors=4,
+        metric="l2",
+    )
+    real_build_index = build_index
+
+    def fail_index(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.build_index", fail_index)
+    with pytest.raises(RuntimeError, match="index unavailable"):
+        add_embeddings(config)
+
+    committed_version = lance.dataset(uri).version
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.build_index", real_build_index)
+    add_embeddings(config)
+
+    dataset = lance.dataset(uri)
+    assert loads == ["load:m2l"]
+    assert dataset.version > committed_version
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    assert [entry["fields"] for entry in indices] == [[f"{M2L_FIELD}_vec"]]
+
+
+def test_missing_embedding_specs_with_legacy_metadata_accepts_existing_policy(
+    tmp_path: Path,
+) -> None:
+    """Legacy columns without identity metadata remain selectable.
+
+    :param tmp_path: Scratch directory for the Lance dataset.
+    """
+    uri = tmp_path / "legacy-clap.lance"
+    audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
+    clap = np.zeros((2, CLAP_EMBEDDING_DIM), dtype=np.float32)
+    write_lance_shard(uri, {AUDIO_FIELD: audio, CLAP_FIELD: clap})
+    spec = _fake_spec("clap")
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri), embeddings=("clap",), build_index=False
+    )
+
+    with capture_logs() as logs:
+        missing = _missing_embedding_specs(lance.dataset(uri), [spec], config)
+
+    assert missing == []
+    assert any(entry["event"] == "legacy_embedding_identity_missing" for entry in logs)
+
+
+def test_add_embeddings_existing_artifact_identity_mismatch_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed column cannot masquerade as a different checkpoint output.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a dependency-free CLAP policy.
+    """
+    uri = tmp_path / "checkpoint-mismatch.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("clap",))
+    add_embeddings(
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
+    )
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            _fake_spec("clap"),
+            resolve_artifact_identity=lambda checkpoint: f"fake:clap:{checkpoint}:v2",
+        ),
+    )
+    with pytest.raises(ValueError, match="checkpoint identity"):
+        add_embeddings(
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
+        )
+
+
+def test_t5gemma_artifact_identity_includes_parameter_text_policy() -> None:
+    """Text embeddings from different parameter policies are incompatible."""
+    spec = _fake_spec("t5gemma")
+    surge_xt = AddEmbeddingsConfig(
+        lance_uri=_LANCE_URI,
+        embeddings=("t5gemma",),
+        param_spec_name="surge_xt",
+        param_text_normalizer="param_names",
+    )
+    surge_4 = surge_xt.model_copy(update={"param_spec_name": "surge_4"})
+    alternate_normalizer = surge_xt.model_copy(update={"param_text_normalizer": "future_policy"})
+
+    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(spec, surge_4)
+    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(
+        spec, alternate_normalizer
+    )
+
+
+def test_add_embeddings_partial_policy_columns_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A policy with only its sequence output cannot be treated as complete.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a dependency-free M2L policy.
+    """
+    uri = tmp_path / "partial-policy.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("m2l",))
+    config = AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False)
+    add_embeddings(config)
+    lance.dataset(uri).drop_columns([f"{M2L_FIELD}_vec"])
+
+    with pytest.raises(ValueError, match="partial m2l columns"):
+        add_embeddings(config)
+
+
 def test_add_embeddings_with_index_disabled_writes_companions_without_building(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1176,11 +1490,7 @@ def test_add_embeddings_with_index_disabled_writes_companions_without_building(
         lambda dataset, column, *, index, config: calls.append(column),
     )
 
-    add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=selected, build_index=False
-        )
-    )
+    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False))
 
     assert calls == []
     dataset = lance.dataset(str(uri))
@@ -1200,7 +1510,7 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
     selected = ("same_l", "clap", "m2l")
     _install_fake_specs(monkeypatch, selected)
-    calls: list[tuple[str, IndexSpec, int, int, str]] = []
+    calls: list[tuple[str, IndexSpec, int, int | None, str]] = []
 
     def record_index(
         dataset: lance.LanceDataset,
@@ -1215,7 +1525,7 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
                 column,
                 index,
                 cast(int, config.num_partitions),
-                cast(int, config.num_sub_vectors),
+                config.num_sub_vectors,
                 config.metric,
             )
         )
@@ -1251,95 +1561,93 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     ]
 
 
-def test_add_embeddings_after_index_failure_rerun_builds_index_without_reencoding(
+def test_add_embeddings_existing_mixed_target_writes_only_missing_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A split rerun resumes a missing index from committed vectors.
-
-    :param tmp_path: Scratch directory for the finalized shard.
-    :param monkeypatch: Fixture installing a fake encoder and one index failure.
-    """
-    uri = tmp_path / "index-resume.lance"
-    audio = np.random.default_rng(0).uniform(-1, 1, (300, 2, 3_200)).astype(np.float32)
-    write_minimal_lance_shard(
-        uri,
-        build_lance_smoke_spec(train_val_test_sizes=(300, 0, 0)),
-        num_rows=300,
-        audio=audio,
-    )
-    loads: list[str] = []
-    _install_fake_specs(monkeypatch, ("clap",), loads)
-    real_build_index = build_index
-    attempts = 0
-
-    def fail_first_index(
-        dataset: lance.LanceDataset,
-        column: str,
-        *,
-        index: IndexSpec,
-        config: AddEmbeddingsConfig,
-    ) -> bool:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise RuntimeError("transient index failure")
-        return real_build_index(dataset, column, index=index, config=config)
-
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.build_index", fail_first_index
-    )
-    config = AddEmbeddingsConfig(
-        lance_uri=str(uri),
-        embeddings=("clap",),
-        num_partitions=4,
-        num_sub_vectors=16,
-    )
-
-    with pytest.raises(RuntimeError, match="transient index failure"):
-        add_embeddings(config)
-    vectors_before = lance.dataset(str(uri)).to_table(columns=[CLAP_FIELD])
-
-    add_embeddings(config)
-
-    dataset = lance.dataset(str(uri))
-    assert loads == ["load:clap"]
-    assert dataset.to_table(columns=[CLAP_FIELD]).equals(vectors_before)
-    indices = cast("list[dict[str, Any]]", dataset.list_indices())
-    assert any(entry["fields"] == [CLAP_FIELD] for entry in indices)
-    with pytest.raises(ValueError, match="already has embedding"):
-        add_embeddings(config)
-    assert loads == ["load:clap"]
-
-
-@pytest.mark.parametrize("build_index", [False, True])
-def test_add_embeddings_existing_mixed_target_guards_all_loads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build_index: bool
-) -> None:
-    """Any existing selected column blocks every model download.
+    """A retry skips a committed policy and writes the remaining selection.
 
     :param tmp_path: Scratch directory for the finalized shard.
     :param monkeypatch: Fixture installing dependency-free recording specs.
-    :param build_index: Whether a rerun requests index creation.
     """
     uri = tmp_path / "guard.lance"
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
     _install_fake_specs(monkeypatch, ("same_s",))
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("same_s",), build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("same_s",), build_index=False)
     )
     loads: list[str] = []
     _install_fake_specs(monkeypatch, ("clap", "same_s"), loads)
 
-    with pytest.raises(ValueError, match="same_s"):
+    add_embeddings(
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=False)
+    )
+
+    assert loads == ["load:clap"]
+    assert CLAP_FIELD in lance.dataset(uri).schema.names
+
+
+@pytest.mark.slow
+def test_add_embeddings_existing_index_config_mismatch_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed index cannot satisfy a request for different search semantics.
+
+    :param tmp_path: Scratch directory for the finalized shard.
+    :param monkeypatch: Fixture installing a dependency-free CLAP policy.
+    """
+    uri = tmp_path / "index-config-mismatch.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec(), num_rows=256)
+    _install_fake_specs(monkeypatch, ("clap", "m2l"))
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri),
+            embeddings=("clap",),
+            num_partitions=2,
+            metric="l2",
+        )
+    )
+
+    with pytest.raises(ValueError, match="index configuration"):
         add_embeddings(
             AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=build_index
+                lance_uri=str(uri),
+                embeddings=("clap", "m2l"),
+                num_partitions=2,
+                metric="cosine",
             )
         )
 
-    assert loads == []
+    assert M2L_FIELD not in lance.dataset(uri).schema.names
+
+
+def test_matching_index_exists_when_matching_entry_follows_stale_entry() -> None:
+    """Index selection checks every same-column entry before rejecting stale policy."""
+    dataset = SimpleNamespace(
+        count_rows=lambda: 256,
+        list_indices=lambda: [
+            {"name": "stale", "fields": [CLAP_FIELD]},
+            {"name": "current", "fields": [CLAP_FIELD]},
+        ],
+        index_statistics=lambda name: {
+            "indices": [
+                {
+                    "metric_type": "cosine" if name == "stale" else "l2",
+                    "num_partitions": 2,
+                    "sub_index": {"num_sub_vectors": 16},
+                }
+            ]
+        },
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri="dataset", num_partitions=2, num_sub_vectors=16, metric="l2"
+    )
+
+    assert _matching_index_exists(
+        cast("lance.LanceDataset", dataset),
+        CLAP_FIELD,
+        index=IndexSpec(),
+        config=config,
+    )
 
 
 def test_build_index_with_too_few_rows_skips(tmp_path: Path) -> None:
@@ -1353,9 +1661,7 @@ def test_build_index_with_too_few_rows_skips(tmp_path: Path) -> None:
         lance.dataset(str(uri)),
         [_fake_spec("clap")],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False),
     )
 
     built = build_index(
@@ -1381,18 +1687,14 @@ def test_build_index_with_enough_rows_creates_searchable_ivf_pq(tmp_path: Path) 
         lance.dataset(str(uri)),
         [_fake_spec("clap")],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False),
     )
 
     built = build_index(
         lance.dataset(str(uri)),
         CLAP_FIELD,
         index=IndexSpec(),
-        config=AddEmbeddingsConfig(
-            lance_uri=str(uri), num_partitions=4, num_sub_vectors=16
-        ),
+        config=AddEmbeddingsConfig(lance_uri=str(uri), num_partitions=4, num_sub_vectors=16),
     )
 
     dataset = lance.dataset(str(uri))
@@ -1481,9 +1783,7 @@ def test_clap_exact_search_with_stored_vector_returns_queried_row(tmp_path: Path
         lance.dataset(str(uri)),
         [spec],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False),
     )
     dataset = lance.dataset(str(uri))
     stored = dataset.to_table(columns=[CLAP_FIELD, PARAM_ARRAY_FIELD])
@@ -1566,9 +1866,7 @@ def test_same_l_num_latent_frames_for_one_second_returns_11() -> None:
     assert same_l_num_latent_frames(SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 11
 
 
-@pytest.mark.parametrize(
-    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
-)
+@pytest.mark.parametrize("frame_count", [same_s_num_latent_frames, same_l_num_latent_frames])
 def test_same_num_latent_frames_for_four_second_conditioning_returns_44(
     frame_count: Callable[[int, int], int],
 ) -> None:
@@ -1599,9 +1897,7 @@ def test_same_s_num_latent_frames_resamples_and_pads_two_frame_blocks(
     assert same_s_num_latent_frames(num_samples, sample_rate) == expected
 
 
-@pytest.mark.parametrize(
-    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
-)
+@pytest.mark.parametrize("frame_count", [same_s_num_latent_frames, same_l_num_latent_frames])
 @pytest.mark.parametrize(
     ("num_samples", "sample_rate"), [(0, SAME_SAMPLE_RATE), (SAME_SAMPLE_RATE, 0)]
 )
@@ -1998,10 +2294,12 @@ def test_configure_lance_logging_without_debug_defaults_to_warnings(
     :param monkeypatch: Fixture clearing ambient Lance logging.
     """
     monkeypatch.delenv("LANCE_LOG", raising=False)
+    monkeypatch.delenv("LANCE_INCLUDE_VECTOR_CENTROIDS", raising=False)
 
     _configure_lance_logging(debug=False)
 
     assert os.environ["LANCE_LOG"] == "warn"
+    assert os.environ["LANCE_INCLUDE_VECTOR_CENTROIDS"] == "false"
 
 
 def test_configure_lance_logging_with_debug_enables_native_debug(
@@ -2030,9 +2328,7 @@ def test_add_embeddings_with_resume_cache_completes_and_cleans_up(
     _install_fake_specs(monkeypatch, ("clap", "m2l"))
 
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), resume_cache=resume_cache, build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), resume_cache=resume_cache, build_index=False)
     )
 
     assert not resume_cache.exists()
@@ -2065,9 +2361,7 @@ def test_add_embeddings_threads_device_and_debug_to_loaders_and_progress(
 
     with capture_logs() as logs:
         add_embeddings(
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), device="mps", debug=True, build_index=False
-            )
+            AddEmbeddingsConfig(lance_uri=str(uri), device="mps", debug=True, build_index=False)
         )
 
     assert selected == [("clap", "mps"), ("m2l", "mps")]
@@ -2094,9 +2388,7 @@ def test_add_embeddings_uses_sample_rate_from_dataset_metadata(
 
     monkeypatch.setitem(EMBEDDING_REGISTRY, "clap", replace(spec, encode_column=encode))
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
     )
 
     assert seen
@@ -2115,9 +2407,7 @@ def test_write_columns_with_mono_same_source_round_trips(tmp_path: Path) -> None
         lance.dataset(str(uri)),
         [_fake_spec("same_s")],
         SAME_SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("same_s",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("same_s",), build_index=False),
     )
 
     values = (
@@ -2136,6 +2426,7 @@ def test_add_embeddings_open_failure_propagates(monkeypatch: pytest.MonkeyPatch)
 
     :param monkeypatch: Fixture breaking dataset opening.
     """
+
     def boom(uri: str) -> object:
         raise RuntimeError(f"missing R2 credentials for {uri}")
 
@@ -2216,6 +2507,42 @@ def test_add_embeddings_main_when_open_fails_exits_one(
         main()
 
     assert exc_info.value.code == 1
+
+
+def test_add_embeddings_hydra_main_with_invalid_config_exits_one() -> None:
+    """Trust-boundary validation failures use the structured CLI error path."""
+    from synth_setter.pipeline.data.add_embeddings import _hydra_main
+
+    cfg = DictConfig({"lance_uri": 123})
+
+    with capture_logs() as logs, pytest.raises(SystemExit) as exc_info:
+        _hydra_main.__wrapped__(cfg)
+
+    assert exc_info.value.code == 1
+    assert logs[-1]["event"] == "add_embeddings_failed"
+
+
+def test_add_embeddings_hydra_main_with_subprocess_failure_exits_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint subprocess failures use the structured CLI error path.
+
+    :param monkeypatch: Fixture replacing the embedding operation.
+    """
+    from synth_setter.pipeline.data.add_embeddings import _hydra_main
+
+    def fail(config: AddEmbeddingsConfig) -> None:
+        del config
+        raise subprocess.CalledProcessError(1, ["rclone", "copy"])
+
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.add_embeddings", fail)
+    cfg = DictConfig({"lance_uri": "dataset.lance"})
+
+    with capture_logs() as logs, pytest.raises(SystemExit) as exc_info:
+        _hydra_main.__wrapped__(cfg)
+
+    assert exc_info.value.code == 1
+    assert logs[-1]["event"] == "add_embeddings_failed"
 
 
 @pytest.mark.slow
@@ -2371,7 +2698,11 @@ def _install_fake_t5gemma(
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "t5gemma",
-        replace(EMBEDDING_REGISTRY["t5gemma"], load_encoder=load),
+        replace(
+            EMBEDDING_REGISTRY["t5gemma"],
+            load_encoder=load,
+            resolve_artifact_identity=lambda checkpoint: f"fake:t5gemma:{checkpoint}",
+        ),
     )
 
 
@@ -2442,7 +2773,7 @@ def test_t5gemma_encoder_with_param_rows_wider_than_its_spec_raises(
     """
     monkeypatch.setattr(
         "synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder",
-        lambda checkpoint, device: (lambda prompts: np.zeros((len(prompts), 4, 5), np.float32)),
+        lambda checkpoint, device: lambda prompts: np.zeros((len(prompts), 4, 5), np.float32),
     )
     config = AddEmbeddingsConfig(
         lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
@@ -2472,9 +2803,7 @@ def test_t5gemma_encoder_with_matching_param_rows_encodes_one_caption_per_row(
 
         return encode_text
 
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder", fake_load
-    )
+    monkeypatch.setattr("synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder", fake_load)
     config = AddEmbeddingsConfig(
         lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
     )
@@ -2484,6 +2813,20 @@ def test_t5gemma_encoder_with_matching_param_rows_encodes_one_caption_per_row(
     encode(np.zeros((3, spec.encoded_width), dtype=np.float32))
 
     assert seen == [[", ".join(spec.names)] * 3]
+
+
+def test_add_embeddings_config_without_lance_uri_raises() -> None:
+    """An augmentation run requires one Lance dataset."""
+    with pytest.raises(ValidationError, match="lance_uri"):
+        AddEmbeddingsConfig.model_validate({})
+
+
+def test_add_embeddings_config_with_dataset_root_target_raises() -> None:
+    """Every embedding uses the same single-Lance-dataset target contract."""
+    with pytest.raises(ValidationError, match="dataset_root_uri"):
+        AddEmbeddingsConfig.model_validate(
+            {"dataset_root_uri": "dataset", "embeddings": ("tinymu",)}
+        )
 
 
 def test_add_embeddings_config_with_t5gemma_and_no_param_spec_raises() -> None:
@@ -2557,8 +2900,9 @@ def test_load_clap_spec_encoder_passes_the_checkpoint_and_configured_device(
     seen: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
-        lambda checkpoint, device: seen.append((checkpoint, device))
-        or (lambda audio, rate: audio),
+        lambda checkpoint, device: (
+            seen.append((checkpoint, device)) or (lambda audio, rate: audio)
+        ),
     )
 
     _load_clap_spec_encoder("custom/clap", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"))
@@ -2579,7 +2923,9 @@ def test_load_same_spec_encoder_passes_the_checkpoint_and_configured_device(
         lambda checkpoint, device: seen.append((checkpoint, device)) or (lambda audio: audio),
     )
 
-    _load_same_spec_encoder("custom/same-s", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"))
+    _load_same_spec_encoder(
+        "custom/same-s", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu")
+    )
 
     assert seen == [("custom/same-s", "cpu")]
 
@@ -2641,6 +2987,28 @@ def test_sketch_encode_column_with_nonfinite_output_raises(value: float) -> None
         EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, poisoned)
 
 
+@pytest.mark.parametrize(
+    ("row", "value"),
+    [(0, 1.2), (0, -1.2), (2, -0.1), (2, 1.2)],
+    ids=["affine-high", "affine-low", "pitch-negative", "pitch-high"],
+)
+def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: float) -> None:
+    """Finite control cells outside the documented bounds never land in the dataset.
+
+    :param row: Control row receiving the out-of-bounds cell.
+    :param value: Finite cell value outside that row's documented range.
+    """
+    audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
+
+    def poisoned(batch: np.ndarray, sample_rate: int) -> np.ndarray:
+        output = _fake_sketch(batch, sample_rate)
+        output[0, row, 0] = value
+        return output
+
+    with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} controls out of bounds"):
+        EMBEDDING_REGISTRY["sketch"].encode_column(audio, _SAMPLE_RATE, poisoned)
+
+
 def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
     """The sketch closure rejects outputs off the shared mel frame grid."""
     audio = np.zeros((2, 2, _FIXTURE_SAMPLES), dtype=np.float16)
@@ -2672,6 +3040,17 @@ def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(
 
     dataset = lance.dataset(str(uri))
     assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
+    ctrl_type = cast("pa.FixedShapeTensorType", dataset.schema.field(SKETCH_CTRL_FIELD).type)
+    assert isinstance(ctrl_type, pa.FixedShapeTensorType)
+    assert ctrl_type.value_type == pa.float32()
+    frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
+    assert list(ctrl_type.shape) == [NUM_SKETCH_CONTROLS, frames]
+    vec_type = cast(
+        "pa.FixedSizeListType", dataset.schema.field(f"{SKETCH_CTRL_FIELD}_vec").type
+    )
+    assert pa.types.is_fixed_size_list(vec_type)
+    assert vec_type.list_size == NUM_SKETCH_CONTROLS
+    assert vec_type.value_type == pa.float32()
     table = dataset.to_table(columns=[SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"])
     controls = (
         pa.chunked_array([table.column(SKETCH_CTRL_FIELD).chunk(0)])
@@ -2684,6 +3063,50 @@ def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(
         table.column(f"{SKETCH_CTRL_FIELD}_vec").combine_chunks().to_pylist(), dtype=np.float32
     )
     np.testing.assert_allclose(pooled, expected.mean(axis=-1), rtol=1e-6)
+
+
+def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real Hydra entrypoint lands sketch controls from the CLI selection.
+
+    :param tmp_path: Scratch directory for the shard and Hydra run.
+    :param monkeypatch: Fixture installing the entrypoint argv.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    uri = tmp_path / "sketch-cli.lance"
+    spec = build_lance_smoke_spec(task_name="sketch-cli-e2e")
+    write_minimal_lance_shard(uri, spec)
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-add-embeddings",
+            f"lance_uri={uri}",
+            "embeddings=[sketch]",
+            "build_index=false",
+            f"paths.log_dir={tmp_path}",
+            f"hydra.run.dir={tmp_path / 'run'}",
+        ],
+    )
+
+    main()
+
+    dataset = lance.dataset(str(uri))
+    assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
+    controls = (
+        pa.chunked_array([dataset.to_table(columns=[SKETCH_CTRL_FIELD]).column(SKETCH_CTRL_FIELD).chunk(0)])
+        .combine_chunks()
+        .to_numpy_ndarray()
+    )
+    render = spec.render_for_shard(spec.shards[0])
+    audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
+    frames = sketch_num_frames(audio_shape[-1], int(render.sample_rate))
+    assert controls.shape == (audio_shape[0], NUM_SKETCH_CONTROLS, frames)
+    assert np.isfinite(controls).all()
+    assert controls.min() >= -1.0 and controls.max() <= 1.0
 
 
 def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> None:
@@ -2722,7 +3145,7 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
 
 
 def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Path) -> None:
-    """A spec's PQ split applies when the run config leaves the override unset.
+    """A spec's PQ split applies unset-override runs and serves ANN self-queries.
 
     :param tmp_path: Scratch directory for the dataset.
     """
@@ -2731,7 +3154,10 @@ def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Pat
     vectors = rng.random((300, NUM_SKETCH_CONTROLS)).astype(np.float32)
     flat = pa.array(vectors.reshape(-1), pa.float32())
     column = pa.FixedSizeListArray.from_arrays(flat, NUM_SKETCH_CONTROLS)
-    lance.write_dataset(pa.table({f"{SKETCH_CTRL_FIELD}_vec": column}), str(uri))
+    rows = pa.array(np.arange(len(vectors)), pa.int32())
+    lance.write_dataset(
+        pa.table({f"{SKETCH_CTRL_FIELD}_vec": column, "row": rows}), str(uri)
+    )
     dataset = lance.dataset(str(uri))
     spec_index = EMBEDDING_REGISTRY["sketch"].index
     assert spec_index is not None
@@ -2744,5 +3170,12 @@ def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Pat
     )
 
     assert built is True
-    index_fields = [cast("dict[str, Any]", idx)["fields"] for idx in dataset.list_indices()]
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    index_fields = [index["fields"] for index in indices]
     assert [f"{SKETCH_CTRL_FIELD}_vec"] in index_fields
+    target_row = 137
+    hits = dataset.to_table(
+        nearest={"column": f"{SKETCH_CTRL_FIELD}_vec", "q": vectors[target_row], "k": 1},
+        columns=["row"],
+    )
+    assert hits.column("row")[0].as_py() == target_row

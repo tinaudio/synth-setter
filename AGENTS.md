@@ -186,7 +186,8 @@ unintended shell expansion. A `PreToolUse` hook
   has the canonical title rule and examples.
 - **Pre-PR review is temporarily advisory.** Run
   `/repo-review-full-no-comments` before `gh pr create` when the review
-  automation is healthy, and address every BLOCK/WARN. The local
+  automation is healthy, and address every BLOCK/WARN (NIT findings are
+  advisory and gate nothing). The local
   `pre-pr-review-gate.sh` implementation and tests remain available for repair,
   but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
   is unresolved. Server-side tests, metadata checks, branch protection, and

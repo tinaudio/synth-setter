@@ -54,8 +54,38 @@ def test_render_markdown_groups_findings_and_preserves_audit() -> None:
     assert "## Pi review audit" in report
     assert report.count("### `src/example.py`") == 1
     assert "**L42** — **[correctness:block]** Broken boundary." in report
-    assert "1 BLOCK, 1 WARN across 2 skills" in report
+    assert "1 BLOCK, 1 WARN, 0 NIT across 2 skills" in report
     assert "Reviewed at: " + "a" * 40 in report
+
+
+def test_render_markdown_counts_body_nits_apart_from_warns() -> None:
+    """Count advisory NITs in their own bucket instead of folding them into WARN."""
+    payload = {
+        "pr_number": 2174,
+        "repo": "tinaudio/synth-setter",
+        "review_body": "Lead.\n\n## Nits\n\n- **[comment-hygiene:nit]** `src/example.py:9` — filler.",
+        "findings": [
+            {
+                "path": "src/example.py",
+                "line": 55,
+                "body": "**[python-style:warn]** Unclear name.",
+            },
+        ],
+    }
+    context = RenderContext(
+        target="PR #2174",
+        head_sha="a" * 40,
+        head_ref="fix/review",
+        upstream_sha="a" * 40,
+        worktree_state="clean",
+        unchanged_count=0,
+        skill_count=2,
+        next_step="Address the WARN.",
+    )
+
+    report = render_markdown(payload, context=context)
+
+    assert "0 BLOCK, 1 WARN, 1 NIT across 2 skills" in report
 
 
 def test_render_markdown_counts_pr_health_severities() -> None:
@@ -79,7 +109,7 @@ def test_render_markdown_counts_pr_health_severities() -> None:
 
     report = render_markdown(payload, context=context)
 
-    assert "1 BLOCK, 0 WARN across 1 skills" in report
+    assert "1 BLOCK, 0 WARN, 0 NIT across 1 skills" in report
 
 
 def _init_git_repo(path: Path) -> str:

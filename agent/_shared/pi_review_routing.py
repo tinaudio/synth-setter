@@ -238,9 +238,9 @@ class WorkerFinding(BaseModel, strict=True, extra="forbid"):
     """One structured finding returned by a review worker.
 
     .. attribute :: severity
-        :type: Literal["block", "warn"]
+        :type: Literal["block", "warn", "nit"]
 
-        Merge severity assigned by the checklist.
+        Merge severity assigned by the checklist; ``nit`` is advisory only.
 
     .. attribute :: path
         :type: str
@@ -258,7 +258,7 @@ class WorkerFinding(BaseModel, strict=True, extra="forbid"):
         Self-contained failure scenario or concern.
     """
 
-    severity: Literal["block", "warn"]
+    severity: Literal["block", "warn", "nit"]
     path: str
     line: int = Field(gt=0)
     description: str
@@ -788,7 +788,7 @@ Changed paths:
 {paths}
 
 Return exactly one JSON object and no surrounding prose:
-{{"skill":"{skill}","target":"{target}","findings":[{{"severity":"block or warn","path":"repository-relative changed path","line":42,"description":"self-contained concern"}}],"what_looks_good":["positive evidence"]}}
+{{"skill":"{skill}","target":"{target}","findings":[{{"severity":"block, warn, or nit","path":"repository-relative changed path","line":42,"description":"self-contained concern"}}],"what_looks_good":["positive evidence"]}}
 Use an empty findings array when appropriate. Keep what_looks_good non-empty and string values under 1500 words total.
 """
 
@@ -1048,7 +1048,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "finding-fingerprint", help="print a stable finding identity"
     )
     fingerprint.add_argument("--skill", required=True, choices=sorted(SUPPORTED_SKILLS))
-    fingerprint.add_argument("--severity", required=True, choices=("block", "warn"))
+    fingerprint.add_argument("--severity", required=True, choices=("block", "warn", "nit"))
     fingerprint.add_argument("--path", required=True)
     fingerprint.add_argument("--line", required=True, type=int)
     fingerprint.add_argument("--description", required=True)

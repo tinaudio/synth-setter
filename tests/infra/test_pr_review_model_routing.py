@@ -186,7 +186,7 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "thinking" not in worker
     prompt_flat = " ".join(prompt.split())
     assert "exactly one JSON object" in prompt_flat
-    assert '"severity": "block or warn"' in prompt
+    assert '"severity": "block, warn, or nit"' in prompt
     assert '"line": 42' in prompt
     assert '"what_looks_good"' in prompt
     assert "no Markdown fence or surrounding prose" in prompt_flat
@@ -280,6 +280,9 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text
     assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
+    # Tintin's Agent tool rejects a call without `description`; omitting it here
+    # cost every worker launch one rejected round-trip (#2683).
+    assert re.search(r"`description: [^`]+`", text)
     assert "${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments" in text
     assert re.search(r"never\s+put a glob in a worker prompt", text)
     assert re.search(r"never repair assignment paths\s+with", text)
@@ -334,8 +337,11 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"one bullet per\s+affected attempt", text)
     assert re.search(r"exact model selector and diagnostic", text)
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
-    assert "claude -p --dangerously-skip-permissions" in text
-    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
+    assert "bash agent/_shared/run_pi_review.sh repo-review-full-no-comments --target <PR>" in text
+    # The smoke must stay read-only: repo-review-full posts inline threads.
+    assert "run_pi_review.sh repo-review-full --target" not in text
+    assert "claude -p" not in text
+    assert "codex exec" not in text
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
