@@ -7,15 +7,13 @@ import torch
 from jaxtyping import TypeCheckError
 
 from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS,
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_SLICE,
     SketchControls,
     SketchControlSpec,
     resolve_sketch_controls,
-)
-from synth_setter.data.vst.shapes import (
-    NUM_SKETCH_CONTROLS,
-    SKETCH_CENTROID_ROW,
-    SKETCH_LOUDNESS_ROW,
-    SKETCH_PITCH_SLICE,
 )
 from synth_setter.models.components.sketch_tokens import SketchControlTokens
 from synth_setter.models.components.transformer import (
@@ -39,7 +37,7 @@ def _controls(batch: int = _BATCH, seed: int = 0) -> torch.Tensor:
     """
     generator = torch.Generator().manual_seed(seed)
     ctrl = torch.rand((batch, NUM_SKETCH_CONTROLS, _NUM_FRAMES), generator=generator)
-    ctrl[:, : SKETCH_PITCH_SLICE.start] = ctrl[:, : SKETCH_PITCH_SLICE.start] * 2 - 1
+    ctrl[:, :NUM_SKETCH_TRACK_ROWS] = ctrl[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
     return ctrl
 
 
@@ -141,7 +139,6 @@ class TestSketchControlTokens:
 
         zeroed = ctrl.clone()
         zeroed[:, SKETCH_LOUDNESS_ROW] = 0.0
-        assert SKETCH_CENTROID_ROW not in (SKETCH_LOUDNESS_ROW,)
 
         torch.testing.assert_close(module(ctrl, mask), module(zeroed, _no_drop()))
 
@@ -212,7 +209,7 @@ class TestApproxEquivTransformerCtrlTokens:
         x = torch.randn(_BATCH, 6)
         t = torch.rand(_BATCH, 1)
         z = torch.randn(_BATCH, 8)
-        with_ctrl = field(x, t, z, ctrl_tokens=torch.randn(_BATCH, 3, _D_MODEL))
+        with_ctrl = field(x, t, z, ctrl_tokens=torch.randn(_BATCH, _NUM_CTRL_TOKENS, _D_MODEL))
         assert not torch.allclose(field(x, t, z), with_ctrl)
 
     def test_forward_layerwise_conditioning_with_ctrl_tokens_runs(self) -> None:

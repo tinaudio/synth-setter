@@ -16,7 +16,7 @@ from synth_setter.conditioning import (
     select_conditioning,
 )
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
-from synth_setter.models.components.sketch_tokens import SketchControlTokens
+from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
 
 
 def call_with_cfg(
@@ -178,9 +178,10 @@ class VSTFlowMatchingModule(LightningModule):
 
         :param batch_size: Rows in the current batch.
         :param device: Device the mask is drawn on.
-        :returns: ``(batch_size, 3)`` boolean mask; ``True`` drops a control.
+        :returns: ``(batch_size, len(CONTROL_GROUPS))`` boolean mask; ``True`` drops a control.
         """
-        drop = torch.rand(batch_size, 3, device=device) < self.hparams.sketch_dropout_rate
+        num_groups = len(CONTROL_GROUPS)
+        drop = torch.rand(batch_size, num_groups, device=device) < self.hparams.sketch_dropout_rate
         drop_all = torch.rand(batch_size, 1, device=device) < self.hparams.sketch_all_dropout_rate
         return drop | drop_all
 
@@ -199,7 +200,9 @@ class VSTFlowMatchingModule(LightningModule):
         drop_mask = (
             self._sketch_drop_mask(controls.shape[0], controls.device)
             if training
-            else torch.zeros(controls.shape[0], 3, dtype=torch.bool, device=controls.device)
+            else torch.zeros(
+                controls.shape[0], len(CONTROL_GROUPS), dtype=torch.bool, device=controls.device
+            )
         )
         return self.sketch_tokens(controls, drop_mask)
 

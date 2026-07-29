@@ -10,6 +10,7 @@ from lightning import LightningDataModule
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.conditioning import (
+    SKETCH_CTRL_FIELD,
     SKETCH_PITCH_SLICE,
     Conditioning,
     EmbeddingConditioningSpec,
@@ -154,7 +155,7 @@ def prepare_batch(
     if conditioning is not None and not torch.isfinite(conditioning).all():
         raise ValueError("conditioning float32 conversion produced non-finite values")
 
-    sketch_raw = raw.get("sketch_ctrl")
+    sketch_raw = raw.get(SKETCH_CTRL_FIELD)
     if sketch_raw is not None:
         sketch = torch.from_numpy(sketch_raw).to(dtype=torch.float32)
         if sketch_pitch_zero_threshold is not None:
@@ -163,7 +164,7 @@ def prepare_batch(
             sketch = sketch.clone()
             pitch = sketch[:, SKETCH_PITCH_SLICE]
             sketch[:, SKETCH_PITCH_SLICE] = pitch.where(
-                pitch >= sketch_pitch_zero_threshold, torch.zeros_like(pitch)
+                pitch >= sketch_pitch_zero_threshold, 0.0
             )
     else:
         sketch = None
@@ -184,7 +185,7 @@ def prepare_batch(
         "conditioning": (
             conditioning.contiguous() if conditioning is not None else None
         ),
-        "sketch_ctrl": sketch.contiguous() if sketch is not None else None,
+        SKETCH_CTRL_FIELD: sketch.contiguous() if sketch is not None else None,
         "params": params.contiguous(),
         "noise": noise.contiguous(),
         "audio": audio.contiguous() if audio is not None else None,

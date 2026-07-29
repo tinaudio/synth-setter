@@ -347,7 +347,7 @@ class ApproxEquivTransformer(nn.Module):
     ):
         super().__init__()
 
-        # Token width consumers (e.g. SketchControlTokens) size against.
+        # Exposed so ctrl-token producers can size their projections.
         self.d_model = d_model
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
@@ -473,8 +473,11 @@ class ApproxEquivTransformer(nn.Module):
 
         for i, layer in enumerate(self.layers):
             if self.pe_type == "layerwise":
-                params_with_pe = self.pe[i](x[:, :num_param_tokens])
-                x = torch.cat((params_with_pe, x[:, num_param_tokens:]), dim=1)
+                if ctrl_tokens is None:
+                    x = self.pe[i](x)
+                else:
+                    params_with_pe = self.pe[i](x[:, :num_param_tokens])
+                    x = torch.cat((params_with_pe, x[:, num_param_tokens:]), dim=1)
 
             if layerwise_conditioning:
                 z_ = z[:, i, :]

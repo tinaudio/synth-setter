@@ -6,12 +6,13 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.conditioning import SketchControlSpec
-from synth_setter.data.lance_datamodule import LanceVSTDataModule
-from synth_setter.data.vst.shapes import (
+from synth_setter.conditioning import (
     NUM_SKETCH_CONTROLS,
+    NUM_SKETCH_TRACK_ROWS,
     SKETCH_PITCH_SLICE,
+    SketchControlSpec,
 )
+from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 from synth_setter.param_spec_name import ParamSpecName
 from tests.data.test_embedding_conditioning import _write_embedding_shard
@@ -30,7 +31,7 @@ def _sketch_rows(rows: int, seed: int = 0) -> np.ndarray:
     """
     rng = np.random.default_rng(seed)
     values = rng.random((rows, NUM_SKETCH_CONTROLS, _NUM_FRAMES)).astype(np.float32)
-    values[:, : SKETCH_PITCH_SLICE.start] = values[:, : SKETCH_PITCH_SLICE.start] * 2 - 1
+    values[:, :NUM_SKETCH_TRACK_ROWS] = values[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
     return values
 
 
@@ -81,8 +82,8 @@ def test_prepare_batch_loudness_centroid_rows_bit_identical_under_binning() -> N
     sketch = _prepare_sketch(values, threshold=_THRESHOLD)["sketch_ctrl"]
 
     assert sketch is not None
-    stored_tracks = torch.from_numpy(values[:, : SKETCH_PITCH_SLICE.start])
-    assert torch.equal(sketch[:, : SKETCH_PITCH_SLICE.start], stored_tracks)
+    stored_tracks = torch.from_numpy(values[:, :NUM_SKETCH_TRACK_ROWS])
+    assert torch.equal(sketch[:, :NUM_SKETCH_TRACK_ROWS], stored_tracks)
 
 
 def test_prepare_batch_without_threshold_passes_sketch_unchanged() -> None:
@@ -191,7 +192,7 @@ def test_real_lance_split_with_sketch_column_yields_float32_batch(
     assert sketch.shape == (2, NUM_SKETCH_CONTROLS, _NUM_FRAMES)
     assert sketch.dtype == torch.float32
     pitch = sketch[:, SKETCH_PITCH_SLICE]
-    assert (pitch[torch.from_numpy(values[:2, SKETCH_PITCH_SLICE]) < 0.1] == 0.0).all()
+    assert (pitch[torch.from_numpy(values[:2, SKETCH_PITCH_SLICE]) < _THRESHOLD] == 0.0).all()
 
 
 def test_real_lance_split_missing_sketch_column_raises(tmp_path: Path) -> None:

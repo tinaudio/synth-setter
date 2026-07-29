@@ -16,7 +16,8 @@ from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import (
     NUM_SKETCH_CONTROLS,
-    SKETCH_PITCH_SLICE,
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_CTRL_FIELD,
     Conditioning,
     EmbeddingConditioningSpec,
     SketchControls,
@@ -129,7 +130,8 @@ def _conditioning_statistics(  # noqa: DOC502
 
     :param shard_path: Lance split whose parent may hold saved statistics.
     :param column: Stored embedding column to normalize.
-    :returns: ``(mean, std)`` arrays of shape ``(channels, 1)``.
+    :returns: Per-channel ``(mean, std)`` arrays with the row axis dropped
+        (``(channels, 1)`` for time-major columns, ``(channels,)`` for vectors).
     :raises ValueError: If statistics are non-finite or stds are not positive.
     """
     stats_file = shard_path.parent / f"conditioning_stats_{column}.npz"
@@ -254,8 +256,8 @@ class PrepareBatchCollate:
             raw_values["conditioning"] = conditioning
             if self.conditioning_column == "music2latent" and not self.preserve_legacy_m2l:
                 del raw_values["music2latent"]
-        if self.sketch_column is not None and self.sketch_column != "sketch_ctrl":
-            raw_values["sketch_ctrl"] = raw_values.pop(self.sketch_column)
+        if self.sketch_column is not None and self.sketch_column != SKETCH_CTRL_FIELD:
+            raw_values[SKETCH_CTRL_FIELD] = raw_values.pop(self.sketch_column)
         raw = cast(RawBatch, raw_values)
         return prepare_batch(
             raw,
@@ -327,9 +329,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         if self._sketch is not None:
             # Stored layout: signed-unit loudness/centroid, unit-interval pitch.
             sketch = torch.rand(num_rows, NUM_SKETCH_CONTROLS, self._sketch.num_frames)
-            sketch[:, : SKETCH_PITCH_SLICE.start] = (
-                sketch[:, : SKETCH_PITCH_SLICE.start] * 2 - 1
-            )
+            sketch[:, :NUM_SKETCH_TRACK_ROWS] = sketch[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
         else:
             sketch = None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
@@ -641,20 +641,21 @@ class LanceVSTDataModule(VSTDataModule):
         """
         train_shard = self.dataset_root / f"train{self.shard_suffix}"
         split_stats = predict_stats = conditioning_stats = None
-        if self.use_saved_mean_and_variance and self.embedding_conditioning is None:
-            if any(name != "predict" for name in split_names):
-                split_stats = load_dataset_statistics(train_shard)
-            if "predict" in split_names:
-                predict_stats = (
-                    split_stats
-                    if split_stats is not None
-                    and self.predict_file.parent == self.dataset_root
-                    else load_dataset_statistics(self.predict_file)
+        if self.use_saved_mean_and_variance:
+            if self.embedding_conditioning is None:
+                if any(name != "predict" for name in split_names):
+                    split_stats = load_dataset_statistics(train_shard)
+                if "predict" in split_names:
+                    predict_stats = (
+                        split_stats
+                        if split_stats is not None
+                        and self.predict_file.parent == self.dataset_root
+                        else load_dataset_statistics(self.predict_file)
+                    )
+            else:
+                conditioning_stats = _conditioning_statistics(
+                    train_shard, self.embedding_conditioning.column
                 )
-        if self.use_saved_mean_and_variance and self.embedding_conditioning is not None:
-            conditioning_stats = _conditioning_statistics(
-                train_shard, self.embedding_conditioning.column
-            )
         shard_paths = {
             "train": train_shard,
             "val": self.dataset_root / f"val{self.shard_suffix}",

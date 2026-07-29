@@ -12,6 +12,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationKeyError
 
+from synth_setter.conditioning import NUM_SKETCH_CONTROLS
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
@@ -288,7 +289,7 @@ def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["conditioning"].shape == (2, 128, 42)
-    assert batch["sketch_ctrl"].shape == (2, 386, 401)
+    assert batch["sketch_ctrl"].shape == (2, NUM_SKETCH_CONTROLS, 401)
     loss, _penalty = model._train_step(batch)  # noqa: SLF001
     assert torch.isfinite(loss)
 
