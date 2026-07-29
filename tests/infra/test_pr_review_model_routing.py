@@ -186,7 +186,7 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "thinking" not in worker
     prompt_flat = " ".join(prompt.split())
     assert "exactly one JSON object" in prompt_flat
-    assert '"severity": "block or warn"' in prompt
+    assert '"severity": "block, warn, or nit"' in prompt
     assert '"line": 42' in prompt
     assert '"what_looks_good"' in prompt
     assert "no Markdown fence or surrounding prose" in prompt_flat

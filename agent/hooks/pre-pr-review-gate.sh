@@ -414,10 +414,8 @@ if [[ "$lag" -gt "$REVIEW_MAX_LAG" ]]; then
   block "review is ${lag} first-parent commits behind ${REVIEW_REF_LABEL} (max ${REVIEW_MAX_LAG}; set REVIEW_MAX_LAG=N to widen)"
 fi
 
-# Reject any sentinel still listing findings. Match the bracketed
-# `[comment-hygiene:<severity>]` tag, not the bare skill name the PASS template
-# uses. `nit` is deliberately outside the alternation — it is advisory only.
-# `|| true`: tolerate grep's no-match exit-1, like the counter above.
+# Match the bracketed tag, not the bare skill name the PASS template uses; `nit`
+# stays outside the alternation because it is advisory. `|| true`: no-match is 1.
 if [[ "$REVIEW_COMMENT_GATE" != "off" ]]; then
   comment_findings=$(grep -oE '\[comment-hygiene:(warn|block)\]' "$REVIEW_PATH" || true)
   comment_count=$(printf '%s' "$comment_findings" | grep -c . || true)
