@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785292111834,
+  "lastUpdate": 1785292114436,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -20484,6 +20484,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.516018679199998,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dcc0ca02e8371a4cb2313d8ad7cdbdab54ef11ca",
+          "message": "feat(code-health): manage VST plugins with Studiorack (#2632)\n\n* internal-feat(code-health): manage VST plugins with Studiorack\n\n* internal-fix(code-health): preserve CI plugin provisioning\n\n* internal-fix(code-health): restore aliases in snapshot images\n\n* test(code-health): cover plugin management boundaries\n\n* internal-fix(code-health): support Studiorack installer layouts\n\n* internal-fix(code-health): detect root DMG installers\n\n* internal-fix(code-health): support mixed plugin archives\n\n* internal-fix(code-health): prefer portable plugin archives\n\n* internal-fix(code-health): install native plugin dependencies\n\n* internal-fix(code-health): retain Make in validation image\n\n* docs(agents): forbid external issue creation",
+          "timestamp": "2026-07-28T17:49:32-07:00",
+          "tree_id": "079c97da75fdf61ef42fa6ec98ed199aecd84dba",
+          "url": "https://github.com/tinaudio/synth-setter/commit/dcc0ca02e8371a4cb2313d8ad7cdbdab54ef11ca"
+        },
+        "date": 1785292113786,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.501362800598145,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.033177491351962,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08806023001670837,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.004125058650970459,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.4267308712005615,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.63009078990001,
             "unit": "seconds"
           }
         ]
