@@ -36,14 +36,18 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
+from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     REAL_VST_VARIANTS,
+    _render_smoke_train_subprocess,
     assert_log_per_param_mse_wired,
+    augment_lance_splits_with_embedding,
     augment_lance_splits_with_embeddings,
     augment_lance_splits_with_same,
     augment_lance_splits_with_ssondo,
@@ -1547,7 +1551,7 @@ _EMBEDDING_CONDITIONING_PROFILES = ("m2l", "clap")
 
 def _assert_conditioning_train_validate_finite(
     tmp_path: Path, dataset_root: Path, param_spec_name: str, conditioning: str
-) -> None:
+) -> float:
     """Train one step then ``evaluate(validate)`` a conditioning profile, asserting finiteness.
 
     The shared train->checkpoint->validate flow behind both the clap/m2l and SAME
@@ -1560,6 +1564,7 @@ def _assert_conditioning_train_validate_finite(
     :param dataset_root: Dataset root already augmented with the profile's column.
     :param param_spec_name: Param spec driving model width and callback labels.
     :param conditioning: Cached-conditioning profile group.
+    :returns: Finite validation parameter MSE.
     """
     cfg_train = build_surge_xt_embedding_train_cfg(
         tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
@@ -1605,7 +1610,9 @@ def _assert_conditioning_train_validate_finite(
     finally:
         GlobalHydra.instance().clear()
 
-    assert math.isfinite(val_metric_dict["val/param_mse"].item())
+    validation_mse = val_metric_dict["val/param_mse"].item()
+    assert math.isfinite(validation_mse)
+    return validation_mse
 
 
 @pytest.mark.requires_vst
@@ -1633,6 +1640,47 @@ def test_train_eval_embedding_conditioning_real_e2e(
     _assert_conditioning_train_validate_finite(
         tmp_path, dataset_root, param_spec_name, conditioning
     )
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.integration_r2
+@pytest.mark.r2
+def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Train and validate real TinyMU tensors through the generic pooler.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
+    :param param_spec_name: Parameter specification driving model width.
+    :param monkeypatch: Fixture recording tensors consumed by the conditioning pooler.
+    """
+    pooled_inputs: list[torch.Tensor] = []
+    original_forward = EmbeddingPool.forward
+
+    def record_forward(pool: EmbeddingPool, embed: torch.Tensor) -> torch.Tensor:
+        pooled_inputs.append(embed.detach().cpu())
+        return original_forward(pool, embed)
+
+    monkeypatch.setattr(EmbeddingPool, "forward", record_forward)
+    validation_split = surge_xt_smoke_datasets / "val.lance"
+    shutil.rmtree(validation_split)
+    _render_smoke_train_subprocess(validation_split, param_spec_name, base_seed=1)
+    dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "tinymu")
+    validation_mse = _assert_conditioning_train_validate_finite(
+        tmp_path,
+        dataset_root,
+        param_spec_name,
+        "tinymu",
+    )
+    assert validation_mse < 2.0
+    assert pooled_inputs
+    assert all(embed.shape[1] == TINYMU_FRONTEND.embedding_dim for embed in pooled_inputs)
+    assert any(torch.count_nonzero(embed).item() > 0 for embed in pooled_inputs)
 
 
 @pytest.mark.requires_vst

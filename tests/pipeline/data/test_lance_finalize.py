@@ -26,7 +26,9 @@ from synth_setter.pipeline.data.lance_staging import (
     shard_has_complete_attempt,
     stage_lance_shard_attempt,
 )
-from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard
+from synth_setter.pipeline.schemas.lance_attempt import (
+    LanceDatasetCard,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
     shard_arrays,

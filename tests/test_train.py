@@ -52,7 +52,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
-    assert_all_embedding_columns,
+    assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_all_embeddings,
@@ -1934,6 +1934,7 @@ _ALL_EMBEDDING_CONDITIONING_PROFILES = (
     "same_l",
     "ssondo",
     "t5gemma",
+    "tinymu",
 )
 
 
@@ -2040,7 +2041,9 @@ def _assert_model_predictions_depend_on_cached_conditioning(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e(
+@pytest.mark.integration_r2
+@pytest.mark.r2
+def test_train_all_embedding_conditioning_and_eval_real_e2e(
     local_embedding_checkpoints: dict[str, str],
     tmp_path: Path,
     surge_xt_embedding_smoke_datasets: Path,
@@ -2058,7 +2061,7 @@ def test_train_all_embedding_conditioning_and_eval_ssondo_real_e2e(
         local_embedding_checkpoints,
         param_spec_name,
     )
-    assert_all_embedding_columns(dataset_root)
+    assert_embedding_columns(dataset_root)
 
     for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
         cfg = build_surge_xt_embedding_train_cfg(
