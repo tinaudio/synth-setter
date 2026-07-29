@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785304707736,
+  "lastUpdate": 1785307324386,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -12174,6 +12174,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.05560886859893799,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "49d27e5413b0d3e38f42ebe08002a1978cdded3c",
+          "message": "internal-feat(data-pipeline): sketch-control extraction + registry (#2621)\n\n* internal-feat(data-pipeline): sketch-control extraction + registry\n\nExtract Sketch2Sound/FlashFoley-style loudness, spectral-centroid, and PESTO\npitch contours on the mel frame grid (100 fps), normalized with fixed affine\nconstants to [-1, 1] so sketches stay checkpoint-portable. Register a\n'sketch' embedding with a mean-pooled sketch_ctrl_vec IVF companion\n(num_sub_vectors=3) for contour similarity search.\n\nRefs #2612\n\n* internal-fix(data-pipeline): spec index defaults win over unset config\n\nThe run config pinned num_sub_vectors=16 (pydantic default + YAML), so a\nspec's IndexSpec.num_sub_vectors could never apply and the sketch index\nbuild failed (16 does not divide the 3-wide pooled vector). Null now means\n'use each spec's default'; explicit overrides still win. Also document the\nsketch registry entry in the data-pipeline design doc and doc-map.\n\nRefs #2612\n\n* chore(ci): rerun title check after PR title edit\n\n* internal-feat(data-pipeline): FlashFoley-parity sketch controls\n\nMatch the reference implementation (ZacharyNovack/flash-foley): loudness\nbecomes A-weighted spectral dB (16 kHz STFT, per-clip peak-80 floor, fixed\n[-100, 80] affine) and pitch becomes PESTO's raw 384-bin activation matrix\n(stored unthresholded; zero-binning is consumption-time). The sketch_ctrl\ncolumn grows to (386, F) with a slice map; the pooled companion indexes\nwith num_sub_vectors=2 (386 = 2 x 193). All new code carries jaxtyping\nshape annotations checked by beartype; F722 joins the global ruff ignores\nper jaxtyping's documented integration.\n\nRefs #2612\nRefs #2615\n\n* docs(data-pipeline): correct sketch num_sub_vectors phrasing\n\n* internal-fix(data-pipeline): address review round on sketch extraction\n\nFixes:\n- Hoist PESTO loading into _load_sketch_spec_encoder via load_pesto_model,\n  threading the checkpoint through the registry default_checkpoint\n  (DEFAULT_PESTO_CHECKPOINT in shapes.py); the transform stays data-in/\n  data-out with a lazy fallback for single-clip use.\n- Bound-check sketch controls in _encode_sketch_column (affine rows in\n  [-1, 1], pitch rows in [0, 1]) with parametrized rejection tests; the\n  fake sketch encoder now honors the bounds contract it fakes.\n- Add a real Hydra-entrypoint test driving main() with embeddings=[sketch].\n- Assert Lance field types (FixedShapeTensor/FixedSizeList float32) in the\n  writer test and an ANN self-nearest query through the built sketch index.\n- Replace the dict[str, Any] cast on list_indices with dict[str, object].\n- Parametrize extraction shape/bounds at 22050 Hz.\n- Add a module-docstring usage example; apply comment-hygiene rewrites at\n  five sites; tighten the doc-map covers entry; correct the 386-divisor\n  claim in data-pipeline.md.\n\nLeft as-is with inline justifications: global F722 ignore (jaxtyping's\ndocumented ruff integration; list not append-frozen), fixed-affine\nnormalization constants (#2612 portability rationale), and slow marks on\nsub-second PESTO tests.\n\nRefs #2612",
+          "timestamp": "2026-07-28T22:26:48-07:00",
+          "tree_id": "d2ad7422801efd253fab52f83303784f425ddcad",
+          "url": "https://github.com/tinaudio/synth-setter/commit/49d27e5413b0d3e38f42ebe08002a1978cdded3c"
+        },
+        "date": 1785307322455,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.955928087234497,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.362341217948124,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.029448818415403366,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.03128182888031006,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.632650852203369,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 9.713539854666664,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.304989814758301,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.600140667655506,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.031150395050644875,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03600120544433594,
             "unit": "1-cos"
           },
           {
