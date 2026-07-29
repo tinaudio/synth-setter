@@ -581,7 +581,7 @@ def test_flowvae_model_step_reads_mel_batch_key(flowvae_module: VSTFlowVAEModule
     :param flowvae_module: Small random-weight module under test.
     """
     mel = torch.randn(2, 2, 128, 401)
-    params = torch.rand(2, 187)
+    params = torch.rand(2, 187) * 2 - 1
 
     losses, actual_mel, actual_params, out = flowvae_module.model_step(
         {"mel": mel, "params": params}
