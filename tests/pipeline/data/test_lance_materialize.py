@@ -63,6 +63,7 @@ def test_materialize_lance_subset_evicts_written_data_files(
     """
     source, txid = two_version_source
     advised_fds: list[int] = []
+    synced_fds: list[int] = []
 
     def record_advice(fd: int, offset: int, length: int, advice: int) -> None:
         advised_fds.append(fd)
@@ -71,12 +72,22 @@ def test_materialize_lance_subset_evicts_written_data_files(
         assert advice == os.POSIX_FADV_DONTNEED
 
     monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "fsync", synced_fds.append)
     monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
     destination = tmp_path / "materialized.lance"
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
-
     assert advised_fds
+    (destination / "data" / "additional-fragment.lance").write_bytes(b"fragment")
+    advised_fds.clear()
+    synced_fds.clear()
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    data_files = [path for path in (destination / "data").rglob("*") if path.is_file()]
+    assert len(data_files) == 2
+    assert len(synced_fds) == len(data_files)
+    assert len(advised_fds) == len(data_files)
     assert lance.dataset(str(destination)).count_rows() == 3
 
 
@@ -723,34 +734,6 @@ def test_materialize_writes_sidecar_manifest_fields_match_request(
     assert manifest.materialized_txid == transaction.uuid
     assert manifest.columns == ("a",)
     assert manifest.limit == 2
-
-
-def test_materialize_cache_hit_retries_data_file_eviction(
-    tmp_path: Path,
-    two_version_source: tuple[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Reusing a published cache retries advisory data-file eviction.
-
-    :param tmp_path: Isolates the published destination.
-    :param two_version_source: Supplies a real version-pinned Lance source.
-    :param monkeypatch: Records cache advice across initial and reused materialization.
-    """
-    source, txid = two_version_source
-    advised_fds: list[int] = []
-
-    def record_advice(fd: int, _offset: int, _length: int, _advice: int) -> None:
-        advised_fds.append(fd)
-
-    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
-    monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
-    destination = tmp_path / "materialized.lance"
-    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
-    advised_fds.clear()
-
-    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
-
-    assert advised_fds
 
 
 def test_materialize_cache_hit_same_request_returns_without_rewrite(

@@ -527,7 +527,7 @@ def test_train_row_limited_hydration_evicts_materialized_file_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The training entrypoint evicts hydrated Lance data-file pages.
+    """A row-limited file-URI hydration reaches the POSIX cache-advice boundary.
 
     :param cfg_train_lance: Composed Lance training configuration and source dataset.
     :param tmp_path: Parent of the fresh local hydration destination.
