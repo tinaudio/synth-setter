@@ -644,6 +644,59 @@ def testbatch_to_shaped_tensors_preserves_shapes_on_handbuilt_batch() -> None:
     np.testing.assert_array_equal(tensors["mel"].numpy(), values)
 
 
+def _struct_dataset(dest: Path, rows: int = 4) -> dict[str, np.ndarray]:
+    """Write a dataset carrying one struct column with list and tensor children.
+
+    :param dest: Output dataset directory.
+    :param rows: Number of rows.
+    :returns: Source child arrays keyed by dotted column path.
+    """
+    rng = np.random.default_rng(5)
+    loudness = rng.random((rows, 3)).astype(np.float32)
+    pitch = rng.random((rows, 2, 3)).astype(np.float32)
+    struct = pa.StructArray.from_arrays(
+        [
+            pa.FixedSizeListArray.from_arrays(pa.array(loudness.reshape(-1)), 3),
+            pa.FixedShapeTensorArray.from_numpy_ndarray(pitch),
+        ],
+        names=["loudness", "pitch"],
+    )
+    schema = pa.schema([pa.field("sketch", struct.type, nullable=False)])
+    write_lance_dataset(dest, schema, [pa.record_batch([struct], schema=schema)])
+    return {"sketch.loudness": loudness, "sketch.pitch": pitch}
+
+
+def test_map_dataset_take_expands_struct_children_to_dotted_keys(tmp_path: Path) -> None:
+    """A whole-struct ``take`` projection lands as flat ``parent.child`` tensors.
+
+    :param tmp_path: Scratch dir for the struct dataset.
+    """
+    dest = tmp_path / "struct.lance"
+    expected = _struct_dataset(dest)
+
+    batch = LanceMapDataset(dest, columns=["sketch"]).__getitems__([0, 1, 2, 3])
+
+    assert set(batch) == set(expected)
+    for key, values in expected.items():
+        np.testing.assert_array_equal(batch[key].numpy(), values)
+
+
+def test_scanner_dotted_projection_matches_take_expansion(tmp_path: Path) -> None:
+    """Scanner dotted projection (flat dotted columns) normalizes to the same keys.
+
+    :param tmp_path: Scratch dir for the struct dataset.
+    """
+    dest = tmp_path / "struct.lance"
+    expected = _struct_dataset(dest)
+
+    scan = lance.dataset(str(dest)).to_table(columns=["sketch.loudness", "sketch.pitch"])
+    tensors = batch_to_shaped_tensors(scan.combine_chunks().to_batches()[0])
+
+    assert set(tensors) == set(expected)
+    for key, values in expected.items():
+        np.testing.assert_array_equal(tensors[key].numpy(), values)
+
+
 def test_column_with_nulls_raises_value_error() -> None:
     """A null row in a fixed-size-list column is rejected by name, not misread."""
     column = pa.array([[1.0, 2.0], None], type=pa.list_(pa.float32(), 2))

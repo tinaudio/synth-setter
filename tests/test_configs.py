@@ -284,7 +284,7 @@ def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
     model = hydra.utils.instantiate(cfg.model)
 
     assert datamodule.sketch_controls is not None
-    assert datamodule.sketch_controls.column == "sketch_ctrl"
+    assert datamodule.sketch_controls.column == "sketch"
     assert model.sketch_tokens is not None
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))

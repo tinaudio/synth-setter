@@ -11,7 +11,15 @@ LEGACY_M2L_INPUT_SHAPE = (128, 42)
 
 # Sketch-control storage contract (#2612), hosted here (``data.vst.shapes``
 # re-exports it) so model modules import it without the VST runtime package.
+# In-memory model-batch key; the stored layout nests under SKETCH_STRUCT_FIELD (#2707).
 SKETCH_CTRL_FIELD: str = "sketch_ctrl"
+# Stored Lance struct column and its child names (#2707); the datamodule
+# reassembles the children into the flat SKETCH_CTRL_FIELD batch tensor.
+SKETCH_STRUCT_FIELD: str = "sketch"
+SKETCH_LOUDNESS_CHILD: str = "loudness"
+SKETCH_CENTROID_CHILD: str = "centroid"
+SKETCH_PITCH_CHILD: str = "pitch"
+SKETCH_VEC_CHILD: str = "vec"
 # PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
 SKETCH_PITCH_BINS: int = 384
 # Rows: the two scalar tracks (loudness, centroid), then the pitch block.
@@ -103,7 +111,7 @@ class SketchControlSpec(BaseModel):
 
     .. attribute :: column
 
-        Stored Lance column name.
+        Stored Lance struct column name.
 
     .. attribute :: num_frames
 
@@ -120,7 +128,7 @@ class SketchControlSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
-    column: str = Field(default=SKETCH_CTRL_FIELD, min_length=1)
+    column: str = Field(default=SKETCH_STRUCT_FIELD, min_length=1)
     num_frames: PositiveInt
     num_ctrl_tokens: PositiveInt = 32
     # Bounded to the documented [0, 1] activation range: a negative threshold

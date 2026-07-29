@@ -10,15 +10,26 @@ from synth_setter.conditioning import (
     NUM_SKETCH_CONTROLS,
     NUM_SKETCH_TRACK_ROWS,
     SKETCH_PITCH_SLICE,
+    SKETCH_STRUCT_FIELD,
     SketchControlSpec,
 )
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 from synth_setter.param_spec_name import ParamSpecName
 from tests.data.test_embedding_conditioning import _write_embedding_shard
+from tests.helpers.lance_fixtures import make_shard_columns, write_lance_shard_with_sketch
 
 _NUM_FRAMES = 7
 _THRESHOLD = 0.1
+
+
+def _write_sketch_split(path: Path, values: np.ndarray) -> None:
+    """Write one split carrying the nested sketch struct column.
+
+    :param path: Destination Lance dataset.
+    :param values: ``(rows, NUM_SKETCH_CONTROLS, _NUM_FRAMES)`` stacked controls.
+    """
+    write_lance_shard_with_sketch(path, make_shard_columns(len(values), seed=9), values)
 
 
 def _sketch_rows(rows: int, seed: int = 0) -> np.ndarray:
@@ -141,14 +152,14 @@ def _sketch_module(root: Path, *, fake: bool) -> LanceVSTDataModule:
     )
 
 
-def test_sketch_spec_adds_column_to_loader_projection(tmp_path: Path) -> None:
-    """A configured sketch spec projects its stored column for every split.
+def test_sketch_spec_adds_struct_column_to_loader_projection(tmp_path: Path) -> None:
+    """A configured sketch spec projects its stored struct column for every split.
 
     :param tmp_path: Per-test dataset root.
     """
     module = _sketch_module(tmp_path, fake=True)
 
-    assert "sketch_ctrl" in module._loader_columns(read_audio=False)  # noqa: SLF001
+    assert SKETCH_STRUCT_FIELD in module._loader_columns(read_audio=False)  # noqa: SLF001
 
 
 def test_fake_mode_with_sketch_spec_yields_sketch_batch_key(tmp_path: Path) -> None:
@@ -170,15 +181,15 @@ def test_fake_mode_with_sketch_spec_yields_sketch_batch_key(tmp_path: Path) -> N
     assert sketch.dtype == torch.float32
 
 
-def test_real_lance_split_with_sketch_column_yields_float32_batch(
+def test_real_lance_split_with_sketch_struct_yields_float32_batch(
     tmp_path: Path,
 ) -> None:
-    """A stored ``sketch_ctrl`` column reaches the model batch as float32.
+    """A stored sketch struct reaches the model batch as float32 ``sketch_ctrl``.
 
     :param tmp_path: Per-test dataset root.
     """
     values = _sketch_rows(rows=4, seed=1)
-    _write_embedding_shard(tmp_path / "val.lance", column="sketch_ctrl", values=values)
+    _write_sketch_split(tmp_path / "val.lance", values)
     module = _sketch_module(tmp_path, fake=False)
 
     module.setup("validate")
@@ -195,6 +206,33 @@ def test_real_lance_split_with_sketch_column_yields_float32_batch(
     assert (pitch[torch.from_numpy(values[:2, SKETCH_PITCH_SLICE]) < _THRESHOLD] == 0.0).all()
 
 
+def test_real_lance_split_reassembles_struct_bit_identical_to_stack(
+    tmp_path: Path,
+) -> None:
+    """Struct-child reassembly restores the stacked control tensor bit-for-bit.
+
+    Pitch cells sit above the zero-bin threshold so binning is a no-op and the batch must equal the
+    pre-split stack exactly.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    values = _sketch_rows(rows=4, seed=2)
+    # Lift pitch into [0.5, 1.0] so the 0.1 default threshold never bins.
+    values[:, SKETCH_PITCH_SLICE] = values[:, SKETCH_PITCH_SLICE] / 2 + 0.5
+    _write_sketch_split(tmp_path / "val.lance", values)
+    module = _sketch_module(tmp_path, fake=False)
+
+    module.setup("validate")
+    try:
+        batch = next(iter(module.val_dataloader()))
+    finally:
+        module.teardown()
+
+    sketch = batch["sketch_ctrl"]
+    assert sketch is not None
+    assert torch.equal(sketch, torch.from_numpy(values[:2]))
+
+
 def test_real_lance_split_missing_sketch_column_raises(tmp_path: Path) -> None:
     """A configured sketch spec fails loudly when the stored column is absent.
 
@@ -207,5 +245,21 @@ def test_real_lance_split_missing_sketch_column_raises(tmp_path: Path) -> None:
     )
     module = _sketch_module(tmp_path, fake=False)
 
-    with pytest.raises(KeyError, match="sketch_ctrl"):
+    with pytest.raises(KeyError, match=SKETCH_STRUCT_FIELD):
+        module.setup("validate")
+
+
+def test_real_lance_split_with_legacy_flat_sketch_column_raises(tmp_path: Path) -> None:
+    """A pre-#2707 flat tensor column fails with a rewrite instruction, not silently.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    _write_embedding_shard(
+        tmp_path / "val.lance",
+        column=SKETCH_STRUCT_FIELD,
+        values=_sketch_rows(rows=4, seed=3),
+    )
+    module = _sketch_module(tmp_path, fake=False)
+
+    with pytest.raises(ValueError, match="non-struct type.*flat layout"):
         module.setup("validate")
