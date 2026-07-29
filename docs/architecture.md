@@ -152,9 +152,11 @@ settings only and are paired with a `synth=<name>` selection. The `ParamSpec` ob
 `src/synth_setter/data/vst/param_spec_registry.py`. The rendering, Lance
 storage, mel features, distributed workers, and models all read width and
 behavior from the resolved spec, never from a synth literal. Faust entries use
-an empty state path and resolve checked-in source by the same identity. Onboarding a new VST3 synth is additive: scaffold a spec with
-`synth-setter-introspect-plugin`, hand-tune it, register it, and write a render
-config — no core edits. See
+an empty state path and resolve checked-in source by the same identity.
+`studiorack.json`, `plugin_manager.py`, and `synth-setter-plugins` manage exact
+VST3 packages beneath the stable `plugins/*.vst3` identity paths. Onboarding a
+new VST3 synth is additive: install its package, scaffold and hand-tune a spec,
+then register it against the generic `render=vst` backend. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 **R2 as source of truth.** Pipeline state is determined by file existence and
