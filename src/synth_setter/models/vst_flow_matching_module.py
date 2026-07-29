@@ -5,6 +5,8 @@ from functools import partial
 from typing import Any
 
 import torch
+from beartype import beartype
+from jaxtyping import Bool, Float, Shaped, jaxtyped
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
@@ -173,7 +175,10 @@ class VSTFlowMatchingModule(LightningModule):
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return select_conditioning(batch, self._embedding_conditioning)
 
-    def _sketch_drop_mask(self, batch_size: int, device: torch.device) -> torch.Tensor:
+    @jaxtyped(typechecker=beartype)
+    def _sketch_drop_mask(
+        self, batch_size: int, device: torch.device
+    ) -> Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"]:
         """Draw the per-control CFG drop mask for one training step.
 
         :param batch_size: Rows in the current batch.
@@ -185,9 +190,10 @@ class VSTFlowMatchingModule(LightningModule):
         drop_all = torch.rand(batch_size, 1, device=device) < self.hparams.sketch_all_dropout_rate
         return drop | drop_all
 
+    @jaxtyped(typechecker=beartype)
     def _sketch_tokens_from_batch(
-        self, batch: dict[str, torch.Tensor], *, training: bool
-    ) -> torch.Tensor | None:
+        self, batch: dict[str, Shaped[torch.Tensor, "..."] | None], *, training: bool
+    ) -> Float[torch.Tensor, "batch tokens d_model"] | None:
         """Tokenize the batch's sketch controls when a spec is configured.
 
         :param batch: Model batch; must carry ``sketch_ctrl`` when configured.

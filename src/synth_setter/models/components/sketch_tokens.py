@@ -41,6 +41,7 @@ class SketchControlTokens(nn.Module):
 
     positional_encoding: torch.Tensor
 
+    @jaxtyped(typechecker=beartype)
     def __init__(self, d_model: int, num_ctrl_tokens: int = 32):
         """Build the per-control projections and the fixed temporal encoding.
 
