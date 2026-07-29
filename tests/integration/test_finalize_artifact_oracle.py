@@ -8,7 +8,7 @@ verbatim (see :mod:`synth_setter.models.vst_fake_oracle_module`). The
 strongest invariant the oracle pins is therefore ``pred == target_params``
 exactly — ``test_train.py::test_train_eval_surge_xt`` pins this at the
 "oracle pred != target-params" assertion. Loss is exactly zero by
-construction (``loss = 0.0 * net(mel_spec).sum()``); per-param MSE is
+construction (``loss = 0.0 * net(mel).sum()``); per-param MSE is
 exactly zero for the same reason.
 
 This helper exercises those invariants against the *finalized* dataset
@@ -140,7 +140,7 @@ def test_finalize_train_split_passes_fake_oracle_invariants() -> None:
       1. ``predict_step`` returns ``batch["params"]`` bit-identically.
       2. ``per_param_mse`` is exactly zero (no float drift).
       3. ``training_step`` loss is exactly zero with a grad-bearing tensor
-         (the oracle's ``0.0 * net(mel_spec).sum()`` construction).
+         (the oracle's ``0.0 * net(mel).sum()`` construction).
 
     Audio-metric bounds (``mss < 15`` etc.) live behind ``requires_vst`` in
     ``test_train.py::test_train_eval_surge_xt`` — they need Surge XT
@@ -166,10 +166,10 @@ def test_finalize_train_split_passes_fake_oracle_invariants() -> None:
 
     num_samples, num_params = param_array.shape
     params_tensor = torch.from_numpy(param_array)
-    mel_spec = torch.zeros(num_samples, 2, 4, 5)
+    mel = torch.zeros(num_samples, 2, 4, 5)
     batch = {
         "params": params_tensor,
-        "mel_spec": mel_spec,
+        "mel": mel,
         "audio": torch.zeros(num_samples, 2, 16),
     }
 

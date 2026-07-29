@@ -48,7 +48,7 @@ def test_explicit_files_skip_the_root_glob(tmp_path: Path) -> None:
     dataset = AudioFolderDataset(root=str(tmp_path), files=[target])
 
     assert dataset.files == [target]
-    assert dataset[0]["mel_spec"].shape[0] == 2
+    assert dataset[0]["mel"].shape[0] == 2
 
 
 def test_empty_root_yields_empty_dataset(tmp_path: Path) -> None:

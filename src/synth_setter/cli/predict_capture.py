@@ -129,7 +129,7 @@ def compute_capture_mel(wav_path: Path, stats_file: Path | None = None) -> torch
         reference_stats_file=None if stats_file is None else str(stats_file),
         files=[wav_path],
     )
-    return dataset[0]["mel_spec"]
+    return dataset[0]["mel"]
 
 
 def decode_and_convert(  # noqa: DOC502 — ValueError propagates from synth_params_to_clap_rows
@@ -190,18 +190,18 @@ def write_params_csv(rows: Sequence[ClapCsvRow], dest: Path) -> None:  # noqa: D
 
 
 def _predict_raw_params(
-    mel_spec: torch.Tensor, model: VSTFlowMatchingModule | VSTFeedForwardModule
+    mel: torch.Tensor, model: VSTFlowMatchingModule | VSTFeedForwardModule
 ) -> torch.Tensor:
     """Run one mel through the module's real predict path.
 
-    :param mel_spec: Mel of shape ``(2, 128, frames)``.
+    :param mel: Mel of shape ``(2, 128, frames)``.
     :param model: Loaded module in eval mode.
     :returns: Raw prediction tensor of shape ``(1, num_params)``, values in ``[-1, 1]``.
     """
-    batch = {"mel_spec": mel_spec.unsqueeze(0).to(model.device)}
+    batch = {"mel": mel.unsqueeze(0).to(model.device)}
     with torch.no_grad():
         # The ff module annotates batch as a tuple but reads dict keys; both
-        # modules consume {'mel_spec': ...} at runtime.
+        # modules consume {'mel': ...} at runtime.
         prediction, _ = model.predict_step(batch, 0)  # pyright: ignore[reportArgumentType]
     return prediction.detach().cpu()
 
@@ -375,13 +375,13 @@ def _run(
         # Serving a stats-normalized checkpoint without --stats-file is silent
         # train/serve skew, so the omission is at least loud in the log.
         _say(logger, "warning: no --stats-file — mel is unnormalized")
-    mel_spec = compute_capture_mel(wav_path, stats_file)
-    logger.info("mel computed: shape=%s", tuple(mel_spec.shape))
+    mel = compute_capture_mel(wav_path, stats_file)
+    logger.info("mel computed: shape=%s", tuple(mel.shape))
 
     # The flow module's predict_step samples noise; without this the same
     # capture yields a different patch on every spawn.
     torch.manual_seed(_SERVING_SEED)
-    prediction = _predict_raw_params(mel_spec, model)
+    prediction = _predict_raw_params(mel, model)
     uuid_dir.mkdir(parents=True, exist_ok=True)
     torch.save(prediction, uuid_dir / "pred-0.pt")
     logger.info("saved raw prediction: %s", uuid_dir / "pred-0.pt")

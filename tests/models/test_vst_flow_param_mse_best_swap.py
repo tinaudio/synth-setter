@@ -35,13 +35,13 @@ class _TinyEncoder(torch.nn.Module):
         super().__init__()
         self.linear = torch.nn.Linear(_MEL_CHANNELS * _MEL_N_MELS * _MEL_N_FRAMES, _D_MODEL)
 
-    def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
-        """Map ``mel_spec`` to a single conditioning token per sample.
+    def forward(self, mel: torch.Tensor) -> torch.Tensor:
+        """Map ``mel`` to a single conditioning token per sample.
 
-        :param mel_spec: Batch of mel spectrograms.
+        :param mel: Batch of mel spectrograms.
         :returns: Conditioning tensor of shape ``(B, 1, _D_MODEL)``.
         """
-        return self.linear(mel_spec.flatten(start_dim=1)).unsqueeze(1)
+        return self.linear(mel.flatten(start_dim=1)).unsqueeze(1)
 
 
 class _FakeBatchDataset(Dataset[dict[str, torch.Tensor]]):
@@ -63,9 +63,9 @@ class _FakeBatchDataset(Dataset[dict[str, torch.Tensor]]):
         """Return one sample carrying the keys the module's step functions read.
 
         :param index: Sample index.
-        :returns: ``params`` / ``mel_spec`` sample dict.
+        :returns: ``params`` / ``mel`` sample dict.
         """
-        return {"params": self._params[index], "mel_spec": self._mels[index]}
+        return {"params": self._params[index], "mel": self._mels[index]}
 
 
 def _flow_module(num_params: int) -> VSTFlowMatchingModule:
