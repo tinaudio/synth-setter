@@ -86,8 +86,17 @@ class VSTFlowVAEModule(LightningModule):
     def on_train_epoch_end(self) -> None:
         pass
 
-    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        losses, *_, vae_out = self.model_step(batch)
+    def validation_step(
+        self, batch: dict[str, torch.Tensor], batch_idx: int
+    ) -> dict[str, torch.Tensor]:
+        """Return validation predictions and per-parameter MSE for callbacks.
+
+        :param batch: Mel spectrograms shaped ``(batch, channels, mel_bins, frames)``
+            and encoded parameters shaped ``(batch, params)``.
+        :param batch_idx: Validation batch index, unused.
+        :returns: Predictions shaped ``(batch, params)`` and MSE shaped ``(params,)``.
+        """
+        losses, _, target_params, vae_out = self.model_step(batch)
         x_hat = vae_out.x_hat
 
         self.log("val/param_mean", x_hat.mean(), on_step=False, on_epoch=True)
@@ -95,6 +104,9 @@ class VSTFlowVAEModule(LightningModule):
 
         losses = {f"val/{k}": v for k, v in losses.items()}
         self.log_dict(losses, on_step=False, on_epoch=True, prog_bar=True)
+
+        per_param_mse = (x_hat - target_params).square().mean(dim=0)
+        return {"per_param_mse": per_param_mse, "preds": x_hat}
 
     def on_validation_epoch_end(self):
         pass

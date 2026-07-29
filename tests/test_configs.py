@@ -743,6 +743,16 @@ def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> N
     assert cfg.training.val_audio_probe == "auto"
 
 
+def test_surge_eval_composition_retains_default_per_param_mse_callback() -> None:
+    """The surge experiment default applies when composed through the eval entrypoint."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/ffn_simple", "ckpt_path=fake.ckpt", "trainer=cpu"],
+    )
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_simple"
+
+
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
     """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
 
@@ -876,15 +886,15 @@ def test_ffn_smoke_experiment_wires_surge_xt_fixture_source() -> None:
 # Resolved-identity guard for the synth-identity hoist (#2565): each surge
 # experiment must keep pairing this synth spec with these resolved widths and
 # callback labels across the ownership migration to the root `synth` group.
-SURGE_EXPERIMENT_IDENTITY_CASES: tuple[tuple[str, str, str, str | None], ...] = (
+SURGE_EXPERIMENT_IDENTITY_CASES: tuple[tuple[str, str, str, str], ...] = (
     ("surge/ffn_full", "surge_xt", "model.net.d_out", "surge_xt"),
     ("surge/ffn_4", "surge_4", "model.net.d_out", "surge_4"),
-    ("surge/ffn_simple", "surge_simple", "model.net.d_out", None),
+    ("surge/ffn_simple", "surge_simple", "model.net.d_out", "surge_simple"),
     ("surge/flow_full", "surge_xt", "model.num_params", "surge_xt"),
-    ("surge/flow_simple", "surge_simple", "model.num_params", None),
+    ("surge/flow_simple", "surge_simple", "model.num_params", "surge_simple"),
     ("surge/flow_mlp_full", "surge_xt", "model.num_params", "surge_xt"),
     ("surge/fake_oracle", "surge_xt", "model.net.d_out", "surge_xt"),
-    ("surge/vae_full", "surge_xt", "model.net.latent_dim", None),
+    ("surge/vae_full", "surge_xt", "model.net.latent_dim", "surge_xt"),
 )
 
 
@@ -894,15 +904,14 @@ SURGE_EXPERIMENT_IDENTITY_CASES: tuple[tuple[str, str, str, str | None], ...] = 
     ids=[case[0].removeprefix("surge/") for case in SURGE_EXPERIMENT_IDENTITY_CASES],
 )
 def test_surge_experiment_resolves_consistent_synth_identity(
-    experiment: str, param_spec: str, width_path: str, callback_spec: str | None
+    experiment: str, param_spec: str, width_path: str, callback_spec: str
 ) -> None:
     """Each surge experiment resolves one synth spec across datamodule, model, and callback.
 
     :param experiment: Hydra ``experiment=...`` override under test.
     :param param_spec: Spec the experiment's synth selection must resolve to.
     :param width_path: Model key sized from the spec's parameter width.
-    :param callback_spec: Expected ``log_per_param_mse.param_spec``, or ``None``
-        when the experiment composes no per-param-MSE callback.
+    :param callback_spec: Expected ``log_per_param_mse.param_spec``.
     """
     cfg = _compose("train.yaml", [f"experiment={experiment}", "trainer=cpu"])
 

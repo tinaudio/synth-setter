@@ -86,7 +86,9 @@ def prepare_batch(
     :param rescale_params: Whether to map parameters from ``[0, 1]`` to ``[-1, 1]``.
     :param ot: Whether to Hungarian-match noise to parameters.
     :param generator: RNG for the noise draw.
-    :returns: Model batch with float32 contiguous tensors and ``None`` for unread modalities.
+    :returns: Model batch with float32 contiguous tensors and ``None`` for unread
+        modalities; the stored ``mel_spec`` column is emitted under the ``mel`` key,
+        as ``music2latent`` is under ``m2l``.
     :raises ValueError: If stored or transformed values violate the numeric contract.
     """
     validation_error = _raw_batch_validation_error(raw)

@@ -169,6 +169,8 @@ docs:
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
+      - pattern: "src/synth_setter/features/**"
+        covers: "Sketch-control tracks on the mel frame grid."
       - pattern: "tests/pipeline/data/test_same_encoder_e2e.py"
         covers: "SAME-S and SAME-L production-loader parity against legacy references at immutable HF revisions."
       - pattern: "tests/helpers/same_reference.py"

@@ -82,7 +82,7 @@ def test_predict_step_returns_params_and_batch_tuple(batch_size: int) -> None:
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])
-def test_predict_step_ignores_mel_spec(batch_size: int) -> None:
+def test_predict_step_ignores_mel(batch_size: int) -> None:
     """Different mel inputs with identical params produce identical predictions.
 
     :param batch_size: Parametrized batch dimension exercised by this test.

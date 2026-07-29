@@ -1421,6 +1421,7 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.item() == 0.0
+    assert metric_dict["per_param_mse/a_amp_eg_attack"].item() == 0.0
 
 
 def test_evaluate_test_mode_partial_lance_root_returns_metric(
