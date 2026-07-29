@@ -198,7 +198,7 @@ def _fake_spec(name: str, events: list[str] | None = None) -> EmbeddingSpec:
     return replace(
         EMBEDDING_REGISTRY[name],
         load_encoder=load,
-        artifact_identity=f"fake:{name}:v1",
+        resolve_artifact_identity=lambda checkpoint: f"fake:{name}:{checkpoint}:v1",
     )
 
 
@@ -1218,7 +1218,10 @@ def test_add_embeddings_existing_artifact_identity_mismatch_raises(
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "clap",
-        replace(_fake_spec("clap"), artifact_identity="fake:clap:v2"),
+        replace(
+            _fake_spec("clap"),
+            resolve_artifact_identity=lambda checkpoint: f"fake:clap:{checkpoint}:v2",
+        ),
     )
     with pytest.raises(ValueError, match="checkpoint identity"):
         add_embeddings(

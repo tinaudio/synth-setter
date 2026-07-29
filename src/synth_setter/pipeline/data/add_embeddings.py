@@ -10,6 +10,8 @@ CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,tinymu
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import math
 import os
 import subprocess
@@ -95,6 +97,7 @@ type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn | TinyMUEncodeFn
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
+type ResolveArtifactIdentityFn = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -156,9 +159,9 @@ class EmbeddingSpec:
 
         Source batch, sample rate, and encoder to Arrow array transform.
 
-    .. attribute :: artifact_identity
+    .. attribute :: resolve_artifact_identity
 
-        Immutable encoder/checkpoint identity enabling safe resume, or ``None``.
+        Checkpoint source to immutable encoder-artifact identity resolver.
 
     .. attribute :: input_field
 
@@ -172,8 +175,98 @@ class EmbeddingSpec:
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
     encode_column: EncodeColumnFn
-    artifact_identity: str | None = None
+    resolve_artifact_identity: ResolveArtifactIdentityFn
     input_field: str = AUDIO_FIELD
+
+
+EMBEDDING_POLICY_VERSION = 1
+
+
+def _checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
+    """Hash checkpoint file paths and contents in deterministic order.
+
+    :param checkpoint_dir: Materialized checkpoint directory.
+    :returns: SHA-256 identity for the complete checkpoint tree.
+    :raises ValueError: The checkpoint directory contains no files.
+    """
+    digest = hashlib.sha256()
+    files = sorted(path for path in checkpoint_dir.rglob("*") if path.is_file())
+    if not files:
+        raise ValueError(f"checkpoint directory has no files: {checkpoint_dir}")
+    for path in files:
+        digest.update(path.relative_to(checkpoint_dir).as_posix().encode())
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _versioned_artifact_identity(name: str, digest: str) -> str:
+    """Bind checkpoint identity to synth-setter's preprocessing contract.
+
+    :param name: Embedding registry key.
+    :param digest: Immutable package or checkpoint digest.
+    :returns: Versioned identity persisted in Lance field metadata.
+    """
+    return f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:{digest}"
+
+
+def _m2l_artifact_identity(checkpoint: str) -> str:
+    """Resolve the package-owned music2latent artifact identity.
+
+    :param checkpoint: Empty placeholder; caller overrides are unsupported.
+    :returns: Versioned installed-package identity.
+    :raises ValueError: A checkpoint override bypasses package-owned weights.
+    """
+    if checkpoint:
+        raise ValueError("music2latent does not support checkpoint overrides")
+    version = importlib.metadata.version("music2latent")
+    return _versioned_artifact_identity("m2l", f"package:{version}")
+
+
+def _clap_artifact_identity(checkpoint: str) -> str:
+    """Resolve and hash one CLAP checkpoint tree.
+
+    :param checkpoint: Local directory or HuggingFace model id.
+    :returns: Versioned content identity.
+    """
+    checkpoint_dir = Path(_resolve_clap_checkpoint(checkpoint))
+    return _versioned_artifact_identity("clap", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _same_artifact_identity(checkpoint: str) -> str:
+    """Resolve and hash one SAME checkpoint tree.
+
+    :param checkpoint: Local, R2, or HuggingFace checkpoint source.
+    :returns: Versioned content identity.
+    """
+    checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
+    return _versioned_artifact_identity("same", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _t5gemma_artifact_identity(checkpoint: str) -> str:
+    """Resolve and hash one T5Gemma checkpoint tree.
+
+    :param checkpoint: Local, R2, or HuggingFace checkpoint source.
+    :returns: Versioned content identity.
+    """
+    from synth_setter.pipeline.data.t5gemma import _resolve_t5gemma_checkpoint_dir
+
+    checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
+    return _versioned_artifact_identity("t5gemma", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _tinymu_artifact_identity(checkpoint: str) -> str:
+    """Verify and identify the pinned TinyMU package/checkpoint pair.
+
+    :param checkpoint: Pinned R2 URI or SHA-identical local checkpoint.
+    :returns: Versioned package and checkpoint identity.
+    """
+    from synth_setter.pipeline.data.tinymu import resolve_tinymu_checkpoint
+
+    resolve_tinymu_checkpoint(checkpoint)
+    digest = f"package:{TINYMU_PACKAGE_COMMIT};checkpoint:sha256:{TINYMU_CHECKPOINT_SHA256}"
+    return _versioned_artifact_identity("tinymu", digest)
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -509,6 +602,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="none"),
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
+        resolve_artifact_identity=_clap_artifact_identity,
     ),
     "m2l": EmbeddingSpec(
         name="m2l",
@@ -518,6 +612,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
         load_encoder=_load_m2l_spec_encoder,
         encode_column=_encode_m2l_column,
+        resolve_artifact_identity=_m2l_artifact_identity,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",
@@ -527,6 +622,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{SAME_S_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_s_column,
+        resolve_artifact_identity=_same_artifact_identity,
     ),
     "same_l": EmbeddingSpec(
         name="same_l",
@@ -536,6 +632,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
+        resolve_artifact_identity=_same_artifact_identity,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.
@@ -547,6 +644,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=None,
         load_encoder=_load_t5gemma_spec_encoder,
         encode_column=_encode_t5gemma_column,
+        resolve_artifact_identity=_t5gemma_artifact_identity,
         input_field=PARAM_ARRAY_FIELD,
     ),
     "tinymu": EmbeddingSpec(
@@ -557,9 +655,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         index=IndexSpec(pool="mean", vector_column=f"{TINYMU_FIELD}_vec"),
         load_encoder=_load_tinymu_spec_encoder,
         encode_column=_encode_tinymu_column,
-        artifact_identity=(
-            f"package:{TINYMU_PACKAGE_COMMIT};checkpoint:sha256:{TINYMU_CHECKPOINT_SHA256}"
-        ),
+        resolve_artifact_identity=_tinymu_artifact_identity,
     ),
 }
 
@@ -766,7 +862,7 @@ def _write_columns(
         sample_output = _encode_columns(
             _decoded_sources(sample, input_fields), sample_rate, specs, encoders
         )
-    output_schema = _embedding_output_schema(sample_output.schema, specs)
+    output_schema = _embedding_output_schema(sample_output.schema, specs, config)
     logger.info("inferred_embedding_schema", columns=output_columns)
 
     progress_interval = max(
@@ -888,19 +984,23 @@ def build_index(
 
 
 def _embedding_output_schema(
-    schema: pa.Schema, specs: Sequence[EmbeddingSpec]
+    schema: pa.Schema, specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
 ) -> pa.Schema:
     """Attach policy identity to every generated field.
 
     :param schema: Inferred encoder output schema.
     :param specs: Policies producing the output fields.
+    :param config: Checkpoint overrides for this write.
     :returns: Schema carrying resumable embedding identity metadata.
     """
     fields = []
     for spec in specs:
-        metadata = {_EMBEDDING_NAME_METADATA: spec.name.encode()}
-        if spec.artifact_identity is not None:
-            metadata[_EMBEDDING_ARTIFACT_METADATA] = spec.artifact_identity.encode()
+        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
+        identity = spec.resolve_artifact_identity(checkpoint)
+        metadata = {
+            _EMBEDDING_NAME_METADATA: spec.name.encode(),
+            _EMBEDDING_ARTIFACT_METADATA: identity.encode(),
+        }
         fields.extend(
             schema.field(column).with_metadata(metadata) for column in _output_columns(spec)
         )
@@ -933,12 +1033,8 @@ def _missing_embedding_specs(
         if not present:
             missing.append(spec)
             continue
-        if spec.artifact_identity is None:
-            raise ValueError(
-                f"dataset {spec.name} columns have no immutable checkpoint identity; "
-                "remove them before rewriting"
-            )
-        artifact_identity = spec.artifact_identity.encode()
+        checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
+        artifact_identity = spec.resolve_artifact_identity(checkpoint).encode()
         for column in expected:
             metadata = dataset.schema.field(column).metadata or {}
             if (

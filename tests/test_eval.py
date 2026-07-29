@@ -1549,7 +1549,7 @@ _EMBEDDING_CONDITIONING_PROFILES = ("m2l", "clap")
 
 def _assert_conditioning_train_validate_finite(
     tmp_path: Path, dataset_root: Path, param_spec_name: str, conditioning: str
-) -> None:
+) -> float:
     """Train one step then ``evaluate(validate)`` a conditioning profile, asserting finiteness.
 
     The shared train->checkpoint->validate flow behind both the clap/m2l and SAME
@@ -1562,6 +1562,7 @@ def _assert_conditioning_train_validate_finite(
     :param dataset_root: Dataset root already augmented with the profile's column.
     :param param_spec_name: Param spec driving model width and callback labels.
     :param conditioning: Conditioning profile group (``m2l``/``clap``/``same_s``/``same_l``).
+    :returns: Finite validation parameter MSE.
     """
     cfg_train = build_surge_xt_embedding_train_cfg(
         tmp_path, dataset_root, param_spec_name=param_spec_name, conditioning=conditioning
@@ -1608,7 +1609,9 @@ def _assert_conditioning_train_validate_finite(
         GlobalHydra.instance().clear()
 
     assert isinstance(object_dict["model"].encoder, EmbeddingPool)
-    assert math.isfinite(val_metric_dict["val/param_mse"].item())
+    validation_mse = val_metric_dict["val/param_mse"].item()
+    assert math.isfinite(validation_mse)
+    return validation_mse
 
 
 @pytest.mark.requires_vst
@@ -1664,12 +1667,13 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
 
     monkeypatch.setattr(EmbeddingPool, "forward", record_forward)
     dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "tinymu")
-    _assert_conditioning_train_validate_finite(
+    validation_mse = _assert_conditioning_train_validate_finite(
         tmp_path,
         dataset_root,
         param_spec_name,
         "tinymu",
     )
+    assert validation_mse < 2.0
     assert pooled_inputs
     assert all(embed.shape[1] == TINYMU_FRONTEND.embedding_dim for embed in pooled_inputs)
     assert any(torch.count_nonzero(embed).item() > 0 for embed in pooled_inputs)
