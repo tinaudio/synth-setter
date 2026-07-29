@@ -364,6 +364,27 @@ def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
     assert cfg.model.vector_field.conditioning_dim == 512
 
 
+def test_ssondo_conditioning_profile_projects_960_vector() -> None:
+    """The S-SONDO profile routes its global vector through projection."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "conditioning=ssondo",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert cfg.datamodule.conditioning.column == "ssondo"
+    assert tuple(cfg.datamodule.conditioning.input_shape) == (960,)
+    assert encoder(torch.randn(2, 960)).shape == (2, cfg.model.encoder_output_dim)
+
+
 def _conditioning_profile_names() -> list[str]:
     """Enumerate the ``conditioning/`` Hydra group options from the config dir.
 

@@ -310,10 +310,13 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "m2l",
         "same_l",
         "same_s",
+        "ssondo",
         "t5gemma",
         "tinymu",
     }
-    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(pool="none")
+    assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(
+        pool="none", vector_dim=CLAP_EMBEDDING_DIM
+    )
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
     )
@@ -323,12 +326,14 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_l"].index == IndexSpec(
         pool="mean", vector_column=f"{SAME_L_FIELD}_vec"
     )
+    assert EMBEDDING_REGISTRY["ssondo"].index == IndexSpec(pool="none", vector_dim=960)
     assert EMBEDDING_REGISTRY["t5gemma"].index is None
     assert EMBEDDING_REGISTRY["t5gemma"].input_field == PARAM_ARRAY_FIELD
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
+    assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
     assert EMBEDDING_REGISTRY["tinymu"].co_resident is False
 
@@ -354,9 +359,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
         assert cfg.debug is False
-        assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(
-            lance_uri=_LANCE_URI
-        )
+        assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(lance_uri=_LANCE_URI)
     finally:
         GlobalHydra.instance().clear()
 
@@ -385,7 +388,8 @@ def test_add_embeddings_config_with_duplicate_embedding_raises() -> None:
     """A registry entry can be selected at most once."""
     with pytest.raises(ValueError, match="embeddings .* has duplicate entries"):
         AddEmbeddingsConfig(
-            lance_uri=_LANCE_URI, embeddings=["clap", "clap"]  # type: ignore[arg-type]
+            lance_uri=_LANCE_URI,
+            embeddings=["clap", "clap"],  # type: ignore[arg-type]
         )
 
 
@@ -418,7 +422,8 @@ def test_add_embeddings_config_with_checkpoint_override_preserves_mapping() -> N
 def test_add_embeddings_config_with_resume_cache_string_coerces_path() -> None:
     """Hydra string paths become Path values under strict validation."""
     config = AddEmbeddingsConfig(
-        lance_uri=_LANCE_URI, resume_cache="cache/embed.cache"  # type: ignore[arg-type]
+        lance_uri=_LANCE_URI,
+        resume_cache="cache/embed.cache",  # type: ignore[arg-type]
     )
     assert config.resume_cache == Path("cache/embed.cache")
 
@@ -473,12 +478,16 @@ def test_embedding_spec_encode_column_for_valid_encoder_builds_arrow_array(name:
     assert len(array) == 3
     if name == "clap":
         assert array.type == pa.list_(pa.float32(), CLAP_EMBEDDING_DIM)
-        np.testing.assert_allclose(np.asarray(array.to_pylist()), _fake_clap(_downmix_to_mono(audio), _SAMPLE_RATE))
+        np.testing.assert_allclose(
+            np.asarray(array.to_pylist()), _fake_clap(_downmix_to_mono(audio), _SAMPLE_RATE)
+        )
     else:
         assert isinstance(array.type, pa.FixedShapeTensorType)
         assert array.type.value_type == pa.float32()
         values = pa.chunked_array([array]).combine_chunks().to_numpy_ndarray()
-        expected = encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        expected = (
+            encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        )
         np.testing.assert_allclose(values, expected)
 
 
@@ -500,7 +509,9 @@ def test_embedding_spec_encode_column_with_nonfinite_output_raises(
         output.flat[0] = value
         return output
 
-    with pytest.raises(ValueError, match=f"{EMBEDDING_REGISTRY[name].column} embeddings contain non-finite values"):
+    with pytest.raises(
+        ValueError, match=f"{EMBEDDING_REGISTRY[name].column} embeddings contain non-finite values"
+    ):
         EMBEDDING_REGISTRY[name].encode_column(audio, _SAMPLE_RATE, poisoned)
 
 
@@ -590,7 +601,9 @@ def test_write_columns_for_single_registry_spec_round_trips_column(
     else:
         values = column.to_numpy_ndarray()
         encoder = _encoder_for(name)
-        expected = encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        expected = (
+            encoder(audio) if name == "m2l" else encoder(same_encoder_input(audio, _SAMPLE_RATE))
+        )
     np.testing.assert_allclose(values, expected)
 
 
@@ -613,9 +626,7 @@ def test_write_columns_with_mean_pool_writes_float32_companion_from_sequence(
         lance.dataset(str(uri)),
         [replace(base, load_encoder=load)],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("m2l",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
     )
 
     dataset = lance.dataset(str(uri))
@@ -648,9 +659,7 @@ def test_write_columns_with_attention_pool_raises_not_implemented(tmp_path: Path
             lance.dataset(str(uri)),
             [spec],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), build_index=False
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
         )
 
 
@@ -725,9 +734,7 @@ def test_write_columns_with_existing_target_raises_before_encoder_load(tmp_path:
     uri = tmp_path / "existing.lance"
     _audio_dataset(uri, rows=2)
     initial = _fake_spec("same_s")
-    config = AddEmbeddingsConfig(
-        lance_uri=str(uri), embeddings=("same_s",), build_index=False
-    )
+    config = AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("same_s",), build_index=False)
     _write_columns(lance.dataset(str(uri)), [initial], _SAMPLE_RATE, config)
     loads: list[str] = []
 
@@ -769,9 +776,7 @@ def test_write_columns_with_existing_companion_raises_before_encoder_load(
             lance.dataset(str(uri)),
             [_fake_spec("m2l", loads)],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), build_index=False
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
         )
 
     assert loads == []
@@ -978,9 +983,7 @@ def test_write_columns_with_default_batch_size_bounds_work_and_progress(
             lance.dataset(str(uri)),
             [replace(spec, encode_column=encode)],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), build_index=False
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -1011,9 +1014,7 @@ def test_write_columns_with_debug_logs_progress_and_versions(
             lance.dataset(str(uri)),
             [_fake_spec("m2l")],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("m2l",), batch_size=2, debug=True
-            ),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), batch_size=2, debug=True),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -1045,9 +1046,7 @@ def test_add_embeddings_with_mixed_selection_writes_exact_columns(
     selected = ("clap", "m2l", "same_s")
     _install_fake_specs(monkeypatch, selected)
 
-    add_embeddings(
-        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False)
-    )
+    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False))
 
     names = set(lance.dataset(str(uri)).schema.names)
     assert {CLAP_FIELD, M2L_FIELD, SAME_S_FIELD} <= names
@@ -1107,9 +1106,7 @@ def test_add_embeddings_with_all_specs_commits_grouped_and_loads_same_sequential
         commits.append((source_version, dataset.version))
 
     monkeypatch.setattr(lance.LanceDataset, "add_columns", recording_add_columns)
-    add_embeddings(
-        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False)
-    )
+    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False))
 
     assert len(commits) == 3
     assert events == ["load:clap", "load:m2l", "load:same_s", "load:same_l"]
@@ -1204,9 +1201,7 @@ def test_add_embeddings_after_index_failure_resumes_without_reencoding(
         add_embeddings(config)
 
     committed_version = lance.dataset(uri).version
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.build_index", real_build_index
-    )
+    monkeypatch.setattr("synth_setter.pipeline.data.add_embeddings.build_index", real_build_index)
     add_embeddings(config)
 
     dataset = lance.dataset(uri)
@@ -1228,9 +1223,7 @@ def test_add_embeddings_existing_artifact_identity_mismatch_raises(
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
     _install_fake_specs(monkeypatch, ("clap",))
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
     )
 
     monkeypatch.setitem(
@@ -1243,9 +1236,7 @@ def test_add_embeddings_existing_artifact_identity_mismatch_raises(
     )
     with pytest.raises(ValueError, match="checkpoint identity"):
         add_embeddings(
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), embeddings=("clap",), build_index=False
-            )
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
         )
 
 
@@ -1259,13 +1250,9 @@ def test_t5gemma_artifact_identity_includes_parameter_text_policy() -> None:
         param_text_normalizer="param_names",
     )
     surge_4 = surge_xt.model_copy(update={"param_spec_name": "surge_4"})
-    alternate_normalizer = surge_xt.model_copy(
-        update={"param_text_normalizer": "future_policy"}
-    )
+    alternate_normalizer = surge_xt.model_copy(update={"param_text_normalizer": "future_policy"})
 
-    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(
-        spec, surge_4
-    )
+    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(spec, surge_4)
     assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(
         spec, alternate_normalizer
     )
@@ -1282,9 +1269,7 @@ def test_add_embeddings_partial_policy_columns_raise(
     uri = tmp_path / "partial-policy.lance"
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
     _install_fake_specs(monkeypatch, ("m2l",))
-    config = AddEmbeddingsConfig(
-        lance_uri=str(uri), embeddings=("m2l",), build_index=False
-    )
+    config = AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), build_index=False)
     add_embeddings(config)
     lance.dataset(uri).drop_columns([f"{M2L_FIELD}_vec"])
 
@@ -1310,11 +1295,7 @@ def test_add_embeddings_with_index_disabled_writes_companions_without_building(
         lambda dataset, column, *, index, config: calls.append(column),
     )
 
-    add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=selected, build_index=False
-        )
-    )
+    add_embeddings(AddEmbeddingsConfig(lance_uri=str(uri), embeddings=selected, build_index=False))
 
     assert calls == []
     dataset = lance.dataset(str(uri))
@@ -1345,7 +1326,13 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
     ) -> bool:
         del dataset
         calls.append(
-            (column, index, cast(int, config.num_partitions), config.num_sub_vectors, config.metric)
+            (
+                column,
+                index,
+                cast(int, config.num_partitions),
+                config.num_sub_vectors,
+                config.metric,
+            )
         )
         return False
 
@@ -1368,7 +1355,7 @@ def test_add_embeddings_with_index_enabled_targets_declared_vector_columns(
             8,
             "l2",
         ),
-        (CLAP_FIELD, IndexSpec(pool="none"), 4, 8, "l2"),
+        (CLAP_FIELD, IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM), 4, 8, "l2"),
         (
             f"{M2L_FIELD}_vec",
             IndexSpec(pool="mean", vector_column=f"{M2L_FIELD}_vec"),
@@ -1391,17 +1378,13 @@ def test_add_embeddings_existing_mixed_target_writes_only_missing_policy(
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
     _install_fake_specs(monkeypatch, ("same_s",))
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("same_s",), build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("same_s",), build_index=False)
     )
     loads: list[str] = []
     _install_fake_specs(monkeypatch, ("clap", "same_s"), loads)
 
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap", "same_s"), build_index=False)
     )
 
     assert loads == ["load:clap"]
@@ -1481,9 +1464,7 @@ def test_build_index_with_too_few_rows_skips(tmp_path: Path) -> None:
         lance.dataset(str(uri)),
         [_fake_spec("clap")],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False),
     )
 
     built = build_index(
@@ -1509,18 +1490,14 @@ def test_build_index_with_enough_rows_creates_searchable_ivf_pq(tmp_path: Path) 
         lance.dataset(str(uri)),
         [_fake_spec("clap")],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False),
     )
 
     built = build_index(
         lance.dataset(str(uri)),
         CLAP_FIELD,
         index=IndexSpec(),
-        config=AddEmbeddingsConfig(
-            lance_uri=str(uri), num_partitions=4, num_sub_vectors=16
-        ),
+        config=AddEmbeddingsConfig(lance_uri=str(uri), num_partitions=4, num_sub_vectors=16),
     )
 
     dataset = lance.dataset(str(uri))
@@ -1609,9 +1586,7 @@ def test_clap_exact_search_with_stored_vector_returns_queried_row(tmp_path: Path
         lance.dataset(str(uri)),
         [spec],
         _SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False),
     )
     dataset = lance.dataset(str(uri))
     stored = dataset.to_table(columns=[CLAP_FIELD, PARAM_ARRAY_FIELD])
@@ -1694,9 +1669,7 @@ def test_same_l_num_latent_frames_for_one_second_returns_11() -> None:
     assert same_l_num_latent_frames(SAME_SAMPLE_RATE, SAME_SAMPLE_RATE) == 11
 
 
-@pytest.mark.parametrize(
-    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
-)
+@pytest.mark.parametrize("frame_count", [same_s_num_latent_frames, same_l_num_latent_frames])
 def test_same_num_latent_frames_for_four_second_conditioning_returns_44(
     frame_count: Callable[[int, int], int],
 ) -> None:
@@ -1727,9 +1700,7 @@ def test_same_s_num_latent_frames_resamples_and_pads_two_frame_blocks(
     assert same_s_num_latent_frames(num_samples, sample_rate) == expected
 
 
-@pytest.mark.parametrize(
-    "frame_count", [same_s_num_latent_frames, same_l_num_latent_frames]
-)
+@pytest.mark.parametrize("frame_count", [same_s_num_latent_frames, same_l_num_latent_frames])
 @pytest.mark.parametrize(
     ("num_samples", "sample_rate"), [(0, SAME_SAMPLE_RATE), (SAME_SAMPLE_RATE, 0)]
 )
@@ -2158,9 +2129,7 @@ def test_add_embeddings_with_resume_cache_completes_and_cleans_up(
     _install_fake_specs(monkeypatch, ("clap", "m2l"))
 
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), resume_cache=resume_cache, build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), resume_cache=resume_cache, build_index=False)
     )
 
     assert not resume_cache.exists()
@@ -2193,9 +2162,7 @@ def test_add_embeddings_threads_device_and_debug_to_loaders_and_progress(
 
     with capture_logs() as logs:
         add_embeddings(
-            AddEmbeddingsConfig(
-                lance_uri=str(uri), device="mps", debug=True, build_index=False
-            )
+            AddEmbeddingsConfig(lance_uri=str(uri), device="mps", debug=True, build_index=False)
         )
 
     assert selected == [("clap", "mps"), ("m2l", "mps")]
@@ -2222,9 +2189,7 @@ def test_add_embeddings_uses_sample_rate_from_dataset_metadata(
 
     monkeypatch.setitem(EMBEDDING_REGISTRY, "clap", replace(spec, encode_column=encode))
     add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("clap",), build_index=False
-        )
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
     )
 
     assert seen
@@ -2243,9 +2208,7 @@ def test_write_columns_with_mono_same_source_round_trips(tmp_path: Path) -> None
         lance.dataset(str(uri)),
         [_fake_spec("same_s")],
         SAME_SAMPLE_RATE,
-        AddEmbeddingsConfig(
-            lance_uri=str(uri), embeddings=("same_s",), build_index=False
-        ),
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("same_s",), build_index=False),
     )
 
     values = (
@@ -2264,6 +2227,7 @@ def test_add_embeddings_open_failure_propagates(monkeypatch: pytest.MonkeyPatch)
 
     :param monkeypatch: Fixture breaking dataset opening.
     """
+
     def boom(uri: str) -> object:
         raise RuntimeError(f"missing R2 credentials for {uri}")
 
@@ -2610,7 +2574,7 @@ def test_t5gemma_encoder_with_param_rows_wider_than_its_spec_raises(
     """
     monkeypatch.setattr(
         "synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder",
-        lambda checkpoint, device: (lambda prompts: np.zeros((len(prompts), 4, 5), np.float32)),
+        lambda checkpoint, device: lambda prompts: np.zeros((len(prompts), 4, 5), np.float32),
     )
     config = AddEmbeddingsConfig(
         lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
@@ -2640,9 +2604,7 @@ def test_t5gemma_encoder_with_matching_param_rows_encodes_one_caption_per_row(
 
         return encode_text
 
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder", fake_load
-    )
+    monkeypatch.setattr("synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder", fake_load)
     config = AddEmbeddingsConfig(
         lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
     )
@@ -2739,8 +2701,9 @@ def test_load_clap_spec_encoder_passes_the_checkpoint_and_configured_device(
     seen: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
-        lambda checkpoint, device: seen.append((checkpoint, device))
-        or (lambda audio, rate: audio),
+        lambda checkpoint, device: (
+            seen.append((checkpoint, device)) or (lambda audio, rate: audio)
+        ),
     )
 
     _load_clap_spec_encoder("custom/clap", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"))
@@ -2761,7 +2724,9 @@ def test_load_same_spec_encoder_passes_the_checkpoint_and_configured_device(
         lambda checkpoint, device: seen.append((checkpoint, device)) or (lambda audio: audio),
     )
 
-    _load_same_spec_encoder("custom/same-s", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"))
+    _load_same_spec_encoder(
+        "custom/same-s", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu")
+    )
 
     assert seen == [("custom/same-s", "cpu")]
 

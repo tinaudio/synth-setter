@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synth-setter"
-version = "10.8.1"
+version = "10.9.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -63,6 +63,7 @@ synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
 synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-migrate-checkpoint = "synth_setter.cli.migrate_checkpoint:main"
+synth-setter-plugins = "synth_setter.cli.plugins:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
@@ -139,6 +140,7 @@ torch = [
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
+  "ssondo==0.3.1",
   # Commit-pinned until TinyMU publishes a package release.
   "tinymu @ git+https://github.com/ktinubu/TinyMU@fef8564593fceb5625c10f56a46b256216e7173d",
   # Commit-pinned: upstream has no PyPI release or Git tags. Package-scoped metadata

@@ -36,6 +36,7 @@ M2L_FIELD: str = "m2l"
 CLAP_FIELD: str = "clap"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
+SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
 TINYMU_FIELD: str = "tinymu"
 

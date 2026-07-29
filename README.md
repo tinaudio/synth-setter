@@ -48,16 +48,15 @@ under the GPL-3.0 license.
 ## Prerequisites
 
 - **Supported platforms**: Linux (x86_64) and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
-- **Git**, **curl**, **make** (for the canonical install path)
+- **Git**, **curl**, **make**, **Node.js 18+**, and **npm** (for the canonical install path)
 
-`make install` handles uv, Python 3.12, and all dependencies for you.
-`make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
-to install Surge XT yourself. `make install-plugins` additionally fetches the
-other VST3 synths the runtime docker image ships (Dexed, OB-Xf, Six Sines;
-x86_64 Linux only — those targets print a notice and exit 0 elsewhere, so on
-macOS the aggregate still succeeds with Surge XT alone; on non-x86_64 Linux
-`install-surge-xt` itself fails first — see the symlink workaround in
-[docs/getting-started.md](docs/getting-started.md#2d-install-the-surge-xt-vst3)).
+`make install` handles uv, Python 3.12, and Python dependencies.
+`make install-surge-xt` installs the exact package pinned in
+[`studiorack.json`](studiorack.json) through the locked Studiorack CLI and
+creates the stable `plugins/Surge XT.vst3` alias. `make install-plugins`
+installs every package in that manifest. Platform availability is determined
+by the Studiorack registry; unsupported package/host combinations fail
+explicitly.
 
 ## Installation
 
@@ -73,7 +72,7 @@ make install
 # 3. Activate the venv
 source .venv/bin/activate
 
-# 4. Download the Surge XT VST3 into plugins/
+# 4. Install the pinned Surge XT package and create its plugins/ alias
 make install-surge-xt
 
 # 5. Create .env for R2 credentials — see §4b in getting-started.
@@ -87,10 +86,11 @@ make install-surge-xt
 > [getting-started §4c](docs/getting-started.md#4c-weights--biases-wb) for
 > the full configuration workflow.
 
-> **Already have Surge XT installed system-wide?** Skip `make install-surge-xt`
-> and symlink it manually:
-> `ln -s "/path/to/Surge XT.vst3" "plugins/Surge XT.vst3"`.
-> See [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
+> **Already have Surge XT installed system-wide?** Run `make link-plugins` to
+> resolve installed manifest packages from Studiorack storage or standard VST3
+> directories. `SYNTH_SETTER_PLUGIN_PATH` remains available for unmanaged and
+> legacy Surge installs. See
+> [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see

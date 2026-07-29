@@ -4264,6 +4264,27 @@ wheels = [
 ]
 
 [[package]]
+name = "ssondo"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "timm" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/33/5f/67cd3deb615942380c781fed38191778ffef7c4b1109172bf1486d11297b/ssondo-0.3.1.tar.gz", hash = "sha256:8de21007f7190c20605a41b02c563064934b724881aff829abd5ece88fc93257", size = 32981, upload-time = "2026-04-27T19:12:26.637Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/ad/a42f332930ddef19c61ac3422026ee8642ad07785c935463a7e80a65be12/ssondo-0.3.1-py3-none-any.whl", hash = "sha256:c85351887c0fad1804d116048672102be7eccc18c23d21f6315f426083624098", size = 36256, upload-time = "2026-04-27T19:12:24.726Z" },
+]
+
+[[package]]
 name = "stable-audio-3"
 version = "0.1.0"
 source = { git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1#124e8a799f57a1f665495ecb72e547d0a62867f1" }
@@ -4352,7 +4373,7 @@ wheels = [
 
 [[package]]
 name = "synth-setter"
-version = "10.8.1"
+version = "10.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -4459,6 +4480,7 @@ dev = [
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "smoosense", extra = ["jupyter"] },
+    { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "structlog" },
     { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
@@ -4528,6 +4550,7 @@ runtime = [
     { name = "scipy" },
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
+    { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "structlog" },
     { name = "surgepy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
@@ -4555,6 +4578,7 @@ torch = [
     { name = "jaxtyping" },
     { name = "lightning" },
     { name = "music2latent" },
+    { name = "ssondo" },
     { name = "stable-audio-3" },
     { name = "tinymu" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
@@ -4683,6 +4707,7 @@ dev = [
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "smoosense", extras = ["jupyter"] },
+    { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "structlog" },
     { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
@@ -4746,6 +4771,7 @@ runtime = [
     { name = "scipy", specifier = ">=1.14,<1.15" },
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
+    { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "structlog" },
     { name = "surgepy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", git = "https://github.com/surge-synthesizer/surge.git?subdirectory=src%2Fsurge-python&rev=f7b97c682ade0b87da85ca5968b63d5c7c98e68d" },
@@ -4767,6 +4793,7 @@ torch = [
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "music2latent", specifier = ">=0.1.8" },
+    { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
     { name = "tinymu", git = "https://github.com/ktinubu/TinyMU?rev=fef8564593fceb5625c10f56a46b256216e7173d" },
     { name = "torch", specifier = ">=2.0.0" },

@@ -50,6 +50,7 @@ from tests.conftest import (
     augment_lance_splits_with_embedding,
     augment_lance_splits_with_embeddings,
     augment_lance_splits_with_same,
+    augment_lance_splits_with_ssondo,
     build_surge_xt_embedding_train_cfg,
 )
 from tests.helpers.eval_fakes import (
@@ -1562,7 +1563,7 @@ def _assert_conditioning_train_validate_finite(
     :param tmp_path: The temporary output/log path shared by train and eval.
     :param dataset_root: Dataset root already augmented with the profile's column.
     :param param_spec_name: Param spec driving model width and callback labels.
-    :param conditioning: Conditioning profile group (``m2l``/``clap``/``same_s``/``same_l``).
+    :param conditioning: Cached-conditioning profile group.
     :returns: Finite validation parameter MSE.
     """
     cfg_train = build_surge_xt_embedding_train_cfg(
@@ -1681,6 +1682,35 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
     assert pooled_inputs
     assert all(embed.shape[1] == TINYMU_FRONTEND.embedding_dim for embed in pooled_inputs)
     assert any(torch.count_nonzero(embed).item() > 0 for embed in pooled_inputs)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+def test_evaluate_ssondo_conditioning_real_e2e(
+    local_embedding_checkpoints: dict[str, str],
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Compose eval independently and validate a real S-SONDO checkpoint.
+
+    :param local_embedding_checkpoints: Preflighted real model checkpoints.
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_ssondo(
+        surge_xt_embedding_smoke_datasets,
+        local_embedding_checkpoints["ssondo"],
+    )
+
+    _assert_conditioning_train_validate_finite(
+        tmp_path,
+        dataset_root,
+        param_spec_name,
+        "ssondo",
+    )
 
 
 _SAME_CONDITIONING_PROFILES = ("same_s", "same_l")

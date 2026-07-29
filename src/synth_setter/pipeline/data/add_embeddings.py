@@ -35,11 +35,21 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    SSONDO_FIELD,
     T5GEMMA_FIELD,
     TINYMU_FIELD,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.ssondo import (
+    DEFAULT_SSONDO_CHECKPOINT,
+    SSONDO_CHECKPOINT_SHA256,
+    SSONDO_EMBEDDING_DIM,
+    SSONDO_SOURCE_REVISION,
+    SSONDOEncodeFn,
+    load_ssondo_audio_encoder,
+    resolve_ssondo_checkpoint,
+)
 from synth_setter.pipeline.data.tinymu import (
     DEFAULT_TINYMU_CHECKPOINT,
     TINYMU_CHECKPOINT_SHA256,
@@ -95,7 +105,9 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | ParamTextEncodeFn | TinyMUEncodeFn
+type Encoder = (
+    M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn | TinyMUEncodeFn
+)
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[np.ndarray, int, Encoder], pa.Array]
 type ResolveArtifactIdentityFn = Callable[[str], str]
@@ -120,12 +132,17 @@ class IndexSpec:
     .. attribute :: vector_column
 
         Companion vector column, or ``None`` to index the embedding column.
+
+    .. attribute :: vector_dim
+
+        Static vector width for config validation, or ``None`` when output-derived.
     """
 
     metric: str = DEFAULT_INDEX_METRIC
     num_sub_vectors: int = DEFAULT_NUM_SUB_VECTORS
     pool: Literal["none", "mean", "attention"] = "none"
     vector_column: str | None = None
+    vector_dim: int | None = None
 
 
 @dataclass(frozen=True)
@@ -231,10 +248,7 @@ def _versioned_artifact_identity(name: str, digest: str) -> str:
     :param digest: Immutable package or checkpoint digest.
     :returns: Versioned identity persisted in Lance field metadata.
     """
-    return (
-        f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:"
-        f"source:{resolve_git_sha()}:{digest}"
-    )
+    return f"{name}:policy-v{EMBEDDING_POLICY_VERSION}:source:{resolve_git_sha()}:{digest}"
 
 
 def _m2l_artifact_identity(checkpoint: str) -> str:
@@ -280,6 +294,21 @@ def _t5gemma_artifact_identity(checkpoint: str) -> str:
 
     checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
     return _versioned_artifact_identity("t5gemma", _checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _ssondo_artifact_identity(checkpoint: str) -> str:
+    """Verify and identify the pinned S-SONDO package/checkpoint pair.
+
+    :param checkpoint: Pinned Hugging Face repo or SHA-identical local checkpoint.
+    :returns: Versioned package and checkpoint identity.
+    """
+    resolve_ssondo_checkpoint(checkpoint)
+    package_version = importlib.metadata.version("ssondo")
+    digest = (
+        f"package:{package_version};source:{SSONDO_SOURCE_REVISION};"
+        f"checkpoint:sha256:{SSONDO_CHECKPOINT_SHA256}"
+    )
+    return _versioned_artifact_identity("ssondo", digest)
 
 
 def _tinymu_artifact_identity(checkpoint: str) -> str:
@@ -460,7 +489,9 @@ def _encode_same_column(
         frame_count(prepared.shape[-1], SAME_SAMPLE_RATE),
     )
     if latents.shape != expected_shape:
-        raise ValueError(f"{field} encoder produced shape {latents.shape}, expected {expected_shape}")
+        raise ValueError(
+            f"{field} encoder produced shape {latents.shape}, expected {expected_shape}"
+        )
     return tensor_array(latents, np.dtype("float32"), expected_shape[1:])
 
 
@@ -529,6 +560,16 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_same_audio_encoder(checkpoint, config.device)
 
 
+def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load S-SONDO through its pinned checkpoint adapter.
+
+    :param checkpoint: Pinned Hugging Face repo id or hash-identical local artifact.
+    :param config: Run config supplying the device.
+    :returns: S-SONDO encoder over source audio.
+    """
+    return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
+
+
 def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load TinyMU through its managed package dependency.
 
@@ -570,6 +611,25 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
         return encode_text(normalize(spec, params))
 
     return encode
+
+
+def _encode_ssondo_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
+    """Encode one audio batch as fixed-width S-SONDO vectors.
+
+    :param audio: ``(B, C, T)`` source audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: S-SONDO encoder over source audio.
+    :returns: Fixed-size-list float32 array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    encode = cast("SSONDOEncodeFn", encoder)
+    vectors = _finite_embedding(SSONDO_FIELD, encode(audio, sample_rate))
+    expected_shape = (len(audio), SSONDO_EMBEDDING_DIM)
+    if vectors.shape != expected_shape:
+        raise ValueError(
+            f"{SSONDO_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
+        )
+    return _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)
 
 
 def _encode_tinymu_column(audio: np.ndarray, sample_rate: int, encoder: Encoder) -> pa.Array:
@@ -625,7 +685,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         column=CLAP_FIELD,
         default_checkpoint=DEFAULT_CLAP_CHECKPOINT,
         co_resident=True,
-        index=IndexSpec(pool="none"),
+        index=IndexSpec(pool="none", vector_dim=CLAP_EMBEDDING_DIM),
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
         resolve_artifact_identity=_clap_artifact_identity,
@@ -660,6 +720,16 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         encode_column=_encode_same_l_column,
         resolve_artifact_identity=_same_artifact_identity,
     ),
+    "ssondo": EmbeddingSpec(
+        name="ssondo",
+        column=SSONDO_FIELD,
+        default_checkpoint=DEFAULT_SSONDO_CHECKPOINT,
+        co_resident=True,
+        index=IndexSpec(pool="none", vector_dim=SSONDO_EMBEDDING_DIM),
+        load_encoder=_load_ssondo_spec_encoder,
+        encode_column=_encode_ssondo_column,
+        resolve_artifact_identity=_ssondo_artifact_identity,
+    ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.
     "t5gemma": EmbeddingSpec(
@@ -678,7 +748,11 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         column=TINYMU_FIELD,
         default_checkpoint=DEFAULT_TINYMU_CHECKPOINT,
         co_resident=False,
-        index=IndexSpec(pool="mean", vector_column=f"{TINYMU_FIELD}_vec"),
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{TINYMU_FIELD}_vec",
+            vector_dim=TINYMU_FRONTEND.embedding_dim,
+        ),
         load_encoder=_load_tinymu_spec_encoder,
         encode_column=_encode_tinymu_column,
         resolve_artifact_identity=_tinymu_artifact_identity,
@@ -697,9 +771,7 @@ def _output_columns(spec: EmbeddingSpec) -> tuple[str, ...]:
     return spec.column, spec.index.vector_column
 
 
-def _guard_existing_columns(
-    dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]
-) -> None:
+def _guard_existing_columns(dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]) -> None:
     """Reject selected columns already present in the dataset.
 
     :param dataset: Open Lance dataset.
@@ -744,9 +816,7 @@ def _resume_identity_path(resume_cache: Path) -> Path:
     return resume_cache.with_name(f"{resume_cache.name}.identity")
 
 
-def _prepare_resume_cache(
-    resume_cache: Path | None, identities: Mapping[str, str]
-) -> None:
+def _prepare_resume_cache(resume_cache: Path | None, identities: Mapping[str, str]) -> None:
     """Bind a Lance UDF cache to exact embedding artifact identities.
 
     :param resume_cache: Cache path, or ``None`` for a cacheless run.
@@ -805,9 +875,7 @@ def _resume_cache_for_specs(
     return resume_cache.with_name(f"{resume_cache.name}.{suffix}")
 
 
-def _resolve_artifact_identity(
-    spec: EmbeddingSpec, config: AddEmbeddingsConfig
-) -> str:
+def _resolve_artifact_identity(spec: EmbeddingSpec, config: AddEmbeddingsConfig) -> str:
     """Resolve checkpoint and input-policy identity for one embedding.
 
     :param spec: Embedding policy to identify.
@@ -824,9 +892,7 @@ def _resolve_artifact_identity(
     return f"{identity}:input-policy:{digest.hexdigest()}"
 
 
-def _load_encoders(
-    specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig
-) -> list[Encoder]:
+def _load_encoders(specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig) -> list[Encoder]:
     """Load selected encoders in policy order.
 
     :param specs: Policies sharing this UDF pass.
@@ -864,9 +930,7 @@ def _pooled_vector_column(
     return index.vector_column, _fixed_size_list(pooled, pooled.shape[1])
 
 
-def _decoded_sources(
-    batch: pa.RecordBatch, input_fields: Sequence[str]
-) -> dict[str, np.ndarray]:
+def _decoded_sources(batch: pa.RecordBatch, input_fields: Sequence[str]) -> dict[str, np.ndarray]:
     """Decode each required source column of one batch into a numpy array.
 
     :param batch: Source batch supplied by Lance.
@@ -1046,9 +1110,7 @@ def build_index(
         )
         return False
     partitions = (
-        max(1, round(rows**0.5))
-        if config.num_partitions is None
-        else config.num_partitions
+        max(1, round(rows**0.5)) if config.num_partitions is None else config.num_partitions
     )
     dataset.create_index(
         column,
@@ -1247,9 +1309,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if spec.index is None:
                 continue
             vector_column = spec.index.vector_column or spec.column
-            if not _matching_index_exists(
-                dataset, vector_column, index=spec.index, config=config
-            ):
+            if not _matching_index_exists(dataset, vector_column, index=spec.index, config=config):
                 build_index(dataset, vector_column, index=spec.index, config=config)
     logger.info("added_embeddings", uri=config.lance_uri, columns=output_columns)
 

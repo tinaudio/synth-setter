@@ -7,7 +7,7 @@ from typing import NotRequired, Self, TypedDict
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
     Conditioning,
@@ -210,7 +210,7 @@ class _MaterializeConfig(BaseModel):
 
     download_dataset_root_uri: str | None
     download_dataset_txids: dict[str, str] | None
-    download_dataset_row_limit: int | None
+    download_dataset_row_limit: PositiveInt | None
 
     @model_validator(mode="after")
     def validate_consistency(self) -> Self:

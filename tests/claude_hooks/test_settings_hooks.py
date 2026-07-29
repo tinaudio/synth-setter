@@ -1507,7 +1507,18 @@ def test_trailer_hook_allows_generated_with_non_agent_tool(trailer_hook_command:
 
 @pytest.mark.parametrize(
     "agent_keyword",
-    ["Claude Code", "Anthropic Claude", "ChatGPT", "Copilot", "Cursor", "Gemini"],
+    [
+        "Claude Code",
+        "Anthropic Claude",
+        "ChatGPT",
+        "Copilot",
+        "Cursor",
+        "Gemini",
+        "Codex",
+        "Bard",
+        "GPT-4",
+        "GPT4",
+    ],
 )
 def test_trailer_hook_blocks_generated_with_any_agent_keyword(
     trailer_hook_command: str, agent_keyword: str
@@ -1589,26 +1600,6 @@ def test_trailer_hook_catches_no_verify_through_various_git_level_options(
     :param command: ``git`` invocation carrying the option form under test.
     """
     result = _run_hook_command(trailer_hook_command, {"tool_input": {"command": command}})
-    assert result.returncode == 2, (result.returncode, result.stderr)
-    assert "BLOCKED" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "agent_keyword",
-    ["Codex", "Bard", "GPT-4", "GPT4"],
-)
-def test_trailer_hook_blocks_generated_with_additional_agent_keywords(
-    trailer_hook_command: str, agent_keyword: str
-) -> None:
-    """Additional agents in the ``Generated with`` alternation are blocked.
-
-    :param trailer_hook_command: Hook command body fixture.
-    :param agent_keyword: Agent-product name appended after ``Generated with``.
-    """
-    result = _run_hook_command(
-        trailer_hook_command,
-        {"tool_input": {"command": f'git commit -m "feat: x\n\nGenerated with {agent_keyword}"'}},
-    )
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
 
