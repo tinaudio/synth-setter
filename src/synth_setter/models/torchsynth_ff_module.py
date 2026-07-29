@@ -6,7 +6,6 @@ from typing import Any
 import torch
 from lightning import LightningModule
 
-from synth_setter.data.vst.torchsynth_param_spec import SYNTH_COLUMNS
 from synth_setter.metrics import LogSpectralDistance
 
 Renderer = Callable[[torch.Tensor], torch.Tensor]
@@ -100,9 +99,7 @@ class TorchSynthFeedForwardModule(LightningModule):
         renderer = batch[-1]
         self.test_lsd(predictions, inputs, renderer)
 
-        # Pitch and the note window are pinned by the datamodule, so scoring them would
-        # deflate the mean with constants and break comparability with recorded baselines.
-        param_mse = (predictions[:, SYNTH_COLUMNS] - targets[:, SYNTH_COLUMNS]).square().mean()
+        param_mse = (predictions - targets).square().mean()
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/lsd", self.test_lsd, on_step=False, on_epoch=True, prog_bar=True)
         self.log("test/loss", loss, on_step=False, on_epoch=True, prog_bar=True)

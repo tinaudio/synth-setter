@@ -86,11 +86,15 @@ def test_render_responds_to_midi_pitch() -> None:
 
 
 def test_render_note_start_shifts_audio_by_the_start_offset() -> None:
-    """The note-on offset delays the rendered note and zero-fills the head."""
+    """The note-on offset delays the rendered note and zero-fills the head.
+
+    Both windows are exact binary fractions of the note param's range, so the row's float32
+    encoding round-trips to the same note-on length and only the offset differs.
+    """
     renderer = _make_renderer()
-    at_zero = renderer.render(_ADSR_PATCH, 60, 100, (0.0, 0.4))
+    at_zero = renderer.render(_ADSR_PATCH, 60, 100, (0.0, 0.5))
     offset_samples = int(0.25 * _SAMPLE_RATE)
-    delayed = renderer.render(_ADSR_PATCH, 60, 100, (0.25, 0.65))
+    delayed = renderer.render(_ADSR_PATCH, 60, 100, (0.25, 0.75))
 
     assert np.array_equal(delayed[:, :offset_samples], np.zeros((1, offset_samples)))
     assert np.array_equal(delayed[:, offset_samples:], at_zero[:, : _SAMPLES - offset_samples])

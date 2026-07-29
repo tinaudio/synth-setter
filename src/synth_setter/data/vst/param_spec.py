@@ -276,6 +276,18 @@ class ParamSpec:
             yield param, slice(pointer, pointer + width)
             pointer += width
 
+    @property
+    def synth_columns(self) -> slice:
+        """Return the encoded columns the synth params occupy.
+
+        Read off :meth:`encoded_slices` so callers splitting an encoded row never restate
+        an assumed column order.
+
+        :returns: Contiguous span covering every synth parameter's encoded columns.
+        """
+        spans = [span for _, span in self.encoded_slices()][: len(self.synth_params)]
+        return slice(spans[0].start, spans[-1].stop) if spans else slice(0, 0)
+
     def sample(
         self, rng: np.random.Generator | None = None
     ) -> tuple[dict[str, float], NoteParams]:
