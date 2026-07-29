@@ -137,7 +137,7 @@ def test_configure_val_audio_probe_forwards_validated_render_config() -> None:
     assert settings.sample_rate == 44100
 
 
-def test_configure_val_audio_probe_derives_torchsynth_note_suffix_from_datamodule() -> None:
+def test_configure_val_audio_probe_derives_torchsynth_note_params_from_datamodule() -> None:
     """TorchSynth probe rows receive encoded fixed note values from the online data config."""
     cfg = _cfg(enabled=True)
     with open_dict(cfg):
@@ -160,10 +160,10 @@ def test_configure_val_audio_probe_derives_torchsynth_note_suffix_from_datamodul
 
     probe = callbacks[0]
     assert isinstance(probe, ValAudioProbe)
-    assert probe.fixed_model_param_suffix is not None
-    assert probe.fixed_model_param_suffix.shape == (3,)
-    full_row = torch.cat((torch.zeros(76), probe.fixed_model_param_suffix)).numpy()
-    _, note_params = decode_model_output(full_row, param_specs[ParamSpecName("torchsynth_full")])
+    assert probe.complete_rows is not None
+    spec = param_specs[ParamSpecName("torchsynth_full")]
+    full_row = probe.complete_rows(torch.zeros(1, spec.synth_param_length))
+    _, note_params = decode_model_output(full_row[0].numpy(), spec)
     assert note_params == {"pitch": 66, "note_start_and_end": (0.0, 2.0)}
 
 

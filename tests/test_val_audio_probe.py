@@ -12,6 +12,7 @@ from __future__ import annotations
 import concurrent.futures
 import subprocess
 import threading
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -181,20 +182,21 @@ def test_val_audio_probe_stages_only_first_batch_up_to_num_samples(tmp_path: Pat
     assert staged == [tmp_path / "val_audio_probe" / "step-5000"]
 
 
-def test_val_audio_probe_fixed_note_suffix_stages_renderable_torchsynth_rows(
+def test_val_audio_probe_completed_rows_are_renderable_torchsynth_rows(
     tmp_path: Path,
 ) -> None:
-    """A fixed model-space note suffix completes online TorchSynth rows for rendering.
+    """Completing the staged rows makes online TorchSynth predictions renderable.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     spec = param_specs[ParamSpecName("torchsynth_full")]
     note_values = {"pitch": 60, "note_start_and_end": (0.0, 0.1)}
-    placeholder_synth_params = {parameter.name: 0.0 for parameter in spec.synth_params}
-    encoded_row = spec.encode(placeholder_synth_params, note_values)
-    note_suffix = torch.from_numpy(encoded_row[spec.synth_param_length :] * 2 - 1)
-    synth_row = torch.tensor(DEFAULT_NORMALIZED_ROW, dtype=torch.float32) * 2 - 1
-    probe = _probe(tmp_path, fixed_model_param_suffix=note_suffix)
+    synth_row = torch.from_numpy(
+        spec.encoded_to_model(np.asarray(DEFAULT_NORMALIZED_ROW, dtype=np.float32))
+    )
+    probe = _probe(
+        tmp_path, complete_rows=partial(spec.complete_model_rows, note_param_dict=note_values)
+    )
 
     probe.on_validation_batch_end(
         _trainer(global_step=1),
@@ -207,7 +209,7 @@ def test_val_audio_probe_fixed_note_suffix_stages_renderable_torchsynth_rows(
     predictions = tmp_path / "val_audio_probe" / "step-1" / "predictions"
     staged_pred = torch.load(predictions / "pred-0.pt", weights_only=True)
     staged_target = torch.load(predictions / "target-params-0.pt", weights_only=True)
-    assert staged_pred.shape == staged_target.shape == (1, 79)
+    assert staged_pred.shape == staged_target.shape == (1, spec.encoded_width)
 
     synth_params, note_params = decode_model_output(staged_pred[0].numpy(), spec)
     renderer = TorchSynthRenderer(

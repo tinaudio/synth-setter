@@ -6,6 +6,7 @@ import math
 
 import numpy as np
 import pytest
+import torch
 
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
@@ -337,3 +338,52 @@ class TestDecodeModelOutput:
         _, note_params = decode_model_output(row, _tiny_spec())
 
         assert len(note_params["note_start_and_end"]) == 1
+
+
+class TestModelSpaceConversion:
+    """The single-owner width splice and ``[-1, 1]`` <-> ``[0, 1]`` affine."""
+
+    def test_model_to_encoded_inverts_encoded_to_model(self) -> None:
+        """Round-tripping an in-range encoded row returns it unchanged."""
+        spec = _tiny_spec()
+        encoded = np.linspace(0.0, 1.0, spec.encoded_width)
+
+        assert spec.model_to_encoded(spec.encoded_to_model(encoded)) == pytest.approx(encoded)
+
+    def test_model_to_encoded_clips_predictions_outside_the_model_range(self) -> None:
+        """Out-of-range predictions saturate at the encoded domain's bounds."""
+        spec = _tiny_spec()
+
+        encoded = spec.model_to_encoded(np.array([-3.0, 3.0]))
+
+        assert encoded.tolist() == [0.0, 1.0]
+
+    def test_complete_model_rows_widens_synth_rows_to_the_encoded_width(self) -> None:
+        """Synth-only model rows gain the note columns the model never predicts."""
+        spec = _tiny_spec()
+        rows = torch.zeros(2, spec.synth_param_length)
+
+        completed = spec.complete_model_rows(rows, {"pitch": 60, "note_start_and_end": (0.0, 1.0)})
+
+        assert completed.shape == (2, spec.encoded_width)
+        assert torch.equal(completed[:, : spec.synth_param_length], rows)
+
+    def test_complete_model_rows_appends_decodable_note_params(self) -> None:
+        """The appended columns decode back to the note params they were built from."""
+        spec = _tiny_spec()
+        note_params = {"pitch": 72, "note_start_and_end": (0.5, 2.0)}
+
+        completed = spec.complete_model_rows(torch.zeros(1, spec.synth_param_length), note_params)
+
+        _, decoded = decode_model_output(completed[0].numpy(), spec)
+        assert decoded == note_params
+
+    def test_complete_model_rows_rejects_rows_that_are_not_synth_width(self) -> None:
+        """A full-width row is a caller error: the note columns would be duplicated."""
+        spec = _tiny_spec()
+
+        with pytest.raises(ValueError, match="synth_param_length"):
+            spec.complete_model_rows(
+                torch.zeros(1, spec.encoded_width),
+                {"pitch": 60, "note_start_and_end": (0.0, 1.0)},
+            )

@@ -395,7 +395,9 @@ class PlotLossPerTimestep(Callback):
 
         # Get conditioning vector
         conditioning = pl_module.encoder(signal)
-        z = pl_module.vector_field.apply_dropout(conditioning, pl_module.hparams.cfg_dropout_rate)
+        z, _ = pl_module.vector_field.apply_dropout(
+            conditioning, pl_module.hparams.cfg_dropout_rate
+        )
 
         x0, x1, z = pl_module._sample_x0_and_x1(params, z)
 
@@ -645,7 +647,7 @@ class ValAudioProbe(Callback):
         probe_root: str | Path,
         probe_fn: Callable[[Path, int], dict[str, float]],
         num_samples: int = 5,
-        fixed_model_param_suffix: torch.Tensor | None = None,
+        complete_rows: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
         """Initialize the probe.
 
@@ -655,13 +657,14 @@ class ValAudioProbe(Callback):
             verbatim (e.g. ``{"val_audio/mss_mean": ...}``). Exceptions it raises are
             logged as warnings at the next harvest and never crash the fit loop.
         :param num_samples: Upper bound on samples taken from the first val batch.
-        :param fixed_model_param_suffix: Optional one-dimensional model-space values
-            appended to each staged prediction and target row.
+        :param complete_rows: Widens every staged batch to the renderable encoded
+            width — :meth:`~synth_setter.data.vst.param_spec.ParamSpec.complete_model_rows`
+            bound to the run's fixed note params. ``None`` stages rows verbatim.
         """
         super().__init__()
         self.probe_root = Path(probe_root)
         self.num_samples = num_samples
-        self.fixed_model_param_suffix = fixed_model_param_suffix
+        self.complete_rows = complete_rows
         self._probe_fn = probe_fn
         # Created lazily: ddp_spawn pickles callbacks, and a live executor can't travel.
         self._pool: ThreadPoolExecutor | None = None
@@ -731,9 +734,8 @@ class ValAudioProbe(Callback):
             ("target-params", params),
         ):
             staged = tensor[:limit].detach()
-            if self.fixed_model_param_suffix is not None:
-                suffix = self.fixed_model_param_suffix.to(staged).expand(len(staged), -1)
-                staged = torch.cat((staged, suffix), dim=-1)
+            if self.complete_rows is not None:
+                staged = self.complete_rows(staged)
             torch.save(staged.cpu(), predictions_dir / f"{name}-0.pt")
         self._staged = (probe_dir, trainer.global_step)
 
