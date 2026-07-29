@@ -216,6 +216,7 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
     encoder = object_dict["model"].encoder
+    assert isinstance(object_dict["model"].audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, ClapAudioEncoder)
     assert encoder.backbone.out_dim == 8

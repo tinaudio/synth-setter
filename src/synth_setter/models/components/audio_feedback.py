@@ -149,7 +149,7 @@ def metric_tap(encoder: nn.Module) -> EmbeddingTap:
     metric never taps a trainable head, which would reintroduce the between-step drift the
     frozen backbone exists to remove.
 
-    :param encoder: Conditioning encoder.
+    :param encoder: Encoder whose frozen metric tap is resolved.
     :returns: Callable mapping a waveform batch to its metric-space embedding.
     """
     return cast(EmbeddingTap, getattr(encoder, "embed", encoder))
@@ -203,6 +203,8 @@ def _frozen_latent_distance(
         embed = _frozen_embedder(encoder)
         if target_embedding is None:
             target_embedding = embed(target_audio)
+        else:
+            target_embedding = target_embedding.detach()
         # flatten(1) collapses token/layer axes so sequence encoders also reduce to a
         # per-sample scalar instead of broadcasting against the (batch,) weight.
         return 1.0 - functional.cosine_similarity(

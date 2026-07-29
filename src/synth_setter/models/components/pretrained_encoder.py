@@ -11,9 +11,10 @@ call ``embed`` for the stationary metric and ``forward`` for flow conditioning.
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Final, Protocol, cast
 
 import torch
 import torchaudio.functional as audio_fn
@@ -25,6 +26,7 @@ from torch.nn import functional
 from synth_setter.clap import (
     CLAP_SAMPLE_RATE,
     DEFAULT_CLAP_CHECKPOINT,
+    DEFAULT_CLAP_CHECKPOINT_SHA256,
     clap_checkpoint_sha256,
     resolve_clap_checkpoint,
 )
@@ -32,14 +34,41 @@ from synth_setter.clap import (
 # Matches ClapFeatureExtractor's ``mel_floor`` and ``power_to_db``'s ``min_value``, which
 # together clamp the log-mel at -100 dB.
 _MEL_FLOOR: Final = 1e-10
-# Power spectrograms convert to dB at 10 dB per decade, not 20.
+# Convert power spectrograms, rather than amplitudes, to decibels.
 _POWER_TO_DB: Final = 10.0
 
-_BATCH_AUDIO_SHAPE: Final = "batch samples"
+_BATCH_AUDIO_INPUT_SHAPE: Final = "batch ... samples"
 _BATCH_FEATURES_SHAPE: Final = "batch 1 frames mels"
 _BATCH_EMBEDDING_SHAPE: Final = "batch embedding"
 _BATCH_ANY_SHAPE: Final = "batch ..."
 _OFFLINE_CONFIG_KEYS: Final = frozenset({"audio_config", "projection_dim", "text_config"})
+
+
+class _ClapAudioConfig(Protocol):
+    """Typed CLAP audio configuration fields consumed by the encoder.
+
+    .. attribute :: num_mel_bins
+
+       Number of mel bins consumed by the backbone.
+    """
+
+    num_mel_bins: int
+
+
+class _ClapConfig(Protocol):
+    """Typed CLAP configuration fields consumed by the encoder.
+
+    .. attribute :: audio_config
+
+       Audio-branch configuration.
+
+    .. attribute :: projection_dim
+
+       Pooled embedding width.
+    """
+
+    audio_config: _ClapAudioConfig
+    projection_dim: int
 
 
 @jaxtyped(typechecker=beartype)
@@ -91,24 +120,44 @@ class ClapAudioEncoder(nn.Module):
             if unknown_keys:
                 raise ValueError(f"unknown offline CLAP config keys: {sorted(unknown_keys)}")
         checkpoint_dir = resolve_clap_checkpoint(checkpoint)
-        if checkpoint_sha256 is not None:
+        expected_sha256 = checkpoint_sha256
+        if checkpoint == DEFAULT_CLAP_CHECKPOINT and expected_sha256 is None:
+            expected_sha256 = DEFAULT_CLAP_CHECKPOINT_SHA256
+        if expected_sha256 is not None:
             actual_sha256 = clap_checkpoint_sha256(Path(checkpoint_dir))
-            if actual_sha256 != checkpoint_sha256:
+            if actual_sha256 != expected_sha256 and checkpoint == DEFAULT_CLAP_CHECKPOINT:
+                shutil.rmtree(checkpoint_dir)
+                checkpoint_dir = resolve_clap_checkpoint(checkpoint)
+                actual_sha256 = clap_checkpoint_sha256(Path(checkpoint_dir))
+            if actual_sha256 != expected_sha256:
                 raise ValueError(
-                    f"CLAP checkpoint digest mismatch: expected {checkpoint_sha256}, "
+                    f"CLAP checkpoint digest mismatch: expected {expected_sha256}, "
                     f"got {actual_sha256}"
                 )
-        clap = (
-            ClapModel.from_pretrained(checkpoint_dir)
-            if pretrained
-            else ClapModel(
-                ClapConfig(**cast(dict[str, Any], _plain_config_value(backbone_config or {})))
+        if pretrained:
+            clap = ClapModel.from_pretrained(checkpoint_dir)
+        elif backbone_config is None:
+            clap = ClapModel(ClapConfig())
+        else:
+            config_values = cast(dict[str, object], _plain_config_value(backbone_config))
+            projection_dim = config_values.get("projection_dim", 512)
+            text_config = config_values.get("text_config")
+            audio_config = config_values.get("audio_config")
+            if not isinstance(projection_dim, int):
+                raise ValueError("offline CLAP projection_dim must be an integer")
+            if not isinstance(text_config, dict) or not isinstance(audio_config, dict):
+                raise ValueError("offline CLAP text_config and audio_config must be mappings")
+            clap = ClapModel(
+                ClapConfig(
+                    projection_dim=projection_dim,
+                    text_config=text_config,
+                    audio_config=audio_config,
+                )
             )
-        )
         # The front-end geometry always comes from the checkpoint even offline: features
         # that diverge from the stored ``clap`` column are worse than no online path.
         extractor = ClapFeatureExtractor.from_pretrained(checkpoint_dir)
-        clap_config = cast(Any, clap.config)
+        clap_config = cast(_ClapConfig, clap.config)
         backbone_mel_bins = clap_config.audio_config.num_mel_bins
         if backbone_mel_bins != extractor.feature_size:
             raise ValueError(
@@ -145,7 +194,7 @@ class ClapAudioEncoder(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     def features(
-        self, audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+        self, audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]
     ) -> Float[Tensor, _BATCH_FEATURES_SHAPE]:
         """Torch reimplementation of ``ClapFeatureExtractor``'s deterministic short path.
 
@@ -158,6 +207,12 @@ class ClapAudioEncoder(nn.Module):
         :raises ValueError: Audio is empty, non-finite, out of range, on MPS, or exceeds
             the extractor's deterministic short-audio window.
         """
+        if audio.ndim == 3:
+            audio = audio.mean(dim=1)
+        elif audio.ndim != 2:
+            raise ValueError(
+                f"audio must have shape (batch, [channels,] samples), got {audio.shape}"
+            )
         if audio.device.type == "mps":
             raise ValueError("CLAP online features do not support MPS float64 FFT")
         if not torch.isfinite(audio).all():
@@ -206,7 +261,7 @@ class ClapAudioEncoder(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     def forward(
-        self, audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+        self, audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]
     ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
         """Embed a waveform batch with gradient intact all the way to the input.
 
@@ -215,7 +270,9 @@ class ClapAudioEncoder(nn.Module):
         :raises RuntimeError: The Transformers audio branch returns no pooled embedding.
         """
         output = self.clap.get_audio_features(input_features=self.features(audio))
-        embedding = output if isinstance(output, Tensor) else cast(Any, output).pooler_output
+        embedding = (
+            output if isinstance(output, Tensor) else getattr(output, "pooler_output", None)
+        )
         if not isinstance(embedding, Tensor):
             raise RuntimeError("CLAP audio branch returned no pooled embedding")
         return embedding
@@ -246,7 +303,7 @@ class PretrainedConditioningEncoder(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     def embed(
-        self, audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+        self, audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]
     ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
         """Embed audio in the frozen backbone's space — the audio loss's metric tap.
 
@@ -267,7 +324,9 @@ class PretrainedConditioningEncoder(nn.Module):
         return self.head(embedding)
 
     @jaxtyped(typechecker=beartype)
-    def forward(self, audio: Float[Tensor, _BATCH_AUDIO_SHAPE]) -> Float[Tensor, _BATCH_ANY_SHAPE]:
+    def forward(
+        self, audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]
+    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
         """Encode audio into conditioning through both taps.
 
         :param audio: Mono waveform batch.

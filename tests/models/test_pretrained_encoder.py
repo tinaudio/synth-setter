@@ -159,6 +159,18 @@ def test_clap_features_match_huggingface_after_44100_hz_resampling(
     assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
 
 
+def test_clap_stereo_features_match_mono_channel_mean(clap_encoder: ClapAudioEncoder) -> None:
+    """Stored stereo audio uses the same mono downmix as offline CLAP embeddings.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    left = torch.sin(torch.arange(4_800, dtype=torch.float32) * 0.01)
+    right = torch.cos(torch.arange(4_800, dtype=torch.float32) * 0.01)
+    stereo = torch.stack((left, right)).unsqueeze(0)
+
+    assert torch.equal(clap_encoder.features(stereo), clap_encoder.features(stereo.mean(dim=1)))
+
+
 def test_clap_forward_backpropagates_to_waveform(clap_encoder: ClapAudioEncoder) -> None:
     """The frozen backbone retains the graph from embedding to input waveform.
 

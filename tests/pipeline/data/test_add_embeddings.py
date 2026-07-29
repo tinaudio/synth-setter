@@ -2072,6 +2072,21 @@ def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
     assert _resolve_clap_checkpoint(str(tmp_path)) == str(tmp_path)
 
 
+def _materialize_clap_stub(
+    downloads: list[tuple[str, Path]], uri: str, destination: Path
+) -> None:
+    """Record a checkpoint download and materialize its required files.
+
+    :param downloads: Download call ledger.
+    :param uri: Source URI.
+    :param destination: Local checkpoint directory.
+    """
+    downloads.append((uri, destination))
+    destination.mkdir(parents=True)
+    for filename in ("config.json", "preprocessor_config.json", "pytorch_model.bin"):
+        (destination / filename).write_bytes(b"downloaded")
+
+
 def test_resolve_clap_checkpoint_with_default_r2_source_uses_canonical_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2087,7 +2102,7 @@ def test_resolve_clap_checkpoint_with_default_r2_source_uses_canonical_cache(
     monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
-        lambda uri, destination: downloads.append((uri, destination)),
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
     )
 
     resolved = _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT)
@@ -2136,7 +2151,7 @@ def test_resolve_clap_checkpoint_with_zero_byte_cache_repairs_from_r2(
     monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
-        lambda uri, destination: downloads.append((uri, destination)),
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
     )
 
     _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT)
@@ -2146,16 +2161,19 @@ def test_resolve_clap_checkpoint_with_zero_byte_cache_repairs_from_r2(
 
 def test_resolve_clap_checkpoint_with_full_r2_path_uses_distinct_cache_key(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """A custom CLAP mirror cannot overwrite the production checkpoint cache.
 
     :param monkeypatch: Fixture replacing credential loading and download.
+    :param tmp_path: XDG cache root for the custom source.
     """
     downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
-        lambda uri, destination: downloads.append((uri, destination)),
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
     )
 
     checkpoint = "r2://other-bucket/team/clap"

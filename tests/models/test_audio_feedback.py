@@ -502,7 +502,7 @@ def test_latent_loss_with_precomputed_target_embedding_matches_recomputation() -
     torch.manual_seed(0)
     encoder = _linear_encoder()
     target_audio = _render(_encoded_rows(_BATCH))
-    theta = _encoded_rows(_BATCH) * 2 - 1
+    theta = (_encoded_rows(_BATCH) * 2 - 1).requires_grad_()
     t = torch.full((_BATCH, 1), 0.9)
 
     recomputed = _loss()(theta, t, target_audio, encoder=encoder)
@@ -515,6 +515,8 @@ def test_latent_loss_with_precomputed_target_embedding_matches_recomputation() -
     )
 
     assert torch.equal(reused, recomputed)
+    reused.backward()
+    assert all(parameter.grad is None for parameter in encoder.parameters())
 
 
 def test_latent_loss_is_invariant_to_encoder_output_scale() -> None:

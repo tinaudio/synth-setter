@@ -1540,7 +1540,7 @@ def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
     return encode
 
 
-# Compatibility alias for callers that imported the pre-public resolver name.
+# Retain the private resolver alias for callers importing it.
 _resolve_clap_checkpoint = resolve_clap_checkpoint
 
 

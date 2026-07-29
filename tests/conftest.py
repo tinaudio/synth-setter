@@ -483,7 +483,7 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=torchsynth/flow",
+                "experiment=torchsynth/flow_audio",
                 "conditioning=clap_online",
                 "model/encoder=clap_online",
                 "trainer=cpu",
@@ -511,6 +511,7 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
         cfg.trainer.log_every_n_steps = 1
         cfg.model.compile = False
         cfg.model.cfg_dropout_rate = 0.0
+        cfg.model.audio_loss.t_min = 0.0
         cfg.model.vector_field.d_model = 8
         cfg.model.vector_field.num_heads = 1
         cfg.model.vector_field.d_ff = 8
