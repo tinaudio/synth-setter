@@ -63,7 +63,9 @@ repos:
           )$
       - id: pyright
         name: pyright
-        entry: uv run pyright
+        # Node sizes its old-space heap from total RAM, so on a loaded box V8
+        # aborts mid-analysis as a bare `exit code 241` with no diagnostics (#2200).
+        entry: env NODE_OPTIONS=--max-old-space-size=8192 uv run pyright
         language: system
         types: [python]
         pass_filenames: false
