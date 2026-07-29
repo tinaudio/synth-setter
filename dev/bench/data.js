@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785307324386,
+  "lastUpdate": 1785307327315,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -23068,6 +23068,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.03530150651931763,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "49d27e5413b0d3e38f42ebe08002a1978cdded3c",
+          "message": "internal-feat(data-pipeline): sketch-control extraction + registry (#2621)\n\n* internal-feat(data-pipeline): sketch-control extraction + registry\n\nExtract Sketch2Sound/FlashFoley-style loudness, spectral-centroid, and PESTO\npitch contours on the mel frame grid (100 fps), normalized with fixed affine\nconstants to [-1, 1] so sketches stay checkpoint-portable. Register a\n'sketch' embedding with a mean-pooled sketch_ctrl_vec IVF companion\n(num_sub_vectors=3) for contour similarity search.\n\nRefs #2612\n\n* internal-fix(data-pipeline): spec index defaults win over unset config\n\nThe run config pinned num_sub_vectors=16 (pydantic default + YAML), so a\nspec's IndexSpec.num_sub_vectors could never apply and the sketch index\nbuild failed (16 does not divide the 3-wide pooled vector). Null now means\n'use each spec's default'; explicit overrides still win. Also document the\nsketch registry entry in the data-pipeline design doc and doc-map.\n\nRefs #2612\n\n* chore(ci): rerun title check after PR title edit\n\n* internal-feat(data-pipeline): FlashFoley-parity sketch controls\n\nMatch the reference implementation (ZacharyNovack/flash-foley): loudness\nbecomes A-weighted spectral dB (16 kHz STFT, per-clip peak-80 floor, fixed\n[-100, 80] affine) and pitch becomes PESTO's raw 384-bin activation matrix\n(stored unthresholded; zero-binning is consumption-time). The sketch_ctrl\ncolumn grows to (386, F) with a slice map; the pooled companion indexes\nwith num_sub_vectors=2 (386 = 2 x 193). All new code carries jaxtyping\nshape annotations checked by beartype; F722 joins the global ruff ignores\nper jaxtyping's documented integration.\n\nRefs #2612\nRefs #2615\n\n* docs(data-pipeline): correct sketch num_sub_vectors phrasing\n\n* internal-fix(data-pipeline): address review round on sketch extraction\n\nFixes:\n- Hoist PESTO loading into _load_sketch_spec_encoder via load_pesto_model,\n  threading the checkpoint through the registry default_checkpoint\n  (DEFAULT_PESTO_CHECKPOINT in shapes.py); the transform stays data-in/\n  data-out with a lazy fallback for single-clip use.\n- Bound-check sketch controls in _encode_sketch_column (affine rows in\n  [-1, 1], pitch rows in [0, 1]) with parametrized rejection tests; the\n  fake sketch encoder now honors the bounds contract it fakes.\n- Add a real Hydra-entrypoint test driving main() with embeddings=[sketch].\n- Assert Lance field types (FixedShapeTensor/FixedSizeList float32) in the\n  writer test and an ANN self-nearest query through the built sketch index.\n- Replace the dict[str, Any] cast on list_indices with dict[str, object].\n- Parametrize extraction shape/bounds at 22050 Hz.\n- Add a module-docstring usage example; apply comment-hygiene rewrites at\n  five sites; tighten the doc-map covers entry; correct the 386-divisor\n  claim in data-pipeline.md.\n\nLeft as-is with inline justifications: global F722 ignore (jaxtyping's\ndocumented ruff integration; list not append-frozen), fixed-affine\nnormalization constants (#2612 portability rationale), and slow marks on\nsub-second PESTO tests.\n\nRefs #2612",
+          "timestamp": "2026-07-28T22:26:48-07:00",
+          "tree_id": "d2ad7422801efd253fab52f83303784f425ddcad",
+          "url": "https://github.com/tinaudio/synth-setter/commit/49d27e5413b0d3e38f42ebe08002a1978cdded3c"
+        },
+        "date": 1785307326529,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 9.779811303533332,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 2.444952825883333,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 4.361970090466669,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.0904925226166673,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.22370190966666997,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.05592547741666749,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 7.0432634353637695,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.23261022567749,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.029086697846651077,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 6.666927052251995,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.04063469171524048,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 6.985279560089111,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.312414646148682,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.03113117255270481,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.96958848617971,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.03262549638748169,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 6.866248607635498,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 4.101315021514893,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.031554773449897766,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 7.0830858486890795,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.032216787338256836,
             "unit": "1-cos"
           }
         ]
