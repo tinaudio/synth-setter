@@ -432,6 +432,99 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
     return cfg
 
 
+@pytest.fixture
+def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step offline CLAP conditioning run through the train entrypoint.
+
+    :param tmp_path: Pinned output and local feature-extractor directory.
+    :returns: Ready-to-run tiny CLAP TorchSynth training configuration.
+    """
+    from transformers import ClapFeatureExtractor
+
+    checkpoint_dir = tmp_path / "clap-feature-extractor"
+    ClapFeatureExtractor(
+        feature_size=64,
+        sampling_rate=48_000,
+        hop_length=480,
+        fft_window_size=1024,
+        max_length_s=0.1,
+        frequency_min=50,
+        frequency_max=14_000,
+        truncation="rand_trunc",
+        padding="repeatpad",
+    ).save_pretrained(checkpoint_dir)
+    tiny_clap_config = {
+        "projection_dim": 8,
+        "text_config": {
+            "vocab_size": 32,
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "max_position_embeddings": 16,
+            "projection_dim": 8,
+        },
+        "audio_config": {
+            "num_mel_bins": 64,
+            "spec_size": 64,
+            "hidden_size": 32,
+            "projection_dim": 8,
+            "depths": [1, 1, 1, 1],
+            "num_attention_heads": [1, 2, 4, 8],
+            "patch_embeds_hidden_size": 4,
+            "patch_size": 4,
+            "patch_stride": [4, 4],
+            "num_classes": 8,
+            "window_size": 2,
+        },
+    }
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/flow",
+                "conditioning=clap_online",
+                "model/encoder=clap_online",
+                "trainer=cpu",
+                "callbacks=none",
+                "logger=[]",
+            ],
+        )
+    with open_dict(cfg):
+        _set_workspace_root(cfg)
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.seed = 123
+        cfg.test = False
+        cfg.training.val_audio_probe = False
+        cfg.datamodule.sample_rate = 48_000
+        cfg.datamodule.signal_length = 4_800
+        cfg.datamodule.train_val_test_sizes = [1, 1, 1]
+        cfg.datamodule.batch_size = 1
+        cfg.datamodule.num_workers = 0
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.max_steps = 1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 0
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.log_every_n_steps = 1
+        cfg.model.compile = False
+        cfg.model.cfg_dropout_rate = 0.0
+        cfg.model.vector_field.d_model = 8
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 8
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.model.encoder.out_dim = 8
+        cfg.model.encoder.backbone.checkpoint = str(checkpoint_dir)
+        cfg.model.encoder.backbone.checkpoint_sha256 = None
+        cfg.model.encoder.backbone.pretrained = False
+        cfg.model.encoder.backbone.backbone_config = tiny_clap_config
+        cfg.model.encoder.head.input_dim = 8
+    return cfg
+
+
 @pytest.fixture(scope="function")
 def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
     """Build on top of ``cfg_eval_global()`` and redirect logging into ``tmp_path``.

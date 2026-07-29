@@ -4,10 +4,15 @@ The backbone is differentiable from waveform to embedding — no ``torch.no_grad
 numpy hop — so the audio-feedback loss can score a rendered estimate in a space whose
 geometry does not move between steps. See
 https://github.com/tinaudio/synth-setter/issues/2728.
+
+Typical usage is ``PretrainedConditioningEncoder(backbone=ClapAudioEncoder(...), head=...)``;
+call ``embed`` for the stationary metric and ``forward`` for flow conditioning.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, Final, cast
 
 import torch
@@ -17,10 +22,11 @@ from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
 from torch.nn import functional
 
-from synth_setter.pipeline.data.add_embeddings import (
+from synth_setter.clap import (
     CLAP_SAMPLE_RATE,
     DEFAULT_CLAP_CHECKPOINT,
-    _resolve_clap_checkpoint,
+    clap_checkpoint_sha256,
+    resolve_clap_checkpoint,
 )
 
 # Matches ClapFeatureExtractor's ``mel_floor`` and ``power_to_db``'s ``min_value``, which
@@ -33,6 +39,21 @@ _BATCH_AUDIO_SHAPE: Final = "batch samples"
 _BATCH_FEATURES_SHAPE: Final = "batch 1 frames mels"
 _BATCH_EMBEDDING_SHAPE: Final = "batch embedding"
 _BATCH_ANY_SHAPE: Final = "batch ..."
+_OFFLINE_CONFIG_KEYS: Final = frozenset({"audio_config", "projection_dim", "text_config"})
+
+
+@jaxtyped(typechecker=beartype)
+def _plain_config_value(value: object) -> object:
+    """Convert Hydra containers into Transformers' built-in collection contract.
+
+    :param value: Nested config value from Hydra or a direct caller.
+    :returns: Equivalent value containing only built-in dictionaries and lists.
+    """
+    if isinstance(value, Mapping):
+        return {str(key): _plain_config_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_plain_config_value(item) for item in value]
+    return value
 
 
 class ClapAudioEncoder(nn.Module):
@@ -44,14 +65,17 @@ class ClapAudioEncoder(nn.Module):
         *,
         sample_rate: int,
         checkpoint: str = DEFAULT_CLAP_CHECKPOINT,
+        checkpoint_sha256: str | None = None,
         pretrained: bool = True,
-        backbone_config: dict[str, Any] | None = None,
+        backbone_config: Mapping[str, object] | None = None,
     ) -> None:
         """Load the CLAP audio branch and mirror its feature extractor in torch.
 
         :param sample_rate: Rate of the waveforms handed to this encoder; resampled to
             CLAP's 48 kHz when it differs.
-        :param checkpoint: Local directory or HuggingFace CLAP model id.
+        :param checkpoint: Local directory, R2 prefix, or Hugging Face CLAP model id.
+        :param checkpoint_sha256: Expected materialized checkpoint identity; ``None`` skips
+            verification for caller-provided local test fixtures.
         :param pretrained: Load checkpoint weights instead of an offline random backbone.
         :param backbone_config: ``ClapConfig`` overrides used in offline mode.
         :raises ValueError: ``backbone_config`` is supplied in pretrained mode, or the
@@ -62,11 +86,24 @@ class ClapAudioEncoder(nn.Module):
 
         if pretrained and backbone_config is not None:
             raise ValueError("backbone_config requires pretrained=False")
-        checkpoint_dir = _resolve_clap_checkpoint(checkpoint)
+        if backbone_config is not None:
+            unknown_keys = set(backbone_config) - _OFFLINE_CONFIG_KEYS
+            if unknown_keys:
+                raise ValueError(f"unknown offline CLAP config keys: {sorted(unknown_keys)}")
+        checkpoint_dir = resolve_clap_checkpoint(checkpoint)
+        if checkpoint_sha256 is not None:
+            actual_sha256 = clap_checkpoint_sha256(Path(checkpoint_dir))
+            if actual_sha256 != checkpoint_sha256:
+                raise ValueError(
+                    f"CLAP checkpoint digest mismatch: expected {checkpoint_sha256}, "
+                    f"got {actual_sha256}"
+                )
         clap = (
             ClapModel.from_pretrained(checkpoint_dir)
             if pretrained
-            else ClapModel(ClapConfig(**(backbone_config or {})))
+            else ClapModel(
+                ClapConfig(**cast(dict[str, Any], _plain_config_value(backbone_config or {})))
+            )
         )
         # The front-end geometry always comes from the checkpoint even offline: features
         # that diverge from the stored ``clap`` column are worse than no online path.
@@ -118,9 +155,15 @@ class ClapAudioEncoder(nn.Module):
 
         :param audio: Mono waveform batch at ``sample_rate``.
         :returns: Log-mel in dB shaped ``(batch, 1, frames, mels)``.
-        :raises ValueError: Audio is empty or exceeds the extractor's window, where the
-            reference implementation crops at random and cannot be reproduced.
+        :raises ValueError: Audio is empty, non-finite, out of range, on MPS, or exceeds
+            the extractor's deterministic short-audio window.
         """
+        if audio.device.type == "mps":
+            raise ValueError("CLAP online features do not support MPS float64 FFT")
+        if not torch.isfinite(audio).all():
+            raise ValueError("audio waveform must contain only finite samples")
+        if (audio.abs() > 1.0).any():
+            raise ValueError("audio waveform samples must be in range [-1, 1]")
         if self.sample_rate != CLAP_SAMPLE_RATE:
             audio = audio_fn.resample(audio, self.sample_rate, CLAP_SAMPLE_RATE)
         length = audio.shape[-1]
@@ -172,7 +215,7 @@ class ClapAudioEncoder(nn.Module):
         :raises RuntimeError: The Transformers audio branch returns no pooled embedding.
         """
         output = self.clap.get_audio_features(input_features=self.features(audio))
-        embedding = cast(Any, output).pooler_output
+        embedding = output if isinstance(output, Tensor) else cast(Any, output).pooler_output
         if not isinstance(embedding, Tensor):
             raise RuntimeError("CLAP audio branch returned no pooled embedding")
         return embedding

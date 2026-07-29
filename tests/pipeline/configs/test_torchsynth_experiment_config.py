@@ -255,6 +255,7 @@ def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head()
     )
     assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
     assert cfg.model.encoder.backbone.checkpoint.startswith("r2://")
+    assert len(cfg.model.encoder.backbone.checkpoint_sha256) == 64
     assert (
         cfg.model.encoder.head._target_
         == "synth_setter.models.components.vector_projection.VectorProjection"

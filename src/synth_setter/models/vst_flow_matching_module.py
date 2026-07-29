@@ -15,6 +15,7 @@ from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import Conditioning, conditioning_batch_key
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
+from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 
 _BATCH_SHAPE = "batch"
 _BATCH_TIME_SHAPE = "batch 1"
@@ -257,9 +258,8 @@ class VSTFlowMatchingModule(LightningModule):
         params = batch["params"]
         noise = batch["noise"]
 
-        if hasattr(self.encoder, "project"):
-            # One frozen-backbone pass feeds both the conditioning head and the audio
-            # loss's metric tap, cutting three backbone passes per step to two.
+        if isinstance(self.encoder, PretrainedConditioningEncoder):
+            # Reuse the target embedding for conditioning and the stationary audio metric.
             backbone_embedding = self.encoder.embed(conditioning_input)
             conditioning = self.encoder.project(backbone_embedding)
         else:

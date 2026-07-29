@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 import torch
+import torchaudio.functional as audio_fn
 from transformers import ClapFeatureExtractor
 
 from synth_setter.models.components.pretrained_encoder import (
@@ -14,10 +15,6 @@ from synth_setter.models.components.pretrained_encoder import (
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
-from synth_setter.pipeline.data.add_embeddings import (
-    DEFAULT_CLAP_CHECKPOINT,
-    _resolve_clap_checkpoint,
-)
 
 _SAMPLE_RATE = 48_000
 _PROJECTION_DIM = 8
@@ -49,27 +46,71 @@ _TINY_CLAP_CONFIG: dict[str, Any] = {
 
 
 @pytest.fixture(scope="module")
-def clap_checkpoint() -> str:
-    """Materialize the mirrored production checkpoint in the shared local cache.
+def clap_checkpoint(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Create an offline feature-extractor checkpoint with production geometry.
 
-    :returns: Local CLAP checkpoint directory.
+    :param tmp_path_factory: Module-scoped temporary directory factory.
+    :returns: Local CLAP feature-extractor directory.
     """
-    return _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT)
+    checkpoint = tmp_path_factory.mktemp("clap-feature-extractor")
+    ClapFeatureExtractor(
+        feature_size=64,
+        sampling_rate=_SAMPLE_RATE,
+        hop_length=480,
+        fft_window_size=1024,
+        max_length_s=10,
+        frequency_min=50,
+        frequency_max=14_000,
+        truncation="rand_trunc",
+        padding="repeatpad",
+    ).save_pretrained(checkpoint)
+    return str(checkpoint)
 
 
 @pytest.fixture(scope="module")
 def clap_encoder(clap_checkpoint: str) -> ClapAudioEncoder:
-    """Build a small random CLAP network with the production feature geometry.
+    """Build a deterministic small random CLAP network.
 
-    :param clap_checkpoint: Local R2-mirrored feature-extractor checkpoint.
+    :param clap_checkpoint: Self-contained feature-extractor checkpoint.
     :returns: Frozen waveform encoder suitable for CPU behavior tests.
     """
-    return ClapAudioEncoder(
-        sample_rate=_SAMPLE_RATE,
-        checkpoint=clap_checkpoint,
-        pretrained=False,
-        backbone_config=_TINY_CLAP_CONFIG,
-    )
+    with torch.random.fork_rng():
+        torch.manual_seed(0)
+        return ClapAudioEncoder(
+            sample_rate=_SAMPLE_RATE,
+            checkpoint=clap_checkpoint,
+            pretrained=False,
+            backbone_config=_TINY_CLAP_CONFIG,
+        )
+
+
+def test_clap_checkpoint_with_wrong_digest_raises(clap_checkpoint: str) -> None:
+    """A mutable checkpoint cannot silently replace the configured artifact.
+
+    :param clap_checkpoint: Self-contained feature-extractor checkpoint.
+    """
+    with pytest.raises(ValueError, match="digest mismatch"):
+        ClapAudioEncoder(
+            sample_rate=_SAMPLE_RATE,
+            checkpoint=clap_checkpoint,
+            checkpoint_sha256="0" * 64,
+            pretrained=False,
+            backbone_config=_TINY_CLAP_CONFIG,
+        )
+
+
+def test_clap_offline_backbone_with_unknown_config_key_raises(clap_checkpoint: str) -> None:
+    """Transformers rejects malformed offline config at construction.
+
+    :param clap_checkpoint: Self-contained feature-extractor checkpoint.
+    """
+    with pytest.raises((TypeError, ValueError), match="unknown_option"):
+        ClapAudioEncoder(
+            sample_rate=_SAMPLE_RATE,
+            checkpoint=clap_checkpoint,
+            pretrained=False,
+            backbone_config={"unknown_option": True},
+        )
 
 
 def test_clap_features_match_huggingface_short_audio_path(
@@ -78,7 +119,7 @@ def test_clap_features_match_huggingface_short_audio_path(
     """Online torch features agree with the extractor used for stored CLAP vectors.
 
     :param clap_encoder: Differentiable online encoder under test.
-    :param clap_checkpoint: Local R2-mirrored reference extractor checkpoint.
+    :param clap_checkpoint: Self-contained reference extractor checkpoint.
     """
     audio = torch.sin(torch.arange(_SAMPLE_RATE, dtype=torch.float32) * 0.01).unsqueeze(0)
     extractor = ClapFeatureExtractor.from_pretrained(clap_checkpoint)
@@ -89,6 +130,32 @@ def test_clap_features_match_huggingface_short_audio_path(
     actual = clap_encoder.features(audio)
 
     assert actual.shape == expected.shape
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
+
+
+def test_clap_features_match_huggingface_after_44100_hz_resampling(
+    clap_checkpoint: str,
+) -> None:
+    """The shipped TorchSynth rate matches HF after the documented resampling.
+
+    :param clap_checkpoint: Self-contained reference extractor checkpoint.
+    """
+    sample_rate = 44_100
+    audio = torch.sin(torch.arange(sample_rate, dtype=torch.float32) * 0.01).unsqueeze(0)
+    encoder = ClapAudioEncoder(
+        sample_rate=sample_rate,
+        checkpoint=clap_checkpoint,
+        pretrained=False,
+        backbone_config=_TINY_CLAP_CONFIG,
+    )
+    extractor = ClapFeatureExtractor.from_pretrained(clap_checkpoint)
+    resampled = audio_fn.resample(audio, sample_rate, _SAMPLE_RATE)
+    expected = extractor(list(resampled.numpy()), sampling_rate=_SAMPLE_RATE, return_tensors="pt")[
+        "input_features"
+    ]
+
+    actual = encoder.features(audio)
+
     assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
 
 
@@ -172,6 +239,22 @@ def test_optimizer_excludes_frozen_clap_backbone(clap_encoder: ClapAudioEncoder)
     assert all(
         id(parameter) in optimized for parameter in module.parameters() if parameter.requires_grad
     )
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), 1.01, -1.01])
+def test_clap_features_with_invalid_audio_raises(
+    clap_encoder: ClapAudioEncoder, invalid: float
+) -> None:
+    """Non-finite and out-of-range waveforms fail before feature extraction.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    :param invalid: Invalid sample value under test.
+    """
+    audio = torch.zeros(1, 4_800)
+    audio[0, 0] = invalid
+
+    with pytest.raises(ValueError, match="finite|range"):
+        clap_encoder.features(audio)
 
 
 def test_clap_features_with_empty_audio_raises(clap_encoder: ClapAudioEncoder) -> None:

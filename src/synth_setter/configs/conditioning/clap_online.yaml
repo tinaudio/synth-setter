@@ -9,6 +9,3 @@ model:
   encoder_output_dim: ${model.encoder.out_dim}
   vector_field:
     conditioning_dim: ${model.encoder.out_dim}
-
-datamodule:
-  conditioning: audio

@@ -2108,7 +2108,7 @@ def test_resolve_clap_checkpoint_with_complete_default_cache_skips_r2(
     expected = tmp_path / "synth-setter/models/embeddings/clap-htsat-unfused"
     expected.mkdir(parents=True)
     for filename in ("config.json", "preprocessor_config.json", "pytorch_model.bin"):
-        (expected / filename).touch()
+        (expected / filename).write_bytes(b"complete")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.setattr(
         "synth_setter.pipeline.r2_io.ensure_r2_env_loaded",
@@ -2116,6 +2116,32 @@ def test_resolve_clap_checkpoint_with_complete_default_cache_skips_r2(
     )
 
     assert _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT) == str(expected)
+
+
+def test_resolve_clap_checkpoint_with_zero_byte_cache_repairs_from_r2(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An interrupted zero-byte checkpoint cannot suppress the next download.
+
+    :param monkeypatch: Fixture isolating cache location and recording R2 access.
+    :param tmp_path: XDG cache root holding the interrupted checkpoint.
+    """
+    checkpoint_dir = tmp_path / "synth-setter/models/embeddings/clap-htsat-unfused"
+    checkpoint_dir.mkdir(parents=True)
+    for filename in ("config.json", "preprocessor_config.json", "pytorch_model.bin"):
+        (checkpoint_dir / filename).touch()
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: downloads.append((uri, destination)),
+    )
+
+    _resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT)
+
+    assert downloads == [(DEFAULT_CLAP_CHECKPOINT, checkpoint_dir)]
 
 
 def test_resolve_clap_checkpoint_with_full_r2_path_uses_distinct_cache_key(
