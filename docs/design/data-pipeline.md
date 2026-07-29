@@ -1128,7 +1128,7 @@ endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 invocation augments one finalized Lance dataset without modifying finalize-owned
 dataset cards or completion markers. It writes global vector columns for `clap`
 (LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
-dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, and `tinymu`)
+dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, and `matpac_plus`)
 stored as fixed-shape tensors. All are derived from the audio column and
 selectable via `embeddings=` (the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
@@ -1137,7 +1137,7 @@ use Stable Audio 3's autoencoder factory with strict safetensors state loading;
 local directories, R2 mirrors, and HuggingFace repo IDs retain the same
 checkpoint-resolution behavior. Each sequence embedding also writes a mean-pooled
 `FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`, or
-`tinymu_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`, and the
+`matpac_plus_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`, and the
 selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
 resampled to 32 kHz, and right-padded to its 10-second input window; longer
 clips fail instead of silently losing a partial tail. Its PyPI runtime is pinned
@@ -1162,13 +1162,14 @@ vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
 leaves `num_sub_vectors` null to let each spec's default apply.
 
-`tinymu` runs TinyMU's frozen MATPAC encoder through its public package API,
-installed from an exact Git commit in the normal heavy runtime. The pinned R2
-checkpoint is verified by SHA-256, and each generated Lance field records that
-immutable checkpoint digest for safe retry. The integration rejects incompatible model state,
-malformed audio, shape drift, and non-finite output. The measured preprocessing,
-sequence shape, cache identity, package boundary, and `conditioning=tinymu` profile are documented
-in [TinyMU audio embeddings](../reference/tinymu-embeddings.md).
+`matpac_plus` runs the frozen MATPAC++ encoder through TinyMU's public package
+API, installed from an exact Git commit in the normal heavy runtime. The pinned
+R2 checkpoint is verified by SHA-256, and each generated Lance field records
+that immutable checkpoint digest for safe retry. The integration rejects
+incompatible model state, malformed audio, shape drift, and non-finite output.
+The measured preprocessing, sequence shape, cache identity, package boundary,
+and `conditioning=matpac_plus` profile are documented in
+[MATPAC++ audio embeddings](../reference/matpac-plus-embeddings.md).
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,

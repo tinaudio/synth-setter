@@ -1976,7 +1976,7 @@ _ALL_EMBEDDING_CONDITIONING_PROFILES = (
     "same_l",
     "ssondo",
     "t5gemma",
-    "tinymu",
+    "matpac_plus",
 )
 
 
