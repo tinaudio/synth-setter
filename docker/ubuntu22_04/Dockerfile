@@ -409,10 +409,14 @@ COPY --from=node:24.15.0-bookworm-slim /usr/local/ /usr/local/
 COPY --from=synth-setter-src /home/build/synth-setter/package.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/studiorack.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack.lock.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/studiorack-cardinal.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack-cardinal.lock.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/scripts/studiorack/patch-core.mjs /artifacts/studiorack/scripts/studiorack/patch-core.mjs
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/__init__.py /artifacts/studiorack-src/synth_setter/__init__.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_integrity.py /artifacts/studiorack-src/synth_setter/plugin_integrity.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_manager.py /artifacts/studiorack-src/synth_setter/plugin_manager.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_runtime.py /artifacts/studiorack-src/synth_setter/plugin_runtime.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/__init__.py /artifacts/studiorack-src/synth_setter/cli/__init__.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/plugins.py /artifacts/studiorack-src/synth_setter/cli/plugins.py
 WORKDIR /artifacts/studiorack

@@ -1,6 +1,4 @@
 import importlib.metadata
-import json
-import plistlib
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -13,6 +11,7 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.plugin_runtime import plugin_bundle_version, validated_bundle_lease
 from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
 
 # How long the editor stays open before we signal it to close.
@@ -54,9 +53,6 @@ def extract_renderer_version(plugin_path: Path) -> str:
     `synth_setter.cli.generate_dataset.generate`).
 
     :raises FileNotFoundError: plugin_path does not exist.
-    :raises RuntimeError: version cannot be extracted by any method.
-    :raises json.JSONDecodeError: moduleinfo.json is malformed.
-    :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
     if str(plugin_path) == FAUST_PLUGIN_NAME:
         return importlib.metadata.version("dawdreamer")
@@ -69,26 +65,11 @@ def extract_renderer_version(plugin_path: Path) -> str:
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
 
-    moduleinfo = plugin_path / "Contents" / "moduleinfo.json"
-    if moduleinfo.is_file():
-        return json.loads(moduleinfo.read_text())["Version"]
-
-    plist = plugin_path / "Contents" / "Info.plist"
-    if plist.is_file():
-        return plistlib.loads(plist.read_bytes())["CFBundleShortVersionString"]
-
-    # Pedalboard fallback: prebuilt plugin bundles (e.g. Surge XT shipped via
-    # .deb) don't always carry moduleinfo.json. Loading the .so via pedalboard
-    # gives us VST3 factory metadata; this requires X11.
-    plugin = VST3Plugin(str(plugin_path))
-    version = plugin.version
-    if not version:
-        raise RuntimeError(f"Could not extract version from {plugin_path}")
-    return version
+    return plugin_bundle_version(plugin_path)
 
 
 def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
-    """Load a VST3 plugin instance.
+    """Load a VST3 plugin instance after validating manager-owned integrity.
 
     No warm-up — see ``warmup_plugin``.
 
@@ -99,11 +80,13 @@ def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
     :returns: The loaded plugin.
     """
     logger.info(f"Loading plugin {plugin_path}")
-    p = (
-        VST3Plugin(plugin_path)
-        if plugin_name is None
-        else VST3Plugin(plugin_path, plugin_name=plugin_name)
-    )
+    with validated_bundle_lease(Path(plugin_path)) as validated_bundle:
+        validated_path = str(validated_bundle)
+        p = (
+            VST3Plugin(validated_path)
+            if plugin_name is None
+            else VST3Plugin(validated_path, plugin_name=plugin_name)
+        )
     logger.info(f"Plugin {plugin_path} loaded")
     return p
 

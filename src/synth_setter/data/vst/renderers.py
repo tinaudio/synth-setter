@@ -827,7 +827,7 @@ class DawDreamerRenderer(AudioRenderer):
 
     def __post_init__(self) -> None:
         """Create the DawDreamer engine and load the plugin graph."""
-        self.plugin_path = str(Path(self.plugin_path).expanduser().resolve())
+        self.plugin_path = str(Path(self.plugin_path).expanduser().absolute())
         if self.plugin_state_path is not None:
             self.plugin_state_path = str(Path(self.plugin_state_path).expanduser().resolve())
         self._daw = cast(_DawDreamerModule, import_module("dawdreamer"))
@@ -840,10 +840,13 @@ class DawDreamerRenderer(AudioRenderer):
         self._validate_parameter_map()
 
     def _create_graph(self) -> None:
-        """Create a fresh engine, plugin processor, graph, and parameter dispatch."""
+        """Create a fresh engine and open the plugin under its managed lease."""
+        from synth_setter.plugin_runtime import validated_bundle_lease
+
         self.engine = self._daw.RenderEngine(self.sample_rate, self.block_size)
-        self.plugin = self.engine.make_plugin_processor("synth", self.plugin_path)
-        self.engine.load_graph([(self.plugin, [])])
+        with validated_bundle_lease(Path(self.plugin_path)) as validated_bundle:
+            self.plugin = self.engine.make_plugin_processor("synth", str(validated_bundle))
+            self.engine.load_graph([(self.plugin, [])])
         self._parameter_indices = self.parameter_map.dawdreamer_indices()
 
     def _validate_parameter_map(self) -> None:

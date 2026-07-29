@@ -67,9 +67,11 @@ The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-se
 ### First build (dev-snapshot)
 
 The dev-snapshot image installs the package set pinned in `studiorack.json`
-through the npm-locked Studiorack CLI. Archive packages remain versioned under
-`/opt/studiorack`; `/usr/lib/vst3` and checkout-local `plugins/` aliases keep
-render specs portable. Surge source mode and KR-106 retain source fallbacks for
+through the npm-locked Studiorack CLI. Host-selected artifacts must match
+`studiorack.lock.json`, and completed bundles are content-sealed before aliasing.
+Archive packages remain versioned under `/opt/studiorack`; `/usr/lib/vst3` and
+checkout-local `plugins/` aliases keep render specs portable. Surge source mode
+and KR-106 retain source fallbacks for
 registry artifacts that do not satisfy supported architecture/glibc contracts.
 Every shipped bundle is load-validated under headless X11 before the image is
 published.

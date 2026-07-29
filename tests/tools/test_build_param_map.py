@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -653,6 +654,13 @@ def test_dump_dawdreamer_writes_raw_host_names(
             return [{"index": 20, "name": "FX A1 Param 1"}]
 
     engine_config: list[tuple[int, int]] = []
+    opened_paths: list[str] = []
+    validated_path = tmp_path / "validated-plugin.vst3"
+
+    @contextmanager
+    def _lease(path: Path) -> Iterator[Path]:
+        assert path == plugin_path
+        yield validated_path
 
     class Engine:
         """Minimal DawDreamer engine fake."""
@@ -672,11 +680,16 @@ def test_dump_dawdreamer_writes_raw_host_names(
             :param path: VST3 plugin path.
             :returns: Fake plugin processor.
             """
-            del name, path
+            del name
+            opened_paths.append(path)
             return Processor()
 
     monkeypatch.setattr(
         build_param_map, "import_module", lambda _: SimpleNamespace(RenderEngine=Engine)
+    )
+    monkeypatch.setattr(
+        "synth_setter.plugin_runtime.validated_bundle_lease",
+        _lease,
     )
     result = CliRunner().invoke(
         build_param_map.main,
@@ -700,6 +713,7 @@ def test_dump_dawdreamer_writes_raw_host_names(
 
     assert result.exit_code == 0, result.output
     assert engine_config == [(44_100, 2_048)]
+    assert opened_paths == [str(validated_path)]
     assert json.loads(output_path.read_text(encoding="utf-8"))["params"] == [
         {"index": 20, "key": None, "name": "FX A1 Param 1"}
     ]
