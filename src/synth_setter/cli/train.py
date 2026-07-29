@@ -1,6 +1,7 @@
 """Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
 
 import signal
+import tempfile
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,11 @@ from synth_setter.utils import (
     watch_gradients,
 )
 from synth_setter.utils.callbacks import CheckpointUploader, ValAudioProbe
+from synth_setter.utils.checkpoint_fingerprint import (
+    CheckpointFingerprint,
+    fingerprint_from_cfg,
+    fingerprint_sidecar_uri,
+)
 from synth_setter.utils.resume import (
     apply_wandb_resume_continuity,
     discover_resume_checkpoint,
@@ -275,8 +281,11 @@ def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None
     Best-effort and degrades to ``None`` (a lineage-only model artifact) when no
     checkpoint was written (``best_model_path`` empty — e.g. ``fast_dev_run``),
     when R2 is unavailable (local CPU / CI — missing creds or failed auth), or
-    when the upload itself fails — so a completed run is never aborted by
-    checkpoint persistence. :func:`r2_io.ensure_r2_env_loaded` populates the
+    when the upload itself fails, or when the fingerprint guard refuses an
+    architecture-incompatible overwrite (#2588, see
+    :func:`_fingerprint_guard_allows_overwrite`) — so a completed run is never
+    aborted by checkpoint persistence. A successful upload also writes the
+    fingerprint sidecar arming that guard. :func:`r2_io.ensure_r2_env_loaded` populates the
     structural ``RCLONE_CONFIG_R2_*`` defaults (so a runtime wiring only the
     secret keys still resolves the ``r2:`` remote) and auth-pings before the
     upload; ``upload_to_uri`` renames the source to the URI's ``model.ckpt`` basename.
@@ -296,12 +305,93 @@ def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str) -> str | None
         log.info(f"R2 unavailable; logging lineage-only model artifact (no upload): {exc}")
         return None
     uri = _derive_checkpoint_uri(cfg)
+    fingerprint = fingerprint_from_cfg(cfg)
+    if not _fingerprint_guard_allows_overwrite(cfg, uri, fingerprint):
+        return None
     try:
         r2_io.upload_to_uri(Path(best_model_path), uri)
     except Exception as exc:  # noqa: BLE001 — upload failure must not abort a completed run
         log.warning(f"Checkpoint upload to {uri} failed; logging lineage-only artifact: {exc}")
         return None
+    _upload_fingerprint_sidecar(uri, fingerprint)
     return uri
+
+
+def _fingerprint_guard_allows_overwrite(
+    cfg: DictConfig, ckpt_uri: str, fingerprint: CheckpointFingerprint
+) -> bool:
+    """Return whether overwriting the canonical slot is architecture-safe (#2588).
+
+    Refuses when the slot's fingerprint sidecar mismatches this run's (or is
+    unparsable — corrupt guard state fails closed), so two runs sharing a
+    config_id but differing in architecture cannot clobber each other's
+    canonical ``model.ckpt``. ``training.force_checkpoint_overwrite=true``
+    bypasses the guard. A sidecar-less slot (every pre-guard slot) warns and
+    proceeds — refusing would break each existing config's next routine
+    re-train — and the upload then arms the guard by writing the sidecar.
+    Environmental probe failures warn and proceed: the guard is best-effort,
+    like the upload itself.
+
+    :param cfg: Train cfg; reads ``training.force_checkpoint_overwrite``.
+    :param ckpt_uri: The canonical ``r2://.../model.ckpt`` upload target.
+    :param fingerprint: This run's architecture fingerprint.
+    :returns: Whether the upload may proceed.
+    """
+    if OmegaConf.select(cfg, "training.force_checkpoint_overwrite"):
+        log.warning(
+            f"training.force_checkpoint_overwrite=true: bypassing the fingerprint "
+            f"guard for {ckpt_uri}."
+        )
+        return True
+    sidecar_uri = fingerprint_sidecar_uri(ckpt_uri)
+    try:
+        if r2_io.object_size(sidecar_uri) is None:
+            if r2_io.object_size(ckpt_uri) is not None:
+                log.warning(
+                    f"Existing {ckpt_uri} has no fingerprint sidecar (pre-guard slot); "
+                    f"overwriting it unverified and arming the guard."
+                )
+            return True
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "fingerprint.json"
+            r2_io.download_to_path(sidecar_uri, local)
+            payload = local.read_text()
+    except Exception as exc:  # noqa: BLE001 — guard probes are best-effort like the upload
+        log.warning(f"Fingerprint guard probe for {ckpt_uri} failed; proceeding unguarded: {exc}")
+        return True
+    try:
+        stored = CheckpointFingerprint.model_validate_json(payload)
+    except ValueError as exc:
+        log.error(
+            f"Refusing to overwrite {ckpt_uri}: its fingerprint sidecar is unparsable "
+            f"({exc}). Set training.force_checkpoint_overwrite=true to overwrite anyway."
+        )
+        return False
+    if stored != fingerprint:
+        log.error(
+            f"Refusing to overwrite {ckpt_uri}: architecture fingerprint mismatch "
+            f"(slot {stored.model_dump()} vs run {fingerprint.model_dump()}). Another "
+            f"config sharing this config_id owns the slot. Set "
+            f"training.force_checkpoint_overwrite=true to overwrite anyway."
+        )
+        return False
+    return True
+
+
+def _upload_fingerprint_sidecar(ckpt_uri: str, fingerprint: CheckpointFingerprint) -> None:
+    """Write the fingerprint sidecar next to an uploaded checkpoint (best-effort).
+
+    :param ckpt_uri: The canonical ``r2://.../model.ckpt`` URI just uploaded.
+    :param fingerprint: The uploading run's architecture fingerprint.
+    """
+    sidecar_uri = fingerprint_sidecar_uri(ckpt_uri)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "fingerprint.json"
+            local.write_text(fingerprint.model_dump_json())
+            r2_io.upload_to_uri(local, sidecar_uri)
+    except Exception as exc:  # noqa: BLE001 — sidecar failure must not abort a completed run
+        log.warning(f"Fingerprint sidecar upload to {sidecar_uri} failed: {exc}")
 
 
 def _checkpoint_metadata(trainer: Trainer, best_model_path: str, ckpt_uri: str) -> dict[str, Any]:

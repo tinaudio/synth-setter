@@ -69,6 +69,9 @@ training:
   # W&B artifact references; null auto-derives
   # `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`.
   upload_checkpoints_uri: null
+  # Bypass the architecture-fingerprint guard that refuses to overwrite a canonical
+  # model.ckpt fingerprinted by a different architecture (#2588).
+  force_checkpoint_overwrite: false
   # Mirror each ModelCheckpoint write to R2 mid-run (synchronous on rank 0; best
   # for single-device runs) so a host crash before train-end can't strand it.
   upload_checkpoints_during_training: false
