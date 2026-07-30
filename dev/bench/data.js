@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785447166535,
+  "lastUpdate": 1785447168941,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -25838,6 +25838,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.037240684032440186,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ecc22b1ed660d55fb2abada0e4d0184772d1b8cb",
+          "message": "internal-feat(training): condition torchsynth on frozen SAME latents (#2758)\n\n* internal-feat(training): add frozen SAME conditioning\n\nOnline-render synths could condition on frozen CLAP, but SAME profiles\nrequired precomputed Lance columns. Compose the existing differentiable\nSAME backbone with the trainable temporal pool so TorchSynth can consume\nSAME-S or SAME-L directly from each waveform.\n\nGeneralize the pretrained conditioning wrapper to preserve sequence\nembeddings and expose the SAME/pool width contract. Cover both profiles,\nfrozen-backbone custody, trainable pooling, and a real one-step train\nentrypoint.\n\nFixes #2752.\n\n* internal-fix(training): harden frozen SAME conditioning\n\nReject pretrained wrapper modules that omit width metadata instead of\naccepting two missing values as a match. Pin both R2 SAME trees by digest so\nexcluded backbone weights remain reproducible across checkpoint restores.\n\nExpand the behavior coverage to the eval entrypoint, row isolation, complete\npool gradient flow, and fixed-batch overfitting. Share the common tiny online\nconditioning setup so CLAP and SAME smoke tests cannot drift apart.\n\nRefs #2752.\n\n* internal-feat(training): condition the SAME loss arm on SAME-S\n\nThe dedicated SAME audio-loss experiment still inherited log-mel\nconditioning, so its feedback distance and conditioning representation did\nnot match. Select the online SAME-S profile in that experiment and exercise\nboth frozen backbones through the real train and eval entrypoints.\n\nRefs #2752.\n\n* test(training): cover frozen SAME validation failures\n\nExercise mismatched conditioner widths, malformed SAME modules, and checkpoint\ndigest rejection so the online conditioning boundary fails before training and\nthe changed validation branches remain covered.\n\nRefs #2752.\nEOF && git branch --show-current && git push",
+          "timestamp": "2026-07-30T13:42:01-07:00",
+          "tree_id": "8291824fc604ece7bac3c17c43db815e409d3f15",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ecc22b1ed660d55fb2abada0e4d0184772d1b8cb"
+        },
+        "date": 1785447168471,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 9.365440240066668,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 2.341360060016667,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 4.0784399471666655,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.0196099867916664,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.25149684360000035,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.06287421090000009,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 7.737185001373291,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.500017166137695,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.04263824597001076,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 6.567163464078913,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.0389900803565979,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 6.972111225128174,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.203536033630371,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.02946695312857628,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.417802627133206,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.029821038246154785,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 7.092626094818115,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 4.320826053619385,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.029796052724123,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 6.939755056696012,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.036936938762664795,
             "unit": "1-cos"
           }
         ]
