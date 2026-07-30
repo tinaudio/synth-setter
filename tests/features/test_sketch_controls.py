@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from synth_setter.data.vst.shapes import mel_hop_length
+from synth_setter.features import sketch_controls
 from synth_setter.features.sketch_controls import (
     NUM_SKETCH_CONTROLS,
     SKETCH_CENTROID_ROW,
@@ -225,3 +226,15 @@ def test_extract_sketch_controls_batch_on_cuda_predicts_the_same_pitch_bins() ->
     assert torch.equal(cpu_pitch.argmax(dim=1), cuda_pitch.argmax(dim=1))
     # Isolated frames drift ~3e-3 through PESTO's convolutions; the mean is ~1e-7.
     assert torch.allclose(cpu_pitch, cuda_pitch, atol=5e-3)
+
+
+def test_load_pesto_model_without_a_device_defaults_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first load that names no device holds its weights on CPU.
+
+    :param monkeypatch: Clears the cached device so this is a first load.
+    """
+    monkeypatch.setattr(sketch_controls, "_pesto_device", None)
+    model = load_pesto_model()
+    assert next(model.parameters()).device.type == "cpu"
