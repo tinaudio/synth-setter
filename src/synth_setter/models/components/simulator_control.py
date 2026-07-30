@@ -269,8 +269,9 @@ class ControlledFlow(nn.Module):
         try:
             return super().__getattr__(name)  # pyright: ignore[reportReturnType]
         except AttributeError:
-            # Read through __dict__-backed _modules; a plain self.flow would recurse here.
-            flow = self._modules.get("flow")
+            # Read __dict__ directly: self._modules re-enters this handler before
+            # nn.Module.__init__ has run, turning a missing attribute into RecursionError.
+            flow = self.__dict__.get("_modules", {}).get("flow")
             if flow is None:
                 raise
             return getattr(flow, name)

@@ -6,6 +6,7 @@ with the production spectral distance; nothing here stands in for the simulator.
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
@@ -22,6 +23,39 @@ _BATCH = 2
 _WIDTH = TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
 _CONDITIONING_DIM = 8
 _FLOW_PREFIX = "vector_field.flow."
+_BUFFER_SECONDS = _SIGNAL_LENGTH / _SAMPLE_RATE
+# Below this peak the render is silence, and scoring silence against silence leaves the
+# control signal identically zero — every simulator assertion then holds for free.
+_AUDIBLE_PEAK = 1e-4
+
+
+def _audible_model_rows(rows: int, seed: int) -> torch.Tensor:
+    """Draw model-space rows whose note sounds across the whole render buffer.
+
+    The spec draws ``note_start_and_end`` over a multi-second range, so uniform-random rows
+    start their note past the end of this short buffer and render silence. Note columns are
+    mapped back through ``differentiable_decode``'s ``(theta + 1) / 2`` so the decoded row
+    carries the sounding note.
+
+    :param rows: Number of rows to draw.
+    :param seed: Seed for the synth columns.
+    :returns: Rows shaped ``(rows, encoded_width)`` in model space ``[-1, 1]``.
+    """
+    synth_values, _ = TORCHSYNTH_FULL_PARAM_SPEC.sample(np.random.default_rng(0))
+    reference = TORCHSYNTH_FULL_PARAM_SPEC.encode(
+        synth_values, {"pitch": 60, "note_start_and_end": (0.0, _BUFFER_SECONDS)}
+    )
+    note_tail = torch.from_numpy(reference)[TORCHSYNTH_FULL_PARAM_SPEC.synth_columns.stop :]
+    synth = (
+        torch.rand(
+            rows,
+            TORCHSYNTH_FULL_PARAM_SPEC.synth_param_length,
+            generator=torch.Generator().manual_seed(seed),
+        )
+        * 2
+        - 1
+    )
+    return torch.cat([synth, (note_tail * 2 - 1).expand(rows, -1)], dim=1)
 
 
 class _WaveformEncoder(torch.nn.Module):
@@ -120,6 +154,7 @@ def _finetune(
         "scheduler": None,
         "num_params": _WIDTH,
         "conditioning": "audio",
+        "cfg_dropout_rate": 0.0,
         "base_checkpoint": checkpoint,
         "control_mode": control_mode,
         "control_hidden_dim": 16,
@@ -145,7 +180,7 @@ def _batch(rows: int = _BATCH) -> dict[str, torch.Tensor]:
     )
 
     torch.manual_seed(1)
-    params = torch.rand(rows, _WIDTH) * 2 - 1
+    params = _audible_model_rows(rows, seed=1)
     with torch.no_grad():
         audio = render_torchsynth_grad(
             differentiable_decode(params),
@@ -153,7 +188,43 @@ def _batch(rows: int = _BATCH) -> dict[str, torch.Tensor]:
             signal_length=_SIGNAL_LENGTH,
             render_batch_size=rows,
         )
+    assert audio.abs().max() > _AUDIBLE_PEAK, "batch is silent; simulator assertions are vacuous"
     return {"params": params, "noise": torch.randn(rows, _WIDTH), "audio": audio}
+
+
+def _trainer():
+    """Build a one-epoch CPU trainer with validation off.
+
+    :returns: Configured Lightning trainer.
+    """
+    from lightning import Trainer
+
+    return Trainer(
+        max_epochs=1,
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=False,
+        limit_val_batches=0,
+    )
+
+
+def _data():
+    """Build a tiny online torchsynth datamodule already set up for fitting.
+
+    :returns: The datamodule.
+    """
+    from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule
+
+    datamodule = TorchSynthDataModule(
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        train_val_test_sizes=(_BATCH * 2, 2, 2),
+        train_val_test_seeds=(1, 2, 3),
+        batch_size=_BATCH,
+        num_workers=0,
+    )
+    datamodule.setup("fit")
+    return datamodule
 
 
 def test_finetune_module_from_base_checkpoint_restores_every_pretrained_weight(
@@ -255,16 +326,23 @@ def test_finetune_train_step_moves_only_the_control(tmp_path: Path, control_mode
     for name, value in frozen.items():
         assert torch.equal(after[name], value), name
 
-    def _moved(prefix: str) -> bool:
-        return any(
-            not torch.equal(p, before[name])
-            for name, p in trainable.items()
-            if name.startswith(prefix)
-        )
+    def _unmoved(prefix: str) -> list[str]:
+        """Report trainables under a prefix that no step reached.
 
-    assert _moved("vector_field.control.")
+        :param prefix: State-dict prefix to check.
+        :returns: Names that are still bit-identical to their pre-training value.
+        """
+        return [
+            name
+            for name, p in trainable.items()
+            if name.startswith(prefix) and torch.equal(p, before[name])
+        ]
+
+    # Every intended trainable, not any: the zero-initialised output layer means a single
+    # moving bias would otherwise satisfy this while the rest of the network sits dead.
+    assert not _unmoved("vector_field.control.")
     if control_mode == "learned_audio":
-        assert _moved("control_encoder.")
+        assert not _unmoved("control_encoder.")
 
 
 def test_finetune_training_leaves_frozen_normalisation_statistics_untouched(
@@ -364,31 +442,6 @@ def test_finetune_fit_from_a_trained_base_moves_only_the_control(tmp_path: Path)
 
     :param tmp_path: Pytest-provided directory for the base checkpoint.
     """
-    from lightning import Trainer
-
-    from synth_setter.data.torchsynth_datamodule import TorchSynthDataModule
-
-    def _trainer() -> Trainer:
-        return Trainer(
-            max_epochs=1,
-            accelerator="cpu",
-            logger=False,
-            enable_checkpointing=False,
-            limit_val_batches=0,
-        )
-
-    def _data() -> TorchSynthDataModule:
-        datamodule = TorchSynthDataModule(
-            sample_rate=_SAMPLE_RATE,
-            signal_length=_SIGNAL_LENGTH,
-            train_val_test_sizes=(_BATCH * 2, 2, 2),
-            train_val_test_seeds=(1, 2, 3),
-            batch_size=_BATCH,
-            num_workers=0,
-        )
-        datamodule.setup("fit")
-        return datamodule
-
     torch.manual_seed(0)
     base = _base_module()
     _trainer().fit(base, datamodule=_data())
@@ -444,3 +497,125 @@ def test_finetune_module_gradient_arm_without_cost_raises(tmp_path: Path) -> Non
     """
     with pytest.raises(ValueError, match="cost"):
         _finetune(_base_checkpoint(tmp_path), overrides={"cost": None})
+
+
+@pytest.mark.parametrize("control_mode", ["gradient_spectral", "learned_audio"])
+def test_finetune_feedback_arms_depend_on_the_simulator_signal(
+    tmp_path: Path, control_mode: str
+) -> None:
+    """A control reading only ``(t, velocity)`` would pass every movement test; this fails it.
+
+    Parameter movement proves the control trains, not that it *uses* the simulator. After training,
+    replacing the signal with zeros must change the correction — otherwise the arm is
+    indistinguishable from the null ablation it is meant to be measured against.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param control_mode: Feedback arm under test.
+    """
+    module = _finetune(
+        _base_checkpoint(tmp_path),
+        control_mode=control_mode,
+        overrides={
+            "control_encoder": _WaveformEncoder(out_dim=12)
+            if control_mode == "learned_audio"
+            else None
+        },
+    )
+    optimizer = torch.optim.Adam([p for p in module.parameters() if p.requires_grad], lr=1e-2)
+    for _ in range(3):
+        optimizer.zero_grad()
+        module._train_step(_batch()).loss.backward()
+        optimizer.step()
+
+    batch = _batch()
+    t = torch.full((_BATCH, 1), 0.9)
+    with torch.no_grad():
+        z = module.encoder(batch["audio"])
+        velocity = module.vector_field.flow(batch["params"], t, z)
+        active = torch.ones(_BATCH, dtype=torch.bool)
+        signal = module._control_signal(
+            module._one_step_estimate(batch["params"], t, velocity), batch["audio"], active
+        )
+        with_feedback = module.vector_field.combine(velocity, t, signal)
+        without = module.vector_field.combine(velocity, t, torch.zeros_like(signal))
+
+    assert not torch.equal(with_feedback, without)
+
+
+def test_finetune_overfits_a_single_fixed_batch(tmp_path: Path) -> None:
+    """The control must be able to drive the flow-matching loss down on one fixed batch.
+
+    A broken objective or an under-capacity control that never reduces loss would still pass a test
+    that only asserts parameters moved.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    torch.manual_seed(0)
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"control_hidden_dim": 64})
+    batch = _batch()
+    optimizer = torch.optim.Adam([p for p in module.parameters() if p.requires_grad], lr=1e-2)
+
+    initial = module._train_step(batch).loss.item()
+    loss = initial
+    for _ in range(60):
+        optimizer.zero_grad()
+        step = module._train_step(batch)
+        step.loss.backward()
+        optimizer.step()
+        loss = step.loss.item()
+
+    # Relative, not a bare absolute bound: the achievable floor depends on the frozen field's
+    # own error, which differs per machine.
+    assert loss < initial * 0.5
+
+
+def test_finetune_train_step_skips_rendering_unusable_rows(tmp_path: Path) -> None:
+    """Only rows the correction can reach are scored; the rest come back zeroed.
+
+    At the shipped ``control_t_min`` most rows are disengaged, and the render dominates the
+    step, so scoring them would spend the budget on a signal ``combine`` discards.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    batch = _batch()
+    # A distinct estimate: scoring a row against its own render gives a zero cost and a zero
+    # gradient, which would make the "scored rows are non-zero" half of this test vacuous.
+    theta = _audible_model_rows(_BATCH, seed=7)
+    rendered: list[int] = []
+    original = module._render
+
+    def _counting_render(estimate: torch.Tensor) -> torch.Tensor:
+        rendered.append(len(estimate))
+        return original(estimate)
+
+    module._render = _counting_render  # pyright: ignore[reportAttributeAccessIssue]
+    active = torch.tensor([True, False])
+    signal = module._control_signal(theta, batch["audio"], active)
+
+    assert rendered == [1]
+    assert torch.count_nonzero(signal[1]) == 0
+    assert torch.count_nonzero(signal[0]) > 0
+
+
+def test_finetune_train_step_does_not_score_cfg_dropped_rows(tmp_path: Path) -> None:
+    """A fully unconditional row estimates the marginal, so its residual is noise.
+
+    Its render/target residual is unrelated to that row's own audio, and the amount of noise
+    differs per arm — which would confound the very comparison this module exists to run.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"cfg_dropout_rate": 1.0})
+    rendered: list[int] = []
+    original = module._render
+
+    def _counting_render(estimate: torch.Tensor) -> torch.Tensor:
+        rendered.append(len(estimate))
+        return original(estimate)
+
+    module._render = _counting_render  # pyright: ignore[reportAttributeAccessIssue]
+    outputs = module._train_step(_batch())
+
+    assert not outputs.conditioning_keep.identity_keep.any()
+    assert rendered == []

@@ -1,15 +1,13 @@
 defaults:
   - vst_flow
   - _self_
-  # Slot for the equation-10 arm's residual encoder; any model/encoder member that reads a
-  # waveform fits, and its output width is probed rather than declared. Listed after _self_
-  # so a chosen encoder wins over the null this file's body declares the key with.
+  # Residual-encoder width is probed; listed after _self_ so a chosen encoder overrides null.
   - encoder@control_encoder: null
 
 _target_: synth_setter.models.vst_flow_finetune_module.VSTFlowFinetuneModule
 
-# No default: finetuning a checkpoint nobody chose is the failure this module exists to
-# make loud, and every arm must start from the same pretrained flow to be comparable.
+# No default: every arm must start from the same pretrained flow to be comparable, and the
+# module logs this file's sha256 so two runs cannot silently differ behind one path.
 base_checkpoint: ???
 
 control_mode: gradient_spectral

@@ -1,10 +1,7 @@
 # @package _global_
 
-# Equation 10: a trainable encoder reads the render-minus-target residual, so neither the
-# simulator nor the cost need be differentiable. Swap the control representation with
-# `model/encoder@model.control_encoder=<member>`.
-# Inherits torchsynth/flow rather than torchsynth/flow_finetune: a sibling experiment's own
-# defaults resolve against its directory, so chaining two levels looks for torchsynth/torchsynth.
+# Equation 10 encodes the render residual, so its simulator cost need not be differentiable.
+# Starts from torchsynth/flow: a sibling's own defaults resolve relative to its directory.
 defaults:
   - torchsynth/flow
   - override /model: vst_flow_finetune

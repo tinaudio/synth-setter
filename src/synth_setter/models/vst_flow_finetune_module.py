@@ -13,6 +13,8 @@ Typical usage:
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -38,6 +40,8 @@ from synth_setter.models.vst_flow_matching_module import (
     VSTFlowMatchingModule,
 )
 
+logger = logging.getLogger(__name__)
+
 type ControlMode = Literal["gradient_spectral", "learned_audio", "null"]
 
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
@@ -45,6 +49,7 @@ _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_TIME_SHAPE = "batch 1"
 _BATCH_ANY_SHAPE = "batch ..."
+_BATCH_SHAPE = "batch"
 
 
 @jaxtyped(typechecker=beartype)
@@ -54,14 +59,21 @@ def _validate_arm(
     cost: torch.nn.Module | None,
     control_encoder: torch.nn.Module | None,
     audio_loss: object | None,
+    rectified_sigma_min: float,
+    sketch_controls: object | None,
+    compiled: bool,
 ) -> None:
-    """Reject an arm whose required component is absent before anything is built.
+    """Reject, before anything is built, a configuration this module cannot serve.
 
     :param control_mode: Control arm the run selected.
     :param cost: Differentiable per-sample audio distance, if configured.
     :param control_encoder: Trainable encoder over the render residual, if configured.
     :param audio_loss: The base module's audio term, which this module cannot also carry.
-    :raises ValueError: The arm is missing its component, or an audio term was supplied.
+    :param rectified_sigma_min: Probability-path noise scale; only zero leaves the one-step
+        estimate exact.
+    :param sketch_controls: Sketch-control spec, which the controlled field cannot route.
+    :param compiled: Whether the run asked for ``torch.compile``.
+    :raises ValueError: Any of those conditions holds.
     """
     if audio_loss is not None:
         raise ValueError(
@@ -73,6 +85,27 @@ def _validate_arm(
         raise ValueError("control_mode='gradient_spectral' requires a differentiable cost")
     if control_mode == "learned_audio" and control_encoder is None:
         raise ValueError("control_mode='learned_audio' requires a control_encoder")
+    if rectified_sigma_min != 0.0:
+        # theta_hat = x_t + (1 - t) * v is the exact one-step estimate only on the
+        # sigma-free path; any other sigma renders parameters the flow did not imply.
+        raise ValueError(
+            f"simulator feedback requires rectified_sigma_min=0, got {rectified_sigma_min}"
+        )
+    if sketch_controls is not None:
+        # ControlledFlow takes no control_tokens, so a sketch spec would train the frozen
+        # field under conditioning the base never saw and then fail at validation.
+        raise ValueError(
+            "simulator feedback does not support sketch controls; the controlled field "
+            "cannot route control tokens"
+        )
+    if compiled:
+        from synth_setter.models.components.audio_feedback import (
+            validate_audio_feedback_runtime,
+        )
+
+        # Checked here rather than only in on_train_start, which runs after setup() has
+        # already compiled the field (#2585).
+        validate_audio_feedback_runtime(compiled=True, world_size=1)
 
 
 class VSTFlowFinetuneModule(VSTFlowMatchingModule):
@@ -125,6 +158,9 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             cost=cost,
             control_encoder=control_encoder,
             audio_loss=base_kwargs.get("audio_loss"),
+            rectified_sigma_min=float(base_kwargs.get("rectified_sigma_min", 0.0)),  # pyright: ignore[reportArgumentType]
+            sketch_controls=base_kwargs.get("sketch_controls"),
+            compiled=bool(base_kwargs.get("compile", False)),
         )
         super().__init__(
             encoder=encoder,
@@ -134,6 +170,9 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             num_params=num_params,
             **base_kwargs,  # pyright: ignore[reportArgumentType]
         )
+        # Lightning collects the subclass frame's init args, so these land in hparams and
+        # get deep-copied; the group admits large weight-normalized pretrained encoders.
+        self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
         self._load_pretrained(base_checkpoint)
         self.requires_grad_(False)
@@ -194,6 +233,10 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param checkpoint: Path to a Lightning checkpoint of the base run.
         :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
         """
+        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
+        # The config records a mutable path, so without this two arms started from
+        # different flows would still read as comparable runs.
+        logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
         payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
         state = payload.get("state_dict") if isinstance(payload, dict) else None
         if not isinstance(state, dict):
@@ -218,12 +261,21 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
 
         :returns: Width of the vector the control network consumes.
         """
-        if self.control_encoder is None:
+        if self.control_mode != "learned_audio":
             # The gradient signal is the scalar cost beside its per-parameter gradient; the
             # null arm matches that width so the two arms differ only in signal content.
             return 1 + self.num_params
-        with torch.no_grad():
-            probe = self.control_encoder(torch.zeros(1, self.signal_length))
+        assert self.control_encoder is not None
+        # eval for the probe: no_grad suppresses the graph but not normalization
+        # bookkeeping, so a train-mode forward folds this all-zeros waveform into the
+        # encoder's running statistics before training has seen a real batch.
+        was_training = self.control_encoder.training
+        self.control_encoder.eval()
+        try:
+            with torch.no_grad():
+                probe = self.control_encoder(torch.zeros(1, self.signal_length))
+        finally:
+            self.control_encoder.train(was_training)
         return int(probe.flatten(start_dim=1).shape[-1])
 
     @jaxtyped(typechecker=beartype)
@@ -267,19 +319,42 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self,
         theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
         target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+        active: Shaped[Tensor, _BATCH_SHAPE],
     ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
-        """Score the one-step estimate against the observation for the configured arm.
+        """Score the one-step estimate against the observation, on the rows that use it.
+
+        Only ``active`` rows are rendered. At the shipped ``control_t_min`` the control engages
+        on a minority of rows, and the render is this loop's dominant cost, so scoring the whole
+        batch would spend most of the step on a signal :meth:`ControlledFlow.combine` discards.
 
         :param theta_hat: One-step parameter estimate in model space, detached from the flow.
         :param target_audio: Observed audio shaped ``(batch, signal_length)``.
+        :param active: Rows whose signal is used; the rest come back zeroed.
         :returns: Control signal shaped ``(batch, control_dim)``.
         """
-        if self.control_mode == "null":
-            # Same control network on the same velocity, with the simulator's contribution
-            # zeroed: the capacity-matched arm that isolates what the feedback itself buys.
-            return torch.zeros(
-                len(theta_hat), self.control_dim, device=theta_hat.device, dtype=theta_hat.dtype
-            )
+        signal = torch.zeros(
+            len(theta_hat), self.control_dim, device=theta_hat.device, dtype=theta_hat.dtype
+        )
+        # The null arm's zeroed signal is the capacity-matched ablation: same network, same
+        # velocity, only the simulator's contribution removed.
+        if self.control_mode == "null" or not bool(active.any()):
+            return signal
+        rows = active.nonzero(as_tuple=True)[0]
+        scored = self._score(theta_hat[rows], target_audio[rows])
+        return signal.index_copy(0, rows, scored.to(signal.dtype))
+
+    @jaxtyped(typechecker=beartype)
+    def _score(
+        self,
+        theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
+        """Run the configured arm's simulator scoring over a batch of rows.
+
+        :param theta_hat: One-step parameter estimate in model space.
+        :param target_audio: Observed audio for those rows.
+        :returns: Control signal shaped ``(rows, control_dim)``.
+        """
         # __init__ rejects an arm without its component, so a None here is a torn object.
         if self.control_mode == "gradient_spectral":
             assert self.cost is not None
@@ -334,8 +409,15 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             target = self._evaluate_target_field(batch["noise"], params, x_t, t)
             velocity = self.vector_field.flow(x_t, t, z)
 
+        # A row is scored only if its signal can reach the correction (above t_min) and
+        # means anything (its estimate is conditioned on its own audio). A fully
+        # unconditional row estimates the marginal, so its render/target residual is
+        # high-variance noise rather than identity signal — the base module gates its audio
+        # term on the same mask, and leaving it ungated here would teach each arm a
+        # different amount of noise and confound the comparison between them.
+        active = (t.squeeze(-1) >= self.vector_field.t_min) & conditioning_keep.identity_keep
         control_input = self._control_signal(
-            self._one_step_estimate(x_t, t, velocity), batch["audio"]
+            self._one_step_estimate(x_t, t, velocity), batch["audio"], active
         )
         prediction = self.vector_field.combine(velocity, t, control_input)
 
