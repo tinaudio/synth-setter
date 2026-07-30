@@ -10,9 +10,11 @@ import pytest
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.pipeline.data.param_shift import (
     assigned_param_index,
     shift_encoded_row,
+    shift_rng,
 )
 
 _SPEC_NAME = ParamSpecName("torchsynth_adsr")
@@ -148,3 +150,57 @@ def test_shift_encoded_row_wrong_width_raises(spec: ParamSpec) -> None:
             param_index=0,
             rng=np.random.default_rng(0),
         )
+
+
+def test_shift_stream_is_independent_of_the_datagen_stream(spec: ParamSpec) -> None:
+    """Reusing the dataset's own master seed must not echo each row's parameters back.
+
+    Datagen draws a row from ``rng_for_sample(base_seed, sample_idx, attempt)``. If the
+    shift drew from that same stream, its first value would be the row's first parameter —
+    making every replacement a function of the patch it is meant to perturb, and a no-op
+    whenever the assigned parameter happens to be that first one.
+
+    :param spec: Registered torchsynth ADSR param spec.
+    """
+    master = 42
+    spans = list(spec.encoded_slices())
+    first_param_span = spans[0][1]
+
+    echoes = 0
+    for row_id in range(64):
+        synth_params, note_params = spec.sample(rng_for_sample(master, row_id, 0))
+        encoded = spec.encode(synth_params, note_params)
+        param_index = assigned_param_index(row_id, len(spec.names))
+        shifted = shift_encoded_row(
+            encoded, spec, param_index=param_index, rng=shift_rng(master, row_id)
+        )
+        replacement = shifted.encoded[spans[param_index][1]][0]
+        if replacement == pytest.approx(encoded[first_param_span][0], abs=1e-9):
+            echoes += 1
+
+    assert echoes == 0
+
+
+def test_shift_rng_is_reproducible_for_a_row(spec: ParamSpec) -> None:
+    """A rerun or resume-cache replay redraws the identical replacement.
+
+    :param spec: Registered torchsynth ADSR param spec.
+    """
+    row = _encoded_row(spec, seed=21)
+
+    first = shift_encoded_row(row, spec, param_index=1, rng=shift_rng(7, 99))
+    second = shift_encoded_row(row, spec, param_index=1, rng=shift_rng(7, 99))
+
+    assert np.array_equal(first.encoded, second.encoded)
+
+
+def test_shift_rng_differs_across_rows_and_seeds(spec: ParamSpec) -> None:
+    """Distinct rows, and distinct run seeds, draw distinct replacements.
+
+    :param spec: Registered torchsynth ADSR param spec.
+    """
+    row = _encoded_row(spec, seed=22)
+    baseline = shift_encoded_row(row, spec, param_index=1, rng=shift_rng(7, 99)).amount
+
+    assert shift_encoded_row(row, spec, param_index=1, rng=shift_rng(7, 100)).amount != baseline
+    assert shift_encoded_row(row, spec, param_index=1, rng=shift_rng(8, 99)).amount != baseline

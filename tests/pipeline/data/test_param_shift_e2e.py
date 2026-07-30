@@ -20,7 +20,6 @@ import pyarrow as pa
 import pytest
 
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     PARAM_ARRAY_FIELD,
@@ -42,6 +41,7 @@ from synth_setter.pipeline.data.param_shift import (
     encode_param_shift_column,
     load_param_shifter,
     param_shift_policy_values,
+    shift_rng,
     shift_encoded_row,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
@@ -261,7 +261,7 @@ def test_param_shift_audio_is_the_patch_the_row_claims(shifted_dataset: Path) ->
             params[index],
             spec,
             param_index=assigned_param_index(row_id, len(spec.names)),
-            rng=rng_for_sample(_SEED, row_id),
+            rng=shift_rng(_SEED, row_id),
         )
         assert committed_names[index] == expected.param_name
         assert committed_amounts[index] == pytest.approx(expected.amount, rel=1e-6)

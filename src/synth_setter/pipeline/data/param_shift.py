@@ -49,6 +49,14 @@ logger = structlog.get_logger(__name__)
 ROW_ID_FIELD: str = "_rowid"
 PARAM_SHIFT_INPUT_FIELDS: tuple[str, ...] = (AUDIO_FIELD, PARAM_ARRAY_FIELD, ROW_ID_FIELD)
 
+# ``seed_for_sample``'s attempt coordinate namespaces the stream. Datagen only ever passes
+# attempts 0..attempts_per_sample-1, so this reserved index cannot collide with it. Without
+# the separation, a run whose seed equalled the dataset's ``base_seed`` would redraw each row
+# from the very stream that produced that row's parameters: the replacement would land on the
+# original row's first parameter value, making every shift a function of the patch it is
+# meant to perturb and zeroing it outright whenever the assigned parameter is that first one.
+_SHIFT_STREAM_INDEX: int = 1 << 32
+
 _METRIC_SUBFIELDS: tuple[str, ...] = (
     SHIFT_RMS_SUBFIELD,
     SHIFT_SOT_SUBFIELD,
@@ -84,6 +92,19 @@ class ShiftedRow:
     param_name: str
     amount: float
     encoded: np.ndarray
+
+
+def shift_rng(master_seed: int, row_id: int) -> np.random.Generator:
+    """Build a row's replacement-draw generator on a stream datagen never touches.
+
+    Reproducible in ``(master_seed, row_id)`` so a rerun or a resume-cache replay redraws
+    the identical value, and namespaced so the run may safely reuse the dataset's own seed.
+
+    :param master_seed: Run-level ``param_shift_seed``.
+    :param row_id: Lance row id of the row being shifted.
+    :returns: Generator for this row's replacement value.
+    """
+    return rng_for_sample(master_seed, row_id, _SHIFT_STREAM_INDEX)
 
 
 def assigned_param_index(row_id: int, num_params: int) -> int:
@@ -259,7 +280,7 @@ class ParamShifter:
             encoded,
             self.spec,
             param_index=assigned_param_index(row_id, len(self.spec.names)),
-            rng=rng_for_sample(self.seed, row_id),
+            rng=shift_rng(self.seed, row_id),
         )
 
     def _render_shift(self, shift: ShiftedRow, original: np.ndarray) -> np.ndarray:
