@@ -51,6 +51,7 @@ vector_field:
   outer_residual: false
 
 num_params: ${param_spec_width:${synth.param_spec_name}}
+param_spec: ${synth.param_spec_name}
 
 # training
 cfg_dropout_rate: 0.1

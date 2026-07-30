@@ -811,7 +811,11 @@ class ValAudioProbe(Callback):
         self._future_step = step
 
 
-_PER_PARAM_MSE_OUTPUTS = ("per_param_mse", "per_param_mse_best_swap")
+_PER_PARAM_MSE_OUTPUTS = (
+    "per_param_mse",
+    "per_param_mse_best_swap",
+    "per_param_mse_number_group_swap",
+)
 
 
 class LogPerParamMSE(Callback):

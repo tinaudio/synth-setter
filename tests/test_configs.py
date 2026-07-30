@@ -705,7 +705,7 @@ def test_flowvae_predict_step_reads_mel_batch_key(flowvae_module: VSTFlowVAEModu
             "vst_flow_matching_module.VSTFlowMatchingModule",
             "num_params",
             92,
-            None,
+            "surge_simple",
             True,
             1e-4,
         ),
@@ -714,7 +714,7 @@ def test_flowvae_predict_step_reads_mel_batch_key(flowvae_module: VSTFlowVAEModu
             "vst_flow_matching_module.VSTFlowMatchingModule",
             "num_params",
             92,
-            None,
+            "surge_simple",
             True,
             1e-4,
         ),
@@ -837,6 +837,20 @@ def test_log_per_param_mse_config_requires_synth_selection() -> None:
 
     with pytest.raises(InterpolationKeyError, match="synth"):
         OmegaConf.to_container(cfg.callbacks, resolve=True, throw_on_missing=True)
+
+
+@pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp"])
+def test_vst_flow_config_uses_active_synth_spec_for_structured_metrics(model_name: str) -> None:
+    """Every flow model receives the selected ParamSpec for number-group swaps.
+
+    :param model_name: Hydra flow-model group under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_simple", "synth=surge_simple", f"model={model_name}", "trainer=cpu"],
+    )
+
+    assert cfg.model.param_spec == "surge_simple"
 
 
 def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> None:
