@@ -403,8 +403,12 @@ def _conditioning_profile_names() -> list[str]:
     )
 
 
+# Waveform profiles interpolate datamodule geometry, which this bare composition lacks.
+_WAVEFORM_CONDITIONING_PROFILES = frozenset({"clap_online", "log_mel"})
 _CACHED_CONDITIONING_PROFILES = [
-    profile for profile in _conditioning_profile_names() if profile != "clap_online"
+    profile
+    for profile in _conditioning_profile_names()
+    if profile not in _WAVEFORM_CONDITIONING_PROFILES
 ]
 
 

@@ -354,7 +354,6 @@ def test_clap_audio_loss_composes_with_stored_embedding_conditioning() -> None:
             overrides=[
                 "experiment=torchsynth/flow_audio",
                 "conditioning=m2l",
-                "model/encoder=embedpool",
                 "model/audio_loss=clap",
             ],
         )
@@ -383,4 +382,18 @@ def test_mss_audio_loss_measures_in_the_reported_metric_space() -> None:
     assert (
         cfg.model.audio_loss.distance._target_
         == "synth_setter.models.components.audio_distance.MultiScaleSpectralDistance"
+    )
+
+
+def test_conditioning_profile_alone_selects_its_encoder() -> None:
+    """The experiment must not pin an encoder the conditioning profile owns."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow_audio", "conditioning=clap_online"],
+        )
+
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
     )
