@@ -63,9 +63,11 @@ from tests.conftest import (
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_all_embeddings,
+    augment_lance_splits_with_embedding,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
     build_surge_xt_embedding_train_cfg,
+    flatten_lance_embedding_column,
     train_loss_keys,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
@@ -2206,6 +2208,41 @@ def _assert_model_predictions_depend_on_cached_conditioning(
 
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.integration_r2
+@pytest.mark.r2
+def test_train_matpac_plus_flattened_lance_returns_finite_loss(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train through the flattened MATPAC++ layout written in production.
+
+    :param tmp_path: Training output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(
+        surge_xt_embedding_smoke_datasets, "matpac_plus"
+    )
+    flatten_lance_embedding_column(dataset_root, "matpac_plus")
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="matpac_plus",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
 
 
 @pytest.mark.requires_vst

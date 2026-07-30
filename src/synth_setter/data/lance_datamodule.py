@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from math import prod
 from pathlib import Path
 from typing import cast
 
@@ -100,8 +101,11 @@ def _validate_embedding_column(
         raise KeyError(
             f"conditioning column {spec.column!r} is absent from {shard_path}"
         )
-    shape = _fixed_embedding_shape(dataset.schema.field(column_index))
-    if shape != spec.input_shape:
+    field = dataset.schema.field(column_index)
+    shape = _fixed_embedding_shape(field)
+    flattened_shape = (prod(spec.input_shape),)
+    flattened_fixed_list = pa.types.is_fixed_size_list(field.type) and shape == flattened_shape
+    if shape != spec.input_shape and not flattened_fixed_list:
         raise ValueError(
             f"conditioning column {spec.column!r} has shape {shape}, "
             f"expected {spec.input_shape}"
@@ -210,6 +214,7 @@ class PrepareBatchCollate:
         rescale_params: bool,
         ot: bool,
         conditioning_column: str | None = None,
+        conditioning_shape: tuple[int, ...] | None = None,
         sketch_column: str | None = None,
         sketch_pitch_zero_threshold: float | None = None,
         preserve_legacy_m2l: bool = False,
@@ -221,6 +226,7 @@ class PrepareBatchCollate:
         :param rescale_params: Whether to map parameters to ``[-1, 1]``.
         :param ot: Whether to Hungarian-match noise to parameters.
         :param conditioning_column: Generic embedding column to expose as ``conditioning``.
+        :param conditioning_shape: Per-row model shape restored from flattened storage.
         :param sketch_column: Stored sketch struct column whose expanded
             children are reassembled into ``sketch_ctrl``.
         :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
@@ -232,6 +238,7 @@ class PrepareBatchCollate:
         self.rescale_params = rescale_params
         self.ot = ot
         self.conditioning_column = conditioning_column
+        self.conditioning_shape = conditioning_shape
         self.sketch_column = sketch_column
         self.sketch_pitch_zero_threshold = sketch_pitch_zero_threshold
         self.preserve_legacy_m2l = preserve_legacy_m2l
@@ -280,6 +287,8 @@ class PrepareBatchCollate:
         raw_values = {name: tensor.numpy() for name, tensor in columns.items()}
         if self.conditioning_column is not None:
             conditioning = raw_values[self.conditioning_column]
+            if self.conditioning_shape is not None:
+                conditioning = conditioning.reshape(len(conditioning), *self.conditioning_shape)
             raw_values["conditioning"] = conditioning
             if self.conditioning_column == "music2latent" and not self.preserve_legacy_m2l:
                 del raw_values["music2latent"]
@@ -621,6 +630,7 @@ class LanceVSTDataModule(VSTDataModule):
                 rescale_params=True,
                 ot=ot,
                 conditioning_column=spec.column if spec is not None else None,
+                conditioning_shape=spec.input_shape if spec is not None else None,
                 sketch_column=sketch.column if sketch is not None else None,
                 sketch_pitch_zero_threshold=(
                     sketch.pitch_zero_threshold if sketch is not None else None
