@@ -449,11 +449,13 @@ class PretrainedConditioningEncoder(nn.Module):
         :param backbone: Frozen waveform-in encoder defining the metric space.
         :param head: Trainable module mapping ``backbone.out_dim`` to ``out_dim``.
         :param out_dim: Conditioning width Hydra resolves ``${model.encoder.out_dim}`` to.
-        :raises ValueError: The head's input width does not match the backbone's output.
+        :raises ValueError: Width metadata is missing or the backbone and head widths differ.
         """
         super().__init__()
         backbone_out_dim = getattr(backbone, "out_dim", None)
         head_input_dim = getattr(head, "input_dim", None)
+        if not isinstance(backbone_out_dim, int) or not isinstance(head_input_dim, int):
+            raise ValueError("backbone and head must expose integer dimension metadata")
         if head_input_dim != backbone_out_dim:
             raise ValueError(
                 f"head input width {head_input_dim} does not match backbone out_dim "

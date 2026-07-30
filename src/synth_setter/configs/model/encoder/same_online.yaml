@@ -4,6 +4,7 @@ backbone:
   _target_: synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained
   sample_rate: ${datamodule.sample_rate}
   checkpoint: ???
+  checkpoint_sha256: ???
 head:
   _target_: synth_setter.models.components.embed_pool.EmbeddingPool
   embed_dim: 256

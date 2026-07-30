@@ -81,6 +81,31 @@ def test_pretrained_conditioning_pools_same_latent_sequence(
 
     assert conditioning.shape == (_ROWS, 8)
     assert torch.isfinite(conditioning).all()
+    assert not torch.equal(conditioning[0], conditioning[1])
+
+
+def test_same_conditioning_batch_rows_are_independent(tiny_same_checkpoint: Path) -> None:
+    """One row's conditioning does not depend on another waveform in the batch.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    torch.manual_seed(0)
+    encoder = PretrainedConditioningEncoder(
+        backbone=_encoder(tiny_same_checkpoint),
+        head=EmbeddingPool(
+            embed_dim=TINY_SAME_LATENT_DIM,
+            d_model=8,
+            num_heads=1,
+            max_seq_len=8,
+        ),
+        out_dim=8,
+    )
+    audio = torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0).requires_grad_()
+
+    (gradient,) = torch.autograd.grad(encoder(audio)[0].square().sum(), audio)
+
+    assert torch.count_nonzero(gradient[0]).item() > 0
+    assert torch.equal(gradient[1], torch.zeros_like(gradient[1]))
 
 
 def test_same_conditioning_updates_pool_without_backbone_gradients(
@@ -106,10 +131,56 @@ def test_same_conditioning_updates_pool_without_backbone_gradients(
 
     optimizer.zero_grad()
     encoder(torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0)).square().mean().backward()
+    head_gradients = [parameter.grad for parameter in head.parameters()]
     optimizer.step()
 
     assert not torch.equal(head.query, original_query)
+    assert all(gradient is not None for gradient in head_gradients)
+    assert all(
+        torch.isfinite(gradient).all() for gradient in head_gradients if gradient is not None
+    )
+    assert all(
+        torch.count_nonzero(gradient) > 0 for gradient in head_gradients if gradient is not None
+    )
     assert all(parameter.grad is None for parameter in backbone.parameters())
+
+
+@pytest.mark.slow
+def test_same_projection_conditioning_overfits_fixed_batch(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """The trainable temporal pool learns a fixed mapping from SAME latents.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    torch.manual_seed(0)
+    encoder = PretrainedConditioningEncoder(
+        backbone=_encoder(tiny_same_checkpoint),
+        head=EmbeddingPool(
+            embed_dim=TINY_SAME_LATENT_DIM,
+            d_model=8,
+            num_heads=1,
+            max_seq_len=8,
+        ),
+        out_dim=8,
+    )
+    predictor = torch.nn.Linear(8, 2)
+    audio = torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0)
+    with torch.no_grad():
+        embeddings = encoder.embed(audio)
+    targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
+    optimizer = torch.optim.Adam((*encoder.head.parameters(), *predictor.parameters()), lr=3e-3)
+
+    initial_loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+    loss = initial_loss
+    for _ in range(3_000):
+        optimizer.zero_grad()
+        loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert loss.item() < 1e-2
+    assert loss.item() < initial_loss.item() / 100
 
 
 def test_gradient_reaches_the_waveform(tiny_same_checkpoint: Path) -> None:

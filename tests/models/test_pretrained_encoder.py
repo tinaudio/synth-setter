@@ -391,6 +391,14 @@ def test_pretrained_conditioning_encoder_exposes_metric_and_conditioning_taps(
     assert torch.equal(conditioning, encoder(audio))
 
 
+def test_pretrained_conditioning_encoder_requires_dimension_metadata() -> None:
+    """Missing width declarations fail before silently returning the wrong shape."""
+    with pytest.raises(ValueError, match="dimension metadata"):
+        PretrainedConditioningEncoder(
+            backbone=torch.nn.Identity(), head=torch.nn.Identity(), out_dim=6
+        )
+
+
 def _flow_module(clap_encoder: ClapAudioEncoder) -> VSTFlowMatchingModule:
     """Build a tiny flow module with a frozen CLAP conditioning encoder.
 

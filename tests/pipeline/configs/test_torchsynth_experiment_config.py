@@ -14,7 +14,12 @@ from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
-from synth_setter.same import DEFAULT_SAME_L_CHECKPOINT, DEFAULT_SAME_S_CHECKPOINT
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_L_CHECKPOINT_SHA256,
+    DEFAULT_SAME_S_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT_SHA256,
+)
 
 
 def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
@@ -271,19 +276,28 @@ def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head()
 
 
 @pytest.mark.parametrize(
-    ("profile", "checkpoint"),
+    ("profile", "checkpoint", "checkpoint_sha256"),
     [
-        ("same_l_online", DEFAULT_SAME_L_CHECKPOINT),
-        ("same_s_online", DEFAULT_SAME_S_CHECKPOINT),
+        (
+            "same_l_online",
+            DEFAULT_SAME_L_CHECKPOINT,
+            DEFAULT_SAME_L_CHECKPOINT_SHA256,
+        ),
+        (
+            "same_s_online",
+            DEFAULT_SAME_S_CHECKPOINT,
+            DEFAULT_SAME_S_CHECKPOINT_SHA256,
+        ),
     ],
 )
 def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
-    profile: str, checkpoint: str
+    profile: str, checkpoint: str, checkpoint_sha256: str
 ) -> None:
     """Online SAME profiles pool frozen waveform latents into flow conditioning.
 
     :param profile: SAME conditioning profile under test.
     :param checkpoint: Expected pretrained SAME checkpoint.
+    :param checkpoint_sha256: Expected materialized checkpoint digest.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -303,6 +317,7 @@ def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
     )
     assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
     assert cfg.model.encoder.backbone.checkpoint == checkpoint
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == checkpoint_sha256
     assert (
         cfg.model.encoder.head._target_
         == "synth_setter.models.components.embed_pool.EmbeddingPool"

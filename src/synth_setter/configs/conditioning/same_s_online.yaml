@@ -9,6 +9,7 @@ model:
   encoder:
     backbone:
       checkpoint: r2://intermediate-data/models/same-s
+      checkpoint_sha256: d1e6c15e03279a1a72e1faa8e83ea031baabdf568c33f57717118b24d1d4167a
   encoder_output_dim: ${model.encoder.out_dim}
   vector_field:
     conditioning_dim: ${model.encoder.out_dim}
