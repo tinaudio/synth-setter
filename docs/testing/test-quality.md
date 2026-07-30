@@ -124,7 +124,7 @@ Every assertion can fail independently and each names a real requirement.
 **Numeric behavior with real bounds** — `tests/models/test_cnn.py`:
 
 ```python
-def test_log_mel_frontend_predictions_stay_in_normalized_parameter_range() -> None:
+def test_log_mel_model_predictions_stay_in_normalized_parameter_range() -> None:
     predictions = _log_mel_model()(torch.randn(16, 4_410))
     assert torch.all((0 <= predictions) & (predictions <= 1))
 ```

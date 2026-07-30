@@ -33,12 +33,14 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
-from synth_setter.models.components.cnn import LogMelEncoder
+from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
     PretrainedConditioningEncoder,
 )
+from synth_setter.models.components.same_encoder import SameAudioEncoder
+from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -198,7 +200,7 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert audio.shape[-1] == 176_400
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
-    assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
+    assert isinstance(object_dict["model"].net.encoder, SpecEncoder)
 
 
 @pytest.mark.slow
@@ -222,6 +224,31 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
     assert encoder.backbone.out_dim == 8
     assert not encoder.backbone.clap.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
+
+
+@pytest.mark.slow
+def test_train_torchsynth_same_online_advances_one_cpu_step(
+    cfg_torchsynth_same_online_train: DictConfig,
+) -> None:
+    """Train through frozen SAME-S conditioning and its temporal pool.
+
+    :param cfg_torchsynth_same_online_train: Tiny production-path SAME configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_same_online_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_same_online_train)
+
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
+    model = object_dict["model"]
+    encoder = model.encoder
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
+    assert isinstance(encoder, PretrainedConditioningEncoder)
+    assert isinstance(encoder.backbone, SameAudioEncoder)
+    assert isinstance(encoder.head, EmbeddingPool)
+    assert not encoder.backbone.autoencoder.training
+    assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
+    assert any(parameter.requires_grad for parameter in encoder.head.parameters())
 
 
 @pytest.mark.slow

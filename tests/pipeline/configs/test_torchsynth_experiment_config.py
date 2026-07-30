@@ -4,7 +4,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT,
@@ -12,9 +12,18 @@ from synth_setter.clap import (
 )
 from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
-from synth_setter.models.components.cnn import LogMelEncoder
-from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
-from synth_setter.same import DEFAULT_SAME_S_CHECKPOINT
+from synth_setter.models.components.spec_encoder import SpecEncoder
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    AudioSpectrogramTransformer,
+    LearntProjection,
+)
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_L_CHECKPOINT_SHA256,
+    DEFAULT_SAME_S_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT_SHA256,
+)
 
 
 def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
@@ -81,8 +90,8 @@ def test_torchsynth_ffn_derives_log_mel_geometry_from_sample_rate() -> None:
 
     network = instantiate(cfg.model.net)
 
-    assert network.encoder.mel.n_fft == mel_n_fft(sample_rate)
-    assert network.encoder.mel.hop_length == mel_hop_length(sample_rate)
+    assert network.encoder.frontend.mel.n_fft == mel_n_fft(sample_rate)
+    assert network.encoder.frontend.mel.hop_length == mel_hop_length(sample_rate)
 
 
 def test_torchsynth_ffn_four_second_model_has_bounded_parameter_count() -> None:
@@ -161,7 +170,8 @@ def test_torchsynth_flow_experiment_observes_raw_audio() -> None:
     """Online rendering has no stored mel column, so the encoder takes the waveform."""
     cfg = _flow_cfg()
     assert cfg.model.conditioning == "audio"
-    assert cfg.model.encoder._target_ == "synth_setter.models.components.cnn.LogMelEncoder"
+    assert cfg.model.encoder._target_ == "synth_setter.models.components.spec_encoder.SpecEncoder"
+    assert cfg.model.encoder.backbone._target_ == "synth_setter.models.components.cnn.MelCNN"
     assert (
         cfg.datamodule.collate_fn._target_
         == "synth_setter.data.torchsynth_datamodule.collate_audio_dict"
@@ -207,11 +217,11 @@ def test_torchsynth_flow_composed_predict_step_preserves_datamodule_width() -> N
                 "experiment=torchsynth/flow_audio",
                 "datamodule.sample_rate=8000",
                 f"datamodule.signal_length={signal_length}",
-                "model.encoder.hidden_dim=2",
-                "model.encoder.out_dim=8",
-                "model.encoder.n_mels=16",
-                "model.encoder.num_blocks=1",
-                "model.encoder.kernel_size=3",
+                "model.encoder.backbone.hidden_dim=2",
+                "model.encoder.backbone.out_dim=8",
+                "model.encoder.frontend.n_mels=16",
+                "model.encoder.backbone.num_blocks=1",
+                "model.encoder.backbone.kernel_size=3",
                 "model.vector_field.d_model=8",
                 "model.vector_field.num_heads=2",
                 "model.vector_field.d_ff=8",
@@ -225,7 +235,7 @@ def test_torchsynth_flow_composed_predict_step_preserves_datamodule_width() -> N
     model.eval()
     predictions, _ = model.predict_step({"audio": torch.randn(2, signal_length)}, 0)
 
-    assert isinstance(model.encoder, LogMelEncoder)
+    assert isinstance(model.encoder, SpecEncoder)
     assert isinstance(model.vector_field, ApproxEquivTransformer)
     assert isinstance(model.vector_field.projection, LearntProjection)
     assert (
@@ -267,6 +277,143 @@ def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head()
         == "synth_setter.models.components.vector_projection.VectorProjection"
     )
     assert cfg.model.encoder.head.input_dim == 512
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+
+
+def test_ast_online_shares_the_vst_backbone_definition() -> None:
+    """The online profile reuses the stored-mel AST rather than restating its geometry.
+
+    Parity is the point of the split: only the mel's source (computed vs stored) and the
+    channel count may differ, so a hyperparameter that drifts between the two paths means
+    the online arm is no longer comparable to the VST arm.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        stored = compose(
+            config_name="train.yaml", overrides=["datamodule=surge", "model=vst_flow"]
+        )
+        online = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", "conditioning=ast_online"],
+        )
+
+    stored_ast = OmegaConf.to_container(stored.model.encoder, resolve=True)
+    online_ast = OmegaConf.to_container(online.model.encoder.backbone, resolve=True)
+    assert isinstance(stored_ast, dict) and isinstance(online_ast, dict)
+    # Only the mel's channel count may differ; #2751 tracks collapsing that too.
+    differing = {"input_channels"}
+    assert {k: v for k, v in stored_ast.items() if k not in differing} == {
+        k: v for k, v in online_ast.items() if k not in differing
+    }
+
+
+def test_ast_online_conditioning_derives_its_spectrogram_shape_from_the_datamodule() -> None:
+    """The online AST is sized by the render geometry, not a hardcoded stored-mel shape."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow",
+                "conditioning=ast_online",
+                "datamodule.sample_rate=8000",
+                "datamodule.signal_length=800",
+            ],
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert list(cfg.model.encoder.backbone.spec_shape) == [128, 11]
+    # Online renders are mono; the stored-mel profile's patch embedding takes two channels.
+    assert cfg.model.encoder.backbone.input_channels == 1
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.backbone.d_model
+
+
+def test_ast_online_conditioning_predicts_from_online_audio() -> None:
+    """The stored-mel transformer conditions on a waveform with no stored mel column."""
+    signal_length = 800
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow",
+                "conditioning=ast_online",
+                "datamodule.sample_rate=8000",
+                f"datamodule.signal_length={signal_length}",
+                "model.encoder.frontend.n_mels=16",
+                "model.encoder.backbone.d_model=8",
+                "model.encoder.backbone.n_heads=2",
+                "model.encoder.backbone.n_layers=1",
+                "model.encoder.backbone.n_conditioning_outputs=2",
+                "model.encoder.backbone.patch_size=4",
+                "model.encoder.backbone.patch_stride=3",
+                "model.encoder.backbone.spec_shape=[16,11]",
+                "model.vector_field.d_model=8",
+                "model.vector_field.num_heads=2",
+                "model.vector_field.d_ff=8",
+                "model.vector_field.num_layers=1",
+                "model.vector_field.projection.num_tokens=2",
+                "model.test_sample_steps=1",
+            ],
+        )
+
+    model = instantiate(cfg.model)
+    model.eval()
+    predictions, _ = model.predict_step({"audio": torch.randn(2, signal_length)}, 0)
+
+    assert isinstance(model.encoder, SpecEncoder)
+    assert isinstance(model.encoder.backbone, AudioSpectrogramTransformer)
+    assert predictions.shape == (2, cfg.datamodule.num_params)
+    assert torch.isfinite(predictions).all()
+
+
+@pytest.mark.parametrize(
+    ("profile", "checkpoint", "checkpoint_sha256"),
+    [
+        (
+            "same_l_online",
+            DEFAULT_SAME_L_CHECKPOINT,
+            DEFAULT_SAME_L_CHECKPOINT_SHA256,
+        ),
+        (
+            "same_s_online",
+            DEFAULT_SAME_S_CHECKPOINT,
+            DEFAULT_SAME_S_CHECKPOINT_SHA256,
+        ),
+    ],
+)
+def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
+    profile: str, checkpoint: str, checkpoint_sha256: str
+) -> None:
+    """Online SAME profiles pool frozen waveform latents into flow conditioning.
+
+    :param profile: SAME conditioning profile under test.
+    :param checkpoint: Expected pretrained SAME checkpoint.
+    :param checkpoint_sha256: Expected materialized checkpoint digest.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", f"conditioning={profile}"],
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
+    )
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
+    assert cfg.model.encoder.backbone.checkpoint == checkpoint
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == checkpoint_sha256
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    )
+    assert cfg.model.encoder.head.embed_dim == 256
+    assert cfg.model.encoder.head.max_seq_len == 44
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
 
 
@@ -419,3 +566,24 @@ def test_same_audio_loss_measures_in_the_stored_conditioning_space() -> None:
     assert cfg.model.audio_loss.sample_rate == 44_100
     assert cfg.model.audio_loss.render_batch_size == cfg.datamodule.batch_size
     assert cfg.model.compile is False
+
+
+def test_same_audio_loss_experiment_conditions_on_online_same_s() -> None:
+    """The SAME arm uses frozen SAME-S for both conditioning and render distance."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio_same"]
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_SAME_S_CHECKPOINT
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_SAME_S_CHECKPOINT_SHA256
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    )

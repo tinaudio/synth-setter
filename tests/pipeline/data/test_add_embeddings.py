@@ -384,6 +384,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert set(EMBEDDING_REGISTRY) == {
         "clap",
         "m2l",
+        "param_shift",
         "same_l",
         "same_s",
         "sketch",

@@ -164,6 +164,7 @@ docs/design/    Design documents
 src/synth_setter/models/components/transformer.py       DiT and AST implementations
 src/synth_setter/models/components/residual_mlp.py      Residual MLP implementations
 src/synth_setter/models/components/cnn.py               CNN encoder implementations
+src/synth_setter/models/components/spec_encoder.py      Waveform front end paired with a spectrogram-in backbone
 src/synth_setter/models/components/vae.py               VAE+RealNVP baseline implementation
 src/synth_setter/models/*_module.py                     LightningModule implementations
 src/synth_setter/data/vst/*                             Dataset generation + VST/CLAP parameter tooling

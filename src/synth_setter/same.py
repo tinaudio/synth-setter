@@ -17,7 +17,13 @@ if TYPE_CHECKING:
     from torch import nn
 
 DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
+DEFAULT_SAME_S_CHECKPOINT_SHA256: str = (
+    "d1e6c15e03279a1a72e1faa8e83ea031baabdf568c33f57717118b24d1d4167a"
+)
 DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
+DEFAULT_SAME_L_CHECKPOINT_SHA256: str = (
+    "a885dfe4291281b81b368fd163ac486c7dc21da31db25e999992808823fd0f12"
+)
 # Shared cache names predating per-URI namespacing; other sources hash their own prefix.
 _DEFAULT_SAME_CACHE_NAMES: dict[str, str] = {
     DEFAULT_SAME_L_CHECKPOINT: "same-l",

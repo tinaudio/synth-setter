@@ -391,6 +391,29 @@ def test_pretrained_conditioning_encoder_exposes_metric_and_conditioning_taps(
     assert torch.equal(conditioning, encoder(audio))
 
 
+def test_pretrained_conditioning_encoder_requires_dimension_metadata() -> None:
+    """Missing width declarations fail before silently returning the wrong shape."""
+    with pytest.raises(ValueError, match="dimension metadata"):
+        PretrainedConditioningEncoder(
+            backbone=torch.nn.Identity(), head=torch.nn.Identity(), out_dim=6
+        )
+
+
+def test_pretrained_conditioning_encoder_rejects_mismatched_widths(
+    clap_encoder: ClapAudioEncoder,
+) -> None:
+    """A head expecting another representation width fails before the first batch.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    with pytest.raises(ValueError, match="does not match"):
+        PretrainedConditioningEncoder(
+            backbone=clap_encoder,
+            head=VectorProjection(input_dim=_PROJECTION_DIM + 1, d_model=6),
+            out_dim=6,
+        )
+
+
 def _flow_module(clap_encoder: ClapAudioEncoder) -> VSTFlowMatchingModule:
     """Build a tiny flow module with a frozen CLAP conditioning encoder.
 
@@ -543,13 +566,14 @@ def test_checkpoint_load_restores_current_backbone_for_strict_state_loading(
     }
     encoder = cast(PretrainedConditioningEncoder, module.encoder)
     head = cast(VectorProjection, encoder.head)
+    backbone = cast(ClapAudioEncoder, encoder.backbone)
     saved_head = head.projection.weight.detach().clone()
     module.on_save_checkpoint(checkpoint)
-    original_backbone = encoder.backbone.mel_filters.detach().clone()
+    original_backbone = backbone.mel_filters.detach().clone()
     with torch.no_grad():
         head.projection.weight.add_(1.0)
-        encoder.backbone.mel_filters.add_(1.0)
-    current_backbone = encoder.backbone.mel_filters.detach().clone()
+        backbone.mel_filters.add_(1.0)
+    current_backbone = backbone.mel_filters.detach().clone()
 
     module.on_load_checkpoint(checkpoint)
     state = checkpoint["state_dict"]
@@ -557,8 +581,8 @@ def test_checkpoint_load_restores_current_backbone_for_strict_state_loading(
     module.load_state_dict(state, strict=True)
 
     assert torch.equal(head.projection.weight, saved_head)
-    assert torch.equal(encoder.backbone.mel_filters, current_backbone)
-    encoder.backbone.mel_filters.copy_(original_backbone)
+    assert torch.equal(backbone.mel_filters, current_backbone)
+    backbone.mel_filters.copy_(original_backbone)
 
 
 def test_checkpoint_load_with_missing_trainable_key_remains_strict(
