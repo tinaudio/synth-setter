@@ -1,0 +1,12 @@
+# Mel settings must match the dataset writers' stored-mel front end, so every
+# spectrogram-in encoder shares this one definition rather than restating it.
+_target_: synth_setter.models.components.spec_encoder.LogMelFrontend
+in_dim: ${datamodule.signal_length}
+sample_rate: ${datamodule.sample_rate}
+n_mels: 128
+mel_norm: slaney
+mel_scale: slaney
+window: hamming
+power: 2.0
+top_db: 80.0
+amin: 1.0e-10

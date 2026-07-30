@@ -33,12 +33,12 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
-from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
     PretrainedConditioningEncoder,
 )
+from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -198,7 +198,7 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert audio.shape[-1] == 176_400
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
-    assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
+    assert isinstance(object_dict["model"].net.encoder, SpecEncoder)
 
 
 @pytest.mark.slow

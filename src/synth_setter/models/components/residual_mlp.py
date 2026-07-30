@@ -7,7 +7,8 @@ import torch.nn as nn
 from jaxtyping import Float, Shaped
 from torch import Tensor
 
-from synth_setter.models.components.cnn import LogMelEncoder, ResidualEncoder
+from synth_setter.models.components.cnn import MelCNN, ResidualEncoder
+from synth_setter.models.components.spec_encoder import LogMelFrontend, SpecEncoder
 from synth_setter.models.components.transformer import SinusoidalEncoding
 
 _BATCH_ANY_SHAPE = "batch ..."
@@ -299,27 +300,31 @@ class LogMelCNNResidualMLP(nn.Module):
         top_db: float | None = 80.0,
     ) -> None:
         super().__init__()
-        self.encoder = LogMelEncoder(
-            in_dim=in_dim,
-            hidden_dim=channels,
-            out_dim=hidden_dim,
-            sample_rate=sample_rate,
-            center=center,
-            f_min=f_min,
-            f_max=f_max,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            n_mels=n_mels,
-            pad_mode=pad_mode,
-            power=power,
-            mel_norm=mel_norm,
-            mel_scale=mel_scale,
-            window=window,
-            amin=amin,
-            top_db=top_db,
-            num_blocks=encoder_blocks,
-            kernel_size=kernel_size,
-            norm=norm,
+        self.encoder = SpecEncoder(
+            frontend=LogMelFrontend(
+                in_dim,
+                sample_rate=sample_rate,
+                center=center,
+                f_min=f_min,
+                f_max=f_max,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                n_mels=n_mels,
+                pad_mode=pad_mode,
+                power=power,
+                mel_norm=mel_norm,
+                mel_scale=mel_scale,
+                window=window,
+                amin=amin,
+                top_db=top_db,
+            ),
+            backbone=MelCNN(
+                channels,
+                hidden_dim,
+                num_blocks=encoder_blocks,
+                kernel_size=kernel_size,
+                norm=norm,
+            ),
         )
         self.trunk = ResidualMLP(hidden_dim, hidden_dim, out_dim, trunk_blocks)
 
