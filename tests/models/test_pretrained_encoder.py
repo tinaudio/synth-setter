@@ -433,11 +433,13 @@ def test_clap_projection_conditioning_overfits_fixed_batch(
         embeddings = encoder.embed(audio)
     targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
     initial_projection = projection.projection.weight.detach().clone()
-    optimizer = torch.optim.Adam((*projection.parameters(), *predictor.parameters()), lr=3e-2)
+    # 3e-3 over 2000 steps: at 3e-2 the loss oscillates past 1e-3 late in training, so a
+    # single sampled step passes or fails on which side of the swing it lands.
+    optimizer = torch.optim.Adam((*projection.parameters(), *predictor.parameters()), lr=3e-3)
 
     initial_loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
     loss = initial_loss
-    for _ in range(200):
+    for _ in range(2000):
         optimizer.zero_grad()
         loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
         loss.backward()
