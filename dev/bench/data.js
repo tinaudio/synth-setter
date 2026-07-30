@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785444484845,
+  "lastUpdate": 1785444489656,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -25561,6 +25561,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.042660534381866455,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b0607dbec9b39fb53626bd35ed2ce0d172c67e33",
+          "message": "internal-fix(data-pipeline): run sketch extraction on the chosen device (#2748)\n\n* internal-fix(data-pipeline): run sketch extraction on the set device\n\nThe sketch registry loader discarded its run config and left PESTO on CPU,\nso `device=` had no effect and a GPU worker idled through the whole pass.\nMeasured at 1.2 rows/s on 4 s stereo clips, which puts the 440k Surge Simple\ntrain split around 100 h and makes full-scale extraction impractical.\n\nThread the device through: `load_pesto_model` caches on (checkpoint, device)\nand moves the weights, `extract_sketch_controls_batch` takes a device and\nmoves the mono batch so the loudness, centroid, and pitch tracks all follow\nit, and the loader binds the resolved device onto the encoder.\n\nPitch activations are not bitwise portable across devices — PESTO's\nconvolutions drift up to ~1e-2 on isolated frames while the mean stays near\n1e-7 and the predicted bin is unchanged. The real-PESTO round-trip test is\ntherefore pinned to CPU on both sides rather than having its tolerance\nloosened; without that it would pass on CPU CI and fail on any GPU host.\n\nLocally 11.9 -> 115.4 rows/s at the dataset's 4 s stereo clip length.\n\nRefs #2746\n\n* chore(ci): re-run PR title check after retitle\n\n* test(data-pipeline): pin the PESTO CPU device default\n\n`load_pesto_model()` documents that omitting a device holds the weights on\nCPU, but every in-repo caller passes one, so the default never executed\nunder test.\n\nRefs #2746",
+          "timestamp": "2026-07-30T11:05:47-07:00",
+          "tree_id": "413354b2b84ceab7a12f3a5591bbffb493a61172",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b0607dbec9b39fb53626bd35ed2ce0d172c67e33"
+        },
+        "date": 1785444489132,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 12.2276790476,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 3.0569197619,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 5.442059807466664,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.360514951866666,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.2797845298666592,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.0699461324666648,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 7.116415500640869,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.082444667816162,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.027383822947740555,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 6.645967417457141,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.03636258840560913,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 7.455782890319824,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.408060073852539,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.02956222929060459,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.687022894276306,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.04438656568527222,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 7.320226192474365,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 4.4153361320495605,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.027968881651759148,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 6.584371817461215,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.037240684032440186,
             "unit": "1-cos"
           }
         ]
