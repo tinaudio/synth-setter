@@ -248,11 +248,10 @@ def test_train_step_none_spec_ignores_sketch_free_batch() -> None:
 
 
 def test_train_step_none_spec_matches_loss_before_sketch_support() -> None:
-    """``sketch_controls=None`` reproduces the pre-sketch loss computation.
+    """Verify sketch-disabled training preserves the baseline RNG stream and field inputs.
 
-    The reference below is the documented pre-change ``_train_step`` recipe;
-    equality on a fixed seed pins that the ``None`` path adds no RNG draws and
-    no extra field inputs.
+    Equality against the reference recipe below on a fixed seed pins that the
+    ``None`` path draws no extra randomness and passes no extra field inputs.
     """
     module = _module(None)
     batch = _batch(with_sketch=False)

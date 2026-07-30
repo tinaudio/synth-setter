@@ -10,6 +10,7 @@ from lightning import LightningDataModule
 from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
+    NUM_SKETCH_TRACK_ROWS,
     SKETCH_CTRL_FIELD,
     SKETCH_PITCH_SLICE,
     Conditioning,
@@ -74,6 +75,26 @@ def _raw_batch_validation_error(raw: RawBatch) -> str | None:
     audio = raw.get("audio")
     if audio is not None and np.any((audio < -1) | (audio > 1)):
         return "audio values must be within [-1, 1]"
+    return _sketch_range_validation_error(raw.get("sketch_ctrl"))
+
+
+def _sketch_range_validation_error(sketch: np.ndarray | None) -> str | None:
+    """Return the first sketch-control range violation, if any.
+
+    Row-group bounds are the storage contract in :mod:`synth_setter.conditioning`;
+    ``_validate_sketch_column`` only samples row 0, so every row is checked here.
+
+    :param sketch: Stored ``sketch_ctrl`` rows, or ``None`` when unread.
+    :returns: Validation message, or ``None`` when every row is in range.
+    """
+    if sketch is None:
+        return None
+    tracks = sketch[:, :NUM_SKETCH_TRACK_ROWS]
+    if np.any((tracks < -1) | (tracks > 1)):
+        return "sketch_ctrl loudness/centroid values must be within [-1, 1]"
+    pitch = sketch[:, SKETCH_PITCH_SLICE]
+    if np.any((pitch < 0) | (pitch > 1)):
+        return "sketch_ctrl pitch activations must be within [0, 1]"
     return None
 
 

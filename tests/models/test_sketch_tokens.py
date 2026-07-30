@@ -9,13 +9,14 @@ from jaxtyping import TypeCheckError
 from synth_setter.conditioning import (
     NUM_SKETCH_CONTROLS,
     NUM_SKETCH_TRACK_ROWS,
+    SKETCH_CENTROID_ROW,
     SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_SLICE,
     SketchControls,
     SketchControlSpec,
     resolve_sketch_controls,
 )
-from synth_setter.models.components.sketch_tokens import SketchControlTokens
+from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
@@ -175,6 +176,42 @@ class TestSketchControlTokens:
         spike[0, SKETCH_PITCH_SLICE.start, frame] = 1.0
         spike[0, SKETCH_LOUDNESS_ROW, frame] = 1.0
         assert not torch.allclose(module(base, _keep_all(1)), module(spike, _keep_all(1)))
+
+    @pytest.mark.parametrize(
+        ("group_index", "row", "expected"),
+        [
+            (0, SKETCH_LOUDNESS_ROW, (0.5, 0.5, 0.5, 0.5)),
+            (1, SKETCH_CENTROID_ROW, (0.5, 0.5, 0.5, 0.5)),
+            (2, SKETCH_PITCH_SLICE.start, (1.0, 1.0, 1.0, 1.0)),
+        ],
+    )
+    def test_forward_pools_each_group_with_its_specified_reduction(
+        self, group_index: int, row: int, expected: tuple[float, ...]
+    ) -> None:
+        """Each group's exact pooled values pin mean-vs-max per the design.
+
+        The alternating input averages to ``0.5`` per bin and maxes to ``1.0``,
+        so swapping either reduction changes the projected token.
+
+        :param group_index: Column of the group in ``CONTROL_GROUPS`` order.
+        :param row: Control row the alternating signal is written to.
+        :param expected: Per-token pooled value the group's reduction yields.
+        """
+        module = SketchControlTokens(d_model=_D_MODEL, num_control_tokens=_NUM_CONTROL_TOKENS)
+        with torch.no_grad():
+            for projection in module.projections.values():
+                cast(torch.nn.Linear, projection).weight.fill_(1.0)
+        # Two frames per output bin, one high and one low, so mean and max differ.
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 2 * _NUM_CONTROL_TOKENS)
+        controls[0, row, 1::2] = 1.0
+        keep = torch.zeros(1, len(CONTROL_GROUPS), dtype=torch.bool)
+        keep[0, group_index] = True
+
+        contribution = module(controls, keep) - module.unconditional(1)
+
+        torch.testing.assert_close(
+            contribution[0, :, 0], torch.tensor(expected), rtol=0, atol=1e-6
+        )
 
     def test_forward_wrong_channel_count_raises_shape_error(self) -> None:
         """Jaxtyping rejects a wrong channel count at the call boundary."""

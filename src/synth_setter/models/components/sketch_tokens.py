@@ -48,7 +48,7 @@ class SketchControlTokens(nn.Module):
     positional_encoding: torch.Tensor
 
     @jaxtyped(typechecker=beartype)
-    def __init__(self, d_model: int, num_control_tokens: int = 32):
+    def __init__(self, d_model: int, num_control_tokens: int = 32) -> None:
         """Build the per-control projections and the fixed temporal encoding.
 
         :param d_model: Vector-field token width the controls project into.

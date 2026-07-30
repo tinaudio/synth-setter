@@ -118,9 +118,11 @@ def test_prepare_batch_without_threshold_passes_sketch_unchanged() -> None:
 
 def test_prepare_batch_ot_keeps_sketch_aligned_with_params() -> None:
     """OT row permutation moves sketch rows together with their parameters."""
-    row_ids = np.arange(6, dtype=np.float32)
+    # Row markers stay inside the stored sketch contract so the batch-boundary
+    # range check does not reject them before the permutation runs.
+    row_ids = np.arange(6, dtype=np.float32) / 8
     raw: RawBatch = {
-        "param_array": np.stack([row_ids / 8, row_ids / 8], axis=1),
+        "param_array": np.stack([row_ids, row_ids], axis=1),
         "sketch_ctrl": np.broadcast_to(
             row_ids[:, None, None], (6, NUM_SKETCH_CONTROLS, 4)
         ).copy(),
@@ -139,7 +141,7 @@ def test_prepare_batch_ot_keeps_sketch_aligned_with_params() -> None:
     params = batch["params"]
     assert sketch is not None
     assert params is not None
-    torch.testing.assert_close(sketch[:, 0, 0] / 8, params[:, 0])
+    torch.testing.assert_close(sketch[:, 0, 0], params[:, 0])
 
 
 def _sketch_module(root: Path, *, fake: bool) -> LanceVSTDataModule:
