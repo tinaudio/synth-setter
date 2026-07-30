@@ -13,11 +13,13 @@ from synth_setter.features.sketch_controls import (
     SKETCH_PITCH_SLICE,
     extract_sketch_controls,
     extract_sketch_controls_batch,
+    load_pesto_model,
     loudness_track,
     pitch_track,
     sketch_num_frames,
     spectral_centroid_track,
 )
+from tests.helpers.run_if import RunIf
 
 _SAMPLE_RATE = 44100
 _DURATION_S = 1.0
@@ -179,3 +181,47 @@ def test_extract_sketch_controls_repeat_calls_are_deterministic() -> None:
     first = extract_sketch_controls(audio, _SAMPLE_RATE)
     second = extract_sketch_controls(audio, _SAMPLE_RATE)
     assert torch.equal(first, second)
+
+
+def test_extract_sketch_controls_batch_defaults_to_the_input_device() -> None:
+    """Without an explicit device the controls come back where the audio lives."""
+    clips = torch.stack([_sine(440.0)])
+    controls = extract_sketch_controls_batch(clips, _SAMPLE_RATE)
+    assert controls.device == clips.device
+
+
+@RunIf(min_gpus=1)
+def test_load_pesto_model_on_cuda_places_parameters_on_cuda() -> None:
+    """The cached PESTO model moves to the requested device."""
+    model = load_pesto_model(device="cuda")
+    assert next(model.parameters()).device.type == "cuda"
+
+
+@RunIf(min_gpus=1)
+def test_extract_sketch_controls_batch_on_cuda_returns_controls_on_cuda() -> None:
+    """A CUDA request keeps extraction on the GPU end to end."""
+    clips = torch.stack([_sine(440.0)])
+    controls = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cuda")
+    assert controls.device.type == "cuda"
+
+
+@RunIf(min_gpus=1)
+def test_extract_sketch_controls_batch_on_cuda_matches_cpu_affine_tracks() -> None:
+    """CUDA reproduces the loudness and centroid tracks to float32 kernel jitter."""
+    clips = torch.stack([_sine(440.0), _sine(880.0, amplitude=0.25)])
+    on_cpu = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cpu")
+    on_cuda = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cuda").cpu()
+    affine = [SKETCH_LOUDNESS_ROW, SKETCH_CENTROID_ROW]
+    assert torch.allclose(on_cpu[:, affine], on_cuda[:, affine], atol=1e-5)
+
+
+@RunIf(min_gpus=1)
+def test_extract_sketch_controls_batch_on_cuda_predicts_the_same_pitch_bins() -> None:
+    """CUDA picks the same PESTO bins; only conv-kernel jitter moves activations."""
+    clips = torch.stack([_sine(440.0), _sine(880.0, amplitude=0.25)])
+    on_cpu = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cpu")
+    on_cuda = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cuda").cpu()
+    cpu_pitch, cuda_pitch = on_cpu[:, SKETCH_PITCH_SLICE], on_cuda[:, SKETCH_PITCH_SLICE]
+    assert torch.equal(cpu_pitch.argmax(dim=1), cuda_pitch.argmax(dim=1))
+    # Isolated frames drift ~3e-3 through PESTO's convolutions; the mean is ~1e-7.
+    assert torch.allclose(cpu_pitch, cuda_pitch, atol=5e-3)

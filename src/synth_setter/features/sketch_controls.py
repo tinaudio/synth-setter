@@ -68,10 +68,13 @@ _LOUDNESS_PEAK_RANGE_DB = 80.0
 
 _pesto_model = None
 _pesto_checkpoint: str | None = None
+_pesto_device: torch.device | None = None
 _a_weights: torch.Tensor | None = None
 
 
-def load_pesto_model(checkpoint: str | None = None) -> torch.nn.Module:
+def load_pesto_model(
+    checkpoint: str | None = None, device: str | torch.device | None = None
+) -> torch.nn.Module:
     """Load and cache the PESTO model on the 10 ms sketch frame grid.
 
     Called eagerly by the pipeline's registry loader so the batch transform
@@ -80,15 +83,25 @@ def load_pesto_model(checkpoint: str | None = None) -> torch.nn.Module:
 
     :param checkpoint: PESTO checkpoint name; ``None`` reuses the cached model,
         loading ``DEFAULT_PESTO_CHECKPOINT`` when none is cached yet.
+    :param device: Torch device to hold the weights; ``None`` reuses the cached
+        device, defaulting to CPU.
     :returns: The cached process-wide model.
     """
-    global _pesto_model, _pesto_checkpoint
+    global _pesto_model, _pesto_checkpoint, _pesto_device
     target = checkpoint or _pesto_checkpoint or DEFAULT_PESTO_CHECKPOINT
+    target_device = torch.device(device) if device is not None else _pesto_device
+    if target_device is None:
+        target_device = torch.device("cpu")
     if _pesto_model is None or _pesto_checkpoint != target:
         import pesto
 
         _pesto_model = pesto.load_model(target, step_size=_PESTO_STEP_MS)
         _pesto_checkpoint = target
+        # A freshly loaded model sits on CPU; clear the flag so the move below runs.
+        _pesto_device = None
+    if _pesto_device != target_device:
+        _pesto_model = _pesto_model.to(target_device)
+        _pesto_device = target_device
     return _pesto_model
 
 
@@ -244,7 +257,7 @@ def _pitch_batch(
     :param sample_rate: Audio sample rate in Hz.
     :returns: Activation tracks at the PESTO step size (10 ms).
     """
-    _preds, _confidence, _, activations = load_pesto_model()(mono, sample_rate)
+    _preds, _confidence, _, activations = load_pesto_model(device=mono.device)(mono, sample_rate)
     return activations.detach().to(torch.float32).transpose(1, 2)
 
 
@@ -293,16 +306,22 @@ def pitch_track(
 
 @jaxtyped(typechecker=beartype)
 def extract_sketch_controls_batch(
-    audio: torch.Tensor, sample_rate: int
+    audio: torch.Tensor, sample_rate: int, device: str | torch.device | None = None
 ) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"]:
     """Extract all sketch controls for an audio batch.
 
+    Every track follows the batch, so moving it here puts the whole extractor —
+    PESTO included — on one device.
+
     :param audio: ``(B, C, T)`` waveforms.
     :param sample_rate: Audio sample rate in Hz.
+    :param device: Torch device to extract on; ``None`` keeps ``audio``'s.
     :returns: Float32 controls; rows are ``SKETCH_LOUDNESS_ROW``,
         ``SKETCH_CENTROID_ROW``, then ``SKETCH_PITCH_SLICE``.
     """
     mono = _to_mono_batch(audio)
+    if device is not None:
+        mono = mono.to(device)
     num_frames = sketch_num_frames(mono.shape[-1], sample_rate)
     tracks = (
         _loudness_batch(mono, sample_rate),
