@@ -2228,7 +2228,7 @@ def test_clap_checkpoint_defaults_keep_pipeline_and_training_sources_distinct() 
     )
     assert (
         DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
-        == "ca1bad56747e413b34ac0b722a9d5adc5e479d64321440da1227f716a7a44ada"
+        == "4a120dac122423e69160d8653fd9e5505fb35c6a482e564b62ce5ca07a7c54ca"
     )
 
 

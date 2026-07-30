@@ -16,7 +16,7 @@ from synth_setter.pipeline import r2_io
 DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 DEFAULT_CLAP_TRAINING_CHECKPOINT: str = "r2://intermediate-data/models/encoders/clap-htsat-unfused"
 DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256: str = (
-    "ca1bad56747e413b34ac0b722a9d5adc5e479d64321440da1227f716a7a44ada"
+    "4a120dac122423e69160d8653fd9e5505fb35c6a482e564b62ce5ca07a7c54ca"
 )
 _REQUIRED_CHECKPOINT_FILES: tuple[str, ...] = (
     "config.json",

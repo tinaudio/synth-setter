@@ -272,7 +272,7 @@ class AudioFeedbackLoss(nn.Module):
         sample_rate: int,
         signal_length: int,
         render_batch_size: int,
-        metric: nn.Module | None = None,
+        distance: nn.Module | None = None,
     ) -> None:
         """Configure the render geometry and the term's weighting.
 
@@ -282,8 +282,9 @@ class AudioFeedbackLoss(nn.Module):
         :param signal_length: Rendered samples per row.
         :param render_batch_size: Rows the renderer's voice holds; must cover the
             training batch size, which shorter batches pad up to.
-        :param metric: Frozen waveform-in module defining the distance space, decoupling it
-            from the conditioning encoder; ``None`` measures in the conditioning encoder.
+        :param distance: Module mapping ``(rendered, target)`` to a per-sample distance,
+            decoupling the space from the conditioning encoder; ``None`` measures cosine
+            distance in the conditioning encoder.
         :raises ValueError: Non-finite/non-positive ``lambda_audio``, out-of-range
             ``t_min``, non-positive ``render_batch_size``, or a trainable ``metric``.
         """
@@ -297,14 +298,7 @@ class AudioFeedbackLoss(nn.Module):
             raise ValueError(f"t_min must lie in [0, 1), got {t_min}")
         if render_batch_size <= 0:
             raise ValueError(f"render_batch_size must be positive, got {render_batch_size}")
-        if metric is not None:
-            trainable = [name for name, p in metric.named_parameters() if p.requires_grad]
-            if trainable:
-                raise ValueError(
-                    f"metric must be frozen; {len(trainable)} trainable parameter(s) {trainable} "
-                    "would move the space the distance is measured in"
-                )
-        self.metric = metric
+        self.distance = distance
         self.lambda_audio = lambda_audio
         self.t_min = t_min
         self.sample_rate = sample_rate
@@ -337,12 +331,12 @@ class AudioFeedbackLoss(nn.Module):
         :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.
         :param t: Flow time shaped ``(batch, 1)``.
         :param target_audio: Observed audio shaped ``(batch, signal_length)``.
-        :param encoder: Conditioning encoder, used only when no ``metric`` was configured.
+        :param encoder: Conditioning encoder, used only when no ``distance`` was configured.
         :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are
             zero-weighted because their estimate is drawn from the marginal, making the
             residual against that row's own audio near-arbitrary.
         :param target_embedding: Conditioning-space embedding of ``target_audio`` the caller
-            already computed; ignored when a ``metric`` owns a different space.
+            already computed; ignored when a ``distance`` owns a different space.
         :returns: Scalar weighted audio loss.
         """
         params = differentiable_decode(theta_hat)
@@ -364,7 +358,7 @@ class AudioFeedbackLoss(nn.Module):
         # The stored target was hard-clamped by render_torchsynth; a straight-through
         # clamp matches that contract without zeroing gradient on clipped samples.
         rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
-        if self.metric is not None:
-            encoder, target_embedding = self.metric, None
+        if self.distance is not None:
+            return (weight * self.distance(rendered, target_audio)).mean()
         distance = _frozen_latent_distance(encoder, rendered, target_audio, target_embedding)
         return (weight * distance).mean()

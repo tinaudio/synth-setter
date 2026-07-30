@@ -361,7 +361,7 @@ def test_clap_audio_loss_composes_with_stored_embedding_conditioning() -> None:
 
     assert cfg.model.encoder._target_ == "synth_setter.models.components.embed_pool.EmbeddingPool"
     assert (
-        cfg.model.audio_loss.metric._target_
+        cfg.model.audio_loss.distance.encoder._target_
         == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_pretrained"
     )
 
@@ -373,3 +373,17 @@ def test_torchsynth_flow_validates_often_enough_to_checkpoint_within_an_epoch() 
 
     assert cfg.trainer.val_check_interval == 2000
     assert cfg.training.val_audio_probe is True
+
+
+def test_mss_audio_loss_measures_in_the_reported_metric_space() -> None:
+    """Training on the figure evaluation reports keeps the two in the same units."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow_audio", "model/audio_loss=mss"],
+        )
+
+    assert (
+        cfg.model.audio_loss.distance._target_
+        == "synth_setter.models.components.audio_distance.MultiScaleSpectralDistance"
+    )
