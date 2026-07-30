@@ -594,6 +594,7 @@ _FLOW_LAD_EVAL_OVERRIDES = {
         "model.vector_field.num_layers=1",
         "model.vector_field.d_ff=8",
         "model.vector_field.projection.num_tokens=4",
+        "model.vector_field.learn_projection=false",
     ),
     "flow_mlp_simple": (
         "model.vector_field.d_model=8",

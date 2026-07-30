@@ -352,6 +352,9 @@ class ApproxEquivTransformer(nn.Module):
     ):
         super().__init__()
 
+        if num_layers < 1:
+            raise ValueError("num_layers must be at least 1")
+
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
         conditioning_dim = (
@@ -405,9 +408,7 @@ class ApproxEquivTransformer(nn.Module):
         self.pe_type = pe_type
 
         self.projection = projection
-
-        if not learn_projection:
-            self.projection.proj.requires_grad = False
+        self.projection.requires_grad_(learn_projection)
 
         self.pe_penalty = pe_penalty
         self.projection_penalty = projection_penalty
