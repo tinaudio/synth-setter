@@ -385,7 +385,6 @@ def test_pretrained_conditioning_encoder_exposes_metric_and_conditioning_taps(
 
     assert embedding.shape == (1, _PROJECTION_DIM)
     assert conditioning.shape == (1, 6)
-    assert torch.equal(embedding, encoder.frozen_audio_embedder(audio))
     assert torch.equal(conditioning, encoder(audio))
 
 

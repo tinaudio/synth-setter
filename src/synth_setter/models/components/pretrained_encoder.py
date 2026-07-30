@@ -12,7 +12,7 @@ passes it to ``PretrainedConditioningEncoder``; call ``embed`` for the stationar
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final, Protocol, cast, runtime_checkable
 
@@ -44,10 +44,6 @@ _BATCH_ANY_SHAPE: Final = "batch ..."
 _OFFLINE_CONFIG_KEYS: Final = frozenset({"audio_config", "projection_dim", "text_config"})
 _SUPPORTED_TRUNCATION: Final = "rand_trunc"
 _SUPPORTED_PADDING: Final = "repeatpad"
-
-type AudioEmbeddingFn = Callable[
-    [Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]], Float[Tensor, _BATCH_EMBEDDING_SHAPE]
-]
 
 
 class _ClapAudioConfig(Protocol):
@@ -465,15 +461,6 @@ class PretrainedConditioningEncoder(nn.Module):
         self.backbone = backbone
         self.head = head
         self.out_dim = out_dim
-
-    @property
-    @jaxtyped(typechecker=beartype)
-    def frozen_audio_embedder(self) -> AudioEmbeddingFn:
-        """Return the frozen audio embedder used by feedback loss.
-
-        :returns: Frozen backbone embedding callable.
-        """
-        return self.embed
 
     @jaxtyped(typechecker=beartype)
     def embed(

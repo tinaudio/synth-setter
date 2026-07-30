@@ -23,6 +23,7 @@ from synth_setter.data.torchsynth_datamodule import (
     collate_audio_dict,
 )
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
+from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.vst_flow_matching_module import (
@@ -70,6 +71,7 @@ def _audio_loss() -> AudioFeedbackLoss:
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         render_batch_size=_BATCH,
+        distance=MultiScaleSpectralDistance(sample_rate=_SAMPLE_RATE),
     )
 
 
@@ -371,9 +373,8 @@ def test_audio_loss_keep_mask_zeroes_cfg_dropped_rows() -> None:
     theta_hat = torch.rand(_BATCH, _ENCODED_WIDTH) * 2 - 1
     t = torch.full((_BATCH, 1), 0.9)
 
-    encoder = _WaveformEncoder()
-    all_dropped = loss(theta_hat, t, batch["audio"], encoder, keep=torch.zeros(_BATCH))
-    all_kept = loss(theta_hat, t, batch["audio"], encoder, keep=torch.ones(_BATCH))
+    all_dropped = loss(theta_hat, t, batch["audio"], keep=torch.zeros(_BATCH))
+    all_kept = loss(theta_hat, t, batch["audio"], keep=torch.ones(_BATCH))
 
     assert all_dropped.item() == 0.0
     assert all_kept.item() > 0.0

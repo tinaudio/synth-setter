@@ -1,21 +1,19 @@
 """Audio-domain feedback loss that backpropagates through a differentiable render.
 
-The flow's one-step parameter estimate is scored against target audio in a frozen encoder's
-embedding space. Gradient reaching the network scales as ``(t - t_min) * (1 - t)``: zero at
-``t_min``, zero again at t=1 where the estimate is trivially correct, peaking midway — see
+The flow's one-step parameter estimate is scored against target audio by an injected
+distance, which owns its own space and so is independent of what conditions the flow.
+Gradient reaching the network scales as ``(t - t_min) * (1 - t)``: zero at ``t_min``, zero again at t=1 where the estimate is trivially correct, peaking midway — see
 https://github.com/tinaudio/synth-setter/issues/2665.
 
 Typical usage:
     audio_term = AudioFeedbackLoss(**audio_loss_config)(
-        theta_hat, t, target_audio, encoder
+        theta_hat, t, target_audio
     )
 """
 
 import logging
 import math
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
 
 import torch
 from beartype import beartype
@@ -41,24 +39,6 @@ _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_SHAPE = "batch"
 _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
-
-type AudioEmbeddingFn = Callable[
-    [Float[Tensor, _BATCH_AUDIO_SHAPE]], Float[Tensor, _BATCH_ANY_SHAPE]
-]
-
-
-@runtime_checkable
-class FrozenAudioEmbedderProvider(Protocol):
-    """Encoder contract for an explicitly frozen audio embedder."""
-
-    @property
-    @jaxtyped(typechecker=beartype)
-    def frozen_audio_embedder(self) -> AudioEmbeddingFn:
-        """Return the frozen waveform embedding callable.
-
-        :returns: Frozen audio embedding function.
-        """
-        ...
 
 
 @jaxtyped(typechecker=beartype)
@@ -184,82 +164,6 @@ def time_bucket_means(
     return totals / counts
 
 
-@jaxtyped(typechecker=beartype)
-def resolve_audio_embedder(encoder: nn.Module) -> AudioEmbeddingFn:
-    """Resolve the audio embedding function used by the feedback loss.
-
-    Only the explicit :class:`FrozenAudioEmbedderProvider` contract bypasses detached
-    ``functional_call``. An ordinary ``embed`` method remains part of a trainable encoder.
-
-    :param encoder: Conditioning encoder that may provide a frozen audio embedder.
-    :returns: Frozen provider embedder when declared; otherwise the encoder itself.
-    """
-    if isinstance(encoder, FrozenAudioEmbedderProvider):
-        return encoder.frozen_audio_embedder
-    return encoder
-
-
-@jaxtyped(typechecker=beartype)
-def _stationary_audio_embedder(encoder: nn.Module) -> AudioEmbeddingFn:
-    """Build an audio embedder whose parameters cannot follow the feedback gradient.
-
-    A frozen backbone is already stationary. A jointly trained encoder is instead called
-    through ``functional_call`` on detached parameters, so the term cannot shrink by
-    collapsing the encoder while gradient still reaches the rendered estimate.
-
-    :param encoder: Conditioning encoder, expected to be in eval mode already.
-    :returns: Callable mapping a waveform batch to its metric-space embedding.
-    """
-    embedder = resolve_audio_embedder(encoder)
-    if embedder is not encoder:
-        return embedder
-    frozen_state = {
-        name: tensor.detach()
-        for name, tensor in (*encoder.named_parameters(), *encoder.named_buffers())
-    }
-    return lambda signal: torch.func.functional_call(encoder, frozen_state, (signal,))
-
-
-@jaxtyped(typechecker=beartype)
-def _frozen_latent_distance(
-    encoder: nn.Module,
-    rendered: Float[Tensor, _BATCH_AUDIO_SHAPE],
-    target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
-    target_embedding: Float[Tensor, _BATCH_ANY_SHAPE] | None = None,
-) -> Float[Tensor, _BATCH_SHAPE]:
-    """Per-sample cosine distance in an encoder's embedding space, holding the space fixed.
-
-    The encoder runs in eval mode so BatchNorm running stats cannot drift, and its space is
-    held fixed either by a frozen backbone or by ``functional_call`` on detached parameters.
-    Cosine rather than raw MSE because embedding norm carries no fixed meaning while the
-    encoder trains, which would let the term's magnitude drift with activation scale alone.
-
-    :param encoder: Encoder defining the latent space; left in its original mode.
-    :param rendered: Rendered estimate shaped ``(batch, samples)``.
-    :param target_audio: Observed audio, same shape.
-    :param target_embedding: Embedding of ``target_audio`` the caller already computed;
-        ``None`` recomputes it.
-    :returns: Per-sample distance in ``[0, 2]`` shaped ``(batch,)``.
-    """
-    was_training = encoder.training
-    encoder.eval()
-    try:
-        embed = _stationary_audio_embedder(encoder)
-        if target_embedding is None:
-            target_embedding = embed(target_audio)
-        else:
-            target_embedding = target_embedding.detach()
-        # flatten(1) collapses token/layer axes so sequence encoders also reduce to a
-        # per-sample scalar instead of broadcasting against the (batch,) weight.
-        return 1.0 - functional.cosine_similarity(
-            embed(rendered).flatten(start_dim=1),
-            target_embedding.flatten(start_dim=1),
-            dim=-1,
-        )
-    finally:
-        encoder.train(was_training)
-
-
 class AudioFeedbackLoss(nn.Module):
     """Weighted latent-space audio distance on the flow's rendered one-step estimate."""
 
@@ -272,7 +176,7 @@ class AudioFeedbackLoss(nn.Module):
         sample_rate: int,
         signal_length: int,
         render_batch_size: int,
-        distance: nn.Module | None = None,
+        distance: nn.Module,
     ) -> None:
         """Configure the render geometry and the term's weighting.
 
@@ -282,9 +186,8 @@ class AudioFeedbackLoss(nn.Module):
         :param signal_length: Rendered samples per row.
         :param render_batch_size: Rows the renderer's voice holds; must cover the
             training batch size, which shorter batches pad up to.
-        :param distance: Module mapping ``(rendered, target)`` to a per-sample distance,
-            decoupling the space from the conditioning encoder; ``None`` measures cosine
-            distance in the conditioning encoder.
+        :param distance: Module mapping ``(rendered, target)`` to a per-sample distance. It
+            owns the space, so no conditioning choice can change what this term measures.
         :raises ValueError: Non-finite/non-positive ``lambda_audio``, out-of-range
             ``t_min``, non-positive ``render_batch_size``, or a trainable ``metric``.
         """
@@ -322,21 +225,16 @@ class AudioFeedbackLoss(nn.Module):
         theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
         t: Float[Tensor, _BATCH_TIME_SHAPE],
         target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
-        encoder: nn.Module,
         keep: Shaped[Tensor, _BATCH_SHAPE] | None = None,
-        target_embedding: Float[Tensor, _BATCH_ANY_SHAPE] | None = None,
     ) -> Float[Tensor, _SCALAR_SHAPE]:
         """Render the estimate and return the weighted latent distance to the target.
 
         :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.
         :param t: Flow time shaped ``(batch, 1)``.
         :param target_audio: Observed audio shaped ``(batch, signal_length)``.
-        :param encoder: Conditioning encoder, used only when no ``distance`` was configured.
         :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are
             zero-weighted because their estimate is drawn from the marginal, making the
             residual against that row's own audio near-arbitrary.
-        :param target_embedding: Conditioning-space embedding of ``target_audio`` the caller
-            already computed; ignored when a ``distance`` owns a different space.
         :returns: Scalar weighted audio loss.
         """
         params = differentiable_decode(theta_hat)
@@ -358,7 +256,4 @@ class AudioFeedbackLoss(nn.Module):
         # The stored target was hard-clamped by render_torchsynth; a straight-through
         # clamp matches that contract without zeroing gradient on clipped samples.
         rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
-        if self.distance is not None:
-            return (weight * self.distance(rendered, target_audio)).mean()
-        distance = _frozen_latent_distance(encoder, rendered, target_audio, target_embedding)
-        return (weight * distance).mean()
+        return (weight * self.distance(rendered, target_audio)).mean()

@@ -299,15 +299,7 @@ class VSTFlowMatchingModule(LightningModule):
         params = batch["params"]
         noise = batch["noise"]
 
-        if isinstance(self.encoder, PretrainedConditioningEncoder):
-            # Reuse the target embedding for conditioning and the stationary audio metric.
-            backbone_embedding = self.encoder.frozen_audio_embedder(conditioning_input)
-            conditioning = self.encoder.project(backbone_embedding)
-        else:
-            backbone_embedding = None
-            conditioning = self.encoder(conditioning_input)
-        # Reusable only when the conditioning input is the very audio the loss scores.
-        target_embedding = backbone_embedding if self._conditioning_key == "audio" else None
+        conditioning = self.encoder(conditioning_input)
         z, keep = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
 
         with torch.no_grad():
@@ -338,9 +330,7 @@ class VSTFlowMatchingModule(LightningModule):
                 theta_hat,
                 t,
                 batch["audio"],
-                encoder=self.encoder,
                 keep=keep,
-                target_embedding=target_embedding,
             )
             if self._should_probe_gradient_balance():
                 from synth_setter.models.components.audio_feedback import gradient_balance
