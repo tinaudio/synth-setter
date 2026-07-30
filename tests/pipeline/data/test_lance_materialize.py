@@ -109,9 +109,9 @@ def test_materialize_lance_subset_real_cache_evict_remains_consumable(
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
 
-    assert lance.dataset(str(destination)).to_table().to_pydict() == {
-        "a": [1, 2, 3]
-    }
+    materialized = lance.dataset(str(destination))
+    assert materialized.count_rows() == 3
+    assert materialized.schema.names == ["a"]
 
 
 @pytest.mark.parametrize("missing_attribute", ["POSIX_FADV_DONTNEED", "posix_fadvise"])

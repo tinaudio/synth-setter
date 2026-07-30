@@ -459,6 +459,7 @@ def _evict_lance_data_cache(dataset_path: Path) -> None:
     for data_path in (dataset_path / "data").rglob("*"):
         if not data_path.is_file():
             continue
+        # Keep fsync and fadvise on the file descriptor without a Python read buffer.
         with data_path.open("rb", buffering=0) as stream:
             os.fsync(stream.fileno())
             try:
