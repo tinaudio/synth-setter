@@ -48,6 +48,24 @@ class ConditioningKeepMasks:
     content: Bool[torch.Tensor, _BATCH_SHAPE]
     sketch_groups: Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"]
 
+    @classmethod
+    @jaxtyped(typechecker=beartype)
+    def content_only(cls, content: Bool[torch.Tensor, _BATCH_SHAPE]) -> ConditioningKeepMasks:
+        """Build keep state for a run with no sketch controls configured.
+
+        :param content: Content-conditioning keep state shaped ``(batch,)``.
+        :returns: Keep state whose sketch groups are all absent.
+        """
+        return cls(
+            content=content,
+            sketch_groups=torch.zeros(
+                content.shape[0],
+                len(CONTROL_GROUPS),
+                dtype=torch.bool,
+                device=content.device,
+            ),
+        )
+
     @property
     @jaxtyped(typechecker=beartype)
     def identity_keep(self) -> Bool[torch.Tensor, _BATCH_SHAPE]:
@@ -358,21 +376,32 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
     @jaxtyped(typechecker=beartype)
-    def _sketch_tokens_from_batch(
-        self,
-        batch: dict[str, Shaped[torch.Tensor, ...] | None],
-        keep: Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"],
-    ) -> Float[torch.Tensor, "batch tokens d_model"] | None:
-        """Tokenize the batch's sketch controls when a spec is configured.
+    def _prepare_conditioning(
+        self, batch: dict[str, Shaped[torch.Tensor, ...] | None]
+    ) -> tuple[
+        Shaped[torch.Tensor, "batch ..."],
+        Float[torch.Tensor, "batch tokens d_model"] | None,
+        ConditioningKeepMasks,
+    ]:
+        """Encode the content stream and apply this step's sampled dropout policy.
 
-        :param batch: Model batch; must carry ``sketch_ctrl`` when configured.
-        :param keep: Positive per-sketch-group keep mask.
-        :returns: Control tokens, or ``None`` without a configured spec.
+        :param batch: Model batch carrying content conditioning, plus ``sketch_ctrl``
+            whenever a sketch spec is configured.
+        :returns: Post-dropout conditioning, sketch control tokens (``None`` without a
+            configured spec), and the keep masks that produced both.
         """
+        conditioning = self.encoder(self._get_conditioning_from_batch(batch))
         if self.sketch_tokens is None:
-            return None
-        controls = batch["sketch_ctrl"]
-        return self.sketch_tokens(controls, keep)
+            # Legacy path: apply_dropout draws its own mask, keeping the no-sketch
+            # RNG stream identical to runs from before sketch support.
+            z, content_keep = self.vector_field.apply_dropout(
+                conditioning, self.hparams.cfg_dropout_rate
+            )
+            return z, None, ConditioningKeepMasks.content_only(content_keep)
+
+        keep = self._sample_conditioning_keep_masks(conditioning.shape[0], conditioning.device)
+        z, _ = self.vector_field.apply_dropout(conditioning, keep_mask=keep.content)
+        return z, self.sketch_tokens(batch["sketch_ctrl"], keep.sketch_groups), keep
 
     @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
@@ -433,33 +462,10 @@ class VSTFlowMatchingModule(LightningModule):
         :returns: Flow loss plus whichever optional terms this configuration produces.
         """
 
-        conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
 
-        conditioning = self.encoder(conditioning)
-        if self.sketch_tokens is None:
-            z, content_keep = self.vector_field.apply_dropout(
-                conditioning, self.hparams.cfg_dropout_rate
-            )
-            conditioning_keep = ConditioningKeepMasks(
-                content=content_keep,
-                sketch_groups=torch.zeros(
-                    conditioning.shape[0],
-                    len(CONTROL_GROUPS),
-                    dtype=torch.bool,
-                    device=conditioning.device,
-                ),
-            )
-            control_tokens = None
-        else:
-            conditioning_keep = self._sample_conditioning_keep_masks(
-                conditioning.shape[0], conditioning.device
-            )
-            z, _ = self.vector_field.apply_dropout(
-                conditioning, keep_mask=conditioning_keep.content
-            )
-            control_tokens = self._sketch_tokens_from_batch(batch, conditioning_keep.sketch_groups)
+        z, control_tokens, conditioning_keep = self._prepare_conditioning(batch)
 
         with torch.no_grad():
             t = self._sample_time(params.shape[0], params.device)

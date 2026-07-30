@@ -23,26 +23,12 @@ from synth_setter.data.vst_datamodule import SurgeDataModule as VSTPathSurgeData
 from synth_setter.data.vst_datamodule import SurgeXTDataset as VSTPathSurgeXTDataset
 from synth_setter.models.surge_fake_oracle_module import SurgeFakeOracleModule
 from synth_setter.models.surge_ff_module import SurgeFeedForwardModule
-from synth_setter.models.surge_flow_matching_module import (
-    SurgeFlowMatchingModule,
-    call_with_cfg,
-    rk4_with_cfg,
-)
+from synth_setter.models.surge_flow_matching_module import SurgeFlowMatchingModule
 from synth_setter.models.surge_flowvae_module import SurgeFlowVAEModule
 from synth_setter.models.vst_fake_oracle_module import VSTFakeOracleModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
-from synth_setter.models.vst_flow_matching_module import (
-    VSTFlowMatchingModule,
-    build_guided_velocity,
-    rk4_step,
-)
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
-
-
-def test_deprecated_flow_helpers_resolve_to_pure_replacements() -> None:
-    """Archived helper imports remain bound to the replacement APIs."""
-    assert call_with_cfg is build_guided_velocity
-    assert rk4_with_cfg is rk4_step
 
 
 def test_vst_flow_matching_import_does_not_initialize_data_vst_package() -> None:
