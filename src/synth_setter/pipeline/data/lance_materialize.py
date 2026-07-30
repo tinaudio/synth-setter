@@ -461,16 +461,17 @@ def _evict_lance_data_cache(dataset_path: Path) -> None:
             continue
         try:
             fd = os.open(data_path, os.O_RDWR)
+        except OSError as error:
+            logger.warning(
+                "lance_materialize.cache_flush_open_failed",
+                path=str(data_path),
+                errno=error.errno,
+            )
+        else:
             try:
                 os.fsync(fd)
             finally:
                 os.close(fd)
-        except OSError as error:
-            logger.warning(
-                "lance_materialize.cache_flush_failed",
-                path=str(data_path),
-                errno=error.errno,
-            )
         try:
             with data_path.open("rb", buffering=0) as stream:
                 advise(stream.fileno(), 0, 0, dontneed)

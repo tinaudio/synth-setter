@@ -50,6 +50,10 @@ def _raise_advice_error(*_args: int) -> None:
     raise OSError(5, "advice failed")
 
 
+def _raise_flush_error(_fd: int) -> None:
+    raise OSError(5, "flush failed")
+
+
 def test_materialize_lance_subset_evicts_written_data_files(
     tmp_path: Path,
     two_version_source: tuple[str, str],
@@ -144,6 +148,31 @@ def test_materialize_lance_subset_without_cache_advice_remains_consumable(
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
 
     assert lance.dataset(str(destination)).count_rows() == 3
+
+
+def test_materialize_lance_subset_cache_flush_error_propagates(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A data-file writeback failure aborts materialization.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Injects the failed file flush.
+    """
+    source, txid = two_version_source
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "fsync", _raise_flush_error)
+    monkeypatch.setattr(os, "posix_fadvise", lambda *_args: None, raising=False)
+
+    with pytest.raises(OSError, match="flush failed"):
+        materialize_lance_subset(
+            source,
+            tmp_path / "materialized.lance",
+            txid=txid,
+            columns=("a",),
+        )
 
 
 def test_materialize_lance_subset_cache_advice_error_remains_consumable(
