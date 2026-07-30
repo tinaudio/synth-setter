@@ -1,20 +1,14 @@
-# The stored-mel AST (model/encoder/ast.yaml) over a mel computed from the waveform, so
-# online-render synths reach the same backbone without a stored mel column.
-# Mono renders give one channel, so the patch embedding is narrower than the stored
-# two-channel path's (#2751).
+# The VST path's stored-mel AST, fed by a mel the model computes from the waveform.
+# The backbone IS model/encoder/ast.yaml — only the mel's source and geometry differ, so
+# the transformer's hyperparameters have one definition rather than a copy per path.
+# Mono renders give one channel, unlike the stored two-channel column (#2751).
 defaults:
   - /model/frontend@frontend: log_mel
+  - /model/encoder@backbone: ast
   - _self_
 
 _target_: synth_setter.models.components.spec_encoder.SpecEncoder
 backbone:
-  _target_: synth_setter.models.components.transformer.AudioSpectrogramTransformer
-  d_model: 512
-  n_heads: 8
-  n_layers: 8
-  n_conditioning_outputs: 8
-  patch_size: 16
-  patch_stride: 10
   input_channels: 1
   spec_shape:
     - ${model.encoder.frontend.n_mels}

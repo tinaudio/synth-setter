@@ -4,7 +4,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT,
@@ -278,6 +278,32 @@ def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head()
     )
     assert cfg.model.encoder.head.input_dim == 512
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+
+
+def test_ast_online_shares_the_vst_backbone_definition() -> None:
+    """The online profile reuses the stored-mel AST rather than restating its geometry.
+
+    Parity is the point of the split: only the mel's source (computed vs stored) and the
+    channel count may differ, so a hyperparameter that drifts between the two paths means
+    the online arm is no longer comparable to the VST arm.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        stored = compose(
+            config_name="train.yaml", overrides=["datamodule=surge", "model=vst_flow"]
+        )
+        online = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", "conditioning=ast_online"],
+        )
+
+    stored_ast = OmegaConf.to_container(stored.model.encoder, resolve=True)
+    online_ast = OmegaConf.to_container(online.model.encoder.backbone, resolve=True)
+    assert isinstance(stored_ast, dict) and isinstance(online_ast, dict)
+    # Only the mel's channel count may differ; #2751 tracks collapsing that too.
+    differing = {"input_channels"}
+    assert {k: v for k, v in stored_ast.items() if k not in differing} == {
+        k: v for k, v in online_ast.items() if k not in differing
+    }
 
 
 def test_ast_online_conditioning_derives_its_spectrogram_shape_from_the_datamodule() -> None:
