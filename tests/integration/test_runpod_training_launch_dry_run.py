@@ -111,6 +111,7 @@ def test_generic_hydra_train_command_composes_through_worker_entrypoint() -> Non
     assert "run_name: flow_audio_same" in result.stdout
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="worker headless wrapper requires Xvfb")
 def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint() -> None:
     """The workflow-shaped eval command preserves its resolver through the headless CLI."""
     wrapper = "src/synth_setter/scripts/run-linux-vst-headless.sh"
