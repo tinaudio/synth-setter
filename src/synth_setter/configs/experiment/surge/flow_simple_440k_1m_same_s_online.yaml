@@ -1,0 +1,8 @@
+# @package _global_
+
+defaults:
+  - /experiment/surge/flow_simple_440k_1m
+  - override /conditioning: same_s_online
+  - _self_
+
+run_name: flow_simple_440k_1m_same_s_online
