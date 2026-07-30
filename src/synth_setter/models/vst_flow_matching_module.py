@@ -531,12 +531,16 @@ class VSTFlowMatchingModule(LightningModule):
         :param gradient_clip_algorithm: Clip algorithm Lightning resolves from the trainer.
         :raises ValueError: Any parameter carries a non-finite gradient.
         """
-        for name, parameter in self.named_parameters():
-            if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
-                raise ValueError(
-                    f"non-finite gradient in {name}; rejecting the step at its source "
-                    "rather than letting clipping scale every parameter by NaN"
-                )
+        corrupted = [
+            name
+            for name, parameter in self.named_parameters()
+            if parameter.grad is not None and not torch.isfinite(parameter.grad).all()
+        ]
+        if corrupted:
+            raise ValueError(
+                f"non-finite gradient in {len(corrupted)} parameter(s) {corrupted}; rejecting "
+                "the step at its source rather than letting clipping scale every parameter by NaN"
+            )
         super().configure_gradient_clipping(
             optimizer,
             gradient_clip_val=gradient_clip_val,

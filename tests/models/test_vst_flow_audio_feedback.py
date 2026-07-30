@@ -480,3 +480,23 @@ def test_finite_gradients_are_clipped_to_the_configured_norm() -> None:
         torch.stack([p.grad.norm() for p in module.parameters() if p.grad is not None])
     )
     assert total.item() == pytest.approx(1.0, abs=1e-3)
+
+
+def test_non_finite_gradient_error_names_every_affected_parameter() -> None:
+    """One name cannot show whether the corruption is encoder-local or global."""
+    module = _module()
+    optimizer = torch.optim.Adam(module.parameters())
+    for parameter in module.parameters():
+        parameter.grad = torch.zeros_like(parameter)
+    encoder_parameter = next(iter(module.encoder.parameters()))
+    field_parameter = next(iter(module.vector_field.parameters()))
+    for parameter in (encoder_parameter, field_parameter):
+        corrupted = torch.zeros_like(parameter)
+        corrupted[0] = float("nan")
+        parameter.grad = corrupted
+
+    with pytest.raises(ValueError) as failure:
+        module.configure_gradient_clipping(optimizer, gradient_clip_val=1.0)
+
+    assert "encoder." in str(failure.value)
+    assert "vector_field." in str(failure.value)
