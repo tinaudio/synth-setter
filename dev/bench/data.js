@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785447168941,
+  "lastUpdate": 1785447172844,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -22486,6 +22486,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.38734424420004,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ecc22b1ed660d55fb2abada0e4d0184772d1b8cb",
+          "message": "internal-feat(training): condition torchsynth on frozen SAME latents (#2758)\n\n* internal-feat(training): add frozen SAME conditioning\n\nOnline-render synths could condition on frozen CLAP, but SAME profiles\nrequired precomputed Lance columns. Compose the existing differentiable\nSAME backbone with the trainable temporal pool so TorchSynth can consume\nSAME-S or SAME-L directly from each waveform.\n\nGeneralize the pretrained conditioning wrapper to preserve sequence\nembeddings and expose the SAME/pool width contract. Cover both profiles,\nfrozen-backbone custody, trainable pooling, and a real one-step train\nentrypoint.\n\nFixes #2752.\n\n* internal-fix(training): harden frozen SAME conditioning\n\nReject pretrained wrapper modules that omit width metadata instead of\naccepting two missing values as a match. Pin both R2 SAME trees by digest so\nexcluded backbone weights remain reproducible across checkpoint restores.\n\nExpand the behavior coverage to the eval entrypoint, row isolation, complete\npool gradient flow, and fixed-batch overfitting. Share the common tiny online\nconditioning setup so CLAP and SAME smoke tests cannot drift apart.\n\nRefs #2752.\n\n* internal-feat(training): condition the SAME loss arm on SAME-S\n\nThe dedicated SAME audio-loss experiment still inherited log-mel\nconditioning, so its feedback distance and conditioning representation did\nnot match. Select the online SAME-S profile in that experiment and exercise\nboth frozen backbones through the real train and eval entrypoints.\n\nRefs #2752.\n\n* test(training): cover frozen SAME validation failures\n\nExercise mismatched conditioner widths, malformed SAME modules, and checkpoint\ndigest rejection so the online conditioning boundary fails before training and\nthe changed validation branches remain covered.\n\nRefs #2752.\nEOF && git branch --show-current && git push",
+          "timestamp": "2026-07-30T13:42:01-07:00",
+          "tree_id": "8291824fc604ece7bac3c17c43db815e409d3f15",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ecc22b1ed660d55fb2abada0e4d0184772d1b8cb"
+        },
+        "date": 1785447171361,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.852712631225586,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.638923496305942,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09523210674524307,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0044800639152526855,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3815417289733887,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 10.908652600100003,
             "unit": "seconds"
           }
         ]
