@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785418531988,
+  "lastUpdate": 1785444484845,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -12930,6 +12930,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.05300658941268921,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b0607dbec9b39fb53626bd35ed2ce0d172c67e33",
+          "message": "internal-fix(data-pipeline): run sketch extraction on the chosen device (#2748)\n\n* internal-fix(data-pipeline): run sketch extraction on the set device\n\nThe sketch registry loader discarded its run config and left PESTO on CPU,\nso `device=` had no effect and a GPU worker idled through the whole pass.\nMeasured at 1.2 rows/s on 4 s stereo clips, which puts the 440k Surge Simple\ntrain split around 100 h and makes full-scale extraction impractical.\n\nThread the device through: `load_pesto_model` caches on (checkpoint, device)\nand moves the weights, `extract_sketch_controls_batch` takes a device and\nmoves the mono batch so the loudness, centroid, and pitch tracks all follow\nit, and the loader binds the resolved device onto the encoder.\n\nPitch activations are not bitwise portable across devices — PESTO's\nconvolutions drift up to ~1e-2 on isolated frames while the mean stays near\n1e-7 and the predicted bin is unchanged. The real-PESTO round-trip test is\ntherefore pinned to CPU on both sides rather than having its tolerance\nloosened; without that it would pass on CPU CI and fail on any GPU host.\n\nLocally 11.9 -> 115.4 rows/s at the dataset's 4 s stereo clip length.\n\nRefs #2746\n\n* chore(ci): re-run PR title check after retitle\n\n* test(data-pipeline): pin the PESTO CPU device default\n\n`load_pesto_model()` documents that omitting a device holds the weights on\nCPU, but every in-repo caller passes one, so the default never executed\nunder test.\n\nRefs #2746",
+          "timestamp": "2026-07-30T11:05:47-07:00",
+          "tree_id": "413354b2b84ceab7a12f3a5591bbffb493a61172",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b0607dbec9b39fb53626bd35ed2ce0d172c67e33"
+        },
+        "date": 1785444483397,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.118381977081299,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.070774431284517,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02685220167040825,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.02250617742538452,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.6292357444763184,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.191360994249996,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.466085910797119,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.518732880847528,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.030241981148719788,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.050448834896087646,
             "unit": "1-cos"
           },
           {
