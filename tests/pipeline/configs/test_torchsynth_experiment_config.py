@@ -376,12 +376,9 @@ def test_torchsynth_flow_validates_often_enough_to_checkpoint_within_an_epoch() 
 
 
 def test_mss_audio_loss_measures_in_the_reported_metric_space() -> None:
-    """Training on the figure evaluation reports keeps the two in the same units."""
+    """The default feedback space is the figure evaluation reports, in the same units."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            overrides=["experiment=torchsynth/flow_audio", "model/audio_loss=mss"],
-        )
+        cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio"])
 
     assert (
         cfg.model.audio_loss.distance._target_
