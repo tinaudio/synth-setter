@@ -41,7 +41,10 @@ _CONDITIONING_DIM = 32
 _AUDIBLE_PEAK = 1e-4
 _AUDIBLE_ROW_POOL = 256
 _OVERFIT_STEPS = 300
-_OVERFIT_TOTAL_THRESHOLD = 0.1
+# Scaled for the multi-scale log-mel objective, whose decibel units sit higher than the
+# cosine distance this suite scored before #2734. The relative assertion beside it is what
+# pins the collapse; this only guards against a large initial making that ratio cheap.
+_OVERFIT_TOTAL_THRESHOLD = 0.15
 
 
 class _WaveformEncoder(torch.nn.Module):
