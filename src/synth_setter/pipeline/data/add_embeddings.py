@@ -5,7 +5,7 @@ The registry keeps checkpoint loading, Arrow encoding, residency, optional depen
 index policy together for each embedding. Co-resident encoders share one Lance UDF pass; large
 SAME encoders run in separate load-write-release passes.
 
-CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,tinymu]``.
+CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,matpac_plus]``.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from synth_setter.data.vst.shapes import (
     SKETCH_PITCH_BINS,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
-    TINYMU_FIELD,
+    MATPAC_PLUS_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
@@ -59,12 +59,12 @@ from synth_setter.pipeline.data.ssondo import (
     load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
 )
-from synth_setter.pipeline.data.tinymu import (
-    DEFAULT_TINYMU_CHECKPOINT,
-    TINYMU_FRONTEND,
-    encode_tinymu_column,
-    load_tinymu_audio_encoder,
-    tinymu_artifact_digest,
+from synth_setter.pipeline.data.matpac_plus import (
+    DEFAULT_MATPAC_PLUS_CHECKPOINT,
+    MATPAC_PLUS_FRONTEND,
+    encode_matpac_plus_column,
+    load_matpac_plus_audio_encoder,
+    matpac_plus_artifact_digest,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -331,13 +331,13 @@ def _ssondo_artifact_identity(checkpoint: str) -> str:
     return _versioned_artifact_identity("ssondo", digest)
 
 
-def _tinymu_artifact_identity(checkpoint: str) -> str:
-    """Return TinyMU's generic-policy-wrapped artifact identity.
+def _matpac_plus_artifact_identity(checkpoint: str) -> str:
+    """Return the MATPAC++ package/checkpoint artifact identity.
 
     :param checkpoint: Pinned R2 URI or SHA-identical local checkpoint.
     :returns: Versioned package and checkpoint identity.
     """
-    return _versioned_artifact_identity("tinymu", tinymu_artifact_digest(checkpoint))
+    return _versioned_artifact_identity("matpac_plus", matpac_plus_artifact_digest(checkpoint))
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -597,14 +597,14 @@ def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
 
 
-def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
-    """Load TinyMU through its managed package dependency.
+def _load_matpac_plus_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load MATPAC++ through TinyMU's managed package dependency.
 
     :param checkpoint: Exact pinned URI or a hash-identical local artifact.
     :param config: Run config supplying the device.
     :returns: Frozen TinyMU encoder.
     """
-    return load_tinymu_audio_encoder(
+    return load_matpac_plus_audio_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
     )
@@ -835,19 +835,19 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         resolve_artifact_identity=_t5gemma_artifact_identity,
         input_fields=(PARAM_ARRAY_FIELD,),
     ),
-    "tinymu": EmbeddingSpec(
-        name="tinymu",
-        column=TINYMU_FIELD,
-        default_checkpoint=DEFAULT_TINYMU_CHECKPOINT,
+    "matpac_plus": EmbeddingSpec(
+        name="matpac_plus",
+        column=MATPAC_PLUS_FIELD,
+        default_checkpoint=DEFAULT_MATPAC_PLUS_CHECKPOINT,
         co_resident=False,
         index=IndexSpec(
             pool="mean",
-            vector_column=f"{TINYMU_FIELD}_vec",
-            vector_dim=TINYMU_FRONTEND.embedding_dim,
+            vector_column=f"{MATPAC_PLUS_FIELD}_vec",
+            vector_dim=MATPAC_PLUS_FRONTEND.embedding_dim,
         ),
-        load_encoder=_load_tinymu_spec_encoder,
-        encode_column=encode_tinymu_column,
-        resolve_artifact_identity=_tinymu_artifact_identity,
+        load_encoder=_load_matpac_plus_spec_encoder,
+        encode_column=encode_matpac_plus_column,
+        resolve_artifact_identity=_matpac_plus_artifact_identity,
     ),
 }
 

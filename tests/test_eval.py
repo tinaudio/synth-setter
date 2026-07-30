@@ -45,7 +45,7 @@ from synth_setter.models.components.pretrained_encoder import (
     PretrainedConditioningEncoder,
 )
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
-from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
+from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
@@ -1702,13 +1702,13 @@ def test_train_eval_embedding_conditioning_real_e2e(
 @pytest.mark.slow
 @pytest.mark.integration_r2
 @pytest.mark.r2
-def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
+def test_train_eval_matpac_plus_conditioning_real_lance_returns_finite_metric(
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     param_spec_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Train and validate real TinyMU tensors through the generic pooler.
+    """Train and validate real MATPAC++ tensors through the generic pooler.
 
     :param tmp_path: Shared train/eval output directory.
     :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
@@ -1739,16 +1739,16 @@ def test_train_eval_tinymu_conditioning_real_lance_returns_finite_metric(
         for row in validation_audio.column(AUDIO_FIELD)
     }
     assert train_rows.isdisjoint(validation_rows)
-    dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "tinymu")
+    dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "matpac_plus")
     validation_mse = _assert_conditioning_train_validate_finite(
         tmp_path,
         dataset_root,
         param_spec_name,
-        "tinymu",
+        "matpac_plus",
     )
     assert validation_mse < 2.0
     assert pooled_inputs
-    assert all(embed.shape[1] == TINYMU_FRONTEND.embedding_dim for embed in pooled_inputs)
+    assert all(embed.shape[1] == MATPAC_PLUS_FRONTEND.embedding_dim for embed in pooled_inputs)
     assert any(torch.count_nonzero(embed).item() > 0 for embed in pooled_inputs)
 
 

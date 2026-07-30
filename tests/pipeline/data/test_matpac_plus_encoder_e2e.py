@@ -1,4 +1,4 @@
-"""Production-path E2E coverage for the pinned TinyMU MATPAC representation."""
+"""Production-path E2E coverage for the pinned MATPAC++ MATPAC representation."""
 
 from __future__ import annotations
 
@@ -17,17 +17,17 @@ import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD, TINYMU_FIELD
+from synth_setter.data.vst.shapes import AUDIO_FIELD, MATPAC_PLUS_FIELD
 from synth_setter.pipeline.data.add_embeddings import MIN_ROWS_FOR_INDEX
 from synth_setter.pipeline.data.lance_shard import (
     SHARD_METADATA_SCHEMA_KEY,
     tensor_array,
     write_lance_dataset,
 )
-from synth_setter.pipeline.data.tinymu import (
-    TINYMU_FRONTEND,
-    load_tinymu_audio_encoder,
-    tinymu_num_latent_frames,
+from synth_setter.pipeline.data.matpac_plus import (
+    MATPAC_PLUS_FRONTEND,
+    load_matpac_plus_audio_encoder,
+    matpac_plus_num_latent_frames,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
@@ -79,10 +79,10 @@ def _write_audio_lance(destination: Path, rows: int = 2) -> tuple[int, int]:
     return sample_rate, clip_samples
 
 
-def _tinymu_conditioning_encoder() -> torch.nn.Module:
+def _matpac_plus_conditioning_encoder() -> torch.nn.Module:
     """Instantiate the generic conditioning encoder through the shipped Hydra profile.
 
-    :returns: Generic sequence-conditioning encoder configured for TinyMU.
+    :returns: Generic sequence-conditioning encoder configured for MATPAC++.
     """
     GlobalHydra.instance().clear()
     try:
@@ -93,9 +93,9 @@ def _tinymu_conditioning_encoder() -> torch.nn.Module:
                     "datamodule=surge_lance",
                     "datamodule.param_spec_name=surge_xt",
                     "model=vst_flow",
-                    "conditioning=tinymu",
+                    "conditioning=matpac_plus",
                     "trainer=cpu",
-                    "paths.output_dir=/tmp/synth-setter-tinymu-e2e",
+                    "paths.output_dir=/tmp/synth-setter-matpac_plus-e2e",
                 ],
             )
         return hydra.utils.instantiate(config.model.encoder).eval()
@@ -103,10 +103,10 @@ def _tinymu_conditioning_encoder() -> torch.nn.Module:
         GlobalHydra.instance().clear()
 
 
-def test_tinymu_real_encoder_distinct_audio_is_distinct_and_deterministic() -> None:
+def test_matpac_plus_real_encoder_distinct_audio_is_distinct_and_deterministic() -> None:
     """MATPAC distinguishes two real clips while repeated inference stays bitwise stable."""
     clips = _distinct_audio_clips()
-    encode = load_tinymu_audio_encoder(device="cpu")
+    encode = load_matpac_plus_audio_encoder(device="cpu")
 
     first = encode(clips, _SAMPLE_RATE)
     second = encode(clips, _SAMPLE_RATE)
@@ -116,14 +116,14 @@ def test_tinymu_real_encoder_distinct_audio_is_distinct_and_deterministic() -> N
     np.testing.assert_array_equal(first, second)
 
 
-def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
+def test_add_embeddings_real_matpac_plus_checkpoint_audio_conditions_generic_encoder(
     tmp_path: Path,
 ) -> None:
     """Real audio traverses MATPAC, Lance persistence, and generic conditioning.
 
     :param tmp_path: Isolated cache and Lance location.
     """
-    dataset_path = tmp_path / "tinymu-real.lance"
+    dataset_path = tmp_path / "matpac_plus-real.lance"
     sample_rate, clip_samples = _write_audio_lance(dataset_path)
 
     command = Path(sys.executable).with_name("synth-setter-add-embeddings")
@@ -135,7 +135,7 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
         [
             str(command),
             f"lance_uri={dataset_path}",
-            "embeddings=[tinymu]",
+            "embeddings=[matpac_plus]",
             "device=cpu",
             "batch_size=1",
             "build_index=false",
@@ -150,19 +150,19 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
 
     dataset = lance.dataset(dataset_path)
     assert dataset.count_rows() == 2
-    assert {TINYMU_FIELD, f"{TINYMU_FIELD}_vec"} <= set(dataset.schema.names)
-    values = dataset.to_table(columns=[TINYMU_FIELD, f"{TINYMU_FIELD}_vec"])
-    sequence = values.column(TINYMU_FIELD).combine_chunks().to_numpy_ndarray()
-    expected_frames = tinymu_num_latent_frames(clip_samples, sample_rate)
-    assert sequence.shape == (2, TINYMU_FRONTEND.embedding_dim, expected_frames)
+    assert {MATPAC_PLUS_FIELD, f"{MATPAC_PLUS_FIELD}_vec"} <= set(dataset.schema.names)
+    values = dataset.to_table(columns=[MATPAC_PLUS_FIELD, f"{MATPAC_PLUS_FIELD}_vec"])
+    sequence = values.column(MATPAC_PLUS_FIELD).combine_chunks().to_numpy_ndarray()
+    expected_frames = matpac_plus_num_latent_frames(clip_samples, sample_rate)
+    assert sequence.shape == (2, MATPAC_PLUS_FRONTEND.embedding_dim, expected_frames)
     assert sequence.dtype == np.float32
     assert np.isfinite(sequence).all()
     assert sequence.std() > 0.0
 
-    vectors = np.stack(values.column(f"{TINYMU_FIELD}_vec").to_numpy(zero_copy_only=False))
+    vectors = np.stack(values.column(f"{MATPAC_PLUS_FIELD}_vec").to_numpy(zero_copy_only=False))
     np.testing.assert_allclose(vectors, sequence.mean(axis=-1), rtol=1e-5, atol=1e-6)
 
-    encoder = _tinymu_conditioning_encoder()
+    encoder = _matpac_plus_conditioning_encoder()
     with torch.inference_mode():
         conditioned = encoder(torch.from_numpy(sequence))
     assert conditioned.shape == (2, 512)
@@ -170,12 +170,12 @@ def test_add_embeddings_real_tinymu_checkpoint_audio_conditions_generic_encoder(
     assert not torch.allclose(conditioned[0], conditioned[1])
 
 
-def test_tinymu_real_embeddings_build_searchable_ivf_pq_index(tmp_path: Path) -> None:
+def test_matpac_plus_real_embeddings_build_searchable_ivf_pq_index(tmp_path: Path) -> None:
     """Real MATPAC vectors build and serve the declared Lance ANN index.
 
     :param tmp_path: Isolated dataset and Hydra output root.
     """
-    dataset_path = tmp_path / "tinymu-indexed.lance"
+    dataset_path = tmp_path / "matpac_plus-indexed.lance"
     _write_audio_lance(dataset_path, rows=MIN_ROWS_FOR_INDEX)
     command = Path(sys.executable).with_name("synth-setter-add-embeddings")
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -183,7 +183,7 @@ def test_tinymu_real_embeddings_build_searchable_ivf_pq_index(tmp_path: Path) ->
         [
             str(command),
             f"lance_uri={dataset_path}",
-            "embeddings=[tinymu]",
+            "embeddings=[matpac_plus]",
             f"device={device}",
             "batch_size=16",
             "build_index=true",
@@ -199,7 +199,7 @@ def test_tinymu_real_embeddings_build_searchable_ivf_pq_index(tmp_path: Path) ->
     )
 
     dataset = lance.dataset(dataset_path)
-    vector_column = f"{TINYMU_FIELD}_vec"
+    vector_column = f"{MATPAC_PLUS_FIELD}_vec"
     indices = cast("list[dict[str, object]]", dataset.list_indices())
     assert any(index["fields"] == [vector_column] for index in indices)
     vectors = np.stack(

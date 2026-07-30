@@ -34,9 +34,9 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
     M2L_FIELD,
+    MATPAC_PLUS_FIELD,
     PARAM_ARRAY_FIELD,
     T5GEMMA_FIELD,
-    TINYMU_FIELD,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.add_embeddings import (
@@ -229,7 +229,7 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
 
 
-def test_add_embeddings_tinymu_against_real_r2_uses_registry_path(
+def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
     remote_lance_dataset_uri: str,
 ) -> None:
     """The public CLI writes real MATPAC columns through the common Lance target.
@@ -240,7 +240,7 @@ def test_add_embeddings_tinymu_against_real_r2_uses_registry_path(
         [
             _ADD_EMBEDDINGS_CMD,
             f"lance_uri={remote_lance_dataset_uri}",
-            "embeddings=[tinymu]",
+            "embeddings=[matpac_plus]",
             "build_index=false",
         ],
         check=False,
@@ -255,8 +255,8 @@ def test_add_embeddings_tinymu_against_real_r2_uses_registry_path(
 
     dataset = _open_remote_dataset(remote_lance_dataset_uri)
     assert dataset.count_rows() == _SAMPLES_PER_SHARD
-    assert {TINYMU_FIELD, f"{TINYMU_FIELD}_vec"} <= set(dataset.schema.names)
-    values = dataset.to_table(columns=[TINYMU_FIELD]).column(TINYMU_FIELD)
+    assert {MATPAC_PLUS_FIELD, f"{MATPAC_PLUS_FIELD}_vec"} <= set(dataset.schema.names)
+    values = dataset.to_table(columns=[MATPAC_PLUS_FIELD]).column(MATPAC_PLUS_FIELD)
     assert np.isfinite(values.combine_chunks().to_numpy_ndarray()).all()
 
 
