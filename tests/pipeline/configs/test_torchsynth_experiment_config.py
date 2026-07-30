@@ -344,3 +344,23 @@ def test_torchsynth_experiment_checkpoint_monitor_is_param_mse(experiment: str) 
     :param experiment: TorchSynth experiment group member under test.
     """
     assert _experiment_cfg(experiment).callbacks.model_checkpoint.monitor == "val/param_mse"
+
+
+def test_clap_audio_loss_composes_with_stored_embedding_conditioning() -> None:
+    """The feedback space is selectable independently of what conditions the flow."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_audio",
+                "conditioning=m2l",
+                "model/encoder=embedpool",
+                "model/audio_loss=clap",
+            ],
+        )
+
+    assert cfg.model.encoder._target_ == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    assert (
+        cfg.model.audio_loss.metric._target_
+        == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_pretrained"
+    )

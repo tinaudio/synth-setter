@@ -1,0 +1,15 @@
+# Cosine distance in a frozen CLAP space that the conditioning encoder does not own, so
+# stored-embedding conditioning (m2l, same_s) can still score renders in audio space.
+# Costs a second encode of the target; requires model.compile=false and a single device (#2585).
+_target_: synth_setter.models.components.audio_feedback.AudioFeedbackLoss
+lambda_audio: 0.03
+t_min: 0.8
+sample_rate: ${datamodule.sample_rate}
+signal_length: ${datamodule.signal_length}
+# The renderer's voice is allocated once at this size; shorter batches pad up to it.
+render_batch_size: ${datamodule.batch_size}
+metric:
+  _target_: synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_pretrained
+  sample_rate: ${datamodule.sample_rate}
+  checkpoint: r2://intermediate-data/models/encoders/clap-htsat-unfused
+  checkpoint_sha256: ca1bad56747e413b34ac0b722a9d5adc5e479d64321440da1227f716a7a44ada

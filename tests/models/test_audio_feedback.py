@@ -892,3 +892,58 @@ def test_wholly_non_finite_estimate_logs_without_a_finite_range(
         )
 
     assert "non_finite_rows" in caplog.text
+
+
+def _constant_encoder() -> torch.nn.Module:
+    """Build an encoder whose embedding ignores its input.
+
+    :returns: Module mapping any waveform batch to identical rows.
+    """
+
+    class _Constant(torch.nn.Module):
+        def forward(self, audio: torch.Tensor) -> torch.Tensor:
+            """Return one identical embedding row per input row.
+
+            :param audio: Waveform batch.
+            :returns: Constant embedding.
+            """
+            return torch.ones(audio.shape[0], 4)
+
+    module = _Constant()
+    module.requires_grad_(False)
+    return module
+
+
+def test_metric_space_overrides_the_conditioning_encoder() -> None:
+    """A configured metric decides the distance, so conditioning can be a different space."""
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
+    audio = torch.zeros(_BATCH, _SIGNAL_LENGTH)
+
+    coupled = _loss()(theta, torch.ones(_BATCH, 1), audio, _linear_encoder())
+    decoupled = _loss(metric=_constant_encoder())(
+        theta, torch.ones(_BATCH, 1), audio, _linear_encoder()
+    )
+
+    assert coupled.item() != decoupled.item()
+    assert decoupled.item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_trainable_metric_is_rejected() -> None:
+    """A metric that trains would move the space it is supposed to hold fixed."""
+    trainable = torch.nn.Linear(_SIGNAL_LENGTH, 4)
+
+    with pytest.raises(ValueError, match="metric"):
+        _loss(metric=trainable)
+
+
+def test_metric_ignores_a_conditioning_target_embedding() -> None:
+    """A precomputed conditioning embedding lives in the wrong space to reuse."""
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
+    audio = torch.zeros(_BATCH, _SIGNAL_LENGTH)
+    wrong_space = torch.full((_BATCH, 4), -5.0)
+
+    with_stale = _loss(metric=_constant_encoder())(
+        theta, torch.ones(_BATCH, 1), audio, _linear_encoder(), target_embedding=wrong_space
+    )
+
+    assert with_stale.item() == pytest.approx(0.0, abs=1e-6)
