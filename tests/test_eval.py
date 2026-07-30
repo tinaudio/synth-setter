@@ -60,6 +60,7 @@ from tests.conftest import (
     augment_lance_splits_with_same,
     augment_lance_splits_with_ssondo,
     build_surge_xt_embedding_train_cfg,
+    flatten_lance_embedding_column,
 )
 from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
@@ -1822,6 +1823,7 @@ def test_train_eval_matpac_plus_conditioning_real_lance_returns_finite_metric(
     }
     assert train_rows.isdisjoint(validation_rows)
     dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "matpac_plus")
+    flatten_lance_embedding_column(dataset_root, "matpac_plus")
     validation_mse = _assert_conditioning_train_validate_finite(
         tmp_path,
         dataset_root,

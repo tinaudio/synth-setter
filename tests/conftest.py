@@ -1755,6 +1755,35 @@ def augment_lance_splits_with_embedding(dataset_root: Path, embedding: str) -> P
     return dataset_root
 
 
+def flatten_lance_embedding_column(dataset_root: Path, column: str) -> None:
+    """Rewrite a tensor extension as Lance UDF-compatible flattened storage.
+
+    :param dataset_root: Directory holding ``train/val/test.lance`` splits.
+    :param column: Fixed-shape tensor column to flatten without changing row values.
+    """
+    import lance
+    import pyarrow as pa
+
+    for split in ("train", "val", "test"):
+        split_path = dataset_root / f"{split}.lance"
+        dataset = lance.dataset(split_path)
+        table = dataset.to_table()
+        index = table.schema.get_field_index(column)
+        field = table.schema.field(index)
+        tensor = table.column(index).combine_chunks()
+        values = tensor.to_numpy_ndarray()
+        scalar_values = pa.array(values.reshape(-1), type=field.type.value_type)
+        flattened = pa.FixedSizeListArray.from_arrays(scalar_values, values[0].size)
+        flattened_field = pa.field(
+            column,
+            flattened.type,
+            nullable=field.nullable,
+            metadata=field.metadata,
+        )
+        rewritten = table.set_column(index, flattened_field, flattened)
+        lance.write_dataset(rewritten, split_path, mode="overwrite")
+
+
 def augment_lance_splits_with_ssondo(dataset_root: Path, checkpoint: str) -> Path:
     """Append real S-SONDO vectors to identical smoke-dataset splits.
 
