@@ -262,10 +262,12 @@ class SkypilotLaunchConfig(BaseModel):
 
         :param value: Candidate checkout directory.
         :return: Stripped non-empty checkout directory.
+        :raises ValueError: The configured directory is blank.
         """
-        validated = _strip_optional_non_blank(value, "worker_checkout_dir must be non-empty")
-        assert validated is not None
-        return validated
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("worker_checkout_dir must be non-empty")
+        return stripped
 
     @field_validator("num_workers")
     @classmethod

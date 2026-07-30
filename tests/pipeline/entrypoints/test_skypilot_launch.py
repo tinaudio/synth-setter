@@ -6,7 +6,7 @@ calls. The ``mock_sky`` fixture replaces the launcher's module-level ``sky`` ref
 
 ``dispatch_via_skypilot(sky_cfg)`` and the Hydra-native
 ``synth-setter-skypilot-launch`` CLI are the public surfaces; the tests exercise the validation
-funnel, per-rank fan-out, generic command composition, and legacy launch-config loading.
+funnel, per-rank fan-out, generic command composition, and YAML launch-config loading.
 """
 
 from __future__ import annotations

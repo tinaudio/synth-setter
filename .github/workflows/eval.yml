@@ -118,7 +118,7 @@ jobs:
                 "exec src/synth_setter/scripts/run-linux-vst-headless.sh " \
                 "synth-setter-eval " \
                 "experiment=$EXPERIMENT " \
-                "ckpt_path=\\\${wandb:$CHECKPOINT_REF} " \
+                "ckpt_path=\"\\\${wandb:$CHECKPOINT_REF}\" " \
                 "datamodule.download_dataset_root_uri=$DATASET_ROOT_URI " \
                 "hydra.run.dir=/home/build/synth-setter/eval-run"
               python -m synth_setter.pipeline.skypilot_launch \

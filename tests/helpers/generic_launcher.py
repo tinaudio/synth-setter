@@ -15,8 +15,8 @@ def run_generic_launcher_command(
     """Run a worker command through the real decorated launcher without provisioning.
 
     The subprocess patch replaces only the external SkyPilot dispatch boundary. Its
-    replacement executes the launcher's fully wrapped command after substituting the
-    checkout sync with the current test checkout.
+    replacement executes the wrapped command in the current checkout; the real sync
+    script runs in ``--python-ready`` mode without changing the tested worktree ref.
 
     :param tmp_path: Directory for the subprocess patch and Hydra output.
     :param worker_command: Command supplied through ``skypilot_launch.cmd``.
@@ -26,13 +26,16 @@ def run_generic_launcher_command(
     launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
     (tmp_path / "sitecustomize.py").write_text(
         "import os\n"
+        "import shlex\n"
         "import subprocess\n"
         "import synth_setter.pipeline.skypilot_launch as launcher\n"
         "def run_worker(sky_cfg):\n"
-        "    prefix = 'cd /home/build/synth-setter && "
-        "bash scripts/sync_worker_checkout.sh'\n"
-        "    command = sky_cfg.cmd.replace(prefix, 'cd ' + os.environ['WORKER_REPO'], 1)\n"
-        "    subprocess.run(['/bin/bash', '-c', command], check=True)\n"
+        "    checkout = shlex.quote(os.environ['WORKER_REPO'])\n"
+        "    command = sky_cfg.cmd.replace('/home/build/synth-setter', checkout, 1)\n"
+        "    command = command.replace('bash scripts/sync_worker_checkout.sh', "
+        "'bash scripts/sync_worker_checkout.sh --python-ready', 1)\n"
+        "    env = {**os.environ, 'WORKER_GIT_REF': ''}\n"
+        "    subprocess.run(['/bin/bash', '-c', command], check=True, env=env)\n"
         "launcher.dispatch_via_skypilot = run_worker\n",
         encoding="utf-8",
     )
