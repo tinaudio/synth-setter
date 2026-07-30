@@ -212,7 +212,9 @@ def test_finetune_module_at_initialisation_matches_the_pretrained_velocity(tmp_p
         t = torch.full((_BATCH, 1), 0.9)
         z = module.encoder(batch["audio"])
         pretrained = module.vector_field.flow(batch["params"], t, z)
-        controlled = module.vector_field(batch["params"], t, z, torch.zeros(_BATCH, 1 + _WIDTH))
+        controlled = module.vector_field(
+            batch["params"], t, z, control_input=torch.zeros(_BATCH, 1 + _WIDTH)
+        )
 
     assert torch.equal(controlled, pretrained)
 
