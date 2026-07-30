@@ -9,6 +9,7 @@ the same request reuses the local copy; any drift fails loudly.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -25,7 +26,6 @@ from tenacity import (
     RetryError,
     Retrying,
     retry_if_exception,
-    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
@@ -47,6 +47,7 @@ _DIRNAME_DIGEST_CHARS = 8
 _DIRNAME_PREFIX_CHARS = 8
 _MAX_CACHE_FLUSH_ATTEMPTS = 3
 _MAX_LANCE_READ_ATTEMPTS = 3
+_RETRYABLE_CACHE_FLUSH_ERRNOS = (errno.EAGAIN, errno.EBUSY, errno.EINTR)
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
 _RETRYABLE_LANCE_IO_MARKERS = (
@@ -449,13 +450,22 @@ def _reuse_or_raise(
     return dest_path
 
 
+def _is_retryable_cache_flush_error(error: BaseException) -> bool:
+    """Return whether a materialized-file flush failure is transient.
+
+    :param error: Exception raised by ``fsync``.
+    :returns: Whether retrying the flush is safe.
+    """
+    return isinstance(error, OSError) and error.errno in _RETRYABLE_CACHE_FLUSH_ERRNOS
+
+
 def _fsync_with_retry(fd: int) -> None:
     """Flush a materialized data file under a bounded retry policy.
 
     :param fd: Open data-file descriptor.
     """
     Retrying(
-        retry=retry_if_exception_type(OSError),
+        retry=retry_if_exception(_is_retryable_cache_flush_error),
         stop=stop_after_attempt(_MAX_CACHE_FLUSH_ATTEMPTS),
         reraise=True,
     )(os.fsync, fd)
@@ -474,7 +484,7 @@ def _evict_lance_data_cache(dataset_path: Path) -> None:
         if not data_path.is_file():
             continue
         # Keep fsync and fadvise on the file descriptor without a Python read buffer.
-        with data_path.open("rb", buffering=0) as stream:
+        with data_path.open("rb+", buffering=0) as stream:
             _fsync_with_retry(stream.fileno())
             try:
                 advise(stream.fileno(), 0, 0, dontneed)

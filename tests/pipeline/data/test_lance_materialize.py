@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -148,6 +149,37 @@ def test_materialize_lance_subset_without_cache_advice_remains_consumable(
     assert lance.dataset(str(destination)).count_rows() == 3
 
 
+def test_materialize_lance_subset_transient_fsync_error_retries(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transient data-file flush failures are retried before cache advice.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Injects two transient file-flush failures.
+    """
+    source, txid = two_version_source
+    attempts = 0
+
+    def flaky_fsync(_fd: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise BlockingIOError(errno.EAGAIN, "flush busy")
+
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "fsync", flaky_fsync)
+    monkeypatch.setattr(os, "posix_fadvise", lambda *_args: None, raising=False)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert attempts == 3
+    assert lance.dataset(str(destination)).count_rows() == 3
+
+
 def test_materialize_lance_subset_cache_fsync_error_propagates(
     tmp_path: Path,
     two_version_source: tuple[str, str],
@@ -178,7 +210,7 @@ def test_materialize_lance_subset_cache_fsync_error_propagates(
             txid=txid,
             columns=("a",),
         )
-    assert attempts == 3
+    assert attempts == 1
 
 
 def test_materialize_lance_subset_cache_advice_error_remains_consumable(
