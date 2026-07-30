@@ -40,26 +40,29 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
 
 
 @pytest.mark.parametrize(
-    "launch_config_name",
+    ("launch_config_name", "experiment"),
     [
-        "train-runpod-smoke.yaml",
-        "train-runpod-flow-simple-440k.yaml",
-        "train-runpod-flow-simple-440k-volume.yaml",
-        "train-runpod-flow-simple-440k-volume-jp.yaml",
+        ("train-runpod-smoke.yaml", ""),
+        ("train-runpod-flow-simple-440k.yaml", ""),
+        ("train-runpod-flow-simple-440k-volume.yaml", ""),
+        ("train-runpod-flow-simple-440k-volume-jp.yaml", ""),
+        ("train-runpod-flow-simple-440k-1m.yaml", "surge/flow_simple_440k_1m_mel"),
     ],
     ids=[
         "smoke",
         "flow-simple-440k",
         "flow-simple-440k-volume",
         "flow-simple-440k-volume-jp",
+        "flow-simple-440k-1m",
     ],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
-    launch_config_name: str,
+    launch_config_name: str, experiment: str
 ) -> None:
     """Prepare the real SkyPilot task and compose its worker command without submission.
 
     :param launch_config_name: Shipped RunPod training launch config to exercise.
+    :param experiment: Worker experiment environment value, if required.
     """
     launch_config = load_launch_config(_LAUNCH_DIR / launch_config_name)
     assert launch_config.compute is not None
@@ -82,7 +85,7 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
         env={
             **os.environ,
             "DATASET_ROOT_URI": "",
-            "EXPERIMENT": "",
+            "EXPERIMENT": experiment,
             "HYDRA_FULL_ERROR": "1",
         },
         check=False,

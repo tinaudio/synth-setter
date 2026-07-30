@@ -1,0 +1,21 @@
+# @package _global_
+
+defaults:
+  - /experiment/surge/flow_simple_440k
+  - _self_
+
+datamodule:
+  num_workers: 1
+  persistent_workers: false
+  download_dataset_txids:
+    train: 99150e4f-2595-424f-832d-eb434ef35a10
+    val: 99fb32dd-887f-44e7-a587-908073d13db7
+    test: 3d3a410a-b47e-4940-8d4c-81464e4b39f3
+
+trainer:
+  min_steps: 1_000_000
+  max_steps: 1_000_000
+
+callbacks:
+  model_checkpoint:
+    monitor: val/param_mse_best_swap

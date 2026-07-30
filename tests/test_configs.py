@@ -939,6 +939,64 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.test is False
 
 
+def test_flow_simple_440k_1m_experiment_pins_shared_run_contract() -> None:
+    """The shared recipe freezes duration, validation, and complete snapshots."""
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple_440k_1m"])
+
+    assert cfg.datamodule.download_dataset_txids == {
+        "train": "99150e4f-2595-424f-832d-eb434ef35a10",
+        "val": "99fb32dd-887f-44e7-a587-908073d13db7",
+        "test": "3d3a410a-b47e-4940-8d4c-81464e4b39f3",
+    }
+    assert cfg.trainer.min_steps == 1_000_000
+    assert cfg.trainer.max_steps == 1_000_000
+    assert cfg.trainer.val_check_interval == 2_000
+    assert cfg.trainer.limit_val_batches == 20
+    assert cfg.training.val_audio_probe is True
+    assert cfg.training.val_audio_probe_samples == 5
+    assert cfg.datamodule.num_workers == 1
+    assert cfg.datamodule.persistent_workers is False
+    assert cfg.callbacks.log_per_param_mse.param_spec == "surge_simple"
+    assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse_best_swap"
+
+
+SURGE_SIMPLE_440K_1M_EXPERIMENTS: tuple[tuple[str, str], ...] = (
+    ("clap", "clap"),
+    ("clap_online", "audio"),
+    ("log_mel", "audio"),
+    ("m2l", "m2l"),
+    ("matpac_plus", "matpac_plus"),
+    ("mel", "mel"),
+    ("same_l", "same_l"),
+    ("same_l_online", "audio"),
+    ("same_s", "same_s"),
+    ("same_s_online", "audio"),
+    ("ssondo", "ssondo"),
+)
+
+
+@pytest.mark.parametrize(
+    ("arm", "model_conditioning"),
+    SURGE_SIMPLE_440K_1M_EXPERIMENTS,
+    ids=[case[0] for case in SURGE_SIMPLE_440K_1M_EXPERIMENTS],
+)
+def test_flow_simple_440k_1m_arm_owns_unique_runnable_conditioning(
+    arm: str, model_conditioning: str
+) -> None:
+    """Each concurrent selector resolves one runnable conditioning and identity.
+
+    :param arm: Conditioning arm encoded in the experiment selector.
+    :param model_conditioning: Resolved model conditioning mode or column.
+    """
+    cfg = _compose("train.yaml", [f"experiment=surge/flow_simple_440k_1m_{arm}"])
+
+    resolved_conditioning = cfg.model.conditioning
+    if not isinstance(resolved_conditioning, str):
+        resolved_conditioning = resolved_conditioning.column
+    assert resolved_conditioning == model_conditioning
+    assert cfg.run_name == f"flow_440k_1m_{arm}"
+
+
 def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
     """The preliminary A/B arms differ only in sketch conditioning."""
     base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
