@@ -399,6 +399,21 @@ def test_pretrained_conditioning_encoder_requires_dimension_metadata() -> None:
         )
 
 
+def test_pretrained_conditioning_encoder_rejects_mismatched_widths(
+    clap_encoder: ClapAudioEncoder,
+) -> None:
+    """A head expecting another representation width fails before the first batch.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    with pytest.raises(ValueError, match="does not match"):
+        PretrainedConditioningEncoder(
+            backbone=clap_encoder,
+            head=VectorProjection(input_dim=_PROJECTION_DIM + 1, d_model=6),
+            out_dim=6,
+        )
+
+
 def _flow_module(clap_encoder: ClapAudioEncoder) -> VSTFlowMatchingModule:
     """Build a tiny flow module with a frozen CLAP conditioning encoder.
 

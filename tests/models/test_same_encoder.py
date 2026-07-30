@@ -237,6 +237,25 @@ def test_encoder_stays_in_eval_mode_when_the_module_trains(tiny_same_checkpoint:
     assert not encoder.autoencoder.training
 
 
+def test_autoencoder_without_same_surface_is_rejected() -> None:
+    """A generic frozen module cannot masquerade as a SAME backbone."""
+    with pytest.raises(ValueError, match="latent_dim"):
+        SameAudioEncoder(sample_rate=SAME_SAMPLE_RATE, autoencoder=torch.nn.Identity())
+
+
+def test_checkpoint_with_wrong_digest_is_rejected(tiny_same_checkpoint: Path) -> None:
+    """A mutable checkpoint tree cannot silently replace the configured weights.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    with pytest.raises(ValueError, match="digest mismatch"):
+        SameAudioEncoder.from_pretrained(
+            sample_rate=SAME_SAMPLE_RATE,
+            checkpoint=str(tiny_same_checkpoint),
+            checkpoint_sha256="0" * 64,
+        )
+
+
 def test_trainable_autoencoder_is_rejected(tiny_same_checkpoint: Path) -> None:
     """A trainable backbone could move the space instead of matching the target.
 
