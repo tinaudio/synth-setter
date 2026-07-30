@@ -217,14 +217,15 @@ class ControlledFlow(nn.Module):
         self,
         x_t: Float[Tensor, _BATCH_PARAMS_SHAPE],
         t: Float[Tensor, _BATCH_TIME_SHAPE],
-        z: Float[Tensor, _BATCH_ANY_SHAPE],
+        z: Float[Tensor, _BATCH_ANY_SHAPE] | None,
         control_input: Float[Tensor, _BATCH_ANY_SHAPE] | None = None,
     ) -> Float[Tensor, _BATCH_PARAMS_SHAPE]:
         """Return the pretrained velocity below ``t_min`` and the corrected one above.
 
         :param x_t: Trajectory point shaped ``(batch, params)``.
         :param t: Flow time shaped ``(batch, 1)``.
-        :param z: Conditioning the pretrained field consumes.
+        :param z: Conditioning the pretrained field consumes, or ``None`` for the
+            classifier-free-guidance unconditional branch.
         :param control_input: Control signal, or ``None`` for the capacity-matched ablation.
         :returns: Velocity shaped ``(batch, params)``.
         """

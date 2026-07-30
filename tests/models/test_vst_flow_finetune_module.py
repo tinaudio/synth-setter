@@ -44,14 +44,33 @@ class _WaveformEncoder(torch.nn.Module):
         return self.linear(audio)
 
 
-def _base_module() -> VSTFlowMatchingModule:
+class _NormalisingEncoder(torch.nn.Module):
+    """Conditioning encoder carrying batch-norm running statistics, as the shipped ones do."""
+
+    def __init__(self) -> None:
+        """Build the normalised projection from waveform to conditioning."""
+        super().__init__()
+        self.norm = torch.nn.BatchNorm1d(_SIGNAL_LENGTH)
+        self.linear = torch.nn.Linear(_SIGNAL_LENGTH, _CONDITIONING_DIM)
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        """Map a waveform batch to a flat vector through the normalisation.
+
+        :param audio: Audio shaped ``(batch, _SIGNAL_LENGTH)``.
+        :returns: Vector shaped ``(batch, _CONDITIONING_DIM)``.
+        """
+        return self.linear(self.norm(audio))
+
+
+def _base_module(encoder: torch.nn.Module | None = None) -> VSTFlowMatchingModule:
     """Build the tiny pretrained flow a finetune starts from.
 
+    :param encoder: Conditioning encoder to train; a plain waveform encoder when omitted.
     :returns: Configured base module conditioned on raw audio.
     """
     torch.manual_seed(0)
     return VSTFlowMatchingModule(
-        encoder=_WaveformEncoder(),
+        encoder=encoder or _WaveformEncoder(),
         vector_field=VectorField(
             field_dim=_WIDTH,
             hidden_dim=32,
@@ -244,6 +263,53 @@ def test_finetune_train_step_moves_only_the_control(tmp_path: Path, control_mode
     assert _moved("vector_field.control.")
     if control_mode == "learned_audio":
         assert _moved("control_encoder.")
+
+
+def test_finetune_training_leaves_frozen_normalisation_statistics_untouched(
+    tmp_path: Path,
+) -> None:
+    """A pretrained encoder's running statistics do not drift while the control trains.
+
+    Clearing ``requires_grad`` does not stop them; only eval mode does. Drift here changes
+    the conditioning the frozen field sees, confounding the arms this module compares.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    encoder = _NormalisingEncoder()
+    base = _base_module(encoder=_NormalisingEncoder())
+    # Deliberately not calling train(): Lightning does not either before the first steps,
+    # which is exactly when the drift this guards against occurred.
+    module = _finetune(_base_checkpoint(tmp_path, base), overrides={"encoder": encoder})
+    before = {
+        name: buffer.clone()
+        for name, buffer in module.named_buffers()
+        if name.startswith("encoder.")
+    }
+    assert before, "the pretrained encoder must carry running statistics for this to test"
+
+    for _ in range(2):
+        module._train_step(_batch()).loss.backward()
+
+    for name, buffer in module.named_buffers():
+        if name.startswith("encoder."):
+            assert torch.equal(buffer, before[name]), name
+
+
+def test_finetune_validation_step_samples_through_the_controlled_flow(tmp_path: Path) -> None:
+    """Guided sampling reaches the wrapped flow through both CFG branches.
+
+    The unconditional branch passes no conditioning at all, which the wrapper must accept.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    batch = _batch()
+
+    with torch.no_grad():
+        sampled = module._sample(batch["audio"], torch.randn(_BATCH, _WIDTH), 2, 2.0)
+
+    assert sampled.shape == (_BATCH, _WIDTH)
+    assert torch.isfinite(sampled).all()
 
 
 def test_finetune_render_decodes_model_space_before_rendering(tmp_path: Path) -> None:

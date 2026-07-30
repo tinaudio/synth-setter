@@ -156,6 +156,32 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             ),
             t_min=control_t_min,
         )
+        # Lightning does not call train() before the first steps, so the override alone would
+        # leave the pretrained modules in nn.Module's default training mode until then.
+        self._freeze_pretrained_modes()
+
+    @jaxtyped(typechecker=beartype)
+    def train(self, mode: bool = True) -> VSTFlowFinetuneModule:
+        """Enter the given mode, holding every pretrained module in eval.
+
+        Clearing ``requires_grad`` freezes weights but not normalisation running statistics,
+        which keep updating in train mode. Left alone they drift the conditioning the frozen
+        field sees over the course of a finetune, confounding the arms this module compares.
+        The conditioning dropout CFG needs is applied explicitly, not by an ``nn.Dropout``,
+        so eval here does not disable it.
+
+        :param mode: Whether the trainable control enters training mode.
+        :returns: This module.
+        """
+        super().train(mode)
+        self._freeze_pretrained_modes()
+        return self
+
+    @jaxtyped(typechecker=beartype)
+    def _freeze_pretrained_modes(self) -> None:
+        """Hold the pretrained encoder and field in eval mode."""
+        self.encoder.eval()
+        self.vector_field.flow.eval()
 
     @jaxtyped(typechecker=beartype)
     def _load_pretrained(self, checkpoint: str | Path) -> None:
