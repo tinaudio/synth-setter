@@ -41,6 +41,7 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    SHIFT_FIELD,
     NUM_SKETCH_CONTROLS,
     SKETCH_PITCH_BINS,
     SKETCH_STRUCT_FIELD,
@@ -62,6 +63,14 @@ from synth_setter.same import (
     same_s_num_latent_frames,
 )
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.param_shift import (
+    PARAM_SHIFT_INPUT_FIELDS,
+    ROW_ID_FIELD,
+    ParamShifter,
+    encode_param_shift_column,
+    load_param_shifter,
+    param_shift_policy_values,
+)
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
     SSONDO_CHECKPOINT_SHA256,
@@ -121,7 +130,9 @@ type SketchEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn
+type Encoder = (
+    M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn | ParamShifter
+)
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[Mapping[str, np.ndarray], int, Encoder], pa.Array]
 type ResolveArtifactIdentityFn = Callable[[str], str]
@@ -169,7 +180,7 @@ class EmbeddingSpec:
 
     .. attribute :: column
 
-        Lance column written by the encoder.
+        Lance column carrying the embedding and targeted by the index policy.
 
     .. attribute :: default_checkpoint
 
@@ -189,7 +200,7 @@ class EmbeddingSpec:
 
     .. attribute :: encode_column
 
-        Source batch, sample rate, and encoder to Arrow array transform.
+        Decoded source columns, sample rate, and encoder to one Arrow column.
 
     .. attribute :: resolve_artifact_identity
 
@@ -198,6 +209,11 @@ class EmbeddingSpec:
     .. attribute :: input_fields
 
         Dataset columns supplying this embedding's encoder input.
+
+    .. attribute :: rerenders
+
+        Whether the encoder re-renders audio, making the run's render config and seed
+        part of its output identity.
     """
 
     name: str
@@ -209,6 +225,7 @@ class EmbeddingSpec:
     encode_column: EncodeColumnFn
     resolve_artifact_identity: ResolveArtifactIdentityFn
     input_fields: tuple[str, ...] = (AUDIO_FIELD,)
+    rerenders: bool = False
 
 
 EMBEDDING_POLICY_VERSION = 1
@@ -313,6 +330,21 @@ def _ssondo_artifact_identity(checkpoint: str) -> str:
         f"checkpoint:sha256:{SSONDO_CHECKPOINT_SHA256}"
     )
     return _versioned_artifact_identity("ssondo", digest)
+
+
+def _param_shift_artifact_identity(checkpoint: str) -> str:
+    """Return the re-render embedder's identity stem.
+
+    The output-determining settings are the render config and seed, which
+    :func:`_resolve_artifact_identity` folds in through ``EmbeddingSpec.rerenders``.
+
+    :param checkpoint: Empty placeholder; the embedder loads no checkpoint.
+    :returns: Versioned identity stem.
+    :raises ValueError: A checkpoint override was supplied for a checkpoint-free embedder.
+    """
+    if checkpoint:
+        raise ValueError("param_shift renders through a render config, not a checkpoint")
+    return _versioned_artifact_identity("param_shift", "renderer")
 
 
 def _matpac_plus_artifact_identity(checkpoint: str) -> str:
@@ -559,6 +591,17 @@ def _load_matpac_plus_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig)
     )
 
 
+def _load_param_shift_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Build the re-render shifter through the registry's uniform factory signature.
+
+    :param checkpoint: Unused registry placeholder.
+    :param config: Run config supplying the composed render selection and seed.
+    :returns: Renderer-bound param shifter.
+    """
+    del checkpoint
+    return load_param_shifter(config)
+
+
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
 
@@ -799,6 +842,20 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         resolve_artifact_identity=_t5gemma_artifact_identity,
         input_fields=(PARAM_ARRAY_FIELD,),
     ),
+    # Not an encoder: every row is re-rendered with one parameter redrawn, so the run's
+    # render config replaces a checkpoint and the pass is solo (it holds a plugin host).
+    "param_shift": EmbeddingSpec(
+        name="param_shift",
+        column=SHIFT_FIELD,
+        default_checkpoint="",
+        co_resident=False,
+        index=None,
+        load_encoder=_load_param_shift_encoder,
+        encode_column=encode_param_shift_column,
+        resolve_artifact_identity=_param_shift_artifact_identity,
+        input_fields=PARAM_SHIFT_INPUT_FIELDS,
+        rerenders=True,
+    ),
     "matpac_plus": EmbeddingSpec(
         name="matpac_plus",
         column=MATPAC_PLUS_FIELD,
@@ -877,6 +934,9 @@ def _validate_write_source(
         positive.
     """
     for field in input_fields:
+        # ``_rowid`` is synthesized by Lance per scan, so it is never in the schema.
+        if field == ROW_ID_FIELD:
+            continue
         if field not in dataset.schema.names:
             raise ValueError(f"dataset has no {field!r} column to embed")
     if batch_size < 1:
@@ -1015,10 +1075,15 @@ def _resolve_artifact_identity(spec: EmbeddingSpec, config: AddEmbeddingsConfig)
     """
     checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
     identity = spec.resolve_artifact_identity(checkpoint)
-    if PARAM_ARRAY_FIELD not in spec.input_fields:
+    policy_values: tuple[str, ...] = ()
+    if PARAM_ARRAY_FIELD in spec.input_fields:
+        policy_values += (config.param_spec_name or "", config.param_text_normalizer)
+    if spec.rerenders:
+        policy_values += tuple(param_shift_policy_values(config))
+    if not policy_values:
         return identity
     digest = hashlib.sha256()
-    for value in (config.param_spec_name or "", config.param_text_normalizer):
+    for value in policy_values:
         _update_framed_digest(digest, value.encode())
     return f"{identity}:input-policy:{digest.hexdigest()}"
 
@@ -1068,7 +1133,18 @@ def _decoded_sources(batch: pa.RecordBatch, input_fields: Sequence[str]) -> dict
     :param input_fields: Column names the selected policies read.
     :returns: Decoded arrays keyed by field name.
     """
-    return {field: batch.column(field).to_numpy_ndarray() for field in input_fields}
+    return {field: _decoded_column(batch.column(field)) for field in input_fields}
+
+
+def _decoded_column(column: pa.Array) -> np.ndarray:
+    """Decode one Arrow column, preserving tensor columns' per-row shape.
+
+    :param column: Arrow column read from the source batch.
+    :returns: ``(B, *inner_shape)`` for tensor columns, ``(B,)`` for flat ones.
+    """
+    if isinstance(column, pa.FixedShapeTensorArray):
+        return column.to_numpy_ndarray()
+    return column.to_numpy(zero_copy_only=False)
 
 
 def _encode_columns(

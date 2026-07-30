@@ -20,6 +20,9 @@ class Parameter:
     def sample(self, rng: np.random.Generator) -> Any:
         raise NotImplementedError
 
+    def encode(self, raw_value: Any) -> np.ndarray:
+        raise NotImplementedError
+
 
 class CategoricalParameter(Parameter):
     def __init__(

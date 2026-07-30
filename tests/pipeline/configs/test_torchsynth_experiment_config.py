@@ -18,7 +18,12 @@ from synth_setter.models.components.transformer import (
     AudioSpectrogramTransformer,
     LearntProjection,
 )
-from synth_setter.same import DEFAULT_SAME_S_CHECKPOINT
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_L_CHECKPOINT_SHA256,
+    DEFAULT_SAME_S_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT_SHA256,
+)
 
 
 def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
@@ -334,6 +339,58 @@ def test_ast_online_conditioning_predicts_from_online_audio() -> None:
     assert torch.isfinite(predictions).all()
 
 
+@pytest.mark.parametrize(
+    ("profile", "checkpoint", "checkpoint_sha256"),
+    [
+        (
+            "same_l_online",
+            DEFAULT_SAME_L_CHECKPOINT,
+            DEFAULT_SAME_L_CHECKPOINT_SHA256,
+        ),
+        (
+            "same_s_online",
+            DEFAULT_SAME_S_CHECKPOINT,
+            DEFAULT_SAME_S_CHECKPOINT_SHA256,
+        ),
+    ],
+)
+def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
+    profile: str, checkpoint: str, checkpoint_sha256: str
+) -> None:
+    """Online SAME profiles pool frozen waveform latents into flow conditioning.
+
+    :param profile: SAME conditioning profile under test.
+    :param checkpoint: Expected pretrained SAME checkpoint.
+    :param checkpoint_sha256: Expected materialized checkpoint digest.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", f"conditioning={profile}"],
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
+    )
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
+    assert cfg.model.encoder.backbone.checkpoint == checkpoint
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == checkpoint_sha256
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    )
+    assert cfg.model.encoder.head.embed_dim == 256
+    assert cfg.model.encoder.head.max_seq_len == 44
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+
+
 def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> None:
     """The audio arm swaps in the render-feedback term with the datamodule's geometry."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -483,3 +540,24 @@ def test_same_audio_loss_measures_in_the_stored_conditioning_space() -> None:
     assert cfg.model.audio_loss.sample_rate == 44_100
     assert cfg.model.audio_loss.render_batch_size == cfg.datamodule.batch_size
     assert cfg.model.compile is False
+
+
+def test_same_audio_loss_experiment_conditions_on_online_same_s() -> None:
+    """The SAME arm uses frozen SAME-S for both conditioning and render distance."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio_same"]
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_SAME_S_CHECKPOINT
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_SAME_S_CHECKPOINT_SHA256
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    )
