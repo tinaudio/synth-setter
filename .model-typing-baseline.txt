@@ -6,11 +6,6 @@ components/cnn.py:ConvDownsampler.forward:JAX002
 components/cnn.py:LayerNormConv1dFriendly.__init__:JAX001
 components/cnn.py:LayerNormConv1dFriendly.forward:JAX001
 components/cnn.py:LayerNormConv1dFriendly.forward:JAX002
-components/cnn.py:LogMelEncoder.__init__:JAX001
-components/cnn.py:LogMelEncoder.forward:JAX001
-components/cnn.py:LogMelEncoder.forward:JAX002
-components/cnn.py:LogMelEncoder.log_mel_spectrogram:JAX001
-components/cnn.py:LogMelEncoder.log_mel_spectrogram:JAX002
 components/cnn.py:ResidualBlock.__init__:JAX001
 components/cnn.py:ResidualBlock.forward:JAX001
 components/cnn.py:ResidualBlock.forward:JAX002
@@ -22,7 +17,6 @@ components/cnn.py:ResidualEncoder.forward:JAX001
 components/cnn.py:ResidualEncoder.forward:JAX002
 components/cnn.py:ResidualMLPBlock.__init__:JAX001
 components/cnn.py:ResidualMLPBlock.forward:JAX001
-components/cnn.py:_make_log_mel_conv_stack:JAX001
 components/embed_pool.py:EmbeddingPool.__init__:JAX001
 components/embed_pool.py:EmbeddingPool.forward:JAX001
 components/embed_pool.py:EmbeddingPool.forward:JAX002
