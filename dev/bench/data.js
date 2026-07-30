@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785450314770,
+  "lastUpdate": 1785450316851,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -22629,6 +22629,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.908652600100003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "000591be5e70c1a1f79e8874351c9cb71db3a62b",
+          "message": "internal-feat(training): split LogMelEncoder into frontend and backbone (#2755)\n\n* internal-feat(training): split LogMelEncoder into frontend and backbone\n\nLogMelEncoder fused a mel front end with a bespoke CNN backbone used nowhere\nelse. The fusion is why online-render synths could not reach the trainable\nbackbone the VST models use: the AST is spectrogram-in, so waveform\nconditioning had no way to feed it.\n\nSplit the two halves and compose them, mirroring\nPretrainedConditioningEncoder(backbone, head):\n\n- LogMelFrontend keeps the mel + dB contract, including the tests pinning it\n  to the front end the dataset writers use.\n- MelCNN becomes a spectrogram-in backbone with a configurable input channel\n  count, so a stored two-channel grid and a mono online grid share it.\n- SpecEncoder pairs any front end with any spectrogram-in backbone.\n\nLogMelEncoder disappears as a class; model/encoder/log_mel.yaml composes the\nsame graph, so existing torchsynth baselines stay reproducible.\n\nconditioning=ast_online is the payoff: the stored-mel AST over a mel the\nencoder computes from the waveform. Online rendering is mono, so its patch\nembedding takes one channel rather than the stored path's two (#2751).\n\nMel settings now live in one place, model/frontend/log_mel.yaml, because a\nsecond copy that drifts from the dataset writers' geometry is the failure mode\nthis split is meant to prevent.\n\nOnline conditioning is deliberately not the VST default: recomputing mel from\nthe stored audio column is strictly more I/O than reading mel_spec.\n\nFixes #2750\n\n* docs(training): record the spec_encoder module and its renamed test\n\nThe LogMelEncoder split renamed the test that test-quality.md quotes and added\na module README's Key Files does not list.\n\nRefs #2750\n\n* chore(ci-automation): re-run checks on a clean head SHA\n\nThe corrected PR title re-ran check-pr-title green, but statusCheckRollup keeps\nthe two superseded FAILURE runs on the same commit, so the readiness probe reads\ngate 1 as terminally failed (#2756). A fresh SHA gives a clean check suite.\n\nRefs #2756\n\n* internal-fix(testing): nest flow-audio fixture encoder overrides\n\nThe encoder split nests the geometry under frontend/backbone, so the tiny\nflow-audio training fixture's flat model.encoder.* overrides no longer resolve\nand the slow lane errored at fixture setup.\n\nRefs #2750\n\n* internal-fix(training): reuse the VST AST config in the online profile\n\nast_online.yaml restated every transformer hyperparameter, so the online and\nstored-mel arms could drift apart while both looked correct. It now includes\nmodel/encoder/ast.yaml as its backbone, leaving only the mel's source and the\nmono channel count (#2751) as differences, with a test pinning that.\n\nRefs #2750",
+          "timestamp": "2026-07-30T14:21:58-07:00",
+          "tree_id": "419120d14bcf20086ccafee94371f84934a7727c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/000591be5e70c1a1f79e8874351c9cb71db3a62b"
+        },
+        "date": 1785450316533,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.855217933654785,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.206321732699871,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10553396493196487,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0030925869941711426,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.5980987548828125,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.595752289500002,
             "unit": "seconds"
           }
         ]
