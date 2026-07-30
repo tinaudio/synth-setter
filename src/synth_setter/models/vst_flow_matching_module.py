@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -167,21 +166,35 @@ def build_guided_velocity(
     :param control_tokens: Complete conditional/unconditional control-token state.
     :returns: Two-argument guided velocity field.
     """
+    conditional = control_tokens.conditional if control_tokens is not None else None
+    unconditional = control_tokens.unconditional if control_tokens is not None else None
+    return joint_cfg_velocity(
+        _bind_branch(field, conditioning, conditional),
+        _bind_branch(field, None, unconditional),
+        cfg_strength,
+    )
+
+
+@jaxtyped(typechecker=beartype)
+def _bind_branch(
+    field: torch.nn.Module,
+    conditioning: Shaped[torch.Tensor, "batch ..."] | None,
+    control_tokens: Float[torch.Tensor, "batch tokens d_model"] | None,
+) -> _TimeField:
+    """Bind one CFG branch's conditioning into a two-argument time field.
+
+    Content conditioning binds positionally: ``ConditionalResidualMLP`` names the
+    argument ``c`` while the other backbones name it ``conditioning``.
+
+    :param field: Model velocity field.
+    :param conditioning: Encoded content conditioning, or ``None`` for the
+        unconditional branch.
+    :param control_tokens: This branch's control tokens, or ``None`` without sketch support.
+    :returns: Two-argument velocity field over parameter state and time.
+    """
     if control_tokens is None:
-        conditional_field = partial(field, conditioning=conditioning)
-        unconditional_field = partial(field, conditioning=None)
-    else:
-        conditional_field = partial(
-            field,
-            conditioning=conditioning,
-            control_tokens=control_tokens.conditional,
-        )
-        unconditional_field = partial(
-            field,
-            conditioning=None,
-            control_tokens=control_tokens.unconditional,
-        )
-    return joint_cfg_velocity(conditional_field, unconditional_field, cfg_strength)
+        return lambda x, t: field(x, t, conditioning)
+    return lambda x, t: field(x, t, conditioning, control_tokens=control_tokens)
 
 
 @jaxtyped(typechecker=beartype)
