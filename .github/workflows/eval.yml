@@ -62,7 +62,7 @@ jobs:
             exit 1
           fi
           if [[ ! "$CHECKPOINT_REF" =~ ^[A-Za-z0-9_./+-]+:v[0-9]+$ ]]; then
-            echo "::error::checkpoint_ref must name an immutable W&B artifact version"
+            echo "::error::checkpoint_ref must name an explicit W&B artifact version"
             exit 1
           fi
           if [[ ! "$DATASET_ROOT_URI" =~ ^r2://[A-Za-z0-9_./-]+$ ]]; then

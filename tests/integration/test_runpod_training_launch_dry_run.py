@@ -67,20 +67,29 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
     return task
 
 
-def _run_worker_config(task: sky.Task, executable_name: str) -> subprocess.CompletedProcess[str]:
+def _run_worker_config(
+    task: sky.Task, executable_name: str, *, wrapper: str | None = None
+) -> subprocess.CompletedProcess[str]:
     """Feed a generic task's command into its real packaged worker CLI.
 
     :param task: Composed SkyPilot task containing the wrapped command.
-    :param executable_name: Packaged worker executable named after ``exec``.
+    :param executable_name: Packaged worker executable passed to ``exec`` or ``wrapper``.
+    :param wrapper: Repository-relative executable wrapping the worker CLI, if any.
     :return: Completed worker config-composition subprocess.
     """
     assert isinstance(task.run, str)
-    _, marker, raw_args = task.run.partition(f"exec {executable_name} ")
+    command_prefix = (
+        f"exec {wrapper} {executable_name} " if wrapper else f"exec {executable_name} "
+    )
+    _, marker, raw_args = task.run.partition(command_prefix)
     assert marker
     args = shlex.split(raw_args.removesuffix(")"))
-    entrypoint = Path(sys.executable).with_name(executable_name)
+    entrypoint = (
+        _REPO_ROOT / wrapper if wrapper else Path(sys.executable).with_name(executable_name)
+    )
+    command = [entrypoint, executable_name, *args] if wrapper else [entrypoint, *args]
     return subprocess.run(  # noqa: S603 - real packaged worker CLI
-        [entrypoint, *args, "--cfg", "job"],
+        [*command, "--cfg", "job"],
         cwd=_REPO_ROOT,
         env={**os.environ, "DATASET_ROOT_URI": "", "HYDRA_FULL_ERROR": "1"},
         check=False,
@@ -102,16 +111,20 @@ def test_generic_hydra_train_command_composes_through_worker_entrypoint() -> Non
     assert "run_name: flow_audio_same" in result.stdout
 
 
-def test_generic_hydra_eval_command_composes_through_worker_entrypoint() -> None:
-    """The generic launcher's final eval command is consumable by the real CLI."""
+def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint() -> None:
+    """The workflow-shaped eval command preserves its resolver through the headless CLI."""
+    wrapper = "src/synth_setter/scripts/run-linux-vst-headless.sh"
     task = _compose_generic_task(
-        '"exec synth-setter-eval experiment=surge/ffn_simple ckpt_path=/tmp/model.ckpt"'
+        f'"exec {wrapper} synth-setter-eval experiment=surge/ffn_simple '
+        "ckpt_path='\\${wandb:tinaudio/synth-setter/model-ffn_simple:v0}'"
+        ' datamodule.download_dataset_root_uri=r2://experiments/data/test/"'
     )
 
-    result = _run_worker_config(task, "synth-setter-eval")
+    result = _run_worker_config(task, "synth-setter-eval", wrapper=wrapper)
 
     assert result.returncode == 0, result.stderr
-    assert "ckpt_path: /tmp/model.ckpt" in result.stdout
+    assert "ckpt_path: ${wandb:tinaudio/synth-setter/model-ffn_simple:v0}" in result.stdout
+    assert "download_dataset_root_uri: r2://experiments/data/test/" in result.stdout
 
 
 @pytest.mark.parametrize(

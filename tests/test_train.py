@@ -232,7 +232,7 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
 def test_train_torchsynth_same_online_advances_one_cpu_step(
     cfg_torchsynth_same_online_train: DictConfig,
 ) -> None:
-    """Train through frozen SAME-S conditioning and its temporal pool.
+    """Run the workflow-default TorchSynth SAME experiment for one CPU step.
 
     :param cfg_torchsynth_same_online_train: Tiny production-path SAME configuration.
     """

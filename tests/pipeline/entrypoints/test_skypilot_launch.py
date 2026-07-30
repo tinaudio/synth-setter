@@ -2136,6 +2136,50 @@ class TestSkypilotLaunchCli:
         assert result.returncode == 0, result.stderr
         assert "cmd: synth-setter-train experiment=torchsynth/flow_audio_same" in result.stdout
 
+    def test_packaged_cli_execute_mode_dispatches_composed_command(self, tmp_path: Path) -> None:
+        """The real Hydra wrapper composes, wraps, and dispatches a worker command.
+
+        :param tmp_path: Pytest directory containing the subprocess dispatch probe.
+        """
+        launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
+        marker = tmp_path / "dispatched-command.txt"
+        (tmp_path / "sitecustomize.py").write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            "import synth_setter.pipeline.skypilot_launch as launcher\n"
+            "def record_dispatch(sky_cfg):\n"
+            "    Path(os.environ['DISPATCH_MARKER']).write_text(sky_cfg.cmd, encoding='utf-8')\n"
+            "launcher.dispatch_via_skypilot = record_dispatch\n",
+            encoding="utf-8",
+        )
+        env = {
+            **os.environ,
+            "DISPATCH_MARKER": str(marker),
+            "PYTHONPATH": os.pathsep.join(
+                filter(None, (str(tmp_path), os.environ.get("PYTHONPATH")))
+            ),
+        }
+
+        result = subprocess.run(  # noqa: S603 - real packaged launcher CLI
+            [
+                launcher,
+                "skypilot_launch/compute=runpod/smoke",
+                'skypilot_launch.cmd="echo hello"',
+                f"hydra.run.dir={tmp_path / 'hydra-run'}",
+            ],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert marker.read_text(encoding="utf-8") == (
+            "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && (\n"
+            "echo hello\n"
+            ")"
+        )
+
     def test_packaged_cli_execute_mode_reaches_dispatch_validation(self, tmp_path: Path) -> None:
         """The real Hydra wrapper executes main and enters dispatch validation.
 

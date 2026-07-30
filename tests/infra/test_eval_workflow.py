@@ -43,7 +43,7 @@ def _dispatch_step(project_root: Path) -> dict[str, object]:
 
 
 def test_eval_workflow_exposes_science_and_compute_inputs(project_root: Path) -> None:
-    """Evaluation no longer requires a task-specific launch YAML.
+    """Evaluation exposes generic launcher inputs instead of a launch recipe.
 
     :param project_root: Repository root supplied by infra fixtures.
     """
@@ -71,7 +71,7 @@ def test_eval_workflow_validates_inputs_before_command_construction(project_root
     )
 
     assert "unsupported shell characters" in str(validate["run"])
-    assert "immutable W&B artifact version" in str(validate["run"])
+    assert "explicit W&B artifact version" in str(validate["run"])
     assert "^r2://" in str(validate["run"])
 
 

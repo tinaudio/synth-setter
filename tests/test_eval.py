@@ -1463,7 +1463,7 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     monkeypatch: pytest.MonkeyPatch,
     experiment_name: str,
 ) -> None:
-    """Predict eval resolves ckpt_path via ``${wandb:...}`` from the live registry, loads it, and runs inference.
+    """Run the workflow's W&B checkpoint contract through real prediction.
 
     The full W&B checkpoint contract end to end: train a real checkpoint, publish it to
     ``tinaudio/synth-setter-citest``, then pass ``ckpt_path=${wandb:...}`` explicitly and run
