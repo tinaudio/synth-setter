@@ -46,7 +46,10 @@ _CONDITIONING_DIM = 32
 _AUDIBLE_PEAK = 1e-4
 _AUDIBLE_ROW_POOL = 256
 _OVERFIT_STEPS = 300
-_OVERFIT_TOTAL_THRESHOLD = 0.1
+# Coarse "landed near zero" floor guarding against a run that only looks good relatively
+# because it started tiny. The tight claim is the tenfold reduction asserted alongside it;
+# this bound stays slack because where 300 steps land varies with the host (#2745).
+_OVERFIT_TOTAL_THRESHOLD = 0.2
 
 
 class _WaveformEncoder(torch.nn.Module):

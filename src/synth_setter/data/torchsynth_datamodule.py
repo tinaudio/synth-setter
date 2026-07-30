@@ -130,15 +130,19 @@ def _make_renderer(
     :returns: Cached voice and its mutation lock.
     """
     synth_config, voice = _torchsynth_types()
-    instance = voice(
-        synthconfig=synth_config(
-            batch_size=render_batch_size,
-            sample_rate=sample_rate,
-            buffer_size_seconds=signal_length / sample_rate,
-            reproducible=False,
+    # The cache outlives whatever scope first fills it. Built inside a Lightning validation
+    # loop the voice's parameters would be inference tensors, which track no version counter
+    # and so break every later gradient render in the process (#2744).
+    with torch.inference_mode(False):
+        instance = voice(
+            synthconfig=synth_config(
+                batch_size=render_batch_size,
+                sample_rate=sample_rate,
+                buffer_size_seconds=signal_length / sample_rate,
+                reproducible=False,
+            )
         )
-    )
-    return _Renderer(instance.to(torch.device(device)), threading.Lock())
+        return _Renderer(instance.to(torch.device(device)), threading.Lock())
 
 
 def _delay_by_note_start(
