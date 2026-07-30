@@ -45,7 +45,7 @@ _OFFLINE_CONFIG_KEYS: Final = frozenset({"audio_config", "projection_dim", "text
 _SUPPORTED_TRUNCATION: Final = "rand_trunc"
 _SUPPORTED_PADDING: Final = "repeatpad"
 
-type FrozenMetricTap = Callable[
+type AudioEmbeddingFn = Callable[
     [Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]], Float[Tensor, _BATCH_EMBEDDING_SHAPE]
 ]
 
@@ -468,8 +468,8 @@ class PretrainedConditioningEncoder(nn.Module):
 
     @property
     @jaxtyped(typechecker=beartype)
-    def frozen_metric_tap(self) -> FrozenMetricTap:
-        """Return the explicit stationary embedding used by audio feedback.
+    def frozen_audio_embedder(self) -> AudioEmbeddingFn:
+        """Return the frozen audio embedder used by feedback loss.
 
         :returns: Frozen backbone embedding callable.
         """
@@ -479,7 +479,7 @@ class PretrainedConditioningEncoder(nn.Module):
     def embed(
         self, audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]
     ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
-        """Embed audio in the frozen backbone's space — the audio loss's metric tap.
+        """Embed audio in the frozen backbone's space used by the audio loss.
 
         :param audio: Mono waveform batch.
         :returns: Backbone embedding shaped ``(batch, backbone.out_dim)``.

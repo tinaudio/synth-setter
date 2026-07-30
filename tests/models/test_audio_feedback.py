@@ -16,7 +16,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
     gradient_balance,
-    metric_tap,
+    resolve_audio_embedder,
     time_bucket_means,
     validate_audio_feedback_runtime,
 )
@@ -110,8 +110,8 @@ def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
     return encoder
 
 
-class _ExplicitFrozenMetricEncoder(torch.nn.Module):
-    """Encoder whose metric contract bypasses a deliberately unusable head path."""
+class _ExplicitFrozenAudioEmbedder(torch.nn.Module):
+    """Encoder exposing its frozen backbone as the audio embedder."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -120,7 +120,7 @@ class _ExplicitFrozenMetricEncoder(torch.nn.Module):
         self.head = torch.nn.Linear(8, 8)
 
     @property
-    def frozen_metric_tap(self) -> torch.nn.Module:
+    def frozen_audio_embedder(self) -> torch.nn.Module:
         """Return the stationary backbone callable.
 
         :returns: Frozen backbone.
@@ -542,21 +542,21 @@ def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     assert (gradient != 0).any()
 
 
-def test_metric_tap_with_explicit_frozen_provider_uses_stationary_backbone() -> None:
-    """The explicit marker selects the frozen tap instead of the trainable forward path."""
-    encoder = _ExplicitFrozenMetricEncoder()
+def test_resolve_audio_embedder_with_explicit_provider_uses_frozen_backbone() -> None:
+    """The explicit provider selects the backbone instead of the trainable forward path."""
+    encoder = _ExplicitFrozenAudioEmbedder()
 
-    assert metric_tap(encoder) is encoder.backbone
+    assert resolve_audio_embedder(encoder) is encoder.backbone
 
 
-def test_latent_loss_with_explicit_frozen_metric_tap_bypasses_trainable_head(
+def test_latent_loss_with_explicit_frozen_audio_embedder_bypasses_trainable_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Audio feedback measures the frozen backbone without touching the head.
 
     :param monkeypatch: Pytest patcher for the expensive renderer boundary.
     """
-    encoder = _ExplicitFrozenMetricEncoder()
+    encoder = _ExplicitFrozenAudioEmbedder()
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
 
     def fake_render(params: torch.Tensor, **kwargs: object) -> torch.Tensor:
@@ -577,11 +577,11 @@ def test_latent_loss_with_explicit_frozen_metric_tap_bypasses_trainable_head(
     assert all(parameter.grad is None for parameter in encoder.head.parameters())
 
 
-def test_metric_tap_with_ordinary_embed_method_uses_encoder_forward() -> None:
+def test_resolve_audio_embedder_with_ordinary_embed_method_uses_encoder_forward() -> None:
     """An ordinary method name cannot opt a trainable encoder out of detachment."""
     encoder = _OrdinaryEmbedEncoder()
 
-    assert metric_tap(encoder) is encoder
+    assert resolve_audio_embedder(encoder) is encoder
 
 
 def test_latent_loss_with_ordinary_embed_method_uses_detached_functional_call(

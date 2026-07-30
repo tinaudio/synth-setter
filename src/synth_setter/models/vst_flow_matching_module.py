@@ -301,7 +301,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         if isinstance(self.encoder, PretrainedConditioningEncoder):
             # Reuse the target embedding for conditioning and the stationary audio metric.
-            backbone_embedding = self.encoder.frozen_metric_tap(conditioning_input)
+            backbone_embedding = self.encoder.frozen_audio_embedder(conditioning_input)
             conditioning = self.encoder.project(backbone_embedding)
         else:
             backbone_embedding = None

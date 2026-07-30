@@ -39,19 +39,21 @@ _BATCH_SHAPE = "batch"
 _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
 
-type EmbeddingTap = Callable[[Float[Tensor, _BATCH_AUDIO_SHAPE]], Float[Tensor, _BATCH_ANY_SHAPE]]
+type AudioEmbeddingFn = Callable[
+    [Float[Tensor, _BATCH_AUDIO_SHAPE]], Float[Tensor, _BATCH_ANY_SHAPE]
+]
 
 
 @runtime_checkable
-class FrozenMetricTapProvider(Protocol):
-    """Encoder contract for an explicitly stationary metric-space tap."""
+class FrozenAudioEmbedderProvider(Protocol):
+    """Encoder contract for an explicitly frozen audio embedder."""
 
     @property
     @jaxtyped(typechecker=beartype)
-    def frozen_metric_tap(self) -> EmbeddingTap:
+    def frozen_audio_embedder(self) -> AudioEmbeddingFn:
         """Return the frozen waveform embedding callable.
 
-        :returns: Stationary embedding tap.
+        :returns: Frozen audio embedding function.
         """
         ...
 
@@ -156,23 +158,23 @@ def time_bucket_means(
 
 
 @jaxtyped(typechecker=beartype)
-def metric_tap(encoder: nn.Module) -> EmbeddingTap:
-    """Resolve the embedding the audio loss measures distance in.
+def resolve_audio_embedder(encoder: nn.Module) -> AudioEmbeddingFn:
+    """Resolve the audio embedding function used by the feedback loss.
 
-    Only the explicit :class:`FrozenMetricTapProvider` contract bypasses detached
+    Only the explicit :class:`FrozenAudioEmbedderProvider` contract bypasses detached
     ``functional_call``. An ordinary ``embed`` method remains part of a trainable encoder.
 
-    :param encoder: Encoder whose frozen metric tap is resolved.
-    :returns: Callable mapping a waveform batch to its metric-space embedding.
+    :param encoder: Conditioning encoder that may provide a frozen audio embedder.
+    :returns: Frozen provider embedder when declared; otherwise the encoder itself.
     """
-    if isinstance(encoder, FrozenMetricTapProvider):
-        return encoder.frozen_metric_tap
+    if isinstance(encoder, FrozenAudioEmbedderProvider):
+        return encoder.frozen_audio_embedder
     return encoder
 
 
 @jaxtyped(typechecker=beartype)
-def _frozen_embedder(encoder: nn.Module) -> EmbeddingTap:
-    """Build a tap that cannot be reshaped by the gradient it carries.
+def _stationary_audio_embedder(encoder: nn.Module) -> AudioEmbeddingFn:
+    """Build an audio embedder whose parameters cannot follow the feedback gradient.
 
     A frozen backbone is already stationary. A jointly trained encoder is instead called
     through ``functional_call`` on detached parameters, so the term cannot shrink by
@@ -181,8 +183,9 @@ def _frozen_embedder(encoder: nn.Module) -> EmbeddingTap:
     :param encoder: Conditioning encoder, expected to be in eval mode already.
     :returns: Callable mapping a waveform batch to its metric-space embedding.
     """
-    if isinstance(encoder, FrozenMetricTapProvider):
-        return encoder.frozen_metric_tap
+    embedder = resolve_audio_embedder(encoder)
+    if embedder is not encoder:
+        return embedder
     frozen_state = {
         name: tensor.detach()
         for name, tensor in (*encoder.named_parameters(), *encoder.named_buffers())
@@ -214,7 +217,7 @@ def _frozen_latent_distance(
     was_training = encoder.training
     encoder.eval()
     try:
-        embed = _frozen_embedder(encoder)
+        embed = _stationary_audio_embedder(encoder)
         if target_embedding is None:
             target_embedding = embed(target_audio)
         else:
