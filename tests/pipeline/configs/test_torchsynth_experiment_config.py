@@ -171,7 +171,7 @@ def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() 
     """The val-audio probe needs both a render group and the root synth identity."""
     cfg = _flow_cfg()
     assert cfg.synth.param_spec_name == "torchsynth_full"
-    assert cfg.training.val_audio_probe == "auto"
+    assert cfg.render is not None
 
 
 def test_torchsynth_flow_experiment_carries_no_audio_loss() -> None:
@@ -364,3 +364,12 @@ def test_clap_audio_loss_composes_with_stored_embedding_conditioning() -> None:
         cfg.model.audio_loss.metric._target_
         == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_pretrained"
     )
+
+
+def test_torchsynth_flow_validates_often_enough_to_checkpoint_within_an_epoch() -> None:
+    """The trainer default outlives an epoch of this size, so nothing would be saved."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow"])
+
+    assert cfg.trainer.val_check_interval == 2000
+    assert cfg.training.val_audio_probe is True

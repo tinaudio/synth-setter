@@ -38,8 +38,16 @@ datamodule:
 callbacks:
   model_checkpoint:
     monitor: val/param_mse
+
   early_stopping: null
 
-# Audio quality comes from the off-loop probe, not an in-module metric.
+# Matches the surge production cadence: at the trainer default of 10k an epoch of this
+# size ends before validation ever fires, so nothing is checkpointed.
+trainer:
+  val_check_interval: 2000
+  limit_val_batches: 20
+
+# Audio quality comes from the off-loop probe, not an in-module metric. Explicit rather
+# than auto so a missing prerequisite fails the run instead of warning and continuing.
 training:
-  val_audio_probe: auto
+  val_audio_probe: true
