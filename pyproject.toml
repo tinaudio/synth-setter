@@ -195,6 +195,11 @@ metrics = [
 notebooks = [
   "duckdb>=1.5.4",
   "smoosense[jupyter]",
+  # `jupyter nbconvert --to notebook --execute` needs nbconvert (which pulls
+  # nbclient / nbformat / jupyter-core) and ipykernel for the `python3` kernel;
+  # smoosense[jupyter] supplies neither.
+  "nbconvert>=7.16",
+  "ipykernel>=6.29",
 ]
 util = [
   "click<8.2",
