@@ -8,9 +8,12 @@ serve.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from lightning.pytorch import Trainer
+from lightning.pytorch.plugins.precision import Precision
 
 from synth_setter.data.torchsynth_datamodule import (
     TorchSynthBatch,
@@ -441,3 +444,39 @@ def test_fit_with_audio_loss_on_the_online_datamodule_completes_one_step() -> No
     trainer.fit(module, datamodule=_datamodule())
 
     assert trainer.state.finished
+
+
+def test_non_finite_gradient_raises_before_clipping_scales_every_parameter() -> None:
+    """A NaN gradient must fail at its source, not silently poison every weight."""
+    module = _module()
+    optimizer = torch.optim.Adam(module.parameters())
+    for parameter in module.parameters():
+        parameter.grad = torch.zeros_like(parameter)
+    poisoned = next(iter(module.vector_field.parameters()))
+    non_finite_grad = torch.zeros_like(poisoned)
+    non_finite_grad[0] = float("nan")
+    poisoned.grad = non_finite_grad
+
+    with pytest.raises(ValueError, match="non-finite gradient"):
+        module.configure_gradient_clipping(optimizer, gradient_clip_val=1.0)
+
+
+def test_finite_gradients_are_clipped_to_the_configured_norm() -> None:
+    """Ordinary large-but-finite gradients still clip instead of raising."""
+    module = _module()
+    optimizer = torch.optim.Adam(module.parameters())
+    for parameter in module.parameters():
+        parameter.grad = torch.full_like(parameter, 10.0)
+    module._trainer = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
+        precision_plugin=Precision(),
+        model=module,
+        gradient_clip_val=1.0,
+        gradient_clip_algorithm="norm",
+    )
+
+    module.configure_gradient_clipping(optimizer, gradient_clip_val=1.0)
+
+    total = torch.linalg.vector_norm(
+        torch.stack([p.grad.norm() for p in module.parameters() if p.grad is not None])
+    )
+    assert total.item() == pytest.approx(1.0, abs=1e-3)

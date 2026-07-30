@@ -1,5 +1,7 @@
 """Behaviour tests for the torchsynth audio-feedback loss and its runtime guards."""
 
+import logging
+
 import numpy as np
 import pytest
 import torch
@@ -851,3 +853,42 @@ def test_validate_runtime_with_multiple_devices_raises() -> None:
 def test_validate_runtime_accepts_a_supported_configuration() -> None:
     """An uncompiled single-device run is the supported configuration."""
     validate_audio_feedback_runtime(compiled=False, world_size=1)
+
+
+def test_non_finite_estimate_logs_the_finite_theta_hat_range(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The rejection reports how far the finite estimate ran, distinguishing the cause.
+
+    :param caplog: Pytest log capture for the diagnostic record.
+    """
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
+    with torch.no_grad():
+        theta[0, 0] = float("nan")
+        theta[0, 1] = -37.5
+        theta[0, 2] = 42.25
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError, match="non-finite"):
+        _loss()(
+            theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
+        )
+
+    assert "-37.5" in caplog.text
+    assert "42.25" in caplog.text
+
+
+def test_wholly_non_finite_estimate_logs_without_a_finite_range(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A fully corrupted estimate has no finite extremes to report and must not crash.
+
+    :param caplog: Pytest log capture for the diagnostic record.
+    """
+    theta = torch.full((_BATCH, _ENCODED_WIDTH), float("nan"), requires_grad=True)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError, match="non-finite"):
+        _loss()(
+            theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
+        )
+
+    assert "non_finite_rows" in caplog.text

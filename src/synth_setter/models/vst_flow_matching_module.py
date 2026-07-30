@@ -512,6 +512,37 @@ class VSTFlowMatchingModule(LightningModule):
         self.log_dict(vf_norms, on_step=True, on_epoch=False)
         self.log_dict(encoder_norms, on_step=True, on_epoch=False)
 
+    @jaxtyped(typechecker=beartype)
+    def configure_gradient_clipping(
+        self,
+        optimizer: torch.optim.Optimizer,
+        gradient_clip_val: int | float | None = None,
+        gradient_clip_algorithm: str | None = None,
+    ) -> None:
+        """Reject a non-finite gradient before clipping rescales every parameter by NaN.
+
+        ``clip_grad_norm_`` defaults to ``error_if_nonfinite=False``, so one overflowing
+        row turns the total norm into NaN and poisons all weights; the failure then
+        surfaces a step later as a diverged parameter estimate. Runs under 32-bit
+        precision only — an AMP ``GradScaler`` produces transient infs by design.
+
+        :param optimizer: Optimizer whose gradients are about to be clipped.
+        :param gradient_clip_val: Clip threshold Lightning resolves from the trainer.
+        :param gradient_clip_algorithm: Clip algorithm Lightning resolves from the trainer.
+        :raises ValueError: Any parameter carries a non-finite gradient.
+        """
+        for name, parameter in self.named_parameters():
+            if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
+                raise ValueError(
+                    f"non-finite gradient in {name}; rejecting the step at its source "
+                    "rather than letting clipping scale every parameter by NaN"
+                )
+        super().configure_gradient_clipping(
+            optimizer,
+            gradient_clip_val=gradient_clip_val,
+            gradient_clip_algorithm=gradient_clip_algorithm,
+        )
+
     def configure_optimizers(self) -> dict[str, object]:
         trainable_parameters = (
             parameter for parameter in self.trainer.model.parameters() if parameter.requires_grad

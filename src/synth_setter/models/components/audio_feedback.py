@@ -11,6 +11,7 @@ Typical usage:
     )
 """
 
+import logging
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from synth_setter.data.torchsynth_grad_render import (
     render_torchsynth_grad,
     validate_torchsynth_params,
 )
+
+logger = logging.getLogger(__name__)
 
 # Guards the gradient-ratio denominator when the flow loss contributes no gradient.
 _GRAD_NORM_EPS = 1e-12
@@ -56,6 +59,30 @@ class FrozenAudioEmbedderProvider(Protocol):
         :returns: Frozen audio embedding function.
         """
         ...
+
+
+@jaxtyped(typechecker=beartype)
+def _log_non_finite_estimate(
+    theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
+    params: Float[Tensor, _BATCH_PARAMS_SHAPE],
+) -> None:
+    """Report how far the estimate ran before it went non-finite.
+
+    ``differentiable_decode`` clamps every finite input into range, so non-finite decoded
+    params mean ``theta_hat`` arrived corrupt — the extremes bound the last finite weights.
+
+    :param theta_hat: One-step parameter estimate in model space.
+    :param params: Decoded renderer parameters holding at least one non-finite entry.
+    """
+    finite = theta_hat[torch.isfinite(theta_hat)]
+    has_finite = bool(finite.numel())
+    logger.error(
+        "non_finite_audio_estimate non_finite_rows=%d theta_hat_finite_min=%s "
+        "theta_hat_finite_max=%s",
+        int((~torch.isfinite(params).all(dim=-1)).sum().item()),
+        finite.min().item() if has_finite else "none",
+        finite.max().item() if has_finite else "none",
+    )
 
 
 @jaxtyped(typechecker=beartype)
@@ -308,6 +335,8 @@ class AudioFeedbackLoss(nn.Module):
         :returns: Scalar weighted audio loss.
         """
         params = differentiable_decode(theta_hat)
+        if not torch.isfinite(params).all():
+            _log_non_finite_estimate(theta_hat, params)
         validate_torchsynth_params(params)
         weight = self.audio_weight(t).squeeze(-1)
         if keep is not None:
