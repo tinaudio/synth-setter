@@ -1,0 +1,13 @@
+# Multi-scale log-mel distance, matching the MSS figure evaluation reports so training and
+# reporting share units. Parameter-free, so its space is stationary by construction.
+# Requires model.compile=false and a single device (#2585).
+_target_: synth_setter.models.components.audio_feedback.AudioFeedbackLoss
+lambda_audio: 0.03
+t_min: 0.8
+sample_rate: ${datamodule.sample_rate}
+signal_length: ${datamodule.signal_length}
+# The renderer's voice is allocated once at this size; shorter batches pad up to it.
+render_batch_size: ${datamodule.batch_size}
+distance:
+  _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
+  sample_rate: ${datamodule.sample_rate}

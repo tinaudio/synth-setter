@@ -7,8 +7,10 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import weakref
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -25,6 +27,11 @@ from omegaconf import DictConfig
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
+from synth_setter.clap import (
+    DEFAULT_CLAP_TRAINING_CHECKPOINT,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
+    clap_checkpoint_sha256,
+)
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -58,12 +65,13 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_SAME_L_CHECKPOINT,
     DEFAULT_SAME_S_CHECKPOINT,
     EMBEDDING_REGISTRY,
-    SKETCH_INDEX_SUB_VECTORS,
-    SKETCH_VEC_COLUMN,
     SAME_DOWNSAMPLING_RATIO,
     SAME_EMBEDDING_DIM,
     SAME_LATENT_FRAMES,
     SAME_SAMPLE_RATE,
+    SKETCH_INDEX_SUB_VECTORS,
+    SKETCH_VEC_COLUMN,
+    SKETCH_INDEX_SUB_VECTORS,
     EmbeddingSpec,
     Encoder,
     IndexSpec,
@@ -105,6 +113,16 @@ _FIXTURE_SAMPLES = 16
 _FIXTURE_FRAMES = 2
 _M2L_TIME = 3
 _LANCE_URI = "r2://bucket/run/train.lance"
+_CLAP_MIRROR_FILES = (
+    "config.json",
+    "preprocessor_config.json",
+    "pytorch_model.bin",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "vocab.json",
+    "merges.txt",
+)
 
 
 def _fake_m2l(audio: np.ndarray) -> np.ndarray:
@@ -190,7 +208,7 @@ def _fake_sketch(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 
 
 def _fake_matpac_plus(audio: np.ndarray, sample_rate: int) -> np.ndarray:
-    """Encode audio as deterministic MATPAC-shaped sequences.
+    """Encode audio as deterministic MATPAC++-shaped sequences.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate in Hz.
@@ -2025,13 +2043,17 @@ def test_load_clap_audio_encoder_with_mps_available_selects_mps(
     model.eval = lambda: model
     transformers = SimpleNamespace(
         ClapModel=SimpleNamespace(from_pretrained=lambda checkpoint: model),
-        ClapProcessor=SimpleNamespace(from_pretrained=lambda checkpoint: SimpleNamespace()),
+        ClapProcessor=SimpleNamespace(
+            from_pretrained=lambda checkpoint: SimpleNamespace(
+                feature_extractor=SimpleNamespace(sampling_rate=48_000)
+            )
+        ),
     )
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
     monkeypatch.setattr("torch.backends.mps.is_available", lambda: True)
     monkeypatch.setattr(
-        "huggingface_hub.snapshot_download",
-        lambda *_args, **_kwargs: "/cache/clap",
+        "synth_setter.pipeline.data.add_embeddings._resolve_clap_checkpoint",
+        lambda _checkpoint: "/cache/clap",
     )
     monkeypatch.setitem(sys.modules, "transformers", transformers)
 
@@ -2051,6 +2073,8 @@ def test_load_clap_audio_encoder_uses_checkpoint_argument(
     downloads: list[str] = []
 
     class Model:
+        feature_extractor = SimpleNamespace(sampling_rate=48_000)
+
         def to(self, device: str) -> Model:
             del device
             return self
@@ -2081,6 +2105,56 @@ def test_load_clap_audio_encoder_uses_checkpoint_argument(
     assert checkpoints == ["/cache/custom-clap", "/cache/custom-clap"]
 
 
+def test_load_clap_audio_encoder_uses_processor_sample_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkpoint's feature extractor controls CLAP resampling.
+
+    :param monkeypatch: Fixture installing a dependency-free Transformers boundary.
+    """
+
+    class Model:
+        def to(self, device: str) -> Model:
+            del device
+            return self
+
+        def eval(self) -> Model:
+            return self
+
+        def get_audio_features(self, input_features: torch.Tensor) -> SimpleNamespace:
+            samples = input_features[:, :1]
+            return SimpleNamespace(pooler_output=samples.repeat(1, CLAP_EMBEDDING_DIM))
+
+    class Processor:
+        feature_extractor = SimpleNamespace(sampling_rate=32_000)
+
+        def __call__(
+            self, *, audio: list[np.ndarray], sampling_rate: int, return_tensors: str
+        ) -> dict[str, torch.Tensor]:
+            assert sampling_rate == 32_000
+            assert return_tensors == "pt"
+            return {"input_features": torch.tensor([[len(audio[0])]], dtype=torch.float32)}
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings._resolve_clap_checkpoint",
+        lambda _checkpoint: "/cache/clap",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            ClapModel=SimpleNamespace(from_pretrained=lambda _checkpoint: Model()),
+            ClapProcessor=SimpleNamespace(from_pretrained=lambda _checkpoint: Processor()),
+        ),
+    )
+
+    encode = load_clap_audio_encoder(device="cpu")
+    embedding = encode(np.zeros((1, 16_000), dtype=np.float32), 16_000)
+
+    assert embedding.shape == (1, CLAP_EMBEDDING_DIM)
+    assert embedding[0, 0] == 32_000
+
+
 def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
     tmp_path: Path,
 ) -> None:
@@ -2091,13 +2165,100 @@ def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
     assert _resolve_clap_checkpoint(str(tmp_path)) == str(tmp_path)
 
 
-def test_resolve_clap_checkpoint_with_default_source_uses_canonical_cache(
+def _materialize_clap_stub(
+    downloads: list[tuple[str, Path]], uri: str, destination: Path
+) -> None:
+    """Record a checkpoint download and materialize the mirror contract.
+
+    :param downloads: Download call ledger.
+    :param uri: Source URI.
+    :param destination: Local checkpoint directory.
+    """
+    downloads.append((uri, destination))
+    destination.mkdir(parents=True, exist_ok=True)
+    for filename in _CLAP_MIRROR_FILES:
+        (destination / filename).write_bytes(b"downloaded")
+
+
+def _write_tiny_clap_checkpoint(destination: Path) -> None:
+    """Write an eight-file checkpoint loadable by real Transformers consumers.
+
+    :param destination: Checkpoint directory to materialize.
+    """
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from transformers import ClapConfig, ClapFeatureExtractor, ClapModel, PreTrainedTokenizerFast
+
+    config = ClapConfig(
+        projection_dim=8,
+        text_config={
+            "vocab_size": 8,
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "max_position_embeddings": 16,
+            "projection_dim": 8,
+        },
+        audio_config={
+            "num_mel_bins": 64,
+            "spec_size": 256,
+            "hidden_size": 32,
+            "projection_dim": 8,
+            "depths": [1, 1, 1, 1],
+            "num_attention_heads": [1, 2, 4, 8],
+            "patch_embeds_hidden_size": 4,
+            "patch_size": 4,
+            "patch_stride": [4, 4],
+            "num_classes": 8,
+            "window_size": 4,
+        },
+    )
+    model = ClapModel(config)
+    config.save_pretrained(destination)
+    torch.save(model.state_dict(), destination / "pytorch_model.bin")
+    ClapFeatureExtractor(feature_size=64, sampling_rate=48_000).save_pretrained(destination)
+    backend = Tokenizer(
+        WordLevel(
+            {"<unk>": 0, "<s>": 1, "</s>": 2, "<pad>": 3, "sound": 4},
+            unk_token="<unk>",
+        )
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="<unk>",
+        bos_token="<s>",
+        eos_token="</s>",
+        pad_token="<pad>",
+    )
+    tokenizer.save_pretrained(destination)
+    (destination / "special_tokens_map.json").write_text(
+        '{"unk_token":"<unk>","bos_token":"<s>","eos_token":"</s>","pad_token":"<pad>"}'
+    )
+    (destination / "vocab.json").write_text('{"<unk>":0}')
+    (destination / "merges.txt").write_text("#version: 0.2\n")
+
+
+def test_clap_checkpoint_defaults_keep_pipeline_and_training_sources_distinct() -> None:
+    """Offline augmentation remains on HF while training uses its pinned R2 mirror."""
+    assert DEFAULT_CLAP_CHECKPOINT == "laion/clap-htsat-unfused"
+    assert (
+        DEFAULT_CLAP_TRAINING_CHECKPOINT
+        == "r2://intermediate-data/models/encoders/clap-htsat-unfused"
+    )
+    assert (
+        DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
+        == "4a120dac122423e69160d8653fd9e5505fb35c6a482e564b62ce5ca07a7c54ca"
+    )
+
+
+def test_resolve_clap_checkpoint_with_default_hf_source_uses_legacy_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Hydrate the default CLAP snapshot into its stable model directory.
+    """The add-embeddings default retains its established HF cache path.
 
-    :param monkeypatch: Fixture isolating cache location and snapshot download.
+    :param monkeypatch: Fixture isolating and recording the HF snapshot download.
     :param tmp_path: XDG cache root for the assertion.
     """
     downloads: list[tuple[str, str | None]] = []
@@ -2112,6 +2273,215 @@ def test_resolve_clap_checkpoint_with_default_source_uses_canonical_cache(
 
     assert resolved == str(expected)
     assert downloads == [(DEFAULT_CLAP_CHECKPOINT, str(expected))]
+
+
+def test_resolve_clap_checkpoint_with_training_r2_source_uses_uri_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The training mirror hydrates outside the legacy HF cache.
+
+    :param monkeypatch: Fixture isolating cache location and R2 download.
+    :param tmp_path: XDG cache root for the assertion.
+    """
+    downloads: list[tuple[str, Path]] = []
+    legacy = tmp_path / "synth-setter/models/embeddings/clap-htsat-unfused"
+    legacy.mkdir(parents=True)
+    (legacy / "legacy").write_text("preserve")
+    expected = (
+        tmp_path
+        / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
+    )
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
+    )
+
+    resolved = _resolve_clap_checkpoint(DEFAULT_CLAP_TRAINING_CHECKPOINT)
+
+    assert resolved == str(expected)
+    assert legacy.joinpath("legacy").read_text() == "preserve"
+    assert downloads[0][0] == DEFAULT_CLAP_TRAINING_CHECKPOINT
+    assert downloads[0][1].parent == expected.parent
+    assert downloads[0][1] != expected
+
+
+def test_resolve_clap_checkpoint_from_r2_loads_real_transformers_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An atomically published mirror loads as a real model and processor.
+
+    :param monkeypatch: Fixture routing the R2 boundary through a local valid mirror.
+    :param tmp_path: Scratch source and XDG cache root.
+    """
+    from transformers import ClapModel, ClapProcessor
+
+    source = tmp_path / "source"
+    _write_tiny_clap_checkpoint(source)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: shutil.copytree(source, destination, dirs_exist_ok=True),
+    )
+
+    resolved = _resolve_clap_checkpoint("r2://bucket/tiny-clap")
+    model = ClapModel.from_pretrained(resolved)
+    processor = ClapProcessor.from_pretrained(resolved)
+
+    assert model.config.projection_dim == 8
+    assert processor.feature_extractor.sampling_rate == 48_000
+
+
+@pytest.mark.parametrize("missing_file", _CLAP_MIRROR_FILES)
+def test_resolve_clap_checkpoint_with_missing_required_file_repairs_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    missing_file: str,
+) -> None:
+    """Every model and tokenizer artifact participates in completeness.
+
+    :param monkeypatch: Fixture isolating cache location and recording R2 access.
+    :param tmp_path: XDG cache root holding the incomplete checkpoint.
+    :param missing_file: Required mirror file omitted from the published cache.
+    """
+    checkpoint_dir = (
+        tmp_path
+        / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
+    )
+    _materialize_clap_stub([], DEFAULT_CLAP_TRAINING_CHECKPOINT, checkpoint_dir)
+    (checkpoint_dir / missing_file).unlink()
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
+    )
+
+    resolved = Path(_resolve_clap_checkpoint(DEFAULT_CLAP_TRAINING_CHECKPOINT))
+
+    assert resolved == checkpoint_dir
+    assert {path.name for path in resolved.iterdir()} == set(_CLAP_MIRROR_FILES)
+    assert len(downloads) == 1
+
+
+@pytest.mark.parametrize("tree_state", ["absent", "empty"])
+def test_clap_checkpoint_sha256_without_files_raises_value_error(
+    tmp_path: Path, tree_state: str
+) -> None:
+    """A missing checkpoint tree cannot masquerade as the empty-string digest.
+
+    :param tmp_path: Scratch root for the absent or empty tree.
+    :param tree_state: Whether the checkpoint directory exists without files.
+    """
+    checkpoint_dir = tmp_path / "checkpoint"
+    if tree_state == "empty":
+        checkpoint_dir.mkdir()
+
+    with pytest.raises(ValueError, match="CLAP checkpoint .* has no files"):
+        clap_checkpoint_sha256(checkpoint_dir)
+
+
+def test_resolve_clap_checkpoint_when_download_incomplete_preserves_cache_and_cleans_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed hydration leaves prior data untouched and removes staging.
+
+    :param monkeypatch: Fixture forcing an incomplete R2 download.
+    :param tmp_path: XDG cache root holding prior incomplete data.
+    """
+    checkpoint_dir = tmp_path / "synth-setter/models/r2/bucket/clap"
+    checkpoint_dir.mkdir(parents=True)
+    sentinel = checkpoint_dir / "prior"
+    sentinel.write_text("preserve")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+
+    def download_incomplete(uri: str, destination: Path) -> None:
+        del uri
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "config.json").write_text("partial")
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite", download_incomplete
+    )
+
+    with pytest.raises(RuntimeError, match="downloaded CLAP checkpoint is incomplete"):
+        _resolve_clap_checkpoint("r2://bucket/clap")
+
+    assert sentinel.read_text() == "preserve"
+    assert list(checkpoint_dir.parent.glob(".clap.staging-*")) == []
+
+
+def test_resolve_clap_checkpoint_with_concurrent_callers_downloads_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Concurrent callers observe one atomically published checkpoint.
+
+    :param monkeypatch: Fixture coordinating the R2 boundary.
+    :param tmp_path: XDG cache root shared by both callers.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+
+    def controlled_download(uri: str, destination: Path) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+        _materialize_clap_stub(downloads, uri, destination)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite", controlled_download
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(_resolve_clap_checkpoint, DEFAULT_CLAP_TRAINING_CHECKPOINT)
+        assert entered.wait(timeout=5)
+        second = executor.submit(_resolve_clap_checkpoint, DEFAULT_CLAP_TRAINING_CHECKPOINT)
+        release.set()
+        resolved = [first.result(timeout=5), second.result(timeout=5)]
+
+    assert resolved[0] == resolved[1]
+    assert len(downloads) == 1
+    assert set(Path(resolved[0]).iterdir()) == {
+        Path(resolved[0]) / filename for filename in _CLAP_MIRROR_FILES
+    }
+
+
+def test_resolve_clap_checkpoint_with_full_r2_path_uses_distinct_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """R2 mirrors sharing a basename retain distinct local cache directories.
+
+    :param monkeypatch: Fixture replacing credential loading and download.
+    :param tmp_path: XDG cache root for the custom sources.
+    """
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
+    )
+
+    resolved_a = _resolve_clap_checkpoint("r2://bucket/team-a/clap")
+    resolved_b = _resolve_clap_checkpoint("r2://bucket/team-b/clap")
+
+    assert resolved_a != resolved_b
+    assert resolved_a.endswith("models/r2/bucket/team-a/clap")
+    assert resolved_b.endswith("models/r2/bucket/team-b/clap")
+    assert [download[0] for download in downloads] == [
+        "r2://bucket/team-a/clap",
+        "r2://bucket/team-b/clap",
+    ]
 
 
 @pytest.mark.parametrize(

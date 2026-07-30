@@ -1,11 +1,13 @@
 # @package _global_
 
-# The torchsynth flow arm with the differentiable audio-feedback term attached.
+# The torchsynth flow arm with the differentiable audio-feedback term attached, scored in
+# multi-scale log-mel. Parameter-free, so unlike the conditioning encoder's latent the space
+# cannot reshape under the term measuring in it.
 # Requires model.compile=false and a single device — see
 # https://github.com/tinaudio/synth-setter/issues/2585.
 defaults:
   - torchsynth/flow
-  - override /model/audio_loss: latent
+  - override /model/audio_loss: mss
   - _self_
 
 run_name: flow_audio

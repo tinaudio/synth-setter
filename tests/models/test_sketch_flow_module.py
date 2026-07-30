@@ -102,7 +102,6 @@ class _KeepCountAudioLoss(torch.nn.Module):
         theta_hat: torch.Tensor,
         t: torch.Tensor,
         target_audio: torch.Tensor,
-        encoder: torch.nn.Module,
         keep: torch.Tensor,
     ) -> torch.Tensor:
         """Reduce the production keep input to an observable scalar.
@@ -110,11 +109,10 @@ class _KeepCountAudioLoss(torch.nn.Module):
         :param theta_hat: Estimated parameters.
         :param t: Flow time.
         :param target_audio: Target audio.
-        :param encoder: Conditioning encoder.
         :param keep: Positive identity keep state.
         :returns: Number of retained rows in ``theta_hat`` dtype.
         """
-        del t, target_audio, encoder
+        del t, target_audio
         return keep.to(theta_hat.dtype).sum()
 
 
