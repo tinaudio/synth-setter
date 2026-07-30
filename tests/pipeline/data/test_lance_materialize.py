@@ -76,7 +76,9 @@ def test_materialize_lance_subset_evicts_written_data_files(
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
     assert advised_fds
-    (destination / "data" / "additional-fragment.lance").write_bytes(b"fragment")
+    extra_file = destination / "data" / "additional-fragment.lance"
+    extra_file.write_bytes(b"fragment")
+    extra_file.chmod(0o444)
     advised_fds.clear()
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
