@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785415199965,
+  "lastUpdate": 1785415202701,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -25007,6 +25007,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.05253243446350098,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "860f4118dc2edd07480c726845b33735284bc958",
+          "message": "internal-feat(training): add frozen online CLAP conditioning (#2734)\n\n* internal-feat(training): add frozen CLAP conditioning encoder\n\n* internal-fix(training): harden frozen CLAP integration\n\n* internal-fix(training): close frozen CLAP review gaps\n\n* internal-fix(training): address PR #2734 review feedback\n\n* refactor(training): clarify frozen audio embedder naming\n\n* internal-fix(models): fail on non-finite gradients at their source\n\n`clip_grad_norm_` defaults to `error_if_nonfinite=False`, so one overflowing\ngradient row turns the total norm into NaN and rescales every parameter by\nNaN. The run then survives a step and dies in the audio term's parameter\ncheck reporting \"the model has diverged\" — one step after the real damage,\nnaming nothing useful.\n\nReject the step in `configure_gradient_clipping` instead, naming the\noffending parameter, and log how far `theta_hat` ran before going\nnon-finite. Because `differentiable_decode` clamps every finite input into\nrange, non-finite decoded params can only mean `theta_hat` arrived corrupt,\nso the extremes bound the last finite weights.\n\nThe guard applies under 32-bit precision, the only precision the trainer\nconfigs use; an AMP GradScaler produces transient infs by design.\n\n* internal-fix(training): stabilise the CLAP overfit test's convergence\n\nAt lr 3e-2 the fixed-batch loss oscillates by orders of magnitude late in\ntraining: over the last 50 of 200 steps it spans 9.1e-6 to 3.1e-3, so the\nassertion at step 200 passed or failed on which side of the swing it landed.\nIt passed under uv and failed at 6.0e-3 under conda.\n\nLowering the rate alone does not fit in 200 steps (3e-3 reaches only 0.96),\nso take 2000 steps at 3e-3. The worst value over the last 200 steps is then\n3.9e-4, keeping the whole late trajectory below the 1e-3 threshold instead\nof only the sampled step.\n\n* internal-fix(models): name every parameter with a non-finite gradient\n\nReporting only the first name cannot distinguish encoder-local corruption\nfrom a global one, because `named_parameters()` yields the encoder first and\nthe guard stopped there. Collect every affected name and include the count.\n\n* internal-feat(training): decouple feedback metric from conditioning\n\nThe audio term measured distance in whatever encoded the conditioning, which\nconflated two roles with different requirements: the metric must be\nwaveform-in and stationary, the conditioning encoder need be neither. That\nruled out scoring renders at all under stored-embedding conditioning, where\nthe encoder consumes an embedding rather than a waveform.\n\n`AudioFeedbackLoss` now accepts an optional frozen `metric` that owns the\ndistance space and wins over the passed conditioning encoder. Trainable\nmetrics are rejected, since they would move the space they define. A\nconditioning-space `target_embedding` is ignored when a metric owns a\ndifferent space, at the cost of a second encode of the target.\n\nExisting configs keep measuring in the conditioning encoder; `audio_loss=clap`\nselects a frozen CLAP space independently of what conditions the flow.\n\n* internal-fix(training): checkpoint torchsynth runs within an epoch\n\nThe torchsynth flow arm inherited the trainer default of 10k steps between\nvalidations, but an epoch is 3125 steps, so validation never fired inside one\nand no checkpoint was ever written. A crash at step 1364 therefore discarded\nthe whole epoch. Adopt the surge production cadence of 2000 with validation\ncapped at 20 batches.\n\nMake the audio probe explicit rather than auto for the same reason: auto warns\nand continues when a prerequisite is missing, so a run can train to completion\nhaving staged no probe audio at all.\n\n* internal-fix(training): stop the ADSR pow emitting NaN gradients\n\nAnomaly detection named `PowBackward1` in the audio term's backward.\nTorchSynth's ADSR guards its ramp with `+ self.eps`, but the inverse\nbranch's `1 - ramp` destroys that guard once `minimum(ramp, one)`\nsaturates, leaving an exact zero base. With a predicted `alpha < 1` the\nlocal base derivative is `inf`, and the upstream gradient is exactly zero\nacross the envelope tail, so `0 * inf` yields NaN. It reaches every\nparameter because the render sits in the shared graph.\n\nSwap `torch.pow` for a variant that differentiates a base floored at\ntorchsynth's own eps while grafting the exact forward back, so stored\nrenders stay bitwise reproducible and the existing per-row parity pin\nstill holds. Scoped to the differentiable render, the only path that\nbackpropagates through pow.\n\n* internal-feat(training): add MSS as a selectable feedback distance\n\nThe feedback term measured cosine distance in whichever encoder produced\nthe conditioning, so stored-embedding conditioning could not score renders\nat all, and the literature's default objective was unavailable.\n\nReplace the embedder hook with a `distance` module over\n`(rendered, target)`, since a spectral distance is not expressible as a\ncosine over embeddings. `MultiScaleSpectralDistance` reproduces the MSS\nfigure evaluation reports, at Slaney norm and peak-referenced decibels, so\ntraining and reporting share units; a test pins its scales against the\nreported metric's. `CosineEmbeddingDistance` keeps the frozen-encoder case.\n\nAlso correct the CLAP checkpoint digest, which was pinned against a Hugging\nFace snapshot rather than the eight-file R2 mirror and so rejected every\nload.\n\n* internal-feat(training): score torchsynth feedback in log-mel\n\nThe feedback term measured cosine distance in the conditioning encoder's\n512-dim latent, whose 594k parameters reshape every step under the flow\nloss, so the term chased a target that moved beneath it. Over a full epoch\nits gradient stayed near-orthogonal to the flow gradient, cosine within\n+/-0.03 and sign-flipping at random.\n\nMulti-scale log-mel carries no parameters, so its space cannot move, and it\nis localized in time and frequency where the encoder latent is globally\npooled. It is also the objective the sound-matching literature defaults to,\nand the figure this repo already reports, so training and reporting now\nshare units.\n\n* internal-feat(training): decouple feedback distance from conditioning\n\nThe audio term's meaning depended on an unrelated config axis. It took the\nconditioning encoder as a required argument, defaulted to measuring in that\nencoder's space, and received conditioning state through `target_embedding`,\nso `audio_loss=latent` meant a CNN latent under audio conditioning and an\n`EmbeddingPool` latent under `m2l` - one config, two objectives, and no guard\nagainst the encoder being handed a waveform it cannot consume.\n\nMake `distance` required so the term always owns its space. `forward` drops\nboth `encoder` and `target_embedding`; the caller no longer splits its\nconditioning pass into embed and project, since that split existed only to\nsupply the reused embedding. That deletes `_frozen_latent_distance`,\n`_stationary_audio_embedder`, `resolve_audio_embedder`, the\n`FrozenAudioEmbedderProvider` protocol, and the now-unreachable\n`frozen_audio_embedder` tap.\n\nDrops the `latent` arm with them: sharing a live trainable module cannot be\nexpressed in config, only in code, so keeping it would have preserved the\ncoupling it was the sole reason for.\n\n* internal-fix(training): drop a gradient-magnitude assert on random CLAP\n\nThe waveform-gradient test asserted a nonzero gradient through a randomly\ninitialised tiny backbone, which a dead path can legitimately violate, so it\npassed under uv and failed under conda where a different build initialises\ndifferent weights.\n\nConnectivity is what the test means to pin, and `autograd.grad` already\nraises when the input is unused, so reaching the assertions proves it. Check\nthe gradient's shape and finiteness instead of its magnitude.\n\n* internal-fix(training): let the conditioning profile own its encoder\n\n`torchsynth/flow.yaml` pinned `override /model/encoder: log_mel` and set\n`model.conditioning` inline. Experiments compose after the conditioning group,\nand `_self_` applies after its own defaults, so both beat any profile the\ncaller selects: `conditioning=clap_online` silently kept the log-mel encoder\nunless `model/encoder=clap_online` was passed alongside it, and a stored-column\nprofile would have had its conditioning mode forced back to audio.\n\nThe encoder is not an independent axis - the modality determines it - so move\nthe modality, its encoder, and the widths that follow into a `log_mel`\nconditioning profile and have the experiment select it. `conditioning=` alone\nnow swaps all four together.",
+          "timestamp": "2026-07-30T04:54:29-07:00",
+          "tree_id": "3b3d3356420172853d1d353764847a8bbf0f6f9b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/860f4118dc2edd07480c726845b33735284bc958"
+        },
+        "date": 1785415202072,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 9.290551183066661,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 2.3226377957666653,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 4.0289542172333315,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.0072385543083329,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.24283003323333407,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.06070750830833352,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 7.643613815307617,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.694432735443115,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.03225705400109291,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 6.685716663799249,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.0416683554649353,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 8.03849983215332,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.7743353843688965,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.042443107813596725,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.822063767425716,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.05383223295211792,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 7.968799114227295,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 4.75112771987915,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.04215681180357933,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 6.324535141689703,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.036995649337768555,
             "unit": "1-cos"
           }
         ]
