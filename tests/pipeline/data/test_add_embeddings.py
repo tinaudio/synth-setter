@@ -57,18 +57,14 @@ from synth_setter.features.sketch_controls import (
     extract_sketch_controls_batch,
     sketch_num_frames,
 )
+from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     DEFAULT_CLAP_CHECKPOINT,
     DEFAULT_LANCE_BATCH_SIZE,
-    DEFAULT_SAME_L_CHECKPOINT,
-    DEFAULT_SAME_S_CHECKPOINT,
     EMBEDDING_REGISTRY,
-    SAME_DOWNSAMPLING_RATIO,
-    SAME_EMBEDDING_DIM,
     SAME_LATENT_FRAMES,
-    SAME_SAMPLE_RATE,
     SKETCH_INDEX_SUB_VECTORS,
     SKETCH_VEC_COLUMN,
     SKETCH_INDEX_SUB_VECTORS,
@@ -76,7 +72,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     Encoder,
     IndexSpec,
     ParamTextEncodeFn,
-    _checkpoint_tree_sha256,
     _configure_lance_logging,
     _downmix_to_mono,
     _encode_t5gemma_column,
@@ -89,7 +84,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     _prepare_resume_cache,
     _resolve_artifact_identity,
     _resolve_clap_checkpoint,
-    _resolve_same_checkpoint_dir,
     _resume_source_identity,
     _versioned_artifact_identity,
     _write_columns,
@@ -102,8 +96,19 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
-from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND, matpac_plus_num_latent_frames
+from synth_setter.pipeline.data.matpac_plus import (
+    MATPAC_PLUS_FRONTEND,
+    matpac_plus_num_latent_frames,
+)
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT,
+    SAME_DOWNSAMPLING_RATIO,
+    SAME_EMBEDDING_DIM,
+    SAME_SAMPLE_RATE,
+    resolve_same_checkpoint,
+)
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
@@ -906,10 +911,10 @@ def test_checkpoint_tree_identity_ignores_huggingface_download_bookkeeping(
     metadata.parent.mkdir(parents=True)
     model.write_bytes(b"weights")
     metadata.write_text("first timestamp")
-    first = _checkpoint_tree_sha256(tmp_path)
+    first = checkpoint_tree_sha256(tmp_path)
     metadata.write_text("different timestamp")
 
-    assert _checkpoint_tree_sha256(tmp_path) == first
+    assert checkpoint_tree_sha256(tmp_path) == first
 
 
 def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
@@ -2491,7 +2496,7 @@ def test_resolve_clap_checkpoint_with_full_r2_path_uses_distinct_cache_key(
         (DEFAULT_SAME_L_CHECKPOINT, "same-l"),
     ],
 )
-def test_resolve_same_checkpoint_dir_with_default_r2_source_uses_canonical_cache(
+def test_resolve_same_checkpoint_with_default_r2_source_uses_canonical_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     checkpoint: str,
@@ -2513,13 +2518,13 @@ def test_resolve_same_checkpoint_dir_with_default_r2_source_uses_canonical_cache
         lambda uri, destination: downloads.append((uri, destination)),
     )
 
-    resolved = _resolve_same_checkpoint_dir(checkpoint)
+    resolved = resolve_same_checkpoint(checkpoint)
 
     assert resolved == expected
     assert downloads == [(checkpoint, expected)]
 
 
-def test_resolve_same_checkpoint_dir_with_full_r2_path_uses_distinct_cache_keys(
+def test_resolve_same_checkpoint_with_full_r2_path_uses_distinct_cache_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R2 mirrors sharing a basename retain distinct local cache directories.
@@ -2533,8 +2538,8 @@ def test_resolve_same_checkpoint_dir_with_full_r2_path_uses_distinct_cache_keys(
         lambda uri, destination: downloads.append((uri, destination)),
     )
 
-    dir_a = _resolve_same_checkpoint_dir("r2://bucket/team-a/same-s")
-    dir_b = _resolve_same_checkpoint_dir("r2://bucket/team-b/same-s/")
+    dir_a = resolve_same_checkpoint("r2://bucket/team-a/same-s")
+    dir_b = resolve_same_checkpoint("r2://bucket/team-b/same-s/")
 
     assert dir_a != dir_b
     assert downloads == [
@@ -2543,17 +2548,17 @@ def test_resolve_same_checkpoint_dir_with_full_r2_path_uses_distinct_cache_keys(
     ]
 
 
-def test_resolve_same_checkpoint_dir_with_existing_local_path_returns_it(
+def test_resolve_same_checkpoint_with_existing_local_path_returns_it(
     tmp_path: Path,
 ) -> None:
     """An existing local checkpoint directory needs no download.
 
     :param tmp_path: Existing local checkpoint directory.
     """
-    assert _resolve_same_checkpoint_dir(str(tmp_path)) == tmp_path
+    assert resolve_same_checkpoint(str(tmp_path)) == tmp_path
 
 
-def test_resolve_same_checkpoint_dir_with_repo_id_uses_hub_snapshot(
+def test_resolve_same_checkpoint_with_repo_id_uses_hub_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A HuggingFace repo ID resolves to its downloaded snapshot directory.
@@ -2567,7 +2572,7 @@ def test_resolve_same_checkpoint_dir_with_repo_id_uses_hub_snapshot(
         lambda repo_id: downloads.append(repo_id) or str(tmp_path),
     )
 
-    resolved = _resolve_same_checkpoint_dir("org/same-checkpoint")
+    resolved = resolve_same_checkpoint("org/same-checkpoint")
 
     assert resolved == tmp_path
     assert downloads == ["org/same-checkpoint"]

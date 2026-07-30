@@ -14,6 +14,7 @@ from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
+from synth_setter.same import DEFAULT_SAME_S_CHECKPOINT
 
 
 def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
@@ -397,3 +398,24 @@ def test_conditioning_profile_alone_selects_its_encoder() -> None:
         cfg.model.encoder._target_
         == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
     )
+
+
+def test_same_audio_loss_measures_in_the_stored_conditioning_space() -> None:
+    """The SAME arm scores renders in the space the `same_s` column is written in."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio_same"]
+        )
+
+    assert (
+        cfg.model.audio_loss.distance._target_
+        == "synth_setter.models.components.audio_distance.LatentMseDistance"
+    )
+    assert (
+        cfg.model.audio_loss.distance.encoder._target_
+        == "synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.audio_loss.distance.encoder.checkpoint == DEFAULT_SAME_S_CHECKPOINT
+    assert cfg.model.audio_loss.sample_rate == 44_100
+    assert cfg.model.audio_loss.render_batch_size == cfg.datamodule.batch_size
+    assert cfg.model.compile is False
