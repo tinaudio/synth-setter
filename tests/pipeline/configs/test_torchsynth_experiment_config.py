@@ -476,3 +476,24 @@ def test_same_audio_loss_measures_in_the_stored_conditioning_space() -> None:
     assert cfg.model.audio_loss.sample_rate == 44_100
     assert cfg.model.audio_loss.render_batch_size == cfg.datamodule.batch_size
     assert cfg.model.compile is False
+
+
+def test_same_audio_loss_experiment_conditions_on_online_same_s() -> None:
+    """The SAME arm uses frozen SAME-S for both conditioning and render distance."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio_same"]
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_SAME_S_CHECKPOINT
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_SAME_S_CHECKPOINT_SHA256
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    )

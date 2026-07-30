@@ -556,8 +556,7 @@ def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=torchsynth/flow",
-                "conditioning=same_s_online",
+                "experiment=torchsynth/flow_audio_same",
                 "trainer=cpu",
                 "callbacks=none",
                 "logger=[]",
@@ -568,6 +567,9 @@ def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
         cfg.datamodule.signal_length = 4_096
         cfg.model.encoder.backbone.checkpoint = str(checkpoint)
         cfg.model.encoder.backbone.checkpoint_sha256 = None
+        cfg.model.audio_loss.t_min = 0.0
+        cfg.model.audio_loss.distance.encoder.checkpoint = str(checkpoint)
+        cfg.model.audio_loss.distance.encoder.checkpoint_sha256 = None
         cfg.model.encoder.head.embed_dim = TINY_SAME_LATENT_DIM
         cfg.model.encoder.head.max_seq_len = 8
         cfg.model.encoder.head.num_heads = 1

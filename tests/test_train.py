@@ -240,7 +240,9 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
 
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
-    encoder = object_dict["model"].encoder
+    model = object_dict["model"]
+    encoder = model.encoder
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, SameAudioEncoder)
     assert isinstance(encoder.head, EmbeddingPool)
