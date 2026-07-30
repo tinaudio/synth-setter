@@ -55,6 +55,11 @@ class TestDefaults:
 
         assert cfg.worker_checkout_dir == "/workspace/repo"
 
+    def test_blank_worker_checkout_dir_raises(self) -> None:
+        """A configured checkout directory must contain a path."""
+        with pytest.raises(ValueError, match="worker_checkout_dir must be non-empty"):
+            SkypilotLaunchConfig(worker_checkout_dir="   ")
+
     def test_default_tail_is_false(self) -> None:
         """Detach by default; ``tail`` is opt-in."""
         assert SkypilotLaunchConfig().tail is False

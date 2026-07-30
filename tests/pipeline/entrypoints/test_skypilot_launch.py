@@ -2147,7 +2147,7 @@ class TestSkypilotLaunchCli:
             "import os\n"
             "from pathlib import Path\n"
             "import synth_setter.pipeline.skypilot_launch as launcher\n"
-            "def record_dispatch(sky_cfg):\n"
+            "def record_dispatch(sky_cfg: object) -> None:\n"
             "    Path(os.environ['DISPATCH_MARKER']).write_text(sky_cfg.cmd, encoding='utf-8')\n"
             "launcher.dispatch_via_skypilot = record_dispatch\n",
             encoding="utf-8",

@@ -19,7 +19,7 @@ def _write_dispatch_patch(tmp_path: Path) -> None:
         "import shlex\n"
         "import subprocess\n"
         "import synth_setter.pipeline.skypilot_launch as launcher\n"
-        "def run_worker(sky_cfg):\n"
+        "def run_worker(sky_cfg: object) -> None:\n"
         "    checkout = shlex.quote(os.environ['WORKER_REPO'])\n"
         "    command = sky_cfg.cmd.replace('/home/build/synth-setter', checkout, 1)\n"
         "    command = command.replace('bash scripts/sync_worker_checkout.sh', "

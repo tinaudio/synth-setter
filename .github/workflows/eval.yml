@@ -50,22 +50,9 @@ jobs:
       - name: Validate launcher inputs
         run: |
           set -euo pipefail
-          if [[ ! "$EXPERIMENT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
-            echo "::error::experiment contains unsupported shell characters"
-            exit 1
-          fi
-          if [[ ! "$COMPUTE_OPTION" =~ ^[A-Za-z0-9_./-]+$ ]]; then
-            echo "::error::compute contains unsupported shell characters"
-            exit 1
-          fi
-          if [[ ! "$CHECKPOINT_REF" =~ ^[A-Za-z0-9_./+-]+:v[0-9]+$ ]]; then
-            echo "::error::checkpoint_ref must name an explicit W&B artifact version"
-            exit 1
-          fi
-          if [[ ! "$DATASET_ROOT_URI" =~ ^r2://[A-Za-z0-9_./-]+$ ]]; then
-            echo "::error::dataset_root_uri must be an r2:// URI without shell characters"
-            exit 1
-          fi
+          ./scripts/validate_skypilot_workflow_inputs.sh \
+            "$EXPERIMENT" "$COMPUTE_OPTION" \
+            "$CHECKPOINT_REF" "$DATASET_ROOT_URI"
 
       # Exports canonical storage env plus the rclone projection for the container
       # env pass-through below; rclone itself runs on the SkyPilot worker, not the runner.

@@ -47,14 +47,8 @@ jobs:
                 ;;
             esac
           fi
-          if [[ ! "$EXPERIMENT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
-            echo "::error::experiment contains unsupported shell characters"
-            exit 1
-          fi
-          if [[ ! "$COMPUTE_OPTION" =~ ^[A-Za-z0-9_./-]+$ ]]; then
-            echo "::error::compute contains unsupported shell characters"
-            exit 1
-          fi
+          ./scripts/validate_skypilot_workflow_inputs.sh \
+            "$EXPERIMENT" "$COMPUTE_OPTION"
           echo "Resolved compute option: $COMPUTE_OPTION"
           echo "COMPUTE_OPTION=$COMPUTE_OPTION" >> "$GITHUB_ENV"
 

@@ -73,6 +73,7 @@ def test_eval_workflow_exposes_science_and_compute_inputs(project_root: Path) ->
         ("COMPUTE_OPTION", "runpod/smoke;echo-owned"),
         ("CHECKPOINT_REF", "model:v0;echo-owned"),
         ("DATASET_ROOT_URI", "r2://bucket/data;echo-owned"),
+        ("DATASET_ROOT_URI", "r2:///dataset"),
     ],
 )
 def test_eval_workflow_rejects_shell_syntax_in_inputs(

@@ -45,7 +45,7 @@ def test_train_workflow_maps_expensive_experiment_to_training_compute() -> None:
     assert "surge/flow_simple_440k)" in script
     assert "COMPUTE_OPTION=runpod/training" in script
     assert "COMPUTE_OPTION=runpod/smoke" in script
-    assert "unsupported shell characters" in script
+    assert "./scripts/validate_skypilot_workflow_inputs.sh" in script
 
 
 def test_train_workflow_dispatches_hydra_launcher_with_generic_command() -> None:
