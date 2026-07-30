@@ -5,17 +5,18 @@ numpy hop — so the audio-feedback loss can score a rendered estimate in a spac
 geometry does not move between steps. See
 https://github.com/tinaudio/synth-setter/issues/2728.
 
-Typical usage is ``PretrainedConditioningEncoder(backbone=ClapAudioEncoder(...), head=...)``;
-call ``embed`` for the stationary metric and ``forward`` for flow conditioning.
+Typical usage constructs the backbone with ``ClapAudioEncoder.from_pretrained(...)`` and
+passes it to ``PretrainedConditioningEncoder``; call ``embed`` for the stationary metric and
+``forward`` for flow conditioning.
 """
 
 from __future__ import annotations
 
-import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Final, Protocol, cast
+from typing import Final, Protocol, cast, runtime_checkable
 
+import numpy as np
 import torch
 import torchaudio.functional as audio_fn
 from beartype import beartype
@@ -24,9 +25,8 @@ from torch import Tensor, nn
 from torch.nn import functional
 
 from synth_setter.clap import (
-    CLAP_SAMPLE_RATE,
-    DEFAULT_CLAP_CHECKPOINT,
-    DEFAULT_CLAP_CHECKPOINT_SHA256,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
     clap_checkpoint_sha256,
     resolve_clap_checkpoint,
 )
@@ -42,6 +42,12 @@ _BATCH_FEATURES_SHAPE: Final = "batch 1 frames mels"
 _BATCH_EMBEDDING_SHAPE: Final = "batch embedding"
 _BATCH_ANY_SHAPE: Final = "batch ..."
 _OFFLINE_CONFIG_KEYS: Final = frozenset({"audio_config", "projection_dim", "text_config"})
+_SUPPORTED_TRUNCATION: Final = "rand_trunc"
+_SUPPORTED_PADDING: Final = "repeatpad"
+
+type FrozenMetricTap = Callable[
+    [Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]], Float[Tensor, _BATCH_EMBEDDING_SHAPE]
+]
 
 
 class _ClapAudioConfig(Protocol):
@@ -71,6 +77,68 @@ class _ClapConfig(Protocol):
     projection_dim: int
 
 
+@runtime_checkable
+class _ClapFeatureExtractor(Protocol):
+    """Feature-extractor fields needed by the differentiable frontend.
+
+    .. attribute :: feature_size
+
+       Number of mel bins.
+
+    .. attribute :: fft_window_size
+
+       FFT window length in samples.
+
+    .. attribute :: hop_length
+
+       STFT hop length in samples.
+
+    .. attribute :: mel_filters_slaney
+
+       Slaney-normalized mel filter bank.
+
+    .. attribute :: nb_max_samples
+
+       Maximum deterministic waveform length.
+
+    .. attribute :: padding
+
+       Short-waveform padding policy.
+
+    .. attribute :: sampling_rate
+
+       Target waveform sample rate.
+
+    .. attribute :: truncation
+
+       Long-waveform truncation policy.
+    """
+
+    feature_size: int
+    fft_window_size: int
+    hop_length: int
+    mel_filters_slaney: np.ndarray
+    nb_max_samples: int
+    padding: str
+    sampling_rate: int
+    truncation: str
+
+
+class _ClapAudioModel(Protocol):
+    """CLAP audio API used after registering the concrete module."""
+
+    @jaxtyped(typechecker=beartype)
+    def get_audio_features(
+        self, *, input_features: Float[Tensor, _BATCH_FEATURES_SHAPE]
+    ) -> object:
+        """Return pooled audio features.
+
+        :param input_features: CLAP log-mel features.
+        :returns: Tensor or Transformers model output carrying pooled features.
+        """
+        ...
+
+
 @jaxtyped(typechecker=beartype)
 def _plain_config_value(value: object) -> object:
     """Convert Hydra containers into Transformers' built-in collection contract.
@@ -85,6 +153,100 @@ def _plain_config_value(value: object) -> object:
     return value
 
 
+@jaxtyped(typechecker=beartype)
+def _straight_through_clamp_finite(
+    audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE],
+) -> Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]:
+    """Clamp finite waveform values while preserving gradients and non-finite values.
+
+    :param audio: Waveform tensor.
+    :returns: Tensor with finite forward values in ``[-1, 1]`` and identity backward.
+    """
+    finite = torch.isfinite(audio)
+    bounded = torch.where(finite, audio.clamp(-1.0, 1.0), audio)
+    straight_through = audio + (bounded - audio).detach()
+    return torch.where(finite, straight_through, audio)
+
+
+@jaxtyped(typechecker=beartype)
+def _verified_checkpoint_dir(checkpoint: str | None, expected_sha256: str | None) -> str:
+    """Resolve and verify a checkpoint without mutating its shared cache.
+
+    :param checkpoint: Explicit checkpoint or ``None`` for the training default.
+    :param expected_sha256: Explicit expected digest or ``None`` for default policy.
+    :returns: Verified local checkpoint directory.
+    :raises ValueError: The materialized checkpoint digest differs from the expected digest.
+    """
+    if checkpoint is None:
+        checkpoint = DEFAULT_CLAP_TRAINING_CHECKPOINT
+    if checkpoint == DEFAULT_CLAP_TRAINING_CHECKPOINT and expected_sha256 is None:
+        expected_sha256 = DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
+
+    checkpoint_dir = resolve_clap_checkpoint(checkpoint)
+    if expected_sha256 is None:
+        return checkpoint_dir
+    actual_sha256 = clap_checkpoint_sha256(Path(checkpoint_dir))
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"CLAP checkpoint digest mismatch: expected {expected_sha256}, got {actual_sha256}"
+        )
+    return checkpoint_dir
+
+
+@jaxtyped(typechecker=beartype)
+def _random_clap(backbone_config: Mapping[str, object]) -> nn.Module:
+    """Build a random CLAP model from an explicit bounded config.
+
+    :param backbone_config: Required ``ClapConfig`` projection/text/audio mappings.
+    :returns: Randomly initialized Transformers CLAP model.
+    :raises ValueError: The config has unknown keys or malformed required mappings.
+    """
+    from transformers import ClapConfig, ClapModel
+
+    unknown_keys = set(backbone_config) - _OFFLINE_CONFIG_KEYS
+    if unknown_keys:
+        raise ValueError(f"unknown offline CLAP config keys: {sorted(unknown_keys)}")
+    config_values = cast(dict[str, object], _plain_config_value(backbone_config))
+    projection_dim = config_values.get("projection_dim", 512)
+    text_config = config_values.get("text_config")
+    audio_config = config_values.get("audio_config")
+    if not isinstance(projection_dim, int):
+        raise ValueError("offline CLAP projection_dim must be an integer")
+    if not isinstance(text_config, dict) or not isinstance(audio_config, dict):
+        raise ValueError("offline CLAP text_config and audio_config must be mappings")
+    return ClapModel(
+        ClapConfig(
+            projection_dim=projection_dim,
+            text_config=text_config,
+            audio_config=audio_config,
+        )
+    )
+
+
+@jaxtyped(typechecker=beartype)
+def _load_feature_extractor(checkpoint_dir: str) -> _ClapFeatureExtractor:
+    """Load and validate the deterministic CLAP frontend contract.
+
+    :param checkpoint_dir: Materialized Transformers checkpoint directory.
+    :returns: Validated feature extractor.
+    :raises ValueError: The extractor uses unsupported truncation or padding.
+    """
+    from transformers import ClapFeatureExtractor
+
+    extractor = cast(_ClapFeatureExtractor, ClapFeatureExtractor.from_pretrained(checkpoint_dir))
+    if extractor.truncation != _SUPPORTED_TRUNCATION:
+        raise ValueError(
+            f"CLAP feature extractor truncation must be {_SUPPORTED_TRUNCATION!r}, "
+            f"got {extractor.truncation!r}"
+        )
+    if extractor.padding != _SUPPORTED_PADDING:
+        raise ValueError(
+            f"CLAP feature extractor padding must be {_SUPPORTED_PADDING!r}, "
+            f"got {extractor.padding!r}"
+        )
+    return extractor
+
+
 class ClapAudioEncoder(nn.Module):
     """Frozen HF CLAP audio branch, differentiable from waveform to embedding."""
 
@@ -93,71 +255,21 @@ class ClapAudioEncoder(nn.Module):
         self,
         *,
         sample_rate: int,
-        checkpoint: str = DEFAULT_CLAP_CHECKPOINT,
-        checkpoint_sha256: str | None = None,
-        pretrained: bool = True,
-        backbone_config: Mapping[str, object] | None = None,
+        clap: nn.Module,
+        extractor: _ClapFeatureExtractor,
     ) -> None:
-        """Load the CLAP audio branch and mirror its feature extractor in torch.
+        """Register an already selected CLAP model and validated frontend.
 
-        :param sample_rate: Rate of the waveforms handed to this encoder; resampled to
-            CLAP's 48 kHz when it differs.
-        :param checkpoint: Local directory, R2 prefix, or Hugging Face CLAP model id.
-        :param checkpoint_sha256: Expected materialized checkpoint identity; ``None`` skips
-            verification for caller-provided local test fixtures.
-        :param pretrained: Load checkpoint weights instead of an offline random backbone.
-        :param backbone_config: ``ClapConfig`` overrides used in offline mode.
-        :raises ValueError: ``backbone_config`` is supplied in pretrained mode, or the
-            backbone's mel-bin count disagrees with the feature extractor's.
+        Call :meth:`from_pretrained` or :meth:`from_random_config`; this constructor only
+        performs the construction shared by both explicit policies.
+
+        :param sample_rate: Source rate of waveforms handed to this encoder.
+        :param clap: Pretrained or explicitly configured random CLAP model.
+        :param extractor: Validated feature extractor from the selected checkpoint.
+        :raises ValueError: Backbone and extractor mel-bin counts differ.
         """
         super().__init__()
-        from transformers import ClapConfig, ClapFeatureExtractor, ClapModel
-
-        if pretrained and backbone_config is not None:
-            raise ValueError("backbone_config requires pretrained=False")
-        if backbone_config is not None:
-            unknown_keys = set(backbone_config) - _OFFLINE_CONFIG_KEYS
-            if unknown_keys:
-                raise ValueError(f"unknown offline CLAP config keys: {sorted(unknown_keys)}")
-        checkpoint_dir = resolve_clap_checkpoint(checkpoint)
-        expected_sha256 = checkpoint_sha256
-        if checkpoint == DEFAULT_CLAP_CHECKPOINT and expected_sha256 is None:
-            expected_sha256 = DEFAULT_CLAP_CHECKPOINT_SHA256
-        if expected_sha256 is not None:
-            actual_sha256 = clap_checkpoint_sha256(Path(checkpoint_dir))
-            if actual_sha256 != expected_sha256 and checkpoint == DEFAULT_CLAP_CHECKPOINT:
-                shutil.rmtree(checkpoint_dir)
-                checkpoint_dir = resolve_clap_checkpoint(checkpoint)
-                actual_sha256 = clap_checkpoint_sha256(Path(checkpoint_dir))
-            if actual_sha256 != expected_sha256:
-                raise ValueError(
-                    f"CLAP checkpoint digest mismatch: expected {expected_sha256}, "
-                    f"got {actual_sha256}"
-                )
-        if pretrained:
-            clap = ClapModel.from_pretrained(checkpoint_dir)
-        elif backbone_config is None:
-            clap = ClapModel(ClapConfig())
-        else:
-            config_values = cast(dict[str, object], _plain_config_value(backbone_config))
-            projection_dim = config_values.get("projection_dim", 512)
-            text_config = config_values.get("text_config")
-            audio_config = config_values.get("audio_config")
-            if not isinstance(projection_dim, int):
-                raise ValueError("offline CLAP projection_dim must be an integer")
-            if not isinstance(text_config, dict) or not isinstance(audio_config, dict):
-                raise ValueError("offline CLAP text_config and audio_config must be mappings")
-            clap = ClapModel(
-                ClapConfig(
-                    projection_dim=projection_dim,
-                    text_config=text_config,
-                    audio_config=audio_config,
-                )
-            )
-        # The front-end geometry always comes from the checkpoint even offline: features
-        # that diverge from the stored ``clap`` column are worse than no online path.
-        extractor = ClapFeatureExtractor.from_pretrained(checkpoint_dir)
-        clap_config = cast(_ClapConfig, clap.config)
+        clap_config = cast(_ClapConfig, getattr(clap, "config"))
         backbone_mel_bins = clap_config.audio_config.num_mel_bins
         if backbone_mel_bins != extractor.feature_size:
             raise ValueError(
@@ -165,18 +277,71 @@ class ClapAudioEncoder(nn.Module):
                 f"extractor feature_size {extractor.feature_size}"
             )
 
-        self.clap = clap
+        self.clap: nn.Module = clap
         self.clap.requires_grad_(False)
         self.clap.eval()
 
         self.sample_rate = sample_rate
+        self.target_sample_rate = extractor.sampling_rate
         self.out_dim: int = clap_config.projection_dim
         self.n_fft: int = extractor.fft_window_size
         self.hop_length: int = extractor.hop_length
         self.max_samples: int = extractor.nb_max_samples
-        # HF precomputes the slaney-normalised bank; reimplementing it is the main
-        # correctness risk, so copy it verbatim.
+        self.mel_filters: Tensor
         self.register_buffer("mel_filters", torch.from_numpy(extractor.mel_filters_slaney).float())
+
+    @classmethod
+    @jaxtyped(typechecker=beartype)
+    def from_pretrained(
+        cls,
+        *,
+        sample_rate: int,
+        checkpoint: str | None = None,
+        checkpoint_sha256: str | None = None,
+    ) -> ClapAudioEncoder:
+        """Load frozen CLAP weights from a verified checkpoint.
+
+        :param sample_rate: Source rate of waveforms handed to this encoder.
+        :param checkpoint: Local directory, R2 prefix, Hugging Face id, or ``None`` for
+            the shared training checkpoint.
+        :param checkpoint_sha256: Expected materialized identity; default-policy checkpoints
+            use the shared training digest when omitted.
+        :returns: Frozen pretrained waveform encoder.
+        """
+        from transformers import ClapModel
+
+        checkpoint_dir = _verified_checkpoint_dir(checkpoint, checkpoint_sha256)
+        extractor = _load_feature_extractor(checkpoint_dir)
+        clap = ClapModel.from_pretrained(checkpoint_dir)
+        return cls(sample_rate=sample_rate, clap=clap, extractor=extractor)
+
+    @classmethod
+    @jaxtyped(typechecker=beartype)
+    def from_random_config(
+        cls,
+        *,
+        sample_rate: int,
+        backbone_config: Mapping[str, object],
+        checkpoint: str | None = None,
+        checkpoint_sha256: str | None = None,
+    ) -> ClapAudioEncoder:
+        """Build a frozen random CLAP backbone from mandatory explicit geometry.
+
+        :param sample_rate: Source rate of waveforms handed to this encoder.
+        :param backbone_config: Required random ``ClapConfig`` projection/text/audio config.
+        :param checkpoint: Checkpoint supplying the feature-extractor contract, or ``None``
+            for the shared training checkpoint.
+        :param checkpoint_sha256: Expected materialized identity; default-policy checkpoints
+            use the shared training digest when omitted.
+        :returns: Frozen randomly initialized waveform encoder.
+        """
+        checkpoint_dir = _verified_checkpoint_dir(checkpoint, checkpoint_sha256)
+        extractor = _load_feature_extractor(checkpoint_dir)
+        return cls(
+            sample_rate=sample_rate,
+            clap=_random_clap(backbone_config),
+            extractor=extractor,
+        )
 
     @jaxtyped(typechecker=beartype)
     def train(self, mode: bool = True) -> ClapAudioEncoder:
@@ -204,8 +369,8 @@ class ClapAudioEncoder(nn.Module):
 
         :param audio: Mono waveform batch at ``sample_rate``.
         :returns: Log-mel in dB shaped ``(batch, 1, frames, mels)``.
-        :raises ValueError: Audio is empty, non-finite, out of range, on MPS, or exceeds
-            the extractor's deterministic short-audio window.
+        :raises ValueError: Audio is empty, on MPS, or exceeds the extractor's
+            deterministic short-audio window.
         """
         if audio.ndim == 3:
             audio = audio.mean(dim=1)
@@ -215,15 +380,14 @@ class ClapAudioEncoder(nn.Module):
             )
         if audio.device.type == "mps":
             raise ValueError("CLAP online features do not support MPS float64 FFT")
-        if not torch.isfinite(audio).all():
-            raise ValueError("audio waveform must contain only finite samples")
-        if (audio.abs() > 1.0).any():
-            raise ValueError("audio waveform samples must be in range [-1, 1]")
-        if self.sample_rate != CLAP_SAMPLE_RATE:
-            audio = audio_fn.resample(audio, self.sample_rate, CLAP_SAMPLE_RATE)
-        length = audio.shape[-1]
-        if length == 0:
+        if audio.shape[-1] == 0:
             raise ValueError("audio waveform cannot be empty")
+
+        audio = _straight_through_clamp_finite(audio)
+        if self.sample_rate != self.target_sample_rate:
+            audio = audio_fn.resample(audio, self.sample_rate, self.target_sample_rate)
+        audio = _straight_through_clamp_finite(audio)
+        length = audio.shape[-1]
         if length > self.max_samples:
             raise ValueError(
                 f"audio of {length} samples exceeds CLAP's {self.max_samples}-sample "
@@ -269,7 +433,8 @@ class ClapAudioEncoder(nn.Module):
         :returns: Pooled CLAP audio embedding shaped ``(batch, out_dim)``.
         :raises RuntimeError: The Transformers audio branch returns no pooled embedding.
         """
-        output = self.clap.get_audio_features(input_features=self.features(audio))
+        clap = cast(_ClapAudioModel, self.clap)
+        output = clap.get_audio_features(input_features=self.features(audio))
         embedding = (
             output if isinstance(output, Tensor) else getattr(output, "pooler_output", None)
         )
@@ -300,6 +465,15 @@ class PretrainedConditioningEncoder(nn.Module):
         self.backbone = backbone
         self.head = head
         self.out_dim = out_dim
+
+    @property
+    @jaxtyped(typechecker=beartype)
+    def frozen_metric_tap(self) -> FrozenMetricTap:
+        """Return the explicit stationary embedding used by audio feedback.
+
+        :returns: Frozen backbone embedding callable.
+        """
+        return self.embed
 
     @jaxtyped(typechecker=beartype)
     def embed(

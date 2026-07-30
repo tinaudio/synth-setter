@@ -518,9 +518,12 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.vector_field.num_layers = 1
         cfg.model.vector_field.projection.num_tokens = 2
         cfg.model.encoder.out_dim = 8
+        cfg.model.encoder.backbone._target_ = (
+            "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_random_config"
+        )
+        cfg.model.encoder.backbone.sample_rate = 48_000
         cfg.model.encoder.backbone.checkpoint = str(checkpoint_dir)
         cfg.model.encoder.backbone.checkpoint_sha256 = None
-        cfg.model.encoder.backbone.pretrained = False
         cfg.model.encoder.backbone.backbone_config = tiny_clap_config
         cfg.model.encoder.head.input_dim = 8
     return cfg

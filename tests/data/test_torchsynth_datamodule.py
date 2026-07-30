@@ -168,6 +168,19 @@ def test_datamodule_setup_num_params_mismatch_raises() -> None:
         datamodule.setup(None)
 
 
+def test_datamodule_audio_conditioning_is_accepted() -> None:
+    """The shared raw-audio profile composes into the online datamodule."""
+    datamodule = TorchSynthDataModule(conditioning="audio")
+
+    assert datamodule.conditioning == "audio"
+
+
+def test_datamodule_non_audio_conditioning_raises() -> None:
+    """TorchSynth rejects conditioning modes its online collator cannot guarantee."""
+    with pytest.raises(ValueError, match="conditioning must be 'audio'"):
+        TorchSynthDataModule(conditioning="mel")
+
+
 def test_datamodule_default_num_params_matches_spec_encoded_width() -> None:
     """The datamodule's default width is the spec's, so model configs need no literal."""
     assert (

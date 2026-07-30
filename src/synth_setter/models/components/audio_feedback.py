@@ -14,7 +14,7 @@ Typical usage:
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, runtime_checkable
 
 import torch
 from beartype import beartype
@@ -40,6 +40,20 @@ _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
 
 type EmbeddingTap = Callable[[Float[Tensor, _BATCH_AUDIO_SHAPE]], Float[Tensor, _BATCH_ANY_SHAPE]]
+
+
+@runtime_checkable
+class FrozenMetricTapProvider(Protocol):
+    """Encoder contract for an explicitly stationary metric-space tap."""
+
+    @property
+    @jaxtyped(typechecker=beartype)
+    def frozen_metric_tap(self) -> EmbeddingTap:
+        """Return the frozen waveform embedding callable.
+
+        :returns: Stationary embedding tap.
+        """
+        ...
 
 
 @jaxtyped(typechecker=beartype)
@@ -145,14 +159,15 @@ def time_bucket_means(
 def metric_tap(encoder: nn.Module) -> EmbeddingTap:
     """Resolve the embedding the audio loss measures distance in.
 
-    Encoders with a frozen backbone expose ``embed``; ones without are their own tap. The
-    metric never taps a trainable head, which would reintroduce the between-step drift the
-    frozen backbone exists to remove.
+    Only the explicit :class:`FrozenMetricTapProvider` contract bypasses detached
+    ``functional_call``. An ordinary ``embed`` method remains part of a trainable encoder.
 
     :param encoder: Encoder whose frozen metric tap is resolved.
     :returns: Callable mapping a waveform batch to its metric-space embedding.
     """
-    return cast(EmbeddingTap, getattr(encoder, "embed", encoder))
+    if isinstance(encoder, FrozenMetricTapProvider):
+        return encoder.frozen_metric_tap
+    return encoder
 
 
 @jaxtyped(typechecker=beartype)
@@ -166,9 +181,8 @@ def _frozen_embedder(encoder: nn.Module) -> EmbeddingTap:
     :param encoder: Conditioning encoder, expected to be in eval mode already.
     :returns: Callable mapping a waveform batch to its metric-space embedding.
     """
-    tap = metric_tap(encoder)
-    if tap is not encoder:
-        return tap
+    if isinstance(encoder, FrozenMetricTapProvider):
+        return encoder.frozen_metric_tap
     frozen_state = {
         name: tensor.detach()
         for name, tensor in (*encoder.named_parameters(), *encoder.named_buffers())

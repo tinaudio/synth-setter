@@ -40,6 +40,10 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
+from synth_setter.models.components.pretrained_encoder import (
+    ClapAudioEncoder,
+    PretrainedConditioningEncoder,
+)
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -475,6 +479,33 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
     assert torch.isfinite(eval_batch["audio"]).all()
+
+
+@pytest.mark.slow
+def test_eval_torchsynth_clap_online_validates_real_offline_backbone(
+    cfg_torchsynth_clap_online_train: DictConfig,
+) -> None:
+    """The eval entrypoint validates raw audio through a real tiny CLAP model.
+
+    :param cfg_torchsynth_clap_online_train: Offline tiny-CLAP production configuration.
+    """
+    cfg = cfg_torchsynth_clap_online_train
+    with open_dict(cfg):
+        cfg.mode = "validate"
+        cfg.ckpt_path = None
+        cfg.logger = None
+        cfg.trainer.limit_val_batches = 1
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metric_dict["val/param_mse"])
+    encoder = object_dict["model"].encoder
+    assert isinstance(encoder, PretrainedConditioningEncoder)
+    assert isinstance(encoder.backbone, ClapAudioEncoder)
 
 
 _FAKE_ORACLE_DATASETS = [

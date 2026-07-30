@@ -110,6 +110,58 @@ def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
     return encoder
 
 
+class _ExplicitFrozenMetricEncoder(torch.nn.Module):
+    """Encoder whose metric contract bypasses a deliberately unusable head path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.backbone = torch.nn.Linear(_SIGNAL_LENGTH, 8)
+        self.backbone.requires_grad_(False)
+        self.head = torch.nn.Linear(8, 8)
+
+    @property
+    def frozen_metric_tap(self) -> torch.nn.Module:
+        """Return the stationary backbone callable.
+
+        :returns: Frozen backbone.
+        """
+        return self.backbone
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        """Reject use of the trainable conditioning path as the metric.
+
+        :param audio: Waveform batch.
+        :returns: Never returns.
+        :raises AssertionError: Always; the metric must bypass this path.
+        """
+        raise AssertionError("trainable conditioning head cannot define the metric")
+
+
+class _OrdinaryEmbedEncoder(torch.nn.Module):
+    """Trainable encoder whose ordinary ``embed`` must not imply a frozen tap."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.linear = torch.nn.Linear(_SIGNAL_LENGTH, 8)
+
+    def embed(self, audio: torch.Tensor) -> torch.Tensor:
+        """Fail if name-based tap discovery calls this method.
+
+        :param audio: Waveform batch.
+        :returns: Never returns.
+        :raises AssertionError: Always; ordinary ``embed`` is not a frozen metric marker.
+        """
+        raise AssertionError("ordinary embed method must not be the frozen metric tap")
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        """Map waveforms through the trainable conditioning path.
+
+        :param audio: Waveform batch.
+        :returns: Flat embedding batch.
+        """
+        return self.linear(audio)
+
+
 def test_differentiable_decode_matches_the_linear_map_across_the_working_range() -> None:
     """Inside the clamp bounds the decode is exactly the ``(theta + 1) / 2`` param map.
 
@@ -490,11 +542,74 @@ def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     assert (gradient != 0).any()
 
 
-def test_metric_tap_without_frozen_backbone_uses_encoder_forward() -> None:
-    """Legacy trainable encoders remain their own latent-space tap."""
-    encoder = _linear_encoder()
+def test_metric_tap_with_explicit_frozen_provider_uses_stationary_backbone() -> None:
+    """The explicit marker selects the frozen tap instead of the trainable forward path."""
+    encoder = _ExplicitFrozenMetricEncoder()
+
+    assert metric_tap(encoder) is encoder.backbone
+
+
+def test_latent_loss_with_explicit_frozen_metric_tap_bypasses_trainable_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audio feedback measures the frozen backbone without touching the head.
+
+    :param monkeypatch: Pytest patcher for the expensive renderer boundary.
+    """
+    encoder = _ExplicitFrozenMetricEncoder()
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
+
+    def fake_render(params: torch.Tensor, **kwargs: object) -> torch.Tensor:
+        return params[:, :1].expand(-1, _SIGNAL_LENGTH)
+
+    monkeypatch.setattr(
+        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fake_render
+    )
+    value = _loss()(
+        theta,
+        torch.full((_BATCH, 1), 0.9),
+        torch.ones(_BATCH, _SIGNAL_LENGTH),
+        encoder,
+    )
+    value.backward()
+
+    assert theta.grad is not None and torch.isfinite(theta.grad).all()
+    assert all(parameter.grad is None for parameter in encoder.head.parameters())
+
+
+def test_metric_tap_with_ordinary_embed_method_uses_encoder_forward() -> None:
+    """An ordinary method name cannot opt a trainable encoder out of detachment."""
+    encoder = _OrdinaryEmbedEncoder()
 
     assert metric_tap(encoder) is encoder
+
+
+def test_latent_loss_with_ordinary_embed_method_uses_detached_functional_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary ``embed`` encoders remain frozen while rendered-audio gradients pass.
+
+    :param monkeypatch: Pytest patcher for the expensive renderer boundary.
+    """
+    encoder = _OrdinaryEmbedEncoder()
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
+
+    def fake_render(params: torch.Tensor, **kwargs: object) -> torch.Tensor:
+        return params[:, :1].expand(-1, _SIGNAL_LENGTH)
+
+    monkeypatch.setattr(
+        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fake_render
+    )
+    value = _loss()(
+        theta,
+        torch.full((_BATCH, 1), 0.9),
+        torch.ones(_BATCH, _SIGNAL_LENGTH),
+        encoder,
+    )
+    value.backward()
+
+    assert theta.grad is not None and torch.isfinite(theta.grad).all()
+    assert all(parameter.grad is None for parameter in encoder.parameters())
 
 
 def test_latent_loss_with_precomputed_target_embedding_matches_recomputation() -> None:

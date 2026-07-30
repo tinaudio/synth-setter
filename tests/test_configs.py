@@ -13,6 +13,10 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import InterpolationKeyError
 
+from synth_setter.clap import (
+    DEFAULT_CLAP_TRAINING_CHECKPOINT,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
+)
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
@@ -387,21 +391,24 @@ def test_ssondo_conditioning_profile_projects_960_vector() -> None:
     assert encoder(torch.randn(2, 960)).shape == (2, cfg.model.encoder_output_dim)
 
 
-def _cached_conditioning_profile_names() -> list[str]:
-    """Enumerate conditioning profiles backed by stored embedding columns.
+def _conditioning_profile_names() -> list[str]:
+    """Enumerate every shipped conditioning profile.
 
-    ``clap_online`` reads raw audio and is covered by the TorchSynth composition tests.
-
-    :returns: Sorted cached-profile names currently shipped in the group.
+    :returns: Sorted conditioning-profile names.
     """
     return sorted(
         entry.name.removesuffix(".yaml")
         for entry in (configs_dir() / "conditioning").iterdir()
-        if entry.name.endswith(".yaml") and entry.name != "clap_online.yaml"
+        if entry.name.endswith(".yaml")
     )
 
 
-@pytest.mark.parametrize("profile", _cached_conditioning_profile_names())
+_CACHED_CONDITIONING_PROFILES = [
+    profile for profile in _conditioning_profile_names() if profile != "clap_online"
+]
+
+
+@pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)
 @pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
 def test_embedding_conditioning_profile_encoder_matches_model_output(
     profile: str, model_name: str
@@ -430,7 +437,7 @@ def test_embedding_conditioning_profile_encoder_matches_model_output(
     assert encoded.shape == (2, cfg.model.encoder_output_dim)
 
 
-@pytest.mark.parametrize("profile", _cached_conditioning_profile_names())
+@pytest.mark.parametrize("profile", _conditioning_profile_names())
 def test_eval_config_conditioning_profile_composes(profile: str) -> None:
     """Regression guard for #2304: eval.yaml accepts every ``conditioning=`` profile.
 
@@ -441,11 +448,25 @@ def test_eval_config_conditioning_profile_composes(profile: str) -> None:
         ["experiment=surge/flow_simple", f"conditioning={profile}", "trainer=cpu"],
     )
 
-    # The profile wires one shared column onto both sides; its name need not equal
-    # the profile name (e.g. the ``m2l`` profile selects the ``music2latent`` column).
-    column = cfg.model.conditioning.column
-    assert column
-    assert cfg.datamodule.conditioning.column == column
+    # Raw modes are literals; cached profiles wire one shared column onto both sides.
+    if isinstance(cfg.model.conditioning, str):
+        assert cfg.datamodule.conditioning == cfg.model.conditioning
+    else:
+        column = cfg.model.conditioning.column
+        assert column
+        assert cfg.datamodule.conditioning.column == column
+
+
+def test_clap_online_profile_matches_training_checkpoint_identity() -> None:
+    """Online CLAP composition retains the shared production checkpoint identity."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=clap_online", "trainer=cpu"],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_CLAP_TRAINING_CHECKPOINT
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
 
 
 def test_eval_config_conditioning_unset_composes() -> None:

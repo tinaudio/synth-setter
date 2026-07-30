@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
 from beartype import beartype
-from jaxtyping import Float, jaxtyped
+from jaxtyping import Float, Shaped, jaxtyped
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
@@ -18,7 +18,9 @@ from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 
 _BATCH_SHAPE = "batch"
+_BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
+_FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -140,7 +142,10 @@ class VSTFlowMatchingModule(LightningModule):
         """
         super().__init__()
 
-        self.save_hyperparameters(logger=False)
+        self.save_hyperparameters(ignore=["encoder"], logger=False)
+        if not isinstance(encoder, PretrainedConditioningEncoder):
+            # Existing load_from_checkpoint consumers reconstruct legacy encoders from hparams.
+            self.hparams["encoder"] = encoder
 
         self.encoder = encoder
         self.vector_field = vector_field
@@ -176,6 +181,42 @@ class VSTFlowMatchingModule(LightningModule):
             compiled=self.hparams.compile,
             world_size=self.trainer.world_size,
         )
+
+    @jaxtyped(typechecker=beartype)
+    def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Exclude re-resolvable frozen CLAP state from a Lightning checkpoint.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises TypeError: A pretrained-encoder checkpoint has malformed state metadata.
+        """
+        if not isinstance(self.encoder, PretrainedConditioningEncoder):
+            return
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for key in tuple(state):
+            if isinstance(key, str) and key.startswith(_FROZEN_BACKBONE_PREFIX):
+                del state[key]
+
+        hyperparameters = checkpoint.get("hyper_parameters")
+        if isinstance(hyperparameters, MutableMapping):
+            hyperparameters.pop("encoder", None)
+
+    @jaxtyped(typechecker=beartype)
+    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Restore current frozen CLAP state so Lightning can load trainable state strictly.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises TypeError: A pretrained-encoder checkpoint has a malformed state dictionary.
+        """
+        if not isinstance(self.encoder, PretrainedConditioningEncoder):
+            return
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for key, value in self.state_dict().items():
+            if key.startswith(_FROZEN_BACKBONE_PREFIX):
+                state[key] = value
 
     def _sample_time(self, n: int, device: torch.device) -> torch.Tensor:
         return torch.rand(n, 1, device=device)
@@ -260,7 +301,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         if isinstance(self.encoder, PretrainedConditioningEncoder):
             # Reuse the target embedding for conditioning and the stationary audio metric.
-            backbone_embedding = self.encoder.embed(conditioning_input)
+            backbone_embedding = self.encoder.frozen_metric_tap(conditioning_input)
             conditioning = self.encoder.project(backbone_embedding)
         else:
             backbone_embedding = None
@@ -438,7 +479,9 @@ class VSTFlowMatchingModule(LightningModule):
     def on_test_epoch_end(self) -> None:
         pass
 
-    def predict_step(self, batch: dict[str, Any], batch_idx: int):
+    def predict_step(
+        self, batch: dict[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE]], batch_idx: int
+    ):
         conditioning = self._get_conditioning_from_batch(batch)
         return (
             self._sample(
@@ -469,7 +512,7 @@ class VSTFlowMatchingModule(LightningModule):
         self.log_dict(vf_norms, on_step=True, on_epoch=False)
         self.log_dict(encoder_norms, on_step=True, on_epoch=False)
 
-    def configure_optimizers(self) -> dict[str, Any]:
+    def configure_optimizers(self) -> dict[str, object]:
         trainable_parameters = (
             parameter for parameter in self.trainer.model.parameters() if parameter.requires_grad
         )

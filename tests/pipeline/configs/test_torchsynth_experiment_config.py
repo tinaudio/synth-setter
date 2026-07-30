@@ -6,6 +6,10 @@ from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
+from synth_setter.clap import (
+    DEFAULT_CLAP_TRAINING_CHECKPOINT,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
+)
 from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.cnn import LogMelEncoder
@@ -245,17 +249,18 @@ def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head()
         )
 
     assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
     assert (
         cfg.model.encoder._target_
         == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
     )
     assert (
         cfg.model.encoder.backbone._target_
-        == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder"
+        == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_pretrained"
     )
     assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
-    assert cfg.model.encoder.backbone.checkpoint.startswith("r2://")
-    assert len(cfg.model.encoder.backbone.checkpoint_sha256) == 64
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_CLAP_TRAINING_CHECKPOINT
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
     assert (
         cfg.model.encoder.head._target_
         == "synth_setter.models.components.vector_projection.VectorProjection"

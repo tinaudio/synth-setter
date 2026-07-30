@@ -541,6 +541,41 @@ class TestLanceMapDataModuleSetup:
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             module.setup()
 
+    @pytest.mark.parametrize(
+        ("stage", "loader_name"),
+        [("fit", "train_dataloader"), ("fit", "val_dataloader"), ("test", "test_dataloader")],
+        ids=["train", "val", "test"],
+    )
+    def test_audio_conditioning_reads_waveform_without_mel_stats(
+        self, tmp_path: Path, stage: str, loader_name: str
+    ) -> None:
+        """Raw-audio conditioning serves each model split without ``stats.npz``.
+
+        :param tmp_path: Pytest fixture providing a dataset root without mel statistics.
+        :param stage: Lightning setup stage selecting the requested split.
+        :param loader_name: Dataloader method for the requested split.
+        """
+        root = tmp_path / "audio-data"
+        root.mkdir()
+        for split in ("train", "val", "test"):
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            batch_size=2,
+            conditioning="audio",
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+        module.setup(stage)
+        try:
+            batch = next(iter(getattr(module, loader_name)()))
+        finally:
+            module.teardown(stage)
+
+        assert batch["mel"] is None
+        assert _unwrap(batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
+
     def test_map_unregistered_param_spec_raises_at_setup(self, dataset_root: Path) -> None:
         """Legacy parity: an unregistered ``param_spec_name`` fails fast at setup.
 
@@ -894,6 +929,24 @@ class TestLanceMapDataModuleModes:
         assert _unwrap(val_batch["params"]).max() < 1
         assert val_batch["audio"] is None
         assert _unwrap(predict_batch["audio"]).shape == (2, 2, 44100 * 4)
+
+    def test_fake_audio_conditioning_populates_waveform_for_training(self, tmp_path: Path) -> None:
+        """Fake raw-audio batches expose waveform conditioning on non-predict splits.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        """
+        with _set_up_map_module(
+            dataset_root=tmp_path,
+            batch_size=2,
+            fake=True,
+            conditioning="audio",
+            use_saved_mean_and_variance=True,
+        ) as module:
+            batch = next(iter(module.train_dataloader()))
+
+        assert batch["mel"] is None
+        assert batch["conditioning"] is None
+        assert _unwrap(batch["audio"]).shape == (2, 2, 44_100 * 4)
 
     def test_fake_mode_same_global_seed_reproduces_batch(self, tmp_path: Path) -> None:
         """Fake sample generation remains governed by the global PyTorch RNG.
