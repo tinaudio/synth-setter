@@ -24,7 +24,7 @@ from synth_setter.models.components.transformer import (
 _BATCH = 2
 _D_MODEL = 16
 _NUM_FRAMES = 11
-_NUM_CTRL_TOKENS = 4
+_NUM_CONTROL_TOKENS = 4
 
 
 def _controls(batch: int = _BATCH, seed: int = 0) -> torch.Tensor:
@@ -36,9 +36,9 @@ def _controls(batch: int = _BATCH, seed: int = 0) -> torch.Tensor:
         signed-unit loudness/centroid rows and unit-interval pitch rows.
     """
     generator = torch.Generator().manual_seed(seed)
-    ctrl = torch.rand((batch, NUM_SKETCH_CONTROLS, _NUM_FRAMES), generator=generator)
-    ctrl[:, :NUM_SKETCH_TRACK_ROWS] = ctrl[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
-    return ctrl
+    controls = torch.rand((batch, NUM_SKETCH_CONTROLS, _NUM_FRAMES), generator=generator)
+    controls[:, :NUM_SKETCH_TRACK_ROWS] = controls[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
+    return controls
 
 
 def _tokens_module(seed: int = 0) -> SketchControlTokens:
@@ -47,7 +47,7 @@ def _tokens_module(seed: int = 0) -> SketchControlTokens:
     :param seed: RNG seed for the randomized projection weights.
     :returns: Module whose three projections were re-randomized after zero-init.
     """
-    module = SketchControlTokens(d_model=_D_MODEL, num_ctrl_tokens=_NUM_CTRL_TOKENS)
+    module = SketchControlTokens(d_model=_D_MODEL, num_control_tokens=_NUM_CONTROL_TOKENS)
     generator = torch.Generator().manual_seed(seed)
     with torch.no_grad():
         for projection in module.projections.values():
@@ -56,13 +56,13 @@ def _tokens_module(seed: int = 0) -> SketchControlTokens:
     return module
 
 
-def _no_drop(batch: int = _BATCH) -> torch.Tensor:
-    """Return an all-false drop mask.
+def _keep_all(batch: int = _BATCH) -> torch.Tensor:
+    """Return a mask retaining every sketch group.
 
     :param batch: Batch size.
-    :returns: ``(batch, 3)`` boolean mask keeping every control.
+    :returns: ``(batch, 3)`` positive keep mask.
     """
-    return torch.zeros(batch, 3, dtype=torch.bool)
+    return torch.ones(batch, 3, dtype=torch.bool)
 
 
 class TestSketchControlSpec:
@@ -72,7 +72,7 @@ class TestSketchControlSpec:
         """Spec defaults pin the approved column, token budget, and threshold."""
         spec = SketchControlSpec(num_frames=401)
         assert spec.column == "sketch"
-        assert spec.num_ctrl_tokens == 32
+        assert spec.num_control_tokens == 32
         assert spec.pitch_zero_threshold == 0.1
 
     def test_extra_field_rejected(self) -> None:
@@ -110,8 +110,8 @@ class TestSketchControlTokens:
     def test_forward_control_batch_returns_token_sequence(self) -> None:
         """The tokenizer emits the configured token sequence shape."""
         module = _tokens_module()
-        out = module(_controls(), _no_drop())
-        assert out.shape == (_BATCH, _NUM_CTRL_TOKENS, _D_MODEL)
+        out = module(_controls(), _keep_all())
+        assert out.shape == (_BATCH, _NUM_CONTROL_TOKENS, _D_MODEL)
 
     def test_unconditional_returns_expanded_positional_encoding(self) -> None:
         """The unconditional sketch state is the tokenizer's PE-only sequence."""
@@ -123,41 +123,41 @@ class TestSketchControlTokens:
 
     def test_forward_at_zero_init_outputs_exactly_the_positional_encoding(self) -> None:
         """Zero-init projections contribute nothing: output is the PE alone."""
-        module = SketchControlTokens(d_model=_D_MODEL, num_ctrl_tokens=_NUM_CTRL_TOKENS)
-        out = module(_controls(), _no_drop())
+        module = SketchControlTokens(d_model=_D_MODEL, num_control_tokens=_NUM_CONTROL_TOKENS)
+        out = module(_controls(), _keep_all())
         expected = module.positional_encoding.expand(_BATCH, -1, -1)
         torch.testing.assert_close(out, expected)
 
     def test_forward_dropped_control_matches_zeroed_channels(self) -> None:
-        """Masking a control equals zeroing its channels before projection."""
+        """Clearing a group's keep state equals zeroing its channels before projection."""
         module = _tokens_module()
-        ctrl = _controls()
-        mask = _no_drop()
-        mask[0, 2] = True  # drop pitch for the first sample only
+        controls = _controls()
+        keep = _keep_all()
+        keep[0, 2] = False
 
-        zeroed = ctrl.clone()
+        zeroed = controls.clone()
         zeroed[0, SKETCH_PITCH_SLICE] = 0.0
 
-        torch.testing.assert_close(module(ctrl, mask), module(zeroed, _no_drop()))
+        torch.testing.assert_close(module(controls, keep), module(zeroed, _keep_all()))
 
     def test_forward_all_dropped_outputs_exactly_the_positional_encoding(self) -> None:
         """Dropping every control leaves exactly the PE."""
         module = _tokens_module()
-        out = module(_controls(), torch.ones(_BATCH, 3, dtype=torch.bool))
+        out = module(_controls(), torch.zeros(_BATCH, 3, dtype=torch.bool))
         expected = module.positional_encoding.expand(_BATCH, -1, -1)
         torch.testing.assert_close(out, expected)
 
     def test_forward_loudness_and_centroid_drops_are_independent(self) -> None:
         """Dropping loudness leaves the centroid contribution intact."""
         module = _tokens_module()
-        ctrl = _controls()
-        mask = _no_drop()
-        mask[:, 0] = True  # drop loudness everywhere
+        controls = _controls()
+        keep = _keep_all()
+        keep[:, 0] = False
 
-        zeroed = ctrl.clone()
+        zeroed = controls.clone()
         zeroed[:, SKETCH_LOUDNESS_ROW] = 0.0
 
-        torch.testing.assert_close(module(ctrl, mask), module(zeroed, _no_drop()))
+        torch.testing.assert_close(module(controls, keep), module(zeroed, _keep_all()))
 
     @pytest.mark.parametrize("frame", range(_NUM_FRAMES))
     def test_forward_impulse_at_any_frame_reaches_tokens(self, frame: int) -> None:
@@ -174,14 +174,14 @@ class TestSketchControlTokens:
         spike = base.clone()
         spike[0, SKETCH_PITCH_SLICE.start, frame] = 1.0
         spike[0, SKETCH_LOUDNESS_ROW, frame] = 1.0
-        assert not torch.allclose(module(base, _no_drop(1)), module(spike, _no_drop(1)))
+        assert not torch.allclose(module(base, _keep_all(1)), module(spike, _keep_all(1)))
 
     def test_forward_wrong_channel_count_raises_shape_error(self) -> None:
         """Jaxtyping rejects a wrong channel count at the call boundary."""
         module = _tokens_module()
         bad = torch.rand(_BATCH, NUM_SKETCH_CONTROLS - 1, _NUM_FRAMES)
         with pytest.raises(TypeCheckError):
-            module(bad, _no_drop())
+            module(bad, _keep_all())
 
 
 def _field(pe_type: str = "none") -> ApproxEquivTransformer:
@@ -214,18 +214,18 @@ def _field(pe_type: str = "none") -> ApproxEquivTransformer:
     )
 
 
-class TestApproxEquivTransformerCtrlTokens:
-    """Behavior of the optional ctrl-token concat path."""
+class TestApproxEquivTransformerControlTokens:
+    """Behavior of the optional control-token concat path."""
 
-    def test_forward_without_ctrl_kwarg_matches_explicit_none(self) -> None:
-        """``ctrl_tokens=None`` is a strict no-op against the legacy call."""
+    def test_forward_without_control_kwarg_matches_explicit_none(self) -> None:
+        """``control_tokens=None`` is a strict no-op against the legacy call."""
         field = _field()
         x = torch.randn(_BATCH, 6)
         t = torch.rand(_BATCH, 1)
         z = torch.randn(_BATCH, 8)
-        torch.testing.assert_close(field(x, t, z), field(x, t, z, ctrl_tokens=None))
+        torch.testing.assert_close(field(x, t, z), field(x, t, z, control_tokens=None))
 
-    def test_forward_rejects_positional_ctrl_tokens(self) -> None:
+    def test_forward_rejects_positional_control_tokens(self) -> None:
         """Control tokens are keyword-only at the public field boundary."""
         field = _field()
         with pytest.raises(TypeError):
@@ -233,38 +233,43 @@ class TestApproxEquivTransformerCtrlTokens:
                 torch.randn(_BATCH, 6),
                 torch.rand(_BATCH, 1),
                 torch.randn(_BATCH, 8),
-                torch.randn(_BATCH, _NUM_CTRL_TOKENS, _D_MODEL),  # pyright: ignore[reportCallIssue]
+                torch.randn(_BATCH, _NUM_CONTROL_TOKENS, _D_MODEL),  # pyright: ignore[reportCallIssue]
             )
 
-    def test_forward_with_ctrl_tokens_preserves_output_shape(self) -> None:
+    def test_forward_with_control_tokens_preserves_output_shape(self) -> None:
         """Concat injection keeps the parameter-vector output shape."""
         field = _field()
         out = field(
             torch.randn(_BATCH, 6),
             torch.rand(_BATCH, 1),
             torch.randn(_BATCH, 8),
-            ctrl_tokens=torch.randn(_BATCH, _NUM_CTRL_TOKENS, _D_MODEL),
+            control_tokens=torch.randn(_BATCH, _NUM_CONTROL_TOKENS, _D_MODEL),
         )
         assert out.shape == (_BATCH, 6)
         assert torch.isfinite(out).all()
 
-    def test_forward_with_ctrl_tokens_changes_prediction(self) -> None:
+    def test_forward_with_control_tokens_changes_prediction(self) -> None:
         """Control tokens actually reach the field's prediction."""
         field = _field()
         x = torch.randn(_BATCH, 6)
         t = torch.rand(_BATCH, 1)
         z = torch.randn(_BATCH, 8)
-        with_ctrl = field(x, t, z, ctrl_tokens=torch.randn(_BATCH, _NUM_CTRL_TOKENS, _D_MODEL))
-        assert not torch.allclose(field(x, t, z), with_ctrl)
+        with_control = field(
+            x,
+            t,
+            z,
+            control_tokens=torch.randn(_BATCH, _NUM_CONTROL_TOKENS, _D_MODEL),
+        )
+        assert not torch.allclose(field(x, t, z), with_control)
 
-    def test_forward_layerwise_conditioning_with_ctrl_tokens_runs(self) -> None:
+    def test_forward_layerwise_conditioning_with_control_tokens_runs(self) -> None:
         """Rank-3 layerwise conditioning coexists with control tokens."""
         field = _field()
         out = field(
             torch.randn(_BATCH, 6),
             torch.rand(_BATCH, 1),
             torch.randn(_BATCH, 2, 8),
-            ctrl_tokens=torch.randn(_BATCH, _NUM_CTRL_TOKENS, _D_MODEL),
+            control_tokens=torch.randn(_BATCH, _NUM_CONTROL_TOKENS, _D_MODEL),
         )
         assert out.shape == (_BATCH, 6)
         assert torch.isfinite(out).all()
@@ -276,7 +281,7 @@ class TestApproxEquivTransformerCtrlTokens:
             torch.randn(_BATCH, 6),
             torch.rand(_BATCH, 1),
             torch.randn(_BATCH, 8),
-            ctrl_tokens=torch.randn(_BATCH, _NUM_CTRL_TOKENS, _D_MODEL),
+            control_tokens=torch.randn(_BATCH, _NUM_CONTROL_TOKENS, _D_MODEL),
         )
         assert out.shape == (_BATCH, 6)
         assert torch.isfinite(out).all()

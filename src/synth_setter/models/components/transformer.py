@@ -352,7 +352,7 @@ class ApproxEquivTransformer(nn.Module):
     ):
         super().__init__()
 
-        # Exposed so ctrl-token producers can size their projections.
+        # Exposed so control-token producers can size their projections.
         self.d_model = d_model
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
@@ -419,24 +419,23 @@ class ApproxEquivTransformer(nn.Module):
         self,
         z: Float[Tensor, _BATCH_ANY_SHAPE],
         rate: float = 0.1,
-        drop_mask: Bool[Tensor, "batch 1"] | None = None,
+        keep_mask: Bool[Tensor, _BATCH_SHAPE] | None = None,
     ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
         """Replace a random subset of conditioning rows with the CFG token.
 
         :param z: Conditioning rows, rank 2 or rank 3.
         :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
-        :param drop_mask: ``(batch, 1)`` True-drops rows, supplied when the caller
-            coordinates this drop with other conditioning signals (sketch CFG);
-            overrides ``rate``.
+        :param keep_mask: Optional positive row keep state supplied when the caller
+            coordinates content dropout with other conditioning streams; overrides ``rate``.
         :returns: The conditioning after dropout, and the keep mask that produced it
             (True = row kept its conditioning; all-True when ``rate`` is zero).
         """
-        if drop_mask is None:
+        if keep_mask is None:
             if rate == 0.0:
                 return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
             keep = torch.rand(z.shape[0], device=z.device) > rate
         else:
-            keep = ~drop_mask.squeeze(-1)
+            keep = keep_mask
         broadcast_keep = keep.unsqueeze(-1)
         if z.ndim == 3:
             broadcast_keep = broadcast_keep.unsqueeze(-1)
@@ -467,7 +466,7 @@ class ApproxEquivTransformer(nn.Module):
         t: torch.Tensor,
         conditioning: torch.Tensor | None = None,
         *,
-        ctrl_tokens: torch.Tensor | None = None,
+        control_tokens: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Predict parameters with optional control-token context.
 
@@ -475,7 +474,7 @@ class ApproxEquivTransformer(nn.Module):
         :param t: Scalar time for each batch row.
         :param conditioning: Shared rank-2 or per-layer rank-3 conditioning;
             ``None`` uses the CFG token.
-        :param ctrl_tokens: Optional ``(batch, num_ctrl_tokens, d_model)`` context
+        :param control_tokens: Optional ``(batch, num_control_tokens, d_model)`` context
             appended to the parameter-token sequence.
         :returns: ``(batch, num_params)`` predictions projected only from
             parameter tokens; control-token states are excluded.
@@ -503,12 +502,12 @@ class ApproxEquivTransformer(nn.Module):
 
         # Control tokens join after the parameter-token PE so the (frozen,
         # zero-default) parameter positions never leak onto them (#2612).
-        if ctrl_tokens is not None:
-            x = torch.cat((x, ctrl_tokens), dim=1)
+        if control_tokens is not None:
+            x = torch.cat((x, control_tokens), dim=1)
 
         for i, layer in enumerate(self.layers):
             if self.pe_type == "layerwise":
-                if ctrl_tokens is None:
+                if control_tokens is None:
                     x = self.pe[i](x)
                 else:
                     params_with_pe = self.pe[i](x[:, :num_param_tokens])

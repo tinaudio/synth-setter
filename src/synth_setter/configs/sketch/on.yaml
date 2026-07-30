@@ -9,7 +9,7 @@ model:
   sketch_controls:
     column: sketch
     num_frames: 401
-    num_ctrl_tokens: 32
+    num_control_tokens: 32
     pitch_zero_threshold: 0.1
 
 datamodule:

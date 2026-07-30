@@ -33,27 +33,26 @@ _POOLING = {
 class SketchControlTokens(nn.Module):
     """Resample sketch controls to control tokens carrying a temporal PE.
 
-    Each control group is zeroed when dropped, adaptively pooled from the
-    stored frame grid to ``num_ctrl_tokens`` bins, and projected by a
-    zero-initialized bias-free linear layer (FlashFoley ``input_add``): at
-    initialization — and forever for a dropped control — the projections
-    contribute exactly nothing, so training starts at the unconditioned model.
-    The fixed sinusoidal encoding lives on the control tokens only, keeping
-    the field's parameter tokens permutation-symmetric.
+    Each control group is zeroed unless kept, pooled to ``num_control_tokens``
+    bins, and passed through a zero-initialized bias-free projection. Control
+    extraction and per-group projection follow FlashFoley/Sketch2Sound; the
+    concat-and-slice injection is U-ViT-style in-context conditioning. The fixed
+    temporal encoding stays on control tokens so parameter tokens remain
+    permutation-symmetric.
 
     .. attribute :: positional_encoding
 
-        Fixed ``(1, num_ctrl_tokens, d_model)`` sinusoidal temporal encoding buffer.
+        Fixed ``(1, num_control_tokens, d_model)`` sinusoidal temporal encoding buffer.
     """
 
     positional_encoding: torch.Tensor
 
     @jaxtyped(typechecker=beartype)
-    def __init__(self, d_model: int, num_ctrl_tokens: int = 32):
+    def __init__(self, d_model: int, num_control_tokens: int = 32):
         """Build the per-control projections and the fixed temporal encoding.
 
         :param d_model: Vector-field token width the controls project into.
-        :param num_ctrl_tokens: Control tokens the time axis is resampled to.
+        :param num_control_tokens: Control tokens the time axis is resampled to.
         """
         super().__init__()
         projections = {
@@ -63,14 +62,14 @@ class SketchControlTokens(nn.Module):
         for projection in projections.values():
             nn.init.zeros_(projection.weight)
         self.projections = nn.ModuleDict(projections)
-        self.register_buffer("positional_encoding", make_sin_pos_enc(num_ctrl_tokens, d_model))
+        self.register_buffer("positional_encoding", make_sin_pos_enc(num_control_tokens, d_model))
 
     @jaxtyped(typechecker=beartype)
     def unconditional(self, batch_size: int) -> Float[torch.Tensor, "batch tokens d_model"]:
         """Return the PE-only control sequence used by the CFG unconditional branch.
 
         :param batch_size: Number of rows requiring unconditional tokens.
-        :returns: Expanded ``(batch_size, num_ctrl_tokens, d_model)`` positional encoding.
+        :returns: Expanded ``(batch_size, num_control_tokens, d_model)`` positional encoding.
         """
         return self.positional_encoding.expand(batch_size, -1, -1)
 
@@ -78,21 +77,21 @@ class SketchControlTokens(nn.Module):
     def forward(
         self,
         controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
-        drop_mask: Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"],
+        keep: Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"],
     ) -> Float[torch.Tensor, "batch tokens d_model"]:
         """Tokenize a stored sketch-control batch.
 
         :param controls: Loudness, centroid, and pitch rows on the mel grid.
-        :param drop_mask: Per-control CFG drop flags in ``CONTROL_GROUPS`` order;
-            a dropped control's channels are zeroed before projection.
+        :param keep: Positive per-group keep state in ``CONTROL_GROUPS`` order;
+            an absent group's channels are zeroed before projection.
         :returns: Control tokens with the temporal encoding added.
         """
-        keep = (~drop_mask).to(controls.dtype)
+        keep_values = keep.to(controls.dtype)
         num_tokens = self.positional_encoding.shape[1]
         tokens = self.unconditional(controls.shape[0])
         for group_index, group in enumerate(CONTROL_GROUPS):
             channels = controls[:, _CONTROL_CHANNELS[group]]
-            channels = channels * keep[:, group_index, None, None]
+            channels = channels * keep_values[:, group_index, None, None]
             resampled = _POOLING[group](channels, num_tokens)
             tokens = tokens + self.projections[group](resampled.transpose(1, 2))
         return tokens

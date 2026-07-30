@@ -233,10 +233,6 @@ vst_flow_matching_module.py:VSTFlowMatchingModule.training_step:JAX001
 vst_flow_matching_module.py:VSTFlowMatchingModule.training_step:JAX002
 vst_flow_matching_module.py:VSTFlowMatchingModule.validation_step:JAX001
 vst_flow_matching_module.py:VSTFlowMatchingModule.validation_step:JAX002
-vst_flow_matching_module.py:call_with_cfg:JAX001
-vst_flow_matching_module.py:call_with_cfg:JAX002
-vst_flow_matching_module.py:rk4_with_cfg:JAX001
-vst_flow_matching_module.py:rk4_with_cfg:JAX002
 vst_flowvae_module.py:VSTFlowVAEModule.__init__:JAX001
 vst_flowvae_module.py:VSTFlowVAEModule.configure_optimizers:JAX001
 vst_flowvae_module.py:VSTFlowVAEModule.get_beta:JAX001

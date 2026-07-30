@@ -1,7 +1,7 @@
 """Tests for sketch-control conditioning in the flow-matching module."""
 
 from functools import partial
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pytest
 import torch
@@ -12,13 +12,23 @@ from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
 )
-from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule, call_with_cfg
+from synth_setter.models.vst_flow_matching_module import (
+    ConditioningKeepMasks,
+    ControlTokenBranches,
+    VSTFlowMatchingModule,
+    build_guided_velocity,
+    joint_cfg_velocity,
+    rk4_step,
+)
 
 _BATCH = 2
 _D_MODEL = 16
 _NUM_PARAMS = 6
 _NUM_FRAMES = 9
 _MEL_SHAPE = (2, 8, 5)
+
+if TYPE_CHECKING:
+    from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 
 
 class _FlattenEncoder(torch.nn.Module):
@@ -36,15 +46,17 @@ def _module(
     sketch: SketchControlSpec | None,
     *,
     sketch_dropout_rate: float = 0.2,
-    sketch_all_dropout_rate: float = 0.2,
+    all_conditioning_dropout_rate: float = 0.2,
     cfg_dropout_rate: float = 0.1,
+    audio_loss: torch.nn.Module | None = None,
 ) -> VSTFlowMatchingModule:
     """Build a tiny CPU flow module.
 
     :param sketch: Sketch-control spec, or ``None`` for the baseline model.
     :param sketch_dropout_rate: Independent per-control drop probability.
-    :param sketch_all_dropout_rate: Probability of dropping every control.
+    :param all_conditioning_dropout_rate: Probability of dropping every conditioning stream.
     :param cfg_dropout_rate: Audio-conditioning CFG drop probability.
+    :param audio_loss: Focused audio-loss implementation, or ``None``.
     :returns: Module ready for ``_train_step``.
     """
     torch.manual_seed(0)
@@ -75,10 +87,35 @@ def _module(
         num_params=_NUM_PARAMS,
         sketch_controls=sketch,
         sketch_dropout_rate=sketch_dropout_rate,
-        sketch_all_dropout_rate=sketch_all_dropout_rate,
+        all_conditioning_dropout_rate=all_conditioning_dropout_rate,
         cfg_dropout_rate=cfg_dropout_rate,
+        audio_loss=cast("AudioFeedbackLoss | None", audio_loss),
         validation_sample_steps=2,
     )
+
+
+class _KeepCountAudioLoss(torch.nn.Module):
+    """Focused fake returning the number of identity-conditioned rows."""
+
+    def forward(
+        self,
+        theta_hat: torch.Tensor,
+        t: torch.Tensor,
+        target_audio: torch.Tensor,
+        encoder: torch.nn.Module,
+        keep: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reduce the production keep input to an observable scalar.
+
+        :param theta_hat: Estimated parameters.
+        :param t: Flow time.
+        :param target_audio: Target audio.
+        :param encoder: Conditioning encoder.
+        :param keep: Positive identity keep state.
+        :returns: Number of retained rows in ``theta_hat`` dtype.
+        """
+        del t, target_audio, encoder
+        return keep.to(theta_hat.dtype).sum()
 
 
 def _batch(*, with_sketch: bool) -> dict[str, torch.Tensor]:
@@ -100,37 +137,95 @@ def _batch(*, with_sketch: bool) -> dict[str, torch.Tensor]:
     return batch
 
 
-def test_call_with_cfg_uses_pe_only_tokens_for_unconditional_branch() -> None:
-    """CFG evaluates controlled branches with their matching token states."""
-    x = torch.zeros(_BATCH, _NUM_PARAMS)
-    conditioning = torch.ones(_BATCH, 8)
-    conditional_tokens = torch.full((_BATCH, 2, _D_MODEL), 2.0)
-    unconditional_tokens = torch.full((_BATCH, 2, _D_MODEL), 3.0)
+class _BranchField(torch.nn.Module):
+    """Field exposing content and control-token branch selection in its value."""
 
-    def field(
+    def forward(
+        self,
         x: torch.Tensor,
         t: torch.Tensor,
         conditioning: torch.Tensor | None,
         *,
-        ctrl_tokens: torch.Tensor,
+        control_tokens: torch.Tensor,
     ) -> torch.Tensor:
+        """Encode the selected branch into a constant velocity.
+
+        :param x: Parameter state whose shape the velocity follows.
+        :param t: Flow time.
+        :param conditioning: Content conditioning, or ``None`` on the unconditional branch.
+        :param control_tokens: Branch-specific control tokens.
+        :returns: Constant velocity identifying both branch inputs.
+        """
         del t
-        value = ctrl_tokens.mean(dim=(1, 2), keepdim=False).unsqueeze(1)
+        value = control_tokens.mean(dim=(1, 2), keepdim=False).unsqueeze(1)
         if conditioning is not None:
             value = value + 10.0
         return value.expand_as(x)
 
-    guided = call_with_cfg(
-        field,
-        x,
-        torch.zeros(_BATCH, 1),
-        conditioning,
+
+def test_build_guided_velocity_uses_pe_only_unconditional_control_branch() -> None:
+    """Joint CFG evaluates each content branch with its matching control-token state."""
+    x = torch.zeros(_BATCH, _NUM_PARAMS)
+    guided_velocity = build_guided_velocity(
+        _BranchField(),
+        torch.ones(_BATCH, 8),
         cfg_strength=4.0,
-        ctrl_tokens=conditional_tokens,
-        unconditional_ctrl_tokens=unconditional_tokens,
+        control_tokens=ControlTokenBranches(
+            conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+            unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+        ),
     )
 
+    guided = guided_velocity(x, torch.zeros(_BATCH, 1))
+
     torch.testing.assert_close(guided, torch.full_like(x, 39.0))
+
+
+def test_sample_without_content_preserves_explicit_conditional_control_branch() -> None:
+    """Sampling does not reinterpret conditional controls when content is absent."""
+    module = _module(None)
+    module.vector_field = _BranchField()
+    control_tokens = ControlTokenBranches(
+        conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+        unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+    )
+
+    sample = module._sample(  # noqa: SLF001
+        None,
+        torch.zeros(_BATCH, _NUM_PARAMS),
+        steps=1,
+        cfg_strength=4.0,
+        control_tokens=control_tokens,
+    )
+
+    torch.testing.assert_close(sample, torch.full_like(sample, -1.0))
+
+
+def test_joint_cfg_velocity_applies_two_branch_algebra() -> None:
+    """Joint CFG combines one conditional and one unconditional velocity."""
+
+    def conditional(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 5.0)
+
+    def unconditional(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 2.0)
+
+    guided_velocity = joint_cfg_velocity(conditional, unconditional, cfg_strength=4.0)
+
+    guided = guided_velocity(torch.zeros(2, 3), torch.zeros(2, 1))
+
+    torch.testing.assert_close(guided, torch.full((2, 3), 14.0))
+
+
+def test_rk4_step_integrates_two_argument_time_field() -> None:
+    """Pure RK4 advances a two-argument field without conditioning knowledge."""
+    x = torch.ones(1, 1)
+
+    result = rk4_step(lambda state, time: state, x, torch.zeros(1, 1), 0.1)
+
+    torch.testing.assert_close(result, torch.tensor([[1.1051708]]))
 
 
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
@@ -179,68 +274,100 @@ def test_train_step_none_spec_matches_loss_before_sketch_support() -> None:
     torch.testing.assert_close(loss, expected)
 
 
-def test_sketch_drop_mask_zero_rates_keep_every_control() -> None:
-    """Zero drop rates yield an all-false mask."""
+@pytest.mark.parametrize(
+    (
+        "cfg_dropout_rate",
+        "sketch_dropout_rate",
+        "all_conditioning_dropout_rate",
+        "expected_content",
+        "expected_sketch_groups",
+    ),
+    [
+        (0.0, 0.0, 0.0, True, True),
+        (0.0, 1.0, 0.0, True, False),
+        (1.0, 0.0, 0.0, False, True),
+        (0.0, 0.0, 1.0, False, False),
+    ],
+)
+def test_conditioning_keep_masks_unit_rates_match_training_truth_table(
+    cfg_dropout_rate: float,
+    sketch_dropout_rate: float,
+    all_conditioning_dropout_rate: float,
+    expected_content: bool,
+    expected_sketch_groups: bool,
+) -> None:
+    """Unit-rate policies produce full, content-only, sketch-only, and unconditional rows.
+
+    :param cfg_dropout_rate: Content drop probability.
+    :param sketch_dropout_rate: Per-sketch-group drop probability.
+    :param all_conditioning_dropout_rate: Global all-conditioning drop probability.
+    :param expected_content: Expected content keep state.
+    :param expected_sketch_groups: Expected keep state for every sketch group.
+    """
+    module = _module(
+        SketchControlSpec(num_frames=_NUM_FRAMES),
+        sketch_dropout_rate=sketch_dropout_rate,
+        all_conditioning_dropout_rate=all_conditioning_dropout_rate,
+        cfg_dropout_rate=cfg_dropout_rate,
+    )
+
+    keep = module._sample_conditioning_keep_masks(_BATCH, torch.device("cpu"))  # noqa: SLF001
+
+    assert torch.equal(keep.content, torch.full((_BATCH,), expected_content))
+    assert torch.equal(
+        keep.sketch_groups,
+        torch.full((_BATCH, 3), expected_sketch_groups),
+    )
+
+
+def test_train_step_content_drop_preserves_sketch_only_state() -> None:
+    """Content CFG dropout does not erase independently retained sketch groups."""
     module = _module(
         SketchControlSpec(num_frames=_NUM_FRAMES),
         sketch_dropout_rate=0.0,
-        sketch_all_dropout_rate=0.0,
-    )
-    mask = module._sketch_drop_mask(4, torch.device("cpu"))  # noqa: SLF001
-    assert mask.shape == (4, 3)
-    assert not mask.any()
-
-
-def test_sketch_drop_mask_full_joint_rate_drops_every_control() -> None:
-    """A unit all-drop rate masks every control for every sample."""
-    module = _module(
-        SketchControlSpec(num_frames=_NUM_FRAMES),
-        sketch_dropout_rate=0.0,
-        sketch_all_dropout_rate=1.0,
-    )
-    assert module._sketch_drop_mask(4, torch.device("cpu")).all()  # noqa: SLF001
-
-
-def test_sketch_drop_mask_force_drop_rows_drop_every_control() -> None:
-    """Forced rows come back all-dropped even at zero configured rates."""
-    module = _module(
-        SketchControlSpec(num_frames=_NUM_FRAMES),
-        sketch_dropout_rate=0.0,
-        sketch_all_dropout_rate=0.0,
-    )
-    force = torch.tensor([[True], [False], [True], [False]])
-
-    mask = module._sketch_drop_mask(  # noqa: SLF001
-        4, torch.device("cpu"), force_drop=force
-    )
-
-    assert mask[0].all() and mask[2].all()
-    assert not mask[1].any() and not mask[3].any()
-
-
-def test_train_step_audio_cfg_drop_forces_all_sketch_controls_dropped() -> None:
-    """Rows whose audio conditioning is CFG-dropped use PE-only control tokens."""
-    module = _module(
-        SketchControlSpec(num_frames=_NUM_FRAMES),
-        sketch_dropout_rate=0.0,
-        sketch_all_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
         cfg_dropout_rate=1.0,
     )
-    assert module.sketch_tokens is not None
-    captured: dict[str, torch.Tensor] = {}
-    original_forward = module.sketch_tokens.forward
 
-    def spy(controls: torch.Tensor, drop_mask: torch.Tensor) -> torch.Tensor:
-        captured["drop_mask"] = drop_mask
-        captured["tokens"] = original_forward(controls, drop_mask)
-        return captured["tokens"]
+    outputs = module._train_step(_batch(with_sketch=True))  # noqa: SLF001
 
-    module.sketch_tokens.forward = spy  # type: ignore[method-assign]
+    assert not outputs.conditioning_keep.content.any()
+    assert outputs.conditioning_keep.sketch_groups.all()
 
-    module._train_step(_batch(with_sketch=True))  # noqa: SLF001
 
-    assert captured["drop_mask"].all()
-    torch.testing.assert_close(captured["tokens"], module.sketch_tokens.unconditional(_BATCH))
+def test_conditioning_keep_masks_identity_keeps_any_present_stream() -> None:
+    """Identity survives whenever content or at least one sketch group is retained."""
+    keep = ConditioningKeepMasks(
+        content=torch.tensor([True, True, False, False]),
+        sketch_groups=torch.tensor(
+            [
+                [True, True, True],
+                [False, False, False],
+                [False, True, False],
+                [False, False, False],
+            ]
+        ),
+    )
+
+    assert torch.equal(keep.identity_keep, torch.tensor([True, True, True, False]))
+
+
+def test_audio_feedback_sketch_only_rows_remain_in_identity_loss() -> None:
+    """Audio feedback retains rows with dropped content and any retained sketch group."""
+    module = _module(
+        SketchControlSpec(num_frames=_NUM_FRAMES),
+        sketch_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
+        cfg_dropout_rate=1.0,
+        audio_loss=_KeepCountAudioLoss(),
+    )
+    batch = _batch(with_sketch=True)
+    batch["audio"] = torch.zeros(_BATCH, 1)
+
+    audio_term = module._train_step(batch).audio_term  # noqa: SLF001
+
+    assert audio_term is not None
+    torch.testing.assert_close(audio_term, torch.tensor(float(_BATCH)))
 
 
 def test_validation_step_with_sketch_runs_cfg_sampling() -> None:
@@ -257,9 +384,9 @@ def test_validation_step_with_sketch_runs_cfg_sampling() -> None:
 def test_sketch_conditioned_training_fixed_batch_lowers_loss_and_updates_projections() -> None:
     """A fixed sketch batch trains the zero-init control projections."""
     module = _module(
-        SketchControlSpec(num_frames=_NUM_FRAMES, num_ctrl_tokens=2),
+        SketchControlSpec(num_frames=_NUM_FRAMES, num_control_tokens=2),
         sketch_dropout_rate=0.0,
-        sketch_all_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
         cfg_dropout_rate=0.0,
     )
     batch = _batch(with_sketch=True)
