@@ -112,6 +112,7 @@ from synth_setter.same import (
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
+from tests.helpers.run_if import RunIf
 
 _SAMPLE_RATE = 44100
 _FIXTURE_SAMPLES = 16
@@ -3477,8 +3478,8 @@ def test_sketch_encode_never_exceeds_extraction_batch_cap(
 
     seen_sizes: list[int] = []
 
-    def record(batch: torch.Tensor, sample_rate: int) -> torch.Tensor:
-        del sample_rate
+    def record(batch: torch.Tensor, sample_rate: int, device: str = "cpu") -> torch.Tensor:
+        del sample_rate, device
         seen_sizes.append(len(batch))
         return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
 
@@ -3712,14 +3713,18 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
     audio = ((rng.random(audio_shape) - 0.5) * 0.8).astype(np.float16)
     write_minimal_lance_shard(uri, spec, audio=audio)
 
+    # Pinned to CPU so the stored column and the reference share a device;
+    # PESTO's convolutions drift ~1e-2 between CPU and CUDA kernels.
     add_embeddings(
-        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False)
+        AddEmbeddingsConfig(
+            lance_uri=str(uri), embeddings=("sketch",), build_index=False, device="cpu"
+        )
     )
 
     controls = _struct_sketch_controls(_stored_sketch_struct(lance.dataset(str(uri))))
     sample_rate = int(render.sample_rate)
     expected = extract_sketch_controls_batch(
-        torch.from_numpy(audio.astype(np.float32)), sample_rate
+        torch.from_numpy(audio.astype(np.float32)), sample_rate, device="cpu"
     ).numpy()
     frames = sketch_num_frames(audio_shape[-1], sample_rate)
     assert controls.shape == (audio_shape[0], NUM_SKETCH_CONTROLS, frames)
@@ -3811,3 +3816,47 @@ def test_add_embeddings_sketch_end_to_end_writes_struct_and_nested_index(
         nearest={"column": SKETCH_VEC_COLUMN, "q": _struct_sketch_vec(struct)[7], "k": 1}
     )
     assert hits.num_rows == 1
+
+
+def test_sketch_spec_encoder_loads_pesto_on_the_configured_device() -> None:
+    """The registry loader honours config.device instead of pinning PESTO to CPU."""
+    from synth_setter.features.sketch_controls import DEFAULT_PESTO_CHECKPOINT, load_pesto_model
+    from synth_setter.pipeline.data.add_embeddings import _load_sketch_spec_encoder
+
+    config = AddEmbeddingsConfig(lance_uri=_LANCE_URI, embeddings=("sketch",), device="cpu")
+    _load_sketch_spec_encoder(DEFAULT_PESTO_CHECKPOINT, config)
+
+    assert next(load_pesto_model().parameters()).device.type == "cpu"
+
+
+@RunIf(min_gpus=1)
+@pytest.mark.slow
+def test_sketch_spec_encoder_with_cuda_config_extracts_on_cuda() -> None:
+    """A cuda run config moves PESTO and the extraction itself onto the GPU."""
+    from synth_setter.features.sketch_controls import DEFAULT_PESTO_CHECKPOINT, load_pesto_model
+    from synth_setter.pipeline.data.add_embeddings import (
+        SketchEncodeFn,
+        _load_sketch_spec_encoder,
+    )
+
+    # Long enough for PESTO's CQT and the loudness STFT windows.
+    audio = ((np.random.default_rng(7).random((4, 1, 8192)) - 0.5) * 0.8).astype(np.float32)
+    config = AddEmbeddingsConfig(lance_uri=_LANCE_URI, embeddings=("sketch",), device="cuda")
+
+    encode = cast("SketchEncodeFn", _load_sketch_spec_encoder(DEFAULT_PESTO_CHECKPOINT, config))
+    controls = encode(audio, _SAMPLE_RATE)
+
+    assert next(load_pesto_model().parameters()).device.type == "cuda"
+    on_cpu = (
+        extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE, device="cpu")
+        .cpu()
+        .numpy()
+    )
+    assert controls.shape == on_cpu.shape
+    affine = [SKETCH_LOUDNESS_ROW, SKETCH_CENTROID_ROW]
+    np.testing.assert_allclose(controls[:, affine], on_cpu[:, affine], atol=1e-5)
+    # Pitch activations are not bitwise portable across devices; the bin is.
+    assert np.array_equal(
+        controls[:, SKETCH_PITCH_SLICE].argmax(axis=1),
+        on_cpu[:, SKETCH_PITCH_SLICE].argmax(axis=1),
+    )

@@ -10,6 +10,7 @@ CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,matpac
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.metadata
 import json
@@ -637,7 +638,7 @@ def _encode_t5gemma_column(
 
 @jaxtyped(typechecker=beartype)
 def _sketch_encode(
-    audio: Float[np.ndarray, "batch channel time"], sample_rate: int
+    audio: Float[np.ndarray, "batch channel time"], sample_rate: int, device: str = "cpu"
 ) -> Float[np.ndarray, "batch control frame"]:
     """Extract sketch controls for one audio batch in memory-capped chunks.
 
@@ -647,6 +648,7 @@ def _sketch_encode(
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
+    :param device: Torch device the extractor runs on.
     :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
     """
     import torch
@@ -655,7 +657,9 @@ def _sketch_encode(
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
     chunks = [
-        extract_sketch_controls_batch(batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate)
+        extract_sketch_controls_batch(
+            batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate, device=device
+        )
         .cpu()
         .numpy()
         for start in range(0, len(batch), SKETCH_ENCODE_MAX_BATCH)
@@ -670,14 +674,14 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     artifact fails before any row is processed.
 
     :param checkpoint: Bundled PESTO checkpoint name.
-    :param config: Unused run config; PESTO runs on CPU, device is not plumbed.
+    :param config: Run config supplying the device.
     :returns: Encoder over the original audio batch.
     """
     from synth_setter.features.sketch_controls import load_pesto_model
 
-    del config
-    load_pesto_model(checkpoint)
-    return _sketch_encode
+    device = _resolve_torch_device(config.device)
+    load_pesto_model(checkpoint, device=device)
+    return functools.partial(_sketch_encode, device=device)
 
 
 def _encode_sketch_column(
