@@ -543,13 +543,14 @@ def test_checkpoint_load_restores_current_backbone_for_strict_state_loading(
     }
     encoder = cast(PretrainedConditioningEncoder, module.encoder)
     head = cast(VectorProjection, encoder.head)
+    backbone = cast(ClapAudioEncoder, encoder.backbone)
     saved_head = head.projection.weight.detach().clone()
     module.on_save_checkpoint(checkpoint)
-    original_backbone = encoder.backbone.mel_filters.detach().clone()
+    original_backbone = backbone.mel_filters.detach().clone()
     with torch.no_grad():
         head.projection.weight.add_(1.0)
-        encoder.backbone.mel_filters.add_(1.0)
-    current_backbone = encoder.backbone.mel_filters.detach().clone()
+        backbone.mel_filters.add_(1.0)
+    current_backbone = backbone.mel_filters.detach().clone()
 
     module.on_load_checkpoint(checkpoint)
     state = checkpoint["state_dict"]
@@ -557,8 +558,8 @@ def test_checkpoint_load_restores_current_backbone_for_strict_state_loading(
     module.load_state_dict(state, strict=True)
 
     assert torch.equal(head.projection.weight, saved_head)
-    assert torch.equal(encoder.backbone.mel_filters, current_backbone)
-    encoder.backbone.mel_filters.copy_(original_backbone)
+    assert torch.equal(backbone.mel_filters, current_backbone)
+    backbone.mel_filters.copy_(original_backbone)
 
 
 def test_checkpoint_load_with_missing_trainable_key_remains_strict(

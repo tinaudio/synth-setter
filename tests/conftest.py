@@ -530,6 +530,61 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
     return cfg
 
 
+@pytest.fixture
+def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
+    """Compose one CPU step through frozen SAME-S conditioning.
+
+    :param tmp_path: Output root and tiny SAME checkpoint parent.
+    :returns: Ready-to-run tiny SAME-S TorchSynth training configuration.
+    """
+    from synth_setter.same import SAME_SAMPLE_RATE
+    from tests.helpers.same_reference import TINY_SAME_LATENT_DIM, write_tiny_same_checkpoint
+
+    checkpoint = write_tiny_same_checkpoint(tmp_path / "same-s", SAME_SAMPLE_RATE)
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/flow",
+                "conditioning=same_s_online",
+                "trainer=cpu",
+                "callbacks=none",
+                "logger=[]",
+            ],
+        )
+    with open_dict(cfg):
+        _set_workspace_root(cfg)
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.seed = 123
+        cfg.test = False
+        cfg.training.val_audio_probe = False
+        cfg.datamodule.signal_length = 4_096
+        cfg.datamodule.train_val_test_sizes = [1, 1, 1]
+        cfg.datamodule.batch_size = 1
+        cfg.datamodule.num_workers = 0
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.max_steps = 1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 0
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.log_every_n_steps = 1
+        cfg.model.compile = False
+        cfg.model.cfg_dropout_rate = 0.0
+        cfg.model.vector_field.d_model = 8
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 8
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.model.encoder.out_dim = 8
+        cfg.model.encoder.backbone.checkpoint = str(checkpoint)
+        cfg.model.encoder.head.embed_dim = TINY_SAME_LATENT_DIM
+        cfg.model.encoder.head.max_seq_len = 8
+        cfg.model.encoder.head.num_heads = 1
+    return cfg
+
+
 @pytest.fixture(scope="function")
 def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
     """Build on top of ``cfg_eval_global()`` and redirect logging into ``tmp_path``.

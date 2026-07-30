@@ -1,0 +1,17 @@
+# @package _global_
+
+# Online SAME-S conditioning pools frozen latents computed from the waveform.
+defaults:
+  - override /model/encoder: same_online
+
+model:
+  conditioning: audio
+  encoder:
+    backbone:
+      checkpoint: r2://intermediate-data/models/same-s
+  encoder_output_dim: ${model.encoder.out_dim}
+  vector_field:
+    conditioning_dim: ${model.encoder.out_dim}
+
+datamodule:
+  conditioning: audio

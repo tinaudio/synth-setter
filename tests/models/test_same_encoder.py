@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 import torch
 
+from synth_setter.models.components.embed_pool import EmbeddingPool
+from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.same import SAME_SAMPLE_RATE
 from tests.helpers.same_reference import (
@@ -48,6 +50,66 @@ def test_encoder_returns_one_latent_sequence_per_waveform(tiny_same_checkpoint: 
     )
     assert torch.isfinite(latents).all()
     assert not torch.equal(latents[0], latents[1])
+
+
+def test_encoder_exposes_latent_width(tiny_same_checkpoint: Path) -> None:
+    """Conditioning heads can validate their input width before the first batch.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    assert _encoder(tiny_same_checkpoint).out_dim == TINY_SAME_LATENT_DIM
+
+
+def test_pretrained_conditioning_pools_same_latent_sequence(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """The generic pretrained wrapper accepts SAME's temporal latent layout.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    head = EmbeddingPool(
+        embed_dim=TINY_SAME_LATENT_DIM,
+        d_model=8,
+        num_heads=1,
+        max_seq_len=8,
+    )
+    encoder = PretrainedConditioningEncoder(
+        backbone=_encoder(tiny_same_checkpoint), head=head, out_dim=8
+    )
+
+    conditioning = encoder(torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0))
+
+    assert conditioning.shape == (_ROWS, 8)
+    assert torch.isfinite(conditioning).all()
+
+
+def test_same_conditioning_updates_pool_without_backbone_gradients(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """Training adapts the pool while the pretrained SAME weights remain fixed.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    torch.manual_seed(0)
+    head = EmbeddingPool(
+        embed_dim=TINY_SAME_LATENT_DIM,
+        d_model=8,
+        num_heads=1,
+        max_seq_len=8,
+    )
+    backbone = _encoder(tiny_same_checkpoint)
+    encoder = PretrainedConditioningEncoder(backbone=backbone, head=head, out_dim=8)
+    original_query = head.query.detach().clone()
+    optimizer = torch.optim.SGD(
+        (parameter for parameter in encoder.parameters() if parameter.requires_grad), lr=0.1
+    )
+
+    optimizer.zero_grad()
+    encoder(torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0)).square().mean().backward()
+    optimizer.step()
+
+    assert not torch.equal(head.query, original_query)
+    assert all(parameter.grad is None for parameter in backbone.parameters())
 
 
 def test_gradient_reaches_the_waveform(tiny_same_checkpoint: Path) -> None:

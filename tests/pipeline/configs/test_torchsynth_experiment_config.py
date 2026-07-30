@@ -14,7 +14,7 @@ from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
-from synth_setter.same import DEFAULT_SAME_S_CHECKPOINT
+from synth_setter.same import DEFAULT_SAME_L_CHECKPOINT, DEFAULT_SAME_S_CHECKPOINT
 
 
 def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
@@ -267,6 +267,48 @@ def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head()
         == "synth_setter.models.components.vector_projection.VectorProjection"
     )
     assert cfg.model.encoder.head.input_dim == 512
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+
+
+@pytest.mark.parametrize(
+    ("profile", "checkpoint"),
+    [
+        ("same_l_online", DEFAULT_SAME_L_CHECKPOINT),
+        ("same_s_online", DEFAULT_SAME_S_CHECKPOINT),
+    ],
+)
+def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
+    profile: str, checkpoint: str
+) -> None:
+    """Online SAME profiles pool frozen waveform latents into flow conditioning.
+
+    :param profile: SAME conditioning profile under test.
+    :param checkpoint: Expected pretrained SAME checkpoint.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", f"conditioning={profile}"],
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
+    )
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
+    assert cfg.model.encoder.backbone.checkpoint == checkpoint
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    )
+    assert cfg.model.encoder.head.embed_dim == 256
+    assert cfg.model.encoder.head.max_seq_len == 44
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
 
 
