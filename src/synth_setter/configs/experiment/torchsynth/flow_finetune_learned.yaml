@@ -1,0 +1,17 @@
+# @package _global_
+
+# Equation 10 encodes the render residual, so its simulator cost need not be differentiable.
+# Starts from torchsynth/flow: a sibling's own defaults resolve relative to its directory.
+defaults:
+  - torchsynth/flow
+  - override /model: vst_flow_finetune
+  - override /model/encoder@model.control_encoder: log_mel
+  - _self_
+
+run_name: flow_finetune_learned
+tags: [torchsynth, flow, finetune, simulator_feedback, learned_audio]
+
+model:
+  control_mode: learned_audio
+  # The learned arm scores through its encoder, so no differentiable cost is used.
+  cost: null

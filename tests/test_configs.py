@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -11,7 +12,7 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import InterpolationKeyError
+from omegaconf.errors import InterpolationKeyError, MissingMandatoryValue
 
 from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT,
@@ -1145,3 +1146,90 @@ def test_extras_validates_synth_before_missing_extras_early_return() -> None:
 
     with pytest.raises(ValueError, match="surge_4"):
         extras(cfg)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "control_mode"),
+    [
+        ("flow_finetune", "gradient_spectral"),
+        ("flow_finetune_learned", "learned_audio"),
+        ("flow_finetune_null", "null"),
+    ],
+)
+def test_torchsynth_finetune_arm_composes_to_its_control_mode(
+    experiment: str, control_mode: str
+) -> None:
+    """Each simulator-feedback arm selects its own control without further overrides.
+
+    :param experiment: ``experiment=torchsynth/...`` name under test.
+    :param control_mode: Control arm the experiment must select.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [f"experiment=torchsynth/{experiment}", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
+    )
+
+    assert cfg.model.control_mode == control_mode
+    # The differentiable render graph-breaks under compile and is single-device (#2585).
+    assert cfg.model.compile is False
+    assert (cfg.model.control_encoder is not None) == (control_mode == "learned_audio")
+    assert (cfg.model.cost is not None) == (control_mode == "gradient_spectral")
+
+
+@pytest.mark.parametrize(
+    "experiment", ["flow_finetune", "flow_finetune_learned", "flow_finetune_null"]
+)
+def test_torchsynth_finetune_arm_instantiates_from_its_experiment(
+    experiment: str, tmp_path: Path
+) -> None:
+    """Each arm's experiment builds a real module through the operator-facing config.
+
+    Composition alone would still pass with a wrong ``_target_``, a broken interpolation, or
+    instantiation-time wiring that only fails once Hydra builds the object.
+
+    :param experiment: ``experiment=torchsynth/...`` name under test.
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    # Small enough that three arms instantiate quickly; the wiring under test is the
+    # experiment's targets and interpolations, not the field's width.
+    small = [
+        "trainer=cpu",
+        # vst_flow's cosine scheduler interpolates it; the cpu trainer carries no step cap.
+        "+trainer.max_steps=10",
+        "datamodule.sample_rate=16000",
+        "datamodule.signal_length=16384",
+        "model.vector_field.num_layers=1",
+        "model.vector_field.d_model=32",
+        "model.vector_field.d_ff=32",
+        "model.vector_field.projection.num_tokens=4",
+        "model.encoder.backbone.out_dim=32",
+        "model.encoder.backbone.hidden_dim=4",
+    ]
+    pretrained = hydra.utils.instantiate(
+        _compose("train.yaml", ["experiment=torchsynth/flow", *small]).model
+    )
+    checkpoint = tmp_path / "base.ckpt"
+    torch.save({"state_dict": pretrained.state_dict()}, checkpoint)
+
+    cfg = _compose(
+        "train.yaml",
+        [
+            f"experiment=torchsynth/{experiment}",
+            *small,
+            f"model.base_checkpoint={checkpoint}",
+        ],
+    )
+    module = hydra.utils.instantiate(cfg.model)
+
+    assert module.control_mode == cfg.model.control_mode
+    # The control is the only thing this run trains.
+    assert not any(p.requires_grad for p in module.vector_field.flow.parameters())
+    assert any(p.requires_grad for p in module.vector_field.control.parameters())
+
+
+def test_torchsynth_finetune_without_base_checkpoint_raises() -> None:
+    """The finetune arms refuse to run against an unnamed pretrained flow."""
+    cfg = _compose("train.yaml", ["experiment=torchsynth/flow_finetune", "trainer=cpu"])
+
+    with pytest.raises(MissingMandatoryValue):
+        _ = cfg.model.base_checkpoint

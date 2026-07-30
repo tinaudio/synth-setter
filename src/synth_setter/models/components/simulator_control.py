@@ -256,6 +256,61 @@ class ControlledFlow(nn.Module):
         self.flow.eval()
 
     @jaxtyped(typechecker=beartype)
+    def __getattr__(self, name: str) -> object:
+        """Fall back to the wrapped field so this reads as the field it replaces.
+
+        Callers hold a ``ControlledFlow`` wherever they held the pretrained field, and reach
+        for that field's own surface (``apply_dropout``, ``d_model``, ``penalty``).
+
+        :param name: Attribute absent from this wrapper.
+        :returns: The wrapped field's attribute of that name.
+        :raises AttributeError: Neither this wrapper nor the wrapped field defines it.
+        """
+        try:
+            return super().__getattr__(name)  # pyright: ignore[reportReturnType]
+        except AttributeError:
+            # Read __dict__ directly: self._modules re-enters this handler before
+            # nn.Module.__init__ has run, turning a missing attribute into RecursionError.
+            flow = self.__dict__.get("_modules", {}).get("flow")
+            if flow is None:
+                raise
+            return getattr(flow, name)
+
+    @jaxtyped(typechecker=beartype)
+    def combine(
+        self,
+        velocity: Float[Tensor, _BATCH_PARAMS_SHAPE],
+        t: Float[Tensor, _BATCH_TIME_SHAPE],
+        control_input: Float[Tensor, _BATCH_ANY_SHAPE] | None,
+    ) -> Float[Tensor, _BATCH_PARAMS_SHAPE]:
+        """Correct an already-evaluated velocity, gated on flow time.
+
+        Split out of :meth:`forward` so a caller that derives ``control_input`` from the
+        velocity evaluates the field once, rather than once for the estimate and again to
+        correct it — two evaluations a field carrying dropout would not even agree on.
+
+        A bypassed row selects the pretrained velocity itself rather than adding a zero
+        correction, so it is bit-identical to the field's own output — adding ``+0.0`` to a
+        ``-0.0`` velocity flips its sign bit. Its control signal is zeroed before the network
+        rather than after, because a non-finite entry on a bypassed row would otherwise give
+        a clean forward while the GELU backward turned every control gradient in the batch
+        into NaN.
+
+        :param velocity: Pretrained velocity shaped ``(batch, params)``.
+        :param t: Flow time shaped ``(batch, 1)``.
+        :param control_input: Control signal, or ``None`` to bypass the control entirely.
+            ``None`` trains nothing, so it is *not* the capacity-matched ablation; that arm
+            feeds a zeroed signal through this same network.
+        :returns: Velocity shaped ``(batch, params)``.
+        """
+        if control_input is None:
+            return velocity
+        engaged = t >= self.t_min
+        flat = control_input.reshape(control_input.shape[0], -1)
+        correction = self.control(t, velocity, torch.where(engaged, flat, torch.zeros_like(flat)))
+        return torch.where(engaged, velocity + correction, velocity)
+
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
         x_t: Float[Tensor, _BATCH_PARAMS_SHAPE],
@@ -266,27 +321,12 @@ class ControlledFlow(nn.Module):
     ) -> Float[Tensor, _BATCH_PARAMS_SHAPE]:
         """Return the pretrained velocity below ``t_min`` and the corrected one above.
 
-        A bypassed row selects the pretrained velocity itself rather than adding a zero
-        correction, so it is bit-identical to the field's own output — adding ``+0.0`` to a
-        ``-0.0`` velocity flips its sign bit. Its control signal is zeroed before the network
-        rather than after, because a non-finite entry on a bypassed row would otherwise give
-        a clean forward while the GELU backward turned every control gradient in the batch
-        into NaN.
-
         :param x_t: Trajectory point shaped ``(batch, params)``.
         :param t: Flow time shaped ``(batch, 1)``.
         :param z: Conditioning the pretrained field consumes, or ``None`` for the
             classifier-free-guidance unconditional branch.
         :param control_input: Control signal, keyword-only so it cannot be mistaken for
-            ``z`` at a call site. ``None`` bypasses the control entirely, which trains
-            nothing and so is *not* the capacity-matched ablation; that arm feeds a zeroed
-            signal through this same network.
+            ``z`` at a call site.
         :returns: Velocity shaped ``(batch, params)``.
         """
-        velocity = self.flow(x_t, t, z)
-        if control_input is None:
-            return velocity
-        engaged = t >= self.t_min
-        flat = control_input.reshape(control_input.shape[0], -1)
-        correction = self.control(t, velocity, torch.where(engaged, flat, torch.zeros_like(flat)))
-        return torch.where(engaged, velocity + correction, velocity)
+        return self.combine(self.flow(x_t, t, z), t, control_input)

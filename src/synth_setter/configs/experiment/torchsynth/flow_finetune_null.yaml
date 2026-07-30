@@ -1,0 +1,14 @@
+# @package _global_
+
+# Capacity-matched ablation: a zeroed simulator signal trains the same control network.
+defaults:
+  - torchsynth/flow
+  - override /model: vst_flow_finetune
+  - _self_
+
+run_name: flow_finetune_null
+tags: [torchsynth, flow, finetune, simulator_feedback, "null"]
+
+model:
+  control_mode: "null"
+  cost: null
