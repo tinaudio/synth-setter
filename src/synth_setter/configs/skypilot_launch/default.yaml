@@ -1,6 +1,4 @@
-# Shared Hydra configuration for generic and dataset SkyPilot dispatch.
-# The compute group stays null until a caller selects an option such as
-# `skypilot_launch/compute=runpod/smoke`.
+# Shared defaults for generic and dataset SkyPilot dispatch; select compute explicitly.
 
 defaults:
   - compute: null

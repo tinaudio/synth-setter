@@ -1,8 +1,6 @@
 name: Evaluate
 
-# Manually-dispatched evaluation: submits the headless synth-setter-eval
-# command through the Hydra-native generic SkyPilot launcher. Science inputs
-# and reusable compute selection remain independent.
+# Dispatch headless evaluation through the generic Hydra SkyPilot launcher.
 # WORKER_GIT_REF pins the worker checkout to the dispatched SHA so §12
 # github_sha provenance records the commit actually evaluated.
 on:
@@ -17,7 +15,6 @@ on:
         description: "W&B artifact reference resolved by the worker"
         required: true
         type: string
-        default: tinaudio/synth-setter/model-ffn_simple:latest
       dataset_root_uri:
         description: "Finalized Lance dataset consumed by evaluation"
         required: true
@@ -64,8 +61,8 @@ jobs:
             echo "::error::compute contains unsupported shell characters"
             exit 1
           fi
-          if [[ ! "$CHECKPOINT_REF" =~ ^[A-Za-z0-9_./:+-]+$ ]]; then
-            echo "::error::checkpoint_ref contains unsupported shell characters"
+          if [[ ! "$CHECKPOINT_REF" =~ ^[A-Za-z0-9_./+-]+:v[0-9]+$ ]]; then
+            echo "::error::checkpoint_ref must name an immutable W&B artifact version"
             exit 1
           fi
           if [[ ! "$DATASET_ROOT_URI" =~ ^r2://[A-Za-z0-9_./-]+$ ]]; then

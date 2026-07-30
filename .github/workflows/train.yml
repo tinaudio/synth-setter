@@ -1,9 +1,6 @@
 name: Train
 
-# Manually-dispatched training: the experiment owns the dataset pin and
-# scientific knobs; the reusable compute profile owns infrastructure. The
-# runner invokes the Hydra-native generic launcher in the dev-snapshot image
-# and detaches after the managed-jobs controller accepts the job.
+# Dispatch training through the generic Hydra SkyPilot launcher with a selected compute profile.
 # WORKER_GIT_REF pins the worker checkout to the dispatched SHA so §12
 # github_sha provenance records the commit actually trained.
 on:
@@ -40,7 +37,7 @@ jobs:
       - name: Resolve compute option
         run: |
           set -euo pipefail
-          if [ -n "$COMPUTE_INPUT" ]; then
+          if [[ -n "$COMPUTE_INPUT" ]]; then
             COMPUTE_OPTION="$COMPUTE_INPUT"
           else
             case "$EXPERIMENT" in

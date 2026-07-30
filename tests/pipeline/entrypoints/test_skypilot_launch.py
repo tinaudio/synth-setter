@@ -60,32 +60,37 @@ from synth_setter.pipeline.skypilot_launch import (
 from synth_setter.resources import configs_dir
 
 
+def _compose_config(config_name: str, overrides: list[str]) -> DictConfig:
+    """Compose one packaged Hydra config without leaking global state.
+
+    :param config_name: Packaged config name to compose.
+    :param overrides: Hydra overrides applied to the config.
+    :returns: Composed config.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            return compose(config_name=config_name, overrides=overrides)
+    finally:
+        GlobalHydra.instance().clear()
+
+
 def _compose_skypilot_launch(*overrides: str) -> DictConfig:
     """Compose the generic SkyPilot launcher with the given overrides.
 
     :param *overrides: Hydra overrides applied to ``skypilot_launch/default``.
     :returns: Composed generic launcher config.
     """
-    GlobalHydra.instance().clear()
-    try:
-        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            return compose(config_name="skypilot_launch/default", overrides=list(overrides))
-    finally:
-        GlobalHydra.instance().clear()
+    return _compose_config("skypilot_launch/default", list(overrides))
 
 
 def _compose_train_experiment(experiment: str) -> DictConfig:
-    """Compose ``train.yaml`` with the given experiment, clearing GlobalHydra around it.
+    """Compose ``train.yaml`` with the given experiment.
 
     :param experiment: Experiment name as passed on the worker command line.
     :returns: The composed training config.
     """
-    GlobalHydra.instance().clear()
-    try:
-        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-            return compose(config_name="train.yaml", overrides=[f"experiment={experiment}"])
-    finally:
-        GlobalHydra.instance().clear()
+    return _compose_config("train.yaml", [f"experiment={experiment}"])
 
 
 @pytest.fixture()
@@ -2156,7 +2161,22 @@ class TestSkypilotLaunchCli:
 
         submitted_task = mock_sky.jobs.launch.call_args.args[0]
         assert submitted_task.run == (
-            "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && echo hello"
+            "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && (echo hello)"
+        )
+
+    def test_worker_command_control_operators_remain_checkout_gated(self) -> None:
+        """Compound worker commands run only after checkout synchronization."""
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            'skypilot_launch.cmd="echo first; echo second"',
+        )
+
+        sky_cfg = skypilot_launch._sky_cfg_from_hydra(cfg)
+
+        assert sky_cfg.cmd == (
+            "cd /home/build/synth-setter && "
+            "bash scripts/sync_worker_checkout.sh && "
+            "(echo first; echo second)"
         )
 
     def test_escaped_worker_interpolation_remains_literal(

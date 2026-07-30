@@ -215,7 +215,7 @@ ______________________________________________________________________
 
 - All workflows that create W&B runs must guarantee the §12 `github_sha` provenance: runner-local runs export `GITHUB_SHA` into the run environment; SkyPilot-dispatched runs instead pin the worker checkout via `WORKER_GIT_REF` (the worker records its synced `HEAD`).
 - Training and evaluation dispatch through the Hydra-native `synth-setter-skypilot-launch`: `skypilot_launch/compute=<option>` selects reusable infrastructure and `skypilot_launch.cmd=<command>` supplies the generic worker shell command. Training's required `experiment` owns its dataset pin; the workflow maps only exceptional experiments to larger compute. Both workflows forward `WORKER_GIT_REF=<dispatched SHA>`, and the launcher injects `IMAGE_TAG` into every rank's env, so both §12 provenance fields match the dispatched commit and image.
-- Evaluation supplies `experiment=surge/<id>` in the generic worker command and an explicit `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:latest}'` override for the published model artifact.
+- Evaluation supplies `experiment=surge/<id>` in the generic worker command and requires an immutable `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:vN}'` artifact version.
 - Promotion requires both `train_wandb_run_id` and `eval_wandb_run_id`. It pulls the model artifact from the training run and eval metrics from the eval run.
 
 **GitHub Release body schema** (produced by promote workflow):

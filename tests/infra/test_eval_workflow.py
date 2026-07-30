@@ -1,11 +1,20 @@
 """Contract tests for the manually dispatched evaluation workflow."""
 
 from pathlib import Path
-from typing import Any, cast
 
-from workflow_fixtures import load_workflow
+import yaml
 
 _WORKFLOW = "eval.yml"
+
+
+def _load_workflow(project_root: Path) -> dict:
+    """Parse the evaluation workflow.
+
+    :param project_root: Repository root supplied by infra fixtures.
+    :returns: Workflow document mapping.
+    """
+    path = project_root / ".github" / "workflows" / _WORKFLOW
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _dispatch_step(project_root: Path) -> dict[str, object]:
@@ -14,7 +23,7 @@ def _dispatch_step(project_root: Path) -> dict[str, object]:
     :param project_root: Repository root supplied by infra fixtures.
     :returns: Dispatch step mapping.
     """
-    workflow = load_workflow(project_root, _WORKFLOW)
+    workflow = _load_workflow(project_root)
     return next(
         step
         for step in workflow["jobs"]["evaluate"]["steps"]
@@ -27,14 +36,14 @@ def test_eval_workflow_exposes_science_and_compute_inputs(project_root: Path) ->
 
     :param project_root: Repository root supplied by infra fixtures.
     """
-    workflow = load_workflow(project_root, _WORKFLOW)
-    workflow_doc = cast(dict[object, Any], workflow)
-    inputs = workflow_doc[True]["workflow_dispatch"]["inputs"]
+    workflow = _load_workflow(project_root)
+    inputs = workflow[True]["workflow_dispatch"]["inputs"]
 
     assert "launch_config" not in inputs
     assert inputs["experiment"]["default"] == "surge/ffn_simple"
     assert inputs["compute"]["default"] == "runpod/smoke"
     assert inputs["checkpoint_ref"]["required"] is True
+    assert "default" not in inputs["checkpoint_ref"]
 
 
 def test_eval_workflow_validates_inputs_before_command_construction(project_root: Path) -> None:
@@ -42,7 +51,7 @@ def test_eval_workflow_validates_inputs_before_command_construction(project_root
 
     :param project_root: Repository root supplied by infra fixtures.
     """
-    workflow = load_workflow(project_root, _WORKFLOW)
+    workflow = _load_workflow(project_root)
     validate = next(
         step
         for step in workflow["jobs"]["evaluate"]["steps"]
@@ -50,6 +59,7 @@ def test_eval_workflow_validates_inputs_before_command_construction(project_root
     )
 
     assert "unsupported shell characters" in str(validate["run"])
+    assert "immutable W&B artifact version" in str(validate["run"])
     assert "^r2://" in str(validate["run"])
 
 

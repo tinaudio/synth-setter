@@ -798,9 +798,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 def load_launch_config(path: Path) -> SkypilotLaunchConfig:
     """Load a checked-in launch-config YAML into a validated ``SkypilotLaunchConfig``.
 
-    The YAML is the full launch description (``cmd`` included) — unlike the
-    Hydra ``skypilot_launch`` group, which forbids ``cmd`` because the
-    generate-dataset entrypoint builds it from argv. Its ``compute:`` field
+    The YAML is the legacy full-launch description. Its ``compute:`` field
     names a ``skypilot_launch/compute`` option (e.g. ``runpod/smoke``),
     resolved here via the Hydra Compose API. ``extra="forbid"`` on the model
     surfaces config typos instead of silently ignoring them.
@@ -846,7 +844,9 @@ def _sky_cfg_from_hydra(cfg: DictConfig) -> SkypilotLaunchConfig:
     sky_cfg = SkypilotLaunchConfig(**{str(key): value for key, value in raw.items()})
     if sky_cfg.cmd is None:
         return sky_cfg
-    worker_cmd = f"cd {_WORKER_REPO_ROOT} && bash scripts/sync_worker_checkout.sh && {sky_cfg.cmd}"
+    worker_cmd = (
+        f"cd {_WORKER_REPO_ROOT} && bash scripts/sync_worker_checkout.sh && ({sky_cfg.cmd})"
+    )
     return sky_cfg.model_copy(update={"cmd": worker_cmd})
 
 
