@@ -6,7 +6,7 @@ cache and hydrates the pod's local disk before loading Lance.
 
 Because a volume is pinned to one data center, the mounted volume decides where
 the attached task runs. The compute option declares `mount_network_volume`,
-and each launch config (or a `--network-volume` CLI override) names the volume —
+and `skypilot_launch.network_volume` names the volume —
 so the volume name is effectively the region selector.
 
 ## One registry: volumes live in the API server that applied them
@@ -46,18 +46,17 @@ GraphQL query), and apply it. No code changes are needed.
 
 ## Stage the 440k Surge Simple dataset
 
-Run the balance preflight, then launch the checksum-verified R2 copy. The
-checked-in launch config targets the `us-ca-2` volume; pass
-`--network-volume` to stage any other region's volume:
+Run the balance preflight, then launch the checksum-verified R2 copy. Select
+the target network volume through the Hydra launcher config:
 
 ```bash
 uv run python -c \
   "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"
 uv run synth-setter-skypilot-launch \
-  src/synth_setter/configs/launch/stage-runpod-surge-simple-440k-volume.yaml
-uv run synth-setter-skypilot-launch \
-  src/synth_setter/configs/launch/stage-runpod-surge-simple-440k-volume.yaml \
-  --network-volume ss-datasets-ap-jp-1
+  skypilot_launch/compute=runpod/network-volume/staging \
+  skypilot_launch.network_volume=ss-datasets-us-ca-2 \
+  skypilot_launch.tail=true \
+  'skypilot_launch.cmd="exec bash scripts/stage_runpod_network_volume.sh r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/ /workspace/network-volume/surge-simple-lance-440k-20k-20k-20260706T005448315Z"'
 ```
 
 The staging script uses `rclone copy --immutable --checksum`, checks source
@@ -75,10 +74,12 @@ schedule than the 750 GB-disk hosts training needs.
 
 ```bash
 uv run synth-setter-skypilot-launch \
-  src/synth_setter/configs/launch/train-runpod-flow-simple-440k-volume.yaml
+  skypilot_launch/compute=runpod/network-volume/training \
+  skypilot_launch.network_volume=ss-datasets-us-ca-2 \
+  'skypilot_launch.cmd="test -f /workspace/network-volume/surge-simple-lance-440k-20k-20k-20260706T005448315Z/.synth-setter-stage-complete && exec synth-setter-train experiment=surge/flow_simple_440k datamodule.download_dataset_root_uri=file:///workspace/network-volume/surge-simple-lance-440k-20k-20k-20260706T005448315Z training.upload_checkpoints_during_training=true hydra.run.dir=/home/build/synth-setter/train-run"'
 ```
 
-The same `--network-volume` override retargets training at another region's
+The same `skypilot_launch.network_volume` override retargets training at another region's
 staged volume. The launch checks the staging marker, then configures:
 
 ```text

@@ -224,6 +224,22 @@ class SkypilotLaunchConfig(BaseModel):
     tier: GpuTier = Field(default=GpuTier.ANY, strict=False)
     extra_envs: dict[str, str] = Field(default_factory=dict)
 
+    @field_validator("cmd")
+    @classmethod
+    def cmd_must_be_non_blank(cls, value: str | None) -> str | None:
+        """Strip a configured command and reject whitespace-only values.
+
+        :param value: Candidate worker shell command.
+        :return: Stripped command, or ``None`` when unset.
+        :raises ValueError: ``value`` contains no command.
+        """
+        if value is None:
+            return None
+        command = value.strip()
+        if not command:
+            raise ValueError("cmd must be a non-empty command when set")
+        return command
+
     @field_validator("num_workers")
     @classmethod
     def num_workers_must_be_positive(cls, v: int) -> int:

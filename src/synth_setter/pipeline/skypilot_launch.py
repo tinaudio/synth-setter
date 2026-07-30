@@ -5,9 +5,9 @@ fully populated ``SkypilotLaunchConfig`` — ``compute`` and ``cmd`` required;
 dataset-specific envs flow through ``sky_cfg.extra_envs``; the worker
 job-name stem comes from ``sky_cfg.job_name`` (callers pin a domain-specific
 stem) or falls back to ``synth-setter-<uuid8>``. The
-``synth-setter-skypilot-launch`` CLI (``main``) wraps it for checked-in launch
-configs under ``src/synth_setter/configs/launch/`` (train/eval workflows),
-whose ``compute:`` field names a ``skypilot_launch/compute`` Hydra option.
+``synth-setter-skypilot-launch`` CLI composes ``skypilot_launch/default``;
+operators select a reusable ``skypilot_launch/compute`` option and supply the
+generic worker ``cmd``.
 
 Provider-neutral: the same call launches against ``runpod/*``, ``vast/*``, or
 ``local/*`` (kubernetes-via-``sky local up``) compute options;
@@ -35,6 +35,8 @@ Managed jobs differ from cluster-level launches:
 
 Each Resources entry's `image_id` is pinned to `docker:<image>` from
 ``sky_cfg.worker_image_tag`` so the controller provisions the worker image.
+The Hydra CLI prepends checkout synchronization to ``cmd``; programmatic
+callers provide their complete worker command.
 
 ``sky_cfg.num_workers > 1`` fans out N independent managed jobs in parallel
 (neither backend supports num_nodes>1 for this workload). Each rank gets
@@ -55,10 +57,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
+import hydra
 import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
+from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, ValidationError
 
 from synth_setter.pipeline.compute_task import (
@@ -826,52 +830,37 @@ def load_launch_config(path: Path) -> SkypilotLaunchConfig:
     return SkypilotLaunchConfig(**doc)
 
 
-@click.command()
-@click.option(
-    "--extra-env",
-    nargs=2,
-    multiple=True,
-    metavar="KEY VALUE",
-    help="Worker environment entry; repeat to set multiple values.",
-)
-@click.option(
-    "--network-volume",
-    default=None,
-    metavar="NAME",
-    help="SkyPilot volume name overriding the config's network_volume.",
-)
-@click.argument("launch_config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def main(
-    launch_config: Path,
-    extra_env: tuple[tuple[str, str], ...],
-    network_volume: str | None,
-) -> None:
-    """Dispatch the SkyPilot launch config at LAUNCH_CONFIG.
+_WORKER_REPO_ROOT = "/home/build/synth-setter"
 
-    Relative paths inside the config (``env_file``) are resolved against the
-    working directory, so run from the repo root.
 
-    :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
-    :param extra_env: Worker environment entries that override config ``extra_envs``.
-    :param network_volume: Volume-name override; retargets the launch to another
-        data center's volume without editing the config.
-    :raises click.ClickException: The config or worker environment fails validation.
+def _sky_cfg_from_hydra(cfg: DictConfig) -> SkypilotLaunchConfig:
+    """Validate and prepare one Hydra-composed generic worker launch.
+
+    :param cfg: Config composed from ``skypilot_launch/default``.
+    :return: Validated launch config with the standard worker checkout preamble.
+    :raises TypeError: ``cfg.skypilot_launch`` does not resolve to a mapping.
     """
-    try:
-        sky_cfg = load_launch_config(launch_config)
-        sky_cfg = SkypilotLaunchConfig.model_validate(
-            {
-                **sky_cfg.model_dump(),
-                "extra_envs": {**sky_cfg.extra_envs, **dict(extra_env)},
-                **({"network_volume": network_volume} if network_volume is not None else {}),
-            }
-        )
-    except (ValueError, yaml.YAMLError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    try:
-        dispatch_via_skypilot(sky_cfg)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    raw: object = OmegaConf.to_container(cfg.skypilot_launch, resolve=True)
+    if not isinstance(raw, dict):
+        raise TypeError(f"cfg.skypilot_launch must compose to a mapping; got {type(raw).__name__}")
+    sky_cfg = SkypilotLaunchConfig(**{str(key): value for key, value in raw.items()})
+    if sky_cfg.cmd is None:
+        return sky_cfg
+    worker_cmd = f"cd {_WORKER_REPO_ROOT} && bash scripts/sync_worker_checkout.sh && {sky_cfg.cmd}"
+    return sky_cfg.model_copy(update={"cmd": worker_cmd})
+
+
+@hydra.main(
+    version_base="1.3",
+    config_path="pkg://synth_setter.configs",
+    config_name="skypilot_launch/default",
+)
+def main(cfg: DictConfig) -> None:
+    """Compose and dispatch a generic SkyPilot worker command.
+
+    :param cfg: Hydra-composed ``skypilot_launch`` configuration.
+    """
+    dispatch_via_skypilot(_sky_cfg_from_hydra(cfg))
 
 
 if __name__ == "__main__":

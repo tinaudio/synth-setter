@@ -28,6 +28,15 @@ class TestDefaults:
         """Cmd defaults to None — populated by the Hydra entrypoint at dispatch time."""
         assert SkypilotLaunchConfig().cmd is None
 
+    @pytest.mark.parametrize("blank", ["", " ", "\t"])
+    def test_blank_cmd_raises(self, blank: str) -> None:
+        """A configured worker command must contain a shell command.
+
+        :param blank: Empty or whitespace-only candidate command.
+        """
+        with pytest.raises(ValueError, match="cmd must be a non-empty command"):
+            SkypilotLaunchConfig(cmd=blank)
+
     def test_default_num_workers_is_one(self) -> None:
         """Single worker is the default; >1 fans out parallel ranks."""
         assert SkypilotLaunchConfig().num_workers == 1

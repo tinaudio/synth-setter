@@ -123,15 +123,24 @@ Reference: `eval-pipeline.md` §4–5
 
 ### 2.5 Cloud Infrastructure
 
-`dispatch_via_skypilot` is the single entry point a `synth-setter-*` CLI takes
-to dispatch onto SkyPilot. Each console script that supports compute carries
-a `skypilot_launch` sub-config (today: `synth-setter-generate-dataset`; more
-entrypoints are expected to follow). Selecting a compute option via
-`skypilot_launch/compute=<option>` flips the command from "run
-in-process" to "materialize the spec, then dispatch via SkyPilot" — no
-separate launcher invocation is involved.
+`dispatch_via_skypilot` is the shared programmatic boundary for SkyPilot.
+Dataset generation composes its `skypilot_launch` subtree inline; arbitrary
+commands use the Hydra-native `synth-setter-skypilot-launch` endpoint with
+`skypilot_launch/compute=<option>` and a quoted `skypilot_launch.cmd` value.
 
-#### Dispatch flow
+#### Generic dispatch
+
+```bash
+synth-setter-skypilot-launch \
+  skypilot_launch/compute=runpod/training \
+  'skypilot_launch.cmd="exec synth-setter-train experiment=torchsynth/flow_audio_same"'
+```
+
+The launcher prepends the repository checkout synchronization before executing
+`cmd`. Escape worker-side OmegaConf interpolation as `\${...}` so it remains
+literal until the worker composes its command.
+
+#### Dataset dispatch flow
 
 ```
 synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smoke
@@ -314,15 +323,15 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.5 Cloud Infrastructure
 
-| Input                                               | Type                 | What's Needed                                                                                                                                                                                                                                                                                                                   | Reference                                                                                     |
-| --------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| RunPod config                                       | Hydra compute option | Smoke, training, and persistent network-volume options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume`; launch configs select the mounted volume (and thus the data center) via `network_volume` / `--network-volume` | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
-| Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                                                                                                                                                                                                       | new provider                                                                                  |
-| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast.ai, local Kubernetes)                                                                                                                                                                                                                                              | —                                                                                             |
-| `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                                                                                                                                                                                                          | training-pipeline.md §2                                                                       |
-| `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
-| `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
-| `make resume`                                       | Makefile target      | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                                                                                                                                                                                               | training-pipeline.md §2                                                                       |
+| Input                                               | Type                 | What's Needed                                                                                                                                                                                                                                                                                 | Reference                                                                                     |
+| --------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| RunPod config                                       | Hydra compute option | Smoke, training, and persistent network-volume options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume`; `skypilot_launch.network_volume` selects the mounted volume and data center | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
+| Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                                                                                                                                                                     | new provider                                                                                  |
+| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast.ai, local Kubernetes)                                                                                                                                                                                                            | —                                                                                             |
+| `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                                                                                                                                                                        | training-pipeline.md §2                                                                       |
+| `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                                                                                                                                                                     | training-pipeline.md §2                                                                       |
+| `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                                                                                                                                                                     | training-pipeline.md §2                                                                       |
+| `make resume`                                       | Makefile target      | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                                                                                                                                                             | training-pipeline.md §2                                                                       |
 
 ### 5.6 Other
 

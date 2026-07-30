@@ -1,14 +1,9 @@
 name: Train
 
-# Manually-dispatched training: one-selector UX (#2196). The experiment is the
-# self-contained recipe (dataset pin + scientific knobs); this workflow maps it
-# to a launch config that supplies compute and operational flags. Experiments
-# needing dedicated compute get their own launch config row in the mapping
-# below. See src/synth_setter/configs/launch/ and storage-provenance-spec.md §8.
-#
-# The runner only dispatches: the launcher runs in the dev-snapshot container
-# (mirroring generate-dataset-shards.yaml's runpod row) and detaches once the
-# managed-jobs controller accepts the job unless the config sets tail=true.
+# Manually-dispatched training: the experiment owns the dataset pin and
+# scientific knobs; the reusable compute profile owns infrastructure. The
+# runner invokes the Hydra-native generic launcher in the dev-snapshot image
+# and detaches after the managed-jobs controller accepts the job.
 # WORKER_GIT_REF pins the worker checkout to the dispatched SHA so §12
 # github_sha provenance records the commit actually trained.
 on:
@@ -18,8 +13,8 @@ on:
         description: "Hydra experiment to train (e.g. surge/flow_simple_440k); must be self-contained"
         required: true
         type: string
-      launch_config:
-        description: "Expert override: repo-relative launch config path (empty selects by experiment)"
+      compute:
+        description: "Expert override: skypilot_launch/compute option (empty selects by experiment)"
         required: false
         type: string
         default: ""
@@ -35,35 +30,38 @@ jobs:
     env:
       IMAGE: tinaudio/synth-setter:dev-snapshot
       EXPERIMENT: ${{ inputs.experiment }}
-      LAUNCH_CONFIG_INPUT: ${{ inputs.launch_config }}
+      COMPUTE_INPUT: ${{ inputs.compute }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Hardcoded experiment → launch-config mapping (#2196): experiments with
-      # dedicated compute needs get their own row; everything else uses the
-      # generic RunPod launch. The optional launch_config input overrides the
-      # mapping. Replaced by launcher-composed dispatch in a later rollout PR.
-      - name: Resolve launch config
+      # The full dataset needs the 750 GB training pool; other experiments use
+      # the cheap smoke pool unless the operator explicitly selects a profile.
+      - name: Resolve compute option
         run: |
           set -euo pipefail
-          if [ -n "$LAUNCH_CONFIG_INPUT" ]; then
-            LAUNCH_CONFIG="$LAUNCH_CONFIG_INPUT"
+          if [ -n "$COMPUTE_INPUT" ]; then
+            COMPUTE_OPTION="$COMPUTE_INPUT"
           else
             case "$EXPERIMENT" in
               surge/flow_simple_440k)
-                LAUNCH_CONFIG=src/synth_setter/configs/launch/train-runpod-flow-simple-440k.yaml
-                ;;
-              surge/ffn_simple_smoke)
-                LAUNCH_CONFIG=src/synth_setter/configs/launch/train-runpod-smoke.yaml
+                COMPUTE_OPTION=runpod/training
                 ;;
               *)
-                LAUNCH_CONFIG=src/synth_setter/configs/launch/train-runpod.yaml
+                COMPUTE_OPTION=runpod/smoke
                 ;;
             esac
           fi
-          echo "Resolved launch config: $LAUNCH_CONFIG"
-          echo "LAUNCH_CONFIG=$LAUNCH_CONFIG" >> "$GITHUB_ENV"
+          if [[ ! "$EXPERIMENT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+            echo "::error::experiment contains unsupported shell characters"
+            exit 1
+          fi
+          if [[ ! "$COMPUTE_OPTION" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+            echo "::error::compute contains unsupported shell characters"
+            exit 1
+          fi
+          echo "Resolved compute option: $COMPUTE_OPTION"
+          echo "COMPUTE_OPTION=$COMPUTE_OPTION" >> "$GITHUB_ENV"
 
       # Exports canonical storage env plus the rclone projection for the container
       # env pass-through below; rclone itself runs on the SkyPilot worker, not the runner.
@@ -77,10 +75,7 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # python -m (not the console script) so the launcher comes from the
-      # mounted fresh checkout via the image's editable install, independent
-      # of the entry-point shims baked at image-build time. LAUNCH_CONFIG
-      # passes through step env so a stray token cannot break out.
+      # python -m uses the mounted checkout rather than image-baked shims.
       - name: Dispatch via SkyPilot
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
@@ -104,15 +99,15 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e WANDB_API_KEY \
             -e WORKER_GIT_REF \
+            -e COMPUTE_OPTION \
             -e EXPERIMENT \
-            -e LAUNCH_CONFIG \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               python -m synth_setter.pipeline.skypilot_launch \
-                --extra-env EXPERIMENT "$EXPERIMENT" \
-                "$LAUNCH_CONFIG"
+                "skypilot_launch/compute=$COMPUTE_OPTION" \
+                "skypilot_launch.cmd=\"exec synth-setter-train experiment=$EXPERIMENT training.upload_checkpoints_during_training=true hydra.run.dir=/home/build/synth-setter/train-run\""
             ' 2>&1 | tee train-dispatch.log
 
       - name: Upload dispatch log

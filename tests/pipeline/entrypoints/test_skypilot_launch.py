@@ -4,9 +4,9 @@ Covers ``src/synth_setter/pipeline/skypilot_launch.py``. Mock-based: no real Sky
 calls. The ``mock_sky`` fixture replaces the launcher's module-level ``sky`` reference with a
 ``MagicMock`` so dispatch-side assertions can read submission shape without provisioning.
 
-``dispatch_via_skypilot(sky_cfg)`` and the ``synth-setter-skypilot-launch`` CLI (``main`` +
-``load_launch_config``) are the public surfaces; the tests exercise the validation funnel, the
-per-rank fan-out, the uuid-stem job-name fallback, and the checked-in ``configs/launch/*.yaml``.
+``dispatch_via_skypilot(sky_cfg)`` and the Hydra-native
+``synth-setter-skypilot-launch`` CLI are the public surfaces; the tests exercise the validation
+funnel, per-rank fan-out, generic command composition, and legacy launch-config loading.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from collections.abc import Iterator
 from concurrent.futures import Future
 from pathlib import Path
@@ -25,7 +26,6 @@ from unittest.mock import MagicMock
 import click
 import pytest
 import yaml
-from click.testing import CliRunner
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig
@@ -58,6 +58,20 @@ from synth_setter.pipeline.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
 from synth_setter.resources import configs_dir
+
+
+def _compose_skypilot_launch(*overrides: str) -> DictConfig:
+    """Compose the generic SkyPilot launcher with the given overrides.
+
+    :param *overrides: Hydra overrides applied to ``skypilot_launch/default``.
+    :returns: Composed generic launcher config.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            return compose(config_name="skypilot_launch/default", overrides=list(overrides))
+    finally:
+        GlobalHydra.instance().clear()
 
 
 def _compose_train_experiment(experiment: str) -> DictConfig:
@@ -983,16 +997,14 @@ class TestRunpodBalancePreflight:
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
-    def test_cli_main_low_balance_exits_nonzero_without_submission(
+    def test_cli_main_low_balance_raises_without_submission(
         self,
-        tmp_path: Path,
         env_file: Path,
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The launcher CLI surfaces the insufficient-balance abort as a nonzero exit.
+        """The Hydra launcher surfaces the insufficient-balance abort.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
         :param env_file: Fixture-provided worker env file path.
         :param mock_sky: Mocked ``sky`` module from fixture.
         :param monkeypatch: Pytest fixture for the balance patch.
@@ -1001,16 +1013,15 @@ class TestRunpodBalancePreflight:
             "synth_setter.pipeline.skypilot_launch._fetch_runpod_balance",
             lambda: 1.0,
         )
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/smoke",
-            cmd="echo",
-            env_file=str(env_file),
+        monkeypatch.chdir(env_file.parent)
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            "skypilot_launch.cmd=echo",
         )
-        result = CliRunner().invoke(main, [str(cfg_path)])
-        assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
-        assert "insufficient RunPod balance" in str(result.exception)
+
+        with pytest.raises(RuntimeError, match="insufficient RunPod balance"):
+            main.__wrapped__(cfg)
+
         mock_sky.jobs.launch.assert_not_called()
 
     def test_probe_failure_emits_fail_open_notice(
@@ -2088,11 +2099,11 @@ class TestLoadLaunchConfig:
 
 
 class TestSkypilotLaunchCli:
-    """``synth-setter-skypilot-launch`` drives load → dispatch from one config-path argument."""
+    """``synth-setter-skypilot-launch`` composes and dispatches one Hydra config."""
 
     @pytest.fixture(autouse=True)
     def _inline_executor(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Run the launcher's per-rank fan-out inline so mock recording is deterministic.
+        """Run per-rank fan-out inline so mock recording is deterministic.
 
         :param monkeypatch: Pytest fixture for attribute patching.
         """
@@ -2100,126 +2111,95 @@ class TestSkypilotLaunchCli:
             "synth_setter.pipeline.skypilot_launch.ThreadPoolExecutor", _InlineExecutor
         )
 
-    def test_config_file_dispatches_submits_managed_job(
-        self,
-        tmp_path: Path,
-        env_file: Path,
-        mock_sky: MagicMock,
-    ) -> None:
-        """A real config file flows through the full validation funnel to a job submission.
+    def test_packaged_cli_composes_command_containing_hydra_overrides(self) -> None:
+        """The real CLI accepts a quoted command containing equals signs."""
+        launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked ``sky`` module from fixture.
-        """
-        cmd = "cd /home/build/synth-setter && exec synth-setter-train experiment=surge/ffn_simple"
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/smoke",
-            cmd=cmd,
-            env_file=str(env_file),
+        result = subprocess.run(  # noqa: S603 - real packaged launcher CLI
+            [
+                launcher,
+                "--cfg",
+                "job",
+                "skypilot_launch/compute=runpod/smoke",
+                'skypilot_launch.cmd="synth-setter-train experiment=torchsynth/flow_audio_same"',
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
         )
 
-        result = CliRunner().invoke(main, [str(cfg_path)])
+        assert result.returncode == 0, result.stderr
+        assert "cmd: synth-setter-train experiment=torchsynth/flow_audio_same" in result.stdout
 
-        assert result.exit_code == 0, result.output
-        mock_sky.jobs.launch.assert_called_once()
-        submitted_task = mock_sky.jobs.launch.call_args.args[0]
-        assert submitted_task.run == cmd
-
-    def test_missing_worker_ref_cli_pins_fetchable_checkout_head(
+    def test_hydra_config_dispatches_generic_worker_command(
         self,
         tmp_path: Path,
         env_file: Path,
         monkeypatch: pytest.MonkeyPatch,
-        mock_sky_with_git_ref_preflight: MagicMock,
-        fetchable_git_checkout: tuple[Path, str],
+        mock_sky: MagicMock,
     ) -> None:
-        """The real CLI defaults worker source to its fetchable checkout HEAD.
+        """Hydra compute and cmd overrides produce the submitted worker task.
 
-        :param tmp_path: Pytest temporary directory for launcher files.
-        :param env_file: Valid worker credential environment file.
-        :param monkeypatch: Pytest fixture for selecting the operator checkout.
-        :param mock_sky_with_git_ref_preflight: SkyPilot boundary fake.
-        :param fetchable_git_checkout: Real local checkout and bare origin.
+        :param tmp_path: Pytest fixture providing the launcher working directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param monkeypatch: Pytest fixture for selecting the working directory.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
         """
-        checkout, head_sha = fetchable_git_checkout
-        monkeypatch.setattr(skypilot_launch, "_OPERATOR_WORKSPACE", checkout)
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/smoke",
-            cmd="echo",
-            env_file=str(env_file),
+        monkeypatch.chdir(tmp_path)
+        assert env_file == tmp_path / ".env"
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            "skypilot_launch.cmd=echo hello",
         )
 
-        result = CliRunner().invoke(main, [str(cfg_path)])
+        main.__wrapped__(cfg)
 
-        assert result.exit_code == 0, result.output
-        worker_env = mock_sky_with_git_ref_preflight.jobs.launch.call_args.args[0].envs
-        assert worker_env["WORKER_GIT_REF"] == head_sha
+        submitted_task = mock_sky.jobs.launch.call_args.args[0]
+        assert submitted_task.run == (
+            "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && echo hello"
+        )
 
-    def test_extra_env_options_forward_values_to_worker(
+    def test_escaped_worker_interpolation_remains_literal(
+        self,
+    ) -> None:
+        """Escaped worker-side Hydra interpolation is not resolved by the launcher."""
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            r"skypilot_launch.cmd=echo \${wandb:model:latest}",
+        )
+
+        sky_cfg = skypilot_launch._sky_cfg_from_hydra(cfg)
+
+        assert sky_cfg.cmd is not None
+        assert "${wandb:model:latest}" in sky_cfg.cmd
+
+    def test_hydra_overrides_forward_env_and_filter_gpu_tier(
         self,
         tmp_path: Path,
         env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
     ) -> None:
-        """Repeated CLI extra-env overrides reach the submitted worker environment.
+        """Nested Hydra overrides reach worker env and compute filtering.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param tmp_path: Pytest fixture providing the launcher working directory.
         :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for selecting the working directory.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
         """
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/smoke",
-            cmd='echo "experiment=${EXPERIMENT:-surge/ffn_simple}"',
-            env_file=str(env_file),
-            extra_envs={"EXPERIMENT": "surge/ffn_simple"},
+        monkeypatch.chdir(tmp_path)
+        assert env_file == tmp_path / ".env"
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            "skypilot_launch.cmd=echo hello",
+            "skypilot_launch.tier=low",
+            "+skypilot_launch.extra_envs.EXPERIMENT=torchsynth/flow_audio_same",
         )
 
-        result = CliRunner().invoke(
-            main,
-            [
-                "--extra-env",
-                "DATASET_ROOT_URI",
-                "r2://experiments/data/custom/",
-                "--extra-env",
-                "EXPERIMENT",
-                "surge/flow_simple",
-                str(cfg_path),
-            ],
-        )
+        main.__wrapped__(cfg)
 
-        assert result.exit_code == 0, result.output
-        injected = mock_sky.jobs.launch.call_args.args[0].envs
-        assert injected["DATASET_ROOT_URI"] == "r2://experiments/data/custom/"
-        assert injected["EXPERIMENT"] == "surge/flow_simple"
-
-    def test_tier_low_submits_only_consumer_gpu_alternatives(
-        self,
-        tmp_path: Path,
-        env_file: Path,
-        mock_sky: MagicMock,
-    ) -> None:
-        """The real CLI filters a composed compute pool before SkyPilot submission.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked SkyPilot submission boundary.
-        """
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/smoke",
-            cmd="echo hello",
-            env_file=str(env_file),
-            tier="low",
-        )
-
-        result = CliRunner().invoke(main, [str(cfg_path)])
-
-        assert result.exit_code == 0, result.output
         task = mock_sky.jobs.launch.call_args.args[0]
+        assert task.envs["EXPERIMENT"] == "torchsynth/flow_audio_same"
         assert sorted(str(resource.accelerators) for resource in task.resources) == [
             "{'RTX3070': 1}",
             "{'RTX3080': 1}",
@@ -2227,150 +2207,72 @@ class TestSkypilotLaunchCli:
             "{'RTX4090': 1}",
         ]
 
-    def test_network_volume_option_overrides_config_volume(
+    def test_hydra_network_volume_override_mounts_selected_volume(
         self,
         tmp_path: Path,
         env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
     ) -> None:
-        """--network-volume redirects the mounted volume without editing the launch config.
+        """Hydra volume selection reaches the compute profile mount point.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param tmp_path: Pytest fixture providing the launcher working directory.
         :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for selecting the working directory.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
         """
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/network-volume/staging",
-            cmd="echo hello",
-            env_file=str(env_file),
-            network_volume="ss-datasets-us-ca-2",
+        monkeypatch.chdir(tmp_path)
+        assert env_file == tmp_path / ".env"
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/network-volume/staging",
+            "skypilot_launch.cmd=echo hello",
+            "skypilot_launch.network_volume=ss-datasets-us-ca-2",
         )
 
-        result = CliRunner().invoke(
-            main,
-            ["--network-volume", "ss-datasets-ap-jp-1", str(cfg_path)],
-        )
+        main.__wrapped__(cfg)
 
-        assert result.exit_code == 0, result.output
-        submitted_task = mock_sky.jobs.launch.call_args.args[0]
-        assert submitted_task.volumes == {"/workspace/network-volume": "ss-datasets-ap-jp-1"}
+        task = mock_sky.jobs.launch.call_args.args[0]
+        assert task.volumes == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
 
-    def test_config_network_volume_reaches_submitted_task(
+    def test_missing_command_rejects_before_submission(
         self,
-        tmp_path: Path,
-        env_file: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Without a CLI override, the launch config's volume name lands in the task.
+        """A generic launch without cmd fails before contacting SkyPilot.
 
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :param env_file: Fixture-provided worker env file path.
-        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
         """
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/network-volume/staging",
-            cmd="echo hello",
-            env_file=str(env_file),
-            network_volume="ss-datasets-us-ca-2",
-        )
+        cfg = _compose_skypilot_launch("skypilot_launch/compute=runpod/smoke")
 
-        result = CliRunner().invoke(main, [str(cfg_path)])
+        with pytest.raises(ValueError, match="requires sky_cfg.cmd"):
+            main.__wrapped__(cfg)
 
-        assert result.exit_code == 0, result.output
-        submitted_task = mock_sky.jobs.launch.call_args.args[0]
-        assert submitted_task.volumes == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
+        mock_sky.jobs.launch.assert_not_called()
 
-    def test_network_volume_without_sentinel_exits_with_clean_error(
+    def test_malformed_dotenv_auth_rejects_before_submission(
         self,
-        tmp_path: Path,
         env_file: Path,
-    ) -> None:
-        """A volume/template mismatch surfaces as a CLI error message, not a traceback.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        :param env_file: Fixture-provided worker env file path.
-        """
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/smoke",
-            cmd="echo hello",
-            env_file=str(env_file),
-        )
-
-        result = CliRunner().invoke(
-            main,
-            ["--network-volume", "ss-datasets-us-ca-2", str(cfg_path)],
-        )
-
-        assert result.exit_code != 0
-        assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "no mount_network_volume" in result.output
-
-    def test_missing_config_path_exits_nonzero(self, tmp_path: Path) -> None:
-        """A nonexistent path is a usage error, not a dispatch attempt.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-        result = CliRunner().invoke(main, [str(tmp_path / "absent.yaml")])
-
-        assert result.exit_code != 0
-
-    def test_non_mapping_config_exits_nonzero_with_message(self, tmp_path: Path) -> None:
-        """A malformed config maps to a clean CLI error naming the problem.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-        path = tmp_path / "launch.yaml"
-        path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
-
-        result = CliRunner().invoke(main, [str(path)])
-
-        assert result.exit_code != 0
-        assert "must be a YAML mapping" in result.output
-
-    def test_malformed_dotenv_auth_exits_before_skypilot_request(
-        self,
-        tmp_path: Path,
-        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
     ) -> None:
-        """The real CLI reports malformed dotenv auth without provisioning.
+        """Malformed dotenv authentication fails before provisioning.
 
-        :param tmp_path: Pytest temporary directory.
-        :param env_file: Fixture-provided worker env file.
+        :param env_file: Fixture-provided worker env file path.
+        :param monkeypatch: Pytest fixture for selecting the working directory.
         :param mock_sky: Mocked external SkyPilot SDK boundary.
         """
         with env_file.open("a", encoding="utf-8") as stream:
             stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=not-a-url\n")
-        cfg_path = _write_launch_yaml(
-            tmp_path,
-            compute="runpod/smoke",
-            cmd="echo",
-            env_file=str(env_file),
+        monkeypatch.chdir(env_file.parent)
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            "skypilot_launch.cmd=echo hello",
         )
 
-        result = CliRunner().invoke(main, [str(cfg_path)])
+        with pytest.raises(click.ClickException, match="Invalid SkyPilot client authentication"):
+            main.__wrapped__(cfg)
 
-        assert result.exit_code != 0
-        assert "Invalid SkyPilot client authentication settings" in result.output
-        mock_sky.api_info.assert_not_called()
         mock_sky.jobs.launch.assert_not_called()
-
-    def test_unparseable_yaml_exits_nonzero_with_clean_error(self, tmp_path: Path) -> None:
-        """Invalid YAML syntax maps to a clean CLI error, not a raw traceback.
-
-        :param tmp_path: Pytest fixture providing a fresh test directory.
-        """
-        path = tmp_path / "launch.yaml"
-        path.write_text("cmd: [unclosed\n", encoding="utf-8")
-
-        result = CliRunner().invoke(main, [str(path)])
-
-        assert result.exit_code != 0
-        assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "Error" in result.output
 
 
 class TestCheckedInLaunchConfigs:

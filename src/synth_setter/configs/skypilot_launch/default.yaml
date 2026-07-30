@@ -1,17 +1,19 @@
-# SkyPilot dispatch knobs for synth-setter-generate-dataset.
-# The compute group stays null → run in-process; select an option via
-# `skypilot_launch/compute=<option>` (e.g. runpod/smoke, local/kind) to
-# dispatch via SkyPilot. See generate_dataset.main for dispatch semantics.
+# Shared Hydra configuration for generic and dataset SkyPilot dispatch.
+# The compute group stays null until a caller selects an option such as
+# `skypilot_launch/compute=runpod/smoke`.
 
 defaults:
   - compute: null
   - _self_
 
+cmd: null
 tier: any
 env_file: .env
+extra_envs: {}
 job_name: null
 num_workers: 1
 worker_image_tag: devcontainer-tools
 tail: false
 api_server: null
 local: false
+network_volume: null
