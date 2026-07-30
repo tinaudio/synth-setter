@@ -11,8 +11,17 @@ from synth_setter.data.vst.audio_preview import (
     audio_uuid,
     encode_audio_to_mp3,
 )
-from synth_setter.data.vst.shapes import AUDIO_FIELD, AUDIO_MP3_FIELD, AUDIO_UUID_FIELD
-from synth_setter.pipeline.data.lance_shard import tensor_array, write_lance_dataset
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    SKETCH_STRUCT_FIELD,
+)
+from synth_setter.pipeline.data.lance_shard import (
+    sketch_struct_array,
+    tensor_array,
+    write_lance_dataset,
+)
 
 # Tiny per-row shapes shared by the datamodule test fixtures: large enough to
 # expose shape mix-ups (every axis distinct), small enough for sub-second tests.
@@ -143,3 +152,21 @@ def write_lance_shard(path: Path, columns: Mapping[str, np.ndarray]) -> None:
     """
     batch = shard_record_batch(columns)
     write_lance_dataset(path, batch.schema, [batch])
+
+
+def write_lance_shard_with_sketch(
+    path: Path, columns: Mapping[str, np.ndarray], sketch_controls: np.ndarray
+) -> None:
+    """Write a shard carrying the nested sketch struct column (#2707).
+
+    :param path: Output ``.lance`` dataset directory.
+    :param columns: Mapping of column name to ``(num_rows, ...)`` array.
+    :param sketch_controls: ``(num_rows, NUM_SKETCH_CONTROLS, F)`` float32 stack
+        split into the storage struct exactly as the add-embeddings writer does.
+    """
+    batch = shard_record_batch(columns)
+    array = sketch_struct_array(sketch_controls)
+    extended = batch.append_column(
+        pa.field(SKETCH_STRUCT_FIELD, array.type, nullable=False), array
+    )
+    write_lance_dataset(path, extended.schema, [extended])

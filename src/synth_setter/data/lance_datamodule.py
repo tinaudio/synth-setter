@@ -14,8 +14,19 @@ import torch
 from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS,
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW,
+    SKETCH_CTRL_FIELD,
+    SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD,
     Conditioning,
     EmbeddingConditioningSpec,
+    SketchControls,
+    SketchControlSpec,
     resolve_embedding_conditioning,
 )
 from synth_setter.data.lance_torch import (
@@ -108,6 +119,86 @@ def _validate_embedding_column(
         )
 
 
+def _sketch_child_shapes(num_frames: int) -> dict[str, tuple[int, ...]]:
+    """Return the per-row shape each stored sketch struct child must have.
+
+    :param num_frames: Mel-grid frames per stored control row.
+    :returns: Expected shapes keyed by struct child name.
+    """
+    return {
+        SKETCH_LOUDNESS_CHILD: (num_frames,),
+        SKETCH_CENTROID_CHILD: (num_frames,),
+        SKETCH_PITCH_CHILD: (SKETCH_PITCH_BINS, num_frames),
+    }
+
+
+def _stack_sketch_children(
+    loudness: np.ndarray, centroid: np.ndarray, pitch: np.ndarray
+) -> np.ndarray:
+    """Reassemble stored struct children into the flat model control stack.
+
+    Inverts the write-time split bit-for-bit: loudness and centroid land on
+    their ``SKETCH_*_ROW`` rows, pitch fills the remaining block.
+
+    :param loudness: ``(B, F)`` loudness rows.
+    :param centroid: ``(B, F)`` centroid rows.
+    :param pitch: ``(B, SKETCH_PITCH_BINS, F)`` pitch activations.
+    :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` stacked controls.
+    """
+    tracks = np.empty(
+        (len(loudness), NUM_SKETCH_TRACK_ROWS, loudness.shape[-1]), dtype=loudness.dtype
+    )
+    tracks[:, SKETCH_LOUDNESS_ROW] = loudness
+    tracks[:, SKETCH_CENTROID_ROW] = centroid
+    return np.concatenate([tracks, pitch], axis=1)
+
+
+def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None:
+    """Validate one Lance split against the nested sketch storage layout (#2707).
+
+    :param shard_path: Lance dataset selected for a Lightning split.
+    :param sketch: Configured sketch-control spec.
+    :raises KeyError: If the configured struct column is absent.
+    :raises ValueError: If the column is not the nested struct (e.g. a legacy flat dataset), a
+        child is missing or mis-shaped, the split is empty, or its sample is non-finite.
+    """
+    dataset = lance.dataset(str(shard_path))
+    column_index = dataset.schema.get_field_index(sketch.column)
+    if column_index < 0:
+        raise KeyError(f"sketch column {sketch.column!r} is absent from {shard_path}")
+    field = dataset.schema.field(column_index)
+    if not pa.types.is_struct(field.type):
+        raise ValueError(
+            f"sketch column {sketch.column!r} in {shard_path} has non-struct type "
+            f"{field.type}; this dataset stores the pre-#2707 flat layout — "
+            "re-run the sketch add-embeddings backfill to rewrite it as a struct"
+        )
+    for child, expected_shape in _sketch_child_shapes(sketch.num_frames).items():
+        child_index = field.type.get_field_index(child)
+        if child_index < 0:
+            raise ValueError(
+                f"sketch column {sketch.column!r} in {shard_path} is missing "
+                f"struct child {child!r}"
+            )
+        shape = _fixed_embedding_shape(field.type.field(child_index))
+        if shape != expected_shape:
+            raise ValueError(
+                f"sketch child {child!r} in {shard_path} has shape {shape}, "
+                f"expected {expected_shape}"
+            )
+    if dataset.count_rows() == 0:
+        raise ValueError(
+            f"sketch column {sketch.column!r} cannot be sampled from empty {shard_path}"
+        )
+    sample = dataset.take([0], columns=[sketch.column]).combine_chunks()
+    tensors = batch_to_shaped_tensors(sample.to_batches()[0])
+    for child in _sketch_child_shapes(sketch.num_frames):
+        if not torch.isfinite(tensors[f"{sketch.column}.{child}"]).all():
+            raise ValueError(
+                f"sketch child {child!r} sample in {shard_path} contains non-finite values"
+            )
+
+
 class PrepareBatchCollate:
     """Transform pre-collated Lance columns with a process-local noise RNG."""
 
@@ -119,6 +210,8 @@ class PrepareBatchCollate:
         rescale_params: bool,
         ot: bool,
         conditioning_column: str | None = None,
+        sketch_column: str | None = None,
+        sketch_pitch_zero_threshold: float | None = None,
         preserve_legacy_m2l: bool = False,
     ) -> None:
         """Configure model-batch transformation semantics.
@@ -128,6 +221,10 @@ class PrepareBatchCollate:
         :param rescale_params: Whether to map parameters to ``[-1, 1]``.
         :param ot: Whether to Hungarian-match noise to parameters.
         :param conditioning_column: Generic embedding column to expose as ``conditioning``.
+        :param sketch_column: Stored sketch struct column whose expanded
+            children are reassembled into ``sketch_ctrl``.
+        :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
+            or ``None`` to pass activations through unbinned.
         :param preserve_legacy_m2l: Whether ``music2latent`` also populates ``m2l``.
         """
         self.mean = mean
@@ -135,6 +232,8 @@ class PrepareBatchCollate:
         self.rescale_params = rescale_params
         self.ot = ot
         self.conditioning_column = conditioning_column
+        self.sketch_column = sketch_column
+        self.sketch_pitch_zero_threshold = sketch_pitch_zero_threshold
         self.preserve_legacy_m2l = preserve_legacy_m2l
         self._rank = (
             torch.distributed.get_rank()
@@ -184,6 +283,15 @@ class PrepareBatchCollate:
             raw_values["conditioning"] = conditioning
             if self.conditioning_column == "music2latent" and not self.preserve_legacy_m2l:
                 del raw_values["music2latent"]
+        if self.sketch_column is not None:
+            prefix = f"{self.sketch_column}."
+            loudness = raw_values.pop(f"{prefix}{SKETCH_LOUDNESS_CHILD}")
+            centroid = raw_values.pop(f"{prefix}{SKETCH_CENTROID_CHILD}")
+            pitch = raw_values.pop(f"{prefix}{SKETCH_PITCH_CHILD}")
+            # Unread companions (e.g. the vec child) never reach prepare_batch.
+            for key in [key for key in raw_values if key.startswith(prefix)]:
+                del raw_values[key]
+            raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(loudness, centroid, pitch)
         raw = cast(RawBatch, raw_values)
         return prepare_batch(
             raw,
@@ -192,6 +300,7 @@ class PrepareBatchCollate:
             rescale_params=self.rescale_params,
             ot=self.ot,
             generator=self._live_generator(),
+            sketch_pitch_zero_threshold=self.sketch_pitch_zero_threshold,
         )
 
 
@@ -205,6 +314,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         num_params: int,
         read_audio: bool,
         conditioning: Conditioning,
+        sketch: SketchControlSpec | None = None,
     ) -> None:
         """Configure synthetic sample shapes and epoch length.
 
@@ -212,14 +322,17 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         :param num_params: Width of parameter and noise tensors.
         :param read_audio: Whether generated samples include prediction audio.
         :param conditioning: Synthetic conditioning modality to populate.
+        :param sketch: Optional sketch spec adding synthetic control matrices.
         """
         self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
         self._num_params = num_params
-        self._read_audio = read_audio
+        self._read_audio = read_audio or conditioning == "audio"
+        self._read_mel = conditioning == "mel"
         self._preserve_legacy_m2l = (
             isinstance(conditioning, str) and conditioning == "m2l"
         )
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
+        self._sketch = sketch
 
     def __len__(self) -> int:
         """Return the sample count corresponding to 10,000 full batches.
@@ -235,23 +348,26 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         :returns: Model-ready random tensors with the configured shapes.
         """
         audio = torch.randn(num_rows, *_FAKE_AUDIO_SHAPE) if self._read_audio else None
-        mel = (
-            torch.randn(num_rows, *_FAKE_MEL_SHAPE)
-            if self._embedding_conditioning is None
-            else None
-        )
+        mel = torch.randn(num_rows, *_FAKE_MEL_SHAPE) if self._read_mel else None
         conditioning = (
             torch.randn(num_rows, *self._embedding_conditioning.input_shape)
             if self._embedding_conditioning is not None
             else None
         )
         m2l = conditioning if self._preserve_legacy_m2l else None
+        if self._sketch is not None:
+            # Stored layout: signed-unit loudness/centroid, unit-interval pitch.
+            sketch = torch.rand(num_rows, NUM_SKETCH_CONTROLS, self._sketch.num_frames)
+            sketch[:, :NUM_SKETCH_TRACK_ROWS] = sketch[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
+        else:
+            sketch = None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
         noise = torch.randn_like(params)
         return {
             "mel": mel,
             "m2l": m2l,
             "conditioning": conditioning,
+            "sketch_ctrl": sketch,
             "params": params,
             "noise": noise,
             "audio": audio,
@@ -387,6 +503,7 @@ class LanceVSTDataModule(VSTDataModule):
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
         conditioning: Conditioning = "mel",
+        sketch: SketchControls = None,
         pin_memory: bool = True,
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
@@ -406,6 +523,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param repeat_first_batch: Whether non-predict loaders repeat their first batch.
         :param predict_file: Prediction split; defaults to ``test.lance``.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
+        :param sketch: Optional sketch-control spec adding its stored column to
+            every split's read set (#2612).
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param persistent_workers: Whether positive worker counts persist between iterators.
@@ -427,6 +546,7 @@ class LanceVSTDataModule(VSTDataModule):
             repeat_first_batch=repeat_first_batch,
             predict_file=predict_file,
             conditioning=conditioning,
+            sketch=sketch,
             pin_memory=pin_memory,
             param_spec_name=param_spec_name,
             download_dataset_txids=download_dataset_txids,
@@ -488,6 +608,9 @@ class LanceVSTDataModule(VSTDataModule):
         spec = self.embedding_conditioning
         if spec is not None:
             _validate_embedding_column(shard_path, spec)
+        sketch = self.sketch_controls
+        if sketch is not None:
+            _validate_sketch_column(shard_path, sketch)
         columns = self._loader_columns(read_audio=read_audio)
         mean, std = stats if stats is not None else (None, None)
         return _MapSplit(
@@ -498,6 +621,10 @@ class LanceVSTDataModule(VSTDataModule):
                 rescale_params=True,
                 ot=ot,
                 conditioning_column=spec.column if spec is not None else None,
+                sketch_column=sketch.column if sketch is not None else None,
+                sketch_pitch_zero_threshold=(
+                    sketch.pitch_zero_threshold if sketch is not None else None
+                ),
                 preserve_legacy_m2l=(
                     isinstance(self.conditioning, str) and self.conditioning == "m2l"
                 ),
@@ -517,6 +644,7 @@ class LanceVSTDataModule(VSTDataModule):
                 num_params=num_params,
                 read_audio=read_audio,
                 conditioning=self.conditioning,
+                sketch=self.sketch_controls,
             ),
             collate=_model_batch_passthrough,
         )
@@ -529,7 +657,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         train_shard = self.dataset_root / f"train{self.shard_suffix}"
         split_stats = predict_stats = None
-        if self.use_saved_mean_and_variance and self.embedding_conditioning is None:
+        if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
             if any(name != "predict" for name in split_names):
                 split_stats = load_dataset_statistics(train_shard)
             if "predict" in split_names:

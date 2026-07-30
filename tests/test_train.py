@@ -35,6 +35,10 @@ from synth_setter.data.vst import param_specs
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
+from synth_setter.models.components.pretrained_encoder import (
+    ClapAudioEncoder,
+    PretrainedConditioningEncoder,
+)
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -195,6 +199,29 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
     assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
+
+
+@pytest.mark.slow
+def test_train_torchsynth_clap_online_advances_one_cpu_step(
+    cfg_torchsynth_clap_online_train: DictConfig,
+) -> None:
+    """Train through online CLAP conditioning with a real offline backbone.
+
+    :param cfg_torchsynth_clap_online_train: Tiny production-path CLAP configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_clap_online_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_clap_online_train)
+
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
+    encoder = object_dict["model"].encoder
+    assert isinstance(object_dict["model"].audio_loss, AudioFeedbackLoss)
+    assert isinstance(encoder, PretrainedConditioningEncoder)
+    assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert encoder.backbone.out_dim == 8
+    assert not encoder.backbone.clap.training
+    assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
 
 
 @pytest.mark.slow
@@ -519,6 +546,50 @@ def test_train_file_uri_without_completion_marker_raises_before_hydration(
         train(cfg_train_lance)
 
     assert not destination.exists()
+
+
+@pytest.mark.slow
+def test_train_row_limited_hydration_evicts_materialized_file_cache(
+    cfg_train_lance: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row-limited file-URI hydration reaches the POSIX cache-advice boundary.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    :param monkeypatch: Records cache advice and isolates the rclone sidecar boundary.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "row-limited-data"
+    advised_fds: list[int] = []
+
+    def copy_stats(_source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
+        del _source_uri, exclude
+        dest_path.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "stats.npz", dest_path / "stats.npz")
+
+    def record_advice(fd: int, _offset: int, _length: int, _advice: int) -> None:
+        advised_fds.append(fd)
+
+    monkeypatch.setattr(
+        "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+        copy_stats,
+    )
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.datamodule.download_dataset_row_limit = 2
+        cfg_train_lance.datamodule.batch_size = 2
+        cfg_train_lance.datamodule.num_workers = 0
+
+    HydraConfig().set_config(cfg_train_lance)
+    _, object_dict = train(cfg_train_lance)
+
+    assert object_dict["trainer"].global_step > 0
+    assert advised_fds
 
 
 @pytest.mark.slow
@@ -972,6 +1043,28 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
     train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
     assert train_split.is_dir()
+
+
+def test_train_fast_dev_run_sketch_tokens_lance(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """Run a real ``train(cfg)`` step with ``conditioning=m2l sketch=on``.
+
+    Drives the full sketch stack end-to-end on real Lance shards: projected
+    ``sketch_ctrl`` reads, pitch zero-binning and conditioning z-scoring in the
+    collate, control-token injection in the training step, and CFG sampling at
+    validation.
+
+    :param cfg_train_sketch_lance: Composed ``sketch=on`` training config over
+        generated m2l+sketch Lance splits.
+    """
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    model = object_dict["model"]
+    assert model.sketch_tokens is not None
+    assert object_dict["datamodule"].sketch_controls is not None
+    assert torch.isfinite(metric_dict["train/loss"])
 
 
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
@@ -1586,11 +1679,18 @@ def test_train_same_config_launches_upload_isolated_val_audio_probes(
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(audio_probe, "_run_captured", _materialize_fake_probe_stage)
+    # Never loaded (the probe's render stage is stubbed), but they must exist: the
+    # probe pre-flight rejects a launch whose render artifacts resolve nowhere.
+    stub_bundle = tmp_path / "plugins" / "fake.vst3"
+    stub_bundle.mkdir(parents=True)
+    stub_preset = tmp_path / "presets" / "fake.vstpreset"
+    stub_preset.parent.mkdir(parents=True)
+    stub_preset.write_bytes(b"stub preset")
     with open_dict(cfg_surge_fake_train):
         cfg_surge_fake_train.synth.name = param_spec_name
         cfg_surge_fake_train.synth.param_spec_name = param_spec_name
-        cfg_surge_fake_train.synth.plugin_state_path = "presets/fake.vstpreset"
-        cfg_surge_fake_train.synth.plugin_path = "plugins/fake.vst3"
+        cfg_surge_fake_train.synth.plugin_state_path = str(stub_preset)
+        cfg_surge_fake_train.synth.plugin_path = str(stub_bundle)
         cfg_surge_fake_train.render.sample_rate = _SURGE_FIXTURE_SAMPLE_RATE
         cfg_surge_fake_train.render.channels = _SURGE_FIXTURE_CHANNELS
         cfg_surge_fake_train.render.velocity = 100

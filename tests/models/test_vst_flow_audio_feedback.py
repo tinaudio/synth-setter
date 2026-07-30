@@ -8,9 +8,13 @@ serve.
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 import torch
 from lightning.pytorch import Trainer
+from lightning.pytorch.plugins.precision import Precision
 
 from synth_setter.data.torchsynth_datamodule import (
     TorchSynthBatch,
@@ -20,7 +24,12 @@ from synth_setter.data.torchsynth_datamodule import (
     collate_audio_dict,
 )
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
+from synth_setter.models.components.audio_distance import (
+    LatentMseDistance,
+    MultiScaleSpectralDistance,
+)
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.vst_flow_matching_module import (
     TrainStepOutputs,
@@ -37,7 +46,10 @@ _CONDITIONING_DIM = 32
 _AUDIBLE_PEAK = 1e-4
 _AUDIBLE_ROW_POOL = 256
 _OVERFIT_STEPS = 300
-_OVERFIT_TOTAL_THRESHOLD = 0.1
+# Coarse "landed near zero" floor guarding against a run that only looks good relatively
+# because it started tiny. The tight claim is the tenfold reduction asserted alongside it;
+# this bound stays slack because where 300 steps land varies with the host (#2745).
+_OVERFIT_TOTAL_THRESHOLD = 0.2
 
 
 class _WaveformEncoder(torch.nn.Module):
@@ -67,6 +79,7 @@ def _audio_loss() -> AudioFeedbackLoss:
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         render_batch_size=_BATCH,
+        distance=MultiScaleSpectralDistance(sample_rate=_SAMPLE_RATE),
     )
 
 
@@ -368,9 +381,8 @@ def test_audio_loss_keep_mask_zeroes_cfg_dropped_rows() -> None:
     theta_hat = torch.rand(_BATCH, _ENCODED_WIDTH) * 2 - 1
     t = torch.full((_BATCH, 1), 0.9)
 
-    encoder = _WaveformEncoder()
-    all_dropped = loss(theta_hat, t, batch["audio"], encoder, keep=torch.zeros(_BATCH))
-    all_kept = loss(theta_hat, t, batch["audio"], encoder, keep=torch.ones(_BATCH))
+    all_dropped = loss(theta_hat, t, batch["audio"], keep=torch.zeros(_BATCH))
+    all_kept = loss(theta_hat, t, batch["audio"], keep=torch.ones(_BATCH))
 
     assert all_dropped.item() == 0.0
     assert all_kept.item() > 0.0
@@ -441,3 +453,84 @@ def test_fit_with_audio_loss_on_the_online_datamodule_completes_one_step() -> No
     trainer.fit(module, datamodule=_datamodule())
 
     assert trainer.state.finished
+
+
+def test_non_finite_gradient_raises_before_clipping_scales_every_parameter() -> None:
+    """A NaN gradient must fail at its source, not silently poison every weight."""
+    module = _module()
+    optimizer = torch.optim.Adam(module.parameters())
+    for parameter in module.parameters():
+        parameter.grad = torch.zeros_like(parameter)
+    poisoned = next(iter(module.vector_field.parameters()))
+    non_finite_grad = torch.zeros_like(poisoned)
+    non_finite_grad[0] = float("nan")
+    poisoned.grad = non_finite_grad
+
+    with pytest.raises(ValueError, match="non-finite gradient"):
+        module.configure_gradient_clipping(optimizer, gradient_clip_val=1.0)
+
+
+def test_finite_gradients_are_clipped_to_the_configured_norm() -> None:
+    """Ordinary large-but-finite gradients still clip instead of raising."""
+    module = _module()
+    optimizer = torch.optim.Adam(module.parameters())
+    for parameter in module.parameters():
+        parameter.grad = torch.full_like(parameter, 10.0)
+    module._trainer = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
+        precision_plugin=Precision(),
+        model=module,
+        gradient_clip_val=1.0,
+        gradient_clip_algorithm="norm",
+    )
+
+    module.configure_gradient_clipping(optimizer, gradient_clip_val=1.0)
+
+    total = torch.linalg.vector_norm(
+        torch.stack([p.grad.norm() for p in module.parameters() if p.grad is not None])
+    )
+    assert total.item() == pytest.approx(1.0, abs=1e-3)
+
+
+def test_non_finite_gradient_error_names_every_affected_parameter() -> None:
+    """One name cannot show whether the corruption is encoder-local or global."""
+    module = _module()
+    optimizer = torch.optim.Adam(module.parameters())
+    for parameter in module.parameters():
+        parameter.grad = torch.zeros_like(parameter)
+    encoder_parameter = next(iter(module.encoder.parameters()))
+    field_parameter = next(iter(module.vector_field.parameters()))
+    for parameter in (encoder_parameter, field_parameter):
+        corrupted = torch.zeros_like(parameter)
+        corrupted[0] = float("nan")
+        parameter.grad = corrupted
+
+    with pytest.raises(ValueError) as failure:
+        module.configure_gradient_clipping(optimizer, gradient_clip_val=1.0)
+
+    assert "encoder." in str(failure.value)
+    assert "vector_field." in str(failure.value)
+
+
+def test_module_accepts_a_weight_normalized_audio_loss_encoder(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """Lightning deep-copies its saved hyperparameters, which weight norm cannot survive.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    same_loss = AudioFeedbackLoss(
+        lambda_audio=0.03,
+        t_min=0.0,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        render_batch_size=_BATCH,
+        distance=LatentMseDistance(
+            encoder=SameAudioEncoder.from_pretrained(
+                sample_rate=_SAMPLE_RATE, checkpoint=str(tiny_same_checkpoint)
+            )
+        ),
+    )
+
+    module = _module(audio_loss=same_loss)
+
+    assert module.audio_loss is same_loss

@@ -10,9 +10,14 @@ import torch
 from synth_setter.models.components.residual_mlp import ConditionalResidualMLP
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
 from synth_setter.models.components.vector_field import VectorField
+from synth_setter.models.vst_flow_matching_module import build_guided_velocity
 
 
 def _conditional_residual_mlp() -> ConditionalResidualMLP:
+    """Build a minimal FiLM-conditioned MLP backbone.
+
+    :returns: Two-parameter field with scalar time encoding.
+    """
     return ConditionalResidualMLP(
         n_params=2,
         d_model=4,
@@ -23,6 +28,10 @@ def _conditional_residual_mlp() -> ConditionalResidualMLP:
 
 
 def _approx_equiv_transformer() -> ApproxEquivTransformer:
+    """Build a minimal permutation-approximate transformer backbone.
+
+    :returns: Two-parameter, two-token field with positional encoding disabled.
+    """
     return ApproxEquivTransformer(
         projection=LearntProjection(
             d_model=4,
@@ -42,6 +51,10 @@ def _approx_equiv_transformer() -> ApproxEquivTransformer:
 
 
 def _vector_field() -> VectorField:
+    """Build a minimal conditioned vector-field backbone.
+
+    :returns: Two-dimensional single-block field.
+    """
     return VectorField(field_dim=2, hidden_dim=4, conditioning_dim=3, num_blocks=1)
 
 
@@ -122,3 +135,27 @@ def test_apply_dropout_at_zero_rate_keeps_every_row_and_reports_an_all_true_mask
 
     assert torch.equal(dropped, z)
     assert torch.equal(keep, torch.ones(2, dtype=torch.bool))
+
+
+@pytest.mark.parametrize(
+    "model_factory",
+    _MODEL_FACTORIES,
+    ids=["conditional-residual-mlp", "approx-equiv-transformer", "vector-field"],
+)
+def test_build_guided_velocity_calls_every_backbone_signature(
+    model_factory: Callable[[], ConditionalResidualMLP | ApproxEquivTransformer | VectorField],
+) -> None:
+    """Sampling binds content conditioning positionally, whatever the backbone names it.
+
+    ``ConditionalResidualMLP`` calls the argument ``c`` while the other two call it
+    ``conditioning``, so a keyword-bound branch breaks MLP sampling at inference.
+
+    :param model_factory: Backbone constructor under test.
+    """
+    field = model_factory()
+    guided = build_guided_velocity(field, torch.randn(2, 3), cfg_strength=2.0)
+
+    velocity = guided(torch.randn(2, 2), torch.rand(2, 1))
+
+    assert velocity.shape == (2, 2)
+    assert torch.isfinite(velocity).all()

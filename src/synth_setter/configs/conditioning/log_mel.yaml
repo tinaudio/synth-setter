@@ -1,0 +1,17 @@
+# @package _global_
+
+# Raw-audio conditioning through the log-mel CNN: the encoder observes the waveform and
+# computes its own features, so no stored embedding column is read.
+defaults:
+  - override /model/encoder: log_mel
+
+datamodule:
+  conditioning: audio
+
+model:
+  conditioning: audio
+  encoder_output_dim: ${model.encoder.out_dim}
+  vector_field:
+    # LogMelEncoder emits a flat embedding, so conditioning width is its out_dim
+    # rather than a sequence encoder's d_model.
+    conditioning_dim: ${model.encoder.out_dim}

@@ -40,6 +40,10 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
+from synth_setter.models.components.pretrained_encoder import (
+    ClapAudioEncoder,
+    PretrainedConditioningEncoder,
+)
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -84,6 +88,60 @@ _AUDIO_PREDICTION_SAMPLE_COUNT = int(
     _AUDIO_PREDICTION_DURATION_SECONDS * _AUDIO_PREDICTION_SAMPLE_RATE
 )
 _SURGE_XT_PREDICTION_WIDTH = 300
+
+
+def test_evaluate_flow_sketch_prelim_test_mode_uses_sketch_controls(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """The shipped sketch experiment composes and evaluates its nested controls.
+
+    :param cfg_train_sketch_lance: Fixture providing real m2l+sketch Lance splits.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/flow_sketch_prelim",
+                "datamodule=surge_lance",
+                "synth=surge_4",
+                "conditioning=m2l",
+                "trainer=cpu",
+                "callbacks=none",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = cfg_train_sketch_lance.paths.root_dir
+        cfg.paths.output_dir = cfg_train_sketch_lance.paths.output_dir
+        cfg.paths.log_dir = cfg_train_sketch_lance.paths.log_dir
+        cfg.logger = None
+        cfg.ckpt_path = None
+        cfg.mode = "test"
+        cfg.datamodule.dataset_root = cfg_train_sketch_lance.datamodule.dataset_root
+        cfg.datamodule.download_dataset_root_uri = None
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.persistent_workers = False
+        cfg.datamodule.pin_memory = False
+        cfg.model.compile = False
+        cfg.model.test_sample_steps = 2
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 32
+        cfg.model.vector_field.d_ff = 32
+        cfg.model.vector_field.projection.num_tokens = 8
+        cfg.trainer.fast_dev_run = True
+        cfg.trainer.precision = "32-true"
+
+    HydraConfig().set_config(cfg)
+    try:
+        metrics, objects = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metrics["test/param_mse"])
+    assert objects["model"].sketch_tokens is not None
+    assert objects["datamodule"].sketch_controls is not None
 
 
 def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:
@@ -475,6 +533,33 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
     assert torch.isfinite(eval_batch["audio"]).all()
+
+
+@pytest.mark.slow
+def test_eval_torchsynth_clap_online_validates_real_offline_backbone(
+    cfg_torchsynth_clap_online_train: DictConfig,
+) -> None:
+    """The eval entrypoint validates raw audio through a real tiny CLAP model.
+
+    :param cfg_torchsynth_clap_online_train: Offline tiny-CLAP production configuration.
+    """
+    cfg = cfg_torchsynth_clap_online_train
+    with open_dict(cfg):
+        cfg.mode = "validate"
+        cfg.ckpt_path = None
+        cfg.logger = None
+        cfg.trainer.limit_val_batches = 1
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metric_dict["val/param_mse"])
+    encoder = object_dict["model"].encoder
+    assert isinstance(encoder, PretrainedConditioningEncoder)
+    assert isinstance(encoder.backbone, ClapAudioEncoder)
 
 
 _FAKE_ORACLE_DATASETS = [

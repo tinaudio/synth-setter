@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -43,6 +44,157 @@ def two_version_source(tmp_path: Path) -> tuple[str, str]:
     transaction = ds.read_transaction(1)
     assert transaction is not None
     return source, transaction.uuid
+
+
+def _raise_advice_error(*_args: int) -> None:
+    raise OSError(5, "advice failed")
+
+
+def _raise_flush_error(_fd: int) -> None:
+    raise OSError(5, "flush failed")
+
+
+def test_materialize_lance_subset_evicts_written_data_files(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Published Lance data files are advised out of the filesystem cache.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Records the OS advice boundary while preserving real materialization.
+    """
+    source, txid = two_version_source
+    advised_fds: list[int] = []
+
+    def record_advice(fd: int, offset: int, length: int, advice: int) -> None:
+        advised_fds.append(fd)
+        assert offset == 0
+        assert length == 0
+        assert advice == os.POSIX_FADV_DONTNEED
+
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+    assert advised_fds
+    extra_file = destination / "data" / "additional-fragment.lance"
+    extra_file.write_bytes(b"fragment")
+    extra_file.chmod(0o444)
+    advised_fds.clear()
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    data_files = [path for path in (destination / "data").rglob("*") if path.is_file()]
+    assert len(data_files) >= 2
+    assert len(advised_fds) == len(data_files)
+    assert lance.dataset(str(destination)).count_rows() == 3
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "posix_fadvise") or not hasattr(os, "POSIX_FADV_DONTNEED"),
+    reason="POSIX_FADV_DONTNEED is unavailable on this platform",
+)
+def test_materialize_lance_subset_real_cache_evict_remains_consumable(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real OS eviction path preserves the published Lance dataset.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Wraps the real syscall to prove the production path invokes it.
+    """
+    source, txid = two_version_source
+    real_advice = os.posix_fadvise
+    advised_fds: list[int] = []
+
+    def record_real_advice(fd: int, offset: int, length: int, advice: int) -> None:
+        real_advice(fd, offset, length, advice)
+        advised_fds.append(fd)
+
+    monkeypatch.setattr(os, "posix_fadvise", record_real_advice)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert advised_fds
+    materialized = lance.dataset(str(destination))
+    assert materialized.count_rows() == 3
+    assert materialized.schema.names == ["a"]
+
+
+@pytest.mark.parametrize("missing_attribute", ["POSIX_FADV_DONTNEED", "posix_fadvise"])
+def test_materialize_lance_subset_without_cache_advice_remains_consumable(
+    missing_attribute: str,
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Platforms without POSIX cache advice still publish a readable dataset.
+
+    :param missing_attribute: Optional OS cache-advice attribute to remove.
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Removes one optional OS attribute.
+    """
+    source, txid = two_version_source
+    monkeypatch.delattr(os, missing_attribute, raising=False)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert lance.dataset(str(destination)).count_rows() == 3
+
+
+def test_materialize_lance_subset_cache_flush_error_propagates(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A data-file writeback failure aborts materialization.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Injects the failed file flush.
+    """
+    source, txid = two_version_source
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "fsync", _raise_flush_error)
+    monkeypatch.setattr(os, "posix_fadvise", lambda *_args: None, raising=False)
+
+    with pytest.raises(OSError, match="flush failed"):
+        materialize_lance_subset(
+            source,
+            tmp_path / "materialized.lance",
+            txid=txid,
+            columns=("a",),
+        )
+
+
+def test_materialize_lance_subset_cache_advice_error_remains_consumable(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OS advice failure does not invalidate the published dataset.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Injects the advisory syscall failure.
+    """
+    source, txid = two_version_source
+
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", _raise_advice_error, raising=False)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert lance.dataset(str(destination)).count_rows() == 3
 
 
 def test_resolve_txid_version_known_txid_returns_matching_version(

@@ -1155,8 +1155,11 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 `sketch` is not a learned embedding: it extracts the Sketch2Sound-style
 loudness, spectral-centroid, and PESTO pitch tracks
 (`features/sketch_controls.py`) from `audio` on the mel frame grid and writes
-them as a `(NUM_SKETCH_CONTROLS, F)` tensor column plus a mean-pooled
-`sketch_ctrl_vec` companion for contour-similarity search. Its `IndexSpec`
+them as a `sketch` struct column (#2707) with `loudness`/`centroid`
+fixed-size-list children, a `pitch` fixed-shape-tensor child, and a
+frame-mean `vec` child indexed via its dotted path for contour-similarity
+search. The struct is an atomic write unit — refreshing one child means
+rewriting the whole column (requires Lance data storage 2.2). Its `IndexSpec`
 fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
@@ -1249,33 +1252,12 @@ class RenderConfig(BaseModel):
 
     synth: SynthSpec  # Param spec, rendering artifact, preset, and synth_version
     renderer_backend: RendererBackend
-    sample_rate: int
-    channels: int
-    velocity: int
-    signal_duration_seconds: float
-    min_loudness: float
-    audio_dtype: Literal["float16", "float32"] = "float16"
-    mel_spec_dtype: Literal["float16", "float32"] = "float32"
-    samples_per_render_batch: int = 32
-    samples_per_shard: int
-    sample_offset: int = 0      # split-local index of this shard's first row
-    attempts_per_sample: int = 100
-    max_retries: int = 0        # per-shard retry budget for transient renderer failures
-    parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
-    plugin_reload_cadence: Literal["once", "render"] = "once"  # per-shard load (#1999)
-    # Platform-aware default via Field(default_factory=...): "never" on Darwin
-    # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere
-    # (preserves historical per-render warm-up). An explicit
-    # gui_toggle_cadence="render" is still rejected on Darwin by a
-    # model_validator; "always_on" requires plugin_reload_cadence="once".
-    # Source of truth: _GuiToggleCadence / RenderConfig in pipeline/schemas/spec.py.
-    gui_toggle_cadence: Literal["never", "once", "render", "always_on"] = Field(
-        default_factory=_default_gui_toggle_cadence
-    )
-    # "shard" reuses one patch for every sample in the shard (a #489 per-patch
-    # variance probe; a partial shard re-renders from row 0 rather than resuming).
-    # Source of truth: _ParamSampleCadence / RenderConfig in pipeline/schemas/spec.py.
-    param_sample_cadence: Literal["sample", "shard"] = "sample"
+    # Audio/shard geometry, retry budgets, and the cadence knobs
+    # (plugin_reload_cadence #1999, gui_toggle_cadence #714,
+    # param_sample_cadence #489) are documented field-by-field on the
+    # authoritative RenderConfig in pipeline/schemas/spec.py; this block is
+    # an abridged sketch, not the definition.
+    ...
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""
