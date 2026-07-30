@@ -58,6 +58,27 @@ MATPAC_PLUS_FIELD: str = "matpac_plus"
 # Emits the 128-semitone x 3-bin activation width that ``SKETCH_PITCH_BINS`` pins.
 DEFAULT_PESTO_CHECKPOINT: str = "mir-1k_g7"
 
+# Single-parameter sensitivity struct appended by the ``param_shift`` embedder. One nested
+# column keeps the shift's seven facets together and readable as ``shift.param``,
+# ``shift.audio``, ... rather than seven suffixed siblings of the dataset's own columns.
+SHIFT_FIELD: str = "shift"
+SHIFT_PARAM_SUBFIELD: str = "param"
+SHIFT_AMOUNT_SUBFIELD: str = "amount"
+SHIFT_AUDIO_SUBFIELD: str = "audio"
+SHIFT_RMS_SUBFIELD: str = "rms"
+SHIFT_SOT_SUBFIELD: str = "sot"
+SHIFT_WMFCC_SUBFIELD: str = "wmfcc"
+SHIFT_MSS_SUBFIELD: str = "mss"
+SHIFT_SUBFIELD_NAMES: tuple[str, ...] = (
+    SHIFT_PARAM_SUBFIELD,
+    SHIFT_AMOUNT_SUBFIELD,
+    SHIFT_AUDIO_SUBFIELD,
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_WMFCC_SUBFIELD,
+    SHIFT_MSS_SUBFIELD,
+)
+
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.
 DATASET_FIELD_DTYPES: dict[str, np.dtype] = {

@@ -18,6 +18,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
 )
+from synth_setter.pipeline.schemas.spec import RenderConfig
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -83,6 +84,14 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: param_text_normalizer
 
         Strategy rendering param rows as conditioning text.
+
+    .. attribute :: render
+
+        Composed render and synth identity, or ``None`` when nothing re-renders.
+
+    .. attribute :: param_shift_seed
+
+        Master seed for ``param_shift``'s per-row replacement draws.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -119,6 +128,13 @@ class AddEmbeddingsConfig(BaseModel):
     param_text_normalizer: str = Field(
         default=DEFAULT_PARAM_TEXT_NORMALIZER,
         description="Strategy rendering param rows as conditioning text.",
+    )
+    render: RenderConfig | None = Field(
+        default=None,
+        description="Composed render/synth selection; required by re-rendering embeddings.",
+    )
+    param_shift_seed: int = Field(
+        default=0, description="Master seed for param_shift's per-row replacement draws."
     )
 
     @field_validator("embeddings", mode="before")
@@ -218,16 +234,36 @@ class AddEmbeddingsConfig(BaseModel):
     def _param_sourced_embeddings_need_a_param_spec(self) -> Self:
         """Require a param spec whenever a selected embedding reads param rows.
 
+        Re-rendering embeddings are exempt: their spec comes from the render config's synth
+        identity, so a second, independently-set name could only disagree with it.
+
         :returns: Validated config unchanged.
         :raises ValueError: A param-sourced embedding is selected without a param spec.
         """
         param_sourced = sorted(
             name
-            for name in self.embeddings
-            if PARAM_ARRAY_FIELD in EMBEDDING_REGISTRY[name].input_fields
+            for name, spec in ((name, EMBEDDING_REGISTRY[name]) for name in self.embeddings)
+            if PARAM_ARRAY_FIELD in spec.input_fields and not spec.rerenders
         )
         if param_sourced and self.param_spec_name is None:
             raise ValueError(f"embeddings {param_sourced} require param_spec_name")
+        return self
+
+    @model_validator(mode="after")
+    def _rerendering_embeddings_need_a_render_config(self) -> Self:
+        """Require a composed render config whenever a selected embedding re-renders audio.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: A re-rendering embedding is selected without a render config.
+        """
+        rerendering = sorted(
+            name for name in self.embeddings if EMBEDDING_REGISTRY[name].rerenders
+        )
+        if rerendering and self.render is None:
+            raise ValueError(
+                f"embeddings {rerendering} re-render every row and require a composed render "
+                "config; pass `render=<group> synth=<group>`"
+            )
         return self
 
     @model_validator(mode="after")
@@ -258,7 +294,13 @@ class AddEmbeddingsConfig(BaseModel):
         """
         from omegaconf import OmegaConf
 
-        spec_keys = [key for key in cfg if isinstance(key, str) and key in cls.model_fields]
+        # ``render`` composes from two root groups (#2565), so it is masked out here and
+        # rebuilt by ``RenderConfig.from_cfg_nodes`` rather than validated field-wise.
+        spec_keys = [
+            key
+            for key in cfg
+            if isinstance(key, str) and key in cls.model_fields and key != "render"
+        ]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
         except ValueError as exc:
@@ -266,4 +308,7 @@ class AddEmbeddingsConfig(BaseModel):
         raw = OmegaConf.to_container(masked, resolve=True)
         if not isinstance(raw, dict):
             raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
-        return cls(**{key: value for key, value in raw.items() if isinstance(key, str)})
+        values = {key: value for key, value in raw.items() if isinstance(key, str)}
+        if cfg.get("render") is not None:
+            values["render"] = RenderConfig.from_cfg_nodes(cfg.render, cfg.get("synth"))
+        return cls(**values)
