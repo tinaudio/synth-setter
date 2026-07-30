@@ -114,6 +114,29 @@ def test_materialize_lance_subset_real_cache_evict_remains_consumable(
     }
 
 
+@pytest.mark.parametrize("missing_attribute", ["POSIX_FADV_DONTNEED", "posix_fadvise"])
+def test_materialize_lance_subset_without_cache_advice_remains_consumable(
+    missing_attribute: str,
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Platforms without POSIX cache advice still publish a readable dataset.
+
+    :param missing_attribute: Optional OS cache-advice attribute to remove.
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Removes one optional OS attribute.
+    """
+    source, txid = two_version_source
+    monkeypatch.delattr(os, missing_attribute, raising=False)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert lance.dataset(str(destination)).count_rows() == 3
+
+
 def test_materialize_lance_subset_cache_fsync_error_propagates(
     tmp_path: Path,
     two_version_source: tuple[str, str],
