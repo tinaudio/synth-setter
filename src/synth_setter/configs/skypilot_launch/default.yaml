@@ -11,6 +11,7 @@ extra_envs: {}
 job_name: null
 num_workers: 1
 worker_image_tag: devcontainer-tools
+worker_checkout_dir: /home/build/synth-setter
 tail: false
 api_server: null
 local: false

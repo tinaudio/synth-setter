@@ -2255,6 +2255,22 @@ class TestSkypilotLaunchCli:
             ")"
         )
 
+    def test_worker_checkout_dir_override_controls_sync_preamble(self) -> None:
+        """Compute-specific worker workspaces can override the checkout location."""
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            'skypilot_launch.worker_checkout_dir="/workspace/custom repo"',
+            "skypilot_launch.cmd=echo hello",
+        )
+
+        sky_cfg = skypilot_launch._sky_cfg_from_hydra(cfg)
+
+        assert sky_cfg.cmd == (
+            "cd '/workspace/custom repo' && bash scripts/sync_worker_checkout.sh && (\n"
+            "echo hello\n"
+            ")"
+        )
+
     def test_worker_command_trailing_comment_keeps_valid_shell(self) -> None:
         """A trailing command comment cannot consume the wrapper terminator."""
         cfg = _compose_skypilot_launch(

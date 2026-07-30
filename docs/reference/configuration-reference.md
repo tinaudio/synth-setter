@@ -136,8 +136,10 @@ synth-setter-skypilot-launch \
   'skypilot_launch.cmd="exec synth-setter-train experiment=torchsynth/flow_audio_same"'
 ```
 
-The launcher prepends the repository checkout synchronization before executing
-`cmd`. Escape worker-side OmegaConf interpolation as `\${...}` so it remains
+The launcher prepends repository checkout synchronization under
+`skypilot_launch.worker_checkout_dir` (default `/home/build/synth-setter`) before
+executing `cmd`. Override that field for worker images with a different checkout
+location. Escape worker-side OmegaConf interpolation as `\${...}` so it remains
 literal until the worker composes its command.
 
 #### Dataset dispatch flow

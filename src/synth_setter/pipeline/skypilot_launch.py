@@ -49,6 +49,7 @@ import base64
 import functools
 import os
 import re
+import shlex
 import subprocess
 import tomllib
 import uuid
@@ -828,9 +829,6 @@ def load_launch_config(path: Path) -> SkypilotLaunchConfig:
     return SkypilotLaunchConfig(**doc)
 
 
-_WORKER_REPO_ROOT = "/home/build/synth-setter"
-
-
 def _sky_cfg_from_hydra(cfg: DictConfig) -> SkypilotLaunchConfig:
     """Validate and prepare one Hydra-composed generic worker launch.
 
@@ -844,8 +842,9 @@ def _sky_cfg_from_hydra(cfg: DictConfig) -> SkypilotLaunchConfig:
     sky_cfg = SkypilotLaunchConfig(**{str(key): value for key, value in raw.items()})
     if sky_cfg.cmd is None:
         return sky_cfg
+    checkout_dir = shlex.quote(sky_cfg.worker_checkout_dir)
     worker_cmd = (
-        f"cd {_WORKER_REPO_ROOT} && bash scripts/sync_worker_checkout.sh && (\n{sky_cfg.cmd}\n)"
+        f"cd {checkout_dir} && bash scripts/sync_worker_checkout.sh && (\n{sky_cfg.cmd}\n)"
     )
     return sky_cfg.model_copy(update={"cmd": worker_cmd})
 

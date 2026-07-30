@@ -45,6 +45,16 @@ class TestDefaults:
         """Worker image tag defaults to the tooling image so pods are debuggable."""
         assert SkypilotLaunchConfig().worker_image_tag == "devcontainer-tools"
 
+    def test_default_worker_checkout_dir_matches_container_workspace(self) -> None:
+        """The checkout default matches the worker image workspace."""
+        assert SkypilotLaunchConfig().worker_checkout_dir == "/home/build/synth-setter"
+
+    def test_worker_checkout_dir_strips_surrounding_whitespace(self) -> None:
+        """The checkout directory is normalized before shell quoting."""
+        cfg = SkypilotLaunchConfig(worker_checkout_dir=" /workspace/repo ")
+
+        assert cfg.worker_checkout_dir == "/workspace/repo"
+
     def test_default_tail_is_false(self) -> None:
         """Detach by default; ``tail`` is opt-in."""
         assert SkypilotLaunchConfig().tail is False

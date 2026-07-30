@@ -102,10 +102,15 @@ jobs:
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
+              printf -v worker_cmd "%s" \
+                "exec synth-setter-train " \
+                "experiment=$EXPERIMENT " \
+                "training.upload_checkpoints_during_training=true " \
+                "hydra.run.dir=/home/build/synth-setter/train-run"
               python -m synth_setter.pipeline.skypilot_launch \
                 "skypilot_launch/compute=$COMPUTE_OPTION" \
                 skypilot_launch.worker_image_tag=dev-snapshot \
-                "skypilot_launch.cmd=\"exec synth-setter-train experiment=$EXPERIMENT training.upload_checkpoints_during_training=true hydra.run.dir=/home/build/synth-setter/train-run\""
+                "skypilot_launch.cmd=\"$worker_cmd\""
             ' 2>&1 | tee train-dispatch.log
 
       - name: Upload dispatch log

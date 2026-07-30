@@ -16,10 +16,9 @@ on:
         required: true
         type: string
       dataset_root_uri:
-        description: "Finalized Lance dataset consumed by evaluation"
+        description: "Finalized, model-compatible Lance dataset consumed by evaluation"
         required: true
         type: string
-        default: r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
       compute:
         description: "skypilot_launch/compute option"
         required: true
@@ -115,11 +114,18 @@ jobs:
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
+              printf -v worker_cmd "%s" \
+                "exec src/synth_setter/scripts/run-linux-vst-headless.sh " \
+                "synth-setter-eval " \
+                "experiment=$EXPERIMENT " \
+                "ckpt_path=\\\${wandb:$CHECKPOINT_REF} " \
+                "datamodule.download_dataset_root_uri=$DATASET_ROOT_URI " \
+                "hydra.run.dir=/home/build/synth-setter/eval-run"
               python -m synth_setter.pipeline.skypilot_launch \
                 "skypilot_launch/compute=$COMPUTE_OPTION" \
                 "skypilot_launch.tail=$TAIL" \
                 skypilot_launch.worker_image_tag=dev-snapshot \
-                "skypilot_launch.cmd=\"exec src/synth_setter/scripts/run-linux-vst-headless.sh synth-setter-eval experiment=$EXPERIMENT ckpt_path='\\\${wandb:$CHECKPOINT_REF}' datamodule.download_dataset_root_uri=$DATASET_ROOT_URI hydra.run.dir=/home/build/synth-setter/eval-run\""
+                "skypilot_launch.cmd=\"$worker_cmd\""
             ' 2>&1 | tee eval-dispatch.log
 
       - name: Upload dispatch log

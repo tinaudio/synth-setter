@@ -1,8 +1,11 @@
 """Contract tests for the manually dispatched evaluation workflow."""
 
+import os
+import subprocess
 from pathlib import Path
 from typing import cast
 
+import pytest
 import yaml
 
 _WORKFLOW = "eval.yml"
@@ -57,10 +60,55 @@ def test_eval_workflow_exposes_science_and_compute_inputs(project_root: Path) ->
     assert inputs["compute"]["default"] == "runpod/smoke"
     assert inputs["checkpoint_ref"]["required"] is True
     assert "default" not in inputs["checkpoint_ref"]
+    assert inputs["dataset_root_uri"]["required"] is True
+    assert "default" not in inputs["dataset_root_uri"]
 
 
-def test_eval_workflow_validates_inputs_before_command_construction(project_root: Path) -> None:
-    """Workflow inputs cannot inject worker shell syntax.
+@pytest.mark.parametrize(
+    ("input_name", "input_value"),
+    [
+        ("EXPERIMENT", "surge/ffn_simple;echo-owned"),
+        ("COMPUTE_OPTION", "runpod/smoke;echo-owned"),
+        ("CHECKPOINT_REF", "model:v0;echo-owned"),
+        ("DATASET_ROOT_URI", "r2://bucket/data;echo-owned"),
+    ],
+)
+def test_eval_workflow_rejects_shell_syntax_in_inputs(
+    project_root: Path, input_name: str, input_value: str
+) -> None:
+    """Execute workflow validation against each command-injection boundary.
+
+    :param project_root: Repository root supplied by infra fixtures.
+    :param input_name: Environment variable receiving the malicious value.
+    :param input_value: Input containing unsupported shell syntax.
+    """
+    validate = next(
+        step
+        for step in _workflow_steps(project_root)
+        if step.get("name") == "Validate launcher inputs"
+    )
+    env = {
+        **os.environ,
+        "CHECKPOINT_REF": "tinaudio/synth-setter/model:v0",
+        "COMPUTE_OPTION": "runpod/smoke",
+        "DATASET_ROOT_URI": "r2://experiments/data/test/",
+        "EXPERIMENT": "surge/ffn_simple",
+    }
+    env[input_name] = input_value
+
+    result = subprocess.run(  # noqa: S603 - executes the checked-in workflow script
+        ["bash", "-c", str(validate["run"])],  # noqa: S607
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode != 0
+
+
+def test_eval_workflow_accepts_valid_launcher_inputs(project_root: Path) -> None:
+    """Execute workflow validation with representative production inputs.
 
     :param project_root: Repository root supplied by infra fixtures.
     """
@@ -69,10 +117,23 @@ def test_eval_workflow_validates_inputs_before_command_construction(project_root
         for step in _workflow_steps(project_root)
         if step.get("name") == "Validate launcher inputs"
     )
+    env = {
+        **os.environ,
+        "CHECKPOINT_REF": "tinaudio/synth-setter/model-ffn_simple:v12",
+        "COMPUTE_OPTION": "runpod/smoke",
+        "DATASET_ROOT_URI": "r2://experiments/data/test/",
+        "EXPERIMENT": "surge/ffn_simple",
+    }
 
-    assert "unsupported shell characters" in str(validate["run"])
-    assert "explicit W&B artifact version" in str(validate["run"])
-    assert "^r2://" in str(validate["run"])
+    result = subprocess.run(  # noqa: S603 - executes the checked-in workflow script
+        ["bash", "-c", str(validate["run"])],  # noqa: S607
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_eval_workflow_dispatches_hydra_launcher_with_generic_command(
@@ -87,7 +148,8 @@ def test_eval_workflow_dispatches_hydra_launcher_with_generic_command(
     assert '"skypilot_launch/compute=$COMPUTE_OPTION"' in run
     assert "skypilot_launch.worker_image_tag=dev-snapshot" in run
     assert "src/synth_setter/scripts/run-linux-vst-headless.sh" in run
-    assert "synth-setter-eval experiment=$EXPERIMENT" in run
-    assert "ckpt_path='\\\\\\${wandb:$CHECKPOINT_REF}'" in run
+    assert '"synth-setter-eval "' in run
+    assert '"experiment=$EXPERIMENT "' in run
+    assert "ckpt_path=\\\\\\${wandb:$CHECKPOINT_REF}" in run
     assert "hydra.run.dir=/home/build/synth-setter/eval-run" in run
     assert "src/synth_setter/configs/launch" not in run

@@ -193,6 +193,10 @@ class SkypilotLaunchConfig(BaseModel):
 
         Docker image tag pulled by each worker.
 
+    .. attribute :: worker_checkout_dir
+
+        Repository checkout directory inside the worker image.
+
     .. attribute :: tail
 
         Whether to tail logs after launch.
@@ -233,6 +237,7 @@ class SkypilotLaunchConfig(BaseModel):
     job_name: str | None = None
     num_workers: int = 1
     worker_image_tag: str = "devcontainer-tools"
+    worker_checkout_dir: str = "/home/build/synth-setter"
     tail: bool = False
     api_server: str | None = None
     local: bool = False
@@ -249,6 +254,18 @@ class SkypilotLaunchConfig(BaseModel):
         :return: Stripped command, or ``None`` when unset.
         """
         return _strip_optional_non_blank(value, "cmd must be a non-empty command when set")
+
+    @field_validator("worker_checkout_dir")
+    @classmethod
+    def worker_checkout_dir_must_be_non_blank(cls, value: str) -> str:
+        """Normalize the configured worker checkout directory.
+
+        :param value: Candidate checkout directory.
+        :return: Stripped non-empty checkout directory.
+        """
+        validated = _strip_optional_non_blank(value, "worker_checkout_dir must be non-empty")
+        assert validated is not None
+        return validated
 
     @field_validator("num_workers")
     @classmethod
