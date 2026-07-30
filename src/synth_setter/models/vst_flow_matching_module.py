@@ -283,7 +283,10 @@ class VSTFlowMatchingModule(LightningModule):
         """
         super().__init__()
 
-        self.save_hyperparameters(ignore=["encoder"], logger=False)
+        # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
+        # inside the audio term cannot survive; the term is training-time only, so it is not
+        # reconstructed from hparams either.
+        self.save_hyperparameters(ignore=["encoder", "audio_loss"], logger=False)
         if not isinstance(encoder, PretrainedConditioningEncoder):
             # Existing load_from_checkpoint consumers reconstruct legacy encoders from hparams.
             self.hparams["encoder"] = encoder

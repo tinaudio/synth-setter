@@ -20,6 +20,8 @@ from torch.nn import functional
 # ``MEL_PARAMS``. Duplicated rather than imported because that module pulls in librosa,
 # which must not enter the training import path (plugin dlopen hazard, #2549).
 MEL_SCALES: Final[tuple[tuple[int, int, int], ...]] = ((10, 5, 32), (25, 10, 64), (100, 50, 128))
+# Stable Audio 3's ``loss_norm_eps``, guarding the variance divisor of a constant target.
+_LOSS_NORM_EPS: Final = 1e-6
 # librosa's ``power_to_db`` floor and its 10*log10 power convention.
 _AMIN: Final = 1e-10
 _POWER_TO_DB: Final = 10.0
@@ -104,8 +106,8 @@ class MultiScaleSpectralDistance(nn.Module):
         return torch.stack(per_scale, dim=0).mean(dim=0)
 
 
-class CosineEmbeddingDistance(nn.Module):
-    """Cosine distance in a frozen encoder's embedding space, per sample."""
+class _FrozenEncoderDistance(nn.Module):
+    """Shared frozen-encoder custody for distances measured in a learned space."""
 
     @jaxtyped(typechecker=beartype)
     def __init__(self, *, encoder: nn.Module) -> None:
@@ -124,7 +126,7 @@ class CosineEmbeddingDistance(nn.Module):
         self.encoder = encoder
 
     @jaxtyped(typechecker=beartype)
-    def train(self, mode: bool = True) -> CosineEmbeddingDistance:
+    def train(self, mode: bool = True) -> _FrozenEncoderDistance:
         """Keep the encoder in eval mode so normalization statistics cannot drift.
 
         :param mode: Training mode requested for this module's own children.
@@ -133,6 +135,10 @@ class CosineEmbeddingDistance(nn.Module):
         super().train(mode)
         self.encoder.eval()
         return self
+
+
+class CosineEmbeddingDistance(_FrozenEncoderDistance):
+    """Cosine distance in a frozen encoder's embedding space, per sample."""
 
     @jaxtyped(typechecker=beartype)
     def forward(
@@ -153,3 +159,27 @@ class CosineEmbeddingDistance(nn.Module):
             self.encoder(signal).flatten(start_dim=1) for signal in (rendered, target)
         ]
         return 1.0 - functional.cosine_similarity(embedded[0], embedded[1].detach(), dim=-1)
+
+
+class LatentMseDistance(_FrozenEncoderDistance):
+    """Magnitude-normalized squared error in a frozen encoder's latent space, per sample."""
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self,
+        rendered: Float[Tensor, _BATCH_AUDIO_SHAPE],
+        target: Float[Tensor, _BATCH_AUDIO_SHAPE],
+    ) -> Float[Tensor, _BATCH_SHAPE]:
+        """Return the target-variance-normalized latent error of each row.
+
+        Normalizing by the target's own detached variance — Stable Audio 3's ``sample``-mode
+        loss normalization — keeps high-magnitude latents from swamping quiet rows.
+
+        :param rendered: Rendered estimate shaped ``(batch, samples)``.
+        :param target: Observed audio, same shape.
+        :returns: Per-sample distance shaped ``(batch,)``.
+        """
+        rendered_latents = self.encoder(rendered).flatten(start_dim=1)
+        target_latents = self.encoder(target).flatten(start_dim=1).detach()
+        magnitude = target_latents.var(dim=-1, keepdim=True, unbiased=False) + _LOSS_NORM_EPS
+        return ((rendered_latents - target_latents) ** 2 / magnitude).mean(dim=-1)

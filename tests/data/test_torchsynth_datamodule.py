@@ -11,6 +11,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
+from synth_setter.data.sample_seed import derive_sample_seed
 from synth_setter.data.torchsynth_datamodule import (
     _PARAM_CLAMP_EPS,
     NUM_PARAMS,
@@ -22,7 +23,10 @@ from synth_setter.data.torchsynth_datamodule import (
     _verify_voice_matches_spec,
     render_torchsynth,
 )
-from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.torchsynth_grad_render import (
+    differentiable_decode,
+    render_torchsynth_grad,
+)
 from synth_setter.data.vst.param_spec import (
     DiscreteLiteralParameter,
     NoteDurationParameter,
@@ -561,4 +565,21 @@ def test_render_torchsynth_preserves_gpu_device() -> None:
     params = torch.rand((2, _ENCODED_WIDTH), device="cuda")
     audio = render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=2)
     assert audio.device == params.device
+    assert torch.isfinite(audio).all()
+
+
+def test_renderer_built_under_inference_mode_still_backpropagates_afterwards() -> None:
+    """Lightning validates under inference mode, and the cached voice outlives that scope.
+
+    An inference tensor tracks no version counter, so a voice first built inside a validation loop
+    would break every later gradient render in the process (#2744).
+    """
+    _make_renderer.cache_clear()
+    row = _encoded_row(0, 60, (0.0, _BUFFER_SECONDS))
+    with torch.inference_mode():
+        render_torchsynth(row, **_RENDER_KWARGS)
+    params = differentiable_decode(torch.zeros(1, TORCHSYNTH_FULL_PARAM_SPEC.encoded_width))
+
+    audio = render_torchsynth_grad(params, **_RENDER_KWARGS, render_batch_size=1)
+
     assert torch.isfinite(audio).all()

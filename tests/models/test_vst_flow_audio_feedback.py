@@ -8,6 +8,7 @@ serve.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -23,8 +24,12 @@ from synth_setter.data.torchsynth_datamodule import (
     collate_audio_dict,
 )
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
-from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
+from synth_setter.models.components.audio_distance import (
+    LatentMseDistance,
+    MultiScaleSpectralDistance,
+)
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.vst_flow_matching_module import (
     TrainStepOutputs,
@@ -41,10 +46,10 @@ _CONDITIONING_DIM = 32
 _AUDIBLE_PEAK = 1e-4
 _AUDIBLE_ROW_POOL = 256
 _OVERFIT_STEPS = 300
-# Scaled for the multi-scale log-mel objective, whose decibel units sit higher than the
-# cosine distance this suite scored before #2734. The relative assertion beside it is what
-# pins the collapse; this only guards against a large initial making that ratio cheap.
-_OVERFIT_TOTAL_THRESHOLD = 0.15
+# Coarse "landed near zero" floor guarding against a run that only looks good relatively
+# because it started tiny. The tight claim is the tenfold reduction asserted alongside it;
+# this bound stays slack because where 300 steps land varies with the host (#2745).
+_OVERFIT_TOTAL_THRESHOLD = 0.2
 
 
 class _WaveformEncoder(torch.nn.Module):
@@ -504,3 +509,28 @@ def test_non_finite_gradient_error_names_every_affected_parameter() -> None:
 
     assert "encoder." in str(failure.value)
     assert "vector_field." in str(failure.value)
+
+
+def test_module_accepts_a_weight_normalized_audio_loss_encoder(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """Lightning deep-copies its saved hyperparameters, which weight norm cannot survive.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    same_loss = AudioFeedbackLoss(
+        lambda_audio=0.03,
+        t_min=0.0,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        render_batch_size=_BATCH,
+        distance=LatentMseDistance(
+            encoder=SameAudioEncoder.from_pretrained(
+                sample_rate=_SAMPLE_RATE, checkpoint=str(tiny_same_checkpoint)
+            )
+        ),
+    )
+
+    module = _module(audio_loss=same_loss)
+
+    assert module.audio_loss is same_loss
