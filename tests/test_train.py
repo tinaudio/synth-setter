@@ -1045,6 +1045,28 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert train_split.is_dir()
 
 
+def test_train_fast_dev_run_sketch_tokens_lance(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """Run a real ``train(cfg)`` step with ``conditioning=m2l sketch=on``.
+
+    Drives the full sketch stack end-to-end on real Lance shards: projected
+    ``sketch_ctrl`` reads, pitch zero-binning and conditioning z-scoring in the
+    collate, control-token injection in the training step, and CFG sampling at
+    validation.
+
+    :param cfg_train_sketch_lance: Composed ``sketch=on`` training config over
+        generated m2l+sketch Lance splits.
+    """
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    model = object_dict["model"]
+    assert model.sketch_tokens is not None
+    assert object_dict["datamodule"].sketch_controls is not None
+    assert torch.isfinite(metric_dict["train/loss"])
+
+
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
     cfg_train_lance: DictConfig,
 ) -> None:

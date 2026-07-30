@@ -41,8 +41,9 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     NUM_SKETCH_CONTROLS,
-    SKETCH_CTRL_FIELD,
     SKETCH_PITCH_BINS,
+    SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
     MATPAC_PLUS_FIELD,
@@ -104,6 +105,13 @@ SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
 SKETCH_INDEX_SUB_VECTORS: int = 2
+# PESTO's per-clip intermediates scale with batch size: a full 128-row Lance
+# batch peaked at ~8.8 GiB RSS and drew earlyoom SIGTERMs in the field (#2707).
+SKETCH_ENCODE_MAX_BATCH: int = 32
+# Dotted path of the nested IVF companion inside the sketch struct (#2707).
+# Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
+# per-child schema evolution (unused here) is the 2.2-only operation.
+SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
@@ -691,7 +699,11 @@ def _encode_t5gemma_column(
 def _sketch_encode(
     audio: Float[np.ndarray, "batch channel time"], sample_rate: int
 ) -> Float[np.ndarray, "batch control frame"]:
-    """Extract sketch controls for one audio batch.
+    """Extract sketch controls for one audio batch in memory-capped chunks.
+
+    Every track is per-clip independent, so chunking only moves values within
+    float32 kernel jitter (~1e-6, already batch-size-dependent) while bounding
+    extraction RSS at the default Lance batch size.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
@@ -702,7 +714,13 @@ def _sketch_encode(
     from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
-    return extract_sketch_controls_batch(batch, sample_rate).cpu().numpy()
+    chunks = [
+        extract_sketch_controls_batch(batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate)
+        .cpu()
+        .numpy()
+        for start in range(0, len(batch), SKETCH_ENCODE_MAX_BATCH)
+    ]
+    return np.concatenate(chunks, axis=0)
 
 
 def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -725,34 +743,35 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
 def _encode_sketch_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
 ) -> pa.Array:
-    """Encode one audio batch as a fixed-shape sketch-control tensor column.
+    """Encode one audio batch as the nested sketch-control struct column (#2707).
 
     :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param encoder: Sketch extractor over the original audio batch.
-    :returns: Fixed-shape tensor array.
+    :returns: Struct array with loudness/centroid/pitch children and the
+        frame-mean ``vec`` IVF companion.
     :raises ValueError: The encoder output is off the frame grid, non-finite,
         or outside the documented control bounds.
     """
-    from synth_setter.pipeline.data.lance_shard import tensor_array
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
 
     audio = sources[AUDIO_FIELD]
     encode = cast("SketchEncodeFn", encoder)
-    controls = _finite_embedding(SKETCH_CTRL_FIELD, encode(audio, sample_rate))
+    controls = _finite_embedding(SKETCH_STRUCT_FIELD, encode(audio, sample_rate))
     frames = mel_n_frames_from_samples(audio.shape[-1], sample_rate)
     expected = (len(audio), NUM_SKETCH_CONTROLS, frames)
     if controls.shape != expected:
         raise ValueError(
-            f"{SKETCH_CTRL_FIELD} encoder produced shape {controls.shape}, expected {expected}"
+            f"{SKETCH_STRUCT_FIELD} encoder produced shape {controls.shape}, expected {expected}"
         )
     affine = controls[:, : NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS]
     pitch = controls[:, NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS :]
     if affine.min() < -1.0 or affine.max() > 1.0 or pitch.min() < 0.0 or pitch.max() > 1.0:
         raise ValueError(
-            f"{SKETCH_CTRL_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
+            f"{SKETCH_STRUCT_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
             "and pitch rows in [0, 1]"
         )
-    return tensor_array(controls, np.dtype("float32"), controls.shape[1:])
+    return sketch_struct_array(controls)
 
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
@@ -796,16 +815,17 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         encode_column=_encode_same_l_column,
         resolve_artifact_identity=_same_artifact_identity,
     ),
-    # PQ sub-vectors must divide the pooled control-vector width.
+    # PQ sub-vectors must divide the control-vector width. The companion vec
+    # is a struct child written by the encoder, so pooling is "none" (#2707).
     "sketch": EmbeddingSpec(
         name="sketch",
-        column=SKETCH_CTRL_FIELD,
+        column=SKETCH_STRUCT_FIELD,
         default_checkpoint=DEFAULT_PESTO_CHECKPOINT,
         co_resident=True,
         index=IndexSpec(
-            pool="mean",
+            pool="none",
             num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
-            vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+            vector_column=SKETCH_VEC_COLUMN,
             vector_dim=NUM_SKETCH_CONTROLS,
         ),
         load_encoder=_load_sketch_spec_encoder,
@@ -853,14 +873,38 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
 
 
 def _output_columns(spec: EmbeddingSpec) -> tuple[str, ...]:
-    """Return every dataset column emitted by one embedding policy.
+    """Return every top-level dataset column emitted by one embedding policy.
 
     :param spec: Embedding write and index policy.
-    :returns: Sequence column followed by its optional vector companion.
+    :returns: Sequence column followed by its optional vector companion; a dotted companion is a
+        struct child the sequence column already carries.
     """
     if spec.index is None or spec.index.vector_column is None:
         return (spec.column,)
+    if spec.index.vector_column.startswith(f"{spec.column}."):
+        return (spec.column,)
     return spec.column, spec.index.vector_column
+
+
+def _nested_schema_field(schema: pa.Schema, column: str) -> pa.Field | None:
+    """Resolve a possibly dotted column path against a schema.
+
+    :param schema: Dataset schema.
+    :param column: Top-level name or dotted struct-child path.
+    :returns: The resolved field, or ``None`` when any path segment is absent.
+    """
+    head, *rest = column.split(".")
+    if schema.get_field_index(head) < 0:
+        return None
+    field = schema.field(head)
+    for segment in rest:
+        if not pa.types.is_struct(field.type):
+            return None
+        index = field.type.get_field_index(segment)
+        if index < 0:
+            return None
+        field = field.type.field(index)
+    return field
 
 
 def _guard_existing_columns(dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]) -> None:
@@ -1127,6 +1171,8 @@ def _write_columns(
     :param sample_rate: Dataset sample rate in Hz.
     :param config: Batch, checkpoint, logging, and resume settings.
     :raises ValueError: Policies are empty or dataset write preconditions fail.
+    :raises RuntimeError: ``add_columns`` returns without committing every
+        target column (a silent no-op write).
     """
     import lance
     import torch
@@ -1212,11 +1258,22 @@ def _write_columns(
         source_version=dataset.version,
     )
     dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+    # A zero-batch replay is valid only when the target columns are already committed.
+    uncommitted = [
+        column for column in output_columns if column not in dataset.schema.names
+    ]
+    if uncommitted:
+        raise RuntimeError(
+            f"add_columns returned without committing column(s) {uncommitted} "
+            f"(rows_processed={rows_processed} of {total_rows}); refusing to "
+            "treat the write as done"
+        )
     _delete_resume_cache(resume_cache)
     logger.info(
         "wrote_embeddings",
         columns=output_columns,
         total_rows=total_rows,
+        rows_processed=rows_processed,
         committed_version=dataset.version,
     )
     encoders.clear()
@@ -1244,7 +1301,10 @@ def build_index(
         raise ValueError(f"num_sub_vectors must be >= 1, got {num_sub_vectors}")
     if config.num_partitions is not None and config.num_partitions < 1:
         raise ValueError(f"num_partitions must be >= 1, got {config.num_partitions}")
-    vector_dim = dataset.schema.field(column).type.list_size
+    vector_field = _nested_schema_field(dataset.schema, column)
+    if vector_field is None:
+        raise ValueError(f"dataset has no {column!r} vector column to index")
+    vector_dim = vector_field.type.list_size
     if vector_dim % num_sub_vectors != 0:
         raise ValueError(
             f"num_sub_vectors={num_sub_vectors} does not divide {column} dim {vector_dim}"
@@ -1454,7 +1514,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if spec.index is None:
                 continue
             vector_column = spec.index.vector_column or spec.column
-            if vector_column in dataset.schema.names:
+            if _nested_schema_field(dataset.schema, vector_column) is not None:
                 _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
         _validate_write_source(dataset, config.batch_size)

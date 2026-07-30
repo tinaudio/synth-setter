@@ -14,6 +14,21 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+# Re-exported for the writers and validator; canonical home is ``conditioning``.
+from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS as NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_CHILD as SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW as SKETCH_CENTROID_ROW,
+    SKETCH_CTRL_FIELD as SKETCH_CTRL_FIELD,
+    SKETCH_LOUDNESS_CHILD as SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW as SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS as SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD as SKETCH_PITCH_CHILD,
+    SKETCH_PITCH_SLICE as SKETCH_PITCH_SLICE,
+    SKETCH_STRUCT_FIELD as SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD as SKETCH_VEC_CHILD,
+)
+
 if TYPE_CHECKING:
     # Type-only on purpose: a runtime import would risk a cycle (spec.py lazily
     # imports the param-spec registry from data.vst).
@@ -38,14 +53,10 @@ SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
+TINYMU_FIELD: str = "tinymu"
 MATPAC_PLUS_FIELD: str = "matpac_plus"
-SKETCH_CTRL_FIELD: str = "sketch_ctrl"
-# The pitch-row width below is a property of this PESTO checkpoint.
+# Emits the 128-semitone x 3-bin activation width that ``SKETCH_PITCH_BINS`` pins.
 DEFAULT_PESTO_CHECKPOINT: str = "mir-1k_g7"
-# PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
-SKETCH_PITCH_BINS: int = 384
-# Rows: loudness, centroid, then the pitch-activation block.
-NUM_SKETCH_CONTROLS: int = 2 + SKETCH_PITCH_BINS
 
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.

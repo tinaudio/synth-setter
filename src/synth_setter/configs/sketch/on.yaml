@@ -1,0 +1,16 @@
+# @package _global_
+
+# Concat sketch-control token conditioning (#2612): the datamodule reads the
+# nested sketch struct column (#2707), reassembles it into the sketch_ctrl
+# batch tensor (zero-binning pitch below the threshold, #2614), and the flow
+# model injects zero-initialized control tokens into the vector field.
+# Align controls with the four-second 100 fps mel render.
+model:
+  sketch_controls:
+    column: sketch
+    num_frames: 401
+    num_control_tokens: 32
+    pitch_zero_threshold: 0.1
+
+datamodule:
+  sketch: ${model.sketch_controls}

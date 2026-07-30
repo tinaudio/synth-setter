@@ -5,7 +5,7 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Shaped
+from jaxtyping import Bool, Float, Shaped
 from torch import Tensor
 
 _BATCH_ANY_SHAPE = "batch ..."
@@ -352,6 +352,8 @@ class ApproxEquivTransformer(nn.Module):
     ):
         super().__init__()
 
+        # Exposed so control-token producers can size their projections.
+        self.d_model = d_model
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
         conditioning_dim = (
@@ -417,18 +419,23 @@ class ApproxEquivTransformer(nn.Module):
         self,
         z: Float[Tensor, _BATCH_ANY_SHAPE],
         rate: float = 0.1,
+        keep_mask: Bool[Tensor, _BATCH_SHAPE] | None = None,
     ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
         """Replace a random subset of conditioning rows with the CFG token.
 
         :param z: Conditioning rows, rank 2 or rank 3.
         :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
+        :param keep_mask: Optional positive row keep state supplied when the caller
+            coordinates content dropout with other conditioning streams; overrides ``rate``.
         :returns: The conditioning after dropout, and the keep mask that produced it
             (True = row kept its conditioning; all-True when ``rate`` is zero).
         """
-        if rate == 0.0:
-            return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
-
-        keep = torch.rand(z.shape[0], device=z.device) > rate
+        if keep_mask is None:
+            if rate == 0.0:
+                return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
+            keep = torch.rand(z.shape[0], device=z.device) > rate
+        else:
+            keep = keep_mask
         broadcast_keep = keep.unsqueeze(-1)
         if z.ndim == 3:
             broadcast_keep = broadcast_keep.unsqueeze(-1)
@@ -458,13 +465,27 @@ class ApproxEquivTransformer(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         conditioning: torch.Tensor | None = None,
+        *,
+        control_tokens: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """Predict parameters with optional control-token context.
+
+        :param x: ``(batch, num_params)`` parameter state.
+        :param t: Scalar time for each batch row.
+        :param conditioning: Shared rank-2 or per-layer rank-3 conditioning;
+            ``None`` uses the CFG token.
+        :param control_tokens: Optional ``(batch, num_control_tokens, d_model)`` context
+            appended to the parameter-token sequence.
+        :returns: ``(batch, num_params)`` predictions projected only from
+            parameter tokens; control-token states are excluded.
+        """
         if conditioning is None:
             conditioning = self.cfg_dropout_token.expand(x.shape[0], -1)
 
         outer_residual = x if self.outer_residual else None
 
         x = self.projection.param_to_token(x)
+        num_param_tokens = x.shape[1]
 
         t = self.time_encoding(t)
 
@@ -479,9 +500,18 @@ class ApproxEquivTransformer(nn.Module):
         if self.pe_type == "initial":
             x = self.pe(x)
 
+        # Control tokens join after the parameter-token PE so the (frozen,
+        # zero-default) parameter positions never leak onto them (#2612).
+        if control_tokens is not None:
+            x = torch.cat((x, control_tokens), dim=1)
+
         for i, layer in enumerate(self.layers):
             if self.pe_type == "layerwise":
-                x = self.pe[i](x)
+                if control_tokens is None:
+                    x = self.pe[i](x)
+                else:
+                    params_with_pe = self.pe[i](x[:, :num_param_tokens])
+                    x = torch.cat((params_with_pe, x[:, num_param_tokens:]), dim=1)
 
             if layerwise_conditioning:
                 z_ = z[:, i, :]
@@ -490,7 +520,7 @@ class ApproxEquivTransformer(nn.Module):
 
             x = layer(x, z_)
 
-        x = self.projection.token_to_param(x)
+        x = self.projection.token_to_param(x[:, :num_param_tokens])
 
         if outer_residual is not None:
             x = x + outer_residual

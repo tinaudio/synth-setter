@@ -21,6 +21,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
+from synth_setter.conditioning import NUM_SKETCH_TRACK_ROWS, SKETCH_PITCH_BINS
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.param_spec_name import ParamSpecName
@@ -2471,6 +2472,88 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
             cfg.model.net.d_model = 32
             cfg.model.net.n_heads = 2
             cfg.model.net.n_layers = 1
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+def _write_sketch_lance_root(dataset_root: Path) -> None:
+    """Write tiny m2l+sketch train/val/test Lance splits.
+
+    :param dataset_root: Directory receiving the three splits.
+    """
+    # Local import: pulls in pyarrow, which the Docker VST CI images don't
+    # install (no `data` dependency group) — module scope would break their
+    # conftest collection.
+    from tests.helpers.lance_fixtures import write_lance_shard_with_sketch
+
+    for seed, split in enumerate(("train", "val", "test")):
+        rng = np.random.default_rng(seed)
+        pitch = rng.random((4, SKETCH_PITCH_BINS, 401)).astype(np.float32)
+        tracks = rng.uniform(-1.0, 1.0, (4, NUM_SKETCH_TRACK_ROWS, 401)).astype(np.float32)
+        write_lance_shard_with_sketch(
+            dataset_root / f"{split}.lance",
+            {
+                "param_array": rng.random((4, len(param_specs["surge_4"]))).astype(np.float32),
+                "m2l": rng.standard_normal((4, 128, 42)).astype(np.float32),
+            },
+            np.concatenate([tracks, pitch], axis=1),
+        )
+
+
+@pytest.fixture
+def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose a ``conditioning=m2l sketch=on`` training cfg over generated Lance splits.
+
+    Mirrors :func:`cfg_train_lance` with the vst_flow model shrunk to a toy so
+    a ``fast_dev_run`` step (including two-step RK4 CFG validation sampling)
+    stays CPU-cheap.
+
+    :param tmp_path: Per-test tmpdir holding the dataset and output/log dirs.
+    :yields: Resolved DictConfig ready for ``train(cfg)``.
+    :ytype: DictConfig
+    """
+    dataset_root = tmp_path / "lance-data"
+    dataset_root.mkdir()
+    _write_sketch_lance_root(dataset_root)
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "datamodule=surge_lance",
+                "synth=surge_4",
+                "model=vst_flow",
+                "conditioning=m2l",
+                "sketch=on",
+                "trainer=cpu",
+            ],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.logger = None
+            # lr_monitor requires an attached logger, which this smoke cfg disables.
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
+            cfg.trainer.fast_dev_run = True
+            # Not a loop bound under fast_dev_run — the scheduler resolves
+            # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
+            cfg.trainer.max_steps = 1
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.batch_size = 2
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.persistent_workers = False
+            cfg.datamodule.pin_memory = False
+            cfg.model.compile = False
+            cfg.model.validation_sample_steps = 2
+            cfg.model.vector_field.num_layers = 1
+            cfg.model.vector_field.d_model = 32
+            cfg.model.vector_field.d_ff = 32
+            cfg.model.vector_field.projection.num_tokens = 8
 
     yield cfg
 

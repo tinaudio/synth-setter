@@ -90,6 +90,60 @@ _AUDIO_PREDICTION_SAMPLE_COUNT = int(
 _SURGE_XT_PREDICTION_WIDTH = 300
 
 
+def test_evaluate_flow_sketch_prelim_test_mode_uses_sketch_controls(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """The shipped sketch experiment composes and evaluates its nested controls.
+
+    :param cfg_train_sketch_lance: Fixture providing real m2l+sketch Lance splits.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/flow_sketch_prelim",
+                "datamodule=surge_lance",
+                "synth=surge_4",
+                "conditioning=m2l",
+                "trainer=cpu",
+                "callbacks=none",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = cfg_train_sketch_lance.paths.root_dir
+        cfg.paths.output_dir = cfg_train_sketch_lance.paths.output_dir
+        cfg.paths.log_dir = cfg_train_sketch_lance.paths.log_dir
+        cfg.logger = None
+        cfg.ckpt_path = None
+        cfg.mode = "test"
+        cfg.datamodule.dataset_root = cfg_train_sketch_lance.datamodule.dataset_root
+        cfg.datamodule.download_dataset_root_uri = None
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.persistent_workers = False
+        cfg.datamodule.pin_memory = False
+        cfg.model.compile = False
+        cfg.model.test_sample_steps = 2
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 32
+        cfg.model.vector_field.d_ff = 32
+        cfg.model.vector_field.projection.num_tokens = 8
+        cfg.trainer.fast_dev_run = True
+        cfg.trainer.precision = "32-true"
+
+    HydraConfig().set_config(cfg)
+    try:
+        metrics, objects = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metrics["test/param_mse"])
+    assert objects["model"].sketch_tokens is not None
+    assert objects["datamodule"].sketch_controls is not None
+
+
 def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:
     """The eval operator config accepts the production brightOrgan render group."""
     try:

@@ -141,10 +141,7 @@ def test_python_source_tools_target_python_312(project_root: Path) -> None:
 
 @pytest.mark.parametrize(
     "relative_path",
-    [
-        "src/synth_setter/conditioning.py",
-        "src/synth_setter/param_spec_name.py",
-    ],
+    ["src/synth_setter/param_spec_name.py"],
 )
 def test_dev_snapshot_overlay_aliases_parse_on_python_311(
     project_root: Path, relative_path: str

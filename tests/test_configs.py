@@ -17,6 +17,7 @@ from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT,
     DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
 )
+from synth_setter.conditioning import NUM_SKETCH_CONTROLS
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
@@ -256,6 +257,47 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     pooled = encoder(batch["conditioning"])
     assert pooled.shape == (2, cfg.model.vector_field.d_model)
     assert cfg.model.conditioning.column == profile
+
+
+def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
+    """``sketch=on`` composes over ``conditioning=m2l`` and drives a train step."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_4",
+            "model=vst_flow",
+            "conditioning=m2l",
+            "sketch=on",
+            "trainer=cpu",
+            # The scheduler's T_max interpolates ${trainer.max_steps}, which
+            # trainer/cpu.yaml leaves undefined.
+            "+trainer.max_steps=1",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+            "model.compile=false",
+            "model.vector_field.num_layers=1",
+            "model.vector_field.d_model=32",
+            "model.vector_field.d_ff=32",
+            "model.vector_field.projection.num_tokens=8",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    model = hydra.utils.instantiate(cfg.model)
+
+    assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.column == "sketch"
+    assert model.sketch_tokens is not None
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["conditioning"].shape == (2, 128, 42)
+    assert batch["sketch_ctrl"].shape == (2, NUM_SKETCH_CONTROLS, 401)
+    loss = model._train_step(batch).loss  # noqa: SLF001
+    assert torch.isfinite(loss)
 
 
 def _compose_t5gemma_cached_train_cfg(
@@ -892,6 +934,32 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse"
     assert cfg.callbacks.model_checkpoint.every_n_train_steps == 1000
     assert cfg.test is False
+
+
+def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
+    """The preliminary A/B arms differ only in sketch conditioning."""
+    base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
+    sketch = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
+
+    for cfg in (base, sketch):
+        assert cfg.datamodule.download_dataset_root_uri == (
+            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
+            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/"
+        )
+        assert cfg.seed == 3407
+        assert cfg.datamodule.param_spec_name == "surge_simple"
+        assert cfg.trainer.max_steps == 10000
+        assert cfg.trainer.min_steps == 10000
+        assert cfg.trainer.val_check_interval == 1000
+        assert cfg.training.val_audio_probe is True
+        assert cfg.test is False
+    assert base.run_name == "flow1k_prelim_base"
+    assert base.model.sketch_controls is None
+    assert base.datamodule.sketch is None
+    assert sketch.run_name == "flow1k_prelim_sketch"
+    assert sketch.model.sketch_controls.column == "sketch"
+    assert sketch.model.sketch_controls.num_frames == 401
+    assert sketch.datamodule.sketch == sketch.model.sketch_controls
 
 
 def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:

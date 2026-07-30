@@ -24,7 +24,10 @@ from synth_setter.data.vst.shapes import (
     DEFAULT_PESTO_CHECKPOINT,
     MEL_FRAMES_PER_SECOND,
     NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_BINS,
+    SKETCH_PITCH_SLICE,
     mel_hop_length,
     mel_n_fft,
     mel_n_frames_from_samples,
@@ -45,10 +48,6 @@ __all__ = [
     "sketch_num_frames",
     "spectral_centroid_track",
 ]
-
-SKETCH_LOUDNESS_ROW = 0
-SKETCH_CENTROID_ROW = 1
-SKETCH_PITCH_SLICE = slice(2, 2 + SKETCH_PITCH_BINS)
 
 _MIDI_A4 = 69.0
 _MIDI_MAX = 127.0

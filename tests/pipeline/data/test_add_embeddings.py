@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import lance
 import numpy as np
@@ -40,7 +40,15 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
-    SKETCH_CTRL_FIELD,
+    SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD,
+    SKETCH_PITCH_SLICE,
+    SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD,
     T5GEMMA_FIELD,
     dataset_field_shapes,
 )
@@ -61,6 +69,8 @@ from synth_setter.pipeline.data.add_embeddings import (
     SAME_EMBEDDING_DIM,
     SAME_LATENT_FRAMES,
     SAME_SAMPLE_RATE,
+    SKETCH_INDEX_SUB_VECTORS,
+    SKETCH_VEC_COLUMN,
     SKETCH_INDEX_SUB_VECTORS,
     EmbeddingSpec,
     Encoder,
@@ -294,6 +304,9 @@ def _empty_audio_dataset(uri: Path) -> None:
     )
 
 
+_REAL_ADD_COLUMNS = lance.LanceDataset.add_columns
+
+
 def _run_udf_in_process(
     dataset: lance.LanceDataset,
     udf: Callable[[pa.RecordBatch], pa.RecordBatch],
@@ -301,15 +314,22 @@ def _run_udf_in_process(
     read_columns: list[str],
     batch_size: int,
 ) -> None:
-    """Run a Lance batch UDF synchronously for deterministic assertions.
+    """Run a Lance batch UDF synchronously, then commit its outputs.
+
+    Committing keeps the writer's post-commit column check satisfied while the UDF invocations stay
+    observable in-process.
 
     :param dataset: Local dataset supplying batches.
     :param udf: Batch transform under test.
     :param read_columns: Source columns supplied to the transform.
     :param batch_size: Maximum rows per invocation.
     """
-    for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
+    outputs = [
         udf(batch)
+        for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size)
+    ]
+    reader = pa.RecordBatchReader.from_batches(outputs[0].schema, outputs)
+    _REAL_ADD_COLUMNS(dataset, reader, batch_size=batch_size)
 
 
 def _compose_add_embeddings(*overrides: str) -> DictConfig:
@@ -366,9 +386,9 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "matpac_plus",
     }
     assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
-        pool="mean",
+        pool="none",
         num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
-        vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+        vector_column=SKETCH_VEC_COLUMN,
         vector_dim=NUM_SKETCH_CONTROLS,
     )
     assert EMBEDDING_REGISTRY["sketch"].co_resident is True
@@ -3334,17 +3354,66 @@ def test_encode_t5gemma_column_with_malformed_encoder_output_raises(
         )
 
 
-def test_sketch_encode_column_builds_fixed_shape_tensor_array() -> None:
-    """The sketch closure preserves the fake encoder's exact control values."""
+def _struct_sketch_controls(struct: pa.StructArray) -> np.ndarray:
+    """Reassemble a stored sketch struct into the flat control stack.
+
+    :param struct: Nested sketch column values.
+    :returns: ``(rows, NUM_SKETCH_CONTROLS, F)`` float32 controls.
+    """
+    pitch = cast(
+        "pa.FixedShapeTensorArray", struct.field(SKETCH_PITCH_CHILD)
+    ).to_numpy_ndarray()
+    rows, _, frames = pitch.shape
+    stacked = np.empty((rows, NUM_SKETCH_CONTROLS, frames), dtype=np.float32)
+    for child, row in (
+        (SKETCH_LOUDNESS_CHILD, SKETCH_LOUDNESS_ROW),
+        (SKETCH_CENTROID_CHILD, SKETCH_CENTROID_ROW),
+    ):
+        child_array = struct.field(child)
+        stacked[:, row] = np.asarray(child_array.flatten()).reshape(rows, frames)
+    stacked[:, SKETCH_PITCH_SLICE] = pitch
+    return stacked
+
+
+def _struct_sketch_vec(struct: pa.StructArray) -> np.ndarray:
+    """Extract the nested IVF companion vectors from a stored sketch struct.
+
+    :param struct: Nested sketch column values.
+    :returns: ``(rows, NUM_SKETCH_CONTROLS)`` float32 vectors.
+    """
+    vec = struct.field(SKETCH_VEC_CHILD)
+    return np.asarray(vec.flatten()).reshape(len(struct), NUM_SKETCH_CONTROLS)
+
+
+def _stored_sketch_struct(dataset: lance.LanceDataset) -> pa.StructArray:
+    """Read the full sketch struct column from a dataset.
+
+    :param dataset: Dataset carrying the nested sketch column.
+    :returns: Combined struct array.
+    """
+    table = dataset.to_table(columns=[SKETCH_STRUCT_FIELD])
+    return cast("pa.StructArray", table.column(SKETCH_STRUCT_FIELD).combine_chunks())
+
+
+def test_sketch_encode_column_builds_struct_with_split_children_and_vec() -> None:
+    """The sketch closure splits controls into struct children without value drift."""
     audio = np.random.default_rng(7).random((3, 2, _FIXTURE_SAMPLES)).astype(np.float16)
     spec = EMBEDDING_REGISTRY["sketch"]
 
     array = spec.encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, _fake_sketch)
 
-    assert isinstance(array.type, pa.FixedShapeTensorType)
-    assert array.type.value_type == pa.float32()
-    values = pa.chunked_array([array]).combine_chunks().to_numpy_ndarray()
-    np.testing.assert_allclose(values, _fake_sketch(audio, _SAMPLE_RATE))
+    assert pa.types.is_struct(array.type)
+    struct = cast("pa.StructArray", array)
+    frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
+    child_types = {field.name: field.type for field in struct.type}
+    assert child_types[SKETCH_LOUDNESS_CHILD] == pa.list_(pa.float32(), frames)
+    assert child_types[SKETCH_CENTROID_CHILD] == pa.list_(pa.float32(), frames)
+    pitch_type = cast("pa.FixedShapeTensorType", child_types[SKETCH_PITCH_CHILD])
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, frames]
+    assert child_types[SKETCH_VEC_CHILD] == pa.list_(pa.float32(), NUM_SKETCH_CONTROLS)
+    expected = _fake_sketch(audio, _SAMPLE_RATE)
+    np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
+    np.testing.assert_allclose(_struct_sketch_vec(struct), expected.mean(axis=-1), rtol=1e-6)
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf])
@@ -3360,7 +3429,9 @@ def test_sketch_encode_column_with_nonfinite_output_raises(value: float) -> None
         output.flat[0] = value
         return output
 
-    with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} embeddings contain non-finite values"):
+    with pytest.raises(
+        ValueError, match=f"{SKETCH_STRUCT_FIELD} embeddings contain non-finite values"
+    ):
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
@@ -3382,8 +3453,66 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         output[0, row, 0] = value
         return output
 
-    with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} controls out of bounds"):
+    with pytest.raises(ValueError, match=f"{SKETCH_STRUCT_FIELD} controls out of bounds"):
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
+
+
+def test_sketch_encode_never_exceeds_extraction_batch_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every extractor invocation stays within SKETCH_ENCODE_MAX_BATCH.
+
+    :param monkeypatch: Fixture recording extractor input batch sizes.
+    """
+    import synth_setter.features.sketch_controls as sketch_controls
+    from synth_setter.pipeline.data.add_embeddings import (
+        SKETCH_ENCODE_MAX_BATCH,
+        _sketch_encode,
+    )
+
+    seen_sizes: list[int] = []
+
+    def record(batch: torch.Tensor, sample_rate: int) -> torch.Tensor:
+        del sample_rate
+        seen_sizes.append(len(batch))
+        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
+
+    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
+    rows = 2 * SKETCH_ENCODE_MAX_BATCH + 5
+    audio = np.zeros((rows, 1, _FIXTURE_SAMPLES), dtype=np.float32)
+
+    controls = _sketch_encode(audio, _SAMPLE_RATE)
+
+    assert len(controls) == rows
+    assert sum(seen_sizes) == rows
+    assert max(seen_sizes) == SKETCH_ENCODE_MAX_BATCH
+    assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
+
+
+@pytest.mark.slow
+def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
+    """Memory-capped chunking preserves control values within float32 kernel jitter.
+
+    Torch reduction kernels can vary by batch shape at approximately 1e-6.
+    """
+    from synth_setter.pipeline.data.add_embeddings import (
+        SKETCH_ENCODE_MAX_BATCH,
+        _sketch_encode,
+    )
+
+    rows = SKETCH_ENCODE_MAX_BATCH + 3
+    # Clips long enough for PESTO's CQT and the loudness STFT windows.
+    samples = 8192
+    audio = (
+        (np.random.default_rng(23).random((rows, 1, samples)) - 0.5) * 0.8
+    ).astype(np.float32)
+
+    chunked = _sketch_encode(audio, _SAMPLE_RATE)
+
+    full = (
+        extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE).cpu().numpy()
+    )
+    np.testing.assert_allclose(chunked, full, atol=1e-5)
 
 
 def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
@@ -3398,15 +3527,30 @@ def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, off_grid)
 
 
-def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(
-    tmp_path: Path,
+@pytest.mark.parametrize("storage_version", ["2.1", "2.2"])
+def test_write_columns_appends_sketch_struct_to_existing_dataset(
+    tmp_path: Path, storage_version: Literal["2.1", "2.2"]
 ) -> None:
-    """The writer stores the control matrix plus its time-axis mean vector.
+    """The add_columns UDF appends the whole nested struct on either storage format.
+
+    The production dataset may carry Lance file format 2.1 or 2.2; whole-struct append must land
+    identically on both.
 
     :param tmp_path: Scratch directory for the dataset.
+    :param storage_version: Lance data storage version of the pre-existing dataset.
     """
     uri = tmp_path / "sketch.lance"
-    audio = _audio_dataset(uri, rows=4)
+    rng = np.random.default_rng(4)
+    audio = rng.random((4, 2, _FIXTURE_SAMPLES)).astype(np.float16)
+    base = pa.record_batch(
+        {
+            AUDIO_FIELD: pa.FixedShapeTensorArray.from_numpy_ndarray(audio),
+            PARAM_ARRAY_FIELD: pa.FixedShapeTensorArray.from_numpy_ndarray(
+                rng.random((4, 3)).astype(np.float32)
+            ),
+        }
+    )
+    lance.write_dataset(base, str(uri), data_storage_version=storage_version)
 
     _write_columns(
         lance.dataset(str(uri)),
@@ -3416,30 +3560,97 @@ def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(
     )
 
     dataset = lance.dataset(str(uri))
-    assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
-    ctrl_type = cast("pa.FixedShapeTensorType", dataset.schema.field(SKETCH_CTRL_FIELD).type)
-    assert isinstance(ctrl_type, pa.FixedShapeTensorType)
-    assert ctrl_type.value_type == pa.float32()
+    assert SKETCH_STRUCT_FIELD in dataset.schema.names
+    struct_type = dataset.schema.field(SKETCH_STRUCT_FIELD).type
+    assert pa.types.is_struct(struct_type)
     frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
-    assert list(ctrl_type.shape) == [NUM_SKETCH_CONTROLS, frames]
-    vec_type = cast(
-        "pa.FixedSizeListType", dataset.schema.field(f"{SKETCH_CTRL_FIELD}_vec").type
+    pitch_type = cast(
+        "pa.FixedShapeTensorType",
+        struct_type.field(struct_type.get_field_index(SKETCH_PITCH_CHILD)).type,
     )
-    assert pa.types.is_fixed_size_list(vec_type)
-    assert vec_type.list_size == NUM_SKETCH_CONTROLS
-    assert vec_type.value_type == pa.float32()
-    table = dataset.to_table(columns=[SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"])
-    controls = (
-        pa.chunked_array([table.column(SKETCH_CTRL_FIELD).chunk(0)])
-        .combine_chunks()
-        .to_numpy_ndarray()
-    )
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, frames]
+    struct = _stored_sketch_struct(dataset)
     expected = _fake_sketch(audio, _SAMPLE_RATE)
-    np.testing.assert_allclose(controls, expected)
-    pooled = np.asarray(
-        table.column(f"{SKETCH_CTRL_FIELD}_vec").combine_chunks().to_pylist(), dtype=np.float32
+    np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
+    np.testing.assert_allclose(_struct_sketch_vec(struct), expected.mean(axis=-1), rtol=1e-6)
+    # Dotted-path child projection must serve reads without the sibling children.
+    pitch_only = lance.dataset(str(uri)).to_table(
+        columns=[f"{SKETCH_STRUCT_FIELD}.{SKETCH_PITCH_CHILD}"]
     )
-    np.testing.assert_allclose(pooled, expected.mean(axis=-1), rtol=1e-6)
+    projected = cast(
+        "pa.FixedShapeTensorArray", pitch_only.column(0).combine_chunks()
+    ).to_numpy_ndarray()
+    np.testing.assert_array_equal(projected, expected[:, SKETCH_PITCH_SLICE])
+
+
+def test_write_columns_with_noop_add_columns_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write pass whose commit silently lands nothing fails hard, never cleanly.
+
+    Guards the observed field failure mode where a run logs
+    ``embedding_write_started`` and exits without committing (#2707).
+
+    :param tmp_path: Scratch directory for the dataset.
+    :param monkeypatch: Fixture stubbing the Lance commit to a no-op.
+    """
+    uri = tmp_path / "sketch-noop.lance"
+    _audio_dataset(uri, rows=4)
+    dataset = lance.dataset(str(uri))
+    monkeypatch.setattr(dataset, "add_columns", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="without committing"):
+        _write_columns(
+            dataset,
+            [_fake_spec("sketch")],
+            _SAMPLE_RATE,
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
+        )
+
+
+def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
+    """The whole-struct rewrite path (add + drop + rename) refreshes stored controls.
+
+    The struct is an atomic write unit — no per-child recompute exists — so this add-new-column /
+    drop / rename flow is the escape hatch for refreshing any child (#2707).
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+
+    uri = tmp_path / "sketch-rewrite.lance"
+    audio = _audio_dataset(uri, rows=4)
+    _write_columns(
+        lance.dataset(str(uri)),
+        [_fake_spec("sketch")],
+        _SAMPLE_RATE,
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
+    )
+    refreshed = np.clip(_fake_sketch(audio, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+    replacement = f"{SKETCH_STRUCT_FIELD}_refreshed"
+
+    dataset = lance.dataset(str(uri))
+
+    def rewrite(batch: pa.RecordBatch) -> pa.RecordBatch:
+        # Stateless recompute from source rows: Lance also invokes the UDF for
+        # schema inference, so call order carries no row-position information.
+        decoded = batch.column(AUDIO_FIELD).to_numpy_ndarray()
+        rows = np.clip(_fake_sketch(decoded, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+        return pa.RecordBatch.from_arrays([sketch_struct_array(rows)], names=[replacement])
+
+    dataset.add_columns(rewrite, read_columns=[AUDIO_FIELD])
+    dataset.drop_columns([SKETCH_STRUCT_FIELD])
+    # Runtime type-checks demand a bare AlterColumn dict although the stub
+    # declares Iterable[AlterColumn]; cast bridges the disagreement.
+    rename = {"path": replacement, "name": SKETCH_STRUCT_FIELD}
+    dataset.alter_columns(cast("Any", rename))
+
+    reread = lance.dataset(str(uri))
+    assert SKETCH_STRUCT_FIELD in reread.schema.names
+    assert replacement not in reread.schema.names
+    np.testing.assert_array_equal(
+        _struct_sketch_controls(_stored_sketch_struct(reread)), refreshed
+    )
 
 
 def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
@@ -3472,12 +3683,9 @@ def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
     main()
 
     dataset = lance.dataset(str(uri))
-    assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
-    controls = (
-        pa.chunked_array([dataset.to_table(columns=[SKETCH_CTRL_FIELD]).column(SKETCH_CTRL_FIELD).chunk(0)])
-        .combine_chunks()
-        .to_numpy_ndarray()
-    )
+    assert SKETCH_STRUCT_FIELD in dataset.schema.names
+    assert pa.types.is_struct(dataset.schema.field(SKETCH_STRUCT_FIELD).type)
+    controls = _struct_sketch_controls(_stored_sketch_struct(dataset))
     render = spec.render_for_shard(spec.shards[0])
     audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
     frames = sketch_num_frames(audio_shape[-1], int(render.sample_rate))
@@ -3503,13 +3711,7 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
         AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False)
     )
 
-    controls = (
-        pa.chunked_array(
-            [lance.dataset(str(uri)).to_table(columns=[SKETCH_CTRL_FIELD]).column(SKETCH_CTRL_FIELD).chunk(0)]
-        )
-        .combine_chunks()
-        .to_numpy_ndarray()
-    )
+    controls = _struct_sketch_controls(_stored_sketch_struct(lance.dataset(str(uri))))
     sample_rate = int(render.sample_rate)
     expected = extract_sketch_controls_batch(
         torch.from_numpy(audio.astype(np.float32)), sample_rate
@@ -3521,27 +3723,40 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
     assert controls.min() >= -1.0 and controls.max() <= 1.0
 
 
-def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Path) -> None:
-    """A spec's PQ split applies unset-override runs and serves ANN self-queries.
+def _nested_vec_dataset(uri: Path, rows: int) -> np.ndarray:
+    """Write a dataset whose sketch struct carries only the nested vec child.
+
+    :param uri: Output dataset path.
+    :param rows: Number of rows.
+    :returns: The vec vectors written into the struct.
+    """
+    rng = np.random.default_rng(3)
+    vectors = rng.random((rows, NUM_SKETCH_CONTROLS)).astype(np.float32)
+    vec = pa.FixedSizeListArray.from_arrays(
+        pa.array(vectors.reshape(-1), pa.float32()), NUM_SKETCH_CONTROLS
+    )
+    struct = pa.StructArray.from_arrays([vec], names=[SKETCH_VEC_CHILD])
+    table = pa.table(
+        {SKETCH_STRUCT_FIELD: struct, "row": pa.array(np.arange(rows), pa.int32())}
+    )
+    lance.write_dataset(table, str(uri))
+    return vectors
+
+
+def test_build_index_on_nested_vec_child_serves_ann_self_query(tmp_path: Path) -> None:
+    """The registry PQ split builds on the dotted vec child and answers ANN queries.
 
     :param tmp_path: Scratch directory for the dataset.
     """
     uri = tmp_path / "sketch-index.lance"
-    rng = np.random.default_rng(3)
-    vectors = rng.random((300, NUM_SKETCH_CONTROLS)).astype(np.float32)
-    flat = pa.array(vectors.reshape(-1), pa.float32())
-    column = pa.FixedSizeListArray.from_arrays(flat, NUM_SKETCH_CONTROLS)
-    rows = pa.array(np.arange(len(vectors)), pa.int32())
-    lance.write_dataset(
-        pa.table({f"{SKETCH_CTRL_FIELD}_vec": column, "row": rows}), str(uri)
-    )
+    vectors = _nested_vec_dataset(uri, rows=300)
     dataset = lance.dataset(str(uri))
     spec_index = EMBEDDING_REGISTRY["sketch"].index
     assert spec_index is not None
 
     built = build_index(
         dataset,
-        f"{SKETCH_CTRL_FIELD}_vec",
+        SKETCH_VEC_COLUMN,
         index=spec_index,
         config=AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",)),
     )
@@ -3549,10 +3764,45 @@ def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Pat
     assert built is True
     indices = cast("list[dict[str, object]]", dataset.list_indices())
     index_fields = [index["fields"] for index in indices]
-    assert [f"{SKETCH_CTRL_FIELD}_vec"] in index_fields
+    assert [SKETCH_VEC_COLUMN] in index_fields
     target_row = 137
     hits = dataset.to_table(
-        nearest={"column": f"{SKETCH_CTRL_FIELD}_vec", "q": vectors[target_row], "k": 1},
+        nearest={"column": SKETCH_VEC_COLUMN, "q": vectors[target_row], "k": 1},
         columns=["row"],
     )
     assert hits.column("row")[0].as_py() == target_row
+
+
+def test_add_embeddings_sketch_end_to_end_writes_struct_and_nested_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint lands the nested layout and builds the vec index in one run.
+
+    :param tmp_path: Scratch directory for the dataset.
+    :param monkeypatch: Fixture installing the dependency-free sketch spec.
+    """
+    uri = tmp_path / "sketch-e2e.lance"
+    spec = build_lance_smoke_spec(task_name="sketch-nested-e2e")
+    render = spec.render_for_shard(spec.shards[0])
+    audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
+    rows = 300  # Above MIN_ROWS_FOR_INDEX so the vec index really builds.
+    rng = np.random.default_rng(17)
+    audio = ((rng.random((rows, *audio_shape[1:])) - 0.5) * 0.8).astype(np.float16)
+    write_minimal_lance_shard(uri, spec, num_rows=rows, audio=audio)
+    _install_fake_specs(monkeypatch, ("sketch",))
+
+    add_embeddings(
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=True)
+    )
+
+    dataset = lance.dataset(str(uri))
+    assert pa.types.is_struct(dataset.schema.field(SKETCH_STRUCT_FIELD).type)
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    assert [SKETCH_VEC_COLUMN] in [index["fields"] for index in indices]
+    struct = _stored_sketch_struct(dataset)
+    expected = _fake_sketch(audio.astype(np.float32), int(render.sample_rate))
+    np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
+    hits = dataset.to_table(
+        nearest={"column": SKETCH_VEC_COLUMN, "q": _struct_sketch_vec(struct)[7], "k": 1}
+    )
+    assert hits.num_rows == 1
