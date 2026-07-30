@@ -11,7 +11,7 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import InterpolationKeyError
+from omegaconf.errors import InterpolationKeyError, MissingMandatoryValue
 
 from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT,
@@ -1143,3 +1143,39 @@ def test_extras_validates_synth_before_missing_extras_early_return() -> None:
 
     with pytest.raises(ValueError, match="surge_4"):
         extras(cfg)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "control_mode"),
+    [
+        ("flow_finetune", "gradient_spectral"),
+        ("flow_finetune_learned", "learned_audio"),
+        ("flow_finetune_null", "null"),
+    ],
+)
+def test_torchsynth_finetune_arm_composes_to_its_control_mode(
+    experiment: str, control_mode: str
+) -> None:
+    """Each simulator-feedback arm selects its own control without further overrides.
+
+    :param experiment: ``experiment=torchsynth/...`` name under test.
+    :param control_mode: Control arm the experiment must select.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [f"experiment=torchsynth/{experiment}", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
+    )
+
+    assert cfg.model.control_mode == control_mode
+    # The differentiable render graph-breaks under compile and is single-device (#2585).
+    assert cfg.model.compile is False
+    assert (cfg.model.control_encoder is not None) == (control_mode == "learned_audio")
+    assert (cfg.model.cost is not None) == (control_mode == "gradient_spectral")
+
+
+def test_torchsynth_finetune_without_base_checkpoint_raises() -> None:
+    """The finetune arms refuse to run against an unnamed pretrained flow."""
+    cfg = _compose("train.yaml", ["experiment=torchsynth/flow_finetune", "trainer=cpu"])
+
+    with pytest.raises(MissingMandatoryValue):
+        _ = cfg.model.base_checkpoint

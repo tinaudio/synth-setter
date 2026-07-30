@@ -1,0 +1,16 @@
+# @package _global_
+
+# Capacity-matched ablation: the same control network on the same velocity, with the
+# simulator's contribution zeroed. What this arm cannot reach is what the feedback bought.
+# Renders nothing, so it is the cheap leg of the comparison.
+defaults:
+  - torchsynth/flow
+  - override /model: vst_flow_finetune
+  - _self_
+
+run_name: flow_finetune_null
+tags: [torchsynth, flow, finetune, simulator_feedback, "null"]
+
+model:
+  control_mode: "null"
+  cost: null

@@ -167,6 +167,52 @@ class ControlledFlow(nn.Module):
         self.t_min = t_min
 
     @jaxtyped(typechecker=beartype)
+    def __getattr__(self, name: str) -> object:
+        """Fall back to the wrapped field so this reads as the field it replaces.
+
+        Callers hold a ``ControlledFlow`` wherever they held the pretrained field, and reach
+        for that field's own surface (``apply_dropout``, ``d_model``, ``penalty``).
+
+        :param name: Attribute absent from this wrapper.
+        :returns: The wrapped field's attribute of that name.
+        :raises AttributeError: Neither this wrapper nor the wrapped field defines it.
+        """
+        try:
+            return super().__getattr__(name)  # pyright: ignore[reportReturnType]
+        except AttributeError:
+            # Read through __dict__-backed _modules; a plain self.flow would recurse here.
+            flow = self._modules.get("flow")
+            if flow is None:
+                raise
+            return getattr(flow, name)
+
+    @jaxtyped(typechecker=beartype)
+    def combine(
+        self,
+        velocity: Float[Tensor, _BATCH_PARAMS_SHAPE],
+        t: Float[Tensor, _BATCH_TIME_SHAPE],
+        control_input: Float[Tensor, _BATCH_ANY_SHAPE] | None,
+    ) -> Float[Tensor, _BATCH_PARAMS_SHAPE]:
+        """Correct an already-evaluated velocity, gated on flow time.
+
+        Split out of :meth:`forward` so a caller that derives ``control_input`` from the
+        velocity evaluates the field once, rather than once for the estimate and again to
+        correct it — two evaluations a field carrying dropout would not even agree on.
+
+        Rows below ``t_min`` are returned unchanged rather than corrected by zero, so a
+        bypassed row is bit-identical to the pretrained field's own output.
+
+        :param velocity: Pretrained velocity shaped ``(batch, params)``.
+        :param t: Flow time shaped ``(batch, 1)``.
+        :param control_input: Control signal, or ``None`` for the capacity-matched ablation.
+        :returns: Velocity shaped ``(batch, params)``.
+        """
+        if control_input is None:
+            return velocity
+        correction = self.control(t, velocity, control_input)
+        return velocity + torch.where(t >= self.t_min, correction, torch.zeros_like(correction))
+
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
         x_t: Float[Tensor, _BATCH_PARAMS_SHAPE],
@@ -176,17 +222,10 @@ class ControlledFlow(nn.Module):
     ) -> Float[Tensor, _BATCH_PARAMS_SHAPE]:
         """Return the pretrained velocity below ``t_min`` and the corrected one above.
 
-        Rows below the threshold are returned unchanged rather than corrected by zero, so a
-        bypassed row is bit-identical to the pretrained field's own output.
-
         :param x_t: Trajectory point shaped ``(batch, params)``.
         :param t: Flow time shaped ``(batch, 1)``.
         :param z: Conditioning the pretrained field consumes.
         :param control_input: Control signal, or ``None`` for the capacity-matched ablation.
         :returns: Velocity shaped ``(batch, params)``.
         """
-        velocity = self.flow(x_t, t, z)
-        if control_input is None:
-            return velocity
-        correction = self.control(t, velocity, control_input)
-        return velocity + torch.where(t >= self.t_min, correction, torch.zeros_like(correction))
+        return self.combine(self.flow(x_t, t, z), t, control_input)
