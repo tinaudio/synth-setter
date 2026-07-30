@@ -49,7 +49,17 @@ from synth_setter.data.vst.shapes import (
     MATPAC_PLUS_FIELD,
     mel_n_frames_from_samples,
 )
-from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
+from synth_setter.model_cache import checkpoint_tree_sha256
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT,
+    SAME_EMBEDDING_DIM,
+    SAME_SAMPLE_RATE,
+    load_same_autoencoder,
+    resolve_same_checkpoint,
+    same_l_num_latent_frames,
+    same_s_num_latent_frames,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
@@ -79,13 +89,7 @@ logger = structlog.get_logger(__name__)
 operator_workspace()
 
 DEFAULT_M2L_CHECKPOINT: str = ""
-DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
-DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
 DEFAULT_T5GEMMA_CHECKPOINT: str = "r2://intermediate-data/models/sa3-small-music"
-_DEFAULT_SAME_CACHE_NAMES: dict[str, str] = {
-    DEFAULT_SAME_L_CHECKPOINT: "same-l",
-    DEFAULT_SAME_S_CHECKPOINT: "same-s",
-}
 CLAP_EMBEDDING_DIM: int = 512
 M2L_ENCODE_MAX_BATCH: int = 64
 CLAP_ENCODE_MAX_BATCH: int = 32
@@ -98,10 +102,6 @@ DEFAULT_LANCE_LOG: str = "warn"
 PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 _EMBEDDING_NAME_METADATA = b"synth_setter.embedding.name"
 _EMBEDDING_ARTIFACT_METADATA = b"synth_setter.embedding.artifact"
-SAME_EMBEDDING_DIM: int = 256
-SAME_SAMPLE_RATE: int = 44100
-SAME_DOWNSAMPLING_RATIO: int = 4096
-SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
 SKETCH_INDEX_SUB_VECTORS: int = 2
@@ -234,31 +234,6 @@ def _update_framed_digest(digest: _Digest, value: bytes) -> None:
     digest.update(value)
 
 
-def _checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
-    """Hash checkpoint file paths and contents in deterministic order.
-
-    :param checkpoint_dir: Materialized checkpoint directory.
-    :returns: SHA-256 identity for the complete checkpoint tree.
-    :raises ValueError: The checkpoint directory contains no files.
-    """
-    digest = hashlib.sha256()
-    files = sorted(
-        path
-        for path in checkpoint_dir.rglob("*")
-        if path.is_file()
-        and not path.relative_to(checkpoint_dir).parts[:2] == (".cache", "huggingface")
-    )
-    if not files:
-        raise ValueError(f"checkpoint directory has no files: {checkpoint_dir}")
-    for path in files:
-        _update_framed_digest(digest, path.relative_to(checkpoint_dir).as_posix().encode())
-        digest.update(path.stat().st_size.to_bytes(8, "big"))
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _versioned_artifact_identity(name: str, digest: str) -> str:
     """Bind checkpoint identity to synth-setter's preprocessing contract.
 
@@ -289,7 +264,7 @@ def _clap_artifact_identity(checkpoint: str) -> str:
     :returns: Versioned content identity.
     """
     checkpoint_dir = Path(_resolve_clap_checkpoint(checkpoint))
-    return _versioned_artifact_identity("clap", _checkpoint_tree_sha256(checkpoint_dir))
+    return _versioned_artifact_identity("clap", checkpoint_tree_sha256(checkpoint_dir))
 
 
 def _same_artifact_identity(checkpoint: str) -> str:
@@ -298,8 +273,8 @@ def _same_artifact_identity(checkpoint: str) -> str:
     :param checkpoint: Local, R2, or HuggingFace checkpoint source.
     :returns: Versioned content identity.
     """
-    checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
-    return _versioned_artifact_identity("same", _checkpoint_tree_sha256(checkpoint_dir))
+    checkpoint_dir = resolve_same_checkpoint(checkpoint)
+    return _versioned_artifact_identity("same", checkpoint_tree_sha256(checkpoint_dir))
 
 
 def _t5gemma_artifact_identity(checkpoint: str) -> str:
@@ -311,7 +286,7 @@ def _t5gemma_artifact_identity(checkpoint: str) -> str:
     from synth_setter.pipeline.data.t5gemma import _resolve_t5gemma_checkpoint_dir
 
     checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
-    return _versioned_artifact_identity("t5gemma", _checkpoint_tree_sha256(checkpoint_dir))
+    return _versioned_artifact_identity("t5gemma", checkpoint_tree_sha256(checkpoint_dir))
 
 
 def _sketch_artifact_identity(checkpoint: str) -> str:
@@ -427,41 +402,6 @@ def _encode_clap_column(
             f"{CLAP_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
         )
     return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
-
-
-def _same_resampled_samples(num_samples: int, sample_rate: int) -> int:
-    """Return the ceiling sample count after resampling to SAME's 44.1 kHz input rate.
-
-    :param num_samples: Positive source clip length in samples.
-    :param sample_rate: Positive source sample rate in Hz.
-    :returns: Resampled clip length in samples.
-    :raises ValueError: Either input is non-positive.
-    """
-    if num_samples < 1 or sample_rate < 1:
-        raise ValueError(f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}")
-    return math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
-
-
-def same_s_num_latent_frames(num_samples: int, sample_rate: int) -> int:
-    """Return SAME-S's even frame count after resampling and two-hop padding.
-
-    :param num_samples: Positive source clip length in samples.
-    :param sample_rate: Positive source sample rate in Hz.
-    :returns: Two frames per complete or partial 8192-sample block.
-    """
-    resampled = _same_resampled_samples(num_samples, sample_rate)
-    return 2 * math.ceil(resampled / SAME_S_PAD_BLOCK_SAMPLES)
-
-
-def same_l_num_latent_frames(num_samples: int, sample_rate: int) -> int:
-    """Return SAME-L's frame count after resampling to its 4096-sample hop.
-
-    :param num_samples: Positive source clip length in samples.
-    :param sample_rate: Positive source sample rate in Hz.
-    :returns: One frame per complete or partial 4096-sample block.
-    """
-    resampled = _same_resampled_samples(num_samples, sample_rate)
-    return math.ceil(resampled / SAME_DOWNSAMPLING_RATIO)
 
 
 def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -1651,30 +1591,6 @@ def load_clap_audio_encoder(
     return encode
 
 
-def _resolve_same_checkpoint_dir(checkpoint: str) -> Path:
-    """Resolve a local, R2, or HuggingFace SAME checkpoint directory.
-
-    :param checkpoint: Checkpoint directory, R2 prefix, or HuggingFace repo id.
-    :returns: Local directory containing SAME model files.
-    """
-    if r2_io.is_r2_uri(checkpoint):
-        cache_name = _DEFAULT_SAME_CACHE_NAMES.get(checkpoint)
-        if cache_name is None:
-            cache_key = checkpoint.removeprefix("r2://").strip("/")
-            cache_dir = synth_setter_cache_dir() / "models" / cache_key
-        else:
-            cache_dir = embedding_model_dir(cache_name)
-        r2_io.ensure_r2_env_loaded()
-        r2_io.download_dir_no_overwrite(checkpoint, cache_dir)
-        return cache_dir
-    local = Path(checkpoint)
-    if local.is_dir():
-        return local
-    from huggingface_hub import snapshot_download
-
-    return Path(snapshot_download(checkpoint))
-
-
 def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameEncodeFn:
     """Load SAME and return an encoder over prepared stereo 44.1 kHz audio.
 
@@ -1682,19 +1598,12 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
     :param device: Torch device, or ``None`` for automatic selection.
     :returns: Encoder producing ``(B, SAME_EMBEDDING_DIM, T_lat)`` latents.
     """
-    import json
-
     import torch
-    from safetensors.torch import load_file
-    from stable_audio_3.factory import create_autoencoder_from_config
 
-    checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
+    checkpoint_dir = resolve_same_checkpoint(checkpoint)
     resolved_device = _resolve_torch_device(device)
     logger.info("loading_same_checkpoint", checkpoint=checkpoint, device=resolved_device)
-    model_config = json.loads((checkpoint_dir / "model_config.json").read_text())
-    model = create_autoencoder_from_config(model_config["model"], model_config["sample_rate"])
-    model.load_state_dict(load_file(checkpoint_dir / "model.safetensors"), strict=True)
-    model = model.to(resolved_device).eval().requires_grad_(False)
+    model = load_same_autoencoder(checkpoint_dir).to(resolved_device)
 
     @torch.no_grad()
     def _encode_chunk(chunk: np.ndarray) -> np.ndarray:

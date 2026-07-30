@@ -1,6 +1,7 @@
 """Behaviour tests for the torchsynth audio-feedback loss and its runtime guards."""
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,13 +16,17 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     INFERABLE_SPEC,
     TORCHSYNTH_FULL_PARAM_SPEC,
 )
-from synth_setter.models.components.audio_distance import CosineEmbeddingDistance
+from synth_setter.models.components.audio_distance import (
+    CosineEmbeddingDistance,
+    LatentMseDistance,
+)
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
     gradient_balance,
     time_bucket_means,
     validate_audio_feedback_runtime,
 )
+from synth_setter.models.components.same_encoder import SameAudioEncoder
 
 _SAMPLE_RATE = 44_100
 _SIGNAL_LENGTH = 4_410
@@ -730,7 +735,36 @@ def test_configured_distance_overrides_the_conditioning_encoder() -> None:
 
 def test_trainable_cosine_encoder_is_rejected() -> None:
     """An encoder that trains would move the space it is supposed to hold fixed."""
-    from synth_setter.models.components.audio_distance import CosineEmbeddingDistance
+    from synth_setter.models.components.audio_distance import (
+        CosineEmbeddingDistance,
+    )
 
     with pytest.raises(ValueError, match="frozen"):
         CosineEmbeddingDistance(encoder=torch.nn.Linear(_SIGNAL_LENGTH, 4))
+
+
+def test_same_latent_distance_backpropagates_to_the_parameter_estimate(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """SAME latents must carry the render's gradient all the way back to the flow output.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    torch.manual_seed(0)
+    theta_hat = (2.0 * _encoded_rows(_BATCH, seed=0) - 1.0).requires_grad_(True)
+    target_audio = _render(_encoded_rows(_BATCH, seed=1))
+    loss = _loss(
+        distance=LatentMseDistance(
+            encoder=SameAudioEncoder.from_pretrained(
+                sample_rate=_SAMPLE_RATE, checkpoint=str(tiny_same_checkpoint)
+            )
+        )
+    )
+
+    audio_term = loss(theta_hat, torch.ones(_BATCH, 1), target_audio)
+    audio_term.backward()
+
+    assert torch.isfinite(audio_term)
+    assert audio_term.item() > 0.0
+    assert theta_hat.grad is not None
+    assert torch.count_nonzero(theta_hat.grad) > 0
