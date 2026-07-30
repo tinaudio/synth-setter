@@ -19,6 +19,7 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Sampler
 
+from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.sample_seed import derive_sample_seed
 
 # Re-exported for backward compat: training code imports these names from this module.
@@ -361,6 +362,7 @@ class TorchSynthDataModule(LightningDataModule):
         collate_fn: TorchSynthCollateFn | None = None,
         resample_train_per_epoch: bool = False,
         drop_last: bool = False,
+        conditioning: ConditioningMode = "audio",
     ) -> None:
         """Configure the online TorchSynth train, validation, and test splits.
 
@@ -376,7 +378,11 @@ class TorchSynthDataModule(LightningDataModule):
             training) instead of revisiting one fixed split; validation and test stay fixed.
         :param drop_last: Whether training discards a trailing partial batch when the split
             contains at least one full batch.
+        :param conditioning: Model-batch modality; TorchSynth supports raw audio only.
+        :raises ValueError: If conditioning does not select raw audio.
         """
+        if conditioning != "audio":
+            raise ValueError("TorchSynth conditioning must be 'audio'")
         super().__init__()
         self.sample_rate = sample_rate
         self.signal_length = signal_length
@@ -392,6 +398,7 @@ class TorchSynthDataModule(LightningDataModule):
         )
         self.resample_train_per_epoch = resample_train_per_epoch
         self.drop_last = drop_last
+        self.conditioning = conditioning
 
     def setup(self, stage: str | None = None) -> None:
         """Build only the splits required for the requested Lightning stage.

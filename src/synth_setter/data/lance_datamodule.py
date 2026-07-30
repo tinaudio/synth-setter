@@ -215,7 +215,8 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         """
         self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
         self._num_params = num_params
-        self._read_audio = read_audio
+        self._read_audio = read_audio or conditioning == "audio"
+        self._read_mel = conditioning == "mel"
         self._preserve_legacy_m2l = (
             isinstance(conditioning, str) and conditioning == "m2l"
         )
@@ -235,11 +236,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         :returns: Model-ready random tensors with the configured shapes.
         """
         audio = torch.randn(num_rows, *_FAKE_AUDIO_SHAPE) if self._read_audio else None
-        mel = (
-            torch.randn(num_rows, *_FAKE_MEL_SHAPE)
-            if self._embedding_conditioning is None
-            else None
-        )
+        mel = torch.randn(num_rows, *_FAKE_MEL_SHAPE) if self._read_mel else None
         conditioning = (
             torch.randn(num_rows, *self._embedding_conditioning.input_shape)
             if self._embedding_conditioning is not None
@@ -529,7 +526,7 @@ class LanceVSTDataModule(VSTDataModule):
         """
         train_shard = self.dataset_root / f"train{self.shard_suffix}"
         split_stats = predict_stats = None
-        if self.use_saved_mean_and_variance and self.embedding_conditioning is None:
+        if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
             if any(name != "predict" for name in split_names):
                 split_stats = load_dataset_statistics(train_shard)
             if "predict" in split_names:

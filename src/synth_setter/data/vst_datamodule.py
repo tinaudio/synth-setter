@@ -335,10 +335,12 @@ class VSTDataModule(LightningDataModule):
     def _conditioning_column(self) -> str:
         """Return the stored column backing the configured conditioning.
 
-        :returns: Legacy mel column or the resolved embedding column.
+        :returns: Stored column for the raw mode or resolved embedding.
         """
         spec = self.embedding_conditioning
-        return "mel_spec" if spec is None else spec.column
+        if spec is not None:
+            return spec.column
+        return "audio" if self.conditioning == "audio" else "mel_spec"
 
     def _predict_split(
         self, predict_file: str | Path | None, configured_root: Path
@@ -415,7 +417,7 @@ class VSTDataModule(LightningDataModule):
         :returns: Projection for one split — never user-configured.
         """
         columns = ["param_array", self._conditioning_column()]
-        if read_audio:
+        if read_audio and "audio" not in columns:
             columns.append("audio")
         return columns
 

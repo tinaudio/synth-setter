@@ -35,6 +35,10 @@ from synth_setter.data.vst import param_specs
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.cnn import LogMelEncoder
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
+from synth_setter.models.components.pretrained_encoder import (
+    ClapAudioEncoder,
+    PretrainedConditioningEncoder,
+)
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -195,6 +199,29 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
     assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
+
+
+@pytest.mark.slow
+def test_train_torchsynth_clap_online_advances_one_cpu_step(
+    cfg_torchsynth_clap_online_train: DictConfig,
+) -> None:
+    """Train through online CLAP conditioning with a real offline backbone.
+
+    :param cfg_torchsynth_clap_online_train: Tiny production-path CLAP configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_clap_online_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_clap_online_train)
+
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
+    encoder = object_dict["model"].encoder
+    assert isinstance(object_dict["model"].audio_loss, AudioFeedbackLoss)
+    assert isinstance(encoder, PretrainedConditioningEncoder)
+    assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert encoder.backbone.out_dim == 8
+    assert not encoder.backbone.clap.training
+    assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
 
 
 @pytest.mark.slow

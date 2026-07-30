@@ -6,6 +6,10 @@ from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
+from synth_setter.clap import (
+    DEFAULT_CLAP_TRAINING_CHECKPOINT,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
+)
 from synth_setter.data.vst.shapes import mel_hop_length, mel_n_fft
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.models.components.cnn import LogMelEncoder
@@ -167,7 +171,7 @@ def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() 
     """The val-audio probe needs both a render group and the root synth identity."""
     cfg = _flow_cfg()
     assert cfg.synth.param_spec_name == "torchsynth_full"
-    assert cfg.training.val_audio_probe == "auto"
+    assert cfg.render is not None
 
 
 def test_torchsynth_flow_experiment_carries_no_audio_loss() -> None:
@@ -230,6 +234,39 @@ def test_torchsynth_flow_composed_predict_step_preserves_datamodule_width() -> N
     )
     assert predictions.shape == (2, cfg.datamodule.num_params)
     assert torch.isfinite(predictions).all()
+
+
+def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head() -> None:
+    """The online profile feeds raw audio through frozen CLAP before the trained head."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_audio",
+                "conditioning=clap_online",
+                "model/encoder=clap_online",
+            ],
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
+    )
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_CLAP_TRAINING_CHECKPOINT
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.vector_projection.VectorProjection"
+    )
+    assert cfg.model.encoder.head.input_dim == 512
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
 
 
 def test_torchsynth_flow_audio_experiment_attaches_the_latent_audio_loss() -> None:
@@ -307,3 +344,56 @@ def test_torchsynth_experiment_checkpoint_monitor_is_param_mse(experiment: str) 
     :param experiment: TorchSynth experiment group member under test.
     """
     assert _experiment_cfg(experiment).callbacks.model_checkpoint.monitor == "val/param_mse"
+
+
+def test_clap_audio_loss_composes_with_stored_embedding_conditioning() -> None:
+    """The feedback space is selectable independently of what conditions the flow."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_audio",
+                "conditioning=m2l",
+                "model/audio_loss=clap",
+            ],
+        )
+
+    assert cfg.model.encoder._target_ == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    assert (
+        cfg.model.audio_loss.distance.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_pretrained"
+    )
+
+
+def test_torchsynth_flow_validates_often_enough_to_checkpoint_within_an_epoch() -> None:
+    """The trainer default outlives an epoch of this size, so nothing would be saved."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow"])
+
+    assert cfg.trainer.val_check_interval == 2000
+    assert cfg.training.val_audio_probe is True
+
+
+def test_mss_audio_loss_measures_in_the_reported_metric_space() -> None:
+    """The default feedback space is the figure evaluation reports, in the same units."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio"])
+
+    assert (
+        cfg.model.audio_loss.distance._target_
+        == "synth_setter.models.components.audio_distance.MultiScaleSpectralDistance"
+    )
+
+
+def test_conditioning_profile_alone_selects_its_encoder() -> None:
+    """The experiment must not pin an encoder the conditioning profile owns."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow_audio", "conditioning=clap_online"],
+        )
+
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
+    )

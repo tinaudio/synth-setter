@@ -1,5 +1,7 @@
 """Behaviour tests for the torchsynth audio-feedback loss and its runtime guards."""
 
+import logging
+
 import numpy as np
 import pytest
 import torch
@@ -13,6 +15,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     INFERABLE_SPEC,
     TORCHSYNTH_FULL_PARAM_SPEC,
 )
+from synth_setter.models.components.audio_distance import CosineEmbeddingDistance
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
     gradient_balance,
@@ -92,6 +95,7 @@ def _loss(**kwargs: object) -> AudioFeedbackLoss:
         "signal_length": _SIGNAL_LENGTH,
         "render_batch_size": _BATCH,
     }
+    settings.setdefault("distance", CosineEmbeddingDistance(encoder=_linear_encoder()))
     return AudioFeedbackLoss(**(settings | kwargs))
 
 
@@ -99,14 +103,41 @@ def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
     """Build a deterministic encoder whose output magnitude is set by ``scale``.
 
     :param scale: Multiplier applied to every weight and bias.
-    :returns: Encoder mapping ``(batch, signal_length)`` to ``(batch, 8)``.
+    :returns: Frozen encoder mapping ``(batch, signal_length)`` to ``(batch, 8)``.
     """
     torch.manual_seed(0)
     encoder = torch.nn.Linear(_SIGNAL_LENGTH, 8)
     with torch.no_grad():
         encoder.weight.mul_(scale)
         encoder.bias.mul_(scale)
+    # A distance refuses a trainable space, so this stands in for a frozen metric.
+    encoder.requires_grad_(False)
     return encoder
+
+
+class _OrdinaryEmbedEncoder(torch.nn.Module):
+    """Trainable encoder whose ordinary ``embed`` must not imply a frozen tap."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.linear = torch.nn.Linear(_SIGNAL_LENGTH, 8)
+
+    def embed(self, audio: torch.Tensor) -> torch.Tensor:
+        """Fail if name-based tap discovery calls this method.
+
+        :param audio: Waveform batch.
+        :returns: Never returns.
+        :raises AssertionError: Always; ordinary ``embed`` is not a frozen metric marker.
+        """
+        raise AssertionError("ordinary embed method must not be the frozen metric tap")
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        """Map waveforms through the trainable conditioning path.
+
+        :param audio: Waveform batch.
+        :returns: Flat embedding batch.
+        """
+        return self.linear(audio)
 
 
 def test_differentiable_decode_matches_the_linear_map_across_the_working_range() -> None:
@@ -378,9 +409,7 @@ def test_latent_loss_with_all_zero_weights_skips_render_and_preserves_scalar_con
     )
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH, dtype=torch.float64, requires_grad=True)
 
-    value = _loss()(
-        theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
-    )
+    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
 
     assert value.shape == torch.Size([])
     assert value.device == theta.device
@@ -412,7 +441,6 @@ def test_latent_loss_with_partially_zero_weights_still_renders(
         theta,
         torch.full((_BATCH, 1), 0.9),
         torch.zeros(_BATCH, _SIGNAL_LENGTH),
-        _linear_encoder(),
         keep=keep,
     )
 
@@ -425,9 +453,7 @@ def test_latent_loss_with_zero_weights_still_rejects_wrong_parameter_width() -> 
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH - 1, requires_grad=True)
 
     with pytest.raises(ValueError, match="Expected"):
-        _loss()(
-            theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
-        )
+        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
 
 
 def test_latent_loss_with_zero_weights_still_rejects_non_finite_parameters() -> None:
@@ -437,18 +463,14 @@ def test_latent_loss_with_zero_weights_still_rejects_non_finite_parameters() -> 
         theta[0, 0] = float("nan")
 
     with pytest.raises(ValueError, match="non-finite"):
-        _loss()(
-            theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
-        )
+        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
 
 
 def test_latent_loss_with_all_zero_weights_backprops_zero_theta_gradients() -> None:
     """The skipped render keeps a zero autograd path to every estimate row."""
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
 
-    value = _loss()(
-        theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH), _linear_encoder()
-    )
+    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
     (gradient,) = torch.autograd.grad(value, theta)
 
     assert torch.equal(gradient, torch.zeros_like(theta))
@@ -462,7 +484,6 @@ def test_gradient_balance_with_all_zero_audio_weights_is_finite_zero() -> None:
         prediction,
         torch.zeros(_BATCH, 1),
         torch.empty(_BATCH, _SIGNAL_LENGTH),
-        _linear_encoder(),
     )
 
     balance = gradient_balance(flow_loss=flow_loss, audio_term=audio_term, shared=prediction)
@@ -479,9 +500,7 @@ def test_latent_loss_backprops_gradient_through_the_encoder() -> None:
     target_audio = _render(_encoded_rows(_BATCH))
     theta = (_encoded_rows(_BATCH) * 2 - 1).requires_grad_(True)
 
-    value = _loss().forward(
-        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
-    )
+    value = _loss().forward(theta, torch.full((_BATCH, 1), 0.9), target_audio)
     (gradient,) = torch.autograd.grad(value, theta)
 
     assert value.item() > 0.0
@@ -497,8 +516,12 @@ def test_latent_loss_is_invariant_to_encoder_output_scale() -> None:
     theta = _encoded_rows(_BATCH) * 2 - 1
     t = torch.full((_BATCH, 1), 0.9)
 
-    unscaled = _loss().forward(theta, t, target_audio, encoder=_linear_encoder(scale=1.0))
-    scaled = _loss().forward(theta, t, target_audio, encoder=_linear_encoder(scale=10.0))
+    unscaled = _loss(distance=CosineEmbeddingDistance(encoder=_linear_encoder(1.0)))(
+        theta, t, target_audio
+    )
+    scaled = _loss(distance=CosineEmbeddingDistance(encoder=_linear_encoder(10.0)))(
+        theta, t, target_audio
+    )
 
     assert torch.allclose(unscaled, scaled, atol=1e-5)
 
@@ -509,9 +532,7 @@ def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
     params = _encoded_rows(_BATCH).clamp(0.01, 0.99)
     target_audio = _render(params)
 
-    value = _loss().forward(
-        params * 2 - 1, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_linear_encoder()
-    )
+    value = _loss().forward(params * 2 - 1, torch.full((_BATCH, 1), 0.9), target_audio)
 
     assert value.item() == pytest.approx(0.0, abs=1e-6)
 
@@ -523,76 +544,9 @@ def test_latent_loss_of_a_batch_shorter_than_the_render_size_is_finite() -> None
     params = _encoded_rows(rows).clamp(0.01, 0.99)
     target_audio = _render(params)
 
-    value = _loss().forward(
-        params * 2 - 1, torch.full((rows, 1), 0.9), target_audio, encoder=_linear_encoder()
-    )
+    value = _loss().forward(params * 2 - 1, torch.full((rows, 1), 0.9), target_audio)
 
     assert value.item() == pytest.approx(0.0, abs=1e-6)
-
-
-def test_latent_loss_with_a_sequence_encoder_reduces_to_a_scalar() -> None:
-    """Token-emitting encoders must still yield one distance per sample, not per token."""
-
-    class _TokenEncoder(torch.nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.linear = torch.nn.Linear(_SIGNAL_LENGTH, 24)
-
-        def forward(self, audio: torch.Tensor) -> torch.Tensor:
-            return self.linear(audio).reshape(audio.shape[0], 3, 8)
-
-    torch.manual_seed(0)
-    target_audio = _render(_encoded_rows(_BATCH))
-    theta = _encoded_rows(_BATCH) * 2 - 1
-
-    value = _loss().forward(
-        theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=_TokenEncoder()
-    )
-
-    assert value.ndim == 0
-    assert torch.isfinite(value)
-
-
-def test_latent_loss_leaves_encoder_weights_and_stats_untouched() -> None:
-    """The latent space is frozen: no weight gradients, no BatchNorm stat drift."""
-    torch.manual_seed(0)
-    encoder = torch.nn.Sequential(
-        torch.nn.Linear(_SIGNAL_LENGTH, 8), torch.nn.BatchNorm1d(8), torch.nn.GELU()
-    )
-    encoder.train()
-    batch_norm = encoder[1]
-    assert isinstance(batch_norm, torch.nn.BatchNorm1d)
-    assert batch_norm.running_mean is not None
-    stats_before = batch_norm.running_mean.clone()
-    target_audio = _render(_encoded_rows(_BATCH))
-    theta = (_encoded_rows(_BATCH) * 2 - 1).requires_grad_(True)
-
-    value = _loss().forward(theta, torch.full((_BATCH, 1), 0.9), target_audio, encoder=encoder)
-    value.backward()
-
-    assert theta.grad is not None and (theta.grad != 0).any()
-    assert all(parameter.grad is None for parameter in encoder.parameters())
-    assert torch.equal(batch_norm.running_mean, stats_before)
-    assert encoder.training
-
-
-@pytest.mark.parametrize("lambda_audio", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
-def test_audio_loss_with_non_finite_or_non_positive_lambda_raises(lambda_audio: float) -> None:
-    """Only finite positive audio weights define an enabled loss.
-
-    :param lambda_audio: Invalid weight under test.
-    """
-    with pytest.raises(ValueError, match="lambda_audio"):
-        _loss(lambda_audio=lambda_audio)
-
-
-@pytest.mark.parametrize("lambda_audio", [torch.finfo(torch.float32).tiny, 0.03, 1.0])
-def test_audio_loss_with_finite_positive_lambda_is_accepted(lambda_audio: float) -> None:
-    """Every finite positive weight is valid.
-
-    :param lambda_audio: Valid weight under test.
-    """
-    assert _loss(lambda_audio=lambda_audio).lambda_audio == lambda_audio
 
 
 def test_gradient_balance_of_a_term_against_itself_is_unit_ratio_and_alignment() -> None:
@@ -706,3 +660,77 @@ def test_validate_runtime_with_multiple_devices_raises() -> None:
 def test_validate_runtime_accepts_a_supported_configuration() -> None:
     """An uncompiled single-device run is the supported configuration."""
     validate_audio_feedback_runtime(compiled=False, world_size=1)
+
+
+def test_non_finite_estimate_logs_the_finite_theta_hat_range(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The rejection reports how far the finite estimate ran, distinguishing the cause.
+
+    :param caplog: Pytest log capture for the diagnostic record.
+    """
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
+    with torch.no_grad():
+        theta[0, 0] = float("nan")
+        theta[0, 1] = -37.5
+        theta[0, 2] = 42.25
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError, match="non-finite"):
+        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
+
+    assert "-37.5" in caplog.text
+    assert "42.25" in caplog.text
+
+
+def test_wholly_non_finite_estimate_logs_without_a_finite_range(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A fully corrupted estimate has no finite extremes to report and must not crash.
+
+    :param caplog: Pytest log capture for the diagnostic record.
+    """
+    theta = torch.full((_BATCH, _ENCODED_WIDTH), float("nan"), requires_grad=True)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError, match="non-finite"):
+        _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
+
+    assert "non_finite_rows" in caplog.text
+
+
+def _zero_distance() -> torch.nn.Module:
+    """Build a pairwise distance that reports zero for any pair.
+
+    :returns: Module mapping any waveform pair to per-sample zeros.
+    """
+
+    class _Zero(torch.nn.Module):
+        def forward(self, rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            """Return a zero distance per row.
+
+            :param rendered: Rendered estimate.
+            :param target: Observed audio.
+            :returns: Per-sample zeros carrying the render's gradient.
+            """
+            return rendered.sum(dim=-1) * 0.0
+
+    return _Zero()
+
+
+def test_configured_distance_overrides_the_conditioning_encoder() -> None:
+    """A configured distance decides the space, so conditioning can be a different one."""
+    theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
+    audio = torch.zeros(_BATCH, _SIGNAL_LENGTH)
+
+    coupled = _loss()(theta, torch.ones(_BATCH, 1), audio)
+    decoupled = _loss(distance=_zero_distance())(theta, torch.ones(_BATCH, 1), audio)
+
+    assert coupled.item() != decoupled.item()
+    assert decoupled.item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_trainable_cosine_encoder_is_rejected() -> None:
+    """An encoder that trains would move the space it is supposed to hold fixed."""
+    from synth_setter.models.components.audio_distance import CosineEmbeddingDistance
+
+    with pytest.raises(ValueError, match="frozen"):
+        CosineEmbeddingDistance(encoder=torch.nn.Linear(_SIGNAL_LENGTH, 4))

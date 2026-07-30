@@ -31,6 +31,7 @@ from beartype import beartype
 from einops import rearrange
 from jaxtyping import Float, jaxtyped
 
+from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -76,7 +77,6 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 operator_workspace()
 
-DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 DEFAULT_M2L_CHECKPOINT: str = ""
 DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
 DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
@@ -85,7 +85,6 @@ _DEFAULT_SAME_CACHE_NAMES: dict[str, str] = {
     DEFAULT_SAME_L_CHECKPOINT: "same-l",
     DEFAULT_SAME_S_CHECKPOINT: "same-s",
 }
-CLAP_SAMPLE_RATE: int = 48000
 CLAP_EMBEDDING_DIM: int = 512
 M2L_ENCODE_MAX_BATCH: int = 64
 CLAP_ENCODE_MAX_BATCH: int = 32
@@ -603,7 +602,7 @@ def _load_matpac_plus_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig)
 
     :param checkpoint: Exact pinned URI or a hash-identical local artifact.
     :param config: Run config supplying the device.
-    :returns: Frozen MATPAC encoder.
+    :returns: Frozen TinyMU encoder.
     """
     return load_matpac_plus_audio_encoder(
         checkpoint,
@@ -1537,22 +1536,8 @@ def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
     return encode
 
 
-def _resolve_clap_checkpoint(checkpoint: str) -> str:
-    """Resolve a local or HuggingFace CLAP checkpoint directory.
-
-    :param checkpoint: Local directory or HuggingFace model id.
-    :returns: Local directory accepted by the Transformers loaders.
-    """
-    local = Path(checkpoint).expanduser()
-    if local.is_dir():
-        return str(local)
-
-    from huggingface_hub import snapshot_download
-
-    if checkpoint == DEFAULT_CLAP_CHECKPOINT:
-        cache_dir = embedding_model_dir("clap-htsat-unfused")
-        return snapshot_download(checkpoint, local_dir=str(cache_dir))
-    return snapshot_download(checkpoint)
+# Retain the private resolver alias for callers importing it.
+_resolve_clap_checkpoint = resolve_clap_checkpoint
 
 
 def load_clap_audio_encoder(
@@ -1561,7 +1546,7 @@ def load_clap_audio_encoder(
 ) -> ClapEncodeFn:
     """Load CLAP and return an encoder over mono audio.
 
-    :param checkpoint: HuggingFace CLAP model id.
+    :param checkpoint: Local directory, R2 prefix, or Hugging Face CLAP model id.
     :param device: Torch device, or ``None`` for automatic selection.
     :returns: Encoder producing ``(B, CLAP_EMBEDDING_DIM)`` vectors.
     """
@@ -1579,15 +1564,16 @@ def load_clap_audio_encoder(
     checkpoint_dir = _resolve_clap_checkpoint(checkpoint)
     model = ClapModel.from_pretrained(checkpoint_dir).to(resolved_device).eval()  # pyright: ignore
     processor = ClapProcessor.from_pretrained(checkpoint_dir)
+    target_sample_rate = processor.feature_extractor.sampling_rate
 
     @torch.no_grad()
     def _encode_chunk(chunk: np.ndarray, sample_rate: int) -> np.ndarray:
         wav = torch.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32))
-        if sample_rate != CLAP_SAMPLE_RATE:
-            wav = audio_fn.resample(wav, sample_rate, CLAP_SAMPLE_RATE)
+        if sample_rate != target_sample_rate:
+            wav = audio_fn.resample(wav, sample_rate, target_sample_rate)
         processor_kwargs = {
             "audio": list(wav.numpy()),
-            "sampling_rate": CLAP_SAMPLE_RATE,
+            "sampling_rate": target_sample_rate,
             "return_tensors": "pt",
         }
         inputs = processor(**processor_kwargs)

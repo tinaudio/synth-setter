@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
 from beartype import beartype
-from jaxtyping import Float, jaxtyped
+from jaxtyping import Float, Shaped, jaxtyped
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
 from synth_setter.conditioning import Conditioning, conditioning_batch_key
 from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
+from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 
 _BATCH_SHAPE = "batch"
+_BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
+_FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -139,7 +142,10 @@ class VSTFlowMatchingModule(LightningModule):
         """
         super().__init__()
 
-        self.save_hyperparameters(logger=False)
+        self.save_hyperparameters(ignore=["encoder"], logger=False)
+        if not isinstance(encoder, PretrainedConditioningEncoder):
+            # Existing load_from_checkpoint consumers reconstruct legacy encoders from hparams.
+            self.hparams["encoder"] = encoder
 
         self.encoder = encoder
         self.vector_field = vector_field
@@ -175,6 +181,42 @@ class VSTFlowMatchingModule(LightningModule):
             compiled=self.hparams.compile,
             world_size=self.trainer.world_size,
         )
+
+    @jaxtyped(typechecker=beartype)
+    def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Exclude re-resolvable frozen CLAP state from a Lightning checkpoint.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises TypeError: A pretrained-encoder checkpoint has malformed state metadata.
+        """
+        if not isinstance(self.encoder, PretrainedConditioningEncoder):
+            return
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for key in tuple(state):
+            if isinstance(key, str) and key.startswith(_FROZEN_BACKBONE_PREFIX):
+                del state[key]
+
+        hyperparameters = checkpoint.get("hyper_parameters")
+        if isinstance(hyperparameters, MutableMapping):
+            hyperparameters.pop("encoder", None)
+
+    @jaxtyped(typechecker=beartype)
+    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Restore current frozen CLAP state so Lightning can load trainable state strictly.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises TypeError: A pretrained-encoder checkpoint has a malformed state dictionary.
+        """
+        if not isinstance(self.encoder, PretrainedConditioningEncoder):
+            return
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for key, value in self.state_dict().items():
+            if key.startswith(_FROZEN_BACKBONE_PREFIX):
+                state[key] = value
 
     def _sample_time(self, n: int, device: torch.device) -> torch.Tensor:
         return torch.rand(n, 1, device=device)
@@ -253,11 +295,11 @@ class VSTFlowMatchingModule(LightningModule):
         :param batch: Online or stored batch carrying params, noise, and audio.
         :returns: Flow loss plus whichever optional terms this configuration produces.
         """
-        conditioning = self._get_conditioning_from_batch(batch)
+        conditioning_input = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
 
-        conditioning = self.encoder(conditioning)
+        conditioning = self.encoder(conditioning_input)
         z, keep = self.vector_field.apply_dropout(conditioning, self.hparams.cfg_dropout_rate)
 
         with torch.no_grad():
@@ -285,7 +327,10 @@ class VSTFlowMatchingModule(LightningModule):
             # `keep` zeroes CFG-dropped rows: their estimate comes from the marginal, so
             # its residual against that row's own audio is high-variance noise, not signal.
             audio_term = self.audio_loss(
-                theta_hat, t, batch["audio"], encoder=self.encoder, keep=keep
+                theta_hat,
+                t,
+                batch["audio"],
+                keep=keep,
             )
             if self._should_probe_gradient_balance():
                 from synth_setter.models.components.audio_feedback import gradient_balance
@@ -424,7 +469,9 @@ class VSTFlowMatchingModule(LightningModule):
     def on_test_epoch_end(self) -> None:
         pass
 
-    def predict_step(self, batch: dict[str, Any], batch_idx: int):
+    def predict_step(
+        self, batch: dict[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE]], batch_idx: int
+    ):
         conditioning = self._get_conditioning_from_batch(batch)
         return (
             self._sample(
@@ -455,8 +502,46 @@ class VSTFlowMatchingModule(LightningModule):
         self.log_dict(vf_norms, on_step=True, on_epoch=False)
         self.log_dict(encoder_norms, on_step=True, on_epoch=False)
 
-    def configure_optimizers(self) -> dict[str, Any]:
-        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+    @jaxtyped(typechecker=beartype)
+    def configure_gradient_clipping(
+        self,
+        optimizer: torch.optim.Optimizer,
+        gradient_clip_val: int | float | None = None,
+        gradient_clip_algorithm: str | None = None,
+    ) -> None:
+        """Reject a non-finite gradient before clipping rescales every parameter by NaN.
+
+        ``clip_grad_norm_`` defaults to ``error_if_nonfinite=False``, so one overflowing
+        row turns the total norm into NaN and poisons all weights; the failure then
+        surfaces a step later as a diverged parameter estimate. Runs under 32-bit
+        precision only — an AMP ``GradScaler`` produces transient infs by design.
+
+        :param optimizer: Optimizer whose gradients are about to be clipped.
+        :param gradient_clip_val: Clip threshold Lightning resolves from the trainer.
+        :param gradient_clip_algorithm: Clip algorithm Lightning resolves from the trainer.
+        :raises ValueError: Any parameter carries a non-finite gradient.
+        """
+        corrupted = [
+            name
+            for name, parameter in self.named_parameters()
+            if parameter.grad is not None and not torch.isfinite(parameter.grad).all()
+        ]
+        if corrupted:
+            raise ValueError(
+                f"non-finite gradient in {len(corrupted)} parameter(s) {corrupted}; rejecting "
+                "the step at its source rather than letting clipping scale every parameter by NaN"
+            )
+        super().configure_gradient_clipping(
+            optimizer,
+            gradient_clip_val=gradient_clip_val,
+            gradient_clip_algorithm=gradient_clip_algorithm,
+        )
+
+    def configure_optimizers(self) -> dict[str, object]:
+        trainable_parameters = (
+            parameter for parameter in self.trainer.model.parameters() if parameter.requires_grad
+        )
+        optimizer = self.hparams.optimizer(params=trainable_parameters)
 
         if self.hparams.warmup_steps > 0:
             warmup_scheduler = torch.optim.lr_scheduler.LinearLR(

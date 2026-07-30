@@ -1,16 +1,17 @@
 """Audio-domain feedback loss that backpropagates through a differentiable render.
 
-The flow's one-step parameter estimate is scored against target audio in a frozen encoder's
-embedding space. Gradient reaching the network scales as ``(t - t_min) * (1 - t)``: zero at
-``t_min``, zero again at t=1 where the estimate is trivially correct, peaking midway — see
+The flow's one-step parameter estimate is scored against target audio by an injected
+distance, which owns its own space and so is independent of what conditions the flow.
+Gradient reaching the network scales as ``(t - t_min) * (1 - t)``: zero at ``t_min``, zero again at t=1 where the estimate is trivially correct, peaking midway — see
 https://github.com/tinaudio/synth-setter/issues/2665.
 
 Typical usage:
     audio_term = AudioFeedbackLoss(**audio_loss_config)(
-        theta_hat, t, target_audio, encoder
+        theta_hat, t, target_audio
     )
 """
 
+import logging
 import math
 from dataclasses import dataclass
 
@@ -26,6 +27,8 @@ from synth_setter.data.torchsynth_grad_render import (
     validate_torchsynth_params,
 )
 
+logger = logging.getLogger(__name__)
+
 # Guards the gradient-ratio denominator when the flow loss contributes no gradient.
 _GRAD_NORM_EPS = 1e-12
 _TIME_BUCKETS = 4
@@ -36,6 +39,30 @@ _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_SHAPE = "batch"
 _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
+
+
+@jaxtyped(typechecker=beartype)
+def _log_non_finite_estimate(
+    theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
+    params: Float[Tensor, _BATCH_PARAMS_SHAPE],
+) -> None:
+    """Report how far the estimate ran before it went non-finite.
+
+    ``differentiable_decode`` clamps every finite input into range, so non-finite decoded
+    params mean ``theta_hat`` arrived corrupt — the extremes bound the last finite weights.
+
+    :param theta_hat: One-step parameter estimate in model space.
+    :param params: Decoded renderer parameters holding at least one non-finite entry.
+    """
+    finite = theta_hat[torch.isfinite(theta_hat)]
+    has_finite = bool(finite.numel())
+    logger.error(
+        "non_finite_audio_estimate non_finite_rows=%d theta_hat_finite_min=%s "
+        "theta_hat_finite_max=%s",
+        int((~torch.isfinite(params).all(dim=-1)).sum().item()),
+        finite.min().item() if has_finite else "none",
+        finite.max().item() if has_finite else "none",
+    )
 
 
 @jaxtyped(typechecker=beartype)
@@ -137,45 +164,6 @@ def time_bucket_means(
     return totals / counts
 
 
-@jaxtyped(typechecker=beartype)
-def _frozen_latent_distance(
-    encoder: nn.Module,
-    rendered: Float[Tensor, _BATCH_AUDIO_SHAPE],
-    target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
-) -> Float[Tensor, _BATCH_SHAPE]:
-    """Per-sample cosine distance in an encoder's embedding space, holding the space fixed.
-
-    The encoder's parameters are detached via ``functional_call`` and it runs in eval mode,
-    so the term cannot shrink by collapsing the (jointly trained) conditioning encoder or by
-    drifting its BatchNorm running stats; gradient still flows to the rendered estimate
-    through the frozen weights. Cosine rather than raw MSE because embedding norm carries no
-    fixed meaning while the encoder trains, which would let the term's magnitude drift with
-    activation scale alone.
-
-    :param encoder: Encoder defining the latent space; left in its original mode.
-    :param rendered: Rendered estimate shaped ``(batch, samples)``.
-    :param target_audio: Observed audio, same shape.
-    :returns: Per-sample distance in ``[0, 2]`` shaped ``(batch,)``.
-    """
-    frozen_state = {
-        name: tensor.detach()
-        for name, tensor in (*encoder.named_parameters(), *encoder.named_buffers())
-    }
-    was_training = encoder.training
-    encoder.eval()
-    try:
-        # flatten(1) collapses token/layer axes so sequence encoders also reduce to a
-        # per-sample scalar instead of broadcasting against the (batch,) weight.
-        embeddings = (
-            torch.func.functional_call(encoder, frozen_state, (signal,)).flatten(start_dim=1)
-            for signal in (rendered, target_audio)
-        )
-        pred_embedding, target_embedding = embeddings
-        return 1.0 - functional.cosine_similarity(pred_embedding, target_embedding, dim=-1)
-    finally:
-        encoder.train(was_training)
-
-
 class AudioFeedbackLoss(nn.Module):
     """Weighted latent-space audio distance on the flow's rendered one-step estimate."""
 
@@ -188,6 +176,7 @@ class AudioFeedbackLoss(nn.Module):
         sample_rate: int,
         signal_length: int,
         render_batch_size: int,
+        distance: nn.Module,
     ) -> None:
         """Configure the render geometry and the term's weighting.
 
@@ -197,8 +186,10 @@ class AudioFeedbackLoss(nn.Module):
         :param signal_length: Rendered samples per row.
         :param render_batch_size: Rows the renderer's voice holds; must cover the
             training batch size, which shorter batches pad up to.
+        :param distance: Module mapping ``(rendered, target)`` to a per-sample distance. It
+            owns the space, so no conditioning choice can change what this term measures.
         :raises ValueError: Non-finite/non-positive ``lambda_audio``, out-of-range
-            ``t_min``, or non-positive ``render_batch_size``.
+            ``t_min``, non-positive ``render_batch_size``, or a trainable ``metric``.
         """
         super().__init__()
         if not math.isfinite(lambda_audio) or lambda_audio <= 0.0:
@@ -210,6 +201,7 @@ class AudioFeedbackLoss(nn.Module):
             raise ValueError(f"t_min must lie in [0, 1), got {t_min}")
         if render_batch_size <= 0:
             raise ValueError(f"render_batch_size must be positive, got {render_batch_size}")
+        self.distance = distance
         self.lambda_audio = lambda_audio
         self.t_min = t_min
         self.sample_rate = sample_rate
@@ -233,7 +225,6 @@ class AudioFeedbackLoss(nn.Module):
         theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
         t: Float[Tensor, _BATCH_TIME_SHAPE],
         target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
-        encoder: nn.Module,
         keep: Shaped[Tensor, _BATCH_SHAPE] | None = None,
     ) -> Float[Tensor, _SCALAR_SHAPE]:
         """Render the estimate and return the weighted latent distance to the target.
@@ -241,13 +232,14 @@ class AudioFeedbackLoss(nn.Module):
         :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.
         :param t: Flow time shaped ``(batch, 1)``.
         :param target_audio: Observed audio shaped ``(batch, signal_length)``.
-        :param encoder: Encoder defining the latent space the distance is measured in.
         :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are
             zero-weighted because their estimate is drawn from the marginal, making the
             residual against that row's own audio near-arbitrary.
         :returns: Scalar weighted audio loss.
         """
         params = differentiable_decode(theta_hat)
+        if not torch.isfinite(params).all():
+            _log_non_finite_estimate(theta_hat, params)
         validate_torchsynth_params(params)
         weight = self.audio_weight(t).squeeze(-1)
         if keep is not None:
@@ -264,5 +256,4 @@ class AudioFeedbackLoss(nn.Module):
         # The stored target was hard-clamped by render_torchsynth; a straight-through
         # clamp matches that contract without zeroing gradient on clipped samples.
         rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
-        distance = _frozen_latent_distance(encoder, rendered, target_audio)
-        return (weight * distance).mean()
+        return (weight * self.distance(rendered, target_audio)).mean()
