@@ -98,17 +98,28 @@ def test_materialize_lance_subset_evicts_written_data_files(
 def test_materialize_lance_subset_real_cache_evict_remains_consumable(
     tmp_path: Path,
     two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real OS eviction path preserves the published Lance dataset.
 
     :param tmp_path: Isolates the published destination.
     :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Wraps the real syscall to prove the production path invokes it.
     """
     source, txid = two_version_source
+    real_advice = os.posix_fadvise
+    advised_fds: list[int] = []
+
+    def record_real_advice(fd: int, offset: int, length: int, advice: int) -> None:
+        real_advice(fd, offset, length, advice)
+        advised_fds.append(fd)
+
+    monkeypatch.setattr(os, "posix_fadvise", record_real_advice)
     destination = tmp_path / "materialized.lance"
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
 
+    assert advised_fds
     materialized = lance.dataset(str(destination))
     assert materialized.count_rows() == 3
     assert materialized.schema.names == ["a"]
@@ -149,8 +160,11 @@ def test_materialize_lance_subset_cache_fsync_error_propagates(
     :param monkeypatch: Injects the failed file flush.
     """
     source, txid = two_version_source
+    attempts = 0
 
     def fail_fsync(_fd: int) -> None:
+        nonlocal attempts
+        attempts += 1
         raise OSError(5, "flush failed")
 
     monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
@@ -164,6 +178,7 @@ def test_materialize_lance_subset_cache_fsync_error_propagates(
             txid=txid,
             columns=("a",),
         )
+    assert attempts == 3
 
 
 def test_materialize_lance_subset_cache_advice_error_remains_consumable(

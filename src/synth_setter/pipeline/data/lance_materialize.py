@@ -25,6 +25,7 @@ from tenacity import (
     RetryError,
     Retrying,
     retry_if_exception,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
@@ -44,6 +45,7 @@ _SIDECAR_FILENAME = "_materialize.json"
 # to stay readable next to the prefix.
 _DIRNAME_DIGEST_CHARS = 8
 _DIRNAME_PREFIX_CHARS = 8
+_MAX_CACHE_FLUSH_ATTEMPTS = 3
 _MAX_LANCE_READ_ATTEMPTS = 3
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
@@ -447,6 +449,18 @@ def _reuse_or_raise(
     return dest_path
 
 
+def _fsync_with_retry(fd: int) -> None:
+    """Flush a materialized data file under a bounded retry policy.
+
+    :param fd: Open data-file descriptor.
+    """
+    Retrying(
+        retry=retry_if_exception_type(OSError),
+        stop=stop_after_attempt(_MAX_CACHE_FLUSH_ATTEMPTS),
+        reraise=True,
+    )(os.fsync, fd)
+
+
 def _evict_lance_data_cache(dataset_path: Path) -> None:
     """Release clean pages for a completed local Lance dataset.
 
@@ -461,7 +475,7 @@ def _evict_lance_data_cache(dataset_path: Path) -> None:
             continue
         # Keep fsync and fadvise on the file descriptor without a Python read buffer.
         with data_path.open("rb", buffering=0) as stream:
-            os.fsync(stream.fileno())
+            _fsync_with_retry(stream.fileno())
             try:
                 advise(stream.fileno(), 0, 0, dontneed)
             except OSError as error:
