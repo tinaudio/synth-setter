@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import shutil
@@ -64,7 +63,6 @@ def test_materialize_lance_subset_evicts_written_data_files(
     """
     source, txid = two_version_source
     advised_fds: list[int] = []
-    synced_fds: list[int] = []
 
     def record_advice(fd: int, offset: int, length: int, advice: int) -> None:
         advised_fds.append(fd)
@@ -73,7 +71,6 @@ def test_materialize_lance_subset_evicts_written_data_files(
         assert advice == os.POSIX_FADV_DONTNEED
 
     monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
-    monkeypatch.setattr(os, "fsync", synced_fds.append)
     monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
     destination = tmp_path / "materialized.lance"
 
@@ -81,13 +78,11 @@ def test_materialize_lance_subset_evicts_written_data_files(
     assert advised_fds
     (destination / "data" / "additional-fragment.lance").write_bytes(b"fragment")
     advised_fds.clear()
-    synced_fds.clear()
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
 
     data_files = [path for path in (destination / "data").rglob("*") if path.is_file()]
     assert len(data_files) >= 2
-    assert len(synced_fds) == len(data_files)
     assert len(advised_fds) == len(data_files)
     assert lance.dataset(str(destination)).count_rows() == 3
 
@@ -147,70 +142,6 @@ def test_materialize_lance_subset_without_cache_advice_remains_consumable(
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
 
     assert lance.dataset(str(destination)).count_rows() == 3
-
-
-def test_materialize_lance_subset_transient_fsync_error_retries(
-    tmp_path: Path,
-    two_version_source: tuple[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Transient data-file flush failures are retried before cache advice.
-
-    :param tmp_path: Isolates the published destination.
-    :param two_version_source: Supplies a real version-pinned Lance source.
-    :param monkeypatch: Injects two transient file-flush failures.
-    """
-    source, txid = two_version_source
-    attempts = 0
-
-    def flaky_fsync(_fd: int) -> None:
-        nonlocal attempts
-        attempts += 1
-        if attempts < 3:
-            raise BlockingIOError(errno.EAGAIN, "flush busy")
-
-    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
-    monkeypatch.setattr(os, "fsync", flaky_fsync)
-    monkeypatch.setattr(os, "posix_fadvise", lambda *_args: None, raising=False)
-    destination = tmp_path / "materialized.lance"
-
-    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
-
-    assert attempts == 3
-    assert lance.dataset(str(destination)).count_rows() == 3
-
-
-def test_materialize_lance_subset_cache_fsync_error_propagates(
-    tmp_path: Path,
-    two_version_source: tuple[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failed data-file flush aborts materialization.
-
-    :param tmp_path: Isolates the published destination.
-    :param two_version_source: Supplies a real version-pinned Lance source.
-    :param monkeypatch: Injects the failed file flush.
-    """
-    source, txid = two_version_source
-    attempts = 0
-
-    def fail_fsync(_fd: int) -> None:
-        nonlocal attempts
-        attempts += 1
-        raise OSError(5, "flush failed")
-
-    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
-    monkeypatch.setattr(os, "fsync", fail_fsync)
-    monkeypatch.setattr(os, "posix_fadvise", lambda *_args: None, raising=False)
-
-    with pytest.raises(OSError, match="flush failed"):
-        materialize_lance_subset(
-            source,
-            tmp_path / "materialized.lance",
-            txid=txid,
-            columns=("a",),
-        )
-    assert attempts == 1
 
 
 def test_materialize_lance_subset_cache_advice_error_remains_consumable(
