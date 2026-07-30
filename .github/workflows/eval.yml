@@ -1,8 +1,6 @@
 name: Evaluate
 
-# Dispatch headless evaluation through the generic Hydra SkyPilot launcher.
-# WORKER_GIT_REF pins the worker checkout to the dispatched SHA so §12
-# github_sha provenance records the commit actually evaluated.
+# Pass WORKER_GIT_REF so provenance records the evaluated revision.
 on:
   workflow_dispatch:
     inputs:
@@ -114,11 +112,13 @@ jobs:
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
+              printf -v checkpoint_arg "%b" \
+                "ckpt_path=\047\\\${wandb:$CHECKPOINT_REF}\047 "
               printf -v worker_cmd "%s" \
                 "exec src/synth_setter/scripts/run-linux-vst-headless.sh " \
                 "synth-setter-eval " \
                 "experiment=$EXPERIMENT " \
-                "ckpt_path=\"\\\${wandb:$CHECKPOINT_REF}\" " \
+                "$checkpoint_arg" \
                 "datamodule.download_dataset_root_uri=$DATASET_ROOT_URI " \
                 "hydra.run.dir=/home/build/synth-setter/eval-run"
               python -m synth_setter.pipeline.skypilot_launch \

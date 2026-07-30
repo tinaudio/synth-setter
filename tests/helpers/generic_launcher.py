@@ -9,21 +9,11 @@ import sys
 from pathlib import Path
 
 
-def run_generic_launcher_command(
-    tmp_path: Path, worker_command: str, repo_root: Path
-) -> subprocess.CompletedProcess[str]:
-    """Run a worker command through the real decorated launcher without provisioning.
+def _write_dispatch_patch(tmp_path: Path) -> None:
+    """Patch the subprocess's SkyPilot boundary to execute its wrapped command.
 
-    The subprocess patch replaces only the external SkyPilot dispatch boundary. Its
-    replacement executes the wrapped command in the current checkout; the real sync
-    script runs in ``--python-ready`` mode without changing the tested worktree ref.
-
-    :param tmp_path: Directory for the subprocess patch and Hydra output.
-    :param worker_command: Command supplied through ``skypilot_launch.cmd``.
-    :param repo_root: Current worktree used in place of the container checkout.
-    :return: Completed launcher subprocess.
+    :param tmp_path: Directory receiving the Python startup hook.
     """
-    launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
     (tmp_path / "sitecustomize.py").write_text(
         "import os\n"
         "import shlex\n"
@@ -39,6 +29,24 @@ def run_generic_launcher_command(
         "launcher.dispatch_via_skypilot = run_worker\n",
         encoding="utf-8",
     )
+
+
+def run_generic_launcher_command(
+    tmp_path: Path, worker_command: str, repo_root: Path
+) -> subprocess.CompletedProcess[str]:
+    """Run a worker command through the real decorated launcher without provisioning.
+
+    The subprocess patch replaces only the external SkyPilot dispatch boundary. Its
+    replacement executes the wrapped command in the current checkout; the real sync
+    script runs in ``--python-ready`` mode without changing the tested worktree ref.
+
+    :param tmp_path: Directory for the subprocess patch and Hydra output.
+    :param worker_command: Command supplied through ``skypilot_launch.cmd``.
+    :param repo_root: Current worktree used in place of the container checkout.
+    :return: Completed launcher subprocess.
+    """
+    launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
+    _write_dispatch_patch(tmp_path)
     env = {
         **os.environ,
         "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.environ["PATH"])),

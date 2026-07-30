@@ -1,7 +1,9 @@
 """Contract tests for the manually dispatched evaluation workflow."""
 
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -150,6 +152,43 @@ def test_eval_workflow_dispatches_hydra_launcher_with_generic_command(
     assert "src/synth_setter/scripts/run-linux-vst-headless.sh" in run
     assert '"synth-setter-eval "' in run
     assert '"experiment=$EXPERIMENT "' in run
-    assert r"ckpt_path=\"\\\${wandb:$CHECKPOINT_REF}\"" in run
+    assert r"ckpt_path=\047\\\${wandb:$CHECKPOINT_REF}\047" in run
     assert "hydra.run.dir=/home/build/synth-setter/eval-run" in run
     assert "src/synth_setter/configs/launch" not in run
+
+
+def test_eval_workflow_command_composes_with_literal_wandb_resolver(
+    project_root: Path,
+) -> None:
+    """Execute the workflow's inner shell through launcher Hydra composition.
+
+    :param project_root: Repository root supplied by infra fixtures.
+    """
+    run = str(_dispatch_step(project_root)["run"])
+    inner = run.split("bash -c '\n", 1)[1].rsplit("\n  ' 2>&1", 1)[0]
+    inner = inner.replace("cd /home/build/synth-setter", f"cd {shlex.quote(str(project_root))}")
+    launcher = f"{shlex.quote(sys.executable)} -m synth_setter.pipeline.skypilot_launch"
+    inner = inner.replace(
+        "python -m synth_setter.pipeline.skypilot_launch \\",
+        f"{launcher} --cfg job \\",
+        1,
+    )
+    env = {
+        **os.environ,
+        "CHECKPOINT_REF": "tinaudio/synth-setter/model-ffn_simple:v12",
+        "COMPUTE_OPTION": "runpod/smoke",
+        "DATASET_ROOT_URI": "r2://experiments/data/test/",
+        "EXPERIMENT": "surge/ffn_simple",
+        "TAIL": "false",
+    }
+
+    result = subprocess.run(  # noqa: S603 - executes the checked-in workflow shell
+        ["bash", "-c", inner],  # noqa: S607
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ckpt_path='\\${wandb:tinaudio/synth-setter/model-ffn_simple:v12}'" in result.stdout

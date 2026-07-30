@@ -1,8 +1,6 @@
 name: Train
 
-# Dispatch training through the generic Hydra SkyPilot launcher with a selected compute profile.
-# WORKER_GIT_REF pins the worker checkout to the dispatched SHA so §12
-# github_sha provenance records the commit actually trained.
+# Pass WORKER_GIT_REF so provenance records the trained revision.
 on:
   workflow_dispatch:
     inputs:
