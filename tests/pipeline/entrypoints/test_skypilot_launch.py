@@ -2136,6 +2136,35 @@ class TestSkypilotLaunchCli:
         assert result.returncode == 0, result.stderr
         assert "cmd: synth-setter-train experiment=torchsynth/flow_audio_same" in result.stdout
 
+    def test_packaged_cli_execute_mode_reaches_dispatch_validation(self, tmp_path: Path) -> None:
+        """The real Hydra wrapper executes main and enters dispatch validation.
+
+        :param tmp_path: Pytest directory containing no credential file.
+        """
+        launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("RCLONE_CONFIG_R2_", "SYNTH_SETTER_STORAGE_"))
+        }
+
+        result = subprocess.run(  # noqa: S603 - real packaged launcher CLI
+            [
+                launcher,
+                "skypilot_launch/compute=runpod/smoke",
+                f"skypilot_launch.env_file={tmp_path / 'missing.env'}",
+                'skypilot_launch.cmd="echo hello"',
+                f"hydra.run.dir={tmp_path / 'hydra-run'}",
+            ],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+
+        assert result.returncode != 0
+        assert "No object storage settings resolved" in result.stderr
+
     def test_hydra_config_dispatches_generic_worker_command(
         self,
         tmp_path: Path,
@@ -2161,7 +2190,9 @@ class TestSkypilotLaunchCli:
 
         submitted_task = mock_sky.jobs.launch.call_args.args[0]
         assert submitted_task.run == (
-            "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && (echo hello)"
+            "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && (\n"
+            "echo hello\n"
+            ")"
         )
 
     def test_worker_command_control_operators_remain_checkout_gated(self) -> None:
@@ -2175,9 +2206,29 @@ class TestSkypilotLaunchCli:
 
         assert sky_cfg.cmd == (
             "cd /home/build/synth-setter && "
-            "bash scripts/sync_worker_checkout.sh && "
-            "(echo first; echo second)"
+            "bash scripts/sync_worker_checkout.sh && (\n"
+            "echo first; echo second\n"
+            ")"
         )
+
+    def test_worker_command_trailing_comment_keeps_valid_shell(self) -> None:
+        """A trailing command comment cannot consume the wrapper terminator."""
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            'skypilot_launch.cmd="echo first # trailing comment"',
+        )
+        sky_cfg = skypilot_launch._sky_cfg_from_hydra(cfg)
+        assert sky_cfg.cmd is not None
+
+        result = subprocess.run(  # noqa: S603 - validates generated shell text
+            ["bash", "-n"],  # noqa: S607
+            input=sky_cfg.cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
 
     def test_escaped_worker_interpolation_remains_literal(
         self,
@@ -2185,13 +2236,13 @@ class TestSkypilotLaunchCli:
         """Escaped worker-side Hydra interpolation is not resolved by the launcher."""
         cfg = _compose_skypilot_launch(
             "skypilot_launch/compute=runpod/smoke",
-            r"skypilot_launch.cmd=echo \${wandb:model:latest}",
+            r'''skypilot_launch.cmd="echo '\${wandb:model:v1}'"''',
         )
 
         sky_cfg = skypilot_launch._sky_cfg_from_hydra(cfg)
 
         assert sky_cfg.cmd is not None
-        assert "${wandb:model:latest}" in sky_cfg.cmd
+        assert "echo '${wandb:model:v1}'" in sky_cfg.cmd
 
     def test_hydra_overrides_forward_env_and_filter_gpu_tier(
         self,

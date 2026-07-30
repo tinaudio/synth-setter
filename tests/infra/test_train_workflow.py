@@ -54,6 +54,7 @@ def test_train_workflow_dispatches_hydra_launcher_with_generic_command() -> None
 
     dispatch = _steps_by_name(workflow)["Dispatch via SkyPilot"]["run"]
     assert '"skypilot_launch/compute=$COMPUTE_OPTION"' in dispatch
+    assert "skypilot_launch.worker_image_tag=dev-snapshot" in dispatch
     assert "synth-setter-train experiment=$EXPERIMENT" in dispatch
     assert "training.upload_checkpoints_during_training=true" in dispatch
     assert "hydra.run.dir=/home/build/synth-setter/train-run" in dispatch

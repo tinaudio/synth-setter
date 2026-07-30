@@ -67,26 +67,36 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
     return task
 
 
-def test_generic_hydra_train_command_composes_through_worker_entrypoint() -> None:
-    """The generic launcher's final train command is consumable by the real CLI."""
-    task = _compose_generic_task(
-        '"exec synth-setter-train experiment=torchsynth/flow_audio_same '
-        'training.upload_checkpoints_during_training=true"'
-    )
+def _run_worker_config(task: sky.Task, executable_name: str) -> subprocess.CompletedProcess[str]:
+    """Feed a generic task's command into its real packaged worker CLI.
+
+    :param task: Composed SkyPilot task containing the wrapped command.
+    :param executable_name: Packaged worker executable named after ``exec``.
+    :return: Completed worker config-composition subprocess.
+    """
     assert isinstance(task.run, str)
-    _, marker, raw_args = task.run.partition("exec synth-setter-train ")
+    _, marker, raw_args = task.run.partition(f"exec {executable_name} ")
     assert marker
     args = shlex.split(raw_args.removesuffix(")"))
-    entrypoint = Path(sys.executable).with_name("synth-setter-train")
-
-    result = subprocess.run(  # noqa: S603 - real packaged worker CLI
-        [entrypoint, *args, "--cfg", "job", "--resolve"],
+    entrypoint = Path(sys.executable).with_name(executable_name)
+    return subprocess.run(  # noqa: S603 - real packaged worker CLI
+        [entrypoint, *args, "--cfg", "job"],
         cwd=_REPO_ROOT,
         env={**os.environ, "DATASET_ROOT_URI": "", "HYDRA_FULL_ERROR": "1"},
         check=False,
         capture_output=True,
         text=True,
     )
+
+
+def test_generic_hydra_train_command_composes_through_worker_entrypoint() -> None:
+    """The generic launcher's final train command is consumable by the real CLI."""
+    task = _compose_generic_task(
+        '"exec synth-setter-train experiment=torchsynth/flow_audio_same '
+        'training.upload_checkpoints_during_training=true"'
+    )
+
+    result = _run_worker_config(task, "synth-setter-train")
 
     assert result.returncode == 0, result.stderr
     assert "run_name: flow_audio_same" in result.stdout
@@ -97,20 +107,8 @@ def test_generic_hydra_eval_command_composes_through_worker_entrypoint() -> None
     task = _compose_generic_task(
         '"exec synth-setter-eval experiment=surge/ffn_simple ckpt_path=/tmp/model.ckpt"'
     )
-    assert isinstance(task.run, str)
-    _, marker, raw_args = task.run.partition("exec synth-setter-eval ")
-    assert marker
-    args = shlex.split(raw_args.removesuffix(")"))
-    entrypoint = Path(sys.executable).with_name("synth-setter-eval")
 
-    result = subprocess.run(  # noqa: S603 - real packaged worker CLI
-        [entrypoint, *args, "--cfg", "job"],
-        cwd=_REPO_ROOT,
-        env={**os.environ, "DATASET_ROOT_URI": "", "HYDRA_FULL_ERROR": "1"},
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = _run_worker_config(task, "synth-setter-eval")
 
     assert result.returncode == 0, result.stderr
     assert "ckpt_path: /tmp/model.ckpt" in result.stdout

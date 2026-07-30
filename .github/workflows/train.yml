@@ -104,6 +104,7 @@ jobs:
               cd /home/build/synth-setter
               python -m synth_setter.pipeline.skypilot_launch \
                 "skypilot_launch/compute=$COMPUTE_OPTION" \
+                skypilot_launch.worker_image_tag=dev-snapshot \
                 "skypilot_launch.cmd=\"exec synth-setter-train experiment=$EXPERIMENT training.upload_checkpoints_during_training=true hydra.run.dir=/home/build/synth-setter/train-run\""
             ' 2>&1 | tee train-dispatch.log
 

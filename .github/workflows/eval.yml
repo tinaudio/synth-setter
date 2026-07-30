@@ -118,7 +118,8 @@ jobs:
               python -m synth_setter.pipeline.skypilot_launch \
                 "skypilot_launch/compute=$COMPUTE_OPTION" \
                 "skypilot_launch.tail=$TAIL" \
-                "skypilot_launch.cmd=\"exec src/synth_setter/scripts/run-linux-vst-headless.sh synth-setter-eval experiment=$EXPERIMENT ckpt_path=\\\${wandb:$CHECKPOINT_REF} datamodule.download_dataset_root_uri=$DATASET_ROOT_URI hydra.run.dir=/home/build/synth-setter/eval-run\""
+                skypilot_launch.worker_image_tag=dev-snapshot \
+                "skypilot_launch.cmd=\"exec src/synth_setter/scripts/run-linux-vst-headless.sh synth-setter-eval experiment=$EXPERIMENT ckpt_path='\\\${wandb:$CHECKPOINT_REF}' datamodule.download_dataset_root_uri=$DATASET_ROOT_URI hydra.run.dir=/home/build/synth-setter/eval-run\""
             ' 2>&1 | tee eval-dispatch.log
 
       - name: Upload dispatch log
