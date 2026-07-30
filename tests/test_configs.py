@@ -994,7 +994,7 @@ def test_flow_simple_440k_1m_arm_owns_unique_runnable_conditioning(
     if not isinstance(resolved_conditioning, str):
         resolved_conditioning = resolved_conditioning.column
     assert resolved_conditioning == model_conditioning
-    assert cfg.run_name == f"flow_440k_1m_{arm}"
+    assert cfg.run_name == f"flow_simple_440k_1m_{arm}"
 
 
 def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:

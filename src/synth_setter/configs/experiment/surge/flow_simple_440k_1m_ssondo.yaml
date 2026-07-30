@@ -5,4 +5,4 @@ defaults:
   - override /conditioning: ssondo
   - _self_
 
-run_name: flow_440k_1m_ssondo
+run_name: flow_simple_440k_1m_ssondo

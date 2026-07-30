@@ -5,4 +5,4 @@ defaults:
   - override /conditioning: matpac_plus
   - _self_
 
-run_name: flow_440k_1m_matpac_plus
+run_name: flow_simple_440k_1m_matpac_plus

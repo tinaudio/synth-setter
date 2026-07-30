@@ -5,4 +5,4 @@ defaults:
   - override /conditioning: same_s_online
   - _self_
 
-run_name: flow_440k_1m_same_s_online
+run_name: flow_simple_440k_1m_same_s_online

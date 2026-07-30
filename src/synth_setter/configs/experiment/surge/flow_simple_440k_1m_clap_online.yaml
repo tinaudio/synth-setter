@@ -5,4 +5,4 @@ defaults:
   - override /conditioning: clap_online
   - _self_
 
-run_name: flow_440k_1m_clap_online
+run_name: flow_simple_440k_1m_clap_online
