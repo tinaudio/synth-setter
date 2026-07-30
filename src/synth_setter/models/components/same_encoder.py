@@ -34,11 +34,16 @@ _SAME_CHANNELS: Final = 2
 class _SameAutoencoder(Protocol):
     """SAME autoencoder surface consumed by the encoder.
 
+    .. attribute :: latent_dim
+
+       Width of each latent frame.
+
     .. attribute :: pretransform
 
        Patching front end whose ``enable_grad`` flag gates the waveform gradient path.
     """
 
+    latent_dim: int
     pretransform: nn.Module
 
     @jaxtyped(typechecker=beartype)
@@ -75,11 +80,19 @@ class SameAudioEncoder(nn.Module):
                 f"{trainable} would move the space the distance is measured in"
             )
         pretransform = getattr(autoencoder, "pretransform", None)
-        if pretransform is None or not callable(getattr(autoencoder, "encode", None)):
-            raise ValueError("autoencoder must expose SAME's encode and pretransform surface")
+        latent_dim = getattr(autoencoder, "latent_dim", None)
+        if (
+            pretransform is None
+            or not callable(getattr(autoencoder, "encode", None))
+            or not isinstance(latent_dim, int)
+        ):
+            raise ValueError(
+                "autoencoder must expose SAME's encode, latent_dim, and pretransform surface"
+            )
         pretransform.enable_grad = True
         self.autoencoder = autoencoder
         self.sample_rate = sample_rate
+        self.out_dim = latent_dim
 
     @classmethod
     @jaxtyped(typechecker=beartype)

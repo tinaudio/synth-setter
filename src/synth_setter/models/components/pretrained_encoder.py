@@ -5,8 +5,8 @@ numpy hop — so the audio-feedback loss can score a rendered estimate in a spac
 geometry does not move between steps. See
 https://github.com/tinaudio/synth-setter/issues/2728.
 
-Typical usage constructs the backbone with ``ClapAudioEncoder.from_pretrained(...)`` and
-passes it to ``PretrainedConditioningEncoder``; call ``embed`` for the stationary metric and
+Typical usage constructs a frozen waveform backbone and passes it to
+``PretrainedConditioningEncoder``; call ``embed`` for its pretrained representation and
 ``forward`` for flow conditioning.
 """
 
@@ -443,20 +443,23 @@ class PretrainedConditioningEncoder(nn.Module):
     """Frozen backbone with a trainable projection head, tapped at two depths."""
 
     @jaxtyped(typechecker=beartype)
-    def __init__(self, *, backbone: ClapAudioEncoder, head: nn.Module, out_dim: int) -> None:
+    def __init__(self, *, backbone: nn.Module, head: nn.Module, out_dim: int) -> None:
         """Pair a frozen backbone with the head that adapts it to the flow's width.
 
         :param backbone: Frozen waveform-in encoder defining the metric space.
         :param head: Trainable module mapping ``backbone.out_dim`` to ``out_dim``.
         :param out_dim: Conditioning width Hydra resolves ``${model.encoder.out_dim}`` to.
-        :raises ValueError: The head's input width does not match the backbone's output.
+        :raises ValueError: Width metadata is missing or the backbone and head widths differ.
         """
         super().__init__()
+        backbone_out_dim = getattr(backbone, "out_dim", None)
         head_input_dim = getattr(head, "input_dim", None)
-        if head_input_dim != backbone.out_dim:
+        if not isinstance(backbone_out_dim, int) or not isinstance(head_input_dim, int):
+            raise ValueError("backbone and head must expose integer dimension metadata")
+        if head_input_dim != backbone_out_dim:
             raise ValueError(
                 f"head input width {head_input_dim} does not match backbone out_dim "
-                f"{backbone.out_dim}"
+                f"{backbone_out_dim}"
             )
         self.backbone = backbone
         self.head = head
@@ -465,21 +468,21 @@ class PretrainedConditioningEncoder(nn.Module):
     @jaxtyped(typechecker=beartype)
     def embed(
         self, audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]
-    ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
-        """Embed audio in the frozen backbone's space used by the audio loss.
+    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
+        """Embed audio in the frozen backbone's representation.
 
         :param audio: Mono waveform batch.
-        :returns: Backbone embedding shaped ``(batch, backbone.out_dim)``.
+        :returns: Backbone representation with a leading batch axis.
         """
         return self.backbone(audio)
 
     @jaxtyped(typechecker=beartype)
     def project(
-        self, embedding: Float[Tensor, _BATCH_EMBEDDING_SHAPE]
+        self, embedding: Float[Tensor, _BATCH_ANY_SHAPE]
     ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
-        """Map a backbone embedding to the vector field's conditioning width.
+        """Map a backbone representation to the flow's conditioning width.
 
-        :param embedding: Backbone embedding shaped ``(batch, backbone.out_dim)``.
+        :param embedding: Backbone representation with a leading batch axis.
         :returns: Conditioning shaped ``(batch, out_dim)``.
         """
         return self.head(embedding)

@@ -1,11 +1,11 @@
 # @package _global_
 
-# The torchsynth flow arm scored in frozen SAME-S latents rather than log-mel, so the audio
-# term measures in the same space the stored conditioning column uses.
+# Condition and score in frozen SAME-S latents so both paths share one representation.
 # Requires model.compile=false and a single device — see
 # https://github.com/tinaudio/synth-setter/issues/2585.
 defaults:
   - torchsynth/flow
+  - override /conditioning: same_s_online
   - override /model/audio_loss: same
   - _self_
 
