@@ -386,7 +386,9 @@ def test_finetune_validation_step_samples_through_the_controlled_flow(tmp_path: 
     batch = _batch()
 
     with torch.no_grad():
+        module.on_validation_batch_start(batch, 0)
         sampled = module._sample(batch["audio"], torch.randn(_BATCH, _WIDTH), 2, 2.0)
+        module.on_validation_batch_end(None, batch, 0)
 
     assert sampled.shape == (_BATCH, _WIDTH)
     assert torch.isfinite(sampled).all()
@@ -619,3 +621,120 @@ def test_finetune_train_step_does_not_score_cfg_dropped_rows(tmp_path: Path) -> 
 
     assert not outputs.conditioning_keep.identity_keep.any()
     assert rendered == []
+
+
+def test_controlled_sampling_differs_from_the_frozen_base(tmp_path: Path) -> None:
+    """A trained control must change the sample; otherwise the finetune is unmeasurable.
+
+    Until the control reaches sampling, every arm reports the base model's metrics and a working
+    finetune is indistinguishable from a broken one.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    # The base module carries the same encoder and field weights, so it is exactly what
+    # this arm would report if the control never reached sampling.
+    base = _base_module()
+    module = _finetune(_base_checkpoint(tmp_path, base))
+    batch = _batch()
+    optimizer = torch.optim.Adam([p for p in module.parameters() if p.requires_grad], lr=1e-2)
+    for _ in range(3):
+        optimizer.zero_grad()
+        module._train_step(batch).loss.backward()
+        optimizer.step()
+
+    noise = torch.randn(_BATCH, _WIDTH)
+    with torch.no_grad():
+        module.on_validation_batch_start(batch, 0)
+        controlled = module._sample(batch["audio"], noise, 2, 2.0)
+        module.on_validation_batch_end(None, batch, 0)
+        uncontrolled = base._sample(batch["audio"], noise, 2, 2.0)
+
+    assert torch.isfinite(controlled).all()
+    assert not torch.equal(controlled, uncontrolled)
+
+
+def test_controlled_sampling_engages_only_above_t_min(tmp_path: Path) -> None:
+    """Raising the threshold must shrink the set of evaluations that score.
+
+    RK4's final evaluation always lands on t=1, so some evaluation engages for any valid
+    threshold; what the gate controls is how many. The bitwise-passthrough property for a
+    disengaged row is pinned on ``ControlledFlow.combine`` itself.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    batch = _batch()
+    checkpoint = _base_checkpoint(tmp_path)
+
+    def _render_count(t_min: float) -> int:
+        """Count renderer calls over one fixed sampling run.
+
+        :param t_min: Flow time above which the control engages.
+        :returns: Number of renderer invocations.
+        """
+        module = _finetune(checkpoint, overrides={"control_t_min": t_min})
+        calls: list[int] = []
+        original = module._render
+        module._render = lambda estimate: (  # pyright: ignore[reportAttributeAccessIssue]
+            calls.append(len(estimate)),
+            original(estimate),
+        )[1]
+        with torch.no_grad():
+            module.on_validation_batch_start(batch, 0)
+            module._sample(batch["audio"], torch.randn(_BATCH, _WIDTH), 4, 2.0)
+            module.on_validation_batch_end(None, batch, 0)
+        return len(calls)
+
+    # 16 RK4 evaluations over 4 steps; only the last lands at t=1.
+    assert _render_count(0.99) == 1
+    assert _render_count(0.0) == 16
+
+
+def test_controlled_sampling_renders_only_engaged_evaluations(tmp_path: Path) -> None:
+    """Renders are spent only where the correction can use them.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"control_t_min": 0.5})
+    batch = _batch()
+    rendered: list[int] = []
+    original = module._render
+
+    def _counting_render(estimate: torch.Tensor) -> torch.Tensor:
+        rendered.append(len(estimate))
+        return original(estimate)
+
+    module._render = _counting_render  # pyright: ignore[reportAttributeAccessIssue]
+    with torch.no_grad():
+        module.on_validation_batch_start(batch, 0)
+        module._sample(batch["audio"], torch.randn(_BATCH, _WIDTH), 4, 2.0)
+        module.on_validation_batch_end(None, batch, 0)
+
+    # Four RK4 evaluations per step over four steps; only those at t >= 0.5 may render.
+    assert 0 < len(rendered) < 16
+
+
+def test_sampling_without_a_bound_observation_raises(tmp_path: Path) -> None:
+    """Sampling outside a validation batch must fail loudly, not silently use the base.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    with pytest.raises(RuntimeError, match="no observation bound"):
+        module._sample(_batch()["audio"], torch.randn(_BATCH, _WIDTH), 2, 2.0)
+
+
+def test_validation_batch_end_releases_the_bound_observation(tmp_path: Path) -> None:
+    """A stale target must not leak into the next batch's sampling.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    batch = _batch()
+
+    module.on_validation_batch_start(batch, 0)
+    bound = module._sampling_target
+    module.on_validation_batch_end(None, batch, 0)
+
+    assert bound is batch["audio"]
+    assert module._sampling_target is None
