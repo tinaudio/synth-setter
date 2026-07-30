@@ -459,16 +459,16 @@ def _evict_lance_data_cache(dataset_path: Path) -> None:
     for data_path in (dataset_path / "data").rglob("*"):
         if not data_path.is_file():
             continue
-        try:
-            with data_path.open("rb", buffering=0) as stream:
-                os.fsync(stream.fileno())
+        with data_path.open("rb", buffering=0) as stream:
+            os.fsync(stream.fileno())
+            try:
                 advise(stream.fileno(), 0, 0, dontneed)
-        except OSError as error:
-            logger.warning(
-                "lance_materialize.cache_evict_failed",
-                path=str(data_path),
-                errno=error.errno,
-            )
+            except OSError as error:
+                logger.warning(
+                    "lance_materialize.cache_evict_failed",
+                    path=str(data_path),
+                    errno=error.errno,
+                )
 
 
 def _write_materialized_snapshot(

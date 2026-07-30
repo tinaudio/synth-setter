@@ -114,6 +114,35 @@ def test_materialize_lance_subset_real_cache_evict_remains_consumable(
     }
 
 
+def test_materialize_lance_subset_cache_fsync_error_propagates(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed data-file flush aborts materialization.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Injects the failed file flush.
+    """
+    source, txid = two_version_source
+
+    def fail_fsync(_fd: int) -> None:
+        raise OSError(5, "flush failed")
+
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "fsync", fail_fsync)
+    monkeypatch.setattr(os, "posix_fadvise", lambda *_args: None, raising=False)
+
+    with pytest.raises(OSError, match="flush failed"):
+        materialize_lance_subset(
+            source,
+            tmp_path / "materialized.lance",
+            txid=txid,
+            columns=("a",),
+        )
+
+
 def test_materialize_lance_subset_cache_advice_error_remains_consumable(
     tmp_path: Path,
     two_version_source: tuple[str, str],
