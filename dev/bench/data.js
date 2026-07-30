@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785450312791,
+  "lastUpdate": 1785450314770,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -26115,6 +26115,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.036936938762664795,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "000591be5e70c1a1f79e8874351c9cb71db3a62b",
+          "message": "internal-feat(training): split LogMelEncoder into frontend and backbone (#2755)\n\n* internal-feat(training): split LogMelEncoder into frontend and backbone\n\nLogMelEncoder fused a mel front end with a bespoke CNN backbone used nowhere\nelse. The fusion is why online-render synths could not reach the trainable\nbackbone the VST models use: the AST is spectrogram-in, so waveform\nconditioning had no way to feed it.\n\nSplit the two halves and compose them, mirroring\nPretrainedConditioningEncoder(backbone, head):\n\n- LogMelFrontend keeps the mel + dB contract, including the tests pinning it\n  to the front end the dataset writers use.\n- MelCNN becomes a spectrogram-in backbone with a configurable input channel\n  count, so a stored two-channel grid and a mono online grid share it.\n- SpecEncoder pairs any front end with any spectrogram-in backbone.\n\nLogMelEncoder disappears as a class; model/encoder/log_mel.yaml composes the\nsame graph, so existing torchsynth baselines stay reproducible.\n\nconditioning=ast_online is the payoff: the stored-mel AST over a mel the\nencoder computes from the waveform. Online rendering is mono, so its patch\nembedding takes one channel rather than the stored path's two (#2751).\n\nMel settings now live in one place, model/frontend/log_mel.yaml, because a\nsecond copy that drifts from the dataset writers' geometry is the failure mode\nthis split is meant to prevent.\n\nOnline conditioning is deliberately not the VST default: recomputing mel from\nthe stored audio column is strictly more I/O than reading mel_spec.\n\nFixes #2750\n\n* docs(training): record the spec_encoder module and its renamed test\n\nThe LogMelEncoder split renamed the test that test-quality.md quotes and added\na module README's Key Files does not list.\n\nRefs #2750\n\n* chore(ci-automation): re-run checks on a clean head SHA\n\nThe corrected PR title re-ran check-pr-title green, but statusCheckRollup keeps\nthe two superseded FAILURE runs on the same commit, so the readiness probe reads\ngate 1 as terminally failed (#2756). A fresh SHA gives a clean check suite.\n\nRefs #2756\n\n* internal-fix(testing): nest flow-audio fixture encoder overrides\n\nThe encoder split nests the geometry under frontend/backbone, so the tiny\nflow-audio training fixture's flat model.encoder.* overrides no longer resolve\nand the slow lane errored at fixture setup.\n\nRefs #2750\n\n* internal-fix(training): reuse the VST AST config in the online profile\n\nast_online.yaml restated every transformer hyperparameter, so the online and\nstored-mel arms could drift apart while both looked correct. It now includes\nmodel/encoder/ast.yaml as its backbone, leaving only the mel's source and the\nmono channel count (#2751) as differences, with a test pinning that.\n\nRefs #2750",
+          "timestamp": "2026-07-30T14:21:58-07:00",
+          "tree_id": "419120d14bcf20086ccafee94371f84934a7727c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/000591be5e70c1a1f79e8874351c9cb71db3a62b"
+        },
+        "date": 1785450314478,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-seconds-per-render",
+            "value": 12.252541852233337,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/pedalboard/dataset-realtime-factor",
+            "value": 3.0631354630583343,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-seconds-per-render",
+            "value": 5.479529608300004,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer/dataset-realtime-factor",
+            "value": 1.369882402075001,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-seconds-per-render",
+            "value": 0.27966912830000484,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/surgepy/dataset-realtime-factor",
+            "value": 0.06991728207500121,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 7.111202239990234,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.107748031616211,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.03829637169837952,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 6.719730823524296,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.04135417938232422,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 7.905243873596191,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/mss-max",
+            "value": 4.581264019012451,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/sot-max",
+            "value": 0.039117783308029175,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.343334252927452,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.04254394769668579,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 8.286351203918457,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/mss-max",
+            "value": 5.066307544708252,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.04389745742082596,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 6.326069555673748,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.0534893274307251,
             "unit": "1-cos"
           }
         ]
