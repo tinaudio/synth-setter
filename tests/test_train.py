@@ -522,6 +522,50 @@ def test_train_file_uri_without_completion_marker_raises_before_hydration(
 
 
 @pytest.mark.slow
+def test_train_row_limited_hydration_evicts_materialized_file_cache(
+    cfg_train_lance: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row-limited file-URI hydration reaches the POSIX cache-advice boundary.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    :param monkeypatch: Records cache advice and isolates the rclone sidecar boundary.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "row-limited-data"
+    advised_fds: list[int] = []
+
+    def copy_stats(_source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
+        del _source_uri, exclude
+        dest_path.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "stats.npz", dest_path / "stats.npz")
+
+    def record_advice(fd: int, _offset: int, _length: int, _advice: int) -> None:
+        advised_fds.append(fd)
+
+    monkeypatch.setattr(
+        "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+        copy_stats,
+    )
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.datamodule.download_dataset_row_limit = 2
+        cfg_train_lance.datamodule.batch_size = 2
+        cfg_train_lance.datamodule.num_workers = 0
+
+    HydraConfig().set_config(cfg_train_lance)
+    _, object_dict = train(cfg_train_lance)
+
+    assert object_dict["trainer"].global_step > 0
+    assert advised_fds
+
+
+@pytest.mark.slow
 def test_train_row_limited_file_uri_hydration_without_txids(
     cfg_train_lance: DictConfig,
     tmp_path: Path,
