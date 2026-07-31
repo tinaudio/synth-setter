@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785472336652,
+  "lastUpdate": 1785472339122,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -22915,6 +22915,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.79586851009999,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "06eca7e29172db38e941d0a1603295d363342074",
+          "message": "internal-feat(training): add generic Hydra SkyPilot launcher (#2775)\n\n* internal-feat(training): add Hydra-native generic launcher\n\n* internal-fix(training): harden generic launch commands\n\n* internal-fix(training): preserve generic worker shell contracts\n\n* internal-fix(training): cover generic launcher subprocess path\n\n* internal-fix(training): exercise generic worker entrypoints\n\n* internal-fix(training): preserve worker interpolation boundary\n\n* internal-fix(training): validate workflow command composition\n\n* internal-fix(training): centralize workflow input validation\n\n* internal-fix(training): scope headless launch test to Linux\n\n* internal-fix(training): address launcher review feedback\n\n* internal-fix(data-pipeline): configure worker checkout in e2e test",
+          "timestamp": "2026-07-30T20:37:00-07:00",
+          "tree_id": "696542f9b28747f2b46b4a60e76cbc7fc03c164b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/06eca7e29172db38e941d0a1603295d363342074"
+        },
+        "date": 1785472338615,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.719768524169922,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.936897523626685,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10184416174888611,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0033439993858337402,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.4359328746795654,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.773413968199998,
             "unit": "seconds"
           }
         ]
