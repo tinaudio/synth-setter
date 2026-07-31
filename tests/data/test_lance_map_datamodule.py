@@ -377,10 +377,10 @@ class TestLanceMapDataModuleSetup:
     ) -> None:
         """Mel statistics hydrate into the subset directory the loaders read.
 
-        :param tmp_path: Parent of the mounted source and local destination.
+        :param tmp_path: Parent of the local source and destination.
         :param monkeypatch: Fixture replacing the separately tested rclone boundary.
         """
-        source = tmp_path / "network-volume"
+        source = tmp_path / "local-source"
         source.mkdir()
         for split in ("train", "val", "test"):
             write_seeded_lance_shard(source / f"{split}.lance", num_rows=4, seed=1)

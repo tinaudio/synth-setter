@@ -690,7 +690,7 @@ class TestDownloadDirNoOverwrite:
         :param fake_r2_remote: Fixture that requires and configures the rclone binary.
         :param tmp_path: Pytest tmp dir holding the source and destination trees.
         """
-        source = tmp_path / "network volume"
+        source = tmp_path / "local source"
         source.mkdir()
         (source / "train.lance").write_text("train")
         dest = tmp_path / "root"
@@ -704,7 +704,7 @@ class TestDownloadDirNoOverwrite:
 
         :param tmp_path: Pytest tmp dir used to form source and destination paths.
         """
-        source = tmp_path / "network volume"
+        source = tmp_path / "local source"
         destination = tmp_path / "root"
 
         with patch.object(r2_io.subprocess, "check_call") as mock_call:

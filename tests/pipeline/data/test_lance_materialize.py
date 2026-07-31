@@ -448,7 +448,7 @@ def test_open_source_absolute_file_uri_from_other_cwd_preserves_uri(
     :param tmp_path: Pytest fixture providing source and unrelated working directories.
     :param monkeypatch: Fixture changing the process working directory.
     """
-    source = tmp_path / "network volume" / "train.lance"
+    source = tmp_path / "local source" / "train.lance"
     source.parent.mkdir()
     lance.write_dataset(pa.table({"a": [1, 2, 3]}), str(source))
     unrelated_cwd = tmp_path / "worker"

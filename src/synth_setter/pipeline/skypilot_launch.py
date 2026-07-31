@@ -72,7 +72,6 @@ from synth_setter.pipeline.compute_task import (
     build_task_doc,
     load_compute_option,
     resolve_run_block,
-    resolve_volumes,
 )
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.compute import ComputeConfig
@@ -573,7 +572,6 @@ def _launch_one_rank(
     worker_image: str,
     compute: ComputeConfig,
     cmd: str,
-    network_volume: str | None,
 ) -> int:
     """Submit one rank from a native SkyPilot task document.
 
@@ -583,7 +581,6 @@ def _launch_one_rank(
     :param worker_image: Resolved ``repo:tag`` Docker image reference.
     :param compute: Validated compute option to build the task from.
     :param cmd: Worker command injected as the task's run block.
-    :param network_volume: SkyPilot volume name for the option's mount, if any.
     :return: SkyPilot-assigned ``job_id`` for this rank.
     :raises RuntimeError: ``sky.jobs.launch`` / ``sky.stream_and_get`` yielded
         no ``job_id``.
@@ -596,7 +593,7 @@ def _launch_one_rank(
         NUM_WORKERS_ENV_VAR: str(num_workers),
         _IMAGE_TAG_ENV: worker_image.rpartition(":")[2],
     }
-    task_doc = build_task_doc(compute, cmd=cmd, network_volume=network_volume)
+    task_doc = build_task_doc(compute, cmd=cmd)
     task = sky.Task.from_yaml_config(task_doc)
     _override_image_id(task, worker_image)
     task.update_envs(env_for_rank)
@@ -617,7 +614,6 @@ def _run_workers(
     worker_env_base: dict[str, str],
     compute: ComputeConfig,
     cmd: str,
-    network_volume: str | None,
     job_names: list[str],
     worker_image_tag: str,
     tail: bool,
@@ -627,7 +623,6 @@ def _run_workers(
     :param worker_env_base: Env dict forwarded to every rank (rank/world keys added per call).
     :param compute: Validated compute option to build each rank's task from.
     :param cmd: Worker command injected as each task's run block.
-    :param network_volume: SkyPilot volume name for the option's mount, if any.
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
     :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
     :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
@@ -642,7 +637,6 @@ def _run_workers(
         worker_image=worker_image,
         compute=compute,
         cmd=cmd,
-        network_volume=network_volume,
     )
     if tail:
         return _run_workers_tail(job_names, launch_get_job_id)
@@ -677,9 +671,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         raise ValueError("api_server and local are mutually exclusive")
 
     compute = apply_tier_filter(sky_cfg.compute, sky_cfg.tier)
-    # Fail on cmd/run_script conflicts and volume mismatches before any side effect.
     resolve_run_block(compute, sky_cfg.cmd)
-    resolve_volumes(compute, sky_cfg.network_volume)
 
     if sky_cfg.job_name is not None and not _JOB_NAME_RE.fullmatch(sky_cfg.job_name):
         raise ValueError(
@@ -779,7 +771,6 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         worker_env_base=worker_env,
         compute=compute,
         cmd=sky_cfg.cmd,
-        network_volume=sky_cfg.network_volume,
         job_names=job_names,
         worker_image_tag=sky_cfg.worker_image_tag,
         tail=sky_cfg.tail,

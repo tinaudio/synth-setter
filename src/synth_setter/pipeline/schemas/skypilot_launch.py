@@ -209,12 +209,6 @@ class SkypilotLaunchConfig(BaseModel):
 
         Run the job on the local SkyPilot context instead of remote.
 
-    .. attribute :: network_volume
-
-        SkyPilot volume name mounted at the compute option's
-        ``mount_network_volume`` path; the volume's data center decides
-        where the task runs.
-
     .. attribute :: tier
 
         Maximum cumulative GPU class allowed in the selected compute pool.
@@ -241,7 +235,6 @@ class SkypilotLaunchConfig(BaseModel):
     tail: bool = False
     api_server: str | None = None
     local: bool = False
-    network_volume: str | None = None
     tier: GpuTier = Field(default=GpuTier.ANY, strict=False)
     extra_envs: dict[str, str] = Field(default_factory=dict)
 
@@ -301,16 +294,6 @@ class SkypilotLaunchConfig(BaseModel):
         :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
         """
         return _strip_optional_non_blank(v, "env_file must be a non-empty path when set")
-
-    @field_validator("network_volume")
-    @classmethod
-    def network_volume_must_be_non_blank(cls, v: str | None) -> str | None:
-        """Reject blank/whitespace-only network_volume values; strip surrounding whitespace.
-
-        :param v: Candidate ``network_volume`` value pre-validation (``None`` permitted).
-        :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
-        """
-        return _strip_optional_non_blank(v, "network_volume must be a non-empty name when set")
 
     @field_validator("extra_envs")
     @classmethod

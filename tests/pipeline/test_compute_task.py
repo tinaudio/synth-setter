@@ -21,22 +21,14 @@ from synth_setter.pipeline.schemas.gpu_tier import GpuTier
 from synth_setter.resources import configs_dir
 
 
-def _build_task(
-    compute: ComputeConfig,
-    *,
-    cmd: str | None,
-    network_volume: str | None = None,
-) -> sky.Task:
+def _build_task(compute: ComputeConfig, *, cmd: str | None) -> sky.Task:
     """Parse a generated task document through SkyPilot's public loader.
 
     :param compute: Validated compute option.
     :param cmd: Worker command for injected-command options.
-    :param network_volume: Optional network-volume name.
     :returns: Parsed SkyPilot task.
     """
-    return sky.Task.from_yaml_config(
-        build_task_doc(compute, cmd=cmd, network_volume=network_volume)
-    )
+    return sky.Task.from_yaml_config(build_task_doc(compute, cmd=cmd))
 
 
 def _runpod_compute(**overrides: object) -> ComputeConfig:
@@ -129,29 +121,13 @@ class TestBuildTaskDocResources:
         assert rendered["_cluster_config_overrides"] == {"kubernetes": {"pod_config": pod_config}}
 
 
-class TestBuildTaskDocVolumes:
-    """Network-volume validation and task-document fields."""
+class TestBuildTaskDocFields:
+    """Task-document fields preserve supported compute configuration."""
 
-    def test_mount_with_volume_name_populates_task_volumes(self) -> None:
-        """Mount with volume name populates task volumes."""
-        compute = _runpod_compute(mount_network_volume="/workspace/network-volume")
-        task = _build_task(
-            compute,
-            cmd="echo hi",
-            network_volume="ss-datasets-us-ca-2",
-        )
-        assert task.volumes == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
-
-    def test_mount_without_volume_name_raises(self) -> None:
-        """Mount without volume name raises."""
-        compute = _runpod_compute(mount_network_volume="/workspace/network-volume")
-        with pytest.raises(ValueError, match="network_volume"):
-            _build_task(compute, cmd="echo hi")
-
-    def test_volume_name_without_mount_raises(self) -> None:
-        """Volume name without mount raises."""
+    def test_mount_network_volume_field_is_rejected(self) -> None:
+        """Unsupported compute fields fail at the strict config boundary."""
         with pytest.raises(ValueError, match="mount_network_volume"):
-            _build_task(_runpod_compute(), cmd="echo hi", network_volume="vol-x")
+            _runpod_compute(mount_network_volume="/obsolete")
 
     def test_setup_concatenates_scripts_in_order(self) -> None:
         """Setup concatenates scripts in order."""
@@ -191,8 +167,7 @@ def test_all_compute_options_match_constructor_oracle() -> None:
     for option in compute_option_names():
         compute = load_compute_option(option)
         cmd = None if compute.run_script is not None else "echo oracle"
-        volume = "oracle-volume" if compute.mount_network_volume is not None else None
-        task = _build_task(compute, cmd=cmd, network_volume=volume)
+        task = _build_task(compute, cmd=cmd)
         actual[option] = _task_fields_digest(
             {
                 "resources": task.to_yaml_config()["resources"],
@@ -265,23 +240,36 @@ class TestComputeOptionCompose:
         assert debug.resources == smoke.resources
         assert debug.run_script is not None
 
-    @pytest.mark.parametrize("option", ["oci/cpu", "runpod/no-such-option"])
+    @pytest.mark.parametrize(
+        "option",
+        [
+            "oci/cpu",
+            "runpod/no-such-option",
+            "runpod/network-volume/staging",
+            "runpod/network-volume/training",
+            "runpod/network-volume/training-hclass",
+        ],
+    )
     def test_unsupported_option_raises_value_error(self, option: str) -> None:
-        """Reject removed and unknown compute options.
+        """Reject unsupported compute options.
 
         :param option: Unsupported compute option name.
         """
         with pytest.raises(ValueError, match=option):
             load_compute_option(option)
 
-    def test_production_network_volume_options_mount_the_volume(self) -> None:
-        """Production network volume options mount the volume."""
-        for option in (
-            "runpod/network-volume/training",
-            "runpod/network-volume/training-hclass",
-            "runpod/network-volume/staging",
-        ):
-            assert load_compute_option(option).mount_network_volume == "/workspace/network-volume"
+    def test_training_hclass_option_builds_non_volume_high_tier_task(self) -> None:
+        """The native high-tier option requests one H-class GPU and local training disk."""
+        compute = load_compute_option("runpod/training-hclass")
+        task = _build_task(compute, cmd="echo hi")
+
+        assert sorted(str(resource.accelerators) for resource in task.resources) == [
+            "{'B200': 1}",
+            "{'H100-SXM': 1}",
+            "{'H200-SXM': 1}",
+        ]
+        assert {resource.disk_size for resource in task.resources} == {750}
+        assert not task.volumes
 
     def test_smoke_option_builds_a_seven_gpu_any_of_task(self) -> None:
         """Smoke option builds a seven gpu any of task."""
