@@ -2223,8 +2223,7 @@ Introduces the pydantic compute-option model, the programmatic sky.Task builder 
 
 * internal-feat(pipeline): launcher builds sky.Task from ComputeConfig
 
-Replaces the YAML dict-surgery path (_load_compute_template_with_cmd, _inject_network_volume,
-  _override_image_id, _detect_provider_from_doc) with build_sky_task on
+Replaces the YAML dict-surgery path with build_sky_task on
   SkypilotLaunchConfig.compute; launch configs and Hydra overrides now select
   skypilot_launch/compute options. Test suites adapted to assert on the real constructed sky.Task
   handed to sky.jobs.launch.
@@ -2606,93 +2605,6 @@ Fixes #2306 Refs #2213
 * test(ci-automation): load Doom bootstrapper in smoke test
 
 ### Features
-
-- Support RunPod network-volumes + sky-pilot managed job ssh
-  ([#2265](https://github.com/tinaudio/synth-setter/pull/2265),
-  [`9074c5f`](https://github.com/tinaudio/synth-setter/commit/9074c5f6b64b9f9c7cc0018ffd4c99f4227ff423))
-
-* internal-feat(storage): cache datasets on RunPod volumes
-
-* internal-fix(storage): harden network volume staging
-
-* internal-fix(storage): select supported RunPod volume zone
-
-* internal-fix(storage): reject stale staged dataset files
-
-* test(storage): isolate file hydration from rclone availability
-
-* test(storage): cover hydration without external binaries
-
-* feat(storage): parameterize the RunPod network-volume name per launch
-
-Replace the template's hardcoded us-tx-3 volume with a ${NETWORK_VOLUME} sentinel substituted from a
-  new SkypilotLaunchConfig.network_volume field (overridable via --network-volume). Sentinel/config
-  mismatches fail loudly so a launch can never silently target the wrong volume. US-TX-3 currently
-  has no CPU-pod stock and only L40S GPUs, so the checked-in definitions move to US-CA-2
-  (B200/H200/H100 + CPU pods) and AP-JP-1; retargeting a launch at another region's volume no longer
-  needs code changes.
-
-Refs #2263
-
-* fix(storage): surface dispatch validation errors as clean CLI messages
-
-dispatch_via_skypilot ran outside the CLI's try/except, so a network-volume/template mismatch
-  escaped as a raw ValueError traceback instead of the documented click error.
-
-* fix(storage): stock volume-template accelerators in CA/JP data centers
-
-The any-of set {RTX3090, RTX4090, A40} exists in the RunPod catalog but is not stocked in US-CA-2 or
-  AP-JP-1, so volume-bound tasks sat in STARTING/PENDING forever. Add the tiers those data centers
-  actually carry; SkyPilot picks the cheapest available.
-
-* feat(storage): tune and instrument the staging rclone copy
-
-Mirror r2_io.py's reliability flags (contimeout/timeout/retries), add --transfers=8
-  --multi-thread-streams=8 for the ~10 GiB Lance objects, and emit one-line stats every 60s so
-  multi-hundred-GiB copies are observable in job logs instead of silent until completion.
-
-* feat(storage): stage volumes from a small-disk compute template
-
-Staging copies R2 straight onto the mounted network volume, so the shared template's disk_size: 750
-  only inherited a training requirement — and RunPod hosts with 750 GB of free container disk are
-  the scarce resource that left staging jobs in STARTING for 30+ minutes. A 50 GB staging variant
-  schedules on far more hosts.
-
-* feat(storage): stage volumes from CPU pods
-
-GPU stock in the volume data centers runs Low across every tier while CPU stock stays High, and the
-  staging copy needs no GPU. cpu3c-8-16 with the 40 GB CPU-instance disk cap (#2197) schedules
-  immediately at ~a tenth of the cheapest GPU's cost.
-
-* feat(storage): align volume configs with live short-named volumes
-
-SkyPilot rejects RunPod volume names over 30 characters, which blocks use_existing adoption of its
-  own generated <name>-<hash>-<uuid> cloud names on a second API server. Rename the volumes to
-  ss-datasets-<dc>, document the one-registry rule and the adoption/migration procedure, and check
-  in the B200 AP-JP-1 fragment-sampler training launch so region- or tier-pinned runs need no ad-hoc
-  configs.
-
-* fix(storage): stage from small-disk GPU pods, not CPU pods
-
-SkyPilot cannot SSH into RunPod CPU pods — provisioning loops on 600s SSH timeouts and teardown.
-  Revert staging to a 50 GB-disk GPU any-of that includes the H-class tiers the volume data centers
-  actually stock.
-
-* feat(storage): tune the B200 volume launch for full-device batches
-
-bs128 leaves a B200 at ~9% SM occupancy (#2231); pin the tracker's winning bs1024 and raise
-  batch_readahead to Lance's own default of 16 for the fragment-sampler path.
-
-* feat(storage): cap staging accelerators at sub-$1/hr tiers
-
-An rclone copy gains nothing from H-class hosts; job 63 landed on a ~$3/hr H100 whose link ran at
-  10-40 MiB/s anyway. Restrict the staging any-of to the budget tiers.
-
-* feat(storage): H-class any-of training launch at bs2048
-
-Replace the B200-pinned volume launch with an H100/H200/B200 any-of so the JP run takes whatever
-  top-tier the data center stocks instead of queueing on B200 scarcity, and raise the
-  fragment-sampler batch to 2048.
 
 * feat(data-pipeline): forward operator SSH keys into launched pods
 

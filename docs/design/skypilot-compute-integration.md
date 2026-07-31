@@ -97,12 +97,18 @@ src/synth_setter/configs/skypilot_launch/compute/
 ├── runpod/
 │   ├── smoke.yaml            # RunPod GPU (primary smoke target; wide cheap-GPU pool)
 │   ├── training.yaml         # RunPod GPU (750 GB disk full-dataset pool)
-│   ├── network-volume/       # training / training-hclass / staging with the persistent volume mount
+│   ├── training-hclass.yaml  # H100-SXM / H200-SXM / B200 training pool with 750 GB local disk
 │   └── debug/                # 8 canary variants inheriting the smoke pool, each with its own run script
 ├── vast/smoke.yaml           # Vast.ai GPU (marketplace on-demand alternative; use_spot: false)
 ├── local/kind.yaml           # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ├── local/debug-rclone.yaml   # kind rclone canary
 └── scripts/                  # packaged setup/run bash (.sh files, shellcheck-covered)
+```
+
+Launch high-tier training without per-field compute overrides:
+
+```bash
+synth-setter-skypilot-launch skypilot_launch/compute=runpod/training-hclass 'skypilot_launch.cmd="exec synth-setter-train experiment=torchsynth/flow_audio_same"'
 ```
 
 All options share the launcher (`src/synth_setter/pipeline/skypilot_launch.py`),

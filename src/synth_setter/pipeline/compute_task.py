@@ -149,51 +149,21 @@ def resolve_run_block(compute: ComputeConfig, cmd: str | None) -> str:
     return cmd
 
 
-def resolve_volumes(compute: ComputeConfig, network_volume: str | None) -> dict[str, str]:
-    """Resolve the task ``volumes`` mapping with both-or-neither validation.
-
-    :param compute: Validated compute option.
-    :param network_volume: SkyPilot volume name to mount, or ``None``.
-    :returns: Task-level volumes mapping (empty when no mount is configured).
-    :raises ValueError: The option mounts a volume without a configured name,
-        or a name is configured with nowhere to land.
-    """
-    if compute.mount_network_volume is not None and network_volume is None:
-        raise ValueError(
-            f"compute option {compute.name!r} mounts a network volume at "
-            f"{compute.mount_network_volume} but the launch config does not set "
-            "network_volume; set it to the SkyPilot volume name for the target "
-            "data center."
-        )
-    if network_volume is not None and compute.mount_network_volume is None:
-        raise ValueError(
-            f"launch config sets network_volume={network_volume!r} but compute "
-            f"option {compute.name!r} has no mount_network_volume path to mount "
-            "it at."
-        )
-    if compute.mount_network_volume is None or network_volume is None:
-        return {}
-    return {compute.mount_network_volume: network_volume}
-
-
 def build_task_doc(
     compute: ComputeConfig,
     *,
     cmd: str | None,
-    network_volume: str | None = None,
 ) -> dict[str, object]:
-    """Build a SkyPilot task document with scripts and volume names resolved.
+    """Build a SkyPilot task document with packaged scripts resolved.
 
     :param compute: Validated Hydra compute option.
     :param cmd: Worker command required by injected-command options.
-    :param network_volume: Volume name paired with the option's mount path.
     :returns: Mapping accepted by ``sky.Task.from_yaml_config``.
     """
     task_doc = compute.model_dump(exclude_none=True)
     resources = task_doc.pop("resources")
     assert isinstance(resources, list)
 
-    task_doc.pop("mount_network_volume", None)
     setup_scripts = task_doc.pop("setup_scripts")
     task_doc.pop("run_script", None)
     task_doc["resources"] = resources[0] if len(resources) == 1 else {"any_of": resources}
@@ -202,8 +172,4 @@ def build_task_doc(
     if setup:
         task_doc["setup"] = setup
     task_doc["run"] = resolve_run_block(compute, cmd)
-
-    volumes = resolve_volumes(compute, network_volume)
-    if volumes:
-        task_doc["volumes"] = volumes
     return task_doc

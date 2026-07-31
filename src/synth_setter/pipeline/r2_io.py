@@ -491,7 +491,7 @@ def download_dir_no_overwrite(
     copy. ``--immutable`` hard-fails if a destination file already exists with a
     different size/mtime/checksum, so a restart surfaces drift instead of
     masking it. A ``file://`` source supports hydrating pod-local SSD from a
-    mounted network volume through the same datamodule contract as R2.
+    local filesystem source through the same datamodule contract as R2.
 
     :param source_uri: ``r2://`` prefix or absolute ``file://`` directory URI.
     :param dest_path: Local destination directory, created by rclone if absent.

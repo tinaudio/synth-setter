@@ -224,7 +224,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
         covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`, and preflight-verified worker commit pinning. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`). RunPod balance preflight gate (`_check_runpod_balance`) aborts before job submission on a sub-floor balance; skipped under a remote API server; fail-open when unverifiable."
       - pattern: "src/synth_setter/pipeline/compute_task.py"
-        covers: "Native SkyPilot task-document assembly, packaged script loading, network-volume resolution, Hydra compute-option loading, and GPU tier narrowing (`apply_tier_filter`)."
+        covers: "Native SkyPilot task-document assembly, packaged script loading, Hydra compute-option loading, and GPU tier narrowing (`apply_tier_filter`)."
       - pattern: "src/synth_setter/pipeline/schemas/gpu_tier.py"
         covers: "`GpuTier` enum, per-SKU minimum-tier classification, and `allowed_gpu_skus`/`filter_gpu_skus` (cumulative narrowing with unclassified-SKU and empty-intersection ValueErrors)."
       - pattern: "src/synth_setter/pipeline/schemas/compute.py"
@@ -711,21 +711,6 @@ docs:
         covers: "Catalog row (repo-owned /repo-review-full on every PR incl. drafts, posts inline comments), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
-
-  # ── RunPod dataset network volume ───────────────────────────────
-  - doc: docs/operations/runpod-network-volume.md
-    description: Persistent RunPod dataset cache operations
-    sources:
-      - pattern: "scripts/stage_runpod_network_volume.sh"
-        covers: "Restartable checksum copy from R2 and post-copy completion marker"
-      - pattern: "src/synth_setter/configs/volumes/runpod-datasets-*.yaml"
-        covers: "Per-data-center 750 GB RunPod network-volume definitions (US-CA-2, AP-JP-1)"
-      - pattern: "src/synth_setter/configs/skypilot_launch/compute/runpod/network-volume/*.yaml"
-        covers: "Explicit /workspace/network-volume mount via mount_network_volume"
-      - pattern: "src/synth_setter/configs/launch/*-volume.yaml"
-        covers: "Dataset staging and volume-backed training launches"
-      - pattern: "src/synth_setter/configs/launch/stage-runpod-*-volume.yaml"
-        covers: "Dataset-specific staging launch commands"
 
   # ── Credential rotation guide ────────────────────────────────────
   - doc: docs/operations/credential-rotation-guide.md

@@ -1119,14 +1119,6 @@ def _runpod_compute(**overrides: object) -> ComputeConfig:
     return ComputeConfig(**kwargs)  # type: ignore[arg-type]
 
 
-def _volume_runpod_compute() -> ComputeConfig:
-    """Build a RunPod compute option that mounts the network volume.
-
-    :return: Validated compute option with ``mount_network_volume`` set.
-    """
-    return _runpod_compute(mount_network_volume="/workspace/network-volume")
-
-
 def _git(repo: Path, args: tuple[str, ...]) -> str:
     """Run git in ``repo`` and return stripped stdout.
 
@@ -1366,19 +1358,6 @@ class TestDispatchViaSkypilot:
         compute = _runpod_compute(run_script="debug-noop.sh")
         sky_cfg = SkypilotLaunchConfig(compute=compute, cmd="echo")
         with pytest.raises(ValueError, match="cmd cannot be silently dropped"):
-            dispatch_via_skypilot(sky_cfg)
-        mock_sky.jobs.launch.assert_not_called()
-
-    def test_volume_option_without_network_volume_raises_before_launch(
-        self,
-        mock_sky: MagicMock,
-    ) -> None:
-        """A volume-mounting option with no configured volume name never reaches SkyPilot.
-
-        :param mock_sky: Mocked ``sky`` module from fixture.
-        """
-        sky_cfg = SkypilotLaunchConfig(compute=_volume_runpod_compute(), cmd="echo")
-        with pytest.raises(ValueError, match="does not set network_volume"):
             dispatch_via_skypilot(sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
@@ -2116,8 +2095,8 @@ class TestSkypilotLaunchCli:
             "synth_setter.pipeline.skypilot_launch.ThreadPoolExecutor", _InlineExecutor
         )
 
-    def test_packaged_cli_composes_command_containing_hydra_overrides(self) -> None:
-        """The real CLI accepts a quoted command containing equals signs."""
+    def test_packaged_cli_composes_training_hclass_command(self) -> None:
+        """The real CLI composes the short high-tier training command without submission."""
         launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
 
         result = subprocess.run(  # noqa: S603 - real packaged launcher CLI
@@ -2125,8 +2104,9 @@ class TestSkypilotLaunchCli:
                 launcher,
                 "--cfg",
                 "job",
-                "skypilot_launch/compute=runpod/smoke",
-                'skypilot_launch.cmd="synth-setter-train experiment=torchsynth/flow_audio_same"',
+                "skypilot_launch/compute=runpod/training-hclass",
+                'skypilot_launch.cmd="exec synth-setter-train '
+                'experiment=torchsynth/flow_audio_same"',
             ],
             check=False,
             capture_output=True,
@@ -2134,7 +2114,13 @@ class TestSkypilotLaunchCli:
         )
 
         assert result.returncode == 0, result.stderr
-        assert "cmd: synth-setter-train experiment=torchsynth/flow_audio_same" in result.stdout
+        assert "name: runpod-training-hclass" in result.stdout
+        assert (
+            "cmd: exec synth-setter-train experiment=torchsynth/flow_audio_same" in result.stdout
+        )
+        assert "H100-SXM: 1" in result.stdout
+        assert "H200-SXM: 1" in result.stdout
+        assert "B200: 1" in result.stdout
 
     def test_packaged_cli_execute_mode_dispatches_composed_command(self, tmp_path: Path) -> None:
         """The real Hydra wrapper composes, wraps, and dispatches a worker command.
@@ -2348,33 +2334,6 @@ class TestSkypilotLaunchCli:
             "{'RTX4090': 1}",
         ]
 
-    def test_hydra_network_volume_override_mounts_selected_volume(
-        self,
-        tmp_path: Path,
-        env_file: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        mock_sky: MagicMock,
-    ) -> None:
-        """Hydra volume selection reaches the compute profile mount point.
-
-        :param tmp_path: Pytest fixture providing the launcher working directory.
-        :param env_file: Fixture-provided worker env file path.
-        :param monkeypatch: Pytest fixture for selecting the working directory.
-        :param mock_sky: Mocked external SkyPilot SDK boundary.
-        """
-        monkeypatch.chdir(tmp_path)
-        assert env_file == tmp_path / ".env"
-        cfg = _compose_skypilot_launch(
-            "skypilot_launch/compute=runpod/network-volume/staging",
-            "skypilot_launch.cmd=echo hello",
-            "skypilot_launch.network_volume=ss-datasets-us-ca-2",
-        )
-
-        main.__wrapped__(cfg)
-
-        task = mock_sky.jobs.launch.call_args.args[0]
-        assert task.volumes == {"/workspace/network-volume": "ss-datasets-us-ca-2"}
-
     def test_missing_command_rejects_before_submission(
         self,
         mock_sky: MagicMock,
@@ -2558,13 +2517,7 @@ class TestCheckedInLaunchConfigs:
         assert cfg.compute is not None, "shipped launch configs must name a compute option"
         from synth_setter.pipeline.compute_task import build_task_doc
 
-        task = skypilot_launch.sky.Task.from_yaml_config(
-            build_task_doc(
-                cfg.compute,
-                cmd=cfg.cmd,
-                network_volume=cfg.network_volume,
-            )
-        )
+        task = skypilot_launch.sky.Task.from_yaml_config(build_task_doc(cfg.compute, cmd=cfg.cmd))
         assert task.run is not None and cfg.cmd in task.run
         assert cfg.compute.provider() == "runpod"
 
