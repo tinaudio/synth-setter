@@ -1106,7 +1106,6 @@ def remote_worker_dispatch(
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("VIRTUAL_ENV", str(worker_venv))
         monkeypatch.delenv("WORKER_GIT_REF", raising=False)
-        monkeypatch.setattr(generate_dataset_cli, "_WORKER_REPO_ROOT", str(worker_root))
         monkeypatch.setattr(generate_dataset_cli, "_WORKER_VENV", str(worker_venv))
         monkeypatch.setattr(
             generate_dataset_cli,
@@ -1149,6 +1148,7 @@ def remote_worker_dispatch(
                 "experiment=generate_dataset/smoke-shard",
                 f"synth.plugin_path={_TEST_PLUGIN_VST3}",
                 "skypilot_launch/compute=runpod/smoke",
+                f"skypilot_launch.worker_checkout_dir={worker_root}",
             ],
         )
 
