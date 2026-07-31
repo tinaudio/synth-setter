@@ -36,8 +36,11 @@ from synth_setter.models.components.simulator_control import (
     learned_control_signal,
 )
 from synth_setter.models.vst_flow_matching_module import (
+    ControlTokenBranches,
     TrainStepOutputs,
     VSTFlowMatchingModule,
+    _TimeField,
+    build_guided_velocity,
 )
 
 logger = logging.getLogger(__name__)
@@ -195,6 +198,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             ),
             t_min=control_t_min,
         )
+        # Bound per batch by the validation/test hooks; sampling outside one cannot score.
+        self._sampling_target: Tensor | None = None
         # Lightning does not call train() before the first steps, so the override alone would
         # leave the pretrained modules in nn.Module's default training mode until then.
         self._freeze_pretrained_modes()
@@ -391,6 +396,189 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :returns: Detached estimate of ``x_1`` shaped ``(batch, params)``.
         """
         return (x_t + (1 - t) * velocity).detach()
+
+    @jaxtyped(typechecker=beartype)
+    def _velocity_field(
+        self,
+        conditioning: Shaped[Tensor, _BATCH_ANY_SHAPE] | None,
+        cfg_strength: float,
+        control_tokens: ControlTokenBranches | None,
+    ) -> _TimeField:
+        """Build a sampling field whose velocity carries simulator feedback above ``t_min``.
+
+        The control is scored on, and fed, the **conditional** velocity, because that is what
+        it saw in training; the guided combination is roughly ``cfg_strength`` times larger
+        and out of distribution for it, which would let evaluation metrics move for reasons
+        unrelated to the learned correction. The resulting correction is then applied to the
+        guided velocity, which is what the sampler integrates. This costs one extra field
+        evaluation per ODE evaluation and leaves the correction computed for a trajectory
+        point the sampler does not visit — both tracked in
+        https://github.com/tinaudio/synth-setter/issues/2782.
+
+        :param conditioning: Encoded content conditioning for the conditional branch.
+        :param cfg_strength: Joint classifier-free-guidance scale.
+        :param control_tokens: Complete control-token state; rejected at construction.
+        :returns: Two-argument velocity field over parameter state and time.
+        :raises RuntimeError: No observation is bound, which would silently sample the
+            frozen base and report it as this arm's result.
+        """
+        if self._sampling_target is None:
+            raise RuntimeError(
+                "no observation bound for controlled sampling; _sample must run inside a "
+                "validation or test batch so the estimate has something to be scored against"
+            )
+        target_audio = self._sampling_target
+        guided = build_guided_velocity(
+            self.vector_field.flow, conditioning, cfg_strength, control_tokens=control_tokens
+        )
+
+        @jaxtyped(typechecker=beartype)
+        def controlled(
+            x_t: Float[Tensor, _BATCH_PARAMS_SHAPE], t: Float[Tensor, _BATCH_TIME_SHAPE]
+        ) -> Float[Tensor, _BATCH_PARAMS_SHAPE]:
+            """Evaluate the guided velocity and fold in this evaluation's feedback.
+
+            :param x_t: Trajectory point shaped ``(batch, params)``.
+            :param t: Flow time shaped ``(batch, 1)``.
+            :returns: Corrected velocity shaped ``(batch, params)``.
+            """
+            guided_velocity = guided(x_t, t)
+            conditional = self.vector_field.flow(x_t, t, conditioning)
+            signal = self._sampling_control(x_t, t, conditional, target_audio)
+            # combine() minus its input is the gated correction, so a disengaged row
+            # contributes exactly zero and leaves the guided velocity bit-identical.
+            correction = self.vector_field.combine(conditional, t, signal) - conditional
+            return guided_velocity + correction
+
+        return controlled
+
+    @jaxtyped(typechecker=beartype)
+    def _sampling_control(
+        self,
+        x_t: Float[Tensor, _BATCH_PARAMS_SHAPE],
+        t: Float[Tensor, _BATCH_TIME_SHAPE],
+        velocity: Float[Tensor, _BATCH_PARAMS_SHAPE],
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+    ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
+        """Score the one-step estimate at one ODE evaluation, on engaged rows only.
+
+        No conditioning-keep term here: dropout is a training-time device, so at sampling
+        every row's estimate is tied to its own observation.
+
+        :param x_t: Trajectory point shaped ``(batch, params)``.
+        :param t: Flow time shaped ``(batch, 1)``.
+        :param velocity: Guided velocity at ``(x_t, t)``.
+        :param target_audio: Observation shaped ``(batch, signal_length)``.
+        :returns: Control signal shaped ``(batch, control_dim)``.
+        """
+        active = t.squeeze(-1) >= self.vector_field.t_min
+        # Standalone Trainer.validate/test/predict run under inference_mode, which marks
+        # every tensor made inside it as an inference tensor that can never carry a graph —
+        # torch.enable_grad() cannot reopen it, so the gradient arm's autograd.grad raises.
+        # Mid-fit validation happens to work because Lightning builds that loop with
+        # inference_mode=False, which is why this only shows up outside a fit.
+        with torch.inference_mode(False):
+            estimate = self._one_step_estimate(x_t, t, velocity).clone()
+            return self._control_signal(estimate, target_audio.clone(), active)
+
+    @jaxtyped(typechecker=beartype)
+    def on_validation_batch_start(
+        self,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Bind this batch's observation so the sampler can score estimates against it.
+
+        :param batch: Validation batch carrying the observation.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = batch["audio"]
+
+    @jaxtyped(typechecker=beartype)
+    def on_validation_batch_end(
+        self,
+        outputs: object,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Release the observation so a stale target cannot leak into the next batch.
+
+        :param outputs: Whatever ``validation_step`` returned.
+        :param batch: The batch just finished.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = None
+
+    @jaxtyped(typechecker=beartype)
+    def on_predict_batch_start(
+        self,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Bind this batch's observation for the prediction sampler.
+
+        The predict split always projects the audio column, so prediction can score against the
+        same observation validation does rather than falling back to the frozen base.
+
+        :param batch: Predict batch carrying the observation.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = batch["audio"]
+
+    @jaxtyped(typechecker=beartype)
+    def on_predict_batch_end(
+        self,
+        outputs: object,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Release the observation bound for the prediction sampler.
+
+        :param outputs: Whatever ``predict_step`` returned.
+        :param batch: The batch just finished.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = None
+
+    @jaxtyped(typechecker=beartype)
+    def on_test_batch_start(
+        self,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Bind this batch's observation for the test sampler.
+
+        :param batch: Test batch carrying the observation.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = batch["audio"]
+
+    @jaxtyped(typechecker=beartype)
+    def on_test_batch_end(
+        self,
+        outputs: object,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Release the observation bound for the test sampler.
+
+        :param outputs: Whatever ``test_step`` returned.
+        :param batch: The batch just finished.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = None
 
     @jaxtyped(typechecker=beartype)
     def _train_step(self, batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]]) -> TrainStepOutputs:

@@ -628,6 +628,30 @@ class VSTFlowMatchingModule(LightningModule):
     def _warp_time(self, t: torch.Tensor) -> torch.Tensor:
         return t
 
+    @jaxtyped(typechecker=beartype)
+    def _velocity_field(
+        self,
+        conditioning: Shaped[torch.Tensor, "batch ..."] | None,
+        cfg_strength: float,
+        control_tokens: ControlTokenBranches | None,
+    ) -> _TimeField:
+        """Build the time field the sampler integrates.
+
+        A seam, not a wrapper: a subclass whose sampling velocity differs from its training
+        velocity overrides this and inherits the integration loop unchanged.
+
+        :param conditioning: Encoded content conditioning for the conditional branch.
+        :param cfg_strength: Joint classifier-free-guidance scale.
+        :param control_tokens: Complete control-token state, or ``None`` without sketch support.
+        :returns: Two-argument velocity field over parameter state and time.
+        """
+        return build_guided_velocity(
+            self.vector_field,
+            conditioning,
+            cfg_strength,
+            control_tokens=control_tokens,
+        )
+
     def _sample(
         self,
         conditioning: torch.Tensor | None,
@@ -640,12 +664,7 @@ class VSTFlowMatchingModule(LightningModule):
         if conditioning is not None:
             conditioning = self.encoder(conditioning)
 
-        guided_velocity = build_guided_velocity(
-            self.vector_field,
-            conditioning,
-            cfg_strength,
-            control_tokens=control_tokens,
-        )
+        guided_velocity = self._velocity_field(conditioning, cfg_strength, control_tokens)
         t = torch.zeros(noise.shape[0], 1, device=noise.device)
         dt = 1.0 / steps
         sample = noise
