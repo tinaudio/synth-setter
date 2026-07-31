@@ -10,14 +10,17 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
+import torch
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
+from synth_setter.cli import clap_render
 from synth_setter.cli.clap_render import (
     compare_embeddings,
     main,
     resolve_inverse_checkpoint,
     summarize_cosine_distances,
+    write_summary_csv,
 )
 from synth_setter.pipeline import r2_io
 
@@ -139,6 +142,79 @@ def test_summarize_cosine_distances_reports_population_statistics() -> None:
             "max": 0.4,
         }
     )
+
+
+def test_write_summary_csv_persists_named_statistics(tmp_path: Path) -> None:
+    """Aggregate statistics remain machine-readable after CSV persistence.
+
+    :param tmp_path: Temporary summary destination.
+    """
+    output = tmp_path / "aggregate.csv"
+
+    write_summary_csv(output, {"count": 2, "mean": 0.25})
+
+    with output.open(newline="", encoding="utf-8") as stream:
+        assert list(csv.DictReader(stream)) == [{"count": "2", "mean": "0.25"}]
+
+
+def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local CLI shell persists cosine metrics without requiring R2.
+
+    :param tmp_path: Temporary checkpoints and output paths.
+    :param monkeypatch: Boundary patch fixture for heavyweight model and renderer calls.
+    """
+    inverse = tmp_path / "model.ckpt"
+    inverse.write_bytes(b"checkpoint")
+    clap_checkpoint = tmp_path / "clap"
+    clap_checkpoint.mkdir()
+    output = tmp_path / "render.wav"
+    monkeypatch.setattr(
+        clap_render,
+        "_encode_text",
+        lambda *_: torch.tensor([[1.0, 0.0]]),
+    )
+    monkeypatch.setattr(
+        clap_render,
+        "_predict_patch",
+        lambda *_: torch.zeros(1, 92),
+    )
+    monkeypatch.setattr(
+        clap_render,
+        "_render_wav",
+        lambda *_: np.zeros((2, 176400), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        clap_render,
+        "_encode_audio",
+        lambda *_: np.array([[0.0, 1.0]], dtype=np.float32),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "soft bell",
+            "--checkpoint",
+            str(inverse),
+            "--clap-checkpoint",
+            str(clap_checkpoint),
+            "--output",
+            str(output),
+            "--device",
+            "cpu",
+            "--no-upload",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with output.with_suffix(".csv").open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["prompt"] == "soft bell"
+    assert float(row["cosine_distance"]) == pytest.approx(1.0)
+    assert row["wav_r2_uri"] == ""
+    assert row["csv_r2_uri"] == ""
 
 
 def test_console_script_is_installed_and_callable() -> None:
