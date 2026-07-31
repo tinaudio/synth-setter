@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785456446773,
+  "lastUpdate": 1785472334295,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -13266,6 +13266,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04128313064575195,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "06eca7e29172db38e941d0a1603295d363342074",
+          "message": "internal-feat(training): add generic Hydra SkyPilot launcher (#2775)\n\n* internal-feat(training): add Hydra-native generic launcher\n\n* internal-fix(training): harden generic launch commands\n\n* internal-fix(training): preserve generic worker shell contracts\n\n* internal-fix(training): cover generic launcher subprocess path\n\n* internal-fix(training): exercise generic worker entrypoints\n\n* internal-fix(training): preserve worker interpolation boundary\n\n* internal-fix(training): validate workflow command composition\n\n* internal-fix(training): centralize workflow input validation\n\n* internal-fix(training): scope headless launch test to Linux\n\n* internal-fix(training): address launcher review feedback\n\n* internal-fix(data-pipeline): configure worker checkout in e2e test",
+          "timestamp": "2026-07-30T20:37:00-07:00",
+          "tree_id": "696542f9b28747f2b46b4a60e76cbc7fc03c164b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/06eca7e29172db38e941d0a1603295d363342074"
+        },
+        "date": 1785472332521,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.502455711364746,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.738002057471313,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.021750090643763542,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.01893138885498047,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.5709805488586426,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.432858711583341,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.512181282043457,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.6272236697888,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.034551460295915604,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.044510483741760254,
             "unit": "1-cos"
           },
           {
