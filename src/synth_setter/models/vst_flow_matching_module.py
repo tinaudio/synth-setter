@@ -18,7 +18,12 @@ from synth_setter.conditioning import (
     conditioning_batch_key,
     resolve_sketch_controls,
 )
-from synth_setter.metrics import BestSwapParamMSE, best_swap_per_param_mse
+from synth_setter.metrics import (
+    BestSwapParamMSE,
+    NumberGroupSwapParamMSE,
+    best_swap_per_param_mse,
+    number_group_swap_per_param_mse,
+)
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
 
@@ -235,6 +240,7 @@ class VSTFlowMatchingModule(LightningModule):
         # Keyword-only: a stale positional caller would silently train at a bogus width.
         *,
         num_params: int,
+        param_spec: str | None = None,
         conditioning: Conditioning = "mel",
         sketch_controls: SketchControls = None,
         sketch_dropout_rate: float = 0.2,
@@ -259,6 +265,7 @@ class VSTFlowMatchingModule(LightningModule):
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
+        :param param_spec: Registered parameter spec enabling structured swap metrics.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param sketch_controls: Optional sketch-control spec enabling concat
             control-token injection into the vector field (#2612).
@@ -321,6 +328,17 @@ class VSTFlowMatchingModule(LightningModule):
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
+        metric_spec = None
+        if param_spec is not None:
+            from synth_setter.data.vst import param_specs
+
+            metric_spec = param_specs[param_spec]
+        self.val_param_mse_number_group_swap = (
+            NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
+        )
+        self.test_param_mse_number_group_swap = (
+            NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
+        )
 
     def on_train_start(self) -> None:
         if self.audio_loss is None:
@@ -654,6 +672,13 @@ class VSTFlowMatchingModule(LightningModule):
 
         per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
         per_param_mse_best_swap = best_swap_per_param_mse(pred_params, batch["params"])
+        per_param_mse_number_group_swap = None
+        if self.val_param_mse_number_group_swap is not None:
+            per_param_mse_number_group_swap = number_group_swap_per_param_mse(
+                pred_params,
+                batch["params"],
+                self.val_param_mse_number_group_swap.param_spec,
+            )
         param_mse = per_param_mse.mean()
         self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -664,13 +689,24 @@ class VSTFlowMatchingModule(LightningModule):
             on_step=False,
             on_epoch=True,
         )
+        if self.val_param_mse_number_group_swap is not None:
+            self.val_param_mse_number_group_swap.update(pred_params, batch["params"])
+            self.log(
+                "val/param_mse_number_group_swap",
+                self.val_param_mse_number_group_swap,
+                on_step=False,
+                on_epoch=True,
+            )
 
-        return {
+        outputs = {
             "param_mse": param_mse,
             "per_param_mse": per_param_mse,
             "per_param_mse_best_swap": per_param_mse_best_swap,
             "preds": pred_params,
         }
+        if per_param_mse_number_group_swap is not None:
+            outputs["per_param_mse_number_group_swap"] = per_param_mse_number_group_swap
+        return outputs
 
     def on_validation_epoch_end(self):
         pass
@@ -695,6 +731,14 @@ class VSTFlowMatchingModule(LightningModule):
             on_step=False,
             on_epoch=True,
         )
+        if self.test_param_mse_number_group_swap is not None:
+            self.test_param_mse_number_group_swap.update(pred_params, batch["params"])
+            self.log(
+                "test/param_mse_number_group_swap",
+                self.test_param_mse_number_group_swap,
+                on_step=False,
+                on_epoch=True,
+            )
 
         return param_mse
 
