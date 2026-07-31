@@ -11,6 +11,7 @@
   "runpod/debug/spec-mount": "40c7799232258d62f2c98ce952019a11efefc3533887b72b5f3ba43cfac9482c",
   "runpod/gpu-tests": "e5d9fe9915b68d29fc5b6e84e89b1e63894c15ee3ba61974319566ab2457af8e",
   "runpod/smoke": "18daf2b2be2956b103d49b4cc1819deedf8652ac962e3949138107c1aafc15f7",
+  "runpod/torchsynth": "da85483b16f1740857bdb234adf1aa606fc723c15f8b62a06971a333a3c4c830",
   "runpod/training": "7b6b3db98d58a95b0ffbe105cf5457a5da1b890892441b09c51830efebd4b415",
   "runpod/training-hclass": "f9599b8277e7ecb370213ee0b61a6c3ff2ebfdd65196adf56a62ceada7c60d31",
   "vast/smoke": "58847483dd2ee91f8ac510b7537fbd0df2c04bd79c25d23793ba162728dec9c6"
