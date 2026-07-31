@@ -55,6 +55,7 @@ SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
 TINYMU_FIELD: str = "tinymu"
 MATPAC_PLUS_FIELD: str = "matpac_plus"
+PUPUJEPA_TINY_FIELD: str = "pupujepa_tiny"
 # Emits the 128-semitone x 3-bin activation width that ``SKETCH_PITCH_BINS`` pins.
 DEFAULT_PESTO_CHECKPOINT: str = "mir-1k_g7"
 

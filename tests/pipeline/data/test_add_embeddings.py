@@ -385,6 +385,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "clap",
         "m2l",
         "param_shift",
+        "pupujepa_tiny",
         "same_l",
         "same_s",
         "sketch",
@@ -416,6 +417,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["t5gemma"].input_fields == (PARAM_ARRAY_FIELD,)
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
+    assert EMBEDDING_REGISTRY["pupujepa_tiny"].co_resident is False
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
