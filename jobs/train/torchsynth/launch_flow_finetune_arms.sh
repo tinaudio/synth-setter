@@ -23,7 +23,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: launch_flow_finetune_arms.sh --base-checkpoint URI [options]
 
-  --base-checkpoint URI   Pretrained flow every arm finetunes from (required).
+  --base-checkpoint URI   rclone URI of the pretrained flow, e.g.
+                          r2:bucket/path/last.ckpt (required).
   --seeds "1 2 3"         Seeds to run (default: 1 2 3).
   --arms "a b"            Arms to run (default: all three).
   --execute               Actually submit. Without it, nothing is launched.
@@ -82,7 +83,7 @@ main() {
       if ! uv run synth-setter-skypilot-launch \
         --extra-env EXPERIMENT "${experiment}" \
         --extra-env RUN_NAME "${run_name}" \
-        --extra-env BASE_CHECKPOINT "${base_checkpoint}" \
+        --extra-env BASE_CHECKPOINT_URI "${base_checkpoint}" \
         --extra-env SEED "${seed}" \
         "${LAUNCH_CONFIG}"; then
         echo "Failed to submit ${experiment} seed=${seed}" >&2

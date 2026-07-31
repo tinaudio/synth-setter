@@ -1,9 +1,9 @@
 # RunPod launch for a simulator-feedback finetune arm (arXiv 2410.22573).
 #
-# Every arm starts from the same pretrained flow, so BASE_CHECKPOINT is required
-# rather than defaulted: two arms that silently began from different bases would
-# still look comparable in their recorded configs. The module logs the file's
-# sha256 at load, which is what makes a swap detectable after the fact.
+# Every arm starts from the same pretrained flow, so BASE_CHECKPOINT_URI is
+# required rather than defaulted: two arms that silently began from different
+# bases would still look comparable in their recorded configs. The module logs
+# the file's sha256 at load, which is what makes a swap detectable afterwards.
 #
 # SEED is forwarded because a single run per arm cannot separate the effect from
 # run-to-run variance — a regression probe on this same path measured deltas of
@@ -16,6 +16,10 @@
 # No trainer or datamodule overrides here: the step budget and validation cadence
 # live in the arm's experiment YAML so `experiment=` alone reproduces the run
 # (#2118, #2196). Only per-run identity is forwarded.
+#
+# The checkpoint is copied down first because the module loads a local path: a
+# fresh pod has no checkpoint, and copyto pins a fixed local name so every arm
+# reads the same file regardless of the remote layout.
 compute: runpod/torchsynth
 worker_image_tag: devcontainer-tools
 env_file: .env
@@ -24,10 +28,11 @@ tail: false
 cmd: >-
   cd /home/build/synth-setter &&
   bash scripts/sync_worker_checkout.sh &&
+  rclone copyto --checksum "${BASE_CHECKPOINT_URI:?base checkpoint uri is required}" /home/build/base.ckpt &&
   exec synth-setter-train
   "experiment=${EXPERIMENT:?experiment is required}"
   "run_name=${RUN_NAME:?run_name is required}"
-  "model.base_checkpoint=${BASE_CHECKPOINT:?base_checkpoint is required}"
+  model.base_checkpoint=/home/build/base.ckpt
   "seed=${SEED:?seed is required}"
   training.upload_checkpoints_during_training=true
   hydra.run.dir=/home/build/synth-setter/train-run
