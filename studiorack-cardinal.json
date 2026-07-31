@@ -6,5 +6,8 @@
   },
   "vst3Bundles": {
     "distrho/cardinal": "CardinalSynth.vst3"
+  },
+  "vst3Versions": {
+    "distrho/cardinal": "0.26.2"
   }
 }
