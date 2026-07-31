@@ -465,9 +465,14 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :returns: Control signal shaped ``(batch, control_dim)``.
         """
         active = t.squeeze(-1) >= self.vector_field.t_min
-        return self._control_signal(
-            self._one_step_estimate(x_t, t, velocity), target_audio, active
-        )
+        # Standalone Trainer.validate/test/predict run under inference_mode, which marks
+        # every tensor made inside it as an inference tensor that can never carry a graph —
+        # torch.enable_grad() cannot reopen it, so the gradient arm's autograd.grad raises.
+        # Mid-fit validation happens to work because Lightning builds that loop with
+        # inference_mode=False, which is why this only shows up outside a fit.
+        with torch.inference_mode(False):
+            estimate = self._one_step_estimate(x_t, t, velocity).clone()
+            return self._control_signal(estimate, target_audio.clone(), active)
 
     @jaxtyped(typechecker=beartype)
     def on_validation_batch_start(
@@ -495,6 +500,41 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         """Release the observation so a stale target cannot leak into the next batch.
 
         :param outputs: Whatever ``validation_step`` returned.
+        :param batch: The batch just finished.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = None
+
+    @jaxtyped(typechecker=beartype)
+    def on_predict_batch_start(
+        self,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Bind this batch's observation for the prediction sampler.
+
+        The predict split always projects the audio column, so prediction can score against the
+        same observation validation does rather than falling back to the frozen base.
+
+        :param batch: Predict batch carrying the observation.
+        :param batch_idx: Lightning's batch index.
+        :param dataloader_idx: Lightning's dataloader index.
+        """
+        self._sampling_target = batch["audio"]
+
+    @jaxtyped(typechecker=beartype)
+    def on_predict_batch_end(
+        self,
+        outputs: object,
+        batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Release the observation bound for the prediction sampler.
+
+        :param outputs: Whatever ``predict_step`` returned.
         :param batch: The batch just finished.
         :param batch_idx: Lightning's batch index.
         :param dataloader_idx: Lightning's dataloader index.

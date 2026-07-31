@@ -684,7 +684,7 @@ def test_controlled_sampling_engages_only_above_t_min(tmp_path: Path) -> None:
             module.on_validation_batch_end(None, batch, 0)
         return len(calls)
 
-    # 16 RK4 evaluations over 4 steps; only the last lands at t=1.
+    # Only the final evaluation reaches t=1.
     assert _render_count(0.99) == 1
     assert _render_count(0.0) == 16
 
@@ -709,7 +709,7 @@ def test_controlled_sampling_renders_only_engaged_evaluations(tmp_path: Path) ->
         module._sample(batch["audio"], torch.randn(_BATCH, _WIDTH), 4, 2.0)
         module.on_validation_batch_end(None, batch, 0)
 
-    # Four RK4 evaluations per step over four steps; only those at t >= 0.5 may render.
+    # Only engaged evaluations may render.
     assert 0 < len(rendered) < 16
 
 
@@ -737,4 +737,90 @@ def test_validation_batch_end_releases_the_bound_observation(tmp_path: Path) -> 
     module.on_validation_batch_end(None, batch, 0)
 
     assert bound is batch["audio"]
+    assert module._sampling_target is None
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stage", ["validate", "test"])
+def test_finetune_sampling_runs_through_the_lightning_loop(tmp_path: Path, stage: str) -> None:
+    """Every evaluation entrypoint must sample without raising.
+
+    Bracketing the hooks by hand in a test hides two whole classes of failure: a hook that
+    Lightning never calls, and the standalone loops' ``inference_mode``, which
+    ``torch.enable_grad`` cannot reopen. Mid-fit validation is the one path built with
+    ``inference_mode=False``, so testing only that is testing the case that works.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param stage: Lightning entrypoint under test.
+    """
+    from lightning import Trainer
+
+    module = _finetune(
+        _base_checkpoint(tmp_path),
+        overrides={"validation_sample_steps": 2, "test_sample_steps": 2},
+    )
+    trainer = Trainer(
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        limit_val_batches=1,
+        limit_test_batches=1,
+    )
+
+    getattr(trainer, stage)(module, datamodule=_data())
+
+    assert module._sampling_target is None
+
+
+def test_controlled_sampling_depends_on_the_bound_observation(tmp_path: Path) -> None:
+    """The sample must change when the observation does, holding everything else fixed.
+
+    A trained control can differ from the base using only its velocity and time features, so
+    "differs from base" does not prove the simulator signal is read at all. Swapping the target
+    between two otherwise identical runs isolates exactly that.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    batch = _batch()
+    optimizer = torch.optim.Adam([p for p in module.parameters() if p.requires_grad], lr=1e-2)
+    for _ in range(3):
+        optimizer.zero_grad()
+        module._train_step(batch).loss.backward()
+        optimizer.step()
+
+    noise = torch.randn(_BATCH, _WIDTH)
+    with torch.no_grad():
+        module.on_validation_batch_start(batch, 0)
+        as_bound = module._sample(batch["audio"], noise, 2, 2.0)
+        module.on_validation_batch_end(None, batch, 0)
+
+        swapped = dict(batch, audio=batch["audio"].flip(0))
+        module.on_validation_batch_start(swapped, 0)
+        as_swapped = module._sample(batch["audio"], noise, 2, 2.0)
+        module.on_validation_batch_end(None, swapped, 0)
+
+    assert not torch.equal(as_bound, as_swapped)
+
+
+def test_finetune_predict_step_samples_with_a_bound_observation(tmp_path: Path) -> None:
+    """The predict lane must bind its own observation rather than raising.
+
+    ``cli/predict_capture.py`` calls ``predict_step`` directly with no Lightning hooks, and
+    ``synth-setter-eval mode=predict`` goes through ``on_predict_batch_start`` — both reach
+    the same guard, so both need the binding.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"test_sample_steps": 2})
+    batch = _batch()
+
+    module.on_predict_batch_start(batch, 0)
+    with torch.no_grad():
+        predicted = module._sample(batch["audio"], torch.randn(_BATCH, _WIDTH), 2, 2.0)
+    module.on_predict_batch_end(None, batch, 0)
+
+    assert predicted.shape == (_BATCH, _WIDTH)
+    assert torch.isfinite(predicted).all()
     assert module._sampling_target is None
