@@ -135,8 +135,9 @@ make help
 ```
 
 The CLAP command selects CUDA, MPS, or CPU automatically, caches its pinned
-checkpoints, writes `logs/clap-renders/<run-id>.wav`, and uploads the same WAV under
-`r2://experiments/clap-renders/`. Run `synth-setter-clap --help` for checkpoint,
+checkpoints, and writes `logs/clap-renders/<run-id>.{wav,csv}`. It uploads both
+files under `r2://experiments/clap-renders/`; the CSV records the prompt-to-rendered-audio
+CLAP cosine similarity and distance. Run `synth-setter-clap --help` for checkpoint,
 device, output, seed, and upload overrides.
 
 See the project documentation for a full walkthrough.

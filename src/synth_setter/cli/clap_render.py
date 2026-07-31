@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import csv
 import fcntl
 import hashlib
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 import click
+import numpy as np
 import torch
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
@@ -39,6 +42,121 @@ _EXPECTED_CONDITIONING_COLUMN = "clap"
 _EXPECTED_CONDITIONING_SHAPE = (512,)
 _DEFAULT_CONFIG_NAME = "clap_render"
 _HASH_CHUNK_BYTES = 1024 * 1024
+_COMPARISON_CSV_FIELDS: tuple[str, ...] = (
+    "prompt",
+    "wav_r2_uri",
+    "csv_r2_uri",
+    "seed",
+    "text_embedding_norm",
+    "audio_embedding_norm",
+    "cosine_similarity",
+    "cosine_distance",
+)
+
+
+@dataclass(frozen=True)
+class EmbeddingComparison:
+    """Cosine comparison between one prompt and rendered-audio embedding.
+
+    .. attribute :: text_embedding_norm
+
+        L2 norm of the prompt embedding.
+
+    .. attribute :: audio_embedding_norm
+
+        L2 norm of the rendered-audio embedding.
+
+    .. attribute :: cosine_similarity
+
+        Normalized dot product in ``[-1, 1]``.
+
+    .. attribute :: cosine_distance
+
+        ``1 - cosine_similarity`` in ``[0, 2]``.
+    """
+
+    text_embedding_norm: float
+    audio_embedding_norm: float
+    cosine_similarity: float
+    cosine_distance: float
+
+
+def compare_embeddings(text: np.ndarray, audio: np.ndarray) -> EmbeddingComparison:
+    """Compare one text/audio CLAP pair with explicit norm diagnostics.
+
+    :param text: Prompt embedding shaped ``(1, embedding_dim)``.
+    :param audio: Rendered-audio embedding with the same shape.
+    :returns: Cosine similarity, distance, and source-vector norms.
+    :raises ValueError: Shapes differ, values are non-finite, or either norm is zero.
+    """
+    if text.shape != audio.shape or text.ndim != 2 or text.shape[0] != 1:
+        raise ValueError(
+            f"embedding shapes must match as (1, dim), got {text.shape} and {audio.shape}"
+        )
+    if not np.isfinite(text).all() or not np.isfinite(audio).all():
+        raise ValueError("embeddings must contain only finite values")
+    text_norm = float(np.linalg.norm(text[0]))
+    audio_norm = float(np.linalg.norm(audio[0]))
+    if text_norm == 0.0 or audio_norm == 0.0:
+        raise ValueError("embeddings must have non-zero norms")
+    similarity = float(np.dot(text[0], audio[0]) / (text_norm * audio_norm))
+    similarity = float(np.clip(similarity, -1.0, 1.0))
+    return EmbeddingComparison(
+        text_embedding_norm=text_norm,
+        audio_embedding_norm=audio_norm,
+        cosine_similarity=similarity,
+        cosine_distance=1.0 - similarity,
+    )
+
+
+def summarize_cosine_distances(distances: Sequence[float]) -> dict[str, float | int]:
+    """Compute population statistics for a non-empty distance collection.
+
+    :param distances: Finite cosine distances.
+    :returns: Count, center, spread, extrema, and quartiles.
+    :raises ValueError: No distances are supplied or any value is non-finite.
+    """
+    values = np.asarray(distances, dtype=np.float64)
+    if values.size == 0:
+        raise ValueError("at least one cosine distance is required")
+    if not np.isfinite(values).all():
+        raise ValueError("cosine distances must contain only finite values")
+    return {
+        "count": int(values.size),
+        "mean": float(values.mean()),
+        "std_population": float(values.std(ddof=0)),
+        "min": float(values.min()),
+        "p25": float(np.quantile(values, 0.25)),
+        "median": float(np.median(values)),
+        "p75": float(np.quantile(values, 0.75)),
+        "max": float(values.max()),
+    }
+
+
+def write_comparison_csv(path: Path, row: Mapping[str, str | int | float]) -> None:
+    """Write one prompt/audio comparison with a stable column order.
+
+    :param path: CSV destination.
+    :param row: Values for every comparison field.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=_COMPARISON_CSV_FIELDS)
+        writer.writeheader()
+        writer.writerow(row)
+
+
+def write_summary_csv(path: Path, summary: Mapping[str, float | int]) -> None:
+    """Write aggregate statistics as one row keyed by statistic name.
+
+    :param path: CSV destination.
+    :param summary: Ordered statistic names and values.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(summary))
+        writer.writeheader()
+        writer.writerow(summary)
 
 
 class _ClapRenderSettings(BaseModel):
@@ -297,6 +415,37 @@ def _encode_text(prompt: str, checkpoint_dir: str, device: torch.device) -> torc
     return embedding
 
 
+def _encode_audio(
+    audio: np.ndarray,
+    sample_rate: int,
+    checkpoint_dir: str,
+    device: torch.device,
+) -> np.ndarray:
+    """Encode a stereo Surge render through the training CLAP audio path.
+
+    :param audio: Channel-first waveform shaped ``(channels, samples)``.
+    :param sample_rate: Render sample rate in Hz.
+    :param checkpoint_dir: Materialized CLAP checkpoint directory.
+    :param device: Torch inference device.
+    :returns: Audio embedding shaped ``(1, 512)``.
+    :raises RuntimeError: The production encoder returns an incompatible shape.
+    """
+    from synth_setter.pipeline.data.add_embeddings import load_clap_audio_encoder
+
+    mono: np.ndarray = np.asarray(
+        np.mean(audio, axis=0, dtype=np.float32, keepdims=True),
+        dtype=np.float32,
+    )
+    encoder = load_clap_audio_encoder(checkpoint_dir, str(device))
+    embedding = encoder(mono, sample_rate)
+    if embedding.shape != (1, *_EXPECTED_CONDITIONING_SHAPE):
+        raise RuntimeError(
+            f"CLAP audio embedding shape {embedding.shape} does not match "
+            f"{(1, *_EXPECTED_CONDITIONING_SHAPE)}"
+        )
+    return embedding
+
+
 def _validate_inverse_model(model: VSTFlowMatchingModule, render: RenderConfig) -> None:
     """Require a text-compatible CLAP checkpoint for the selected Surge spec.
 
@@ -367,12 +516,13 @@ def _workspace_render_config(render: RenderConfig) -> RenderConfig:
     return render.model_copy(update={"synth": SynthSpec.model_validate(synth_values)})
 
 
-def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) -> None:
+def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) -> np.ndarray:
     """Decode one prediction and persist its production Surge render.
 
     :param prediction: Model-space parameter row shaped ``(1, len(param_spec))``.
     :param render: Surge renderer and audio configuration.
     :param output: New WAV destination.
+    :returns: Channel-first rendered waveform written to ``output``.
     """
     spec = param_specs[render.param_spec_name]
     synth_params, note_params = decode_model_output(prediction[0].float().numpy(), spec)
@@ -385,6 +535,18 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     write_wav(audio, str(output), render.sample_rate, render.channels)
+    return audio
+
+
+def _csv_uri_for_wav(wav_uri: str) -> str:
+    """Derive the adjacent comparison CSV URI from a WAV object URI.
+
+    :param wav_uri: R2 destination for rendered audio.
+    :returns: Same object path with a ``.csv`` suffix.
+    """
+    if wav_uri.casefold().endswith(".wav"):
+        return wav_uri[:-4] + ".csv"
+    return f"{wav_uri}.csv"
 
 
 def _run_id(prompt: str) -> str:
@@ -479,6 +641,10 @@ def main(
     selected_seed = settings.seed if seed is None else seed
     run_id = _run_id(prompt)
     output_path = _resolve_output(output, settings, run_id)
+    metrics_path = output_path.with_suffix(".csv")
+    default_wav_destination = f"{settings.upload_prefix}/{run_id}.wav"
+    wav_destination = (upload_uri or default_wav_destination) if upload else ""
+    csv_destination = _csv_uri_for_wav(wav_destination) if upload else ""
 
     if upload or r2_io.is_r2_uri(inverse_source) or r2_io.is_r2_uri(clap_source):
         click.echo("Checking R2 access...", err=True)
@@ -505,14 +671,38 @@ def main(
         selected_seed,
     )
     click.echo("Rendering Surge patch...", err=True)
-    _render_wav(prediction, render, output_path)
+    audio = _render_wav(prediction, render, output_path)
+    click.echo("Encoding rendered audio with CLAP...", err=True)
+    audio_embedding = _encode_audio(
+        audio,
+        render.sample_rate,
+        clap_checkpoint_dir,
+        selected_device,
+    )
+    comparison = compare_embeddings(embedding.detach().cpu().float().numpy(), audio_embedding)
+    write_comparison_csv(
+        metrics_path,
+        {
+            "prompt": prompt,
+            "wav_r2_uri": wav_destination,
+            "csv_r2_uri": csv_destination,
+            "seed": selected_seed,
+            "text_embedding_norm": comparison.text_embedding_norm,
+            "audio_embedding_norm": comparison.audio_embedding_norm,
+            "cosine_similarity": comparison.cosine_similarity,
+            "cosine_distance": comparison.cosine_distance,
+        },
+    )
 
+    click.echo(f"Cosine distance: {comparison.cosine_distance:.9g}")
     click.echo(f"Local WAV: {output_path}")
+    click.echo(f"Local CSV: {metrics_path}")
     if upload:
-        destination = upload_uri or f"{settings.upload_prefix}/{run_id}.wav"
-        click.echo(f"Uploading {destination}...", err=True)
-        r2_io.upload_to_uri(output_path, destination)
-        click.echo(f"R2 WAV: {destination}")
+        click.echo(f"Uploading {wav_destination}...", err=True)
+        r2_io.upload_to_uri(output_path, wav_destination)
+        r2_io.upload_to_uri(metrics_path, csv_destination)
+        click.echo(f"R2 WAV: {wav_destination}")
+        click.echo(f"R2 CSV: {csv_destination}")
 
 
 if __name__ == "__main__":
