@@ -25,6 +25,22 @@ ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN: Final = "SKYPILOT_SERVICE_ACCOUNT_TOKEN"  # 
 _ENV_IDENT_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
+def _strip_optional_non_blank(value: str | None, error: str) -> str | None:
+    """Strip an optional string and reject a blank configured value.
+
+    :param value: Candidate optional string.
+    :param error: Validation error for a blank value.
+    :return: Stripped value, or ``None`` when unset.
+    :raises ValueError: ``value`` contains only whitespace.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError(error)
+    return stripped
+
+
 class SkypilotClientSettings(BaseSettings):
     """SkyPilot client authentication loaded from ``SKYPILOT_*`` env.
 
@@ -177,6 +193,10 @@ class SkypilotLaunchConfig(BaseModel):
 
         Docker image tag pulled by each worker.
 
+    .. attribute :: worker_checkout_dir
+
+        Repository checkout directory inside the worker image.
+
     .. attribute :: tail
 
         Whether to tail logs after launch.
@@ -217,12 +237,37 @@ class SkypilotLaunchConfig(BaseModel):
     job_name: str | None = None
     num_workers: int = 1
     worker_image_tag: str = "devcontainer-tools"
+    worker_checkout_dir: str = "/home/build/synth-setter"
     tail: bool = False
     api_server: str | None = None
     local: bool = False
     network_volume: str | None = None
     tier: GpuTier = Field(default=GpuTier.ANY, strict=False)
     extra_envs: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("cmd")
+    @classmethod
+    def cmd_must_be_non_blank(cls, value: str | None) -> str | None:
+        """Strip a configured command and reject whitespace-only values.
+
+        :param value: Candidate worker shell command.
+        :return: Stripped command, or ``None`` when unset.
+        """
+        return _strip_optional_non_blank(value, "cmd must be a non-empty command when set")
+
+    @field_validator("worker_checkout_dir")
+    @classmethod
+    def worker_checkout_dir_must_be_non_blank(cls, value: str) -> str:
+        """Normalize the configured worker checkout directory.
+
+        :param value: Candidate checkout directory.
+        :return: Stripped non-empty checkout directory.
+        :raises ValueError: The configured directory is blank.
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("worker_checkout_dir must be non-empty")
+        return stripped
 
     @field_validator("num_workers")
     @classmethod
@@ -244,13 +289,8 @@ class SkypilotLaunchConfig(BaseModel):
 
         :param v: Candidate ``api_server`` value pre-validation (``None`` permitted).
         :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
-        :raises ValueError: ``v`` is a non-``None`` string that is blank/whitespace-only.
         """
-        if v is None:
-            return v
-        if not v.strip():
-            raise ValueError("api_server must be a non-empty URL when set")
-        return v.strip()
+        return _strip_optional_non_blank(v, "api_server must be a non-empty URL when set")
 
     @field_validator("env_file")
     @classmethod
@@ -259,13 +299,8 @@ class SkypilotLaunchConfig(BaseModel):
 
         :param v: Candidate ``env_file`` value pre-validation (``None`` permitted).
         :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
-        :raises ValueError: ``v`` is a non-``None`` string that is blank/whitespace-only.
         """
-        if v is None:
-            return v
-        if not v.strip():
-            raise ValueError("env_file must be a non-empty path when set")
-        return v.strip()
+        return _strip_optional_non_blank(v, "env_file must be a non-empty path when set")
 
     @field_validator("network_volume")
     @classmethod
@@ -274,13 +309,8 @@ class SkypilotLaunchConfig(BaseModel):
 
         :param v: Candidate ``network_volume`` value pre-validation (``None`` permitted).
         :return: ``None`` when input is ``None``; else ``v`` with whitespace stripped.
-        :raises ValueError: ``v`` is a non-``None`` string that is blank/whitespace-only.
         """
-        if v is None:
-            return v
-        if not v.strip():
-            raise ValueError("network_volume must be a non-empty name when set")
-        return v.strip()
+        return _strip_optional_non_blank(v, "network_volume must be a non-empty name when set")
 
     @field_validator("extra_envs")
     @classmethod

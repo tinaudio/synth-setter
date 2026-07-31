@@ -426,4 +426,4 @@ Should `skypilot` be a required or optional dependency?
 
 - `sky check vast` confirms Vast.ai credentials.
 - `sky show-gpus` confirms GPU availability.
-- Managed-job dispatch via `synth-setter-skypilot-launch src/synth_setter/configs/launch/train-vast-smoke.yaml` provisions a Vast GPU, runs the 10-step smoke train, and releases the instance (verified in #2212).
+- Managed-job dispatch via `synth-setter-skypilot-launch skypilot_launch/compute=vast/smoke 'skypilot_launch.cmd="exec synth-setter-train experiment=surge/ffn_simple_smoke"'` provisions a Vast GPU, runs the smoke train, and releases the instance (verified in #2212).

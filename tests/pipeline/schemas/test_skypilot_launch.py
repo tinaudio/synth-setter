@@ -28,6 +28,15 @@ class TestDefaults:
         """Cmd defaults to None — populated by the Hydra entrypoint at dispatch time."""
         assert SkypilotLaunchConfig().cmd is None
 
+    @pytest.mark.parametrize("blank", ["", " ", "\t"])
+    def test_blank_cmd_raises(self, blank: str) -> None:
+        """A configured worker command must contain a shell command.
+
+        :param blank: Empty or whitespace-only candidate command.
+        """
+        with pytest.raises(ValueError, match="cmd must be a non-empty command"):
+            SkypilotLaunchConfig(cmd=blank)
+
     def test_default_num_workers_is_one(self) -> None:
         """Single worker is the default; >1 fans out parallel ranks."""
         assert SkypilotLaunchConfig().num_workers == 1
@@ -35,6 +44,21 @@ class TestDefaults:
     def test_default_worker_image_tag_is_devcontainer_tools(self) -> None:
         """Worker image tag defaults to the tooling image so pods are debuggable."""
         assert SkypilotLaunchConfig().worker_image_tag == "devcontainer-tools"
+
+    def test_default_worker_checkout_dir_matches_container_workspace(self) -> None:
+        """The checkout default matches the worker image workspace."""
+        assert SkypilotLaunchConfig().worker_checkout_dir == "/home/build/synth-setter"
+
+    def test_worker_checkout_dir_strips_surrounding_whitespace(self) -> None:
+        """The checkout directory is normalized before shell quoting."""
+        cfg = SkypilotLaunchConfig(worker_checkout_dir=" /workspace/repo ")
+
+        assert cfg.worker_checkout_dir == "/workspace/repo"
+
+    def test_blank_worker_checkout_dir_raises(self) -> None:
+        """A configured checkout directory must contain a path."""
+        with pytest.raises(ValueError, match="worker_checkout_dir must be non-empty"):
+            SkypilotLaunchConfig(worker_checkout_dir="   ")
 
     def test_default_tail_is_false(self) -> None:
         """Detach by default; ``tail`` is opt-in."""

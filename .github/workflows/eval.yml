@@ -1,41 +1,58 @@
 name: Evaluate
 
-# Manually-dispatched evaluation: submits a SkyPilot managed job that runs
-# synth-setter-eval (under the headless-VST wrapper) on the provider named in
-# the launch config (RunPod by default). The launch config is the single
-# input — experiment, checkpoint (via the wandb_checkpoint overlay), compute
-# template, worker image tag, and worker cmd are all baked there. See
-# src/synth_setter/configs/launch/eval-runpod.yaml and
-# storage-provenance-spec.md §8.
-#
-# The runner only dispatches: the launcher runs in the dev-snapshot container
-# (mirroring generate-dataset-shards.yaml's runpod row) and detaches once the
-# managed-jobs controller accepts the job unless the config sets tail=true.
-# WORKER_GIT_REF pins the worker checkout to the dispatched SHA so §12
-# github_sha provenance records the commit actually evaluated.
+# Pass WORKER_GIT_REF so provenance records the evaluated revision.
 on:
   workflow_dispatch:
     inputs:
-      launch_config:
-        description: "Repo-relative path to the SkyPilot launch config (see src/synth_setter/configs/launch/)"
+      experiment:
+        description: "Hydra experiment used to construct the evaluation model"
         required: true
         type: string
-        default: src/synth_setter/configs/launch/eval-runpod.yaml
+        default: surge/ffn_simple
+      checkpoint_ref:
+        description: "W&B artifact reference resolved by the worker"
+        required: true
+        type: string
+      dataset_root_uri:
+        description: "Finalized, model-compatible Lance dataset consumed by evaluation"
+        required: true
+        type: string
+      compute:
+        description: "skypilot_launch/compute option"
+        required: true
+        type: string
+        default: runpod/smoke
+      tail:
+        description: "Tail worker logs and propagate the terminal status"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   evaluate:
-    name: Dispatch synth-setter-eval via SkyPilot (${{ inputs.launch_config }})
+    name: Dispatch synth-setter-eval via SkyPilot (${{ inputs.experiment }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
+      CHECKPOINT_REF: ${{ inputs.checkpoint_ref }}
+      COMPUTE_OPTION: ${{ inputs.compute }}
+      DATASET_ROOT_URI: ${{ inputs.dataset_root_uri }}
+      EXPERIMENT: ${{ inputs.experiment }}
       IMAGE: tinaudio/synth-setter:dev-snapshot
-      LAUNCH_CONFIG: ${{ inputs.launch_config }}
+      TAIL: ${{ inputs.tail }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Validate launcher inputs
+        run: |
+          set -euo pipefail
+          ./scripts/validate_skypilot_workflow_inputs.sh \
+            "$EXPERIMENT" "$COMPUTE_OPTION" \
+            "$CHECKPOINT_REF" "$DATASET_ROOT_URI"
 
       # Exports canonical storage env plus the rclone projection for the container
       # env pass-through below; rclone itself runs on the SkyPilot worker, not the runner.
@@ -49,10 +66,7 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # python -m (not the console script) so the launcher comes from the
-      # mounted fresh checkout via the image's editable install, independent
-      # of the entry-point shims baked at image-build time. LAUNCH_CONFIG
-      # passes through step env so a stray token cannot break out.
+      # python -m uses the mounted checkout rather than image-baked shims.
       - name: Dispatch via SkyPilot
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
@@ -76,12 +90,31 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e WANDB_API_KEY \
             -e WORKER_GIT_REF \
-            -e LAUNCH_CONFIG \
+            -e CHECKPOINT_REF \
+            -e COMPUTE_OPTION \
+            -e DATASET_ROOT_URI \
+            -e EXPERIMENT \
+            -e TAIL \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
-              python -m synth_setter.pipeline.skypilot_launch "$LAUNCH_CONFIG"
+              printf -v checkpoint_arg "%b" \
+                "ckpt_path=\047\\\${wandb:$CHECKPOINT_REF}\047 "
+              printf -v worker_cmd "%s" \
+                "exec src/synth_setter/scripts/run-linux-vst-headless.sh " \
+                "synth-setter-eval " \
+                "experiment=$EXPERIMENT " \
+                "$checkpoint_arg" \
+                "datamodule.download_dataset_root_uri=$DATASET_ROOT_URI " \
+                "hydra.run.dir=/home/build/synth-setter/eval-run"
+              python -m synth_setter.pipeline.skypilot_launch \
+                "skypilot_launch/compute=$COMPUTE_OPTION" \
+                "skypilot_launch.tail=$TAIL" \
+                skypilot_launch.worker_image_tag=dev-snapshot \
+                "skypilot_launch.cmd=\"$worker_cmd\"" \
+                hydra.run.dir=/tmp/synth-setter-skypilot-launch \
+                hydra.output_subdir=null
             ' 2>&1 | tee eval-dispatch.log
 
       - name: Upload dispatch log

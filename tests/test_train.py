@@ -10,6 +10,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 import logging
 import os
 import re
+import shlex
 import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -76,6 +77,7 @@ from tests.helpers.eval_fakes import (
     fake_metrics_csv,
     fake_postprocessing_subprocess,
 )
+from tests.helpers.generic_launcher import run_generic_launcher_command
 from tests.helpers.noise_capture import NoiseCaptureCallback
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
@@ -232,7 +234,7 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
 def test_train_torchsynth_same_online_advances_one_cpu_step(
     cfg_torchsynth_same_online_train: DictConfig,
 ) -> None:
-    """Train through frozen SAME-S conditioning and its temporal pool.
+    """Run the workflow-default TorchSynth SAME experiment for one CPU step.
 
     :param cfg_torchsynth_same_online_train: Tiny production-path SAME configuration.
     """
@@ -251,6 +253,67 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
     assert not encoder.backbone.autoencoder.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
     assert any(parameter.requires_grad for parameter in encoder.head.parameters())
+
+
+@pytest.mark.slow
+def test_generic_launcher_runs_workflow_default_train_entrypoint(
+    cfg_torchsynth_same_online_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Run one workflow-default training step through the decorated launcher CLI.
+
+    :param cfg_torchsynth_same_online_train: Tiny SAME configuration supplying checkpoints.
+    :param tmp_path: Output root for launcher and worker subprocesses.
+    """
+    repo_root = Path(__file__).parents[1]
+    cfg = cfg_torchsynth_same_online_train
+    worker_command = shlex.join(
+        [
+            "exec",
+            "synth-setter-train",
+            "experiment=torchsynth/flow_audio_same",
+            "trainer=cpu",
+            "callbacks=none",
+            "logger=[]",
+            f"paths.root_dir={repo_root}",
+            f"paths.output_dir={tmp_path / 'train'}",
+            f"paths.log_dir={tmp_path / 'train'}",
+            f"hydra.run.dir={tmp_path / 'train'}",
+            "test=false",
+            "training.val_audio_probe=false",
+            "datamodule.train_val_test_sizes=[1,1,1]",
+            "datamodule.batch_size=1",
+            "datamodule.num_workers=0",
+            "datamodule.signal_length=4096",
+            "+trainer.max_epochs=1",
+            "+trainer.max_steps=1",
+            "+trainer.limit_train_batches=1",
+            "trainer.limit_val_batches=0",
+            "+trainer.num_sanity_val_steps=0",
+            "model.compile=false",
+            "model.cfg_dropout_rate=0.0",
+            "model.vector_field.d_model=8",
+            "model.vector_field.num_heads=1",
+            "model.vector_field.d_ff=8",
+            "model.vector_field.num_layers=1",
+            "model.vector_field.projection.num_tokens=2",
+            "model.encoder.out_dim=8",
+            f"model.encoder.backbone.checkpoint={cfg.model.encoder.backbone.checkpoint}",
+            "model.encoder.backbone.checkpoint_sha256=null",
+            "model.encoder.head.embed_dim=8",
+            "model.encoder.head.max_seq_len=8",
+            "model.encoder.head.num_heads=1",
+            "model.audio_loss.t_min=0.0",
+            "model.audio_loss.distance.encoder.checkpoint="
+            f"{cfg.model.audio_loss.distance.encoder.checkpoint}",
+            "+model.audio_loss.distance.encoder.checkpoint_sha256=null",
+        ]
+    )
+
+    result = run_generic_launcher_command(tmp_path, worker_command, repo_root)
+
+    assert result.returncode == 0, result.stderr
+    assert "max_steps=1" in result.stdout
 
 
 @pytest.mark.slow

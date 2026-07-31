@@ -2295,6 +2295,17 @@ class TestBuildWorkerCmd:
         assert cmd.startswith(f"cd {_WORKER_REPO_ROOT}")
         assert _WORKER_REPO_ROOT == "/home/build/synth-setter"
 
+    def test_cmd_uses_configured_worker_checkout_dir(self, spec: DatasetSpec) -> None:
+        """Dataset dispatch honors a non-default worker checkout directory.
+
+        :param spec: Fixture-provided ``DatasetSpec``.
+        """
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd([], spec, worker_checkout_dir="/workspace/custom repo")
+
+        assert cmd.startswith("cd '/workspace/custom repo'")
+
     def test_cmd_runs_sync_worker_checkout_before_exec(self, spec: DatasetSpec) -> None:
         """sync_worker_checkout.sh bypasses dev-snapshot bake-lag when WORKER_GIT_REF is set.
 

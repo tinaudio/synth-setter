@@ -10,6 +10,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 
 import math
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -66,6 +67,7 @@ from tests.helpers.eval_fakes import (
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
 )
+from tests.helpers.generic_launcher import run_generic_launcher_command
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
@@ -90,6 +92,45 @@ _AUDIO_PREDICTION_SAMPLE_COUNT = int(
     _AUDIO_PREDICTION_DURATION_SECONDS * _AUDIO_PREDICTION_SAMPLE_RATE
 )
 _SURGE_XT_PREDICTION_WIDTH = 300
+
+
+@pytest.mark.slow
+def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) -> None:
+    """Run workflow-default evaluation through the launcher and headless wrapper.
+
+    :param tmp_path: Output root for launcher and worker subprocesses.
+    """
+    repo_root = Path(__file__).parents[1]
+    worker_command = shlex.join(
+        [
+            "exec",
+            "src/synth_setter/scripts/run-linux-vst-headless.sh",
+            "synth-setter-eval",
+            "experiment=surge/ffn_simple",
+            "trainer=cpu",
+            "callbacks=none",
+            "~logger",
+            "ckpt_path=null",
+            "datamodule=surge_lance",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=1",
+            "datamodule.num_workers=0",
+            "model.net.d_model=16",
+            "model.net.n_heads=1",
+            "model.net.n_layers=1",
+            "model.net.patch_size=128",
+            "model.net.patch_stride=64",
+            "model.compile=false",
+            "mode=test",
+            "+trainer.limit_test_batches=1",
+            f"hydra.run.dir={tmp_path / 'eval'}",
+        ]
+    )
+
+    result = run_generic_launcher_command(tmp_path, worker_command, repo_root)
+
+    assert result.returncode == 0, result.stderr
+    assert "test/param_mse" in result.stdout
 
 
 def test_evaluate_flow_sketch_prelim_test_mode_uses_sketch_controls(
@@ -1463,7 +1504,7 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
     monkeypatch: pytest.MonkeyPatch,
     experiment_name: str,
 ) -> None:
-    """Predict eval resolves ckpt_path via ``${wandb:...}`` from the live registry, loads it, and runs inference.
+    """Run the workflow's W&B checkpoint contract through real prediction.
 
     The full W&B checkpoint contract end to end: train a real checkpoint, publish it to
     ``tinaudio/synth-setter-citest``, then pass ``ckpt_path=${wandb:...}`` explicitly and run

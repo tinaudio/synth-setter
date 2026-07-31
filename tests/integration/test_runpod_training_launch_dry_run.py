@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -10,14 +11,41 @@ from pathlib import Path
 import pytest
 import sky
 import yaml
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 from sky.volumes import Volume
 
 from synth_setter.pipeline.compute_task import build_task_doc, load_compute_option
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-from synth_setter.pipeline.skypilot_launch import _override_image_id, load_launch_config
+from synth_setter.pipeline.skypilot_launch import (
+    _override_image_id,
+    _sky_cfg_from_hydra,
+    load_launch_config,
+)
 
 _REPO_ROOT = Path(__file__).parents[2]
 _LAUNCH_DIR = _REPO_ROOT / "src/synth_setter/configs/launch"
+
+
+def _compose_generic_task(command: str) -> sky.Task:
+    """Compose the Hydra launcher and build its real SkyPilot task.
+
+    :param command: Generic worker shell command.
+    :return: Constructed SkyPilot task without submission.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="skypilot_launch/default",
+                overrides=[
+                    "skypilot_launch/compute=runpod/smoke",
+                    f"skypilot_launch.cmd={command}",
+                ],
+            )
+    finally:
+        GlobalHydra.instance().clear()
+    return _compose_task(_sky_cfg_from_hydra(cfg))
 
 
 def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
@@ -37,6 +65,67 @@ def _compose_task(launch_config: SkypilotLaunchConfig) -> sky.Task:
     )
     _override_image_id(task, f"tinaudio/synth-setter:{launch_config.worker_image_tag}")
     return task
+
+
+def _run_worker_config(
+    task: sky.Task, executable_name: str, *, wrapper: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Feed a generic task's command into its real packaged worker CLI.
+
+    :param task: Composed SkyPilot task containing the wrapped command.
+    :param executable_name: Packaged worker executable passed to ``exec`` or ``wrapper``.
+    :param wrapper: Repository-relative executable wrapping the worker CLI, if any.
+    :return: Completed worker config-composition subprocess.
+    """
+    assert isinstance(task.run, str)
+    command_prefix = (
+        f"exec {wrapper} {executable_name} " if wrapper else f"exec {executable_name} "
+    )
+    _, marker, raw_args = task.run.partition(command_prefix)
+    assert marker
+    args = shlex.split(raw_args.removesuffix(")"))
+    entrypoint = (
+        _REPO_ROOT / wrapper if wrapper else Path(sys.executable).with_name(executable_name)
+    )
+    command = [entrypoint, executable_name, *args] if wrapper else [entrypoint, *args]
+    return subprocess.run(  # noqa: S603 - real packaged worker CLI
+        [*command, "--cfg", "job"],
+        cwd=_REPO_ROOT,
+        env={**os.environ, "DATASET_ROOT_URI": "", "HYDRA_FULL_ERROR": "1"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_generic_hydra_train_command_composes_through_worker_entrypoint() -> None:
+    """The generic launcher's final train command is consumable by the real CLI."""
+    task = _compose_generic_task(
+        '"exec synth-setter-train experiment=torchsynth/flow_audio_same '
+        'training.upload_checkpoints_during_training=true"'
+    )
+
+    result = _run_worker_config(task, "synth-setter-train")
+
+    assert result.returncode == 0, result.stderr
+    assert "run_name: flow_audio_same" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="worker headless wrapper requires Xvfb")
+def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint() -> None:
+    """The workflow-shaped eval command preserves its resolver through the headless CLI."""
+    wrapper = "src/synth_setter/scripts/run-linux-vst-headless.sh"
+    task = _compose_generic_task(
+        f'"exec {wrapper} synth-setter-eval experiment=surge/ffn_simple '
+        "ckpt_path='\\${wandb:tinaudio/synth-setter/model-ffn_simple:v0}'"
+        ' datamodule.download_dataset_root_uri=r2://experiments/data/test/"'
+    )
+
+    result = _run_worker_config(task, "synth-setter-eval", wrapper=wrapper)
+
+    assert result.returncode == 0, result.stderr
+    assert "ckpt_path: ${wandb:tinaudio/synth-setter/model-ffn_simple:v0}" in result.stdout
+    assert "download_dataset_root_uri: r2://experiments/data/test/" in result.stdout
 
 
 @pytest.mark.parametrize(
