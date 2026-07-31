@@ -406,10 +406,14 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
     ) -> _TimeField:
         """Build a sampling field whose velocity carries simulator feedback above ``t_min``.
 
-        The control corrects the *guided* velocity rather than each classifier-free-guidance
-        branch: the estimate has to come from the velocity actually integrated, the
-        unconditional branch's estimate is not tied to this row's observation anyway — the
-        same reason training skips fully-dropped rows — and it halves the renders.
+        The control is scored on, and fed, the **conditional** velocity, because that is what
+        it saw in training; the guided combination is roughly ``cfg_strength`` times larger
+        and out of distribution for it, which would let evaluation metrics move for reasons
+        unrelated to the learned correction. The resulting correction is then applied to the
+        guided velocity, which is what the sampler integrates. This costs one extra field
+        evaluation per ODE evaluation and leaves the correction computed for a trajectory
+        point the sampler does not visit — both tracked in
+        https://github.com/tinaudio/synth-setter/issues/2782.
 
         :param conditioning: Encoded content conditioning for the conditional branch.
         :param cfg_strength: Joint classifier-free-guidance scale.
@@ -438,10 +442,13 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             :param t: Flow time shaped ``(batch, 1)``.
             :returns: Corrected velocity shaped ``(batch, params)``.
             """
-            velocity = guided(x_t, t)
-            return self.vector_field.combine(
-                velocity, t, self._sampling_control(x_t, t, velocity, target_audio)
-            )
+            guided_velocity = guided(x_t, t)
+            conditional = self.vector_field.flow(x_t, t, conditioning)
+            signal = self._sampling_control(x_t, t, conditional, target_audio)
+            # combine() minus its input is the gated correction, so a disengaged row
+            # contributes exactly zero and leaves the guided velocity bit-identical.
+            correction = self.vector_field.combine(conditional, t, signal) - conditional
+            return guided_velocity + correction
 
         return controlled
 

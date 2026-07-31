@@ -824,3 +824,50 @@ def test_finetune_predict_step_samples_with_a_bound_observation(tmp_path: Path) 
     assert predicted.shape == (_BATCH, _WIDTH)
     assert torch.isfinite(predicted).all()
     assert module._sampling_target is None
+
+
+def test_controlled_sampling_scores_the_conditional_velocity(tmp_path: Path) -> None:
+    """The control sees the velocity it was trained on, not the CFG-extrapolated one.
+
+    Training scores ``flow(x_t, t, z)``; the sampler integrates
+    ``(1 - w) * v_uncond + w * v_cond``, which at the shipped ``w`` is a different vector.
+    Feeding that to the control would put it out of distribution, so evaluation metrics
+    could move for reasons unrelated to the learned correction (#2782).
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"control_t_min": 0.0})
+    batch = _batch()
+    noise = torch.randn(_BATCH, _WIDTH)
+    seen: list[torch.Tensor] = []
+    original = module.vector_field.control.forward
+
+    def _spy(t: torch.Tensor, velocity: torch.Tensor, control: torch.Tensor) -> torch.Tensor:
+        """Record the velocity feature the control is handed.
+
+        :param t: Flow time.
+        :param velocity: Velocity feature under test.
+        :param control: Control signal.
+        :returns: The unmodified correction.
+        """
+        seen.append(velocity.clone())
+        return original(t, velocity, control)
+
+    module.vector_field.control.forward = _spy  # pyright: ignore[reportAttributeAccessIssue]
+    with torch.no_grad():
+        module.on_validation_batch_start(batch, 0)
+        module._sample(batch["audio"], noise, 1, 2.0)
+        module.on_validation_batch_end(None, batch, 0)
+
+        # The sampler's first RK4 evaluation is at (noise, t=0), so both candidate
+        # velocities can be reconstructed exactly.
+        z = module.encoder(batch["audio"])
+        t0 = torch.zeros(_BATCH, 1)
+        conditional = module.vector_field.flow(noise, t0, z)
+        unconditional = module.vector_field.flow(noise, t0, None)
+    guided = (1 - 2.0) * unconditional + 2.0 * conditional
+
+    assert seen, "the control was never evaluated"
+    assert not torch.allclose(conditional, guided), "fixture cannot distinguish the two"
+    assert torch.allclose(seen[0], conditional, atol=1e-6)
+    assert not torch.allclose(seen[0], guided, atol=1e-6)
