@@ -2540,7 +2540,12 @@ class TestCheckedInLaunchConfigs:
             "train-runpod.yaml",
             "eval-runpod.yaml",
         ],
-        ids=["flow-simple-440k", "smoke", "train", "eval"],
+        ids=[
+            "flow-simple-440k",
+            "smoke",
+            "train",
+            "eval",
+        ],
     )
     def test_shipped_config_loads_and_composes_with_its_template(self, name: str) -> None:
         """A shipped config validates, names a real template, and its cmd injects cleanly.
