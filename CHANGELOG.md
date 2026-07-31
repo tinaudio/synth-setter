@@ -1,6 +1,1951 @@
 # CHANGELOG
 
 
+## v11.0.0 (2026-07-31)
+
+### Chores
+
+- Remove obsolete RunPod network volume launching
+  ([#2788](https://github.com/tinaudio/synth-setter/pull/2788),
+  [`ac62c58`](https://github.com/tinaudio/synth-setter/commit/ac62c58fc6c7d70351b835135d3f3675d7dc9ee0))
+
+* internal-feat(training): remove network volume launching
+
+* internal-fix(training): include TorchSynth compute oracle
+
+### Internal-Feat
+
+- **ci-automation**: Collapse Pi review audit details
+  ([#2722](https://github.com/tinaudio/synth-setter/pull/2722),
+  [`c3fc950`](https://github.com/tinaudio/synth-setter/commit/c3fc9504528cc88de36c6b837d33636d92500b1e))
+
+- **code-health**: Add nbconvert toolchain to notebooks group
+  ([#2761](https://github.com/tinaudio/synth-setter/pull/2761),
+  [`ff4fca4`](https://github.com/tinaudio/synth-setter/commit/ff4fca4a1388b13e22107b98eaf328c932eda54a))
+
+`smoosense[jupyter]` pulls in neither nbconvert/nbclient/nbformat nor a `jupyter` entry point, so
+  notebooks under `notebooks/` could only be executed via an ad-hoc `uv run --with nbconvert --with
+  ipykernel ...`.
+
+Add nbconvert (which brings nbclient/nbformat/jupyter-core) and ipykernel for the `python3` kernel.
+  The group is already folded into `dev`, which is what the devcontainer base image installs, so no
+  devcontainer change is needed.
+
+Closes #2759
+
+- **data-pipeline**: Nested shift sensitivity column
+  ([#2697](https://github.com/tinaudio/synth-setter/pull/2697),
+  [`80e4d9b`](https://github.com/tinaudio/synth-setter/commit/80e4d9b2bbc550944077453c8f90f84420535b8d))
+
+* internal-feat(data-pipeline): param_shift sensitivity columns
+
+Adds a `param_shift` entry to the add-embeddings registry. Each row is assigned one parameter of the
+  render's param spec, that parameter is redrawn from its own distribution, the patch is
+  re-rendered, and the perturbed audio is scored against the row's stored audio — turning any
+  finalized dataset into a per-parameter sensitivity dataset without a second generation pass.
+
+Seven new columns: param_shift, param_amount_shift, audio_shift, rms_shift, sot_shift, wmfcc_shift,
+  mss_shift.
+
+Assignment and per-row draws key on the Lance row id rather than a running counter, so the
+  assignment is balanced across the spec and a resume-cache replay reproduces the identical shift.
+
+The registry contract widens to carry this: input_field becomes input_fields, encoders return a
+  column mapping instead of a single array, and specs gain extra_columns and rerenders. Lance
+  compares a UDF's output schema field by field, so _encode_columns now emits columns in the
+  policy's declared order and rejects an encoder whose column set differs from that policy.
+
+compute_mss/compute_sot/compute_wmfcc now forward sample_rate to the helpers that already accepted
+  it; without this the recorded metrics silently assume 44.1 kHz.
+
+Verification is a real production path with nothing faked or mocked: the real writer renders a
+  torchsynth Lance shard and the real CLI augments it in a subprocess. The load-bearing assertion
+  re-derives each row's shift from its row id, re-renders it, and requires bitwise equality with the
+  committed audio_shift — proving the recorded parameter name and amount describe the audio actually
+  written.
+
+Closes #2693
+
+* test(data-pipeline): cover param_shift's in-process encoder path
+
+The e2e drives the CLI through a subprocess, so coverage saw none of the module and codecov/patch
+  failed at 48%. Adds tests that call the same production entry points in-process —
+  load_param_shifter then encode_param_shift_columns — and require the resulting Arrow columns to
+  equal what the CLI subprocess committed, plus the two guard paths (a render config the dataset
+  does not match, and identity values without a render config).
+
+No mocks: the renderer, the metrics and the source columns are all real. Module coverage 48% -> 98%.
+
+Refs #2693
+
+* internal-fix(evaluation): forward sample_rate through mss, sot and wmfcc
+
+compute_mss, compute_sot and compute_wmfcc each call a helper that takes a sample_rate, but none of
+  them forwarded one, so the helper's 44100.0 default always won. compute_rms already took and used
+  a sample rate, so the four metrics disagreed the moment audio was not 44.1 kHz.
+
+At 22.05 kHz every analysis window covered twice its intended real-time duration. Nothing raised;
+  the returned float just described a different transform than the caller asked for.
+
+The new parameter defaults to 44100.0, so every existing call site keeps its current behaviour
+  exactly.
+
+Note this does not make the metrics rate-invariant: the frequency axis still changes with the sample
+  rate, so scores from different rates remain incomparable. It only lets a caller size the windows
+  for the audio it has.
+
+Fixes #2700
+
+* internal-feat(data-pipeline): nest the shift facets in one struct column
+
+Review feedback: seven suffixed sibling columns (param_shift, param_amount_shift, audio_shift,
+  rms_shift, ...) sat awkwardly next to the dataset's own columns and forced the registry to grow
+  multi-column support.
+
+One nested `shift` struct reads better — shift.param, shift.amount, shift.audio,
+  shift.rms/sot/wmfcc/mss — and Lance projects subfields directly, so `columns={"p": "shift.param"}`
+  reads one field without materialising the audio.
+
+It also removes most of the contract churn this feature needed. EmbeddingSpec no longer grows
+  extra_columns, encoders return a single Arrow array again, and _encode_columns drops the
+  column-set and ordering enforcement. All that remains of the widening is input_field ->
+  input_fields, which param_shift genuinely needs to read audio, param_array and _rowid together.
+
+* refactor(data-pipeline): embeddings may declare several source columns
+
+EmbeddingSpec declared exactly one source column per embedding, and _encode_columns handed the
+  encoder that single decoded array. Every embedder today reads one column, so the contract has been
+  sufficient — but it cannot express an embedding that has to relate two columns to each other.
+
+Widens the declaration to a tuple and passes encoders the decoded source mapping. Encoders still
+  return a single Arrow array; each gains one unpack line and a signature/docstring update.
+
+No behaviour change: every added line in add_embeddings.py is a signature, a docstring, a
+  `sources[...]` unpack, or the new field. The existing tests/pipeline/data suite exercises every
+  registry entry and stays green with only call-site updates.
+
+Alternatives rejected: arity dispatch (two paths through one registry field); reading param_array
+  for every embedder (six pay I/O they do not use); having a multi-input encoder reopen the dataset
+  (breaks UDF batch alignment).
+
+Closes #2717
+
+* internal-fix(data-pipeline): namespace param_shift draws off datagen
+
+The per-row replacement was drawn from rng_for_sample(param_shift_seed, row_id), the same derivation
+  datagen uses for rng_for_sample(base_seed, sample_idx, attempt). With a single-fragment shard
+  row_id equals sample_idx and an accepted-on-first-attempt row uses attempt 0, so a run configured
+  with the dataset's own base_seed drew from the very stream that produced that row's parameters.
+
+The first draw off that stream is what datagen spent on the spec's first parameter, so the "random"
+  replacement landed on the row's own first parameter value: measured on torchsynth_adsr at
+  base_seed 42, 48 of 64 rows had the replacement exactly equal to that row's adsr_1.attack, and
+  every row whose assigned parameter was adsr_1.attack shifted by zero. A sensitivity column whose
+  perturbation is a function of the patch it perturbs measures nothing.
+
+Draws now go through shift_rng, which reserves seed_for_sample's attempt coordinate at 1 << 32.
+  Datagen only ever passes attempts below attempts_per_sample, so the streams cannot coincide
+  whatever seeds are configured. Reproducibility is unchanged: the value is still a pure function of
+  (param_shift_seed, row_id).
+
+After the fix the only remaining zero-amount rows are genuine discrete redraws landing on their
+  original value — 7 across 1200 rows, all pitch, against ~6.9 expected for a 25-value parameter
+  owning a seventh of the rows.
+
+* docs(data-pipeline): param_shift walkthrough notebook
+
+Renders a real 50-row torchsynth dataset, adds the shift column through the real add-embeddings CLI,
+  reads the subfields back through Lance's struct projection, and browses the result in SmooSense.
+
+The point of the notebook is the sensitivity ranking the column exists to produce. On this dataset
+  note_start_and_end dominates (mean mss 47.7) while adsr_1.release barely registers (mss 0.004, rms
+  1.000) — expected when a 0.5 s render ends before release shapes anything.
+
+Force-added: notebooks/ is gitignored for scratch work, and the two existing curated notebooks are
+  tracked the same way.
+
+* docs(data-pipeline): keep the param_shift notebook's executed outputs
+
+The notebook was committed stripped, so GitHub's rich diff showed prose and code but no results — no
+  sensitivity table, no audio players. Executes it for real against a 50-row torchsynth dataset and
+  keeps the outputs, matching how the two existing curated notebooks are handled.
+
+nbstripout's exclude list is the mechanism that distinguishes a curated walkthrough from scratch
+  work; param_shift_walkthrough joins the two notebooks already there. This is not a lint exemption
+  — the hook clears outputs, it does not check anything.
+
+Two log sources had to be quieted first or the saved outputs would have been unreadable: the render
+  loop's tqdm bar and its per-sample loguru lines, 693 of them for 50 rows. TQDM_DISABLE and
+  LOGURU_LEVEL are set before the synth_setter import, with a comment saying to drop them to watch
+  progress interactively. Saved output items fell from 716 to 33, and the file from 392K to 156K.
+
+Also adds a markdown table of one recorded run, so the ranking is visible even to a reader who never
+  executes the notebook, and notes that the SmooSense frame is served from localhost and therefore
+  cannot render on GitHub.
+
+* docs(data-pipeline): add a Sense widget cell to the notebook
+
+Adds the one-liner from SmooSense's notebook guide for the scalar scores, where the widget's
+  DataFrame -> Parquet round trip is lossless.
+
+The full dataset keeps the native Lance path: shift.audio is a fixed-shape tensor nested in a
+  struct, which that round trip would flatten, and it would copy 50 re-rendered clips through a temp
+  file to do it. The section now says so instead of leaving the choice implicit.
+
+Sense is not an alternative to the local server — it constructs the same _SmooSenseServer, starts
+  Flask, and emits a localhost iframe. Both viewers are therefore live-only and neither renders on
+  GitHub; the notebook now states that rather than leaving a reader to wonder why the frames are
+  blank.
+
+- **data-pipeline**: Sketch-control extraction + registry
+  ([#2621](https://github.com/tinaudio/synth-setter/pull/2621),
+  [`49d27e5`](https://github.com/tinaudio/synth-setter/commit/49d27e5413b0d3e38f42ebe08002a1978cdded3c))
+
+* internal-feat(data-pipeline): sketch-control extraction + registry
+
+Extract Sketch2Sound/FlashFoley-style loudness, spectral-centroid, and PESTO pitch contours on the
+  mel frame grid (100 fps), normalized with fixed affine constants to [-1, 1] so sketches stay
+  checkpoint-portable. Register a 'sketch' embedding with a mean-pooled sketch_ctrl_vec IVF
+  companion (num_sub_vectors=3) for contour similarity search.
+
+Refs #2612
+
+* internal-fix(data-pipeline): spec index defaults win over unset config
+
+The run config pinned num_sub_vectors=16 (pydantic default + YAML), so a spec's
+  IndexSpec.num_sub_vectors could never apply and the sketch index build failed (16 does not divide
+  the 3-wide pooled vector). Null now means 'use each spec's default'; explicit overrides still win.
+  Also document the sketch registry entry in the data-pipeline design doc and doc-map.
+
+* chore(ci): rerun title check after PR title edit
+
+* internal-feat(data-pipeline): FlashFoley-parity sketch controls
+
+Match the reference implementation (ZacharyNovack/flash-foley): loudness becomes A-weighted spectral
+  dB (16 kHz STFT, per-clip peak-80 floor, fixed [-100, 80] affine) and pitch becomes PESTO's raw
+  384-bin activation matrix (stored unthresholded; zero-binning is consumption-time). The
+  sketch_ctrl column grows to (386, F) with a slice map; the pooled companion indexes with
+  num_sub_vectors=2 (386 = 2 x 193). All new code carries jaxtyping shape annotations checked by
+  beartype; F722 joins the global ruff ignores per jaxtyping's documented integration.
+
+Refs #2612 Refs #2615
+
+* docs(data-pipeline): correct sketch num_sub_vectors phrasing
+
+* internal-fix(data-pipeline): address review round on sketch extraction
+
+Fixes: - Hoist PESTO loading into _load_sketch_spec_encoder via load_pesto_model, threading the
+  checkpoint through the registry default_checkpoint (DEFAULT_PESTO_CHECKPOINT in shapes.py); the
+  transform stays data-in/ data-out with a lazy fallback for single-clip use. - Bound-check sketch
+  controls in _encode_sketch_column (affine rows in [-1, 1], pitch rows in [0, 1]) with parametrized
+  rejection tests; the fake sketch encoder now honors the bounds contract it fakes. - Add a real
+  Hydra-entrypoint test driving main() with embeddings=[sketch]. - Assert Lance field types
+  (FixedShapeTensor/FixedSizeList float32) in the writer test and an ANN self-nearest query through
+  the built sketch index. - Replace the dict[str, Any] cast on list_indices with dict[str, object].
+  - Parametrize extraction shape/bounds at 22050 Hz. - Add a module-docstring usage example; apply
+  comment-hygiene rewrites at five sites; tighten the doc-map covers entry; correct the 386-divisor
+  claim in data-pipeline.md.
+
+Left as-is with inline justifications: global F722 ignore (jaxtyping's documented ruff integration;
+  list not append-frozen), fixed-affine normalization constants (#2612 portability rationale), and
+  slow marks on sub-second PESTO tests.
+
+- **data-pipeline**: Spec-encode TorchSynth rows, sample notes
+  ([#2676](https://github.com/tinaudio/synth-setter/pull/2676),
+  [`e25152a`](https://github.com/tinaudio/synth-setter/commit/e25152a07d3e6814cbe4f75c3ca6f4f161600b20))
+
+* internal-fix(data-pipeline): build TorchSynth rows through ParamSpec
+
+TorchSynthDataset.__getitem__ drew rows with torch.rand((1, NUM_PARAMS)), inventing a second,
+  synth-only row contract 76 wide while the registry's torchsynth_full spec encodes 79 including
+  note params. Downstream consumers had to reconstitute the missing three columns by hand.
+
+Rows now come from TORCHSYNTH_FULL_PARAM_SPEC.sample/encode with note params pinned to the render
+  configuration (pitch from midi_pitch, note window from signal_length / sample_rate), so every path
+  emits spec.encoded_width. The synth-only view moves to the render boundary: render_encoded_rows
+  slices SYNTH_COLUMNS before handing the voice its 76 native params.
+
+Model output width therefore goes 76 -> 79 and existing checkpoints will not load. The datamodule
+  config resolves num_params through param_spec_width instead of a literal, so out_dim follows the
+  spec.
+
+test/param_mse scores SYNTH_COLUMNS only: the three note columns are pinned constants, so including
+  them would deflate the mean and break comparability with previously recorded parameter-error
+  numbers.
+
+Routing synth draws through the spec's numpy generator changes the realised values for a given seed.
+  The distribution (uniform [0, 1]) and the per-index determinism contract from derive_sample_seed
+  are unchanged.
+
+Fixes #2673
+
+* internal-feat(data-pipeline): sample TorchSynth pitch and timing per row (#2686)
+
+TorchSynth's online path fixed pitch and note timing by configuration while every VST dataset draws
+  both from its spec per row. #2676 widened rows to the torchsynth_full encoded width but pinned the
+  three note columns to the render config, so the model predicted three constants.
+
+TorchSynthDataset now takes pitch and the note window from the spec's own sampler, exactly as the
+  VST generator does, and render_torchsynth derives note conditioning from the row instead of from
+  arguments. midi_pitch and note_duration_seconds are gone from the renderer: passing them alongside
+  a row that already encodes them would give the same quantity two sources of truth, and nothing
+  would detect a caller contradicting the row.
+
+The datamodule's midi_pitch config key is removed rather than kept as an override. Determinism is
+  unaffected - rows are seeded per index through derive_sample_seed, so a seeded test still draws
+  the same pitch every run, just not one chosen by configuration.
+
+The renderer slices the synth columns explicitly before touching the voice. The note columns carry
+  no gradient by construction (pitch is a discrete category, duration lands on ADSR segment
+  boundaries through integer sample arithmetic), so a differentiable render must never see them as
+  continuous knobs.
+
+test/param_mse now scores the whole encoded row. The exclusion existed only because the note columns
+  were constants; they are real targets with real error now, and excluding them would let systematic
+  pitch and timing error leave the metric unmoved.
+
+The offline TorchSynthRenderer builds its encoded row through the spec and drops its hand-rolled
+  note-delay block, so both paths share one implementation of note-on offset emulation. Its note
+  window now round-trips through the spec's float32 encoding and clamps to the note param's declared
+  range.
+
+Fixes #2680
+
+- **experiments**: Enable per-parameter MSE by default
+  ([#2709](https://github.com/tinaudio/synth-setter/pull/2709),
+  [`14efffb`](https://github.com/tinaudio/synth-setter/commit/14efffba7a72642dd8e133d48fabfc97133ca6d5))
+
+* internal-feat(experiments): default to per-param MSE logging
+
+* test(experiments): cover default per-param metrics end to end
+
+* test(models): exercise Flow-VAE callback lifecycle
+
+* refactor(tests): clarify callback contract fixtures
+
+- **training**: Add frozen online CLAP conditioning
+  ([#2734](https://github.com/tinaudio/synth-setter/pull/2734),
+  [`860f411`](https://github.com/tinaudio/synth-setter/commit/860f4118dc2edd07480c726845b33735284bc958))
+
+* internal-feat(training): add frozen CLAP conditioning encoder
+
+* internal-fix(training): harden frozen CLAP integration
+
+* internal-fix(training): close frozen CLAP review gaps
+
+* internal-fix(training): address PR #2734 review feedback
+
+* refactor(training): clarify frozen audio embedder naming
+
+* internal-fix(models): fail on non-finite gradients at their source
+
+`clip_grad_norm_` defaults to `error_if_nonfinite=False`, so one overflowing gradient row turns the
+  total norm into NaN and rescales every parameter by NaN. The run then survives a step and dies in
+  the audio term's parameter check reporting "the model has diverged" — one step after the real
+  damage, naming nothing useful.
+
+Reject the step in `configure_gradient_clipping` instead, naming the offending parameter, and log
+  how far `theta_hat` ran before going non-finite. Because `differentiable_decode` clamps every
+  finite input into range, non-finite decoded params can only mean `theta_hat` arrived corrupt, so
+  the extremes bound the last finite weights.
+
+The guard applies under 32-bit precision, the only precision the trainer configs use; an AMP
+  GradScaler produces transient infs by design.
+
+* internal-fix(training): stabilise the CLAP overfit test's convergence
+
+At lr 3e-2 the fixed-batch loss oscillates by orders of magnitude late in training: over the last 50
+  of 200 steps it spans 9.1e-6 to 3.1e-3, so the assertion at step 200 passed or failed on which
+  side of the swing it landed. It passed under uv and failed at 6.0e-3 under conda.
+
+Lowering the rate alone does not fit in 200 steps (3e-3 reaches only 0.96), so take 2000 steps at
+  3e-3. The worst value over the last 200 steps is then 3.9e-4, keeping the whole late trajectory
+  below the 1e-3 threshold instead of only the sampled step.
+
+* internal-fix(models): name every parameter with a non-finite gradient
+
+Reporting only the first name cannot distinguish encoder-local corruption from a global one, because
+  `named_parameters()` yields the encoder first and the guard stopped there. Collect every affected
+  name and include the count.
+
+* internal-feat(training): decouple feedback metric from conditioning
+
+The audio term measured distance in whatever encoded the conditioning, which conflated two roles
+  with different requirements: the metric must be waveform-in and stationary, the conditioning
+  encoder need be neither. That ruled out scoring renders at all under stored-embedding
+  conditioning, where the encoder consumes an embedding rather than a waveform.
+
+`AudioFeedbackLoss` now accepts an optional frozen `metric` that owns the distance space and wins
+  over the passed conditioning encoder. Trainable metrics are rejected, since they would move the
+  space they define. A conditioning-space `target_embedding` is ignored when a metric owns a
+  different space, at the cost of a second encode of the target.
+
+Existing configs keep measuring in the conditioning encoder; `audio_loss=clap` selects a frozen CLAP
+  space independently of what conditions the flow.
+
+* internal-fix(training): checkpoint torchsynth runs within an epoch
+
+The torchsynth flow arm inherited the trainer default of 10k steps between validations, but an epoch
+  is 3125 steps, so validation never fired inside one and no checkpoint was ever written. A crash at
+  step 1364 therefore discarded the whole epoch. Adopt the surge production cadence of 2000 with
+  validation capped at 20 batches.
+
+Make the audio probe explicit rather than auto for the same reason: auto warns and continues when a
+  prerequisite is missing, so a run can train to completion having staged no probe audio at all.
+
+* internal-fix(training): stop the ADSR pow emitting NaN gradients
+
+Anomaly detection named `PowBackward1` in the audio term's backward. TorchSynth's ADSR guards its
+  ramp with `+ self.eps`, but the inverse branch's `1 - ramp` destroys that guard once
+  `minimum(ramp, one)` saturates, leaving an exact zero base. With a predicted `alpha < 1` the local
+  base derivative is `inf`, and the upstream gradient is exactly zero across the envelope tail, so
+  `0 * inf` yields NaN. It reaches every parameter because the render sits in the shared graph.
+
+Swap `torch.pow` for a variant that differentiates a base floored at torchsynth's own eps while
+  grafting the exact forward back, so stored renders stay bitwise reproducible and the existing
+  per-row parity pin still holds. Scoped to the differentiable render, the only path that
+  backpropagates through pow.
+
+* internal-feat(training): add MSS as a selectable feedback distance
+
+The feedback term measured cosine distance in whichever encoder produced the conditioning, so
+  stored-embedding conditioning could not score renders at all, and the literature's default
+  objective was unavailable.
+
+Replace the embedder hook with a `distance` module over `(rendered, target)`, since a spectral
+  distance is not expressible as a cosine over embeddings. `MultiScaleSpectralDistance` reproduces
+  the MSS figure evaluation reports, at Slaney norm and peak-referenced decibels, so training and
+  reporting share units; a test pins its scales against the reported metric's.
+  `CosineEmbeddingDistance` keeps the frozen-encoder case.
+
+Also correct the CLAP checkpoint digest, which was pinned against a Hugging Face snapshot rather
+  than the eight-file R2 mirror and so rejected every load.
+
+* internal-feat(training): score torchsynth feedback in log-mel
+
+The feedback term measured cosine distance in the conditioning encoder's 512-dim latent, whose 594k
+  parameters reshape every step under the flow loss, so the term chased a target that moved beneath
+  it. Over a full epoch its gradient stayed near-orthogonal to the flow gradient, cosine within
+  +/-0.03 and sign-flipping at random.
+
+Multi-scale log-mel carries no parameters, so its space cannot move, and it is localized in time and
+  frequency where the encoder latent is globally pooled. It is also the objective the sound-matching
+  literature defaults to, and the figure this repo already reports, so training and reporting now
+  share units.
+
+* internal-feat(training): decouple feedback distance from conditioning
+
+The audio term's meaning depended on an unrelated config axis. It took the conditioning encoder as a
+  required argument, defaulted to measuring in that encoder's space, and received conditioning state
+  through `target_embedding`, so `audio_loss=latent` meant a CNN latent under audio conditioning and
+  an `EmbeddingPool` latent under `m2l` - one config, two objectives, and no guard against the
+  encoder being handed a waveform it cannot consume.
+
+Make `distance` required so the term always owns its space. `forward` drops both `encoder` and
+  `target_embedding`; the caller no longer splits its conditioning pass into embed and project,
+  since that split existed only to supply the reused embedding. That deletes
+  `_frozen_latent_distance`, `_stationary_audio_embedder`, `resolve_audio_embedder`, the
+  `FrozenAudioEmbedderProvider` protocol, and the now-unreachable `frozen_audio_embedder` tap.
+
+Drops the `latent` arm with them: sharing a live trainable module cannot be expressed in config,
+  only in code, so keeping it would have preserved the coupling it was the sole reason for.
+
+* internal-fix(training): drop a gradient-magnitude assert on random CLAP
+
+The waveform-gradient test asserted a nonzero gradient through a randomly initialised tiny backbone,
+  which a dead path can legitimately violate, so it passed under uv and failed under conda where a
+  different build initialises different weights.
+
+Connectivity is what the test means to pin, and `autograd.grad` already raises when the input is
+  unused, so reaching the assertions proves it. Check the gradient's shape and finiteness instead of
+  its magnitude.
+
+* internal-fix(training): let the conditioning profile own its encoder
+
+`torchsynth/flow.yaml` pinned `override /model/encoder: log_mel` and set `model.conditioning`
+  inline. Experiments compose after the conditioning group, and `_self_` applies after its own
+  defaults, so both beat any profile the caller selects: `conditioning=clap_online` silently kept
+  the log-mel encoder unless `model/encoder=clap_online` was passed alongside it, and a
+  stored-column profile would have had its conditioning mode forced back to audio.
+
+The encoder is not an independent axis - the modality determines it - so move the modality, its
+  encoder, and the widths that follow into a `log_mel` conditioning profile and have the experiment
+  select it. `conditioning=` alone now swaps all four together.
+
+- **training**: Add generic Hydra SkyPilot launcher
+  ([#2775](https://github.com/tinaudio/synth-setter/pull/2775),
+  [`06eca7e`](https://github.com/tinaudio/synth-setter/commit/06eca7e29172db38e941d0a1603295d363342074))
+
+* internal-feat(training): add Hydra-native generic launcher
+
+* internal-fix(training): harden generic launch commands
+
+* internal-fix(training): preserve generic worker shell contracts
+
+* internal-fix(training): cover generic launcher subprocess path
+
+* internal-fix(training): exercise generic worker entrypoints
+
+* internal-fix(training): preserve worker interpolation boundary
+
+* internal-fix(training): validate workflow command composition
+
+* internal-fix(training): centralize workflow input validation
+
+* internal-fix(training): scope headless launch test to Linux
+
+* internal-fix(training): address launcher review feedback
+
+* internal-fix(data-pipeline): configure worker checkout in e2e test
+
+- **training**: Add number-group swap MSE
+  ([#2777](https://github.com/tinaudio/synth-setter/pull/2777),
+  [`6abaa8d`](https://github.com/tinaudio/synth-setter/commit/6abaa8d747bb768e8db19f970ca87ba81c838d68))
+
+- **training**: Apply simulator feedback during sampling
+  ([#2774](https://github.com/tinaudio/synth-setter/pull/2774),
+  [`cbbaa60`](https://github.com/tinaudio/synth-setter/commit/cbbaa60918d2ca669ed32f3e41ff7299b64d99f2))
+
+* internal-feat(training): add simulator-feedback control signals
+
+Foundation for finetuning a frozen flow with simulator feedback, following Holzschuh & Thuerey
+  (arXiv 2410.22573). A frozen field supplies a velocity, a simulator scores the one-step estimate
+  it implies, and a small zero-initialised control network corrects the velocity above t=0.8 where
+  the paper finds the estimate reliable.
+
+Both control forms are provided. The gradient form concatenates the cost with its normalised
+  parameter gradient, needing a differentiable simulator and cost. The learned form detaches the
+  render, so neither need be differentiable and a VST host can serve as the simulator.
+
+The signal is an input rather than a loss term, so the flow-matching objective and its guarantees
+  are untouched, and rows below the threshold return the pretrained velocity bitwise rather than
+  adding a zero correction.
+
+Part of #2628
+
+* internal-fix(training): re-run PR title check with a fresh payload
+
+* internal-fix(training): rescale the overfit threshold for log-mel
+
+Switching the default feedback distance to multi-scale log-mel in #2734 moved the combined objective
+  into decibel units without retuning this absolute threshold, so the test failed at 0.1051 against
+  a 0.1 bound. The relative assertion beside it passed, confirming the objective still collapses
+  tenfold; only the absolute guard was stale.
+
+* internal-feat(training): simulator-feedback finetune module and arms
+
+Part 2 of the simulator-feedback chain: the LightningModule that binds #2743's control signals to a
+  frozen pretrained flow, plus the three ablation arms.
+
+The objective stays plain conditional flow matching. The simulator's cost reaches the run only as
+  the control network's input, which is what preserves the paper's guarantees and distinguishes this
+  from the audio-loss arm.
+
+Three details the tests pin, each a silent-failure mode otherwise:
+
+- The render binds differentiable_decode, because theta_hat is model-space [-1, 1] while the
+  renderer reads [0, 1] and clamps. Omitting it renders audible but wrong audio. - The checkpoint
+  loads before the control is attached, so the module's shape is exactly the base run's and any
+  missing or unexpected key is fatal. A permissive load would "finetune" a randomly initialised
+  field. - The one-step estimate is detached and re-seeded, so the finetune never becomes
+  second-order in the frozen field.
+
+The null arm zeroes the control signal rather than passing None: passing None bypasses the control
+  entirely, leaving nothing to train and no capacity to match.
+
+ControlledFlow gains combine() so a caller deriving the control signal from the velocity evaluates
+  the field once, and an attribute fallback so it reads as the field it stands in for.
+
+* internal-fix(training): keep the pretrained flow frozen while finetuning
+
+Two defects an end-to-end run of the three arms exposed; the unit tests missed both because they
+  never sampled and their encoder carries no normalisation.
+
+ControlledFlow.forward rejected z=None, so validation sampling crashed the moment the
+  classifier-free-guidance unconditional branch ran.
+
+Clearing requires_grad does not stop BatchNorm running statistics, which kept updating and drifted
+  the "frozen" encoder across the finetune. Lightning does not call train() before the first steps,
+  so the mode has to be set at construction as well as held through the override. Left alone this
+  would have moved the conditioning the frozen field sees, confounding the very arm comparison this
+  chain exists to make.
+
+* internal-fix(training): address review round on simulator controls
+
+The review's test-quality findings were right about more than they claimed. Fixing the normalisation
+  assertion turned the suite red and exposed the cause: every render in it was silent. At 8192
+  samples / 16 kHz the spec's note window starts past the end of the buffer, so the cost was 0 and
+  its gradient all-zero for every test in the gradient-signal suite, not just the one flagged. The
+  fixture now pins a note that sounds across the whole buffer, and the assertion is an equality
+  against unit norm.
+
+Correctness:
+
+- gradient_control_signal runs under enable_grad, so it works inside the no_grad an ODE integration
+  loop holds (3685436865) - the cost column is sanitised like the gradient block (3685436947) - both
+  signals clamp the render straight-through, matching what render_torchsynth stored the target as
+  (3685437021) - bypassed rows zero their control before the network, so a non-finite entry cannot
+  NaN every control gradient through the GELU backward (3685437110) - bypassed rows select the
+  velocity itself, keeping negative zero (3685467165) - ControlNet reshapes, accepting the rank-1
+  control its annotation permits, and names a width mismatch (3685437221) - learned_control_signal
+  detaches the target (3685467160) - ControlledFlow re-asserts the freeze in train(); requires_grad
+  at construction does not survive a later unfreeze, and does not stop normalisation statistics
+  drifting at all (3685437442)
+
+The cost entry is compressed with log1p (3685437369). Raw it is a ~10-40 dB gap beside unit-norm
+  gradient entries of ~0.06, outweighing the whole block by two to three orders of magnitude.
+  Measured on the now-audible fixture: 24.8 dB compressed to 3.25.
+
+None no longer reads as the capacity-matched ablation, which it never was: it bypasses the control
+  entirely and trains nothing (3685467155).
+
+Tests: unit-norm equality, a retained estimate with a real backward for the stop-gradient contract,
+  dead seed dropped, _render annotated, C6 line, and a single-batch overfitting test for ControlNet.
+
+control_input is keyword-only (3685467144).
+
+* internal-fix(training): address review round on the finetune module
+
+The review's MT8 finding was right for a stronger reason than it stated. It argued parameter
+  movement does not prove the arms use simulator feedback. Adding that test showed the feedback
+  arms' control signal was identically zero: this file's batch drew uniform-random rows, whose note
+  window starts past the end of a 0.5 s buffer, so every render was silent and every simulator
+  assertion held for free. Same vacuity as the suite fixed in #2743. The batch now pins a sounding
+  note.
+
+- reject nonzero rectified_sigma_min, which biases the one-step estimate the same way the base
+  module already guards against (3686544755) - select the control width by control_mode, not by
+  whether an encoder is configured; the gradient arm emits 1+params regardless (3686538252) - do not
+  score CFG-dropped rows, whose estimate is drawn from the marginal and whose residual is noise that
+  differs per arm (3686544699) - reject sketch controls, which the controlled field cannot route and
+  which crash at validation (3686546177) - keep cost and control_encoder out of hparams, which
+  deep-copies them (3686546257) - probe the encoder width in eval, so it cannot fold a zeros
+  waveform into its running statistics (3686548358) - check the compile guard at construction,
+  before setup() compiles (3686548572) - read __dict__ in the attribute fallback so a pre-init
+  access raises AttributeError rather than recursing (3686548479)
+
+Renders are now gated on rows that can use the result: at control_t_min 0.8 roughly four in five
+  renders were discarded by combine (3686548643).
+
+Tests: feedback-dependence per arm, single-batch overfit, render gating, the CFG gate, every
+  trainable asserted moved rather than any, module-private helpers, and an instantiation test
+  driving each experiment config.
+
+The base checkpoint's sha256 is logged so two arms cannot silently start from different flows behind
+  one path (3686538273).
+
+* internal-feat(training): apply simulator feedback during sampling
+
+Part 3 of the chain. Until now the control reached only the training step: _sample bound the field
+  with control_input=None, so validation and test measured the frozen base and every arm reported
+  the same numbers. A working finetune and a broken one were indistinguishable, which made the
+  ablation unreadable.
+
+The base gains one seam, _velocity_field, which _sample now calls instead of build_guided_velocity
+  directly. Behaviour is unchanged for every existing subclass; the finetune module overrides it and
+  inherits the integration loop rather than forking it.
+
+The control corrects the guided velocity rather than each CFG branch. The estimate has to come from
+  the velocity actually integrated, the unconditional branch's estimate is not tied to the row's
+  observation anyway — the same reason training skips fully-dropped rows — and it halves the
+  renders.
+
+The observation is bound per batch by the validation and test hooks, since _sample receives
+  conditioning rather than the waveform and those differ under every profile but audio. Sampling
+  with nothing bound raises rather than quietly falling back to the frozen base, which would report
+  a null result for a finetune that works.
+
+Verified on a real run of all three arms: val/param_mse now differs per arm (1.395 gradient, 1.222
+  learned, 1.383 null) where before the three were structurally identical.
+
+* internal-fix(training): make controlled sampling work outside a fit loop
+
+The review found two crashes my own end-to-end runs could not have caught, because every one of them
+  used test=false and mid-fit validation is the single evaluation path Lightning builds with
+  inference_mode=False.
+
+Standalone Trainer.validate/test/predict run under inference_mode, which marks tensors created
+  inside it as inference tensors that can never carry a graph. torch.enable_grad() cannot reopen
+  that, so the gradient arm's autograd.grad raised on the first engaged RK4 evaluation. Both
+  `synth-setter-train test=true` and `synth-setter-eval` died. Scoring now runs under
+  inference_mode(False), mirroring torchsynth_datamodule.
+
+The predict lane bound no observation at all, so every prediction raised the guard instead of
+  sampling. It now binds through on_predict_batch_start, and predict_step is covered directly since
+  cli/predict_capture.py calls it with no Lightning hooks.
+
+Tests now drive Trainer.validate and Trainer.test rather than bracketing the hooks by hand, which is
+  what let both bugs through. Reverting the fix makes them fail with the same RuntimeError the real
+  loops produced.
+
+The observation-dependence test swaps the bound target between two otherwise identical runs, so a
+  control reading only its velocity and time features can no longer pass by merely differing from
+  the base.
+
+* internal-fix(training): score the conditional velocity during sampling
+
+The control network is trained on the conditional velocity, but sampling was scoring and feeding it
+  the classifier-free-guidance combination, which at the shipped cfg_strength is a different vector
+  of roughly double the magnitude. That put the control out of distribution at evaluation time, so
+  val/param_mse could move because of the scale mismatch rather than because the learned correction
+  was good — defeating the readability controlled sampling exists to establish.
+
+Sampling now evaluates the conditional branch separately, scores that, and adds the resulting gated
+  correction to the guided velocity the sampler integrates. Subtracting combine()'s input recovers
+  the correction alone, so a disengaged row contributes exactly zero and leaves the guided velocity
+  bit-identical.
+
+Two consequences are deliberate and tracked in #2782: it costs one extra field evaluation per ODE
+  evaluation, and the correction is computed for a trajectory point the sampler does not visit. The
+  alternative — training under the guided combination — was rejected because it changes the training
+  objective, and so the experiment, rather than only the evaluation path.
+
+- **training**: Concat sketch-control tokens into flow field
+  ([#2669](https://github.com/tinaudio/synth-setter/pull/2669),
+  [`4216468`](https://github.com/tinaudio/synth-setter/commit/4216468192305de0930ee5a9198a365c249ef7d2))
+
+* internal-feat(data-pipeline): sketch-control extraction + registry
+
+Extract Sketch2Sound/FlashFoley-style loudness, spectral-centroid, and PESTO pitch contours on the
+  mel frame grid (100 fps), normalized with fixed affine constants to [-1, 1] so sketches stay
+  checkpoint-portable. Register a 'sketch' embedding with a mean-pooled sketch_ctrl_vec IVF
+  companion (num_sub_vectors=3) for contour similarity search.
+
+Refs #2612
+
+* internal-fix(data-pipeline): spec index defaults win over unset config
+
+The run config pinned num_sub_vectors=16 (pydantic default + YAML), so a spec's
+  IndexSpec.num_sub_vectors could never apply and the sketch index build failed (16 does not divide
+  the 3-wide pooled vector). Null now means 'use each spec's default'; explicit overrides still win.
+  Also document the sketch registry entry in the data-pipeline design doc and doc-map.
+
+* chore(ci): rerun title check after PR title edit
+
+* internal-feat(data-pipeline): FlashFoley-parity sketch controls
+
+Match the reference implementation (ZacharyNovack/flash-foley): loudness becomes A-weighted spectral
+  dB (16 kHz STFT, per-clip peak-80 floor, fixed [-100, 80] affine) and pitch becomes PESTO's raw
+  384-bin activation matrix (stored unthresholded; zero-binning is consumption-time). The
+  sketch_ctrl column grows to (386, F) with a slice map; the pooled companion indexes with
+  num_sub_vectors=2 (386 = 2 x 193). All new code carries jaxtyping shape annotations checked by
+  beartype; F722 joins the global ruff ignores per jaxtyping's documented integration.
+
+Refs #2612 Refs #2615
+
+* internal-feat(data): z-score the conditioning column per channel
+
+use_saved_mean_and_variance now also normalizes the generic embedding conditioning column: a
+  conditioning_stats_<column>.npz beside the train split takes precedence, otherwise per-channel
+  mean/std are computed from a deterministic first-N train-row sample at setup and threaded into the
+  collate. Statistics are validated (finite, std > 0) like mel stats.
+
+Adapted from experiment-sketch-adaln-layerwise for the sketch-token conditioning stack.
+
+* internal-feat(training): concat sketch-control tokens into flow field
+
+SketchControlTokens resamples the stored (386, F) sketch_ctrl rows to a fixed control-token budget,
+  projects each control group through a zero-initialized bias-free linear (FlashFoley input_add: a
+  dropped or zeroed control contributes exactly nothing), adds a fixed sinusoidal temporal PE on the
+  control tokens only, and concatenates them onto the parameter tokens inside ApproxEquivTransformer
+  — parameter tokens stay permutation-symmetric. Training draws Sketch2Sound-style CFG dropout
+  (independent 0.2 per control plus 0.2 joint); the unconditional branch and conditioning-free
+  sampling pass no control tokens.
+
+The datamodules project sketch_ctrl for every split, validate its (386, num_frames) shape at setup,
+  zero-bin pitch activations below the spec threshold at batch preparation (train and inference),
+  OT-permute the rows with their parameters, and fake-generate the column. The sketch row-layout
+  constants move to synth_setter.conditioning so model modules import them without initializing the
+  VST runtime package; data.vst.shapes re-exports them. sketch=on composes the profile over any
+  conditioning= choice.
+
+Refs #2612 Fixes #2614
+
+* internal-fix(testing): compose the sketch e2e cfg via a conftest fixture
+
+tests/test_train.py is an entrypoint-only test module (pinned by
+  test_entrypoint_module_does_not_contain_config_layer_imports); the sketch fast_dev_run test now
+  receives its pre-composed cfg from the new cfg_train_sketch_lance conftest fixture instead of
+  composing inline.
+
+* refactor(training): apply simplifier findings to the sketch stack
+
+Reuse embed_pool.make_sin_pos_enc for the control-token PE; derive the per-control projections and
+  CONTROL_GROUPS from one channel map; hoist NUM_SKETCH_TRACK_ROWS and SKETCH_CTRL_FIELD into
+  conditioning (shapes re-exports the field name) and replace slice-attribute and bare-literal call
+  sites; guard the layerwise-PE split so the no-sketch path keeps its single-tensor PE add; nest the
+  mutually exclusive normalization-stats branches; scalar-fill the pitch zero-bin; tighten stale
+  comments and the conditioning-stats shape docstring; drop a tautological test assert.
+
+* internal-fix(training): satisfy model-typing on new sketch callables
+
+The model-typing hook (new on main) requires @jaxtyped(typechecker= beartype) and jaxtyping
+  annotations on every new callable under src/synth_setter/models; annotate the sketch drop-mask and
+  batch tokenizer accordingly.
+
+* internal-fix(training): address sketch-injection review round
+
+- Persist computed conditioning stats to a sidecar npz beside the train shard (atomic publish) so
+  ranks, restarts, and checkpoint evals reuse identical normalization constants. - Floor the sampled
+  per-channel std so constant channels normalize to zero instead of hard-failing setup; the
+  saved-file branch keeps the strict positivity check. - Restore the split-aware guard: predict-only
+  setup reads stats beside the predict file instead of opening the train shard. - Validate saved
+  stats shape against the conditioning spec before use. - Couple audio-CFG dropout with
+  sketch-control dropout: CFG-dropped rows also drop every control, matching the inference
+  unconditional branch. - Replace align_corners point-sampling with adaptive pooling (max for pitch)
+  so sub-stride transients reach the control tokens. - Bound pitch_zero_threshold to [0, 1] and
+  raise when exactly one of conditioning_mean/std is supplied.
+
+* internal-feat(data-pipeline): nest sketch controls under a struct column (#2713)
+
+* internal-feat(data-pipeline): nest sketch controls under a struct column
+
+Replace the flat sketch_ctrl (386, F) FixedShapeTensor column with a nested sketch struct (Refs
+  #2707): loudness/centroid FixedSizeList(F) children, a pitch FixedShapeTensor (384, F) child, and
+  a frame-mean vec FixedSizeList(386) child indexed via its dotted path (IVF_PQ on sketch.vec). The
+  datamodule expands struct columns to dotted-key tensors (normalizing the take-vs-scanner
+  projection asymmetry) and reassembles the (B, 386, F) sketch_ctrl batch tensor bit-for-bit, so the
+  model contract and SketchControlSpec semantics are unchanged. A flat-column dataset now fails
+  validation with an explicit rewrite instruction.
+
+Verified against pinned pylance 7.0.0: FixedShapeTensor works as a struct child, whole-struct
+  add_columns append lands on storage 2.1 and 2.2 datasets, and create_index accepts the nested vec
+  child. The struct is an atomic write unit; the add/drop/rename whole-struct rewrite is the covered
+  escape hatch for refreshing children.
+
+Part of #2612
+
+* internal-feat(data-pipeline): fold doc-drift fixes for sketch layout
+
+Point the training-pipeline materialization prose at VSTDataModule._loader_columns instead of
+  enumerating the projection inline (it was missing the sketch struct), register conditioning.py in
+  doc-map.yaml as the canonical SKETCH_* constants home, and abridge data-pipeline.md's RenderConfig
+  sketch to a pointer at the authoritative pipeline/schemas/spec.py definition.
+
+Refs #2707
+
+* internal-fix(data-pipeline): cap sketch RSS and forbid no-op writes
+
+Field runs of the sketch backfill against the R2 1k dataset died within seconds of
+  embedding_write_started with no error and no commit. Root cause: PESTO extraction on a full
+  128-row Lance batch peaked at ~8.8 GiB RSS and earlyoom SIGTERMed the process (exit 143; an exit-0
+  reading came from measuring a pipeline's exit code). The nested struct layout is not the driver:
+  flat and struct add_columns peak within 160 MiB of each other on the same s3 dataset, and the raw
+  Lance layer processes all batches on a byte-identical copy.
+
+Chunk _sketch_encode at SKETCH_ENCODE_MAX_BATCH=32 (tracks are per-clip independent; values move
+  only within float32 kernel jitter), halving peak RSS to ~4.0 GiB at the default batch size, and
+  make _write_columns raise when add_columns returns without committing every target column so a
+  silent no-op write is impossible.
+
+* internal-fix(data-pipeline): scope no-op write guard to zero batches
+
+The schema-presence guard also fired for the in-process UDF progress tests that stub add_columns
+  without committing; require the observed field signature (zero UDF batches AND missing columns) so
+  cache replays and stubbed progress runs stay valid while the silent no-op stays fatal.
+
+* internal-feat(training): prelim 1k sketch A/B experiments
+
+Two self-contained experiment configs for the RunPod preliminary A/B (#2196 one-selector
+  convention): flow_sketch_prelim_base pins the 1k dataset root, shared seed 3407, and 10k-step
+  cadence with val_audio_probe; flow_sketch_prelim composes it and flips sketch=on (401-frame grid,
+  matching the dataset's 44.1 kHz 4 s render). Compose test asserts the arms differ only in sketch
+  conditioning.
+
+* internal-fix(data-pipeline): address nested-sketch review round
+
+Make the post-write uncommitted-column check unconditional (the in-process UDF test stub now commits
+  its outputs through the real add_columns reader path), pin the extraction batch cap with a
+  recorded-batch-size test and move the real-PESTO equivalence check to the slow suite, add
+  malformed-child validation tests (missing child, off-grid shape, non-finite sample), and apply the
+  comment-hygiene rewrites in tests, configs, and doc-map.
+
+* internal-fix(training): split conditioning z-score from sketch PR
+
+* internal-fix(training): address sketch review round
+
+* internal-fix(training): simplify sketch conditioning flow
+
+* internal-fix(training): drop misleading flow-helper shims and linearize the train step
+
+The surge_* shim exists so archived Hydra `_target_` paths resolve; those targets are classes, and
+  no config, script, or test resolves call_with_cfg or rk4_with_cfg. Aliasing them to
+  build_guided_velocity / rk4_step bound the old names to incompatible signatures, so an external
+  caller would get a confusing runtime failure instead of a clean ImportError. Remove them.
+
+Move conditioning encode, dropout, and sketch tokenization behind _prepare_conditioning so
+  _train_step reads linearly (88 -> 65 lines, below the 73 it had before this branch).
+
+Refs #2669
+
+* internal-fix(training): close the open sketch review findings
+
+Validate sketch_ctrl row-group bounds at the batch boundary alongside param_array and audio: split
+  validation samples only row 0, so a NaN or an out-of-contract value in any later row previously
+  reached the model. Cover it with last-row corruption and per-group range tests.
+
+Pin the tokenizer's pooling mathematics with exact expected values per control group, so swapping
+  pitch max-pooling for average (or the reverse on loudness/centroid) fails instead of passing on a
+  shape check.
+
+Also: drop shapes.py's local sketch constants that shadowed the canonical conditioning.py imports,
+  declare SketchControls as a PEP 695 type alias, annotate SketchControlTokens.__init__ -> None, and
+  rewrite a test docstring that narrated pre-change behavior.
+
+* internal-fix(training): bind CFG conditioning positionally for every backbone
+
+build_guided_velocity bound content conditioning as a keyword, but only the transformer names that
+  argument 'conditioning' — ConditionalResidualMLP names it 'c'. Every MLP-field sampling path
+  raised TypeError at inference, which the fast suite missed because it only samples through the
+  transformer field; test_audio_dataset_predict_entrypoint_writes_artifacts[flow_mlp_full] caught it
+  in the slow lane.
+
+Bind positionally via _bind_branch and pin it across all three backbones.
+
+* internal-fix(training): declare SketchControls with the type keyword
+
+Drop conditioning.py from the Python 3.11 overlay-parse pin so the module can use PEP 695 syntax.
+  The bare assignment was the only form that satisfied both gates: 'type' failed the 3.11 pin and
+  'TypeAlias' failed ruff UP040.
+
+The pin guarded a stale-venv worker importing the module before repair; that path recreates the venv
+  at 3.12.13 in bash before any package import. param_spec_name.py keeps its pin.
+
+- **training**: Condition torchsynth on frozen SAME latents
+  ([#2758](https://github.com/tinaudio/synth-setter/pull/2758),
+  [`ecc22b1`](https://github.com/tinaudio/synth-setter/commit/ecc22b1ed660d55fb2abada0e4d0184772d1b8cb))
+
+* internal-feat(training): add frozen SAME conditioning
+
+Online-render synths could condition on frozen CLAP, but SAME profiles required precomputed Lance
+  columns. Compose the existing differentiable SAME backbone with the trainable temporal pool so
+  TorchSynth can consume SAME-S or SAME-L directly from each waveform.
+
+Generalize the pretrained conditioning wrapper to preserve sequence embeddings and expose the
+  SAME/pool width contract. Cover both profiles, frozen-backbone custody, trainable pooling, and a
+  real one-step train entrypoint.
+
+Fixes #2752.
+
+* internal-fix(training): harden frozen SAME conditioning
+
+Reject pretrained wrapper modules that omit width metadata instead of accepting two missing values
+  as a match. Pin both R2 SAME trees by digest so excluded backbone weights remain reproducible
+  across checkpoint restores.
+
+Expand the behavior coverage to the eval entrypoint, row isolation, complete pool gradient flow, and
+  fixed-batch overfitting. Share the common tiny online conditioning setup so CLAP and SAME smoke
+  tests cannot drift apart.
+
+Refs #2752.
+
+* internal-feat(training): condition the SAME loss arm on SAME-S
+
+The dedicated SAME audio-loss experiment still inherited log-mel conditioning, so its feedback
+  distance and conditioning representation did not match. Select the online SAME-S profile in that
+  experiment and exercise both frozen backbones through the real train and eval entrypoints.
+
+* test(training): cover frozen SAME validation failures
+
+Exercise mismatched conditioner widths, malformed SAME modules, and checkpoint digest rejection so
+  the online conditioning boundary fails before training and the changed validation branches remain
+  covered.
+
+Refs #2752. EOF && git branch --show-current && git push
+
+- **training**: Launch configs for the feedback ablation grid
+  ([#2785](https://github.com/tinaudio/synth-setter/pull/2785),
+  [`e7c376f`](https://github.com/tinaudio/synth-setter/commit/e7c376fb692c10bfb4efc4df39155ee425f7d4c3))
+
+* internal-feat(training): launch configs for the feedback ablation grid
+
+Nothing existed for launching torchsynth on RunPod; the regression probe had to invent a compute
+  pool and a launcher before it could run. This lands the reusable half so the ablation grid does
+  not reinvent it again.
+
+runpod/torchsynth is a single-GPU pool with a 100 GB disk: torchsynth renders online, so no dataset
+  is staged and the training pool's 750 GB is wasted inventory-scarce capacity. Single device is
+  required by #2585.
+
+The finetune launcher requires BASE_CHECKPOINT rather than defaulting it. Two arms that silently
+  started from different bases would still look comparable in their recorded configs, and the module
+  logs the file's sha256 at load, which is what makes a swap detectable afterwards. SEED is required
+  for the same reason the grid has seeds at all: a probe on this path could not separate a 2%
+  param_mse shift from run-to-run variance at one run per arm, and the effect under test is smaller
+  than that.
+
+The step budget moved into the three arm experiment YAMLs rather than the launch cmd, so experiment=
+  alone reproduces a run (#2118, #2196). The shipped launch config carries no trainer or datamodule
+  overrides, and both new configs are added to the contracts that enforce this: they were hardcoded
+  lists, so a new config would otherwise have escaped the coverage the class docstring promises.
+
+The arms script is dry-run by default; --execute is the only path that spends money, and it runs the
+  RunPod balance preflight first.
+
+The probe's own launch config is deliberately not shipped: it overrides trainer knobs in the cmd
+  because it compares two commits whose experiment YAML differs, which is the one case the
+  convention cannot serve.
+
+Part of #2628
+
+* internal-fix(training): download the base checkpoint before finetuning
+
+VSTFlowFinetuneModule loads a local path, and a fresh pod has none, so passing an r2 URI straight to
+  model.base_checkpoint would have failed on first contact with the cloud. The launcher now copies
+  the checkpoint down first.
+
+copyto rather than copy pins a fixed local name, so every arm reads the same file regardless of how
+  the remote lays it out.
+
+* internal-fix(training): dispatch arms through the Hydra launcher
+
+The first launch attempt failed cleanly with "unrecognized arguments: --extra-env". The
+  path-plus-extra-env interface this was modelled on was replaced by the Hydra-native launcher in
+  #2775, so the pattern copied from #2723 no longer exists. Nothing was submitted and nothing was
+  spent.
+
+The arms script now composes skypilot_launch/compute and a quoted skypilot_launch.cmd, matching how
+  .github/workflows/train.yml dispatches.
+
+train-runpod-torchsynth-finetune.yaml is dropped: configs/launch/*.yaml is the legacy path-based
+  form, still loadable programmatically but no longer how the CLI is driven, so shipping a new one
+  would have added to a deprecated surface. The compute pool stays — that is a
+  skypilot_launch/compute group option and is exactly what the new interface selects.
+
+- **training**: Score torchsynth renders in frozen SAME latents
+  ([#2742](https://github.com/tinaudio/synth-setter/pull/2742),
+  [`23cac29`](https://github.com/tinaudio/synth-setter/commit/23cac2955edb4ee98f456389df875b526962b238))
+
+* internal-feat(training): score renders in frozen SAME latents
+
+The audio-feedback term could measure a render in log-mel or frozen CLAP, but not in SAME — the
+  space the stored `same_s` conditioning column is written in. Adding it lets the term and the
+  conditioning share one space, and gives part 2's teacher comparison a third stationary metric.
+
+`SameAudioEncoder` wraps a frozen SAME autoencoder, differentiable from waveform to latent. Stable
+  Audio 3's `PatchedPretransform` hardcodes `enable_grad = False`, so `AudioAutoencoder.encode` runs
+  the patching under `torch.no_grad` and every waveform gradient comes back exactly zero; the
+  encoder opens that path explicitly. The patching carries no parameters, so nothing becomes
+  trainable.
+
+`LatentMseDistance` measures Stable Audio 3's magnitude-normalized squared error — per-row division
+  by the target's own detached variance — so loud targets cannot swamp quiet ones. It is
+  encoder-agnostic; SAME is its first user.
+
+Checkpoint resolution, the latent-frame geometry, and the model loader move out of the
+  add-embeddings CLI into `synth_setter.same` so the training path does not import Lance, Hydra, and
+  librosa (#2549). Both paths now build the model through one loader, which a parity test pins
+  against the pipeline's own latents.
+
+Refs #2741. Refs #2624.
+
+* internal-fix(training): keep the audio term out of saved hyperparameters
+
+Lightning deep-copies the hyperparameters it saves, and a weight-normalized module cannot survive a
+  deepcopy. The audio term now carries a frozen SAME autoencoder, whose WNConv1d layers are exactly
+  that, so composing `experiment=torchsynth/flow_audio_same` raised at module construction before a
+  single step ran. The MSS and CLAP arms only escaped it because neither holds a weight-normalized
+  module.
+
+The term is training-time only and nothing reconstructs it from hparams, so it joins `encoder` in
+  the ignore list rather than being stored and copied.
+
+* docs(training): map the shared SAME module in doc-map
+
+`synth_setter.same` had no `sources` entry, so the checkpoint and latent-frame logic it now owns
+  fell out of the mapping when it left `add_embeddings.py`. The `model_cache.py` and
+  `same_reference.py` entries also under-described what this branch added to them.
+
+* internal-fix(training): keep the cached voice out of inference mode
+
+The cached voice outlives whatever scope first fills it. Lightning runs validation under
+  `inference_mode`, so an eval test that built the cache first left its `ModuleParameter` tensors as
+  inference tensors, which track no version counter — every later gradient render in that process
+  then died with `RuntimeError: Inference tensors do not track version counter`.
+
+That made `run_slow_tests` red whenever pytest-randomly happened to order a torchsynth eval test
+  before a torchsynth train test, which is why the lane moved between unrelated PRs with the seed.
+
+Also widens the overfit test's absolute floor. It duplicated the tenfold-reduction claim asserted
+  beside it, at a bar so tight that CI landed at 0.1051 against 0.1 while the same run passes on
+  other hosts. The relative assert stays as the real claim; the absolute one goes back to being a
+  coarse sanity bound.
+
+Fixes #2744. Fixes #2745.
+
+- **training**: Simulator-feedback control signals
+  ([#2743](https://github.com/tinaudio/synth-setter/pull/2743),
+  [`75e9361`](https://github.com/tinaudio/synth-setter/commit/75e936113ed99ff3fe792188596b65b27f29f36d))
+
+* internal-feat(training): add simulator-feedback control signals
+
+Foundation for finetuning a frozen flow with simulator feedback, following Holzschuh & Thuerey
+  (arXiv 2410.22573). A frozen field supplies a velocity, a simulator scores the one-step estimate
+  it implies, and a small zero-initialised control network corrects the velocity above t=0.8 where
+  the paper finds the estimate reliable.
+
+Both control forms are provided. The gradient form concatenates the cost with its normalised
+  parameter gradient, needing a differentiable simulator and cost. The learned form detaches the
+  render, so neither need be differentiable and a VST host can serve as the simulator.
+
+The signal is an input rather than a loss term, so the flow-matching objective and its guarantees
+  are untouched, and rows below the threshold return the pretrained velocity bitwise rather than
+  adding a zero correction.
+
+Part of #2628
+
+* internal-fix(training): re-run PR title check with a fresh payload
+
+* internal-fix(training): rescale the overfit threshold for log-mel
+
+Switching the default feedback distance to multi-scale log-mel in #2734 moved the combined objective
+  into decibel units without retuning this absolute threshold, so the test failed at 0.1051 against
+  a 0.1 bound. The relative assertion beside it passed, confirming the objective still collapses
+  tenfold; only the absolute guard was stale.
+
+* internal-fix(training): address review round on simulator controls
+
+The review's test-quality findings were right about more than they claimed. Fixing the normalisation
+  assertion turned the suite red and exposed the cause: every render in it was silent. At 8192
+  samples / 16 kHz the spec's note window starts past the end of the buffer, so the cost was 0 and
+  its gradient all-zero for every test in the gradient-signal suite, not just the one flagged. The
+  fixture now pins a note that sounds across the whole buffer, and the assertion is an equality
+  against unit norm.
+
+Correctness:
+
+- gradient_control_signal runs under enable_grad, so it works inside the no_grad an ODE integration
+  loop holds (3685436865) - the cost column is sanitised like the gradient block (3685436947) - both
+  signals clamp the render straight-through, matching what render_torchsynth stored the target as
+  (3685437021) - bypassed rows zero their control before the network, so a non-finite entry cannot
+  NaN every control gradient through the GELU backward (3685437110) - bypassed rows select the
+  velocity itself, keeping negative zero (3685467165) - ControlNet reshapes, accepting the rank-1
+  control its annotation permits, and names a width mismatch (3685437221) - learned_control_signal
+  detaches the target (3685467160) - ControlledFlow re-asserts the freeze in train(); requires_grad
+  at construction does not survive a later unfreeze, and does not stop normalisation statistics
+  drifting at all (3685437442)
+
+The cost entry is compressed with log1p (3685437369). Raw it is a ~10-40 dB gap beside unit-norm
+  gradient entries of ~0.06, outweighing the whole block by two to three orders of magnitude.
+  Measured on the now-audible fixture: 24.8 dB compressed to 3.25.
+
+None no longer reads as the capacity-matched ablation, which it never was: it bypasses the control
+  entirely and trains nothing (3685467155).
+
+Tests: unit-norm equality, a retained estimate with a real backward for the stop-gradient contract,
+  dead seed dropped, _render annotated, C6 line, and a single-batch overfitting test for ControlNet.
+
+control_input is keyword-only (3685467144).
+
+- **training**: Simulator-feedback finetune module and arms
+  ([#2754](https://github.com/tinaudio/synth-setter/pull/2754),
+  [`2ba54c1`](https://github.com/tinaudio/synth-setter/commit/2ba54c1d442f66a96ebffe4fefd2d3614990bbc0))
+
+* internal-feat(training): add simulator-feedback control signals
+
+Foundation for finetuning a frozen flow with simulator feedback, following Holzschuh & Thuerey
+  (arXiv 2410.22573). A frozen field supplies a velocity, a simulator scores the one-step estimate
+  it implies, and a small zero-initialised control network corrects the velocity above t=0.8 where
+  the paper finds the estimate reliable.
+
+Both control forms are provided. The gradient form concatenates the cost with its normalised
+  parameter gradient, needing a differentiable simulator and cost. The learned form detaches the
+  render, so neither need be differentiable and a VST host can serve as the simulator.
+
+The signal is an input rather than a loss term, so the flow-matching objective and its guarantees
+  are untouched, and rows below the threshold return the pretrained velocity bitwise rather than
+  adding a zero correction.
+
+Part of #2628
+
+* internal-fix(training): re-run PR title check with a fresh payload
+
+* internal-fix(training): rescale the overfit threshold for log-mel
+
+Switching the default feedback distance to multi-scale log-mel in #2734 moved the combined objective
+  into decibel units without retuning this absolute threshold, so the test failed at 0.1051 against
+  a 0.1 bound. The relative assertion beside it passed, confirming the objective still collapses
+  tenfold; only the absolute guard was stale.
+
+* internal-feat(training): simulator-feedback finetune module and arms
+
+Part 2 of the simulator-feedback chain: the LightningModule that binds #2743's control signals to a
+  frozen pretrained flow, plus the three ablation arms.
+
+The objective stays plain conditional flow matching. The simulator's cost reaches the run only as
+  the control network's input, which is what preserves the paper's guarantees and distinguishes this
+  from the audio-loss arm.
+
+Three details the tests pin, each a silent-failure mode otherwise:
+
+- The render binds differentiable_decode, because theta_hat is model-space [-1, 1] while the
+  renderer reads [0, 1] and clamps. Omitting it renders audible but wrong audio. - The checkpoint
+  loads before the control is attached, so the module's shape is exactly the base run's and any
+  missing or unexpected key is fatal. A permissive load would "finetune" a randomly initialised
+  field. - The one-step estimate is detached and re-seeded, so the finetune never becomes
+  second-order in the frozen field.
+
+The null arm zeroes the control signal rather than passing None: passing None bypasses the control
+  entirely, leaving nothing to train and no capacity to match.
+
+ControlledFlow gains combine() so a caller deriving the control signal from the velocity evaluates
+  the field once, and an attribute fallback so it reads as the field it stands in for.
+
+* internal-fix(training): keep the pretrained flow frozen while finetuning
+
+Two defects an end-to-end run of the three arms exposed; the unit tests missed both because they
+  never sampled and their encoder carries no normalisation.
+
+ControlledFlow.forward rejected z=None, so validation sampling crashed the moment the
+  classifier-free-guidance unconditional branch ran.
+
+Clearing requires_grad does not stop BatchNorm running statistics, which kept updating and drifted
+  the "frozen" encoder across the finetune. Lightning does not call train() before the first steps,
+  so the mode has to be set at construction as well as held through the override. Left alone this
+  would have moved the conditioning the frozen field sees, confounding the very arm comparison this
+  chain exists to make.
+
+* internal-fix(training): address review round on simulator controls
+
+The review's test-quality findings were right about more than they claimed. Fixing the normalisation
+  assertion turned the suite red and exposed the cause: every render in it was silent. At 8192
+  samples / 16 kHz the spec's note window starts past the end of the buffer, so the cost was 0 and
+  its gradient all-zero for every test in the gradient-signal suite, not just the one flagged. The
+  fixture now pins a note that sounds across the whole buffer, and the assertion is an equality
+  against unit norm.
+
+Correctness:
+
+- gradient_control_signal runs under enable_grad, so it works inside the no_grad an ODE integration
+  loop holds (3685436865) - the cost column is sanitised like the gradient block (3685436947) - both
+  signals clamp the render straight-through, matching what render_torchsynth stored the target as
+  (3685437021) - bypassed rows zero their control before the network, so a non-finite entry cannot
+  NaN every control gradient through the GELU backward (3685437110) - bypassed rows select the
+  velocity itself, keeping negative zero (3685467165) - ControlNet reshapes, accepting the rank-1
+  control its annotation permits, and names a width mismatch (3685437221) - learned_control_signal
+  detaches the target (3685467160) - ControlledFlow re-asserts the freeze in train(); requires_grad
+  at construction does not survive a later unfreeze, and does not stop normalisation statistics
+  drifting at all (3685437442)
+
+The cost entry is compressed with log1p (3685437369). Raw it is a ~10-40 dB gap beside unit-norm
+  gradient entries of ~0.06, outweighing the whole block by two to three orders of magnitude.
+  Measured on the now-audible fixture: 24.8 dB compressed to 3.25.
+
+None no longer reads as the capacity-matched ablation, which it never was: it bypasses the control
+  entirely and trains nothing (3685467155).
+
+Tests: unit-norm equality, a retained estimate with a real backward for the stop-gradient contract,
+  dead seed dropped, _render annotated, C6 line, and a single-batch overfitting test for ControlNet.
+
+control_input is keyword-only (3685467144).
+
+* internal-fix(training): address review round on the finetune module
+
+The review's MT8 finding was right for a stronger reason than it stated. It argued parameter
+  movement does not prove the arms use simulator feedback. Adding that test showed the feedback
+  arms' control signal was identically zero: this file's batch drew uniform-random rows, whose note
+  window starts past the end of a 0.5 s buffer, so every render was silent and every simulator
+  assertion held for free. Same vacuity as the suite fixed in #2743. The batch now pins a sounding
+  note.
+
+- reject nonzero rectified_sigma_min, which biases the one-step estimate the same way the base
+  module already guards against (3686544755) - select the control width by control_mode, not by
+  whether an encoder is configured; the gradient arm emits 1+params regardless (3686538252) - do not
+  score CFG-dropped rows, whose estimate is drawn from the marginal and whose residual is noise that
+  differs per arm (3686544699) - reject sketch controls, which the controlled field cannot route and
+  which crash at validation (3686546177) - keep cost and control_encoder out of hparams, which
+  deep-copies them (3686546257) - probe the encoder width in eval, so it cannot fold a zeros
+  waveform into its running statistics (3686548358) - check the compile guard at construction,
+  before setup() compiles (3686548572) - read __dict__ in the attribute fallback so a pre-init
+  access raises AttributeError rather than recursing (3686548479)
+
+Renders are now gated on rows that can use the result: at control_t_min 0.8 roughly four in five
+  renders were discarded by combine (3686548643).
+
+Tests: feedback-dependence per arm, single-batch overfit, render gating, the CFG gate, every
+  trainable asserted moved rather than any, module-private helpers, and an instantiation test
+  driving each experiment config.
+
+The base checkpoint's sha256 is logged so two arms cannot silently start from different flows behind
+  one path (3686538273).
+
+- **training**: Split LogMelEncoder into frontend and backbone
+  ([#2755](https://github.com/tinaudio/synth-setter/pull/2755),
+  [`000591b`](https://github.com/tinaudio/synth-setter/commit/000591be5e70c1a1f79e8874351c9cb71db3a62b))
+
+* internal-feat(training): split LogMelEncoder into frontend and backbone
+
+LogMelEncoder fused a mel front end with a bespoke CNN backbone used nowhere else. The fusion is why
+  online-render synths could not reach the trainable backbone the VST models use: the AST is
+  spectrogram-in, so waveform conditioning had no way to feed it.
+
+Split the two halves and compose them, mirroring PretrainedConditioningEncoder(backbone, head):
+
+- LogMelFrontend keeps the mel + dB contract, including the tests pinning it to the front end the
+  dataset writers use. - MelCNN becomes a spectrogram-in backbone with a configurable input channel
+  count, so a stored two-channel grid and a mono online grid share it. - SpecEncoder pairs any front
+  end with any spectrogram-in backbone.
+
+LogMelEncoder disappears as a class; model/encoder/log_mel.yaml composes the same graph, so existing
+  torchsynth baselines stay reproducible.
+
+conditioning=ast_online is the payoff: the stored-mel AST over a mel the encoder computes from the
+  waveform. Online rendering is mono, so its patch embedding takes one channel rather than the
+  stored path's two (#2751).
+
+Mel settings now live in one place, model/frontend/log_mel.yaml, because a second copy that drifts
+  from the dataset writers' geometry is the failure mode this split is meant to prevent.
+
+Online conditioning is deliberately not the VST default: recomputing mel from the stored audio
+  column is strictly more I/O than reading mel_spec.
+
+Fixes #2750
+
+* docs(training): record the spec_encoder module and its renamed test
+
+The LogMelEncoder split renamed the test that test-quality.md quotes and added a module README's Key
+  Files does not list.
+
+Refs #2750
+
+* chore(ci-automation): re-run checks on a clean head SHA
+
+The corrected PR title re-ran check-pr-title green, but statusCheckRollup keeps the two superseded
+  FAILURE runs on the same commit, so the readiness probe reads gate 1 as terminally failed (#2756).
+  A fresh SHA gives a clean check suite.
+
+Refs #2756
+
+* internal-fix(testing): nest flow-audio fixture encoder overrides
+
+The encoder split nests the geometry under frontend/backbone, so the tiny flow-audio training
+  fixture's flat model.encoder.* overrides no longer resolve and the slow lane errored at fixture
+  setup.
+
+* internal-fix(training): reuse the VST AST config in the online profile
+
+ast_online.yaml restated every transformer hyperparameter, so the online and stored-mel arms could
+  drift apart while both looked correct. It now includes model/encoder/ast.yaml as its backbone,
+  leaving only the mel's source and the mono channel count (#2751) as differences, with a test
+  pinning that.
+
+- **training**: Torchsynth fold + latent audio loss (part 1/n)
+  ([#2600](https://github.com/tinaudio/synth-setter/pull/2600),
+  [`d8fdc15`](https://github.com/tinaudio/synth-setter/commit/d8fdc15fcb0de98d2cc9a26e085e9431eca0bab2))
+
+* internal-feat(models): backprop a torchsynth audio loss into the flow
+
+The #2553 spike rendered the flow's one-step estimate, scored it, and fed the detached cost gradient
+  to a separate control field as a conditioning feature. Here the render stays in the graph: the
+  spectral distance backpropagates into the vector field's own weights alongside the flow-matching
+  loss.
+
+Carries grad_render.py, flow.py, and step_b_pretrain.py over from that spike (the control field and
+  its ablation harness are dropped) and adds:
+
+- differentiable_decode: straight-through clamp into the renderable range. A plain clamp zeroes the
+  gradient of every saturated parameter, which is most of the batch for a [-1, 1]-space flow;
+  measured on fully-saturated input, straight-through keeps 76% of gradients alive against 0% for
+  clamp. - audio_weight: ramps the term in over t >= t_min, since below the window the one-step
+  estimate is still near noise and its render carries no signal. - combined_loss /
+  finetune_audio_loss: stage B, training the flow only. - step_d_audio_loss: runner scoring the
+  held-out protocol either side, so the run is comparable to the #2553 control-field arms.
+
+lambda_audio=0 skips the render entirely and reproduces the flow-matching gradient exactly, giving a
+  capacity-matched ablation arm for free.
+
+* internal-fix(models): reuse torchaudio mel and step_b helpers
+
+The multi-scale mel distance hand-assembled torch.stft, melscale_fbanks, a matmul and log10 — a
+  worse reimplementation of torchaudio.transforms. MelSpectrogram, which cnn.LogMelEncoder already
+  wraps. The hand-rolled version inherited torchaudio's functional defaults (norm=None,
+  mel_scale=htk), giving unit-PEAK filters: treble bands collected ~13x the energy of bass bands and
+  6 bands at n_fft=256 were identically zero. Rebuilt on the transform with slaney scale and
+  area-normalization, matching the dataset front-end.
+
+run_4s likewise copied step_b_pretrain's train and eval loops. Extracted pretrain_flow() and gave
+  evaluate() a signal_length parameter so both callers share one implementation instead of two
+  drifting copies.
+
+Also adds the 4 s runner: LogMelEncoder conditioning (differentiable log-mel from raw waveforms, so
+  no librosa parity surface), a latent-distance option measuring error in the frozen encoder's
+  embedding space, and W&B progress logging for stage A and each finetune arm.
+
+* internal-feat(training): audio-feedback loss with runtime guards
+
+Promotes the differentiable torchsynth renderer and the straight-through parameter decode out of
+  prototypes/ into src/, and adds AudioFeedbackLoss as a Hydra-injectable component supporting both
+  audio distances: multi-scale log-mel on the waveforms, and MSE in a frozen encoder's embedding
+  space.
+
+validate_audio_feedback_runtime() refuses three configurations the renderer cannot serve, each
+  raising with a message pointing at the tracking issue:
+
+- drop_last=False — the renderer caches per (sample_rate, signal_length, batch, device), so a
+  trailing partial batch silently misses the cache. - torch.compile — tracing through
+  functional_call into Voice graph-breaks or miscompiles, and wrong gradients are worse than no run.
+  - world_size > 1 — the render runs inside the loss behind a process-local lock; distributed
+  training is unvalidated.
+
+Also fixes the flow-time window in the prototype finetune loop. It sampled t only in [t_min, 1], but
+  the vector field is shared across t, so training exclusively on the late window starved the [0,
+  t_min) region the sampler integrates through first — which is why the no-render control arm
+  degraded every metric against its own base. The flow-matching term now samples the full range and
+  the audio weight gates the audio term alone.
+
+lambda_audio=0 is rejected rather than silently paying for a render that is then multiplied by zero;
+  the control arm omits the component entirely.
+
+Refs #2585
+
+* internal-feat(training): emit VST dict batches from torchsynth
+
+torchsynth is already a first-class VST-family synth — registered in synth_spec.py SYNTHS,
+  data/vst/param_spec_registry.py and renderer_factory.py. Only training forked to the ksin module
+  family, and for an incidental reason: TorchSynthDataModule emitted (audio, params, render_fn)
+  tuples while every VST experiment consumes dict batches.
+
+Adds a "dict" batch format producing {params, noise, mel_spec, audio}, so the online renderer feeds
+  VSTFlowMatchingModule directly. mel_spec goes through generate_vst_dataset.make_spectrogram — the
+  same librosa call the dataset generator uses — so an online batch matches a Lance-hydrated one in
+  shape and scaling with no reimplementation. params convert to the [-1, 1] model space VST batches
+  carry, and audio is kept so an audio-domain loss has its target.
+
+The loader sets drop_last in dict mode, satisfying the renderer's batch-keyed cache requirement that
+  validate_audio_feedback_runtime() enforces.
+
+The tuple format stays the default until experiment/torchsynth/ffn.yaml migrates off ksin_ff_module
+  (#2587, blocked on this).
+
+Verified: VSTFlowMatchingModule._train_step consumes an online torchsynth batch and produces finite,
+  non-zero vector-field gradients with the production module unmodified.
+
+* refactor(training): fold torchsynth onto the VST module family
+
+TorchSynthFeedForwardModule duplicated VSTFeedForwardModule: same loss, same model_step shape,
+  differing only in batch contract (tuple vs dict) and an in-module val/lsd that re-rendered
+  predictions inline during validation.
+
+torchsynth was already a first-class VST-family synth everywhere else — the SYNTHS registry, the
+  param-spec registry, renderer_factory and the render config group — so the training fork bought
+  nothing and split the code path that experiments are supposed to share.
+
+Deletes the module and repoints configs/model/ffn.yaml at VSTFeedForwardModule. The audio signal
+  moves to ValAudioProbe, which every other synth already uses and which renders off-loop instead of
+  blocking validation. The checkpoint monitor moves to val/param_mse: probe metrics arrive a
+  validation late and can be skipped, so they cannot gate checkpointing. PR #1810's reasoning still
+  holds — val/loss has a high irreducible floor — the audio signal just arrives by a different route
+  now.
+
+Adds "audio" as a conditioning mode. mel and m2l both name precomputed Lance columns, but an
+  online-render synth has no stored representation: its audio exists only at training time.
+  select_conditioning() takes the raw batch key so LogMelCNNResidualMLP keeps observing waveforms
+  and computing its own log-mel, rather than forcing an architecture change under a tuned
+  experiment.
+
+The datamodule now emits dict batches only; drop_last is set on training alone, where the renderer's
+  batch-keyed cache needs a stable size. Evaluation keeps its remainder rather than silently
+  discarding rows.
+
+Adds experiment/torchsynth/flow.yaml — the same VSTFlowMatchingModule every Surge experiment uses,
+  on 4 s online torchsynth audio.
+
+Closes #2587 Refs #2585
+
+* internal-fix(training): resolve torchsynth flow config interpolations
+
+Composition succeeded but instantiation failed: vst_flow's cosine scheduler interpolates
+  ${trainer.max_steps}, which trainer=gpu does not define, and its vector field reads
+  ${model.encoder.d_model}, which LogMelEncoder does not have.
+
+Pins trainer=gpu_400k_steps and points the conditioning width at the encoder's out_dim. Found by
+  driving the real train() entrypoint under fast_dev_run — the existing config test only composed
+  the tree, which does not catch a broken interpolation behind a lazily-resolved node.
+
+* internal-feat(training): wire audio-feedback loss into the flow module
+
+The AudioFeedbackLoss shipped orphaned: nothing consumed the model/audio_loss config group and the
+  runtime guards were never called. Attach it as an optional VSTFlowMatchingModule submodule,
+  validate the runtime (drop_last, compile, world_size) before setup() and at train start, and
+  expose it as the experiment=torchsynth/flow_audio arm.
+
+Replace the prototypes/torchsynth_feedback scripts and their sys.path-importing tests with
+  integration tests that drive the production module on real online batches. training_step also now
+  tolerates vector fields without a penalty() method, which previously crashed the None path.
+
+* chore(ci): retrigger check-pr-title after title edit
+
+* internal-fix(training): adapt torchsynth fold to synth-identity main
+
+Post-merge skew fixes: render groups are knobs-only after #2565, so the torchsynth experiments now
+  pass render=torchsynth beside synth=torchsynth_full; the default checkpoint monitor moves to
+  val/param_mse because val/loss died with the torchsynth fork; and main-side tests that unpacked
+  tuple batches or asserted val/loss / test/loss are updated to the dict-batch contract.
+
+* internal-fix(training): address torchsynth audio-loss review round
+
+Correctness: the latent audio distance now runs the conditioning encoder frozen (functional_call
+  over detached params/buffers, eval mode) so the jointly trained encoder cannot collapse the term
+  or drift its BatchNorm stats; the online train loader only drops the trailing batch when the split
+  holds at least one full batch; the differentiable render validates finite inputs and serializes
+  its process-global SynthModule.p patch behind one lock.
+
+Contracts: TorchSynthBatch is now the dict the loader actually emits; AudioFeedbackLoss construction
+  is keyword-only; the mslm/latent configs declare the full mel front-end; missing return
+  annotations added across the touched modules and tests.
+
+Coverage: composed torchsynth/ffn model driven on a real online dict batch, fixed-batch overfit of
+  the combined CFM+audio objective at pinned flow time, renderer output-contract and collate
+  known-input tests, batch dtype pins, and a per-parameter gradient assertion.
+
+* internal-fix(training): close audio-loss correctness gaps from review
+
+Aligns the batched grad render's noise buffers with the row-at-a-time target renderer (chunk 0 for
+  every row) and adds an output finiteness guard; hard-caps the rendered estimate with a
+  straight-through clamp so it matches the clamped target contract; excludes CFG-dropped rows from
+  the audio term via a caller-sampled keep mask threaded through apply_dropout; rejects nonzero
+  rectified_sigma_min with the audio loss (the one-step estimate is only exact on the sigma-free
+  path); flattens latent embeddings so sequence encoders reduce to per-sample scalars; and gates the
+  per-row librosa mel behind an emit_mel flag, off in the shipped torchsynth datamodule config where
+  every arm conditions on raw audio.
+
+New tests pin grad-render/target parity, keep-mask zeroing, the sigma-min guard, frozen-encoder
+  invariance (weights, BatchNorm stats, mode), sequence-encoder latent reduction, and the mel-free
+  batch contract.
+
+* internal-fix(training): run audio-loss render tests in the coverage lane
+
+The render-backed unit tests measure ~2s for both files, so the slow marks only served to exclude
+  the new audio-loss code from codecov's patch gate (make test-ci-unit filters -m 'not slow').
+
+* internal-feat(training): latent-only audio loss on a cosine distance
+
+Part 1 of the audio-feedback redesign tracked in #2628.
+
+Drop the multi-scale log-mel distance entirely. It duplicated the mel front-end already in
+  compute_audio_metrics, and every number measured with it predates the _aligned_noise fix, so it
+  was a confounded strawman rather than evidence about spectral objectives. With one distance left,
+  AudioDistance and the mel geometry knobs go, forward loses its branch, and encoder stops being
+  Optional-with-a-raise: the invalid latent-without-encoder state is now unrepresentable.
+
+Measure the latent distance by cosine rather than raw MSE. The conditioning encoder is jointly
+  trained, so its embedding norm carries no fixed meaning and an unnormalized distance drifts in
+  magnitude with activation scale alone. REPA and LPL both align to a frozen reference under a
+  normalized distance; this takes the normalization half. The frozen-teacher half is #2624.
+
+Add gradient_balance: the audio-to-flow gradient-norm ratio and the cosine between the two
+  gradients, both sampled at `prediction`, which both terms reach. Loss magnitude does not track
+  gradient magnitude, so a weight tuned against loss curves does not transfer between distances;
+  EnCodec's balancer reads the weight as a fraction of total gradient instead. The cosine is REPA's
+  conflict signal. Gated on Lightning's existing log_every_n_steps because the probe costs a second
+  backward through the renderer.
+
+The finetune test splits in two: the audio term is only measurably minimizable above the shipped
+  weight, while the combined objective is only stable at or below it. Above roughly 0.1 the cosine
+  term's gradient destabilizes the flow loss at this learning rate, so asserting both at one weight
+  was flaky by about 5%.
+
+Refs #2585, #2628
+
+* internal-fix(training): re-run checks after the PR title length fix
+
+The PR title was initially 93 chars; check-pr-title runs gitlint, which caps titles at 72. Three
+  failing runs are bound to the previous head SHA and the readiness probe reads check runs per SHA,
+  so they cannot clear in place even though the corrected title now passes.
+
+Refs #2628
+
+* internal-fix(training): address PR 2600 review feedback
+
+* internal-fix(training): stabilize audio overfit threshold
+
+* internal-fix(training): focus overfit test on combined loss
+
+* internal-fix(training): satisfy model typing gate
+
+* internal-fix(data-pipeline): unpatch SynthModule.p, sigmoid the decode
+
+Build each functional_call override as `column.as_subclass(ModuleParameter)` carrying the replaced
+  parameter's range and name, so stock `SynthModule.p` resolves it without a process-global class
+  patch. `as_subclass` rebrands in place, so the autograd graph survives; `_PATCH_LOCK` and the
+  threading import go with it. Gradients are unchanged: the pinned baseline test reproduces the
+  pre-refactor grad sums exactly.
+
+Replace `differentiable_decode`'s straight-through clamp with `sigmoid(theta * _DECODE_GAIN)`, gain
+  derived as `logit(1 - _PARAM_CLAMP_EPS)` so theta in [-1, 1] maps onto [eps, 1 - eps].
+  Out-of-range theta now keeps a nonzero gradient instead of a fabricated straight-through one, at
+  the cost of a nonlinear interior that no longer agrees with the linear (theta + 1) / 2 map
+  val/param_mse and the dataset targets assume — up to 0.240 absolute at theta = +-0.5. The
+  param-loss path and dataset targets are untouched.
+
+* internal-fix(data-pipeline): restore the straight-through clamp decode
+
+The sigmoid decode measured strictly worse than the clamp it replaced: above theta ~= 1.88 it
+  saturates to exactly 1.0 with exactly 0.0 float32 gradient, losing the pull-back the switch was
+  meant to buy, and its interior deviates from the linear (theta + 1) / 2 map by up to 0.285,
+  breaking agreement with val/param_mse and the dataset targets.
+
+Restore params01 + (clamped - params01).detach() and drop _DECODE_GAIN. The as_subclass substitution
+  for SynthModule.p is unaffected.
+
+* test(data-pipeline): pin batched grad render to per-row targets
+
+TorchSynthDataset renders every stored target alone, so each sees torchsynth Noise chunk 0.
+  render_torchsynth_grad renders whole batches and broadcasts chunk 0 to match; without that shim
+  rows past the first diverge from their targets by up to 8% of the signal peak while every existing
+  test stays green.
+
+* internal-fix(training): straight-through clamp, CFG keep-mask return
+
+Make the parameter clamp in render_torchsynth_grad straight-through so a saturated estimate keeps
+  the gradient that pulls it back into range; the hard clamp silently zeroed it.
+
+apply_dropout now returns the keep mask it drew instead of accepting a pre-sampled one, so the audio
+  term observes the same CFG decision without the caller duplicating the draw. One polarity (keep,
+  True = keep) holds in every name.
+
+Replace _train_step's 4-tuple of nullable positionals with a TrainStepOutputs dataclass, and correct
+  the CFG-dropout rationale: dropped rows are skipped for signal-to-noise, not correctness.
+
+Refs #2600
+
+* internal-fix(data-pipeline): render torchsynth at a fixed voice size
+
+Keying the renderer cache on the observed batch length allocated and permanently retained a
+  torchsynth Voice per distinct batch size (#1820), and forced audio feedback to reject
+  drop_last=False. It also let the batch length choose the noise realization: torchsynth's Noise
+  pre-draws a seeded (batch, buffer) block, and torch's CPU RNG splits that fill across threads once
+  it is large enough, so a partial final batch rendered different noise than a full one (7.4e-3 max
+  abs deviation at the shipped 4 s geometry).
+
+Both render paths now take an explicit render_batch_size, pad a shorter batch up to it, and slice
+  the padding rows back off. The audio loss reads the size from datamodule.batch_size, so the
+  configured batch size is the single source of truth, and the per-row target render keeps its
+  dedicated size-1 voice.
+
+Refs #1820 Refs #2585
+
+* internal-fix(data-pipeline): pin the renderer's two-voice rationale
+
+The fixed-size renderer reads as though batch_size merely survived in the cache key, inviting a
+  later simplification that collapses the size-1 target voice into the batched one and reintroduces
+  a ~3.8x per-row cost on the dataloader and the offline dataset generator. Link the measurement and
+  the reasoning at the definition site instead of leaving them in review history.
+
+Refs #1820
+
+* internal-fix(training): give param width/space conversion one owner
+
+ParamSpec now owns the [-1, 1] <-> [0, 1] affine and the synth-only -> full-width splice, so the val
+  audio probe no longer carries a hand-spliced note suffix from train.py.
+
+Also unpacks VectorField.apply_dropout's (z, keep) return in PlotLossPerTimestep after 2a08bdcc
+  changed its signature.
+
+* internal-fix(training): bucket audio gradient norm by flow time
+
+The module docstring claimed the audio term is gated to late flow times where the estimate carries
+  usable signal. Gradient reaching the network scales as (t - t_min) * (1 - t) instead: zero at
+  t_min, zero again at t=1 where theta_hat is trivially correct, peaking midway. State the real
+  envelope and link #2665; audio_weight itself is unchanged pending a measurement.
+
+Add that measurement. gradient_balance already differentiates the audio term w.r.t. the shared
+  tensor, so it now also returns the un-reduced per-row norms, and a pure time_bucket_means reduces
+  them into equal-width flow-time buckets. No second backward pass, no RNG draw, and the whole thing
+  stays inside the existing throttled probe.
+
+* internal-fix(training): key the model batch by conditioning mode
+
+`raw_conditioning_key` existed for one name mismatch: the mode is `mel` while the model-batch key
+  was `mel_spec`. Every other mode was identity, and `_RAW_CONDITIONING_KEYS.get(conditioning,
+  "mel_spec")` silently returned a mel key for any mode absent from the dict.
+
+Rename the in-memory batch entry `mel_spec` -> `mel` so key == mode, and replace the lookup with
+  `conditioning_batch_key`, which raises on an unknown literal instead of defaulting.
+  `select_conditioning` collapses to a dict index once the key is resolved at construction, so the
+  modules store the key and index the batch directly.
+
+The stored Lance column stays `mel_spec`: `prepare_batch` maps it onto the `mel` batch entry at the
+  datamodule boundary, exactly as it already maps `music2latent` onto `m2l`. No on-disk schema,
+  projection, or dataset spec field changes.
+
+* internal-fix(testing): render audible rows in audio-feedback tests
+
+Under the per-row note contract the spec draws each row's note window across a 4 s range, so on the
+  short test buffers nearly every online row starts its note past the end and renders silence. The
+  audio-term assertions were then comparing silence against silence and passed or failed on luck,
+  which is why they flipped between the Linux and macOS lanes.
+
+Collate the audio-feedback batches from online rows filtered to audible ones, so the real dataset
+  and collate still produce the batch and only the note window is constrained. Give the eval smoke
+  run a 4 s buffer at a cheaper sample rate and enough rows to beat the untrained baseline, since a
+  single-row overfit no longer transfers once pitch and timing vary per row. Widen only the gradient
+  sum's tolerance, whose cancellation makes it far more float-sensitive than the pinned magnitude
+  beside it.
+
+* internal-fix(testing): complete mel batch-key rename in preds test
+
+The flow-VAE preds-contract test still indexed the pre-rename ``mel_spec`` key while its own batch
+  helper emits ``mel``, so it raised KeyError on main as well as here; see #2715.
+
+``_encode_note_params`` was extracted only so the deleted ``complete_model_rows`` could splice a
+  note tail onto a narrower row. With that caller gone the helper is indirection around its single
+  remaining caller, so fold it back into ``encode``.
+
+Refs #2715
+
+* internal-fix(testing): widen pinned gradient baseline for arm64 drift
+
+Both gradient statistics drift by ~1e-4 relative on macOS arm64 while the forward energy holds to
+  1e-5, so the backward pass reassociates differently per BLAS backend. The previous ordering hid
+  this: the signed-sum assertion ran first and failed, leaving the magnitude assertion unevaluated.
+
+### Internal-Fix
+
+- **ci-automation**: Document Agent's required description field
+  ([#2694](https://github.com/tinaudio/synth-setter/pull/2694),
+  [`4138b72`](https://github.com/tinaudio/synth-setter/commit/4138b72682ad58a9a7a41d474f998f9605d15603))
+
+Tintin's Agent tool rejects a call without description, so every worker launch burned one round-trip
+  before the orchestrator retried. Observed as 14 rejected launches in one
+  repo-review-full-no-comments run.
+
+Refs #2683
+
+- **ci-automation**: Pin node heap in the pyright hook
+  ([#2716](https://github.com/tinaudio/synth-setter/pull/2716),
+  [`c95e809`](https://github.com/tinaudio/synth-setter/commit/c95e809974a4b5a34962650565dca47dbdd3c2aa))
+
+* internal-fix(ci-automation): bake node heap ceiling into pyright hook
+
+Node derives its old-space ceiling from total RAM, so on a loaded machine pyright's analysis
+  exhausts it and V8 aborts with a bare `exit code 241` and no diagnostics, which reads as a real
+  type error. Pin the ceiling in the hook entry so every invocation path (pre-commit run, make
+  format, the git hooks, CI) is deterministic without an operator-set env var.
+
+Refs #2200
+
+* chore(ci-automation): retrigger pr title check after title edit
+
+- **ci-automation**: Provision Cardinal in Docker image
+  ([#2696](https://github.com/tinaudio/synth-setter/pull/2696),
+  [`8af91ec`](https://github.com/tinaudio/synth-setter/commit/8af91ec78e3f4ed703ef262aaab4bdad9a67ca7d))
+
+- **data-pipeline**: Bind resume caches to source
+  ([#2690](https://github.com/tinaudio/synth-setter/pull/2690),
+  [`7684eb0`](https://github.com/tinaudio/synth-setter/commit/7684eb0a95001ba91a6cbbf653a50f798cfeb119))
+
+- **data-pipeline**: Evict materialized Lance file cache
+  ([#2736](https://github.com/tinaudio/synth-setter/pull/2736),
+  [`b4ffaa6`](https://github.com/tinaudio/synth-setter/commit/b4ffaa669f1db83aba6e8c044cf14911ebc123ad))
+
+* internal-fix(data-pipeline): evict materialized Lance file cache
+
+* test(data-pipeline): cover training cache eviction path
+
+* internal-fix(data-pipeline): retry eviction on cache reuse
+
+* test(data-pipeline): verify every cached data file is evicted
+
+* test(data-pipeline): tolerate Lance fragment layout changes
+
+* internal-fix(data-pipeline): propagate materialized file flush failures
+
+* test(data-pipeline): cover unavailable cache advice APIs
+
+* test(data-pipeline): assert stable eviction outcomes
+
+* internal-fix(data-pipeline): retry materialized file flushes
+
+* internal-fix(data-pipeline): retry only transient flush failures
+
+* refactor(data-pipeline): keep cache eviction advisory
+
+* internal-fix(data-pipeline): keep cache flush and advice best effort
+
+* internal-fix(data-pipeline): fail on cache writeback errors
+
+- **data-pipeline**: Name MATPAC++ embeddings by encoder
+  ([#2730](https://github.com/tinaudio/synth-setter/pull/2730),
+  [`c9d7bfa`](https://github.com/tinaudio/synth-setter/commit/c9d7bfaf809832ff5bb44cee7066d27483fe37cb))
+
+* internal-fix(data-pipeline): name MATPAC++ embeddings by encoder
+
+* chore(comments): tighten MATPAC doc map description
+
+- **data-pipeline**: Run sketch extraction on the chosen device
+  ([#2748](https://github.com/tinaudio/synth-setter/pull/2748),
+  [`b0607db`](https://github.com/tinaudio/synth-setter/commit/b0607dbec9b39fb53626bd35ed2ce0d172c67e33))
+
+* internal-fix(data-pipeline): run sketch extraction on the set device
+
+The sketch registry loader discarded its run config and left PESTO on CPU, so `device=` had no
+  effect and a GPU worker idled through the whole pass. Measured at 1.2 rows/s on 4 s stereo clips,
+  which puts the 440k Surge Simple train split around 100 h and makes full-scale extraction
+  impractical.
+
+Thread the device through: `load_pesto_model` caches on (checkpoint, device) and moves the weights,
+  `extract_sketch_controls_batch` takes a device and moves the mono batch so the loudness, centroid,
+  and pitch tracks all follow it, and the loader binds the resolved device onto the encoder.
+
+Pitch activations are not bitwise portable across devices — PESTO's convolutions drift up to ~1e-2
+  on isolated frames while the mean stays near 1e-7 and the predicted bin is unchanged. The
+  real-PESTO round-trip test is therefore pinned to CPU on both sides rather than having its
+  tolerance loosened; without that it would pass on CPU CI and fail on any GPU host.
+
+Locally 11.9 -> 115.4 rows/s at the dataset's 4 s stereo clip length.
+
+Refs #2746
+
+* chore(ci): re-run PR title check after retitle
+
+* test(data-pipeline): pin the PESTO CPU device default
+
+`load_pesto_model()` documents that omitting a device holds the weights on CPU, but every in-repo
+  caller passes one, so the default never executed under test.
+
+- **evaluation**: Forward sample_rate through mss, sot and wmfcc
+  ([#2702](https://github.com/tinaudio/synth-setter/pull/2702),
+  [`4121069`](https://github.com/tinaudio/synth-setter/commit/4121069cfbfb913022bad26c1b9cb7aec00ca890))
+
+compute_mss, compute_sot and compute_wmfcc each call a helper that takes a sample_rate, but none of
+  them forwarded one, so the helper's 44100.0 default always won. compute_rms already took and used
+  a sample rate, so the four metrics disagreed the moment audio was not 44.1 kHz.
+
+At 22.05 kHz every analysis window covered twice its intended real-time duration. Nothing raised;
+  the returned float just described a different transform than the caller asked for.
+
+The new parameter defaults to 44100.0, so every existing call site keeps its current behaviour
+  exactly.
+
+Note this does not make the metrics rate-invariant: the frequency axis still changes with the sample
+  rate, so scores from different rates remain incomparable. It only lets a caller size the windows
+  for the audio it has.
+
+Fixes #2700
+
+- **testing**: Regenerate Cardinal synth identity
+  ([#2689](https://github.com/tinaudio/synth-setter/pull/2689),
+  [`5aea55d`](https://github.com/tinaudio/synth-setter/commit/5aea55da31c682a40002a4ab765026682ca11701))
+
+- **training**: Key the model batch on mel, not mel_spec
+  ([#2708](https://github.com/tinaudio/synth-setter/pull/2708),
+  [`b51dd82`](https://github.com/tinaudio/synth-setter/commit/b51dd82090da16bdecec0bb54d63e0407819bf41))
+
+The in-memory model-batch entry is renamed from mel_spec to mel. The stored Lance column keeps its
+  name; prepare_batch now maps the mel_spec column onto the mel key at the datamodule boundary,
+  where music2latent -> m2l already lives.
+
+One name previously covered two things — a stored dataset column and the tensor a model consumes —
+  so a call site could not say which it held.
+
+No dataset or checkpoint is affected: MEL_SPEC_FIELD, DATASET_FIELD_NAMES, mel_spec_dtype, and the
+  mel_spec-<digest>/ subset dirs are untouched.
+
+Fixes #2705
+
+- **training**: Pre-flight the val audio probe's plugin path
+  ([#2738](https://github.com/tinaudio/synth-setter/pull/2738),
+  [`ba7312c`](https://github.com/tinaudio/synth-setter/commit/ba7312cdf9a980930c4e6f24c2ccb34cc857e966))
+
+* internal-fix(training): pre-flight the val audio probe's plugin path
+
+``ValAudioProbe`` swallows probe failures so a transient render error cannot take a training run
+  down. That also hid permanent misconfiguration: a worktree without a ``plugins/`` mirror resolved
+  the relative ``plugin_path`` to nothing, so every validation of a 10k-step run lost its subprocess
+  and the run finished with no ``val_audio/*`` metrics and only per-step warnings to show for it.
+
+``_configure_val_audio_probe`` now pre-flights the render artifacts alongside the render group,
+  ``limit_val_batches``, sample count, and R2 checks: mode ``true`` raises naming the unresolved
+  paths, mode ``auto`` leaves the probe unwired and warns.
+
+``missing_render_artifacts`` mirrors the hosts' own resolution rather than guessing. pedalboard's
+  ``VST3Plugin`` rejects a nonexistent path before it scans, so there is no system VST3 search-path
+  fallback to respect (``installed_plugins`` only lists); ``~`` is expanded because
+  ``DawDreamerRenderer`` expands it; and an in-process backend name (torchsynth / faust / surgepy)
+  declares no bundle on disk, so online-render specs stay ungated.
+
+Fixes #2737
+
+* internal-fix(training): re-run CI after PR title correction
+
+check-pr-title reruns re-read the stale payload, so the corrected title needs a new head commit;
+  also lets codecov re-evaluate against complete uploads.
+
+- **training**: Refresh TorchSynth compute oracle
+  ([#2793](https://github.com/tinaudio/synth-setter/pull/2793),
+  [`92f4d54`](https://github.com/tinaudio/synth-setter/commit/92f4d545c99a527a8d81025c38d76958ee95c148))
+
+Record the task digest produced by the checked-in TorchSynth compute option.
+
+Fixes #2791
+
+- **training**: Relax the SAME overfit bound to a portable ratio
+  ([#2776](https://github.com/tinaudio/synth-setter/pull/2776),
+  [`86c607f`](https://github.com/tinaudio/synth-setter/commit/86c607f5e02387a1ac7d136d9fdac010458c3292))
+
+The test asserted both an absolute `< 1e-2` and a `< initial / 100` ratio. From an initial loss of
+  ~1.04 the seeded optimisation reaches ~0.0017 locally and 0.0419 on the CI runner, so both bounds
+  sit inside that gap and both fail on CI. It is deterministic, not flaky: the same value comes back
+  on every run and on unrelated PRs, so re-running never clears it.
+
+A tenth still separates a pool that learns the fixed mapping from one that does not, which is what
+  the test is named for, and holds on both machines with margin.
+
+Fixes #2767
+
+- **training**: Repair mel batch-key consumers
+  ([#2720](https://github.com/tinaudio/synth-setter/pull/2720),
+  [`aced11d`](https://github.com/tinaudio/synth-setter/commit/aced11d49d1ced75e2aa0f06711dcc808addcd1c))
+
+* test(training): cover FlowVAE mel batch contract
+
+Exercise the model and prediction paths with the renamed batch key.
+
+* internal-fix(training): update audio stats mel key
+
+Read directory statistics from the model-batch key.
+
+Keep Lance statistics on the persisted mel_spec column.
+
+* test(evaluation): pin mel batch key in oracle E2E
+
+Document the existing production path that fails on a stale in-memory batch key.
+
+* test(training): update FlowVAE validation batch key
+
+- **training**: Restore flattened MATPAC++ conditioning shape
+  ([#2772](https://github.com/tinaudio/synth-setter/pull/2772),
+  [`139ab10`](https://github.com/tinaudio/synth-setter/commit/139ab10d674cc18627765a5f9433204449a23ffd))
+
+* internal-fix(training): restore flattened conditioning shape
+
+* test(training): cover flattened conditioning entrypoints
+
+### Refactoring
+
+- **data-pipeline**: Embeddings may declare several source columns
+  ([#2718](https://github.com/tinaudio/synth-setter/pull/2718),
+  [`2a68e30`](https://github.com/tinaudio/synth-setter/commit/2a68e3041beb67cedeca11fd27bf29acb28cbe69))
+
+EmbeddingSpec declared exactly one source column per embedding, and _encode_columns handed the
+  encoder that single decoded array. Every embedder today reads one column, so the contract has been
+  sufficient — but it cannot express an embedding that has to relate two columns to each other.
+
+Widens the declaration to a tuple and passes encoders the decoded source mapping. Encoders still
+  return a single Arrow array; each gains one unpack line and a signature/docstring update.
+
+No behaviour change: every added line in add_embeddings.py is a signature, a docstring, a
+  `sources[...]` unpack, or the new field. The existing tests/pipeline/data suite exercises every
+  registry entry and stays green with only call-site updates.
+
+Alternatives rejected: arity dispatch (two paths through one registry field); reading param_array
+  for every embedder (six pay I/O they do not use); having a multi-input encoder reopen the dataset
+  (breaks UDF batch alignment).
+
+Closes #2717
+
+
 ## v10.10.0 (2026-07-29)
 
 ### Features
@@ -2223,7 +4168,8 @@ Introduces the pydantic compute-option model, the programmatic sky.Task builder 
 
 * internal-feat(pipeline): launcher builds sky.Task from ComputeConfig
 
-Replaces the YAML dict-surgery path with build_sky_task on
+Replaces the YAML dict-surgery path (_load_compute_template_with_cmd, _inject_network_volume,
+  _override_image_id, _detect_provider_from_doc) with build_sky_task on
   SkypilotLaunchConfig.compute; launch configs and Hydra overrides now select
   skypilot_launch/compute options. Test suites adapted to assert on the real constructed sky.Task
   handed to sky.jobs.launch.
@@ -2605,6 +4551,93 @@ Fixes #2306 Refs #2213
 * test(ci-automation): load Doom bootstrapper in smoke test
 
 ### Features
+
+- Support RunPod network-volumes + sky-pilot managed job ssh
+  ([#2265](https://github.com/tinaudio/synth-setter/pull/2265),
+  [`9074c5f`](https://github.com/tinaudio/synth-setter/commit/9074c5f6b64b9f9c7cc0018ffd4c99f4227ff423))
+
+* internal-feat(storage): cache datasets on RunPod volumes
+
+* internal-fix(storage): harden network volume staging
+
+* internal-fix(storage): select supported RunPod volume zone
+
+* internal-fix(storage): reject stale staged dataset files
+
+* test(storage): isolate file hydration from rclone availability
+
+* test(storage): cover hydration without external binaries
+
+* feat(storage): parameterize the RunPod network-volume name per launch
+
+Replace the template's hardcoded us-tx-3 volume with a ${NETWORK_VOLUME} sentinel substituted from a
+  new SkypilotLaunchConfig.network_volume field (overridable via --network-volume). Sentinel/config
+  mismatches fail loudly so a launch can never silently target the wrong volume. US-TX-3 currently
+  has no CPU-pod stock and only L40S GPUs, so the checked-in definitions move to US-CA-2
+  (B200/H200/H100 + CPU pods) and AP-JP-1; retargeting a launch at another region's volume no longer
+  needs code changes.
+
+Refs #2263
+
+* fix(storage): surface dispatch validation errors as clean CLI messages
+
+dispatch_via_skypilot ran outside the CLI's try/except, so a network-volume/template mismatch
+  escaped as a raw ValueError traceback instead of the documented click error.
+
+* fix(storage): stock volume-template accelerators in CA/JP data centers
+
+The any-of set {RTX3090, RTX4090, A40} exists in the RunPod catalog but is not stocked in US-CA-2 or
+  AP-JP-1, so volume-bound tasks sat in STARTING/PENDING forever. Add the tiers those data centers
+  actually carry; SkyPilot picks the cheapest available.
+
+* feat(storage): tune and instrument the staging rclone copy
+
+Mirror r2_io.py's reliability flags (contimeout/timeout/retries), add --transfers=8
+  --multi-thread-streams=8 for the ~10 GiB Lance objects, and emit one-line stats every 60s so
+  multi-hundred-GiB copies are observable in job logs instead of silent until completion.
+
+* feat(storage): stage volumes from a small-disk compute template
+
+Staging copies R2 straight onto the mounted network volume, so the shared template's disk_size: 750
+  only inherited a training requirement — and RunPod hosts with 750 GB of free container disk are
+  the scarce resource that left staging jobs in STARTING for 30+ minutes. A 50 GB staging variant
+  schedules on far more hosts.
+
+* feat(storage): stage volumes from CPU pods
+
+GPU stock in the volume data centers runs Low across every tier while CPU stock stays High, and the
+  staging copy needs no GPU. cpu3c-8-16 with the 40 GB CPU-instance disk cap (#2197) schedules
+  immediately at ~a tenth of the cheapest GPU's cost.
+
+* feat(storage): align volume configs with live short-named volumes
+
+SkyPilot rejects RunPod volume names over 30 characters, which blocks use_existing adoption of its
+  own generated <name>-<hash>-<uuid> cloud names on a second API server. Rename the volumes to
+  ss-datasets-<dc>, document the one-registry rule and the adoption/migration procedure, and check
+  in the B200 AP-JP-1 fragment-sampler training launch so region- or tier-pinned runs need no ad-hoc
+  configs.
+
+* fix(storage): stage from small-disk GPU pods, not CPU pods
+
+SkyPilot cannot SSH into RunPod CPU pods — provisioning loops on 600s SSH timeouts and teardown.
+  Revert staging to a 50 GB-disk GPU any-of that includes the H-class tiers the volume data centers
+  actually stock.
+
+* feat(storage): tune the B200 volume launch for full-device batches
+
+bs128 leaves a B200 at ~9% SM occupancy (#2231); pin the tracker's winning bs1024 and raise
+  batch_readahead to Lance's own default of 16 for the fragment-sampler path.
+
+* feat(storage): cap staging accelerators at sub-$1/hr tiers
+
+An rclone copy gains nothing from H-class hosts; job 63 landed on a ~$3/hr H100 whose link ran at
+  10-40 MiB/s anyway. Restrict the staging any-of to the budget tiers.
+
+* feat(storage): H-class any-of training launch at bs2048
+
+Replace the B200-pinned volume launch with an H100/H200/B200 any-of so the JP run takes whatever
+  top-tier the data center stocks instead of queueing on B200 scarcity, and raise the
+  fragment-sampler batch to 2048.
 
 * feat(data-pipeline): forward operator SSH keys into launched pods
 
