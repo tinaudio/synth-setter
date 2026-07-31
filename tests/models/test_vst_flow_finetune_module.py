@@ -871,3 +871,75 @@ def test_controlled_sampling_scores_the_conditional_velocity(tmp_path: Path) -> 
     assert not torch.allclose(conditional, guided), "fixture cannot distinguish the two"
     assert torch.allclose(seen[0], conditional, atol=1e-6)
     assert not torch.allclose(seen[0], guided, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("control_mode", "expected"),
+    [
+        (
+            "gradient_spectral",
+            {
+                "train/control_active_fraction",
+                "train/control_signal_norm",
+                "train/control_cost",
+                "train/control_grad_norm",
+            },
+        ),
+        ("learned_audio", {"train/control_active_fraction", "train/control_signal_norm"}),
+        ("null", {"train/control_active_fraction", "train/control_signal_norm"}),
+    ],
+)
+def test_finetune_logs_whether_the_control_signal_arrived(
+    tmp_path: Path, control_mode: str, expected: set[str]
+) -> None:
+    """A run must record the signal's magnitude, not just that the control trained.
+
+    Weight gradients cannot settle it: ControlNet concatenates ``(t, velocity, control)``,
+    so a network reading only time and velocity produces the same norms as one reading the
+    simulator. Without this a silent render is indistinguishable from feedback that did not
+    help (#2795).
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param control_mode: Control arm under test.
+    :param expected: Metric keys the arm must log.
+    """
+    from lightning import Trainer
+
+    module = _finetune(
+        _base_checkpoint(tmp_path),
+        control_mode=control_mode,
+        overrides={
+            "control_encoder": _WaveformEncoder(out_dim=12)
+            if control_mode == "learned_audio"
+            else None,
+            "control_t_min": 0.0,
+        },
+    )
+    logged: dict[str, float] = {}
+    # Attaching a trainer is what switches the diagnostics on; they no-op when detached so
+    # a direct _train_step call in a unit test does not need a fit loop.
+    module.trainer = Trainer(  # pyright: ignore[reportAttributeAccessIssue]
+        accelerator="cpu", logger=False, enable_checkpointing=False, enable_progress_bar=False
+    )
+
+    def _capture(name: str, value: object, on_step: bool = False, on_epoch: bool = False) -> None:
+        """Record a logged metric instead of routing it to a logger.
+
+        :param name: Metric key.
+        :param value: Metric value.
+        :param on_step: Lightning cadence flag, unused here.
+        :param on_epoch: Lightning cadence flag, unused here.
+        """
+        logged[name] = float(value)  # pyright: ignore[reportArgumentType]
+
+    module.log = _capture  # pyright: ignore[reportAttributeAccessIssue]
+
+    module._train_step(_batch())
+
+    assert expected <= set(logged), f"missing {expected - set(logged)}"
+    assert logged["train/control_active_fraction"] > 0.0
+    # The null arm's signal is zero by construction; the feedback arms' must not be.
+    if control_mode == "null":
+        assert logged["train/control_signal_norm"] == 0.0
+    else:
+        assert logged["train/control_signal_norm"] > 0.0

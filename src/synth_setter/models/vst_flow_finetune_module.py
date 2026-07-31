@@ -581,6 +581,48 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self._sampling_target = None
 
     @jaxtyped(typechecker=beartype)
+    def _log_control_diagnostics(
+        self,
+        control_input: Float[Tensor, _BATCH_ANY_SHAPE],
+        active: Shaped[Tensor, _BATCH_SHAPE],
+    ) -> None:
+        """Record whether the simulator signal actually reached the control network.
+
+        Without this a run cannot distinguish feedback that arrived and did not help from
+        feedback that never arrived: a silent render yields a zero cost and a zero gradient,
+        so the signal is all zeros while the render still costs its full wall-clock. Weight
+        gradients do not settle it either — ``ControlNet`` concatenates ``(t, velocity,
+        control)``, so a network reading only time and velocity produces the same norms.
+
+        :param control_input: Signal handed to the control network.
+        :param active: Rows whose signal can reach the correction.
+        """
+        # self.trainer raises when detached, so the private attribute is the only probe that
+        # works for direct _train_step calls outside a fit loop.
+        if self._trainer is None:
+            return
+        rows = control_input[active]
+        engaged = float(active.float().mean())
+        self.log("train/control_active_fraction", engaged, on_step=True, on_epoch=False)
+        if not len(rows):
+            return
+        self.log(
+            "train/control_signal_norm", rows.norm(dim=-1).mean(), on_step=True, on_epoch=False
+        )
+        if self.control_mode != "gradient_spectral":
+            return
+        # The two blocks collapse independently: _compress_cost can flatten the cost while
+        # the per-row normalizer still returns unit vectors, and a zeroed gradient survives
+        # normalization as an exact zero.
+        self.log("train/control_cost", rows[:, 0].mean(), on_step=True, on_epoch=False)
+        self.log(
+            "train/control_grad_norm",
+            rows[:, 1:].norm(dim=-1).mean(),
+            on_step=True,
+            on_epoch=False,
+        )
+
+    @jaxtyped(typechecker=beartype)
     def _train_step(self, batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]]) -> TrainStepOutputs:
         """Run one finetuning step: estimate, score, correct, and match the flow.
 
@@ -607,6 +649,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         control_input = self._control_signal(
             self._one_step_estimate(x_t, t, velocity), batch["audio"], active
         )
+        self._log_control_diagnostics(control_input, active)
         prediction = self.vector_field.combine(velocity, t, control_input)
 
         loss = ((prediction - target).square().mean(dim=-1) * w).mean()
