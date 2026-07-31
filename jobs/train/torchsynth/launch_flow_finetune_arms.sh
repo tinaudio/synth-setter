@@ -8,10 +8,16 @@
 # Seeds are part of the grid, not an afterthought. A regression probe on this
 # path could not separate a 2% param_mse shift from run-to-run variance at one
 # run per arm, and the effect under test is smaller than that.
+#
+# Dispatch goes through the Hydra-native launcher (#2762): compute selects the
+# pool, skypilot_launch.cmd carries the worker shell command. The step budget and
+# validation cadence live in the arm's experiment YAML so `experiment=` alone
+# reproduces a run (#2118, #2196).
 
 set -euo pipefail
 
-readonly LAUNCH_CONFIG="src/synth_setter/configs/launch/train-runpod-torchsynth-finetune.yaml"
+readonly COMPUTE_OPTION="runpod/torchsynth"
+readonly WORKER_IMAGE_TAG="dev-snapshot"
 readonly -a ARMS=(
   flow_finetune
   flow_finetune_learned
@@ -23,8 +29,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: launch_flow_finetune_arms.sh --base-checkpoint URI [options]
 
-  --base-checkpoint URI   rclone URI of the pretrained flow, e.g.
-                          r2:bucket/path/last.ckpt (required).
+  --base-checkpoint URI   rclone URI of the pretrained flow every arm starts
+                          from, e.g. r2:bucket/path/last.ckpt (required).
   --seeds "1 2 3"         Seeds to run (default: 1 2 3).
   --arms "a b"            Arms to run (default: all three).
   --execute               Actually submit. Without it, nothing is launched.
@@ -69,11 +75,23 @@ main() {
     echo "balance preflight passed"
   fi
 
-  local arm seed experiment run_name
+  local arm seed experiment run_name worker_cmd
   for arm in "${arms[@]}"; do
     for seed in "${seeds[@]}"; do
       experiment="torchsynth/${arm}"
       run_name="${arm}_s${seed}"
+
+      # The module loads a local path and a fresh pod has none; copyto pins a
+      # fixed name so every arm reads the same file whatever the remote layout.
+      printf -v worker_cmd "%s" \
+        "rclone copyto --checksum ${base_checkpoint} /home/build/base.ckpt && " \
+        "exec synth-setter-train " \
+        "experiment=${experiment} " \
+        "run_name=${run_name} " \
+        "model.base_checkpoint=/home/build/base.ckpt " \
+        "seed=${seed} " \
+        "training.upload_checkpoints_during_training=true " \
+        "hydra.run.dir=/home/build/synth-setter/train-run"
 
       if [[ "${execute}" == false ]]; then
         echo "DRY RUN: ${experiment} seed=${seed} run_name=${run_name}"
@@ -81,11 +99,12 @@ main() {
       fi
 
       if ! uv run synth-setter-skypilot-launch \
-        --extra-env EXPERIMENT "${experiment}" \
-        --extra-env RUN_NAME "${run_name}" \
-        --extra-env BASE_CHECKPOINT_URI "${base_checkpoint}" \
-        --extra-env SEED "${seed}" \
-        "${LAUNCH_CONFIG}"; then
+        "skypilot_launch/compute=${COMPUTE_OPTION}" \
+        skypilot_launch.tail=false \
+        "skypilot_launch.worker_image_tag=${WORKER_IMAGE_TAG}" \
+        "skypilot_launch.cmd=\"${worker_cmd}\"" \
+        hydra.run.dir=/tmp/synth-setter-skypilot-launch \
+        hydra.output_subdir=null; then
         echo "Failed to submit ${experiment} seed=${seed}" >&2
         status=1
       fi
