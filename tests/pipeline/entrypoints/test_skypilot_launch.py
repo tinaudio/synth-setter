@@ -2455,6 +2455,7 @@ class TestCheckedInLaunchConfigs:
             "train-runpod-smoke.yaml",
             "train-runpod.yaml",
             "train-vast-smoke.yaml",
+            "train-runpod-torchsynth-finetune.yaml",
         ],
     )
     def test_shipped_train_config_carries_no_scientific_overrides(self, name: str) -> None:
@@ -2521,6 +2522,7 @@ class TestCheckedInLaunchConfigs:
             "train-runpod-smoke.yaml",
             "train-runpod.yaml",
             "train-vast-smoke.yaml",
+            "train-runpod-torchsynth-finetune.yaml",
         ],
     )
     def test_shipped_train_config_enables_mid_run_checkpoint_durability(self, name: str) -> None:
@@ -2539,8 +2541,15 @@ class TestCheckedInLaunchConfigs:
             "train-runpod-smoke.yaml",
             "train-runpod.yaml",
             "eval-runpod.yaml",
+            "train-runpod-torchsynth-finetune.yaml",
         ],
-        ids=["flow-simple-440k", "smoke", "train", "eval"],
+        ids=[
+            "flow-simple-440k",
+            "smoke",
+            "train",
+            "eval",
+            "torchsynth-finetune",
+        ],
     )
     def test_shipped_config_loads_and_composes_with_its_template(self, name: str) -> None:
         """A shipped config validates, names a real template, and its cmd injects cleanly.

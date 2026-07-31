@@ -15,3 +15,9 @@ tags: [torchsynth, flow, finetune, simulator_feedback, gradient_spectral]
 
 model:
   control_mode: gradient_spectral
+
+# The ablation's step budget lives here, not in a launch cmd, so `experiment=` alone
+# reproduces the run (#2118, #2196). torchsynth/flow's own trainer block supplies the
+# validation cadence.
+trainer:
+  max_steps: 20000

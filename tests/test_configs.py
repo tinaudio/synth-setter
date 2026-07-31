@@ -1208,8 +1208,9 @@ def test_torchsynth_finetune_arm_instantiates_from_its_experiment(
     # experiment's targets and interpolations, not the field's width.
     small = [
         "trainer=cpu",
-        # vst_flow's cosine scheduler interpolates it; the cpu trainer carries no step cap.
-        "+trainer.max_steps=10",
+        # vst_flow's cosine scheduler interpolates it. `++` because the cpu trainer carries
+        # no step cap while the finetune arms pin their own.
+        "++trainer.max_steps=10",
         "datamodule.sample_rate=16000",
         "datamodule.signal_length=16384",
         "model.vector_field.num_layers=1",
