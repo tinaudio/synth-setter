@@ -68,7 +68,9 @@ jobs:
             skypilot_launch.tail=true \
             "+skypilot_launch.extra_envs.COVERAGE_KEY=$COVERAGE_KEY" \
             "+skypilot_launch.extra_envs.R2_BUCKET=$R2_BUCKET" \
-            "skypilot_launch.cmd=exec bash scripts/ci/gpu_tests.sh"
+            "skypilot_launch.cmd=exec bash scripts/ci/gpu_tests.sh" \
+            hydra.run.dir=/tmp/synth-setter-skypilot-launch \
+            hydra.output_subdir=null
 
       # moveto, not copyto: retrieving the run-scoped object also cleans it up,
       # so a skipped cleanup step can never leak coverage blobs into R2.

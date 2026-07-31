@@ -139,8 +139,14 @@ synth-setter-skypilot-launch \
 The launcher prepends repository checkout synchronization under
 `skypilot_launch.worker_checkout_dir` (default `/home/build/synth-setter`) before
 executing `cmd`. Override that field for worker images with a different checkout
-location. Escape worker-side OmegaConf interpolation as `\${...}` so it remains
-literal until the worker composes its command.
+location. Every literal `${...}` intended for the worker command—including
+shell environment expansion—must be written `\${...}` so the launcher does not
+treat it as OmegaConf interpolation. An unescaped value fails with a
+`skypilot_launch.cmd` diagnostic before dispatch.
+
+`load_launch_config` and `configs/launch/*.yaml` remain only for compatibility
+with manual Python callers during migration; their removal is tracked by
+[#2780](https://github.com/tinaudio/synth-setter/issues/2780).
 
 #### Dataset dispatch flow
 

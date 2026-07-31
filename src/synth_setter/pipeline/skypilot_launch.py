@@ -64,6 +64,7 @@ import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
 from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import InterpolationResolutionError
 from pydantic import BaseModel, ValidationError
 
 from synth_setter.pipeline.compute_task import (
@@ -835,8 +836,18 @@ def _sky_cfg_from_hydra(cfg: DictConfig) -> SkypilotLaunchConfig:
     :param cfg: Config composed from ``skypilot_launch/default``.
     :return: Validated launch config with the standard worker checkout preamble.
     :raises TypeError: ``cfg.skypilot_launch`` does not resolve to a mapping.
+    :raises ValueError: ``cmd`` contains an unescaped worker shell interpolation.
+    :raises InterpolationResolutionError: Another launcher field cannot resolve.
     """
-    raw: object = OmegaConf.to_container(cfg.skypilot_launch, resolve=True)
+    try:
+        raw: object = OmegaConf.to_container(cfg.skypilot_launch, resolve=True)
+    except InterpolationResolutionError as error:
+        if error.full_key != "skypilot_launch.cmd":
+            raise
+        raise ValueError(
+            "skypilot_launch.cmd contains an unescaped interpolation; write every "
+            r"worker shell expansion as \${...}"
+        ) from error
     if not isinstance(raw, dict):
         raise TypeError(f"cfg.skypilot_launch must compose to a mapping; got {type(raw).__name__}")
     sky_cfg = SkypilotLaunchConfig(**{str(key): value for key, value in raw.items()})

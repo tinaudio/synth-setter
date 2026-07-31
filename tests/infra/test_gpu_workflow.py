@@ -97,6 +97,7 @@ def test_gpu_workflow_pins_low_tier_pool_and_worker_image(project_root: Path) ->
     assert "skypilot_launch.tier=low" in launch_command
     assert "skypilot_launch.worker_image_tag=dev-snapshot" in launch_command
     assert "skypilot_launch.tail=true" in launch_command
+    assert "hydra.output_subdir=null" in launch_command
 
 
 @pytest.mark.infra

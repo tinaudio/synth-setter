@@ -33,6 +33,7 @@ def test_train_workflow_requires_experiment_and_accepts_compute_override() -> No
     assert inputs["experiment"]["required"] is True
     assert inputs["compute"]["required"] is False
     assert inputs["compute"]["default"] == ""
+    assert inputs["tail"]["default"] is False
     assert "launch_config" not in inputs
     assert "dataset_root_uri" not in inputs
 
@@ -45,6 +46,8 @@ def test_train_workflow_maps_expensive_experiment_to_training_compute() -> None:
     assert "surge/flow_simple_440k)" in script
     assert "COMPUTE_OPTION=runpod/training" in script
     assert "COMPUTE_OPTION=runpod/smoke" in script
+    assert '== "surge/ffn_simple_smoke"' in script
+    assert "TAIL=true" in script
     assert "./scripts/validate_skypilot_workflow_inputs.sh" in script
 
 
@@ -54,6 +57,8 @@ def test_train_workflow_dispatches_hydra_launcher_with_generic_command() -> None
 
     dispatch = _steps_by_name(workflow)["Dispatch via SkyPilot"]["run"]
     assert '"skypilot_launch/compute=$COMPUTE_OPTION"' in dispatch
+    assert '"skypilot_launch.tail=$TAIL"' in dispatch
+    assert "hydra.output_subdir=null" in dispatch
     assert "skypilot_launch.worker_image_tag=dev-snapshot" in dispatch
     assert '"exec synth-setter-train "' in dispatch
     assert '"experiment=$EXPERIMENT "' in dispatch

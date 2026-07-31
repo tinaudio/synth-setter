@@ -112,7 +112,9 @@ jobs:
                 "skypilot_launch/compute=$COMPUTE_OPTION" \
                 "skypilot_launch.tail=$TAIL" \
                 skypilot_launch.worker_image_tag=dev-snapshot \
-                "skypilot_launch.cmd=\"$worker_cmd\""
+                "skypilot_launch.cmd=\"$worker_cmd\"" \
+                hydra.run.dir=/tmp/synth-setter-skypilot-launch \
+                hydra.output_subdir=null
             ' 2>&1 | tee eval-dispatch.log
 
       - name: Upload dispatch log

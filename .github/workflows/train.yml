@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: ""
+      tail:
+        description: "Tail worker logs; smoke training always tails"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,6 +31,7 @@ jobs:
       IMAGE: tinaudio/synth-setter:dev-snapshot
       EXPERIMENT: ${{ inputs.experiment }}
       COMPUTE_INPUT: ${{ inputs.compute }}
+      TAIL_INPUT: ${{ inputs.tail }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -47,10 +53,15 @@ jobs:
                 ;;
             esac
           fi
+          TAIL="$TAIL_INPUT"
+          if [[ "$EXPERIMENT" == "surge/ffn_simple_smoke" ]]; then
+            TAIL=true
+          fi
           ./scripts/validate_skypilot_workflow_inputs.sh \
             "$EXPERIMENT" "$COMPUTE_OPTION"
           echo "Resolved compute option: $COMPUTE_OPTION"
           echo "COMPUTE_OPTION=$COMPUTE_OPTION" >> "$GITHUB_ENV"
+          echo "TAIL=$TAIL" >> "$GITHUB_ENV"
 
       # Exports canonical storage env plus the rclone projection for the container
       # env pass-through below; rclone itself runs on the SkyPilot worker, not the runner.
@@ -90,6 +101,7 @@ jobs:
             -e WORKER_GIT_REF \
             -e COMPUTE_OPTION \
             -e EXPERIMENT \
+            -e TAIL \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
@@ -101,8 +113,11 @@ jobs:
                 "hydra.run.dir=/home/build/synth-setter/train-run"
               python -m synth_setter.pipeline.skypilot_launch \
                 "skypilot_launch/compute=$COMPUTE_OPTION" \
+                "skypilot_launch.tail=$TAIL" \
                 skypilot_launch.worker_image_tag=dev-snapshot \
-                "skypilot_launch.cmd=\"$worker_cmd\""
+                "skypilot_launch.cmd=\"$worker_cmd\"" \
+                hydra.run.dir=/tmp/synth-setter-skypilot-launch \
+                hydra.output_subdir=null
             ' 2>&1 | tee train-dispatch.log
 
       - name: Upload dispatch log

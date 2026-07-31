@@ -2290,6 +2290,16 @@ class TestSkypilotLaunchCli:
 
         assert result.returncode == 0, result.stderr
 
+    def test_unescaped_shell_expansion_names_cmd_and_escape(self) -> None:
+        """Unescaped shell expansion fails with launcher-specific remediation."""
+        cfg = _compose_skypilot_launch(
+            "skypilot_launch/compute=runpod/smoke",
+            'skypilot_launch.cmd="echo ${WORKER_REPO}"',
+        )
+
+        with pytest.raises(ValueError, match=r"skypilot_launch.cmd.*\\\$\{"):
+            skypilot_launch._sky_cfg_from_hydra(cfg)
+
     def test_escaped_worker_interpolation_remains_literal(
         self,
     ) -> None:

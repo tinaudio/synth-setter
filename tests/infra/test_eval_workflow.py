@@ -67,23 +67,24 @@ def test_eval_workflow_exposes_science_and_compute_inputs(project_root: Path) ->
 
 
 @pytest.mark.parametrize(
-    ("input_name", "input_value"),
+    ("input_name", "input_value", "expected_error"),
     [
-        ("EXPERIMENT", "surge/ffn_simple;echo-owned"),
-        ("COMPUTE_OPTION", "runpod/smoke;echo-owned"),
-        ("CHECKPOINT_REF", "model:v0;echo-owned"),
-        ("DATASET_ROOT_URI", "r2://bucket/data;echo-owned"),
-        ("DATASET_ROOT_URI", "r2:///dataset"),
+        ("EXPERIMENT", "surge/ffn_simple;echo-owned", "::error::experiment"),
+        ("COMPUTE_OPTION", "runpod/smoke;echo-owned", "::error::compute"),
+        ("CHECKPOINT_REF", "model:v0;echo-owned", "::error::checkpoint_ref"),
+        ("DATASET_ROOT_URI", "r2://bucket/data;echo-owned", "::error::dataset_root_uri"),
+        ("DATASET_ROOT_URI", "r2:///dataset", "::error::dataset_root_uri"),
     ],
 )
 def test_eval_workflow_rejects_shell_syntax_in_inputs(
-    project_root: Path, input_name: str, input_value: str
+    project_root: Path, input_name: str, input_value: str, expected_error: str
 ) -> None:
     """Execute workflow validation against each command-injection boundary.
 
     :param project_root: Repository root supplied by infra fixtures.
     :param input_name: Environment variable receiving the malicious value.
     :param input_value: Input containing unsupported shell syntax.
+    :param expected_error: Validation diagnostic prefix for the rejected field.
     """
     validate = next(
         step
@@ -107,7 +108,8 @@ def test_eval_workflow_rejects_shell_syntax_in_inputs(
         text=True,
     )
 
-    assert result.returncode != 0
+    assert result.returncode == 1
+    assert expected_error in result.stdout
 
 
 def test_eval_workflow_accepts_valid_launcher_inputs(project_root: Path) -> None:
@@ -149,6 +151,7 @@ def test_eval_workflow_dispatches_hydra_launcher_with_generic_command(
     run = str(_dispatch_step(project_root)["run"])
 
     assert '"skypilot_launch/compute=$COMPUTE_OPTION"' in run
+    assert "hydra.output_subdir=null" in run
     assert "skypilot_launch.worker_image_tag=dev-snapshot" in run
     assert "src/synth_setter/scripts/run-linux-vst-headless.sh" in run
     assert '"synth-setter-eval "' in run
