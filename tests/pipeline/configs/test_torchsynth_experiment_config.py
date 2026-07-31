@@ -36,6 +36,36 @@ def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
     assert "emit_mel" not in cfg.datamodule
 
 
+def test_torchsynth_flow_finetune_persists_four_workers_by_default() -> None:
+    """Gradient-spectral finetuning reuses each render worker across epochs."""
+    cfg = _experiment_cfg("flow_finetune")
+
+    assert cfg.datamodule.num_workers == 4
+    assert cfg.datamodule.persistent_workers is True
+
+
+def test_torchsynth_flow_finetune_null_persists_four_workers_by_default() -> None:
+    """Null-control finetuning reuses each render worker across epochs."""
+    cfg = _experiment_cfg("flow_finetune_null")
+
+    assert cfg.datamodule.num_workers == 4
+    assert cfg.datamodule.persistent_workers is True
+
+
+def test_torchsynth_persistent_workers_cli_override_disables_persistence() -> None:
+    """The Hydra override can opt out of worker reuse for troubleshooting."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_finetune_null",
+                "datamodule.persistent_workers=false",
+            ],
+        )
+
+    assert cfg.datamodule.persistent_workers is False
+
+
 def test_default_callbacks_monitor_parameter_mse() -> None:
     """The shared callback group monitors the metric emitted by default train modules."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):

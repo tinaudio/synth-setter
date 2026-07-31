@@ -192,6 +192,30 @@ def test_datamodule_default_num_params_matches_spec_encoded_width() -> None:
     )
 
 
+def test_datamodule_positive_workers_persist_by_default() -> None:
+    """Worker processes stay alive between epochs unless explicitly disabled."""
+    datamodule = TorchSynthDataModule(num_workers=1)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is True
+
+
+def test_datamodule_persistent_workers_false_disables_persistence() -> None:
+    """An explicit false option keeps positive-count workers nonpersistent."""
+    datamodule = TorchSynthDataModule(num_workers=1, persistent_workers=False)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is False
+
+
+def test_datamodule_zero_workers_disables_persistence_safely() -> None:
+    """The persistent default remains valid when loading in the main process."""
+    datamodule = TorchSynthDataModule(num_workers=0)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is False
+
+
 def test_datamodule_test_dataloader_yields_finite_batch() -> None:
     """``setup('test')`` builds the test split and ``test_dataloader`` yields a finite batch."""
     datamodule = TorchSynthDataModule(

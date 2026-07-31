@@ -353,25 +353,30 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert np.isfinite(logged_values).all()
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
     cfg_torchsynth_train: DictConfig,
 ) -> None:
-    """Train two epochs with per-epoch resampling through the real entrypoint.
+    """Train two epochs with a persistent render worker through the real entrypoint.
 
-    Pins that Lightning's fit loop accepts the fresh-index train sampler across
-    epoch boundaries (one ``iter()`` per epoch on the same loader).
+    Pins that Lightning's fit loop accepts the fresh-index train sampler across epoch boundaries
+    while reusing the same worker process.
 
     :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
     """
     HydraConfig().set_config(cfg_torchsynth_train)
     with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.datamodule.num_workers = 1
         cfg_torchsynth_train.datamodule.resample_train_per_epoch = True
         cfg_torchsynth_train.trainer.fast_dev_run = False
         cfg_torchsynth_train.trainer.max_epochs = 2
-    metric_dict, _ = train(cfg_torchsynth_train)
+    metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
     assert torch.isfinite(metric_dict["train/loss"])
+    assert object_dict["datamodule"].train_dataloader().persistent_workers is True
 
 
 @pytest.mark.gpu

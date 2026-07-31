@@ -367,6 +367,7 @@ class TorchSynthDataModule(LightningDataModule):
         resample_train_per_epoch: bool = False,
         drop_last: bool = False,
         conditioning: ConditioningMode = "audio",
+        persistent_workers: bool = True,
     ) -> None:
         """Configure the online TorchSynth train, validation, and test splits.
 
@@ -383,6 +384,8 @@ class TorchSynthDataModule(LightningDataModule):
         :param drop_last: Whether training discards a trailing partial batch when the split
             contains at least one full batch.
         :param conditioning: Model-batch modality; TorchSynth supports raw audio only.
+        :param persistent_workers: Keep worker processes alive between epochs when
+            ``num_workers`` is positive.
         :raises ValueError: If conditioning does not select raw audio.
         """
         if conditioning != "audio":
@@ -395,6 +398,7 @@ class TorchSynthDataModule(LightningDataModule):
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.persistent_workers = persistent_workers
         self.collate_fn = (
             collate_fn
             if collate_fn is not None
@@ -448,8 +452,6 @@ class TorchSynthDataModule(LightningDataModule):
             evaluation keeps its remainder rather than silently losing rows.
         :returns: Batched online data loader.
         """
-        # persistent_workers / pin_memory are unset — per-epoch worker Voice rebuilds
-        # and the host→GPU copy are tunable throughput wins, deferred to #1820.
         # The cast re-types the loader by its collate output; DataLoader's generic only
         # tracks the dataset's item type.
         return cast(
@@ -460,6 +462,7 @@ class TorchSynthDataModule(LightningDataModule):
                 shuffle=shuffle,
                 sampler=sampler,
                 num_workers=self.num_workers,
+                persistent_workers=self.persistent_workers and self.num_workers > 0,
                 drop_last=drop_last,
                 collate_fn=self.collate_fn,
             ),
