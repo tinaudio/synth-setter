@@ -394,7 +394,16 @@ def _tiny_torchsynth_finetune_cfg(tmp_path: Path) -> tuple[DictConfig, Path]:
         )
         base_model = hydra.utils.instantiate(base_cfg.model)
         base_checkpoint = tmp_path / "base.ckpt"
-        torch.save({"state_dict": base_model.state_dict()}, base_checkpoint)
+        base_trainer = Trainer(
+            accelerator="cpu",
+            devices=1,
+            logger=False,
+            enable_checkpointing=False,
+            enable_model_summary=False,
+            enable_progress_bar=False,
+        )
+        base_trainer.strategy.connect(base_model)
+        base_trainer.save_checkpoint(base_checkpoint)
         cfg = hydra.compose(
             config_name="train.yaml",
             return_hydra_config=True,

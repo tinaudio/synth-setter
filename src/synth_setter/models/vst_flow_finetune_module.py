@@ -17,6 +17,7 @@ import hashlib
 import logging
 import os
 from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +25,8 @@ import torch
 from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor
+from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
+from torchaudio.transforms import MelScale, MelSpectrogram, Spectrogram
 
 from synth_setter.checkpoint_identity import (
     BASE_CHECKPOINT_MATERIALIZED_PATH_KEY,
@@ -36,12 +39,20 @@ from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
+from synth_setter.models.components.cnn import MelCNN
 from synth_setter.models.components.simulator_control import (
     DEFAULT_CONTROL_T_MIN,
     ControlledFlow,
     ControlNet,
     gradient_control_signal,
     learned_control_signal,
+)
+from synth_setter.models.components.spec_encoder import LogMelFrontend, SpecEncoder
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    DiTransformerBlock,
+    LearntProjection,
+    SinusoidalEncoding,
 )
 from synth_setter.models.vst_flow_matching_module import (
     ControlTokenBranches,
@@ -61,6 +72,32 @@ _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_TIME_SHAPE = "batch 1"
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_SHAPE = "batch"
+_BASE_CHECKPOINT_SAFE_GLOBALS = (
+    partial,
+    torch.nn.AdaptiveAvgPool2d,
+    torch.nn.BatchNorm2d,
+    torch.nn.Conv2d,
+    torch.nn.GELU,
+    torch.nn.LayerNorm,
+    torch.nn.Linear,
+    torch.nn.MaxPool2d,
+    torch.nn.ModuleList,
+    torch.nn.MultiheadAttention,
+    torch.nn.Sequential,
+    torch.optim.Adam,
+    torch.optim.lr_scheduler.CosineAnnealingLR,
+    ApproxEquivTransformer,
+    DiTransformerBlock,
+    LearntProjection,
+    LogMelFrontend,
+    MelCNN,
+    MelScale,
+    MelSpectrogram,
+    NonDynamicallyQuantizableLinear,
+    SinusoidalEncoding,
+    SpecEncoder,
+    Spectrogram,
+)
 
 
 @jaxtyped(typechecker=beartype)
@@ -117,6 +154,23 @@ def _validate_arm(
         # Checked here rather than only in on_train_start, which runs after setup() has
         # already compiled the field (#2585).
         validate_audio_feedback_runtime(compiled=True, world_size=1)
+
+
+@jaxtyped(typechecker=beartype)
+def _resolve_base_checkpoint(
+    checkpoint: str | Path, source: str | Path | None
+) -> tuple[Path, str]:
+    """Resolve the local checkpoint and sanitize its recorded source.
+
+    :param checkpoint: Materialized local checkpoint path.
+    :param source: Explicit original source, or ``None`` to consult the worker environment.
+    :returns: Absolute local path and credential-free source identity.
+    """
+    materialized = Path(checkpoint).expanduser().resolve(strict=True)
+    original_source = source
+    if original_source is None:
+        original_source = os.getenv(BASE_CHECKPOINT_SOURCE_ENV)
+    return materialized, canonical_base_checkpoint_source(materialized, original_source)
 
 
 class VSTFlowFinetuneModule(VSTFlowMatchingModule):
@@ -185,23 +239,14 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             num_params=num_params,
             **base_kwargs,  # pyright: ignore[reportArgumentType]
         )
-        materialized = Path(base_checkpoint).expanduser().resolve(strict=True)
-        source = base_checkpoint_source
-        if source is None:
-            source = os.getenv(BASE_CHECKPOINT_SOURCE_ENV)
-        base_checkpoint = materialized
-        base_checkpoint_source = canonical_base_checkpoint_source(materialized, source)
+        base_checkpoint, base_checkpoint_source = _resolve_base_checkpoint(
+            base_checkpoint, base_checkpoint_source
+        )
         # Lightning collects the current subclass-frame values, so sanitize source metadata
         # before it is copied into checkpoints or dispatched to loggers.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        resolved_source, materialized_path, digest = self._load_pretrained(
-            base_checkpoint, base_checkpoint_source
-        )
-        self.hparams[BASE_CHECKPOINT_RESOLVED_SOURCE_KEY] = resolved_source
-        self.hparams[BASE_CHECKPOINT_MATERIALIZED_PATH_KEY] = materialized_path
-        self.hparams[BASE_CHECKPOINT_SHA256_KEY] = digest
-        self.requires_grad_(False)
+        self._load_and_record_pretrained(base_checkpoint, base_checkpoint_source)
 
         self.control_mode: ControlMode = control_mode
         if cost is not None:
@@ -251,6 +296,19 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self.vector_field.flow.eval()
 
     @jaxtyped(typechecker=beartype)
+    def _load_and_record_pretrained(self, checkpoint: Path, source: str) -> None:
+        """Restore the frozen base and retain its identity in checkpoint metadata.
+
+        :param checkpoint: Absolute local checkpoint path.
+        :param source: Credential-free original checkpoint source.
+        """
+        resolved_source, materialized_path, digest = self._load_pretrained(checkpoint, source)
+        self.hparams[BASE_CHECKPOINT_RESOLVED_SOURCE_KEY] = resolved_source
+        self.hparams[BASE_CHECKPOINT_MATERIALIZED_PATH_KEY] = materialized_path
+        self.hparams[BASE_CHECKPOINT_SHA256_KEY] = digest
+        self.requires_grad_(False)
+
+    @jaxtyped(typechecker=beartype)
     def _load_pretrained(
         self, checkpoint: str | Path, source: str | Path | None
     ) -> tuple[str, str, str]:
@@ -271,7 +329,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         with materialized.open("rb") as checkpoint_file:
             digest = hashlib.file_digest(checkpoint_file, "sha256").hexdigest()
             checkpoint_file.seek(0)
-            payload = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
+            with torch.serialization.safe_globals(list(_BASE_CHECKPOINT_SAFE_GLOBALS)):
+                payload = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
         logger.info("base_checkpoint path=%s sha256=%s", materialized, digest)
         state = payload.get("state_dict") if isinstance(payload, dict) else None
         if not isinstance(state, dict):
