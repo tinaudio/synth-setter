@@ -115,8 +115,9 @@ def test_meanaudio_public_adapter_matches_direct_upstream_posterior_mean(
     adapter_path = tmp_path / "adapter.npy"
     np.save(audio_path, _deterministic_audio()[:1], allow_pickle=False)
     direct_program = """
-import numpy as np
 import sys
+
+import numpy as np
 import torch
 import torchaudio.functional as audio_fn
 from meanaudio.ext.autoencoder.vae import get_my_vae
@@ -139,8 +140,12 @@ with torch.inference_mode():
 np.save(output, latents, allow_pickle=False)
 """
     adapter_program = """
-import numpy as np
 import sys
+
+import numpy as np
+import torch
+import torchaudio.functional as audio_fn
+
 from synth_setter.pipeline.data.meanaudio import load_meanaudio_audio_encoder
 
 audio = np.load(sys.argv[1], allow_pickle=False)
@@ -149,6 +154,10 @@ encode = load_meanaudio_audio_encoder(checkpoint, device=device)
 first = encode(audio, 44_100)
 second = encode(audio, 44_100)
 np.testing.assert_array_equal(second, first)
+native_mono = audio_fn.resample(torch.from_numpy(audio[:, 0]), 44_100, 16_000).numpy()[:, None]
+native_stereo = np.repeat(native_mono, 2, axis=1)
+np.testing.assert_allclose(encode(native_mono, 16_000), first, rtol=1e-6, atol=1e-6)
+np.testing.assert_allclose(encode(native_stereo, 16_000), first, rtol=1e-6, atol=1e-6)
 np.save(output, first, allow_pickle=False)
 """
     for program, output in ((direct_program, direct_path), (adapter_program, adapter_path)):
