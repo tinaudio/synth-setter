@@ -2169,6 +2169,7 @@ _ALL_EMBEDDING_CONDITIONING_PROFILES = (
     "ssondo",
     "t5gemma",
     "matpac_plus",
+    "meanaudio_16k",
 )
 
 

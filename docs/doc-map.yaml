@@ -16,7 +16,7 @@ docs:
     description: uv sync command surface, relock cadence, Linux resync flip
     sources:
       - pattern: "pyproject.toml"
-        covers: "MATPAC++ runtime dependency."
+        covers: "MATPAC++ and MeanAudio runtime dependencies."
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
@@ -169,6 +169,10 @@ docs:
         covers: "Registry-driven Lance embedding augmentation with resumable artifact and index identity."
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
+      - pattern: "src/synth_setter/pipeline/data/meanaudio.py"
+        covers: "Pinned MeanAudio VAE checkpoint, posterior-mean encoding, and frame geometry."
+      - pattern: "src/synth_setter/configs/conditioning/meanaudio_16k.yaml"
+        covers: "Four-second MeanAudio EmbeddingPool conditioning profile."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
       - pattern: "src/synth_setter/features/**"

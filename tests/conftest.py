@@ -54,7 +54,16 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
-_EMBEDDING_KEYS = ("clap", "m2l", "same_s", "same_l", "ssondo", "t5gemma", "matpac_plus")
+_EMBEDDING_KEYS = (
+    "clap",
+    "m2l",
+    "same_s",
+    "same_l",
+    "ssondo",
+    "t5gemma",
+    "matpac_plus",
+    "meanaudio_16k",
+)
 _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
@@ -1289,6 +1298,7 @@ def local_embedding_checkpoints() -> dict[str, str]:
     from huggingface_hub import snapshot_download
     from music2latent.inference import download_model, load_path_inference_default
 
+    from synth_setter.pipeline.data.meanaudio import resolve_meanaudio_checkpoint
     from synth_setter.pipeline.data.ssondo import resolve_ssondo_checkpoint
 
     download_model()
@@ -1328,6 +1338,7 @@ def local_embedding_checkpoints() -> dict[str, str]:
             pytest.fail(message)
         pytest.skip(message)
     checkpoints = {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints["meanaudio_16k"] = str(resolve_meanaudio_checkpoint())
     checkpoints["ssondo"] = str(resolve_ssondo_checkpoint())
     return checkpoints
 
@@ -1824,6 +1835,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         CLAP_FIELD,
         M2L_FIELD,
         MATPAC_PLUS_FIELD,
+        MEANAUDIO_16K_FIELD,
         MEL_SPEC_FIELD,
         PARAM_ARRAY_FIELD,
         SAME_L_FIELD,
@@ -1849,6 +1861,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         SSONDO_FIELD,
         T5GEMMA_FIELD,
         MATPAC_PLUS_FIELD,
+        MEANAUDIO_16K_FIELD,
     } <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
@@ -1862,6 +1875,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
             SSONDO_FIELD,
             T5GEMMA_FIELD,
             MATPAC_PLUS_FIELD,
+            MEANAUDIO_16K_FIELD,
         ]
     )
     for column in table.columns:
@@ -1875,6 +1889,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
     t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
     matpac_plus = table.column(MATPAC_PLUS_FIELD).combine_chunks().to_numpy_ndarray()
+    meanaudio_16k = table.column(MEANAUDIO_16K_FIELD).combine_chunks().to_numpy_ndarray()
 
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
     assert not np.array_equal(audio[0], audio[1])
@@ -1885,6 +1900,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
         ("ssondo", ssondo, (_EMBEDDING_E2E_ROWS, 960)),
         ("matpac_plus", matpac_plus, (_EMBEDDING_E2E_ROWS, 3840, 25)),
+        ("meanaudio_16k", meanaudio_16k, (_EMBEDDING_E2E_ROWS, 20, 125)),
     ):
         assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
         assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"

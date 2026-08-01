@@ -37,6 +37,7 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
     M2L_FIELD,
+    MEANAUDIO_16K_FIELD,
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
@@ -67,7 +68,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     SAME_LATENT_FRAMES,
     SKETCH_INDEX_SUB_VECTORS,
     SKETCH_VEC_COLUMN,
-    SKETCH_INDEX_SUB_VECTORS,
     EmbeddingSpec,
     Encoder,
     IndexSpec,
@@ -99,6 +99,10 @@ from synth_setter.pipeline.data.add_embeddings import (
 from synth_setter.pipeline.data.matpac_plus import (
     MATPAC_PLUS_FRONTEND,
     matpac_plus_num_latent_frames,
+)
+from synth_setter.pipeline.data.meanaudio import (
+    MEANAUDIO_EMBEDDING_DIM,
+    meanaudio_num_latent_frames,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.same import (
@@ -213,6 +217,20 @@ def _fake_sketch(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return np.ascontiguousarray(np.repeat(cells, frames, axis=2))
 
 
+def _fake_meanaudio(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Encode audio as deterministic MeanAudio-shaped sequences.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :returns: Deterministic ``(B, 20, F)`` posterior means.
+    """
+    frames = meanaudio_num_latent_frames(audio.shape[-1], sample_rate)
+    fill = audio.astype(np.float32).mean(axis=(1, 2))
+    return np.broadcast_to(
+        fill[:, None, None], (len(audio), MEANAUDIO_EMBEDDING_DIM, frames)
+    ).copy()
+
+
 def _fake_matpac_plus(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Encode audio as deterministic MATPAC++-shaped sequences.
 
@@ -246,6 +264,8 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_same(0.75, same_l_num_latent_frames)
     if name == "matpac_plus":
         return _fake_matpac_plus
+    if name == "meanaudio_16k":
+        return _fake_meanaudio
     raise ValueError(f"no fake encoder for {name!r}")
 
 
@@ -391,6 +411,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "ssondo",
         "t5gemma",
         "matpac_plus",
+        "meanaudio_16k",
     }
     assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
         pool="none",
@@ -421,6 +442,13 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
     assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
+    assert EMBEDDING_REGISTRY["meanaudio_16k"].index == IndexSpec(
+        pool="mean",
+        num_sub_vectors=4,
+        vector_column=f"{MEANAUDIO_16K_FIELD}_vec",
+        vector_dim=MEANAUDIO_EMBEDDING_DIM,
+    )
+    assert EMBEDDING_REGISTRY["meanaudio_16k"].co_resident is False
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
