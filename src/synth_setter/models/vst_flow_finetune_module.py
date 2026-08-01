@@ -581,6 +581,38 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self._sampling_target = None
 
     @jaxtyped(typechecker=beartype)
+    def _log_control_telemetry(
+        self,
+        control_input: Float[Tensor, _BATCH_ANY_SHAPE],
+        active: Shaped[Tensor, _BATCH_SHAPE],
+    ) -> None:
+        """Log whole-batch control activity and signal magnitudes when attached.
+
+        :param control_input: Sanitized, gated signal handed to the control network.
+        :param active: Rows whose control gate is active.
+        """
+        if self._trainer is None:
+            return
+        metrics = {
+            "train/control_active_fraction": active.to(dtype=control_input.dtype).mean(),
+            "train/control_signal_norm": control_input.norm(dim=-1).mean(),
+        }
+        if self.control_mode == "gradient_spectral":
+            metrics.update(
+                {
+                    "train/control_cost": control_input[:, 0].abs().mean(),
+                    "train/control_grad_norm": control_input[:, 1:].norm(dim=-1).mean(),
+                }
+            )
+        self.log_dict(
+            metrics,
+            on_step=True,
+            on_epoch=False,
+            sync_dist=True,
+            batch_size=int(control_input.shape[0]),
+        )
+
+    @jaxtyped(typechecker=beartype)
     def _train_step(self, batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]]) -> TrainStepOutputs:
         """Run one finetuning step: estimate, score, correct, and match the flow.
 
@@ -607,6 +639,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         control_input = self._control_signal(
             self._one_step_estimate(x_t, t, velocity), batch["audio"], active
         )
+        self._log_control_telemetry(control_input, active)
         prediction = self.vector_field.combine(velocity, t, control_input)
 
         loss = ((prediction - target).square().mean(dim=-1) * w).mean()
