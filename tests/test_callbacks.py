@@ -171,6 +171,31 @@ def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
     assert torch.equal(loaded_params, params)
 
 
+def test_prediction_writer_serializes_views_without_backing_storage(
+    tmp_path: Path,
+) -> None:
+    """Staged tensor slices serialize only their visible values.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    backing = torch.arange(4096, dtype=torch.float32)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+
+    writer.write_on_batch_end(
+        cast("Trainer", None),
+        cast("LightningModule", None),
+        (backing[:2], {"audio": backing[2:4], "params": backing[4:6]}),
+        None,
+        None,
+        0,
+        0,
+    )
+
+    for artifact in ("pred-0.pt", "target-audio-0.pt", "target-params-0.pt"):
+        loaded = torch.load(tmp_path / artifact, weights_only=True)
+        assert loaded.untyped_storage().nbytes() == loaded.numel() * loaded.element_size()
+
+
 def test_prediction_writer_epoch_serializes_torchsynth_signals_as_plain_tensors(
     tmp_path: Path,
 ) -> None:

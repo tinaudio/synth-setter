@@ -592,7 +592,7 @@ def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
     :param tensor: Callback output to make safe for weights-only serialization.
     :returns: Exact base :class:`torch.Tensor` value on CPU.
     """
-    return tensor.detach().cpu().as_subclass(torch.Tensor)
+    return tensor.detach().to(device="cpu", copy=True).as_subclass(torch.Tensor)
 
 
 class PredictionWriter(BasePredictionWriter):
