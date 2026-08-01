@@ -12,6 +12,7 @@ on:
       - "src/synth_setter/data/vst/shapes.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
       - "src/synth_setter/pipeline/data/meanaudio.py"
+      - "tests/conftest.py"
       - "tests/pipeline/data/test_meanaudio_encoder_e2e.py"
       - "uv.lock"
   pull_request:
@@ -22,6 +23,7 @@ on:
       - "src/synth_setter/data/vst/shapes.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
       - "src/synth_setter/pipeline/data/meanaudio.py"
+      - "tests/conftest.py"
       - "tests/pipeline/data/test_meanaudio_encoder_e2e.py"
       - "uv.lock"
 
