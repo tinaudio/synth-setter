@@ -7,6 +7,7 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import json
 import logging
 import os
 import re
@@ -44,8 +45,6 @@ from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
@@ -1181,31 +1180,28 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
 
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
-def test_train_lance_records_dataset_lineage_from_local_spec(
+def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
     cfg_train_lance: DictConfig,
-    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
-    """A real Lance training run records its local dataset artifact as a W&B input.
+    """A real Lance training run records a historical dataset as a W&B input.
 
     :param cfg_train_lance: Composed Lance training configuration.
-    :param dataset_spec_factory: Factory producing the frozen dataset provenance.
     """
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
     dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
-    write_spec_to_path(
-        dataset_spec_factory(
-            task_name="lineage-lance",
-            train_val_test_sizes=[4, 4, 0],
-            r2={"bucket": "intermediate-data"},
-            render={"samples_per_shard": 4},
-        ),
-        dataset_root / "input_spec.json",
-    )
+    (dataset_root / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
     HydraConfig().set_config(cfg_train_lance)
     logger = _RecordingWandbLogger()
     with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
         train(cfg_train_lance)
 
-    assert logger.used_artifacts == ["data-lineage-lance:lineage-lance-20260520T000000000Z"]
+    assert logger.used_artifacts == [
+        "data-surge-simple-lance-440k-20k-20k:surge-simple-lance-440k-20k-20k-20260706T005448315Z"
+    ]
 
 
 def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:

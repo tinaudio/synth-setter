@@ -285,7 +285,14 @@ def test_dataset_artifact_ref_invalid_spec_returns_none(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("task_name", ""), ("run_id", ""), ("task_name", 440), ("run_id", 440)],
+    [
+        ("task_name", ""),
+        ("run_id", ""),
+        ("task_name", " "),
+        ("run_id", "\t"),
+        ("task_name", 440),
+        ("run_id", 440),
+    ],
 )
 def test_dataset_artifact_ref_invalid_identity_returns_none(
     tmp_path: Path, field: str, value: str | int

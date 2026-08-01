@@ -19,7 +19,7 @@ from synth_setter.pipeline.spec_io import join_uri, read_spec_text
 
 log = structlog.get_logger(__name__)
 
-_LineageId = Annotated[str, StringConstraints(min_length=1)]
+type _LineageId = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 
 
 class _DatasetLineageIdentity(BaseModel, extra="ignore", strict=True):
