@@ -20,7 +20,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-_EXACT_SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+_SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+_SEMVER_PRERELEASE_IDENTIFIER = rf"(?:{_SEMVER_NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+_EXACT_SEMVER = re.compile(
+    rf"^{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}"
+    rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 _PACKAGE_SLUG = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*/[0-9A-Za-z][0-9A-Za-z._-]*$")
 
 

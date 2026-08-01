@@ -60,7 +60,7 @@ def test_committed_manifests_match_the_plugin_manifest_contract() -> None:
 
 
 def test_manifest_load_without_vst3_versions_preserves_legacy_contract(tmp_path: Path) -> None:
-    """Manifests from before runtime-version metadata remain consumable.
+    """Runtime-version metadata is optional.
 
     :param tmp_path: Scratch root for the legacy manifest.
     """
@@ -159,6 +159,24 @@ def test_manifest_load_vst3_prerelease_with_build_metadata_accepted(tmp_path: Pa
     manifest = PluginManifest.load(path)
 
     assert manifest.vst3_versions == {"example/synth": "4.5.6-rc.1+build.7"}
+
+
+@pytest.mark.parametrize("version", ["4.5.6-rc..1", "4.5.6+build..7"])
+def test_manifest_load_vst3_version_with_empty_identifier_rejected(
+    tmp_path: Path, version: str
+) -> None:
+    """Runtime versions reject empty prerelease and build identifiers.
+
+    :param tmp_path: Scratch root for the test manifest.
+    :param version: Malformed runtime version for the scenario.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    payload["vst3Versions"]["example/synth"] = version
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValidationError, match="VST3 version must be an exact semantic version"):
+        PluginManifest.load(path)
 
 
 def test_manifest_load_unpinned_vst3_version_rejected(tmp_path: Path) -> None:
