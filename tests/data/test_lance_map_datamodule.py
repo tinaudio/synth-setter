@@ -450,6 +450,37 @@ class TestLanceMapDataModuleSetup:
                 assert loader.batch_size == 2, name
                 assert len(loader.dataset) == num_rows, name  # type: ignore[arg-type]
 
+    def test_train_and_validation_loaders_use_independent_worker_counts(
+        self, dataset_root: Path
+    ) -> None:
+        """Each fit loader uses its own configured worker count.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=3,
+            val_num_workers=0,
+        ) as module:
+            assert module.train_dataloader().num_workers == 3
+            assert module.val_dataloader().num_workers == 0
+
+    def test_validation_loader_worker_override_is_honored(
+        self, dataset_root: Path
+    ) -> None:
+        """Validation can opt into workers without changing training workers.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            val_num_workers=1,
+        ) as module:
+            assert module.val_dataloader().num_workers == 1
+
     def test_persistent_workers_without_workers_is_effectively_disabled(
         self, dataset_root: Path
     ) -> None:
@@ -478,8 +509,10 @@ class TestLanceMapDataModuleSetup:
             dataset_root=dataset_root,
             batch_size=2,
             num_workers=1,
+            val_num_workers=1,
             persistent_workers=True,
         ) as module:
+            assert module.train_dataloader().persistent_workers is True
             assert module.val_dataloader().persistent_workers is True
 
     def test_prefetch_factor_with_workers_reaches_loader(self, dataset_root: Path) -> None:
@@ -490,7 +523,7 @@ class TestLanceMapDataModuleSetup:
         with _set_up_map_module(
             dataset_root=dataset_root,
             batch_size=2,
-            num_workers=1,
+            val_num_workers=1,
             prefetch_factor=4,
         ) as module:
             assert module.val_dataloader().prefetch_factor == 4
@@ -1086,7 +1119,10 @@ class TestLanceMapDataModuleModes:
 
         def collect(num_workers: int) -> np.ndarray:
             with _set_up_map_module(
-                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=num_workers
+                dataset_root=dataset_root,
+                batch_size=2,
+                ot=False,
+                val_num_workers=num_workers,
             ) as module:
                 return _params_in_order(module.val_dataloader())
 
@@ -1106,7 +1142,7 @@ class TestLanceMapDataModuleModes:
         def collect() -> torch.Tensor:
             torch.manual_seed(47)
             with _set_up_map_module(
-                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=2
+                dataset_root=dataset_root, batch_size=2, ot=False, val_num_workers=2
             ) as module:
                 batches = [_unwrap(batch["noise"]) for batch in module.val_dataloader()]
             return torch.stack(batches)

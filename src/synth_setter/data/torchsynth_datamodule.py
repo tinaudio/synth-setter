@@ -363,6 +363,7 @@ class TorchSynthDataModule(LightningDataModule):
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
         num_workers: int = 0,
+        val_num_workers: int = 0,
         collate_fn: TorchSynthCollateFn | None = None,
         resample_train_per_epoch: bool = False,
         drop_last: bool = False,
@@ -376,7 +377,8 @@ class TorchSynthDataModule(LightningDataModule):
         :param train_val_test_sizes: Row counts for the train, validation, and test splits.
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
-        :param num_workers: DataLoader worker process count.
+        :param num_workers: Worker processes for training and test loaders.
+        :param val_num_workers: Worker processes for the validation loader.
         :param collate_fn: Fully configured row collator; defaults to mel-capable batches.
         :param resample_train_per_epoch: Draw fresh train rows every epoch (truly online
             training) instead of revisiting one fixed split; validation and test stay fixed.
@@ -395,6 +397,7 @@ class TorchSynthDataModule(LightningDataModule):
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.val_num_workers = val_num_workers
         self.collate_fn = (
             collate_fn
             if collate_fn is not None
@@ -435,6 +438,7 @@ class TorchSynthDataModule(LightningDataModule):
         self,
         dataset: Dataset[TorchSynthItem],
         *,
+        num_workers: int,
         shuffle: bool = False,
         sampler: Sampler[int] | None = None,
         drop_last: bool = False,
@@ -442,6 +446,7 @@ class TorchSynthDataModule(LightningDataModule):
         """Wrap one online split with the configured collator.
 
         :param dataset: Online split to load.
+        :param num_workers: Worker processes for this split.
         :param shuffle: Whether to shuffle logical row indices; exclusive with ``sampler``.
         :param sampler: Index sampler overriding the default order.
         :param drop_last: Whether to drop a trailing partial batch. Set on training only;
@@ -459,7 +464,7 @@ class TorchSynthDataModule(LightningDataModule):
                 batch_size=self.batch_size,
                 shuffle=shuffle,
                 sampler=sampler,
-                num_workers=self.num_workers,
+                num_workers=num_workers,
                 drop_last=drop_last,
                 collate_fn=self.collate_fn,
             ),
@@ -474,20 +479,28 @@ class TorchSynthDataModule(LightningDataModule):
         drop_last = self.drop_last and len(self.train) >= self.batch_size
         if self.resample_train_per_epoch:
             return self._loader(
-                self.train, sampler=_FreshEpochSampler(len(self.train)), drop_last=drop_last
+                self.train,
+                num_workers=self.num_workers,
+                sampler=_FreshEpochSampler(len(self.train)),
+                drop_last=drop_last,
             )
-        return self._loader(self.train, shuffle=True, drop_last=drop_last)
+        return self._loader(
+            self.train,
+            num_workers=self.num_workers,
+            shuffle=True,
+            drop_last=drop_last,
+        )
 
     def val_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online validation loader.
 
         :returns: Batched online validation data.
         """
-        return self._loader(self.val)
+        return self._loader(self.val, num_workers=self.val_num_workers)
 
     def test_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online test loader.
 
         :returns: Batched online test data.
         """
-        return self._loader(self.test)
+        return self._loader(self.test, num_workers=self.num_workers)

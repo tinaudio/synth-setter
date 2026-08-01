@@ -224,6 +224,32 @@ def test_datamodule_validate_stage_builds_only_validation_split() -> None:
     assert torch.isfinite(audio).all()
 
 
+def test_datamodule_train_and_validation_loaders_use_independent_worker_counts() -> None:
+    """Training and validation loaders honor their separate worker settings."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 1, 1),
+        num_workers=2,
+        val_num_workers=0,
+    )
+    datamodule.setup("fit")
+
+    assert datamodule.train_dataloader().num_workers == 2
+    assert datamodule.val_dataloader().num_workers == 0
+
+
+def test_datamodule_validation_workers_default_to_zero() -> None:
+    """Validation loads in-process unless workers are explicitly requested."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 1, 1),
+        num_workers=2,
+    )
+    datamodule.setup("fit")
+
+    assert datamodule.val_dataloader().num_workers == 0
+
+
 def test_datamodule_loaders_shuffle_only_training_rows() -> None:
     """Training shuffles logical indices; validation and test retain a fixed order."""
     datamodule = TorchSynthDataModule(
