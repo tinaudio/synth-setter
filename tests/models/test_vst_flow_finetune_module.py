@@ -1041,6 +1041,7 @@ def test_finetune_gradient_control_logs_positive_whole_batch_telemetry(tmp_path:
 
     :param tmp_path: Pytest-provided directory for the base checkpoint.
     """
+    torch.manual_seed(1)
     metrics = _logged_control_metrics(_finetune(_base_checkpoint(tmp_path)), _batch())
     options = {
         "on_step": True,
