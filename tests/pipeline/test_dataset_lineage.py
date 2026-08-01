@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -37,6 +38,25 @@ def test_dataset_artifact_ref_valid_local_spec_returns_dataset_artifact(
     assert dataset_artifact_ref(tmp_path) == (
         "data-surge-simple-lance",
         "surge-simple-lance-20260520T000000000Z",
+    )
+
+
+def test_dataset_artifact_ref_legacy_local_spec_returns_dataset_artifact(tmp_path: Path) -> None:
+    """Lineage identity survives unrelated frozen-spec schema drift.
+
+    :param tmp_path: Local dataset root containing a legacy input spec.
+    """
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "copy_dataset_root_uri": "r2://obsolete/source",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
+    (tmp_path / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
+
+    assert dataset_artifact_ref(tmp_path) == (
+        "data-surge-simple-lance-440k-20k-20k",
+        "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
     )
 
 
@@ -87,6 +107,28 @@ def test_dataset_artifact_ref_remote_root_returns_frozen_run_id(
     assert dataset_artifact_ref(dataset_root_uri) == (
         "data-surge-simple-lance",
         "surge-simple-lance-20260713T130000000Z",
+    )
+
+
+def test_dataset_artifact_ref_legacy_remote_spec_returns_dataset_artifact(
+    fake_r2_remote: Path,
+) -> None:
+    """Remote lineage identity survives unrelated frozen-spec schema drift.
+
+    :param fake_r2_remote: Local filesystem backing the fake ``r2:`` remote.
+    """
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
+    spec_path = fake_r2_remote / "intermediate-data" / "legacy-lineage-run" / "input_spec.json"
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text(json.dumps(legacy_spec), encoding="utf-8")
+
+    assert dataset_artifact_ref("r2://intermediate-data/legacy-lineage-run") == (
+        "data-surge-simple-lance-440k-20k-20k",
+        "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
     )
 
 
@@ -237,6 +279,29 @@ def test_dataset_artifact_ref_invalid_spec_returns_none(tmp_path: Path) -> None:
     :param tmp_path: Local dataset root containing an invalid input spec.
     """
     (tmp_path / "input_spec.json").write_text("{}", encoding="utf-8")
+
+    assert dataset_artifact_ref(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("task_name", ""), ("run_id", ""), ("task_name", 440), ("run_id", 440)],
+)
+def test_dataset_artifact_ref_invalid_identity_returns_none(
+    tmp_path: Path, field: str, value: str | int
+) -> None:
+    """Blank or non-string identity fields cannot create a lineage edge.
+
+    :param tmp_path: Local dataset root containing malformed lineage identity.
+    :param field: Identity field made invalid.
+    :param value: Invalid frozen value.
+    """
+    identity: dict[str, object] = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+    }
+    identity[field] = value
+    (tmp_path / "input_spec.json").write_text(json.dumps(identity), encoding="utf-8")
 
     assert dataset_artifact_ref(tmp_path) is None
 
