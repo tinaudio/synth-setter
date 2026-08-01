@@ -62,6 +62,7 @@ jobs:
         env:
           PYTEST_SESSION_BUDGET_SECONDS: "2400"
         run: |
+          set -euo pipefail
           uv run --no-sync pytest \
             -m meanaudio_e2e \
             tests/pipeline/data/test_meanaudio_encoder_e2e.py \
