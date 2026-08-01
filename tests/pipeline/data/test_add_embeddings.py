@@ -102,6 +102,7 @@ from synth_setter.pipeline.data.matpac_plus import (
 )
 from synth_setter.pipeline.data.meanaudio import (
     MEANAUDIO_EMBEDDING_DIM,
+    MEANAUDIO_INDEX_SUB_VECTORS,
     meanaudio_num_latent_frames,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
@@ -444,7 +445,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
     assert EMBEDDING_REGISTRY["meanaudio_16k"].index == IndexSpec(
         pool="mean",
-        num_sub_vectors=4,
+        num_sub_vectors=MEANAUDIO_INDEX_SUB_VECTORS,
         vector_column=f"{MEANAUDIO_16K_FIELD}_vec",
         vector_dim=MEANAUDIO_EMBEDDING_DIM,
     )

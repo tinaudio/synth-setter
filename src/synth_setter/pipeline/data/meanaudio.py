@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Protocol, Self, cast
 
 import numpy as np
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEANAUDIO_16K_FIELD
 from synth_setter.utils.logging_utils import resolve_git_sha
@@ -34,6 +34,7 @@ MEANAUDIO_CHECKPOINT_SHA256 = "15ad082c714ccf3771898a771fc6eebdc1d9c8d5c61547269
 DEFAULT_MEANAUDIO_CHECKPOINT = MEANAUDIO_CHECKPOINT_REPO
 MEANAUDIO_SAMPLE_RATE = 16_000
 MEANAUDIO_EMBEDDING_DIM = 20
+MEANAUDIO_INDEX_SUB_VECTORS = 4
 MEANAUDIO_MEL_HOP_LENGTH = 256
 MEANAUDIO_VAE_DOWNSAMPLE = 2
 MEANAUDIO_ENCODE_MAX_BATCH = 4
@@ -185,7 +186,24 @@ def _verified_checkpoint(path: Path) -> Path:
     return resolved
 
 
+def _is_retryable_download_error(error: BaseException) -> bool:
+    """Return whether a transient transport or service failure can succeed on retry.
+
+    :param error: Download failure raised by Hugging Face Hub.
+    :returns: Whether the failure is transient.
+    """
+    from httpx import TransportError
+    from huggingface_hub.errors import HfHubHTTPError
+
+    if isinstance(error, TimeoutError | ConnectionError | TransportError):
+        return True
+    if not isinstance(error, HfHubHTTPError) or error.response is None:
+        return False
+    return error.response.status_code in {408, 425, 429, 500, 502, 503, 504}
+
+
 @retry(
+    retry=retry_if_exception(_is_retryable_download_error),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=4),
     reraise=True,
@@ -282,7 +300,9 @@ def meanaudio_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     import torchaudio.functional as audio_fn
 
     resampled = audio_fn.resample(torch.from_numpy(mono), sample_rate, MEANAUDIO_SAMPLE_RATE)
-    return np.ascontiguousarray(resampled.numpy(), dtype=np.float32)
+    values = resampled.numpy()
+    np.clip(values, -1.0, 1.0, out=values)
+    return np.ascontiguousarray(values, dtype=np.float32)
 
 
 def _load_meanaudio_vae(

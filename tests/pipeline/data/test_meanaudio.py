@@ -19,6 +19,7 @@ from synth_setter.pipeline.data.meanaudio import (
     DEFAULT_MEANAUDIO_CHECKPOINT,
     MEANAUDIO_CHECKPOINT_SHA256,
     MEANAUDIO_EMBEDDING_DIM,
+    MEANAUDIO_INDEX_SUB_VECTORS,
     MEANAUDIO_PACKAGE_COMMIT,
     encode_meanaudio_column,
     meanaudio_encoder_input,
@@ -41,7 +42,7 @@ def test_meanaudio_registry_spec_pins_sequence_and_index_policy() -> None:
         pool="mean",
         vector_column=f"{MEANAUDIO_16K_FIELD}_vec",
         vector_dim=MEANAUDIO_EMBEDDING_DIM,
-        num_sub_vectors=4,
+        num_sub_vectors=MEANAUDIO_INDEX_SUB_VECTORS,
     )
 
 
@@ -89,6 +90,9 @@ def test_meanaudio_encoder_input_8khz_constant_resamples_known_signal() -> None:
     prepared = meanaudio_encoder_input(audio, 8_000)
 
     assert prepared.shape == (1, 2_048)
+    assert np.isfinite(prepared).all()
+    assert prepared.min() >= -1.0
+    assert prepared.max() <= 1.0
     np.testing.assert_allclose(prepared[0, 100:105], 0.25, atol=3e-4)
 
 
@@ -351,6 +355,30 @@ def test_download_meanaudio_checkpoint_transient_failures_retry_to_success(
 
     assert meanaudio_module._download_meanaudio_checkpoint(download) == "/tmp/v1-16.pth"
     assert attempts == 3
+
+
+def test_download_meanaudio_checkpoint_permanent_failure_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Permanent downloader failures surface without repeated requests.
+
+    :param monkeypatch: Fixture removing retry waits from this unit test.
+    """
+    from tenacity import wait_none
+
+    attempts = 0
+
+    def download(**kwargs: str) -> str:
+        nonlocal attempts
+        del kwargs
+        attempts += 1
+        raise ValueError("invalid repository identity")
+
+    monkeypatch.setattr(meanaudio_module._download_meanaudio_checkpoint.retry, "wait", wait_none())
+
+    with pytest.raises(ValueError, match="invalid repository identity"):
+        meanaudio_module._download_meanaudio_checkpoint(download)
+    assert attempts == 1
 
 
 class _StateLoadingVAE(torch.nn.Module):

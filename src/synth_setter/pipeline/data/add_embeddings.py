@@ -63,6 +63,7 @@ from synth_setter.pipeline.data.matpac_plus import (
 from synth_setter.pipeline.data.meanaudio import (
     DEFAULT_MEANAUDIO_CHECKPOINT,
     MEANAUDIO_EMBEDDING_DIM,
+    MEANAUDIO_INDEX_SUB_VECTORS,
     encode_meanaudio_column,
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
@@ -906,7 +907,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         co_resident=False,
         index=IndexSpec(
             pool="mean",
-            num_sub_vectors=4,
+            num_sub_vectors=MEANAUDIO_INDEX_SUB_VECTORS,
             vector_column=f"{MEANAUDIO_16K_FIELD}_vec",
             vector_dim=MEANAUDIO_EMBEDDING_DIM,
         ),
