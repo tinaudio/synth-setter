@@ -1183,7 +1183,7 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
 def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
     cfg_train_lance: DictConfig,
 ) -> None:
-    """A real Lance training run records a historical dataset as a W&B input.
+    """A real Lance training run records a schema-drifted dataset as a W&B input.
 
     :param cfg_train_lance: Composed Lance training configuration.
     """

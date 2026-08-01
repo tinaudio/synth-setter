@@ -136,9 +136,9 @@ def test_train_calls_record_input_lineage_with_discovered_dataset_edge(
 
 
 def test_train_calls_record_input_lineage_with_legacy_dataset_edge(tmp_path: Path) -> None:
-    """Training records lineage from a frozen spec with an obsolete render schema.
+    """Training records lineage when unrelated frozen-spec fields cannot validate.
 
-    :param tmp_path: Pytest tmp dir containing the legacy dataset spec.
+    :param tmp_path: Pytest tmp dir containing the identity-bearing dataset spec.
     """
     logger_sentinel = MagicMock(name="loggers")
     legacy_spec = {
@@ -366,7 +366,7 @@ def test_train_legacy_dataset_root_leaves_the_wandb_run_unmarked(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A legacy frozen spec creates lineage without an incomplete marker.
+    """An identity-bearing frozen spec creates lineage without an incomplete marker.
 
     Also pins that an offline run — where ``use_artifact`` is unavailable by
     design — is not reported as a lineage gap it could never close.
