@@ -51,6 +51,14 @@ def test_meanaudio_four_second_frame_geometry_returns_125() -> None:
     assert meanaudio_num_latent_frames(_FOUR_SECONDS, _SAMPLE_RATE) == 125
 
 
+def test_meanaudio_frame_geometry_nonintegral_resample_crosses_first_frame_boundary() -> None:
+    """Ceiling resample geometry admits the first source length that reaches 512 samples."""
+    with pytest.raises(ValueError, match="at least 512 samples"):
+        meanaudio_num_latent_frames(1_408, 44_100)
+
+    assert meanaudio_num_latent_frames(1_409, 44_100) == 1
+
+
 def test_meanaudio_encoder_input_mono_native_rate_preserves_known_values() -> None:
     """Native-rate mono samples reach the canonical frontend unchanged."""
     audio = np.zeros((1, 1, 1_024), dtype=np.float32)
@@ -318,6 +326,31 @@ def test_resolve_meanaudio_checkpoint_unpinned_remote_identity_raises() -> None:
     """Only the revision-pinned default Hugging Face repository is accepted."""
     with pytest.raises(ValueError, match="requires the pinned Hugging Face repo"):
         resolve_meanaudio_checkpoint("other-owner/MeanAudio")
+
+
+def test_download_meanaudio_checkpoint_transient_failures_retry_to_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transient Hugging Face failures retry before surfacing to the pipeline.
+
+    :param monkeypatch: Fixture removing retry waits from this unit test.
+    """
+    from tenacity import wait_none
+
+    attempts = 0
+
+    def download(**kwargs: str) -> str:
+        nonlocal attempts
+        attempts += 1
+        assert kwargs["repo_id"] == meanaudio_module.MEANAUDIO_CHECKPOINT_REPO
+        if attempts < 3:
+            raise TimeoutError("transient Hugging Face timeout")
+        return "/tmp/v1-16.pth"
+
+    monkeypatch.setattr(meanaudio_module._download_meanaudio_checkpoint.retry, "wait", wait_none())
+
+    assert meanaudio_module._download_meanaudio_checkpoint(download) == "/tmp/v1-16.pth"
+    assert attempts == 3
 
 
 class _StateLoadingVAE(torch.nn.Module):

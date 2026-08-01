@@ -170,7 +170,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
       - pattern: "src/synth_setter/pipeline/data/meanaudio.py"
-        covers: "Pinned MeanAudio VAE checkpoint, posterior-mean encoding, and frame geometry."
+        covers: "Pinned MeanAudio VAE embedding adapter."
       - pattern: "src/synth_setter/configs/conditioning/meanaudio_16k.yaml"
         covers: "Four-second MeanAudio EmbeddingPool conditioning profile."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"

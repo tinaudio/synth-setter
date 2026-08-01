@@ -160,7 +160,7 @@ np.save(output, first, allow_pickle=False)
     direct = np.load(direct_path, allow_pickle=False)
     actual = np.load(adapter_path, allow_pickle=False)
     assert actual.shape == direct.shape == (1, MEANAUDIO_EMBEDDING_DIM, 125)
-    # Both paths execute the same pinned float32 kernels; 1e-6 only admits kernel-order jitter.
+    # Both paths execute the same pinned float32 kernels; tolerance admits only kernel-order jitter.
     np.testing.assert_allclose(actual, direct, rtol=_PARITY_RTOL, atol=_PARITY_ATOL)
 
 

@@ -911,7 +911,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
             vector_dim=MEANAUDIO_EMBEDDING_DIM,
         ),
         load_encoder=_load_meanaudio_spec_encoder,
-        encode_column=encode_meanaudio_column,
+        encode_column=cast("EncodeColumnFn", encode_meanaudio_column),
         resolve_artifact_identity=_meanaudio_artifact_identity,
     ),
 }

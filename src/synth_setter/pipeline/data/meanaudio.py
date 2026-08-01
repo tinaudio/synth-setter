@@ -1,7 +1,8 @@
 """MeanAudio 16 kHz MMAudio VAE adapter for offline audio embeddings.
 
 The adapter imports the pinned upstream package directly, loads only its mel frontend and VAE, and
-stores deterministic posterior means without loading a vocoder or flow model.
+stores deterministic posterior means without loading a vocoder or flow model. Typical use is
+``load_meanaudio_audio_encoder()(audio, sample_rate)``.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Protocol, Self, cast
 
 import numpy as np
 import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEANAUDIO_16K_FIELD
 from synth_setter.utils.logging_utils import resolve_git_sha
@@ -183,6 +185,24 @@ def _verified_checkpoint(path: Path) -> Path:
     return resolved
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=4),
+    reraise=True,
+)
+def _download_meanaudio_checkpoint(download: Callable[..., str]) -> str:
+    """Download the immutable checkpoint with bounded transient-failure retries.
+
+    :param download: Hugging Face file downloader.
+    :returns: Local cache path from the downloader.
+    """
+    return download(
+        repo_id=MEANAUDIO_CHECKPOINT_REPO,
+        revision=MEANAUDIO_CHECKPOINT_REVISION,
+        filename=MEANAUDIO_CHECKPOINT_NAME,
+    )
+
+
 def resolve_meanaudio_checkpoint(
     checkpoint: str = DEFAULT_MEANAUDIO_CHECKPOINT,
 ) -> Path:
@@ -204,11 +224,7 @@ def resolve_meanaudio_checkpoint(
 
     from huggingface_hub import hf_hub_download
 
-    downloaded = hf_hub_download(
-        repo_id=MEANAUDIO_CHECKPOINT_REPO,
-        revision=MEANAUDIO_CHECKPOINT_REVISION,
-        filename=MEANAUDIO_CHECKPOINT_NAME,
-    )
+    downloaded = _download_meanaudio_checkpoint(hf_hub_download)
     return _verified_checkpoint(Path(downloaded))
 
 
@@ -408,7 +424,7 @@ def load_meanaudio_audio_encoder(
 
 
 def encode_meanaudio_column(
-    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: object
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: MeanAudioEncodeFn
 ) -> pa.Array:
     """Encode one audio batch as a fixed-shape MeanAudio Lance tensor.
 
@@ -419,8 +435,7 @@ def encode_meanaudio_column(
     :raises ValueError: Encoder output has the wrong shape or non-finite values.
     """
     audio = sources[AUDIO_FIELD]
-    encode = cast("MeanAudioEncodeFn", encoder)
-    embeddings = np.asarray(encode(audio, sample_rate), dtype=np.float32)
+    embeddings = np.asarray(encoder(audio, sample_rate), dtype=np.float32)
     expected_shape = (
         len(audio),
         MEANAUDIO_EMBEDDING_DIM,

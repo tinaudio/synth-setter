@@ -1824,6 +1824,31 @@ def test_train_eval_embedding_conditioning_real_e2e(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.network
+@pytest.mark.meanaudio_e2e
+def test_train_eval_meanaudio_conditioning_real_lance_returns_finite_metric(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train and validate the MeanAudio profile through the public eval path.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "meanaudio_16k")
+
+    _assert_conditioning_train_validate_finite(
+        tmp_path,
+        dataset_root,
+        param_spec_name,
+        "meanaudio_16k",
+    )
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
 @pytest.mark.integration_r2
 @pytest.mark.r2
 def test_train_eval_matpac_plus_conditioning_real_lance_returns_finite_metric(
