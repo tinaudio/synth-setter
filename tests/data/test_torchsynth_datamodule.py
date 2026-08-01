@@ -21,6 +21,7 @@ from synth_setter.data.torchsynth_datamodule import (
     TorchSynthDataset,
     _make_renderer,
     _verify_voice_matches_spec,
+    collate_audio_dict,
     render_torchsynth,
 )
 from synth_setter.data.torchsynth_grad_render import (
@@ -179,6 +180,22 @@ def test_datamodule_audio_conditioning_is_accepted() -> None:
     assert datamodule.conditioning == "audio"
 
 
+def test_datamodule_positional_collate_fn_keeps_legacy_binding() -> None:
+    """A positional custom collator remains bound to ``collate_fn``."""
+    datamodule = TorchSynthDataModule(
+        44_100,
+        4_410,
+        _ENCODED_WIDTH,
+        (1, 1, 1),
+        (123, 456, 789),
+        1,
+        0,
+        collate_audio_dict,
+    )
+
+    assert datamodule.collate_fn is collate_audio_dict
+
+
 def test_datamodule_non_audio_conditioning_raises() -> None:
     """TorchSynth rejects conditioning modes its online collator cannot guarantee."""
     with pytest.raises(ValueError, match="conditioning must be 'audio'"):
@@ -225,7 +242,7 @@ def test_datamodule_validate_stage_builds_only_validation_split() -> None:
 
 
 def test_datamodule_train_and_validation_loaders_use_independent_worker_counts() -> None:
-    """Training and validation loaders honor their separate worker settings."""
+    """A nonzero training worker count must not enable validation workers."""
     datamodule = TorchSynthDataModule(
         signal_length=4_410,
         train_val_test_sizes=(1, 1, 1),
@@ -387,6 +404,25 @@ def test_datamodule_resample_train_per_epoch_keeps_val_rows_fixed() -> None:
     loader = datamodule.val_dataloader()
 
     assert _epoch_param_rows(loader) == _epoch_param_rows(loader)
+
+
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
+def test_datamodule_validation_worker_override_renders_finite_batch() -> None:
+    """A positive validation worker override renders through a child process."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 2, 1),
+        batch_size=2,
+        num_workers=0,
+        val_num_workers=1,
+    )
+    datamodule.setup("validate")
+
+    batch = next(iter(datamodule.val_dataloader()))
+
+    assert torch.isfinite(batch["audio"]).all()
 
 
 @pytest.mark.dataloader_multiprocess

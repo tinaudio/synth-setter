@@ -363,11 +363,12 @@ class TorchSynthDataModule(LightningDataModule):
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
         num_workers: int = 0,
-        val_num_workers: int = 0,
         collate_fn: TorchSynthCollateFn | None = None,
         resample_train_per_epoch: bool = False,
         drop_last: bool = False,
         conditioning: ConditioningMode = "audio",
+        *,
+        val_num_workers: int = 0,
     ) -> None:
         """Configure the online TorchSynth train, validation, and test splits.
 
@@ -378,13 +379,13 @@ class TorchSynthDataModule(LightningDataModule):
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
         :param num_workers: Worker processes for training and test loaders.
-        :param val_num_workers: Worker processes for the validation loader.
         :param collate_fn: Fully configured row collator; defaults to mel-capable batches.
         :param resample_train_per_epoch: Draw fresh train rows every epoch (truly online
             training) instead of revisiting one fixed split; validation and test stay fixed.
         :param drop_last: Whether training discards a trailing partial batch when the split
             contains at least one full batch.
         :param conditioning: Model-batch modality; TorchSynth supports raw audio only.
+        :param val_num_workers: Worker processes for the validation loader.
         :raises ValueError: If conditioning does not select raw audio.
         """
         if conditioning != "audio":

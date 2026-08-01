@@ -453,7 +453,7 @@ class TestLanceMapDataModuleSetup:
     def test_train_and_validation_loaders_use_independent_worker_counts(
         self, dataset_root: Path
     ) -> None:
-        """Each fit loader uses its own configured worker count.
+        """A nonzero training worker count must not enable validation workers.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
