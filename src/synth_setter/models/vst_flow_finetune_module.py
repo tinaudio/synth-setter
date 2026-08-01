@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -23,17 +25,34 @@ import torch
 from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor
+from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
+from torchaudio.transforms import MelScale, MelSpectrogram, Spectrogram
 
+from synth_setter.checkpoint_identity import (
+    BASE_CHECKPOINT_MATERIALIZED_PATH_KEY,
+    BASE_CHECKPOINT_RESOLVED_SOURCE_KEY,
+    BASE_CHECKPOINT_SHA256_KEY,
+    BASE_CHECKPOINT_SOURCE_ENV,
+    canonical_base_checkpoint_source,
+)
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
+from synth_setter.models.components.cnn import MelCNN
 from synth_setter.models.components.simulator_control import (
     DEFAULT_CONTROL_T_MIN,
     ControlledFlow,
     ControlNet,
     gradient_control_signal,
     learned_control_signal,
+)
+from synth_setter.models.components.spec_encoder import LogMelFrontend, SpecEncoder
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    DiTransformerBlock,
+    LearntProjection,
+    SinusoidalEncoding,
 )
 from synth_setter.models.vst_flow_matching_module import (
     ControlTokenBranches,
@@ -53,6 +72,32 @@ _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_TIME_SHAPE = "batch 1"
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_SHAPE = "batch"
+_BASE_CHECKPOINT_SAFE_GLOBALS = (
+    partial,
+    torch.nn.AdaptiveAvgPool2d,
+    torch.nn.BatchNorm2d,
+    torch.nn.Conv2d,
+    torch.nn.GELU,
+    torch.nn.LayerNorm,
+    torch.nn.Linear,
+    torch.nn.MaxPool2d,
+    torch.nn.ModuleList,
+    torch.nn.MultiheadAttention,
+    torch.nn.Sequential,
+    torch.optim.Adam,
+    torch.optim.lr_scheduler.CosineAnnealingLR,
+    ApproxEquivTransformer,
+    DiTransformerBlock,
+    LearntProjection,
+    LogMelFrontend,
+    MelCNN,
+    MelScale,
+    MelSpectrogram,
+    NonDynamicallyQuantizableLinear,
+    SinusoidalEncoding,
+    SpecEncoder,
+    Spectrogram,
+)
 
 
 @jaxtyped(typechecker=beartype)
@@ -111,6 +156,23 @@ def _validate_arm(
         validate_audio_feedback_runtime(compiled=True, world_size=1)
 
 
+@jaxtyped(typechecker=beartype)
+def _resolve_base_checkpoint(
+    checkpoint: str | Path, source: str | Path | None
+) -> tuple[Path, str]:
+    """Resolve the local checkpoint and sanitize its recorded source.
+
+    :param checkpoint: Materialized local checkpoint path.
+    :param source: Explicit original source, or ``None`` to consult the worker environment.
+    :returns: Absolute local path and credential-free source identity.
+    """
+    materialized = Path(checkpoint).expanduser().resolve(strict=True)
+    original_source = source
+    if original_source is None:
+        original_source = os.getenv(BASE_CHECKPOINT_SOURCE_ENV)
+    return materialized, canonical_base_checkpoint_source(materialized, original_source)
+
+
 class VSTFlowFinetuneModule(VSTFlowMatchingModule):
     """Pretrained flow whose velocity a simulator-fed control network learns to correct."""
 
@@ -123,6 +185,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         scheduler: Callable[..., object] | None,
         *,
         base_checkpoint: str | Path,
+        base_checkpoint_source: str | Path | None = None,
         num_params: int,
         sample_rate: int,
         signal_length: int,
@@ -140,7 +203,10 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param vector_field: Velocity field of the same shape the base run trained.
         :param optimizer: ``functools.partial``-style optimizer factory.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param base_checkpoint: Checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint: Local checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint_source: Original local or remote source of the materialized
+            checkpoint; defaults to ``SYNTH_SETTER_BASE_CHECKPOINT_SOURCE`` and then
+            ``base_checkpoint``.
         :param num_params: Parameter-vector width the field operates on.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row; must match the target audio.
@@ -173,12 +239,14 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             num_params=num_params,
             **base_kwargs,  # pyright: ignore[reportArgumentType]
         )
-        # Lightning collects the subclass frame's init args, so these land in hparams and
-        # get deep-copied; the group admits large weight-normalized pretrained encoders.
+        base_checkpoint, base_checkpoint_source = _resolve_base_checkpoint(
+            base_checkpoint, base_checkpoint_source
+        )
+        # Lightning collects the current subclass-frame values, so sanitize source metadata
+        # before it is copied into checkpoints or dispatched to loggers.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        self._load_pretrained(base_checkpoint)
-        self.requires_grad_(False)
+        self._load_and_record_pretrained(base_checkpoint, base_checkpoint_source)
 
         self.control_mode: ControlMode = control_mode
         if cost is not None:
@@ -228,21 +296,42 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self.vector_field.flow.eval()
 
     @jaxtyped(typechecker=beartype)
-    def _load_pretrained(self, checkpoint: str | Path) -> None:
-        """Restore every pretrained weight, refusing a checkpoint that does not fit.
+    def _load_and_record_pretrained(self, checkpoint: Path, source: str) -> None:
+        """Restore the frozen base and retain its identity in checkpoint metadata.
+
+        :param checkpoint: Absolute local checkpoint path.
+        :param source: Credential-free original checkpoint source.
+        """
+        resolved_source, materialized_path, digest = self._load_pretrained(checkpoint, source)
+        self.hparams[BASE_CHECKPOINT_RESOLVED_SOURCE_KEY] = resolved_source
+        self.hparams[BASE_CHECKPOINT_MATERIALIZED_PATH_KEY] = materialized_path
+        self.hparams[BASE_CHECKPOINT_SHA256_KEY] = digest
+        self.requires_grad_(False)
+
+    @jaxtyped(typechecker=beartype)
+    def _load_pretrained(
+        self, checkpoint: str | Path, source: str | Path | None
+    ) -> tuple[str, str, str]:
+        """Restore every pretrained weight and return its immutable local identity.
 
         Runs before the control is attached, so the module's own shape is exactly the base
         run's: any missing or unexpected key means the wrong checkpoint, and a silent
         ``strict=False`` here would "finetune" a randomly initialised field.
 
-        :param checkpoint: Path to a Lightning checkpoint of the base run.
-        :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
+        :param checkpoint: Local path to a Lightning checkpoint of the base run.
+        :param source: Original local or remote checkpoint source.
+        :returns: Resolved source, absolute materialized path, and SHA-256 digest.
+        :raises ValueError: The source is invalid, the payload has no ``state_dict``, or
+            its keys do not match.
         """
-        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
-        # The config records a mutable path, so without this two arms started from
-        # different flows would still read as comparable runs.
-        logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        materialized = Path(checkpoint).expanduser().resolve(strict=True)
+        resolved_source = canonical_base_checkpoint_source(materialized, source)
+        with materialized.open("rb") as checkpoint_file:
+            digest = hashlib.file_digest(checkpoint_file, "sha256").hexdigest()
+            checkpoint_file.seek(0)
+            with torch.serialization.safe_globals(list(_BASE_CHECKPOINT_SAFE_GLOBALS)):
+                payload = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
+        logger.info("base_checkpoint path=%s sha256=%s", materialized, digest)
         state = payload.get("state_dict") if isinstance(payload, dict) else None
         if not isinstance(state, dict):
             raise ValueError(f"{checkpoint} holds no Lightning state_dict")
@@ -255,6 +344,27 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
                 f"{checkpoint} does not match this model: "
                 f"{len(missing)} missing key(s) {missing[:5]}, "
                 f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
+            )
+        return resolved_source, str(materialized), digest
+
+    @jaxtyped(typechecker=beartype)
+    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Reject resume when the frozen base differs from the saved run.
+
+        :param checkpoint: Lightning finetune checkpoint being restored.
+        :raises ValueError: The checkpoint lacks a base digest or names different bytes.
+        """
+        saved_hparams = checkpoint.get("hyper_parameters")
+        if not isinstance(saved_hparams, Mapping):
+            raise ValueError("finetune resume checkpoint has no hyper_parameters mapping")
+        saved_digest = saved_hparams.get(BASE_CHECKPOINT_SHA256_KEY)
+        if not isinstance(saved_digest, str):
+            raise ValueError("finetune resume checkpoint has no base checkpoint SHA-256")
+        current_digest = self.hparams[BASE_CHECKPOINT_SHA256_KEY]
+        if saved_digest != current_digest:
+            raise ValueError(
+                "finetune resume base checkpoint SHA-256 mismatch: "
+                f"saved {saved_digest}, materialized {current_digest}"
             )
 
     @jaxtyped(typechecker=beartype)

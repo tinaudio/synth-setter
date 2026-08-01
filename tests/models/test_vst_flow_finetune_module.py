@@ -4,6 +4,7 @@ Every arm renders real torchsynth audio through the production differentiable re
 with the production spectral distance; nothing here stands in for the simulator.
 """
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -225,6 +226,171 @@ def _data():
     )
     datamodule.setup("fit")
     return datamodule
+
+
+def test_finetune_checkpoint_identity_without_source_uses_canonical_local_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An omitted source identifies the materialized local file and exact bytes.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Changes the working directory to exercise a relative path.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    expected_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    monkeypatch.chdir(tmp_path)
+
+    module = _finetune(Path("base.ckpt"))
+
+    assert module.hparams["model/base_checkpoint/resolved_source"] == checkpoint.as_uri()
+    assert module.hparams["model/base_checkpoint/materialized_path"] == str(checkpoint)
+    assert module.hparams["model/base_checkpoint/sha256"] == expected_sha256
+    assert type(module.hparams["model/base_checkpoint/resolved_source"]) is str
+    assert type(module.hparams["model/base_checkpoint/materialized_path"]) is str
+    assert type(module.hparams["model/base_checkpoint/sha256"]) is str
+
+
+def test_finetune_checkpoint_identity_preserves_remote_source(tmp_path: Path) -> None:
+    """A remote source remains exactly as supplied while the loaded path stays local.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    source = "r2:training-checkpoints/flow/base.ckpt"
+
+    module = _finetune(checkpoint, overrides={"base_checkpoint_source": source})
+
+    assert module.hparams["base_checkpoint"] == checkpoint
+    assert module.hparams["model/base_checkpoint/resolved_source"] == source
+    assert module.hparams["model/base_checkpoint/materialized_path"] == str(checkpoint)
+
+
+def test_finetune_checkpoint_identity_redacts_remote_credentials(tmp_path: Path) -> None:
+    """Run metadata retains the object path without publishing URI credentials.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    source = (
+        "https://operator:password@example.com/checkpoints/base.ckpt"
+        "?X-Amz-Signature=secret#fragment"
+    )
+
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": source})
+
+    safe_source = "https://example.com/checkpoints/base.ckpt"
+    assert module.hparams["model/base_checkpoint/resolved_source"] == safe_source
+    assert module.hparams["base_checkpoint_source"] == safe_source
+
+
+def test_finetune_checkpoint_identity_reads_sanitized_launcher_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Launcher provenance reaches the model without persisting URI credentials.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Sets the launcher-to-model checkpoint source environment value.
+    """
+    monkeypatch.setenv(
+        "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE",
+        "https://operator:password@example.com/base.ckpt?signature=secret",
+    )
+
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    assert (
+        module.hparams["model/base_checkpoint/resolved_source"] == "https://example.com/base.ckpt"
+    )
+    assert module.hparams["base_checkpoint_source"] == "https://example.com/base.ckpt"
+
+
+def test_finetune_checkpoint_identity_canonicalizes_explicit_local_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit local source becomes a strict absolute file URI.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Changes the working directory to exercise a relative source.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    module = _finetune(checkpoint, overrides={"base_checkpoint_source": "base.ckpt"})
+
+    assert module.hparams["model/base_checkpoint/resolved_source"] == checkpoint.as_uri()
+
+
+def test_finetune_checkpoint_identity_redacts_local_file_uri_credentials(
+    tmp_path: Path,
+) -> None:
+    """Credentialed local file URIs persist only the canonical local identity.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    source = f"file://operator:password@localhost{checkpoint}?token=secret#fragment"
+
+    module = _finetune(checkpoint, overrides={"base_checkpoint_source": source})
+
+    assert module.hparams["model/base_checkpoint/resolved_source"] == checkpoint.as_uri()
+    assert module.hparams["base_checkpoint_source"] == checkpoint.as_uri()
+
+
+def test_finetune_checkpoint_identity_nonlocal_file_error_redacts_credentials(
+    tmp_path: Path,
+) -> None:
+    """Invalid file-host errors do not echo URI credentials or query secrets.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    source = "file://operator:password@remote.example/base.ckpt?token=secret"
+
+    with pytest.raises(ValueError, match="got host 'remote.example'") as exc_info:
+        _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": source})
+
+    assert "password" not in str(exc_info.value)
+    assert "secret" not in str(exc_info.value)
+
+
+def test_finetune_checkpoint_identity_rejects_blank_explicit_source(tmp_path: Path) -> None:
+    """Whitespace cannot stand in for a retrievable checkpoint identity.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    with pytest.raises(ValueError, match="base_checkpoint_source cannot be blank"):
+        _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": "   "})
+
+
+def test_finetune_resume_matching_base_checkpoint_digest_is_accepted(tmp_path: Path) -> None:
+    """Resume accepts a finetune checkpoint tied to the currently loaded base bytes.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    digest = module.hparams["model/base_checkpoint/sha256"]
+
+    module.on_load_checkpoint({"hyper_parameters": {"model/base_checkpoint/sha256": digest}})
+
+
+def test_finetune_resume_changed_base_checkpoint_digest_raises(tmp_path: Path) -> None:
+    """Resume fails before combining control weights with a different frozen base.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    with pytest.raises(ValueError, match="base checkpoint SHA-256 mismatch"):
+        module.on_load_checkpoint({"hyper_parameters": {"model/base_checkpoint/sha256": "0" * 64}})
+
+
+def test_finetune_resume_without_base_checkpoint_digest_raises(tmp_path: Path) -> None:
+    """Legacy resume cannot silently bypass frozen-base identity validation.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    with pytest.raises(ValueError, match="has no base checkpoint SHA-256"):
+        module.on_load_checkpoint({"hyper_parameters": {}})
 
 
 def test_finetune_module_from_base_checkpoint_restores_every_pretrained_weight(
