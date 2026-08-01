@@ -191,7 +191,13 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         log.warning("Logger not found! Skipping hyperparameter logging...")
         return
 
-    hparams["model"] = cfg["model"]
+    model_config = cfg["model"]
+    if isinstance(model_config, dict):
+        model_config = dict(model_config)
+        configured_source = model_config.get("base_checkpoint_source")
+        if isinstance(configured_source, str):
+            model_config["base_checkpoint_source"] = redact_checkpoint_source(configured_source)
+    hparams["model"] = model_config
     for key in BASE_CHECKPOINT_IDENTITY_KEYS:
         if key not in model.hparams:
             continue

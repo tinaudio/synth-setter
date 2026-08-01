@@ -106,14 +106,26 @@ def test_log_hyperparameters_redacts_checkpoint_source_credentials() -> None:
     )
     logger = _RecordingHyperparameterLogger()
     trainer = SimpleNamespace(logger=logger, loggers=[logger])
-    cfg = OmegaConf.create({"model": {}, "datamodule": {}, "trainer": {}})
+    cfg = OmegaConf.create(
+        {
+            "model": {
+                "base_checkpoint_source": (
+                    "https://operator:password@example.com/base.ckpt?signature=secret"
+                )
+            },
+            "datamodule": {},
+            "trainer": {},
+        }
+    )
 
     log_hyperparameters({"cfg": cfg, "model": model, "trainer": trainer})
 
     assert logger.payload is not None
-    assert (
-        logger.payload["model/base_checkpoint/resolved_source"] == "https://example.com/base.ckpt"
-    )
+    safe_source = "https://example.com/base.ckpt"
+    assert logger.payload["model/base_checkpoint/resolved_source"] == safe_source
+    logged_model = logger.payload["model"]
+    assert isinstance(logged_model, dict)
+    assert logged_model["base_checkpoint_source"] == safe_source
 
 
 def test_log_hyperparameters_non_string_checkpoint_identity_raises() -> None:

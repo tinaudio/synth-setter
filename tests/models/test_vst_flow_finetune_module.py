@@ -277,10 +277,30 @@ def test_finetune_checkpoint_identity_redacts_remote_credentials(tmp_path: Path)
 
     module = _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": source})
 
-    assert (
-        module.hparams["model/base_checkpoint/resolved_source"]
-        == "https://example.com/checkpoints/base.ckpt"
+    safe_source = "https://example.com/checkpoints/base.ckpt"
+    assert module.hparams["model/base_checkpoint/resolved_source"] == safe_source
+    assert module.hparams["base_checkpoint_source"] == safe_source
+
+
+def test_finetune_checkpoint_identity_reads_sanitized_launcher_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Launcher provenance reaches the model without persisting URI credentials.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Sets the launcher-to-model checkpoint source environment value.
+    """
+    monkeypatch.setenv(
+        "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE",
+        "https://operator:password@example.com/base.ckpt?signature=secret",
     )
+
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    assert (
+        module.hparams["model/base_checkpoint/resolved_source"] == "https://example.com/base.ckpt"
+    )
+    assert module.hparams["base_checkpoint_source"] == "https://example.com/base.ckpt"
 
 
 def test_finetune_checkpoint_identity_canonicalizes_explicit_local_source(
@@ -297,6 +317,38 @@ def test_finetune_checkpoint_identity_canonicalizes_explicit_local_source(
     module = _finetune(checkpoint, overrides={"base_checkpoint_source": "base.ckpt"})
 
     assert module.hparams["model/base_checkpoint/resolved_source"] == checkpoint.as_uri()
+
+
+def test_finetune_checkpoint_identity_redacts_local_file_uri_credentials(
+    tmp_path: Path,
+) -> None:
+    """Credentialed local file URIs persist only the canonical local identity.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    source = f"file://operator:password@localhost{checkpoint}?token=secret#fragment"
+
+    module = _finetune(checkpoint, overrides={"base_checkpoint_source": source})
+
+    assert module.hparams["model/base_checkpoint/resolved_source"] == checkpoint.as_uri()
+    assert module.hparams["base_checkpoint_source"] == checkpoint.as_uri()
+
+
+def test_finetune_checkpoint_identity_nonlocal_file_error_redacts_credentials(
+    tmp_path: Path,
+) -> None:
+    """Invalid file-host errors do not echo URI credentials or query secrets.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    source = "file://operator:password@remote.example/base.ckpt?token=secret"
+
+    with pytest.raises(ValueError, match="got host 'remote.example'") as exc_info:
+        _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": source})
+
+    assert "password" not in str(exc_info.value)
+    assert "secret" not in str(exc_info.value)
 
 
 def test_finetune_checkpoint_identity_rejects_blank_explicit_source(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ materialized checkpoint's source alongside its local path and SHA-256.
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
 
+BASE_CHECKPOINT_SOURCE_ENV = "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE"
 BASE_CHECKPOINT_RESOLVED_SOURCE_KEY = "model/base_checkpoint/resolved_source"
 BASE_CHECKPOINT_MATERIALIZED_PATH_KEY = "model/base_checkpoint/materialized_path"
 BASE_CHECKPOINT_SHA256_KEY = "model/base_checkpoint/sha256"
@@ -24,7 +25,7 @@ def redact_checkpoint_source(source: str) -> str:
     :returns: Source safe to publish as run metadata.
     """
     parsed = urlsplit(source)
-    if not parsed.scheme or parsed.scheme == "file":
+    if not parsed.scheme:
         return source
     host = parsed.netloc.rsplit("@", maxsplit=1)[-1]
     return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
@@ -45,11 +46,14 @@ def canonical_base_checkpoint_source(materialized_path: Path, source: str | Path
     if not source.strip():
         raise ValueError("base_checkpoint_source cannot be blank")
 
-    parsed = urlsplit(source)
+    redacted_source = redact_checkpoint_source(source)
+    parsed = urlsplit(redacted_source)
     if parsed.scheme == "file":
         if parsed.netloc not in ("", "localhost"):
-            raise ValueError(f"base_checkpoint_source file URI must be local, got {source!r}")
+            raise ValueError(
+                f"base_checkpoint_source file URI must be local, got host {parsed.netloc!r}"
+            )
         return Path(unquote(parsed.path)).expanduser().resolve(strict=True).as_uri()
     if parsed.scheme:
-        return redact_checkpoint_source(source)
+        return redacted_source
     return Path(source).expanduser().resolve(strict=True).as_uri()

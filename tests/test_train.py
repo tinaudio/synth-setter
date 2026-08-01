@@ -354,11 +354,14 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert np.isfinite(logged_values).all()
 
 
-@pytest.mark.slow
-def test_train_torchsynth_finetune_logs_control_and_checkpoint_identity(tmp_path: Path) -> None:
-    """One production train step emits control metrics and consumed-base identity.
+_FINETUNE_SOURCE = "r2:checkpoints/verified-base.ckpt"
 
-    :param tmp_path: Output root and materialized base-checkpoint location.
+
+def _tiny_torchsynth_finetune_cfg(tmp_path: Path) -> tuple[DictConfig, Path]:
+    """Build a one-step finetune config and its architecture-matched base checkpoint.
+
+    :param tmp_path: Output root and base-checkpoint destination.
+    :returns: Composed finetune config and materialized base-checkpoint path.
     """
     common_overrides = [
         "trainer=cpu",
@@ -399,7 +402,6 @@ def test_train_torchsynth_finetune_logs_control_and_checkpoint_identity(tmp_path
                 "experiment=torchsynth/flow_finetune_null",
                 *common_overrides,
                 f"model.base_checkpoint={base_checkpoint}",
-                "model.base_checkpoint_source=r2:checkpoints/verified-base.ckpt",
                 "model.control_t_min=0.0",
             ],
         )
@@ -415,9 +417,20 @@ def test_train_torchsynth_finetune_logs_control_and_checkpoint_identity(tmp_path
         cfg.trainer.num_sanity_val_steps = 0
         cfg.trainer.log_every_n_steps = 1
         cfg.training.val_audio_probe = False
+    return cfg, base_checkpoint
+
+
+@pytest.mark.slow
+def test_train_torchsynth_finetune_logs_control_and_checkpoint_identity(tmp_path: Path) -> None:
+    """One production train step emits control metrics and consumed-base identity.
+
+    :param tmp_path: Output root and materialized base-checkpoint location.
+    """
+    cfg, base_checkpoint = _tiny_torchsynth_finetune_cfg(tmp_path)
     HydraConfig().set_config(cfg)
 
-    metric_dict, object_dict = train(cfg)
+    with patch.dict(os.environ, {"SYNTH_SETTER_BASE_CHECKPOINT_SOURCE": _FINETUNE_SOURCE}):
+        metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step == 1
     assert metric_dict["train/control_active_fraction"] == 1.0
@@ -428,11 +441,93 @@ def test_train_torchsynth_finetune_logs_control_and_checkpoint_identity(tmp_path
     assert len(hparams_files) == 1
     logged_hparams = OmegaConf.load(hparams_files[0])
     assert isinstance(logged_hparams, DictConfig)
-    assert (
-        logged_hparams["model/base_checkpoint/resolved_source"]
-        == "r2:checkpoints/verified-base.ckpt"
-    )
+    assert logged_hparams["model/base_checkpoint/resolved_source"] == _FINETUNE_SOURCE
     assert logged_hparams["model/base_checkpoint/sha256"] == digest
+
+
+def _saved_torchsynth_finetune_resume(tmp_path: Path) -> tuple[DictConfig, Path, Path]:
+    """Train one step and save a real Lightning resume checkpoint.
+
+    :param tmp_path: Output root and checkpoint destination.
+    :returns: Finetune config, base-checkpoint path, and resume-checkpoint path.
+    """
+    cfg, base_checkpoint = _tiny_torchsynth_finetune_cfg(tmp_path)
+    HydraConfig().set_config(cfg)
+    with patch.dict(os.environ, {"SYNTH_SETTER_BASE_CHECKPOINT_SOURCE": _FINETUNE_SOURCE}):
+        _, object_dict = train(cfg)
+        resume_checkpoint = tmp_path / "finetune-resume.ckpt"
+        object_dict["trainer"].save_checkpoint(resume_checkpoint)
+    return cfg, base_checkpoint, resume_checkpoint
+
+
+def _resume_torchsynth_finetune(cfg: DictConfig, resume_checkpoint: Path) -> Trainer:
+    """Resume the tiny finetune through a real Lightning fit loop.
+
+    :param cfg: Composed tiny finetune configuration.
+    :param resume_checkpoint: Lightning checkpoint to restore.
+    :returns: Trainer after the resumed fit reaches step two.
+    """
+    model = hydra.utils.instantiate(cfg.model)
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        max_steps=2,
+        limit_train_batches=1,
+        limit_val_batches=0,
+    )
+    trainer.fit(
+        model,
+        datamodule=datamodule,
+        ckpt_path=resume_checkpoint,
+        weights_only=False,
+    )
+    return trainer
+
+
+@pytest.mark.slow
+def test_train_torchsynth_finetune_resume_matching_base_succeeds(tmp_path: Path) -> None:
+    """A real Lightning resume continues when the frozen base digest matches.
+
+    :param tmp_path: Output root and checkpoint destinations.
+    """
+    cfg, _, resume_checkpoint = _saved_torchsynth_finetune_resume(tmp_path)
+
+    with patch.dict(os.environ, {"SYNTH_SETTER_BASE_CHECKPOINT_SOURCE": _FINETUNE_SOURCE}):
+        trainer = _resume_torchsynth_finetune(cfg, resume_checkpoint)
+
+    assert trainer.global_step == 2
+
+
+@pytest.mark.slow
+def test_train_torchsynth_finetune_resume_changed_base_fails(tmp_path: Path) -> None:
+    """A real Lightning resume rejects control state paired with changed base bytes.
+
+    :param tmp_path: Output root and checkpoint destinations.
+    """
+    cfg, base_checkpoint, resume_checkpoint = _saved_torchsynth_finetune_resume(tmp_path)
+    payload = torch.load(base_checkpoint, map_location="cpu", weights_only=False)
+    assert isinstance(payload, dict)
+    state = payload["state_dict"]
+    assert isinstance(state, dict)
+    first_key = next(iter(state))
+    first_tensor = state[first_key]
+    assert isinstance(first_tensor, torch.Tensor)
+    state[first_key] = first_tensor + 1
+    changed_base = tmp_path / "changed-base.ckpt"
+    torch.save(payload, changed_base)
+    with open_dict(cfg):
+        cfg.model.base_checkpoint = str(changed_base)
+
+    with (
+        patch.dict(os.environ, {"SYNTH_SETTER_BASE_CHECKPOINT_SOURCE": _FINETUNE_SOURCE}),
+        pytest.raises(ValueError, match="base checkpoint SHA-256 mismatch"),
+    ):
+        _resume_torchsynth_finetune(cfg, resume_checkpoint)
 
 
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(

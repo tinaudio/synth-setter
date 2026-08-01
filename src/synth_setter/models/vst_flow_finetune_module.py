@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal
@@ -28,6 +29,7 @@ from synth_setter.checkpoint_identity import (
     BASE_CHECKPOINT_MATERIALIZED_PATH_KEY,
     BASE_CHECKPOINT_RESOLVED_SOURCE_KEY,
     BASE_CHECKPOINT_SHA256_KEY,
+    BASE_CHECKPOINT_SOURCE_ENV,
     canonical_base_checkpoint_source,
 )
 from synth_setter.data.torchsynth_grad_render import (
@@ -149,7 +151,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param base_checkpoint: Local checkpoint holding the pretrained flow to refine.
         :param base_checkpoint_source: Original local or remote source of the materialized
-            checkpoint; defaults to ``base_checkpoint``.
+            checkpoint; defaults to ``SYNTH_SETTER_BASE_CHECKPOINT_SOURCE`` and then
+            ``base_checkpoint``.
         :param num_params: Parameter-vector width the field operates on.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row; must match the target audio.
@@ -182,8 +185,14 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             num_params=num_params,
             **base_kwargs,  # pyright: ignore[reportArgumentType]
         )
-        # Lightning collects the subclass frame's init args, so these land in hparams and
-        # get deep-copied; the group admits large weight-normalized pretrained encoders.
+        materialized = Path(base_checkpoint).expanduser().resolve(strict=True)
+        source = base_checkpoint_source
+        if source is None:
+            source = os.getenv(BASE_CHECKPOINT_SOURCE_ENV)
+        base_checkpoint = materialized
+        base_checkpoint_source = canonical_base_checkpoint_source(materialized, source)
+        # Lightning collects the current subclass-frame values, so sanitize source metadata
+        # before it is copied into checkpoints or dispatched to loggers.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
         resolved_source, materialized_path, digest = self._load_pretrained(
