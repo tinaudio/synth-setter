@@ -2,8 +2,10 @@
 
 import dataclasses
 import hashlib
+import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -19,6 +21,7 @@ from synth_setter.data.torchsynth_datamodule import (
     TorchSynthBatch,
     TorchSynthDataModule,
     TorchSynthDataset,
+    TorchSynthItem,
     _make_renderer,
     _verify_voice_matches_spec,
     collate_audio_dict,
@@ -50,6 +53,18 @@ _NOTE_WINDOW_PARAM = next(
     if isinstance(param, NoteDurationParameter)
 )
 _BUFFER_SECONDS = _RENDER_KWARGS["signal_length"] / _RENDER_KWARGS["sample_rate"]
+_WORKER_PID_KEY = "worker_pid"
+
+
+def _collate_audio_with_worker_pid(batch: Sequence[TorchSynthItem]) -> TorchSynthBatch:
+    """Add the collating process ID to a real audio batch.
+
+    :param batch: Rendered TorchSynth rows.
+    :returns: Model-ready audio batch carrying the collator PID.
+    """
+    collated = collate_audio_dict(batch)
+    collated[_WORKER_PID_KEY] = torch.tensor(os.getpid())
+    return collated
 
 
 # The live-voice drift test lives with the pinned spec in
@@ -416,12 +431,14 @@ def test_datamodule_validation_worker_override_renders_finite_batch() -> None:
         train_val_test_sizes=(1, 2, 1),
         batch_size=2,
         num_workers=0,
+        collate_fn=_collate_audio_with_worker_pid,
         val_num_workers=1,
     )
     datamodule.setup("validate")
 
     batch = next(iter(datamodule.val_dataloader()))
 
+    assert batch[_WORKER_PID_KEY].item() != os.getpid()
     assert torch.isfinite(batch["audio"]).all()
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import multiprocessing
 import pickle
 import shutil
 from collections.abc import Iterator
@@ -480,6 +481,32 @@ class TestLanceMapDataModuleSetup:
             val_num_workers=1,
         ) as module:
             assert module.val_dataloader().num_workers == 1
+
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
+    @pytest.mark.slow
+    def test_validation_worker_override_consumes_batch_in_child_processes(
+        self, dataset_root: Path
+    ) -> None:
+        """A validation override must start workers that produce a real Lance batch.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        existing_children = {child.pid for child in multiprocessing.active_children()}
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            val_num_workers=2,
+        ) as module:
+            iterator = iter(module.val_dataloader())
+            batch = next(iterator)
+            validation_workers = {
+                child.pid for child in multiprocessing.active_children()
+            } - existing_children
+            assert len(validation_workers) == 2
+            assert _unwrap(batch["params"]).shape == (2, NUM_PARAMS)
+            del iterator
 
     def test_persistent_workers_without_workers_is_effectively_disabled(
         self, dataset_root: Path
