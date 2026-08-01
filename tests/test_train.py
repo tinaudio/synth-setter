@@ -7,6 +7,7 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import hashlib
 import logging
 import os
 import re
@@ -27,7 +28,7 @@ import torch
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.cli.eval import evaluate
@@ -351,6 +352,87 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         logged_values = values[~np.isnan(values)]
         assert logged_values.size > 0
         assert np.isfinite(logged_values).all()
+
+
+@pytest.mark.slow
+def test_train_torchsynth_finetune_logs_control_and_checkpoint_identity(tmp_path: Path) -> None:
+    """One production train step emits control metrics and consumed-base identity.
+
+    :param tmp_path: Output root and materialized base-checkpoint location.
+    """
+    common_overrides = [
+        "trainer=cpu",
+        "callbacks=none",
+        "logger=csv",
+        "datamodule.sample_rate=8000",
+        "datamodule.signal_length=800",
+        "datamodule.train_val_test_sizes=[1,1,1]",
+        "datamodule.batch_size=1",
+        "datamodule.num_workers=0",
+        "model.encoder.frontend.n_mels=16",
+        "model.encoder.backbone.hidden_dim=2",
+        "model.encoder.backbone.out_dim=8",
+        "model.encoder.backbone.num_blocks=1",
+        "model.encoder.backbone.kernel_size=3",
+        "model.vector_field.d_model=8",
+        "model.vector_field.num_heads=2",
+        "model.vector_field.d_ff=8",
+        "model.vector_field.num_layers=1",
+        "model.vector_field.projection.num_tokens=2",
+        "model.validation_sample_steps=1",
+        "model.test_sample_steps=1",
+        "model.cfg_dropout_rate=0.0",
+        "++trainer.max_steps=1",
+    ]
+    with hydra.initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        base_cfg = hydra.compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", *common_overrides],
+        )
+        base_model = hydra.utils.instantiate(base_cfg.model)
+        base_checkpoint = tmp_path / "base.ckpt"
+        torch.save({"state_dict": base_model.state_dict()}, base_checkpoint)
+        cfg = hydra.compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/flow_finetune_null",
+                *common_overrides,
+                f"model.base_checkpoint={base_checkpoint}",
+                "model.base_checkpoint_source=r2:checkpoints/verified-base.ckpt",
+                "model.control_t_min=0.0",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.seed = 123
+        cfg.test = False
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 0
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.log_every_n_steps = 1
+        cfg.training.val_audio_probe = False
+    HydraConfig().set_config(cfg)
+
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step == 1
+    assert metric_dict["train/control_active_fraction"] == 1.0
+    assert metric_dict["train/control_signal_norm"] == 0.0
+    digest = hashlib.sha256(base_checkpoint.read_bytes()).hexdigest()
+    assert object_dict["model"].hparams["model/base_checkpoint/sha256"] == digest
+    hparams_files = list(tmp_path.glob("csv/**/hparams.yaml"))
+    assert len(hparams_files) == 1
+    logged_hparams = OmegaConf.load(hparams_files[0])
+    assert isinstance(logged_hparams, DictConfig)
+    assert (
+        logged_hparams["model/base_checkpoint/resolved_source"]
+        == "r2:checkpoints/verified-base.ckpt"
+    )
+    assert logged_hparams["model/base_checkpoint/sha256"] == digest
 
 
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(

@@ -75,8 +75,8 @@ main() {
     echo "balance preflight passed"
   fi
 
-  local arm seed experiment quoted_checkpoint run_name worker_cmd
-  printf -v quoted_checkpoint '%q' "${base_checkpoint}"
+  local arm seed experiment run_name shell_escaped_checkpoint worker_cmd
+  printf -v shell_escaped_checkpoint '%q' "${base_checkpoint}"
   for arm in "${arms[@]}"; do
     for seed in "${seeds[@]}"; do
       experiment="torchsynth/${arm}"
@@ -85,12 +85,12 @@ main() {
       # The module loads a local path and a fresh pod has none; copyto pins a
       # fixed name so every arm reads the same file whatever the remote layout.
       printf -v worker_cmd "%s" \
-        "rclone copyto --checksum ${quoted_checkpoint} /home/build/base.ckpt && " \
+        "export SYNTH_SETTER_BASE_CHECKPOINT_SOURCE=${shell_escaped_checkpoint} && " \
+        "rclone copyto --checksum ${shell_escaped_checkpoint} /home/build/base.ckpt && " \
         "exec synth-setter-train " \
         "experiment=${experiment} " \
         "run_name=${run_name} " \
         "model.base_checkpoint=/home/build/base.ckpt " \
-        "model.base_checkpoint_source=${quoted_checkpoint} " \
         "seed=${seed} " \
         "training.upload_checkpoints_during_training=true " \
         "hydra.run.dir=/home/build/synth-setter/train-run"

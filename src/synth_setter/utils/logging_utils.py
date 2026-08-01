@@ -13,7 +13,11 @@ from lightning.pytorch.loggers import Logger
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf
 
-from synth_setter.checkpoint_identity import BASE_CHECKPOINT_IDENTITY_KEYS
+from synth_setter.checkpoint_identity import (
+    BASE_CHECKPOINT_IDENTITY_KEYS,
+    BASE_CHECKPOINT_RESOLVED_SOURCE_KEY,
+    redact_checkpoint_source,
+)
 from synth_setter.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
@@ -175,6 +179,7 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         - `"cfg"`: A DictConfig object containing the main config.
         - `"model"`: The Lightning model.
         - `"trainer"`: The Lightning trainer.
+    :raises TypeError: A runtime checkpoint-identity value is not a string.
     """
     hparams = {}
 
@@ -188,8 +193,16 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
 
     hparams["model"] = cfg["model"]
     for key in BASE_CHECKPOINT_IDENTITY_KEYS:
-        if key in model.hparams:
-            hparams[key] = model.hparams[key]
+        if key not in model.hparams:
+            continue
+        value = model.hparams[key]
+        if not isinstance(value, str):
+            raise TypeError(f"{key} must be a string, got {type(value).__name__}")
+        hparams[key] = (
+            redact_checkpoint_source(value)
+            if key == BASE_CHECKPOINT_RESOLVED_SOURCE_KEY
+            else value
+        )
 
     # save number of model parameters
     hparams["model/params/total"] = sum(p.numel() for p in model.parameters())

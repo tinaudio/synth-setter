@@ -21,6 +21,10 @@ import torch
 from lightning.pytorch import LightningModule, Trainer
 from torchsynth.signal import Signal
 
+from synth_setter.data.torchsynth_grad_render import (
+    differentiable_decode,
+    render_torchsynth_grad,
+)
 from synth_setter.data.vst import TorchSynthRenderer, param_specs
 from synth_setter.data.vst.param_spec import decode_model_output
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
@@ -190,7 +194,18 @@ def test_val_audio_probe_real_torchsynth_signal_passes_production_sample_count_l
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
-    signal = torch.arange(18, dtype=torch.float32).reshape(6, 3).as_subclass(Signal)
+    synth_values, _ = TORCHSYNTH_FULL_PARAM_SPEC.sample(np.random.default_rng(7))
+    encoded = TORCHSYNTH_FULL_PARAM_SPEC.encode(
+        synth_values, {"pitch": 60, "note_start_and_end": (0.0, 0.1)}
+    )
+    model_row = torch.from_numpy(TORCHSYNTH_FULL_PARAM_SPEC.encoded_to_model(encoded)).repeat(6, 1)
+    signal = render_torchsynth_grad(
+        differentiable_decode(model_row),
+        sample_rate=8_000,
+        signal_length=800,
+        render_batch_size=6,
+    )
+    assert type(signal) is Signal
     probe = _probe(tmp_path)
 
     probe.on_validation_batch_end(

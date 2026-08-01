@@ -1171,13 +1171,15 @@ def test_extras_validates_synth_before_missing_extras_early_return() -> None:
     ],
 )
 def test_torchsynth_finetune_arm_composes_to_its_control_mode(
-    experiment: str, control_mode: str
+    experiment: str, control_mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each simulator-feedback arm selects its own control without further overrides.
 
     :param experiment: ``experiment=torchsynth/...`` name under test.
     :param control_mode: Control arm the experiment must select.
+    :param monkeypatch: Clears launcher-provided checkpoint provenance.
     """
+    monkeypatch.delenv("SYNTH_SETTER_BASE_CHECKPOINT_SOURCE", raising=False)
     cfg = _compose(
         "train.yaml",
         [f"experiment=torchsynth/{experiment}", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
@@ -1189,6 +1191,28 @@ def test_torchsynth_finetune_arm_composes_to_its_control_mode(
     assert cfg.model.compile is False
     assert (cfg.model.control_encoder is not None) == (control_mode == "learned_audio")
     assert (cfg.model.cost is not None) == (control_mode == "gradient_spectral")
+
+
+def test_torchsynth_finetune_checkpoint_source_env_survives_hydra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Launcher source text reaches the model without entering Hydra override grammar.
+
+    :param monkeypatch: Sets the worker environment value consumed by the model config.
+    """
+    source = "r2:training checkpoints/base.ckpt;not-a-hydra-token"
+    monkeypatch.setenv("SYNTH_SETTER_BASE_CHECKPOINT_SOURCE", source)
+
+    cfg = _compose(
+        "train.yaml",
+        [
+            "experiment=torchsynth/flow_finetune_null",
+            "trainer=cpu",
+            "model.base_checkpoint=base.ckpt",
+        ],
+    )
+
+    assert cfg.model.base_checkpoint_source == source
 
 
 @pytest.mark.parametrize(

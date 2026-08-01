@@ -265,6 +265,24 @@ def test_finetune_checkpoint_identity_preserves_remote_source(tmp_path: Path) ->
     assert module.hparams["model/base_checkpoint/materialized_path"] == str(checkpoint)
 
 
+def test_finetune_checkpoint_identity_redacts_remote_credentials(tmp_path: Path) -> None:
+    """Run metadata retains the object path without publishing URI credentials.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    source = (
+        "https://operator:password@example.com/checkpoints/base.ckpt"
+        "?X-Amz-Signature=secret#fragment"
+    )
+
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": source})
+
+    assert (
+        module.hparams["model/base_checkpoint/resolved_source"]
+        == "https://example.com/checkpoints/base.ckpt"
+    )
+
+
 def test_finetune_checkpoint_identity_canonicalizes_explicit_local_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -288,6 +306,39 @@ def test_finetune_checkpoint_identity_rejects_blank_explicit_source(tmp_path: Pa
     """
     with pytest.raises(ValueError, match="base_checkpoint_source cannot be blank"):
         _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": "   "})
+
+
+def test_finetune_resume_matching_base_checkpoint_digest_is_accepted(tmp_path: Path) -> None:
+    """Resume accepts a finetune checkpoint tied to the currently loaded base bytes.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    digest = module.hparams["model/base_checkpoint/sha256"]
+
+    module.on_load_checkpoint({"hyper_parameters": {"model/base_checkpoint/sha256": digest}})
+
+
+def test_finetune_resume_changed_base_checkpoint_digest_raises(tmp_path: Path) -> None:
+    """Resume fails before combining control weights with a different frozen base.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    with pytest.raises(ValueError, match="base checkpoint SHA-256 mismatch"):
+        module.on_load_checkpoint({"hyper_parameters": {"model/base_checkpoint/sha256": "0" * 64}})
+
+
+def test_finetune_resume_without_base_checkpoint_digest_raises(tmp_path: Path) -> None:
+    """Legacy resume cannot silently bypass frozen-base identity validation.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    with pytest.raises(ValueError, match="has no base checkpoint SHA-256"):
+        module.on_load_checkpoint({"hyper_parameters": {}})
 
 
 def test_finetune_module_from_base_checkpoint_restores_every_pretrained_weight(
@@ -1018,6 +1069,57 @@ def test_finetune_inactive_batch_logs_finite_zero_control_telemetry(tmp_path: Pa
     assert metrics["train/control_signal_norm"][0] == 0.0
     assert metrics["train/control_cost"][0] == 0.0
     assert metrics["train/control_grad_norm"][0] == 0.0
+
+
+def test_finetune_mixed_control_mask_logs_whole_batch_means(tmp_path: Path) -> None:
+    """Inactive zeros remain in each telemetry denominator for mixed batches.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    module.trainer = _trainer()  # pyright: ignore[reportAttributeAccessIssue]
+    metrics: dict[str, torch.Tensor] = {}
+    logging_options: dict[str, object] = {}
+
+    def capture(
+        values: dict[str, torch.Tensor],
+        *,
+        on_step: bool,
+        on_epoch: bool,
+        sync_dist: bool,
+        batch_size: int,
+    ) -> None:
+        """Retain telemetry emitted at the Lightning logging boundary.
+
+        :param values: Metric mapping emitted by the module.
+        :param on_step: Whether Lightning emits per-step values.
+        :param on_epoch: Whether Lightning aggregates over the epoch.
+        :param sync_dist: Whether Lightning synchronizes distributed values.
+        :param batch_size: Rows represented by each metric.
+        """
+        metrics.update(values)
+        logging_options.update(
+            on_step=on_step,
+            on_epoch=on_epoch,
+            sync_dist=sync_dist,
+            batch_size=batch_size,
+        )
+
+    module.log_dict = capture  # pyright: ignore[reportAttributeAccessIssue]
+    module._log_control_telemetry(
+        torch.tensor([[3.0, 4.0], [0.0, 0.0]]), torch.tensor([True, False])
+    )
+
+    assert float(metrics["train/control_active_fraction"]) == 0.5
+    assert float(metrics["train/control_signal_norm"]) == 2.5
+    assert float(metrics["train/control_cost"]) == 1.5
+    assert float(metrics["train/control_grad_norm"]) == 2.0
+    assert logging_options == {
+        "on_step": True,
+        "on_epoch": False,
+        "sync_dist": True,
+        "batch_size": 2,
+    }
 
 
 def test_controlled_sampling_scores_the_conditional_velocity(tmp_path: Path) -> None:

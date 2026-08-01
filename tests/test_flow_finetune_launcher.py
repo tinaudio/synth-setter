@@ -33,8 +33,13 @@ done
     fake_rclone.write_text('#!/bin/bash\nprintf \'%s\\n\' "$@" > "${RCLONE_CAPTURE}"\n')
     fake_rclone.chmod(0o755)
     train_capture = tmp_path / "train-arguments.txt"
+    source_capture = tmp_path / "source.txt"
     fake_train = bin_dir / "synth-setter-train"
-    fake_train.write_text('#!/bin/bash\nprintf \'%s\\n\' "$@" > "${TRAIN_CAPTURE}"\n')
+    fake_train.write_text(
+        "#!/bin/bash\n"
+        'printf \'%s\\n\' "$@" > "${TRAIN_CAPTURE}"\n'
+        'printf \'%s\' "${SYNTH_SETTER_BASE_CHECKPOINT_SOURCE}" > "${SOURCE_CAPTURE}"\n'
+    )
     fake_train.chmod(0o755)
 
     injected = tmp_path / "injected"
@@ -71,6 +76,7 @@ done
         _env={
             **env,
             "RCLONE_CAPTURE": str(rclone_capture),
+            "SOURCE_CAPTURE": str(source_capture),
             "TRAIN_CAPTURE": str(train_capture),
         },
     )
@@ -82,5 +88,5 @@ done
         "/home/build/base.ckpt",
     ]
     assert "model.base_checkpoint=/home/build/base.ckpt" in train_capture.read_text().splitlines()
-    assert f"model.base_checkpoint_source={source}" in train_capture.read_text().splitlines()
+    assert source_capture.read_text() == source
     assert not injected.exists()

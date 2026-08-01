@@ -10,7 +10,7 @@ _target_: synth_setter.models.vst_flow_finetune_module.VSTFlowFinetuneModule
 # module logs this file's sha256 so two runs cannot silently differ behind one path.
 base_checkpoint: ???
 # Original source before any launcher materializes the checkpoint locally.
-base_checkpoint_source: null
+base_checkpoint_source: ${oc.env:SYNTH_SETTER_BASE_CHECKPOINT_SOURCE,null}
 
 control_mode: gradient_spectral
 # Filled by the encoder@control_encoder slot above; declared so the key exists to override.

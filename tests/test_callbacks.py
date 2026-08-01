@@ -164,6 +164,36 @@ def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
     assert torch.equal(loaded_params, params)
 
 
+def test_prediction_writer_epoch_serializes_torchsynth_signals_as_plain_tensors(
+    tmp_path: Path,
+) -> None:
+    """Epoch artifacts from Signal values reload through the weights-only boundary.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    prediction = torch.arange(6, dtype=torch.float32).reshape(2, 3).as_subclass(Signal)
+    audio = torch.arange(8, dtype=torch.float32).reshape(2, 4).as_subclass(Signal)
+    params = torch.arange(10, dtype=torch.float32).reshape(2, 5).as_subclass(Signal)
+    writer = PredictionWriter(tmp_path, write_interval="epoch")
+
+    writer.write_on_epoch_end(
+        cast("Trainer", None),
+        cast("LightningModule", None),
+        (prediction, {"audio": audio, "params": params}),
+        [],
+    )
+
+    loaded_prediction = torch.load(tmp_path / "predictions.pt", weights_only=True)
+    loaded_audio = torch.load(tmp_path / "target-audio.pt", weights_only=True)
+    loaded_params = torch.load(tmp_path / "target-params.pt", weights_only=True)
+    assert type(loaded_prediction) is torch.Tensor
+    assert type(loaded_audio) is torch.Tensor
+    assert type(loaded_params) is torch.Tensor
+    assert torch.equal(loaded_prediction, prediction)
+    assert torch.equal(loaded_audio, audio)
+    assert torch.equal(loaded_params, params)
+
+
 class _RecordingModule:
     """Stand-in for the LightningModule, capturing the metric dict the callback emits."""
 

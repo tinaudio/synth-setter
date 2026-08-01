@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -278,6 +278,26 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
                 f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
             )
         return resolved_source, str(materialized), digest
+
+    @jaxtyped(typechecker=beartype)
+    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Reject resume when the frozen base differs from the saved run.
+
+        :param checkpoint: Lightning finetune checkpoint being restored.
+        :raises ValueError: The checkpoint lacks a base digest or names different bytes.
+        """
+        saved_hparams = checkpoint.get("hyper_parameters")
+        if not isinstance(saved_hparams, Mapping):
+            raise ValueError("finetune resume checkpoint has no hyper_parameters mapping")
+        saved_digest = saved_hparams.get(BASE_CHECKPOINT_SHA256_KEY)
+        if not isinstance(saved_digest, str):
+            raise ValueError("finetune resume checkpoint has no base checkpoint SHA-256")
+        current_digest = self.hparams[BASE_CHECKPOINT_SHA256_KEY]
+        if saved_digest != current_digest:
+            raise ValueError(
+                "finetune resume base checkpoint SHA-256 mismatch: "
+                f"saved {saved_digest}, materialized {current_digest}"
+            )
 
     @jaxtyped(typechecker=beartype)
     def _control_signal_width(self) -> int:
