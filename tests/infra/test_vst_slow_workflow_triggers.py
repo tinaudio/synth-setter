@@ -53,6 +53,26 @@ def test_vst_slow_ssondo_changes_trigger_real_vst_e2e(project_root: Path, event_
 
 
 @pytest.mark.infra
+@pytest.mark.parametrize("event_name", ["push", "pull_request"])
+def test_vst_slow_meanaudio_changes_trigger_real_eval_e2e(
+    project_root: Path, event_name: str
+) -> None:
+    """MeanAudio implementation changes select its real train/eval workflow leg.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    :param event_name: GitHub event whose path filter is checked.
+    """
+    triggers = _load_triggers(project_root)
+    workflow_text = (project_root / ".github" / "workflows" / WORKFLOW_FILENAME).read_text()
+
+    assert "src/synth_setter/pipeline/data/meanaudio.py" in triggers[event_name]["paths"]
+    assert (
+        "tests/test_eval.py::"
+        "test_train_eval_meanaudio_conditioning_real_lance_returns_bounded_metric"
+    ) in workflow_text
+
+
+@pytest.mark.infra
 def test_vst_slow_triggers_declare_no_yaml_anchors(project_root: Path) -> None:
     """Neither trigger deduplicates through an anchor GitHub Actions cannot parse.
 

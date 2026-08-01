@@ -1825,7 +1825,6 @@ def test_train_eval_embedding_conditioning_real_e2e(
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.network
-@pytest.mark.meanaudio_e2e
 def test_train_eval_meanaudio_conditioning_real_lance_returns_bounded_metric(
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,

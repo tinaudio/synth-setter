@@ -300,9 +300,7 @@ def meanaudio_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     import torchaudio.functional as audio_fn
 
     resampled = audio_fn.resample(torch.from_numpy(mono), sample_rate, MEANAUDIO_SAMPLE_RATE)
-    values = resampled.numpy()
-    np.clip(values, -1.0, 1.0, out=values)
-    return np.ascontiguousarray(values, dtype=np.float32)
+    return np.ascontiguousarray(resampled.numpy(), dtype=np.float32)
 
 
 def _load_meanaudio_vae(

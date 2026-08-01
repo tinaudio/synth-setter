@@ -91,9 +91,24 @@ def test_meanaudio_encoder_input_8khz_constant_resamples_known_signal() -> None:
 
     assert prepared.shape == (1, 2_048)
     assert np.isfinite(prepared).all()
-    assert prepared.min() >= -1.0
-    assert prepared.max() <= 1.0
     np.testing.assert_allclose(prepared[0, 100:105], 0.25, atol=3e-4)
+
+
+def test_meanaudio_encoder_input_resampling_matches_canonical_torchaudio_output() -> None:
+    """Normalized source audio preserves the canonical resampler output without clipping."""
+    import torchaudio.functional as audio_fn
+
+    audio = np.concatenate(
+        (
+            -np.ones(2_205, dtype=np.float32),
+            np.ones(2_205, dtype=np.float32),
+        )
+    ).reshape(1, 1, -1)
+    expected = audio_fn.resample(torch.from_numpy(audio[:, 0]), 44_100, 16_000).numpy()
+
+    prepared = meanaudio_encoder_input(audio, 44_100)
+
+    np.testing.assert_array_equal(prepared, expected)
 
 
 @pytest.mark.parametrize(
