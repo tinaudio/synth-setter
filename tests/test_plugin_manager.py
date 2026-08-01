@@ -146,6 +146,21 @@ def test_manifest_load_metadata_keys_differ_from_plugins_rejected(
         PluginManifest.load(path)
 
 
+def test_manifest_load_vst3_prerelease_with_build_metadata_accepted(tmp_path: Path) -> None:
+    """Exact runtime versions may carry both prerelease and build metadata.
+
+    :param tmp_path: Scratch root for the test manifest.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    payload["vst3Versions"]["example/synth"] = "4.5.6-rc.1+build.7"
+    path.write_text(json.dumps(payload))
+
+    manifest = PluginManifest.load(path)
+
+    assert manifest.vst3_versions == {"example/synth": "4.5.6-rc.1+build.7"}
+
+
 def test_manifest_load_unpinned_vst3_version_rejected(tmp_path: Path) -> None:
     """Runtime version ranges are rejected at the manifest boundary.
 
