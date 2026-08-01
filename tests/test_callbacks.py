@@ -11,6 +11,7 @@ real.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -18,9 +19,10 @@ import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
+from torchsynth.signal import Signal
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.utils.callbacks import LogPerParamMSE, _log_figure
+from synth_setter.utils.callbacks import LogPerParamMSE, PredictionWriter, _log_figure
 
 
 class _RecordingWandbLogger(WandbLogger):
@@ -121,6 +123,45 @@ def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
     """Per-parameter metric labels require callers to select a ParamSpec."""
     with pytest.raises(TypeError, match="param_spec"):
         LogPerParamMSE()  # type: ignore[call-arg]
+
+
+def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
+    tmp_path: Path,
+) -> None:
+    """Prediction, audio, and parameter artifacts load safely as exact base tensors.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    prediction = torch.arange(6, dtype=torch.float32).reshape(2, 3).as_subclass(Signal)
+    audio = torch.arange(8, dtype=torch.float32).reshape(2, 4).as_subclass(Signal)
+    params = torch.arange(10, dtype=torch.float32).reshape(2, 5).as_subclass(Signal)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+
+    writer.write_on_batch_end(
+        cast("Trainer", None),
+        cast("LightningModule", None),
+        (prediction, {"audio": audio, "params": params}),
+        None,
+        None,
+        0,
+        0,
+    )
+
+    loaded_prediction = torch.load(tmp_path / "pred-0.pt", weights_only=True)
+    loaded_audio = torch.load(tmp_path / "target-audio-0.pt", weights_only=True)
+    loaded_params = torch.load(tmp_path / "target-params-0.pt", weights_only=True)
+    assert type(loaded_prediction) is torch.Tensor
+    assert type(loaded_audio) is torch.Tensor
+    assert type(loaded_params) is torch.Tensor
+    assert (
+        loaded_prediction.device.type
+        == loaded_audio.device.type
+        == loaded_params.device.type
+        == "cpu"
+    )
+    assert torch.equal(loaded_prediction, prediction)
+    assert torch.equal(loaded_audio, audio)
+    assert torch.equal(loaded_params, params)
 
 
 class _RecordingModule:

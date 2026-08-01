@@ -23,6 +23,7 @@ from omegaconf import OmegaConf
 
 from synth_setter.utils.logging_utils import (
     LINEAGE_INCOMPLETE_TAG,
+    log_hyperparameters,
     log_wandb_provenance,
     mark_lineage_incomplete,
     pin_wandb_run_id,
@@ -57,6 +58,41 @@ def make_fake_wandb(*, has_run: bool = True) -> SimpleNamespace:
         config=FakeWandbConfig(),
         __spec__=object(),
     )
+
+
+class _RecordingHyperparameterLogger:
+    """Logger fake retaining the last hyperparameter payload."""
+
+    def __init__(self) -> None:
+        """Initialize an empty payload slot."""
+        self.payload: dict[str, object] | None = None
+
+    def log_hyperparams(self, params: dict[str, object]) -> None:
+        """Retain the hyperparameters sent through the production dispatcher.
+
+        :param params: Complete run hyperparameter payload.
+        """
+        self.payload = params
+
+
+def test_log_hyperparameters_exposes_base_checkpoint_identity() -> None:
+    """Every attached logger receives the module's resolved checkpoint strings."""
+    identity = {
+        "model/base_checkpoint/resolved_source": "r2:bucket/base.ckpt",
+        "model/base_checkpoint/materialized_path": "/home/build/base.ckpt",
+        "model/base_checkpoint/sha256": "a" * 64,
+    }
+    model = SimpleNamespace(hparams=identity, parameters=lambda: iter(()))
+    logger = _RecordingHyperparameterLogger()
+    trainer = SimpleNamespace(logger=logger, loggers=[logger])
+    cfg = OmegaConf.create({"model": {}, "datamodule": {}, "trainer": {}})
+
+    log_hyperparameters({"cfg": cfg, "model": model, "trainer": trainer})
+
+    assert logger.payload is not None
+    assert logger.payload["model/base_checkpoint/resolved_source"] == "r2:bucket/base.ckpt"
+    assert logger.payload["model/base_checkpoint/materialized_path"] == "/home/build/base.ckpt"
+    assert logger.payload["model/base_checkpoint/sha256"] == "a" * 64
 
 
 # ---------------------------------------------------------------------------

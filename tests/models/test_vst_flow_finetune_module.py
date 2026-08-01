@@ -4,6 +4,7 @@ Every arm renders real torchsynth audio through the production differentiable re
 with the production spectral distance; nothing here stands in for the simulator.
 """
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -227,6 +228,68 @@ def _data():
     return datamodule
 
 
+def test_finetune_checkpoint_identity_without_source_uses_canonical_local_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An omitted source identifies the materialized local file and exact bytes.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Changes the working directory to exercise a relative path.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    expected_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    monkeypatch.chdir(tmp_path)
+
+    module = _finetune(Path("base.ckpt"))
+
+    assert module.hparams["model/base_checkpoint/resolved_source"] == checkpoint.as_uri()
+    assert module.hparams["model/base_checkpoint/materialized_path"] == str(checkpoint)
+    assert module.hparams["model/base_checkpoint/sha256"] == expected_sha256
+    assert type(module.hparams["model/base_checkpoint/resolved_source"]) is str
+    assert type(module.hparams["model/base_checkpoint/materialized_path"]) is str
+    assert type(module.hparams["model/base_checkpoint/sha256"]) is str
+
+
+def test_finetune_checkpoint_identity_preserves_remote_source(tmp_path: Path) -> None:
+    """A remote source remains exactly as supplied while the loaded path stays local.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    source = "r2:training-checkpoints/flow/base.ckpt"
+
+    module = _finetune(checkpoint, overrides={"base_checkpoint_source": source})
+
+    assert module.hparams["base_checkpoint"] == checkpoint
+    assert module.hparams["model/base_checkpoint/resolved_source"] == source
+    assert module.hparams["model/base_checkpoint/materialized_path"] == str(checkpoint)
+
+
+def test_finetune_checkpoint_identity_canonicalizes_explicit_local_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit local source becomes a strict absolute file URI.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Changes the working directory to exercise a relative source.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    module = _finetune(checkpoint, overrides={"base_checkpoint_source": "base.ckpt"})
+
+    assert module.hparams["model/base_checkpoint/resolved_source"] == checkpoint.as_uri()
+
+
+def test_finetune_checkpoint_identity_rejects_blank_explicit_source(tmp_path: Path) -> None:
+    """Whitespace cannot stand in for a retrievable checkpoint identity.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    with pytest.raises(ValueError, match="base_checkpoint_source cannot be blank"):
+        _finetune(_base_checkpoint(tmp_path), overrides={"base_checkpoint_source": "   "})
+
+
 def test_finetune_module_from_base_checkpoint_restores_every_pretrained_weight(
     tmp_path: Path,
 ) -> None:
@@ -426,6 +489,50 @@ def test_finetune_render_decodes_model_space_before_rendering(tmp_path: Path) ->
 
     assert torch.equal(rendered, decoded)
     assert not torch.equal(rendered, undecoded)
+
+
+def _logged_control_metrics(
+    module: VSTFlowFinetuneModule, batch: dict[str, torch.Tensor]
+) -> dict[str, tuple[float, dict[str, object]]]:
+    """Run an attached training step and capture its control telemetry.
+
+    :param module: Finetune module to attach to a trainer.
+    :param batch: Training batch to process.
+    :returns: Metric names mapped to scalar values and logging options.
+    """
+    module.trainer = _trainer()  # pyright: ignore[reportAttributeAccessIssue]
+    logged: dict[str, tuple[float, dict[str, object]]] = {}
+
+    def capture(
+        values: dict[str, object],
+        *,
+        on_step: bool,
+        on_epoch: bool,
+        sync_dist: bool,
+        batch_size: int,
+    ) -> None:
+        """Capture one Lightning metric group.
+
+        :param values: Metric keys and scalar values.
+        :param on_step: Whether Lightning emits the per-step values.
+        :param on_epoch: Whether Lightning aggregates metrics over the epoch.
+        :param sync_dist: Whether Lightning synchronizes values across ranks.
+        :param batch_size: Number of rows represented by each scalar.
+        """
+        options = {
+            "on_step": on_step,
+            "on_epoch": on_epoch,
+            "sync_dist": sync_dist,
+            "batch_size": batch_size,
+        }
+        logged.update(
+            (name, (float(torch.as_tensor(value).detach()), options))
+            for name, value in values.items()
+        )
+
+    module.log_dict = capture  # pyright: ignore[reportAttributeAccessIssue]
+    module._train_step(batch)
+    return logged
 
 
 def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:
@@ -824,6 +931,93 @@ def test_finetune_predict_step_samples_with_a_bound_observation(tmp_path: Path) 
     assert predicted.shape == (_BATCH, _WIDTH)
     assert torch.isfinite(predicted).all()
     assert module._sampling_target is None
+
+
+def test_finetune_gradient_control_logs_positive_whole_batch_telemetry(tmp_path: Path) -> None:
+    """Active gradient feedback reports signal, cost, and gradient magnitudes.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    metrics = _logged_control_metrics(_finetune(_base_checkpoint(tmp_path)), _batch())
+    options = {
+        "on_step": True,
+        "on_epoch": False,
+        "sync_dist": True,
+        "batch_size": _BATCH,
+    }
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_cost",
+        "train/control_grad_norm",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"] == (1.0, options)
+    assert metrics["train/control_signal_norm"][0] > 0.0
+    assert metrics["train/control_cost"][0] > 0.0
+    assert metrics["train/control_grad_norm"][0] > 0.0
+    assert metrics["train/control_signal_norm"][1] == options
+    assert metrics["train/control_cost"][1] == options
+    assert metrics["train/control_grad_norm"][1] == options
+
+
+def test_finetune_null_control_logs_active_gate_and_zero_signal(tmp_path: Path) -> None:
+    """The null arm distinguishes an active gate from its intentionally zero signal.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    metrics = _logged_control_metrics(
+        _finetune(_base_checkpoint(tmp_path), control_mode="null"), _batch()
+    )
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"][0] == 1.0
+    assert metrics["train/control_signal_norm"][0] == 0.0
+
+
+def test_finetune_learned_control_logs_common_metric_key_set(tmp_path: Path) -> None:
+    """The learned arm emits only the telemetry shared by every control mode.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(
+        _base_checkpoint(tmp_path),
+        control_mode="learned_audio",
+        overrides={"control_encoder": _WaveformEncoder(out_dim=12)},
+    )
+
+    metrics = _logged_control_metrics(module, _batch())
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"][0] == 1.0
+    assert metrics["train/control_signal_norm"][0] > 0.0
+
+
+def test_finetune_inactive_batch_logs_finite_zero_control_telemetry(tmp_path: Path) -> None:
+    """An entirely inactive gradient batch emits every metric as a finite zero.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"cfg_dropout_rate": 1.0})
+
+    metrics = _logged_control_metrics(module, _batch())
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_cost",
+        "train/control_grad_norm",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"][0] == 0.0
+    assert metrics["train/control_signal_norm"][0] == 0.0
+    assert metrics["train/control_cost"][0] == 0.0
+    assert metrics["train/control_grad_norm"][0] == 0.0
 
 
 def test_controlled_sampling_scores_the_conditional_velocity(tmp_path: Path) -> None:

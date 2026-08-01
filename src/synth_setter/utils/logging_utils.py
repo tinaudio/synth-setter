@@ -13,6 +13,7 @@ from lightning.pytorch.loggers import Logger
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.checkpoint_identity import BASE_CHECKPOINT_IDENTITY_KEYS
 from synth_setter.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
@@ -186,6 +187,9 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         return
 
     hparams["model"] = cfg["model"]
+    for key in BASE_CHECKPOINT_IDENTITY_KEYS:
+        if key in model.hparams:
+            hparams[key] = model.hparams[key]
 
     # save number of model parameters
     hparams["model/params/total"] = sum(p.numel() for p in model.parameters())

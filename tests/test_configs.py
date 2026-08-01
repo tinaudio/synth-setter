@@ -1184,6 +1184,7 @@ def test_torchsynth_finetune_arm_composes_to_its_control_mode(
     )
 
     assert cfg.model.control_mode == control_mode
+    assert cfg.model.base_checkpoint_source is None
     # The differentiable render graph-breaks under compile and is single-device (#2585).
     assert cfg.model.compile is False
     assert (cfg.model.control_encoder is not None) == (control_mode == "learned_audio")

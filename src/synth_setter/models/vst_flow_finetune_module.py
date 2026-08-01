@@ -24,6 +24,12 @@ from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor
 
+from synth_setter.checkpoint_identity import (
+    BASE_CHECKPOINT_MATERIALIZED_PATH_KEY,
+    BASE_CHECKPOINT_RESOLVED_SOURCE_KEY,
+    BASE_CHECKPOINT_SHA256_KEY,
+    canonical_base_checkpoint_source,
+)
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
@@ -123,6 +129,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         scheduler: Callable[..., object] | None,
         *,
         base_checkpoint: str | Path,
+        base_checkpoint_source: str | Path | None = None,
         num_params: int,
         sample_rate: int,
         signal_length: int,
@@ -140,7 +147,9 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param vector_field: Velocity field of the same shape the base run trained.
         :param optimizer: ``functools.partial``-style optimizer factory.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param base_checkpoint: Checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint: Local checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint_source: Original local or remote source of the materialized
+            checkpoint; defaults to ``base_checkpoint``.
         :param num_params: Parameter-vector width the field operates on.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row; must match the target audio.
@@ -177,7 +186,12 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        self._load_pretrained(base_checkpoint)
+        resolved_source, materialized_path, digest = self._load_pretrained(
+            base_checkpoint, base_checkpoint_source
+        )
+        self.hparams[BASE_CHECKPOINT_RESOLVED_SOURCE_KEY] = resolved_source
+        self.hparams[BASE_CHECKPOINT_MATERIALIZED_PATH_KEY] = materialized_path
+        self.hparams[BASE_CHECKPOINT_SHA256_KEY] = digest
         self.requires_grad_(False)
 
         self.control_mode: ControlMode = control_mode
@@ -228,21 +242,28 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self.vector_field.flow.eval()
 
     @jaxtyped(typechecker=beartype)
-    def _load_pretrained(self, checkpoint: str | Path) -> None:
-        """Restore every pretrained weight, refusing a checkpoint that does not fit.
+    def _load_pretrained(
+        self, checkpoint: str | Path, source: str | Path | None
+    ) -> tuple[str, str, str]:
+        """Restore every pretrained weight and return its immutable local identity.
 
         Runs before the control is attached, so the module's own shape is exactly the base
         run's: any missing or unexpected key means the wrong checkpoint, and a silent
         ``strict=False`` here would "finetune" a randomly initialised field.
 
-        :param checkpoint: Path to a Lightning checkpoint of the base run.
-        :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
+        :param checkpoint: Local path to a Lightning checkpoint of the base run.
+        :param source: Original local or remote checkpoint source.
+        :returns: Resolved source, absolute materialized path, and SHA-256 digest.
+        :raises ValueError: The source is invalid, the payload has no ``state_dict``, or
+            its keys do not match.
         """
-        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
-        # The config records a mutable path, so without this two arms started from
-        # different flows would still read as comparable runs.
-        logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        materialized = Path(checkpoint).expanduser().resolve(strict=True)
+        resolved_source = canonical_base_checkpoint_source(materialized, source)
+        with materialized.open("rb") as checkpoint_file:
+            digest = hashlib.file_digest(checkpoint_file, "sha256").hexdigest()
+            checkpoint_file.seek(0)
+            payload = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
+        logger.info("base_checkpoint path=%s sha256=%s", materialized, digest)
         state = payload.get("state_dict") if isinstance(payload, dict) else None
         if not isinstance(state, dict):
             raise ValueError(f"{checkpoint} holds no Lightning state_dict")
@@ -256,6 +277,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
                 f"{len(missing)} missing key(s) {missing[:5]}, "
                 f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
             )
+        return resolved_source, str(materialized), digest
 
     @jaxtyped(typechecker=beartype)
     def _control_signal_width(self) -> int:
@@ -581,6 +603,38 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self._sampling_target = None
 
     @jaxtyped(typechecker=beartype)
+    def _log_control_telemetry(
+        self,
+        control_input: Float[Tensor, _BATCH_ANY_SHAPE],
+        active: Shaped[Tensor, _BATCH_SHAPE],
+    ) -> None:
+        """Log whole-batch control activity and signal magnitudes when attached.
+
+        :param control_input: Sanitized, gated signal handed to the control network.
+        :param active: Rows whose control gate is active.
+        """
+        if self._trainer is None:
+            return
+        metrics = {
+            "train/control_active_fraction": active.to(dtype=control_input.dtype).mean(),
+            "train/control_signal_norm": control_input.norm(dim=-1).mean(),
+        }
+        if self.control_mode == "gradient_spectral":
+            metrics.update(
+                {
+                    "train/control_cost": control_input[:, 0].abs().mean(),
+                    "train/control_grad_norm": control_input[:, 1:].norm(dim=-1).mean(),
+                }
+            )
+        self.log_dict(
+            metrics,
+            on_step=True,
+            on_epoch=False,
+            sync_dist=True,
+            batch_size=int(control_input.shape[0]),
+        )
+
+    @jaxtyped(typechecker=beartype)
     def _train_step(self, batch: dict[str, Shaped[Tensor, _BATCH_ANY_SHAPE]]) -> TrainStepOutputs:
         """Run one finetuning step: estimate, score, correct, and match the flow.
 
@@ -607,6 +661,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         control_input = self._control_signal(
             self._one_step_estimate(x_t, t, velocity), batch["audio"], active
         )
+        self._log_control_telemetry(control_input, active)
         prediction = self.vector_field.combine(velocity, t, control_input)
 
         loss = ((prediction - target).square().mean(dim=-1) * w).mean()
