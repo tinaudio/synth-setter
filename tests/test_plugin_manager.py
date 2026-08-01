@@ -29,6 +29,7 @@ def _manifest(path: Path) -> Path:
                 "type": "project",
                 "plugins": {"example/synth": "1.2.3"},
                 "vst3Bundles": {"example/synth": "Example Synth.vst3"},
+                "vst3Versions": {"example/synth": "4.5.6"},
             }
         )
     )
@@ -48,6 +49,29 @@ def test_manifest_load_valid_project_returns_pinned_plugin(tmp_path: Path) -> No
     assert plugin.version == "1.2.3"
     assert plugin.bundle == "Example Synth.vst3"
     assert plugin.reference == "example/synth@1.2.3"
+    assert manifest.vst3_versions == {"example/synth": "4.5.6"}
+
+
+def test_committed_manifests_match_the_plugin_manifest_contract() -> None:
+    """Repository manifests remain consumable by the plugin installer."""
+    project_root = Path(__file__).parents[1]
+    for filename in ("studiorack-cardinal.json", "studiorack.json"):
+        PluginManifest.load(project_root / filename)
+
+
+def test_manifest_load_without_vst3_versions_preserves_legacy_contract(tmp_path: Path) -> None:
+    """Manifests from before runtime-version metadata remain consumable.
+
+    :param tmp_path: Scratch root for the legacy manifest.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    del payload["vst3Versions"]
+    path.write_text(json.dumps(payload))
+
+    manifest = PluginManifest.load(path)
+
+    assert manifest.vst3_versions is None
 
 
 def test_manifest_resolve_unknown_package_raises(tmp_path: Path) -> None:
@@ -104,17 +128,35 @@ def test_manifest_load_unpinned_version_rejected(tmp_path: Path) -> None:
         PluginManifest.load(path)
 
 
-def test_manifest_load_bundle_keys_differ_from_plugins_rejected(tmp_path: Path) -> None:
-    """Every package must name its expected VST3 bundle.
+@pytest.mark.parametrize("field", ["vst3Bundles", "vst3Versions"])
+def test_manifest_load_metadata_keys_differ_from_plugins_rejected(
+    tmp_path: Path, field: str
+) -> None:
+    """Every package must carry bundle and runtime-version metadata.
+
+    :param tmp_path: Scratch root for the test manifest.
+    :param field: Metadata mapping corrupted for the scenario.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    payload[field] = {"other/synth": "Example Synth.vst3"}
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValidationError, match="same package keys"):
+        PluginManifest.load(path)
+
+
+def test_manifest_load_unpinned_vst3_version_rejected(tmp_path: Path) -> None:
+    """Runtime version ranges are rejected at the manifest boundary.
 
     :param tmp_path: Scratch root for the test manifest.
     """
     path = _manifest(tmp_path / "studiorack.json")
     payload = json.loads(path.read_text())
-    payload["vst3Bundles"] = {"other/synth": "Example Synth.vst3"}
+    payload["vst3Versions"]["example/synth"] = "^4.5.6"
     path.write_text(json.dumps(payload))
 
-    with pytest.raises(ValidationError, match="same package keys"):
+    with pytest.raises(ValidationError, match="VST3 version must be an exact semantic version"):
         PluginManifest.load(path)
 
 
@@ -359,6 +401,7 @@ def test_plugins_cli_link_without_selection_links_only_installed_packages(tmp_pa
     payload = json.loads(manifest_path.read_text())
     payload["plugins"]["missing/synth"] = "2.0.0"
     payload["vst3Bundles"]["missing/synth"] = "Missing Synth.vst3"
+    payload["vst3Versions"]["missing/synth"] = "2.0.0"
     manifest_path.write_text(json.dumps(payload))
     managed = tmp_path / "managed"
     bundle = managed / "VST3/example/synth/1.2.3/Example Synth.vst3"

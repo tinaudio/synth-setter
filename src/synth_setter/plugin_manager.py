@@ -73,6 +73,10 @@ class PluginManifest(BaseModel):
     .. attribute :: vst3_bundles
 
         Package slug to the VST3 bundle synth-setter loads.
+
+    .. attribute :: vst3_versions
+
+        Package slug to the exact version reported by the installed VST3, when declared.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", populate_by_name=True, frozen=True)
@@ -81,21 +85,31 @@ class PluginManifest(BaseModel):
     type: Literal["project"]
     plugins: dict[str, str]
     vst3_bundles: dict[str, str] = Field(alias="vst3Bundles")
+    vst3_versions: dict[str, str] | None = Field(default=None, alias="vst3Versions")
 
     @model_validator(mode="after")
     def _validate_packages(self) -> PluginManifest:
         """Require exact versions and one bundle mapping per package.
 
         :returns: The validated manifest.
-        :raises ValueError: A slug/version is invalid or bundle keys differ from plugin keys.
+        :raises ValueError: A slug/version is invalid or metadata keys differ from plugin keys.
         """
-        if self.plugins.keys() != self.vst3_bundles.keys():
+        package_keys = self.plugins.keys()
+        if package_keys != self.vst3_bundles.keys():
             raise ValueError("plugins and vst3Bundles must contain the same package keys")
-        for package, version in self.plugins.items():
+        vst3_versions = self.vst3_versions
+        if vst3_versions is not None and package_keys != vst3_versions.keys():
+            raise ValueError("plugins and vst3Versions must contain the same package keys")
+        for package, package_version in self.plugins.items():
             if _PACKAGE_SLUG.fullmatch(package) is None:
                 raise ValueError(f"invalid Studiorack package slug: {package!r}")
-            if _EXACT_SEMVER.fullmatch(version) is None:
+            if _EXACT_SEMVER.fullmatch(package_version) is None:
                 raise ValueError(f"{package} version must be an exact semantic version")
+            if (
+                vst3_versions is not None
+                and _EXACT_SEMVER.fullmatch(vst3_versions[package]) is None
+            ):
+                raise ValueError(f"{package} VST3 version must be an exact semantic version")
             bundle = self.vst3_bundles[package]
             if Path(bundle).name != bundle or not bundle.endswith(".vst3"):
                 raise ValueError(f"{package} bundle must be a .vst3 basename")
