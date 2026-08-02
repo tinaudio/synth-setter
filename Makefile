@@ -174,8 +174,19 @@ install-plugins: install-studiorack ## Install every VST3 pinned in studiorack.j
 	$(STUDIORACK) install
 
 link-plugins: ## Link installed Studiorack packages into the checkout's plugins/ namespace
-	@$(STUDIORACK) link
-	@$(STUDIORACK) --manifest studiorack-cardinal.json link
+	@set -e; \
+	primary="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir)")" && pwd)"; \
+	here="$$(git rev-parse --show-toplevel)"; \
+	central="$$primary/plugins"; \
+	if [ "$$primary" != "$$here" ] && [ -d "$$central" ] && [ ! -e "$$here/plugins" ]; then \
+		ln -s "$$central" "$$here/plugins"; \
+		echo "plugins/ linked -> $$central"; \
+	elif [ -L "$$here/plugins" ] && [ "$$(readlink "$$here/plugins")" = "$$central" ]; then \
+		echo "plugins/ already linked -> $$central"; \
+	else \
+		$(STUDIORACK) link; \
+		$(STUDIORACK) --manifest studiorack-cardinal.json link; \
+	fi
 
 # Symlink this worktree's gitignored thoughts/ to the primary's central thoughts/
 # so qrspi docs from every worktree converge; migrates pre-existing files first.
