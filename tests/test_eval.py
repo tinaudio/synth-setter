@@ -396,6 +396,8 @@ def _assert_audio_prediction_artifacts(output_dir: Path) -> None:
         map_location="cpu",
         weights_only=True,
     )
+    assert type(prediction) is torch.Tensor
+    assert type(target_audio) is torch.Tensor
     assert prediction.shape == (1, _SURGE_XT_PREDICTION_WIDTH)
     assert torch.isfinite(prediction).all()
     assert target_audio.shape == (1, 2, _AUDIO_PREDICTION_SAMPLE_COUNT)
