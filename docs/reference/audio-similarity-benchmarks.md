@@ -58,9 +58,9 @@ safety net; the chart is the early warning.
 The chart's left-hand legend lets you toggle individual metric series on
 and off; the dropdown at the top selects the dashboard ("bucket").
 
-## Three dashboards
+## Four dashboards
 
-The workflow publishes three independent dashboards, each representing a
+The workflow publishes four independent dashboards, each representing a
 different question.
 
 ### `VST noise floor (1 preset N renders)`
@@ -98,26 +98,40 @@ This view is _broader_ in patch coverage but noisier between runs (each
 run picks a different random sample), so trend signal is lower per
 point but covers more of the patch space than the hardcoded fixture.
 
-### `Surge host parity and throughput`
+### `Surge host parity`
 
-Sourced from `test_surgepy_pedalboard_dawdreamer_have_real_artifact_parity_and_benchmarks`.
-Pedalboard, DawDreamer, and SurgePy each render 30 rows from the same native
-Surge patch, normalized parameter vector, and MIDI event through the production
-Lance writer and reader. Every backend pair is checked with MSS, wMFCC, SOT,
-RMS-envelope cosine, and persisted-mel RMSE.
+The real tests in
+[`test_surgepy_host_parity_e2e.py`](../../tests/data/vst/test_surgepy_host_parity_e2e.py)
+render matched Pedalboard, DawDreamer, and SurgePy datasets through the production
+Lance writer and reader. The repeated workload renders one deterministic patch 30
+times, while the diverse workload renders eight deterministic cutoff and octave
+combinations. Both set oscillator drift to zero so host scheduling and parameter
+dispatch determine differences. A causal workload isolates oscillator one, then
+changes filter cutoff and oscillator octave independently to verify that each host
+applies both mapped controls in the expected direction.
 
-Bucket name: `Surge host parity and throughput`<br>
-JSON file: `surge-host-parity.json`<br>
-Metric name prefix: `surge-host-parity/`
+Every matched render is checked separately with MSS, wMFCC, SOT, RMS-envelope
+cosine, and persisted-mel RMSE. The existing broad quality limits remain unchanged
+while workload coverage is established. Audio must also begin no earlier than the
+requested MIDI sample and no backend may lag its independent Pedalboard/DawDreamer
+controls by more than two samples. Failures identify the workload, backend or pair,
+and sample.
 
-The workflow also retains an evaluator-friendly `surge-host-parity-comparison`
+| Workload       | Bucket name                           | JSON file                                |
+| -------------- | ------------------------------------- | ---------------------------------------- |
+| Repeated patch | `Surge host parity (repeated patch)`  | `surge-host-parity-repeated-patch.json`  |
+| Diverse patch  | `Surge host parity (diverse patches)` | `surge-host-parity-diverse-patches.json` |
+
+Metric name prefix: `surge-host-parity/<workload>/`.
+
+The workflow retains an evaluator-friendly `surge-host-parity-comparison`
 artifact for 14 days. Trusted main-branch runs copy the same directory with
 checksums to
-`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. It contains
-180 evaluator-layout WAV files, 90 persisted mel arrays, 90 mel PNG previews,
-normalized parameters,
-per-sample metrics, worst-case metrics, thresholds, and provenance. Pull requests
-never receive R2 credentials.
+`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. Each workload keeps the
+existing pairwise `target.wav` and `pred.wav` listening layout, persisted mel
+arrays and previews, exact normalized parameters, per-render metrics, thresholds,
+and provenance. Pull requests never receive R2 credentials. Backend-named WAVs are
+introduced separately by the artifact-schema-v2 change.
 
 ## Metric series
 
