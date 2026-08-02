@@ -357,6 +357,8 @@ class PupuJepaAudioEncoder(nn.Module):
             raise ValueError(
                 f"PupuJEPA audio must have shape (B, T) or (B, C, T), got {tuple(audio.shape)}"
             )
+        if audio.amin() < -1.0 or audio.amax() > 1.0:
+            raise ValueError("PupuJEPA input audio must lie within [-1, 1]")
         expected_patches = pupujepa_num_time_patches(audio.shape[-1], source_rate, self.config)
         with torch.autocast(device_type=audio.device.type, enabled=False):
             waveform = audio.float()

@@ -54,6 +54,8 @@ def pupujepa_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     pupujepa_num_time_patches(audio.shape[-1], sample_rate)
     if not np.isfinite(audio).all():
         raise ValueError("PupuJEPA input audio contains non-finite values")
+    if audio.min() < -1.0 or audio.max() > 1.0:
+        raise ValueError("PupuJEPA input audio must lie within [-1, 1]")
     return np.ascontiguousarray(audio.mean(axis=1, dtype=np.float32))
 
 

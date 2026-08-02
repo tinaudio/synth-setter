@@ -46,7 +46,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/pupujepa.py"
         covers: "Bounded offline Lance adapter"
       - pattern: "src/synth_setter/configs/conditioning/pupujepa_*.yaml"
-        covers: "Tiny and Large cached and online conditioning profiles"
+        covers: "PupuJEPA conditioning profiles"
       - pattern: "pyproject.toml"
         covers: "Exact timm runtime pin"
 

@@ -1829,6 +1829,32 @@ def test_train_eval_embedding_conditioning_real_e2e(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.network
+def test_train_eval_pupujepa_large_conditioning_real_lance_returns_finite_metric(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train and validate cached PupuJEPA Large sequences through both entrypoints.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(
+        surge_xt_embedding_smoke_datasets, "pupujepa_large"
+    )
+
+    _assert_conditioning_train_validate_finite(
+        tmp_path,
+        dataset_root,
+        param_spec_name,
+        "pupujepa_large",
+    )
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
 @pytest.mark.integration_r2
 @pytest.mark.r2
 def test_train_eval_matpac_plus_conditioning_real_lance_returns_finite_metric(

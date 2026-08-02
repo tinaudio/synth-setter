@@ -284,6 +284,15 @@ def test_conditioning_training_step_updates_pool_not_teacher() -> None:
     assert all(parameter.grad is None for parameter in backbone.parameters())
 
 
+def test_encoder_out_of_range_waveform_raises() -> None:
+    """Online waveforms outside the normalized audio contract fail early."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        encoder(torch.full((1, 256), 1.01))
+
+
 def test_encoder_too_short_for_one_time_patch_raises() -> None:
     """Audio without four complete mel frames fails before the patch convolution."""
     config = _tiny_config()

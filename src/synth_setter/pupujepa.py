@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 import yaml
@@ -190,24 +192,11 @@ PUPUJEPA_TINY_CONFIG = PupuJepaConfig(
     use_swiglu=True,
     qk_norm=True,
 )
-PUPUJEPA_LARGE_CONFIG = PupuJepaConfig(
-    sample_rate=24_000,
-    n_fft=1_024,
-    win_length=1_024,
-    hop_length=240,
-    n_mels=128,
-    fmin=0.0,
-    fmax=12_000.0,
-    mel_mean=-4.089994845986366,
-    mel_std=2.0242277159094813,
-    patch_time=4,
-    patch_frequency=16,
+PUPUJEPA_LARGE_CONFIG = replace(
+    PUPUJEPA_TINY_CONFIG,
     embed_dim=1_024,
     depth=24,
     num_heads=16,
-    mlp_ratio=4.0,
-    use_swiglu=True,
-    qk_norm=True,
 )
 PUPUJEPA_SAMPLE_RATE = PUPUJEPA_TINY_CONFIG.sample_rate
 PUPUJEPA_TINY_EMBEDDING_DIM = PUPUJEPA_TINY_CONFIG.output_dim
@@ -242,20 +231,22 @@ class PupuJepaCheckpointSpec:
     config: PupuJepaConfig
 
 
-PUPUJEPA_CHECKPOINT_SPECS: dict[PupuJepaVariant, PupuJepaCheckpointSpec] = {
-    "tiny": PupuJepaCheckpointSpec(
-        args_file=PUPUJEPA_TINY_ARGS_FILE,
-        weights_file=PUPUJEPA_TINY_WEIGHTS_FILE,
-        checkpoint_sha256=PUPUJEPA_TINY_CHECKPOINT_SHA256,
-        config=PUPUJEPA_TINY_CONFIG,
-    ),
-    "large": PupuJepaCheckpointSpec(
-        args_file=PUPUJEPA_LARGE_ARGS_FILE,
-        weights_file=PUPUJEPA_LARGE_WEIGHTS_FILE,
-        checkpoint_sha256=PUPUJEPA_LARGE_CHECKPOINT_SHA256,
-        config=PUPUJEPA_LARGE_CONFIG,
-    ),
-}
+PUPUJEPA_CHECKPOINT_SPECS: Mapping[PupuJepaVariant, PupuJepaCheckpointSpec] = MappingProxyType(
+    {
+        "tiny": PupuJepaCheckpointSpec(
+            args_file=PUPUJEPA_TINY_ARGS_FILE,
+            weights_file=PUPUJEPA_TINY_WEIGHTS_FILE,
+            checkpoint_sha256=PUPUJEPA_TINY_CHECKPOINT_SHA256,
+            config=PUPUJEPA_TINY_CONFIG,
+        ),
+        "large": PupuJepaCheckpointSpec(
+            args_file=PUPUJEPA_LARGE_ARGS_FILE,
+            weights_file=PUPUJEPA_LARGE_WEIGHTS_FILE,
+            checkpoint_sha256=PUPUJEPA_LARGE_CHECKPOINT_SHA256,
+            config=PUPUJEPA_LARGE_CONFIG,
+        ),
+    }
+)
 
 
 class _PreprocessArgs(BaseModel):

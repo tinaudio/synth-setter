@@ -130,6 +130,7 @@ def test_pupujepa_encoder_input_duplicated_stereo_matches_mono() -> None:
         (np.zeros((1, 3, 960), dtype=np.float32), 24_000, "1 or 2 channels"),
         (np.zeros((1, 1, 960), dtype=np.float32), 0, "positive sample_rate"),
         (np.full((1, 1, 960), np.nan, dtype=np.float32), 24_000, "non-finite"),
+        (np.full((1, 1, 960), 1.01, dtype=np.float32), 24_000, r"\[-1, 1\]"),
         (np.zeros((1, 1, 959), dtype=np.float32), 24_000, "one complete time patch"),
     ],
 )
@@ -149,7 +150,7 @@ def test_pupujepa_encoder_input_invalid_audio_raises(
 def test_encode_pupujepa_large_column_valid_sequence_preserves_orientation() -> None:
     """Large channel-major teacher sequences persist without transposition."""
     audio = np.zeros((2, 1, 96_000), dtype=np.float32)
-    output = np.ones((2, PUPUJEPA_LARGE_EMBEDDING_DIM, 100), dtype=np.float32)
+    output = np.ones((2, PUPUJEPA_LARGE_EMBEDDING_DIM, 100), dtype=np.float64)
 
     encoded = encode_pupujepa_large_column(
         {AUDIO_FIELD: audio},
@@ -157,7 +158,9 @@ def test_encode_pupujepa_large_column_valid_sequence_preserves_orientation() -> 
         lambda _audio, _sample_rate: output,
     )
 
-    assert encoded.to_numpy_ndarray().shape == (2, PUPUJEPA_LARGE_EMBEDDING_DIM, 100)
+    persisted = encoded.to_numpy_ndarray()
+    assert persisted.shape == (2, PUPUJEPA_LARGE_EMBEDDING_DIM, 100)
+    assert persisted.dtype == np.float32
 
 
 def test_encode_pupujepa_column_valid_sequence_preserves_orientation() -> None:
