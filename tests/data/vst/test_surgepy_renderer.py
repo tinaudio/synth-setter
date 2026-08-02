@@ -13,7 +13,11 @@ from synth_setter.data.vst.generate_vst_dataset import (
     _reject_clipped_audio,
 )
 from synth_setter.data.vst.param_map import load_param_map
-from synth_setter.data.vst.renderers import SurgePyRenderer, _sample_index_at_or_after
+from synth_setter.data.vst.renderers import (
+    SurgePyRenderer,
+    _align_native_attack,
+    _sample_index_at_or_after,
+)
 from synth_setter.data.vst.surgepy_runtime import surge_component_state
 
 
@@ -35,14 +39,18 @@ def _simple_renderer() -> SurgePyRenderer:
 
 
 def _mock_renderer(
+    monkeypatch: pytest.MonkeyPatch,
     *,
     block_size: int,
     output_samples: int,
+    sample_rate: int = 44_100,
 ) -> tuple[SurgePyRenderer, Mock, dict[str, int | bool]]:
-    """Build a renderer around a stateful block-processing mock.
+    """Build a public renderer around a stateful block-processing mock.
 
+    :param monkeypatch: Installs the native synth at the external-engine boundary.
     :param block_size: Native samples per block.
-    :param output_samples: Native stereo buffer length.
+    :param output_samples: Retained stereo output length.
+    :param sample_rate: Output samples per second.
     :returns: Renderer, synth mock, and mutable note state.
     """
     state: dict[str, int | bool] = {"playing": False, "note_age": 0}
@@ -54,9 +62,15 @@ def _mock_renderer(
     )
     synth.playNote.side_effect = lambda *_: state.__setitem__("playing", True)
     synth.releaseNote.side_effect = lambda *_: state.__setitem__("playing", False)
-    renderer = object.__new__(SurgePyRenderer)
-    renderer.sample_rate = 44_100
-    renderer.synth = synth
+    renderer = _simple_renderer()
+    renderer.sample_rate = sample_rate
+    renderer.signal_duration_seconds = (output_samples + 0.5) / sample_rate
+    monkeypatch.setattr(
+        renderer,
+        "_initialize_synth",
+        lambda: setattr(renderer, "synth", synth),
+    )
+    monkeypatch.setattr(renderer, "_apply_parameters", lambda _: None)
     return renderer, synth, state
 
 
@@ -122,6 +136,11 @@ def test_surgepy_renderer_non_block_aligned_note_starts_at_requested_sample() ->
     ("event_time", "expected_sample"),
     [
         pytest.param(13 / 44_100, 13, id="quotient-sample-boundary"),
+        pytest.param(
+            np.nextafter(17 / 44_100, np.inf),
+            18,
+            id="rounded-down-just-after-boundary",
+        ),
         pytest.param(32 / 44_100, 32, id="native-block-boundary"),
         pytest.param(
             np.nextafter(32 / 44_100, np.inf),
@@ -147,6 +166,19 @@ def test_sample_index_at_or_after_float_boundary_quantizes_event_exactly(
     assert _sample_index_at_or_after(event_time, 44_100) == expected_sample
 
 
+def test_align_native_attack_undersized_source_raises() -> None:
+    """Alignment rejects a native buffer that cannot fill the retained output."""
+    audio = np.zeros((2, 31), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="attack buffer"):
+        _align_native_attack(
+            audio,
+            samples=32,
+            start_sample=0,
+            source_start=16,
+        )
+
+
 @pytest.mark.parametrize(
     ("note_end", "expected_release_sample"),
     [
@@ -161,14 +193,20 @@ def test_sample_index_at_or_after_float_boundary_quantizes_event_exactly(
 def test_surgepy_renderer_note_end_preserves_quantized_duration(
     note_end: float,
     expected_release_sample: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A shifted attack retains its native block-quantized note duration.
 
     :param note_end: Requested note end in seconds.
     :param expected_release_sample: First output sample rendered after note release.
+    :param monkeypatch: Installs the controlled native block processor.
     """
     block_size = 32
-    renderer, synth, state = _mock_renderer(block_size=block_size, output_samples=96)
+    renderer, synth, state = _mock_renderer(
+        monkeypatch,
+        block_size=block_size,
+        output_samples=96,
+    )
 
     def process_blocks(output: np.ndarray, start_block: int, num_blocks: int) -> None:
         """Mark each processed block with the current note state.
@@ -183,40 +221,45 @@ def test_surgepy_renderer_note_end_preserves_quantized_duration(
 
     synth.processMultiBlock.side_effect = process_blocks
 
-    audio = renderer._render_note_blocks(
-        midi_note=60,
-        velocity=100,
-        samples=96,
-        start=16 / 44_100,
-        end=note_end,
-    )
+    audio = renderer.render({}, 60, 100, (16 / 44_100, note_end))
 
     assert np.all(audio[:, 16:expected_release_sample] == 1.0)
     assert np.all(audio[:, expected_release_sample:] == -1.0)
 
 
-def test_surgepy_renderer_event_after_retained_output_returns_silence() -> None:
-    """An event beyond a fractional retained sample count does not invoke Surge."""
-    renderer = object.__new__(SurgePyRenderer)
-    renderer.sample_rate = 10
-    renderer.synth = Mock()
+def test_surgepy_renderer_event_after_retained_output_returns_silence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An event beyond a fractional retained sample count does not invoke Surge.
 
-    audio = renderer._render_note_blocks(
-        midi_note=60,
-        velocity=100,
-        samples=4,
-        start=0.41,
-        end=0.44,
+    :param monkeypatch: Installs the controlled native block processor.
+    """
+    renderer, synth, _ = _mock_renderer(
+        monkeypatch,
+        block_size=32,
+        output_samples=4,
+        sample_rate=10,
     )
 
+    audio = renderer.render({}, 60, 100, (0.41, 0.44))
+
     np.testing.assert_array_equal(audio, np.zeros((2, 4), dtype=np.float32))
-    assert renderer.synth.method_calls == []
+    assert synth.method_calls == []
 
 
-def test_surgepy_renderer_non_block_aligned_note_preserves_native_attack() -> None:
-    """Sub-block placement delays the attack without discarding native samples."""
+def test_surgepy_renderer_non_block_aligned_note_preserves_native_attack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sub-block placement delays the attack without discarding native samples.
+
+    :param monkeypatch: Installs the controlled native block processor.
+    """
     block_size = 32
-    renderer, synth, state = _mock_renderer(block_size=block_size, output_samples=128)
+    renderer, synth, state = _mock_renderer(
+        monkeypatch,
+        block_size=block_size,
+        output_samples=128,
+    )
 
     def process_blocks(output: np.ndarray, start_block: int, num_blocks: int) -> None:
         """Emit increasing native attack samples while the note is active.
@@ -239,13 +282,7 @@ def test_surgepy_renderer_non_block_aligned_note_preserves_native_attack() -> No
 
     synth.processMultiBlock.side_effect = process_blocks
 
-    audio = renderer._render_note_blocks(
-        midi_note=60,
-        velocity=100,
-        samples=128,
-        start=48 / 44_100,
-        end=80 / 44_100,
-    )
+    audio = renderer.render({}, 60, 100, (48 / 44_100, 80 / 44_100))
 
     expected_attack = np.tile(np.arange(1, 33, dtype=np.float32), (2, 1))
     np.testing.assert_array_equal(audio[:, 48:80], expected_attack)
