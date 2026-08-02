@@ -251,7 +251,7 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
         def get_parameters_description(self) -> list[dict[str, object]]:
             """Return preset-dependent parameter identities.
 
-            :returns: Stale aliases until the restored preset has processed two callbacks.
+            :returns: Stale aliases until restored preset processing completes.
             """
             oscillator_names = (
                 ("A Osc 1 Sawtooth", "A Osc 1 Pulse", "A Osc 1 Triangle", "A Osc 1 Width")
