@@ -121,6 +121,9 @@ in [docs/reference/dependency-management.md](docs/reference/dependency-managemen
 ## Quick Start
 
 ```bash
+# Render a CLAP-conditioned Surge patch and upload the WAV to R2
+synth-setter-clap "frog croak"
+
 # Run tests
 make test-fast
 
@@ -130,6 +133,12 @@ make format
 # See all available targets
 make help
 ```
+
+The CLAP command selects CUDA, MPS, or CPU automatically, caches its pinned
+checkpoints, and writes `logs/clap-renders/<run-id>.{wav,csv}`. It uploads both
+files under `r2://experiments/clap-renders/`; the CSV records the prompt-to-rendered-audio
+CLAP cosine similarity and distance. Run `synth-setter-clap --help` for checkpoint,
+device, output, seed, and upload overrides.
 
 See the project documentation for a full walkthrough.
 
