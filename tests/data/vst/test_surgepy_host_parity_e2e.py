@@ -127,16 +127,16 @@ _CAUSAL_OCTAVE_FREQUENCY_RATIO_MIN = 6.0
 _DIVERSE_CENTROID_SHIFT_MIN = 7.0
 _DOMINANT_FREQUENCY_MAX_HZ = 5_000.0
 _DOMINANT_FREQUENCY_MIN_HZ = 40.0
-_MEL_RMSE_MAX = 25.0
-_MSS_MAX = 22.0
+_MEL_RMSE_MAX = 5.0
+_MSS_MAX = 6.0
 _ONSET_AMPLITUDE = 1e-8
 _ONSET_CONTROL_LAG_TOLERANCE_SAMPLES = 2
 _PARAMETER_MAP_PATH = Path("src/synth_setter/data/vst/surge_xt_param_map.json")
-_RMS_MIN = 0.8
-_SOT_MAX = 0.35
+_RMS_MIN = 0.99
+_SOT_MAX = 0.01
 _SURGEPY_PRESET_PATH = Path("presets/surge-base.fxp")
 _VST_PRESET_PATH = Path("presets/surge-base.vstpreset")
-_WMFCC_MAX = 25.0
+_WMFCC_MAX = 2.0
 
 
 @dataclass(frozen=True)
@@ -384,11 +384,11 @@ def _assert_pair_metrics(workload: str, pair_rows: dict[str, list[MetricRow]]) -
                 "sample": int(row["sample"]),
                 "metrics": row,
             }
-            assert float(row["mel_rmse"]) < _MEL_RMSE_MAX, identity
-            assert float(row["mss"]) < _MSS_MAX, identity
-            assert float(row["rms"]) > _RMS_MIN, identity
-            assert float(row["sot"]) < _SOT_MAX, identity
-            assert float(row["wmfcc"]) < _WMFCC_MAX, identity
+            assert float(row["mel_rmse"]) <= _MEL_RMSE_MAX, identity
+            assert float(row["mss"]) <= _MSS_MAX, identity
+            assert float(row["rms"]) >= _RMS_MIN, identity
+            assert float(row["sot"]) <= _SOT_MAX, identity
+            assert float(row["wmfcc"]) <= _WMFCC_MAX, identity
 
 
 def _assert_repeated_backend_stability(
@@ -402,7 +402,7 @@ def _assert_repeated_backend_stability(
         for sample, mel in enumerate(result.mel):
             mel_rmse = float(np.sqrt(np.mean(np.square(mel - result.mel[0]))))
             identity = {"backend": backend, "sample": sample, "mel_rmse": mel_rmse}
-            assert mel_rmse < _MEL_RMSE_MAX, identity
+            assert mel_rmse <= _MEL_RMSE_MAX, identity
 
 
 def _worst_pair_metrics(rows: list[MetricRow]) -> dict[str, float]:
@@ -1039,7 +1039,7 @@ def test_pair_gate_reports_workload_backend_pair_and_sample() -> None:
     rows: list[MetricRow] = [
         {
             "sample": 7,
-            "mel_rmse": _MEL_RMSE_MAX,
+            "mel_rmse": 5.1,
             "mss": 0.0,
             "rms": 1.0,
             "sot": 0.0,
@@ -1063,7 +1063,9 @@ def test_repeated_backend_stability_rejects_anomalous_render() -> None:
         mel=np.stack(
             [
                 np.zeros(_EXPECTED_MEL_SHAPE, dtype=np.float32),
-                np.full(_EXPECTED_MEL_SHAPE, _MEL_RMSE_MAX, dtype=np.float32),
+                np.full(
+                    _EXPECTED_MEL_SHAPE, 5.1, dtype=np.float32
+                ),
             ]
         ),
         params=np.zeros((2, 1), dtype=np.float32),
@@ -1072,6 +1074,73 @@ def test_repeated_backend_stability_rejects_anomalous_render() -> None:
 
     with pytest.raises(AssertionError, match="pedalboard.*sample.*1"):
         _assert_repeated_backend_stability({"pedalboard": result})
+
+
+def test_repeated_backend_stability_accepts_documented_boundary() -> None:
+    """Inclusive repeated-render limit accepts mel RMSE at the boundary."""
+    result = _BackendResult(
+        audio=np.zeros((2, 2, 8), dtype=np.float32),
+        mel=np.stack(
+            [
+                np.zeros(_EXPECTED_MEL_SHAPE, dtype=np.float32),
+                np.full(_EXPECTED_MEL_SHAPE, 5.0, dtype=np.float32),
+            ]
+        ),
+        params=np.zeros((2, 1), dtype=np.float32),
+        total_seconds=0.0,
+    )
+
+    _assert_repeated_backend_stability({"pedalboard": result})
+
+
+def test_pair_metrics_accept_documented_boundary_values() -> None:
+    """Inclusive quality limits accept metrics exactly on each boundary."""
+    rows: list[MetricRow] = [
+        {
+            "sample": 0,
+            "mel_rmse": 5.0,
+            "mss": 6.0,
+            "rms": 0.99,
+            "sot": 0.01,
+            "wmfcc": 2.0,
+        }
+    ]
+
+    _assert_pair_metrics("boundary", {"pedalboard-vs-surgepy": rows})
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        pytest.param(
+            {"sample": 0, "mel_rmse": 5.1, "mss": 0.0, "rms": 1.0, "sot": 0.0, "wmfcc": 0.0},
+            id="mel-rmse",
+        ),
+        pytest.param(
+            {"sample": 0, "mel_rmse": 0.0, "mss": 6.1, "rms": 1.0, "sot": 0.0, "wmfcc": 0.0},
+            id="mss",
+        ),
+        pytest.param(
+            {"sample": 0, "mel_rmse": 0.0, "mss": 0.0, "rms": 0.98, "sot": 0.0, "wmfcc": 0.0},
+            id="rms",
+        ),
+        pytest.param(
+            {"sample": 0, "mel_rmse": 0.0, "mss": 0.0, "rms": 1.0, "sot": 0.02, "wmfcc": 0.0},
+            id="sot",
+        ),
+        pytest.param(
+            {"sample": 0, "mel_rmse": 0.0, "mss": 0.0, "rms": 1.0, "sot": 0.0, "wmfcc": 2.1},
+            id="wmfcc",
+        ),
+    ],
+)
+def test_pair_metrics_reject_documented_limit_violation(row: MetricRow) -> None:
+    """A metric outside its documented quality limit fails independently.
+
+    :param row: One parity row with exactly one out-of-contract metric.
+    """
+    with pytest.raises(AssertionError):
+        _assert_pair_metrics("boundary", {"pedalboard-vs-surgepy": [row]})
 
 
 def test_manifest_rejects_backend_filename_swap(tmp_path: Path) -> None:
