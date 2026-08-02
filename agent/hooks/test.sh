@@ -2214,6 +2214,28 @@ T_link_plugins_reuses_primary_fixture_in_fresh_worktree() {
 }
 it "link-plugins: fresh worktree → exposes primary VST fixture cleanly" T_link_plugins_reuses_primary_fixture_in_fresh_worktree
 
+T_link_plugins_dangling_primary_link_fails_loudly() {
+  local out primary target
+  primary="$TEST_DIR/plugin-missing-primary-$$"
+  target="$TEST_DIR/plugin-missing-worktree-$$"
+  git init -q "$primary"
+  git -C "$primary" config user.email test@test
+  git -C "$primary" config user.name test
+  git -C "$primary" commit -q --allow-empty -m init
+  mkdir -p "$primary/plugins/Surge XT.vst3"
+  git -C "$primary" worktree add --detach "$target" >/dev/null 2>&1
+  ln -s "$primary/plugins" "$target/plugins"
+  rm -rf "$primary/plugins"
+
+  if out=$(cd "$target" && make -f "$REPO_ROOT/Makefile" link-plugins STUDIORACK=true 2>&1); then
+    echo "dangling primary plugins link unexpectedly succeeded: $out"; return 1
+  fi
+  echo "$out" | grep -q "primary plugins directory is unavailable" || {
+    echo "missing actionable dangling-link error: $out"; return 1
+  }
+}
+it "link-plugins: dangling primary link → fails with actionable error" T_link_plugins_dangling_primary_link_fails_loudly
+
 T_wt_post_setup_exits_0_on_missing_path() {
   local out
   reset_sandbox

@@ -178,11 +178,12 @@ link-plugins: ## Link installed Studiorack packages into the checkout's plugins/
 	primary="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir)")" && pwd)"; \
 	here="$$(git rev-parse --show-toplevel)"; \
 	central="$$primary/plugins"; \
-	if [ "$$primary" != "$$here" ] && [ -d "$$central" ] && [ ! -e "$$here/plugins" ]; then \
+	if [ "$$primary" != "$$here" ] && [ -L "$$here/plugins" ] && [ "$$(readlink "$$here/plugins")" = "$$central" ]; then \
+		[ -d "$$central" ] || { echo "ERROR: primary plugins directory is unavailable: $$central" >&2; exit 1; }; \
+		echo "plugins/ already linked -> $$central"; \
+	elif [ "$$primary" != "$$here" ] && [ -d "$$central" ] && [ ! -e "$$here/plugins" ] && [ ! -L "$$here/plugins" ]; then \
 		ln -s "$$central" "$$here/plugins"; \
 		echo "plugins/ linked -> $$central"; \
-	elif [ -L "$$here/plugins" ] && [ "$$(readlink "$$here/plugins")" = "$$central" ]; then \
-		echo "plugins/ already linked -> $$central"; \
 	else \
 		$(STUDIORACK) link; \
 		$(STUDIORACK) --manifest studiorack-cardinal.json link; \
