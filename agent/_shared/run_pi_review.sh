@@ -112,7 +112,9 @@ return only the specified foreground deliverable."
           >&2
         return 1
       fi
-      echo "Synchronous Pi review aftercare completed: ${PI_REVIEW_AFTERCARE_MANIFEST}" >&2
+      echo \
+        "Synchronous Pi review aftercare completed: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
+        >&2
     else
       local aftercare_pid
       if aftercare_pid="$(

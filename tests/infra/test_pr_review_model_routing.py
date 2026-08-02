@@ -469,48 +469,92 @@ def _write_ci_aftercare_repo(tmp_path: Path) -> Path:
     return repo_root
 
 
+def _aftercare_success_payload() -> str:
+    """Return a valid result consumed by the real aftercare supervisor.
+
+    :returns: Serialized successful aftercare result.
+    """
+    return json.dumps(
+        {
+            "status": "complete",
+            "attempts": [
+                {
+                    "skill": "correctness-review",
+                    "pass_name": "free-pool",
+                    "model": "kimi-coding/k3",
+                    "status": "success",
+                    "agent_id": "agent-aftercare",
+                    "output_path": ".pi/output/agent-aftercare.jsonl",
+                    "detail": "validated report",
+                }
+            ],
+            "diagnostics": [],
+            "late_findings": [],
+            "posted_review_url": None,
+            "child_exit_code": None,
+            "log_tail": "",
+            "completed_at": "2026-08-02T00:00:00Z",
+        }
+    )
+
+
+def _deferred_manifest_payload() -> str:
+    """Return a valid manifest that requires one aftercare pass.
+
+    :returns: Serialized aftercare manifest.
+    """
+    return json.dumps(
+        {
+            "version": 1,
+            "mode": "full",
+            "repo": "tinaudio/synth-setter",
+            "pr_number": 2174,
+            "base_sha": "a" * 40,
+            "head_sha": "b" * 40,
+            "target": "PR #2174",
+            "deferred_passes": [
+                {
+                    "skill": "correctness-review",
+                    "pass_name": "free-pool",
+                    "origin": "primary",
+                    "model": "kimi-coding/k3",
+                    "verification_model": "openai-codex/gpt-5.6-sol",
+                    "thinking": "high",
+                }
+            ],
+            "foreground_fingerprints": [],
+        }
+    )
+
+
 def _write_manifest_pi(tmp_path: Path) -> None:
     """Create a fake Pi that drives foreground and real aftercare protocols.
 
     :param tmp_path: Temporary directory placed first on PATH.
     """
-    pi = tmp_path / "pi"
-    pi.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json\n"
-        "import os\n"
-        "from pathlib import Path\n"
-        "if os.environ.get('SYNTH_SETTER_PI_REVIEW_AFTERCARE') == '1':\n"
-        "    if os.environ.get('AFTERCARE_FAIL') == '1':\n"
-        "        raise SystemExit(9)\n"
-        "    runtime = Path(os.environ['PI_REVIEW_AFTERCARE_RUNTIME_MANIFEST'])\n"
-        "    result = {\n"
-        "        'status': 'complete',\n"
-        "        'attempts': [{'skill': 'correctness-review', 'pass_name': 'free-pool', "
-        "'model': 'kimi-coding/k3', 'status': 'success', 'agent_id': 'agent-aftercare', "
-        "'output_path': '.pi/output/agent-aftercare.jsonl', "
-        "'detail': 'validated report'}],\n"
-        "        'diagnostics': [], 'late_findings': [], 'posted_review_url': None,\n"
-        "        'child_exit_code': None, 'log_tail': '', "
-        "'completed_at': '2026-08-02T00:00:00Z',\n"
-        "    }\n"
-        "    Path(f'{runtime}.result.json').write_text(json.dumps(result))\n"
-        "    raise SystemExit(0)\n"
-        "manifest = Path(os.environ['PI_REVIEW_AFTERCARE_MANIFEST'])\n"
-        "Path(os.environ['MANIFEST_PATH_FILE']).write_text(str(manifest))\n"
-        "manifest.write_text(json.dumps({\n"
-        "    'version': 1, 'mode': 'full', 'repo': 'tinaudio/synth-setter',\n"
-        "    'pr_number': 2174, 'base_sha': 'a' * 40, 'head_sha': 'b' * 40,\n"
-        "    'target': 'PR #2174',\n"
-        "    'deferred_passes': [{'skill': 'correctness-review', "
-        "'pass_name': 'free-pool', 'origin': 'primary', 'model': 'kimi-coding/k3', "
-        "'verification_model': 'openai-codex/gpt-5.6-sol', 'thinking': 'high'}],\n"
-        "    'foreground_fingerprints': [],\n"
-        "}))\n"
-        "print(json.dumps({'type': 'message_end', 'message': {\n"
-        "    'role': 'assistant', 'content': 'foreground-complete'\n"
-        "}}))\n"
+    final_event = json.dumps(
+        {
+            "type": "message_end",
+            "message": {"role": "assistant", "content": "foreground-complete"},
+        }
     )
+    script = f"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+if os.environ.get("SYNTH_SETTER_PI_REVIEW_AFTERCARE") == "1":
+    if os.environ.get("AFTERCARE_FAIL") == "1":
+        raise SystemExit(9)
+    runtime = Path(os.environ["PI_REVIEW_AFTERCARE_RUNTIME_MANIFEST"])
+    Path(str(runtime) + ".result.json").write_text({_aftercare_success_payload()!r})
+    raise SystemExit(0)
+manifest = Path(os.environ["PI_REVIEW_AFTERCARE_MANIFEST"])
+Path(os.environ["MANIFEST_PATH_FILE"]).write_text(str(manifest))
+manifest.write_text({_deferred_manifest_payload()!r})
+print({final_event!r})
+"""
+    pi = tmp_path / "pi"
+    pi.write_text(script)
     pi.chmod(0o755)
 
 

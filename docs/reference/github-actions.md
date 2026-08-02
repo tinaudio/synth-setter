@@ -58,14 +58,14 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 ### Housekeeping & automation
 
-| Workflow                  | Purpose                                                                                                               | Gotcha                                                                                                                                 |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `auto-approve`            | Auto-approves PRs once all CI checks pass, Copilot has reviewed, threads are resolved, and the author is allowlisted. | Deduplicates check-runs by name (re-runs share a name but have distinct IDs). See [Check-run deduplication](#check-run-deduplication). |
-| `claude`                  | Runs Claude Code on `@claude` mentions in issue/PR comments via `anthropics/claude-code-action`.                      | Requires `CLAUDE_CODE_OAUTH_TOKEN`; the action exchanges OIDC for a Claude GitHub App installation token to post.                      |
-| `claude-repo-review-full` | Runs the Pi-native `/repo-review-full` pipeline on trusted same-repository PRs and posts inline review comments.      | Fork and untrusted-author PRs skip before secrets are loaded. CI waits for deferred aftercare; a newer head cancels the stale run.     |
-| `stale`                   | Labels issues/PRs inactive for 120 days as stale. Never auto-closes (`days-before-close: -1`).                        |                                                                                                                                        |
-| `snooze-issue`            | Lets an issue comment snooze the issue for N days.                                                                    |                                                                                                                                        |
-| `unsnooze-issues`         | Daily job that unsnoozes issues whose snooze window has elapsed.                                                      |                                                                                                                                        |
+| Workflow                  | Purpose                                                                                                                                 | Gotcha                                                                                                                                 |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto-approve`            | Auto-approves PRs once all CI checks pass, Copilot has reviewed, threads are resolved, and the author is allowlisted.                   | Deduplicates check-runs by name (re-runs share a name but have distinct IDs). See [Check-run deduplication](#check-run-deduplication). |
+| `claude`                  | Runs Claude Code on `@claude` mentions in issue/PR comments via `anthropics/claude-code-action`.                                        | Requires `CLAUDE_CODE_OAUTH_TOKEN`; the action exchanges OIDC for a Claude GitHub App installation token to post.                      |
+| `claude-repo-review-full` | Runs the Pi-native `/repo-review-full` pipeline when both the PR author and triggering actor are `ktinubu` on a same-repository branch. | Other PRs skip before secrets load. CI waits for deferred aftercare; a newer head cancels the stale run.                               |
+| `stale`                   | Labels issues/PRs inactive for 120 days as stale. Never auto-closes (`days-before-close: -1`).                                          |                                                                                                                                        |
+| `snooze-issue`            | Lets an issue comment snooze the issue for N days.                                                                                      |                                                                                                                                        |
+| `unsnooze-issues`         | Daily job that unsnoozes issues whose snooze window has elapsed.                                                                        |                                                                                                                                        |
 
 ## Dependency map
 
@@ -146,8 +146,8 @@ Or use the Actions tab UI.
 `claude-repo-review-full.yml` retains its historical filename but runs Pi, not
 Claude. It installs pinned Pi and Tintin releases, checks out an immutable
 `tinaudio/skills` commit with `GIT_PAT`, and restores the provider document from
-`PI_AUTH_JSON`. Only allowlisted-maintainer same-repository PRs reach those secrets; never
-convert this workflow to `pull_request_target`.
+`PI_AUTH_JSON`. Only same-repository PRs authored and triggered by `ktinubu` reach those
+secrets; never convert this workflow to `pull_request_target`.
 GitHub Actions runs aftercare synchronously so the job cannot report success
 while deferred passes remain. Local launcher calls keep detached aftercare.
 The `.agent-reviews/` audit is retained as a repository-private artifact for
