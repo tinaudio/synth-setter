@@ -7,6 +7,7 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import json
 import logging
 import os
 import re
@@ -44,8 +45,6 @@ from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
@@ -1119,12 +1118,12 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
-    """Run one spawned-worker train, val, and test step from Lance shards.
+    """Run train, validation, and test steps with split-specific Lance workers.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
-    reads end-to-end through the in-process ``train(cfg)`` entrypoint with
-    spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
-    fixture. Also pins the
+    reads end-to-end through the in-process ``train(cfg)`` entrypoint. Training
+    and test use a worker while validation uses the in-process default; the Hydra
+    composition path lives on the ``cfg_train_lance`` fixture. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
@@ -1138,8 +1137,11 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
 
     # Pin the Dataset-API migration e2e: the split the datamodule trained over
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
-    train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
+    datamodule = object_dict["datamodule"]
+    train_split = Path(datamodule.dataset_root) / "train.lance"
     assert train_split.is_dir()
+    assert datamodule.num_workers == 1
+    assert datamodule.val_num_workers == 0
 
 
 def test_train_fast_dev_run_sketch_tokens_lance(
@@ -1186,31 +1188,28 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
 
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
-def test_train_lance_records_dataset_lineage_from_local_spec(
+def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
     cfg_train_lance: DictConfig,
-    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
-    """A real Lance training run records its local dataset artifact as a W&B input.
+    """A real Lance training run records a schema-drifted dataset as a W&B input.
 
     :param cfg_train_lance: Composed Lance training configuration.
-    :param dataset_spec_factory: Factory producing the frozen dataset provenance.
     """
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
     dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
-    write_spec_to_path(
-        dataset_spec_factory(
-            task_name="lineage-lance",
-            train_val_test_sizes=[4, 4, 0],
-            r2={"bucket": "intermediate-data"},
-            render={"samples_per_shard": 4},
-        ),
-        dataset_root / "input_spec.json",
-    )
+    (dataset_root / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
     HydraConfig().set_config(cfg_train_lance)
     logger = _RecordingWandbLogger()
     with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
         train(cfg_train_lance)
 
-    assert logger.used_artifacts == ["data-lineage-lance:lineage-lance-20260520T000000000Z"]
+    assert logger.used_artifacts == [
+        "data-surge-simple-lance-440k-20k-20k:surge-simple-lance-440k-20k-20k-20260706T005448315Z"
+    ]
 
 
 def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:

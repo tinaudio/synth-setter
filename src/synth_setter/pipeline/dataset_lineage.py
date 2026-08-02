@@ -8,13 +8,36 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Annotated
 
 import structlog
+from pydantic import BaseModel, StringConstraints
 
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.spec_io import load_spec_from_root
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.pipeline.spec_io import join_uri, read_spec_text
 
 log = structlog.get_logger(__name__)
+
+type _LineageId = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
+
+
+class _DatasetLineageIdentity(BaseModel, extra="ignore", strict=True):
+    """Stable identity projection from a frozen dataset spec.
+
+    .. attribute :: task_name
+        :type: str
+
+        Dataset task used in the W&B artifact name.
+
+    .. attribute :: run_id
+        :type: str
+
+        Immutable W&B artifact alias for the finalized dataset.
+    """
+
+    task_name: _LineageId
+    run_id: _LineageId
 
 
 def dataset_artifact_ref(
@@ -76,14 +99,9 @@ def _artifact_ref_from_root(dataset_root: str | Path | None) -> tuple[str, str] 
     if dataset_root is None:
         return None
     try:
-        spec = load_spec_from_root(str(dataset_root))
-    except (
-        FileNotFoundError,
-        KeyError,
-        OSError,
-        subprocess.CalledProcessError,
-        ValueError,
-    ) as exc:
+        spec_uri = join_uri(str(dataset_root), INPUT_SPEC_FILENAME)
+        identity = _DatasetLineageIdentity.model_validate_json(read_spec_text(spec_uri))
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
         log.warning("dataset_lineage_unavailable", dataset_root=str(dataset_root), error=str(exc))
         return None
-    return (f"data-{spec.task_name}", spec.run_id)
+    return (f"data-{identity.task_name}", identity.run_id)

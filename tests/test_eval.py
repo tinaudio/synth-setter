@@ -396,6 +396,8 @@ def _assert_audio_prediction_artifacts(output_dir: Path) -> None:
         map_location="cpu",
         weights_only=True,
     )
+    assert type(prediction) is torch.Tensor
+    assert type(target_audio) is torch.Tensor
     assert prediction.shape == (1, _SURGE_XT_PREDICTION_WIDTH)
     assert torch.isfinite(prediction).all()
     assert target_audio.shape == (1, 2, _AUDIO_PREDICTION_SAMPLE_COUNT)
@@ -574,7 +576,9 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
     val_loss = metric_dict["val/param_mse"]
     assert torch.isfinite(val_loss)
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
-    eval_batch = next(iter(eval_objects["datamodule"].val_dataloader()))
+    val_dataloader = eval_objects["datamodule"].val_dataloader()
+    assert val_dataloader.num_workers == 0
+    eval_batch = next(iter(val_dataloader))
     assert torch.isfinite(eval_batch["audio"]).all()
 
 
@@ -1573,6 +1577,7 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
         GlobalHydra.instance().clear()
 
     assert_log_per_param_mse_wired(object_dict["trainer"], "surge_4")
+    assert object_dict["datamodule"].val_num_workers == 0
 
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)

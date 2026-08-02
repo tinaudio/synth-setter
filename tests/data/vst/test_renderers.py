@@ -238,6 +238,7 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.parameters: dict[int, float] = {}
             self.midi: list[tuple[int, int, float, float]] = []
             self.midi_history: list[tuple[int, int, float, float]] = []
+            self.settled = True
 
         def set_parameter(self, name: int, value: float) -> None:
             """Record a parameter assignment.
@@ -248,16 +249,21 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.parameters[name] = value
 
         def get_parameters_description(self) -> list[dict[str, object]]:
-            """Return one named parameter with its host index.
+            """Return preset-dependent parameter identities.
 
-            :returns: The fixed indexed host enumeration used for parameter dispatch.
+            :returns: Stale aliases until restored preset processing completes.
             """
+            oscillator_names = (
+                ("A Osc 1 Sawtooth", "A Osc 1 Pulse", "A Osc 1 Triangle", "A Osc 1 Width")
+                if self.settled
+                else ("A Osc 1 Shape", "A Osc 1 Width 1", "A Osc 1 Width 2", "A Osc 1 Sub Mix")
+            )
             return [
                 {"index": 0, "name": "A Filter 1 Cutoff"},
-                {"index": 1, "name": "A Osc 1 Shape"},
-                {"index": 2, "name": "A Osc 1 Width 1"},
-                {"index": 3, "name": "A Osc 1 Width 2"},
-                {"index": 4, "name": "A Osc 1 Sub Mix"},
+                {"index": 1, "name": oscillator_names[0]},
+                {"index": 2, "name": oscillator_names[1]},
+                {"index": 3, "name": oscillator_names[2]},
+                {"index": 4, "name": oscillator_names[3]},
             ]
 
         def add_midi_note(self, pitch: int, velocity: int, start: float, duration: float) -> None:
@@ -277,11 +283,12 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.midi.clear()
 
         def load_vst3_preset(self, path: str) -> None:
-            """Record the loaded VST3 preset path.
+            """Record the preset and expose stale identities until processing settles it.
 
             :param path: Preset path.
             """
             self.preset = path
+            self.settled = False
 
     class FakeEngine:
         """Minimal DawDreamer engine surface used by the backend contract test."""
@@ -295,6 +302,7 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.sample_rate = sample_rate
             self.block_size = block_size
             self.processor = FakeProcessor()
+            self.render_count = 0
             self.rendered_duration = 0.0
 
         def make_plugin_processor(self, name: str, path: str) -> FakeProcessor:
@@ -316,11 +324,14 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.graph = graph
 
         def render(self, duration: float) -> None:
-            """Record the requested render duration.
+            """Advance preset state and record the requested duration.
 
             :param duration: Duration in seconds.
             """
+            self.render_count += 1
             self.rendered_duration = duration
+            if self.render_count == 2:
+                self.processor.settled = True
 
         def get_audio(self) -> np.ndarray:
             """Return deterministic stereo test audio.
@@ -334,10 +345,10 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
     parameter_map = _test_param_map(
         {
             "a_filter_1_cutoff": (0, "A Filter 1 Cutoff"),
-            "a_osc_1_sawtooth": (1, "A Osc 1 Shape"),
-            "a_osc_1_pulse": (2, "A Osc 1 Width 1"),
-            "a_osc_1_triangle": (3, "A Osc 1 Width 2"),
-            "a_osc_1_width": (4, "A Osc 1 Sub Mix"),
+            "a_osc_1_sawtooth": (1, "A Osc 1 Sawtooth"),
+            "a_osc_1_pulse": (2, "A Osc 1 Pulse"),
+            "a_osc_1_triangle": (3, "A Osc 1 Triangle"),
+            "a_osc_1_width": (4, "A Osc 1 Width"),
         },
         5,
     )

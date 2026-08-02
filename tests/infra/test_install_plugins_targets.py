@@ -90,7 +90,8 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
     assert "npm ci" in stage
     assert "python -m synth_setter.cli.plugins" in stage
     assert "update-alternatives --install /usr/bin/gcc" in DOCKERFILE.read_text()
-    assert "studiorack.json" in stage
+    assert "studiorack-cardinal.lock.json" in stage
+    assert "studiorack.lock.json" in stage
 
 
 def test_docker_plugin_stage_provisions_cardinal_at_configured_path() -> None:
