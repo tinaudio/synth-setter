@@ -13,6 +13,7 @@ import pytest
 
 from scripts.dev.characterise_conditioning_columns import (
     StreamingStatistics,
+    analyse_dataset,
     discover_conditioning_columns,
     matpac_band_views,
 )
@@ -98,6 +99,39 @@ def test_matpac_band_views_with_zero_band_width_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="positive"):
         matpac_band_views(values, band_width=0)
+
+
+def test_analyse_dataset_nested_fixed_size_lists_reports_sequence_statistics(
+    tmp_path: Path,
+) -> None:
+    """Nested Arrow lists decode to the registered channel-frame shape.
+
+    :param tmp_path: Directory holding the real nested-list Lance fixture.
+    """
+    primitive = pa.array(np.arange(12, dtype=np.float32))
+    frames = pa.FixedSizeListArray.from_arrays(primitive, 3)
+    rows = pa.FixedSizeListArray.from_arrays(frames, 2)
+    dataset_path = tmp_path / "nested.lance"
+    lance.write_dataset(pa.table({"sequence": rows}), dataset_path)
+
+    results = analyse_dataset(str(dataset_path), {"sequence": (2, 3)}, row_limit=2, batch_size=1)
+
+    assert results["sequence"].rows == 2
+    assert results["sequence"].global_mean == pytest.approx(5.5)
+
+
+def test_analyse_dataset_percent_encoded_file_uri_opens_dataset(tmp_path: Path) -> None:
+    """A percent-encoded file URI resolves to its local Lance dataset.
+
+    :param tmp_path: Directory holding a Lance fixture whose name contains a space.
+    """
+    dataset_path = tmp_path / "sample data.lance"
+    values = pa.FixedShapeTensorArray.from_numpy_ndarray(np.array([[3.0, 4.0]], dtype=np.float32))
+    lance.write_dataset(pa.table({"vector": values}), dataset_path)
+
+    results = analyse_dataset(dataset_path.as_uri(), {"vector": (2,)}, row_limit=1, batch_size=1)
+
+    assert results["vector"].row_l2_mean == pytest.approx(5.0)
 
 
 def test_cli_real_lance_dataset_writes_markdown_report(

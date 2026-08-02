@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
+from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 DEFAULT_ROWS = 1_000
 DEFAULT_BATCH_SIZE = 16
@@ -35,6 +36,28 @@ MATPAC_FREQUENCY_BANDS = 5
 type FloatArray = npt.NDArray[np.float16 | np.float32 | np.float64]
 type Float64Array = npt.NDArray[np.float64]
 type MomentValue = float | Float64Array
+
+
+@dataclass(frozen=True)
+class _MomentState:
+    """Population-moment accumulator state.
+
+    .. attribute :: count
+
+        Number of observations.
+
+    .. attribute :: mean
+
+        Scalar or per-channel mean.
+
+    .. attribute :: m2
+
+        Scalar or per-channel sum of squared deviations.
+    """
+
+    count: int
+    mean: MomentValue
+    m2: MomentValue
 
 
 class _ConditioningConfig(BaseModel):
@@ -134,17 +157,12 @@ class StreamingStatistics:
             raise ValueError(f"expected a positive vector or channel-frame shape, got {shape}")
         self.shape = shape
         self.rows = 0
-        self._channel_count = 0
-        self._channel_mean = np.zeros(shape[0], dtype=np.float64)
-        self._channel_m2 = np.zeros(shape[0], dtype=np.float64)
-        self._global_count = 0
-        self._global_mean = 0.0
-        self._global_m2 = 0.0
+        zeros = np.zeros(shape[0], dtype=np.float64)
+        self._channel_moments = _MomentState(0, zeros, zeros.copy())
+        self._global_moments = _MomentState(0, 0.0, 0.0)
         self._global_min = math.inf
         self._global_max = -math.inf
-        self._row_count = 0
-        self._row_mean = 0.0
-        self._row_m2 = 0.0
+        self._row_moments = _MomentState(0, 0.0, 0.0)
         self._frame_cv_sum = 0.0
 
     def update(self, values: FloatArray) -> None:
@@ -173,21 +191,9 @@ class StreamingStatistics:
         :param values: Validated float64 rows.
         """
         channel_observations = np.moveaxis(values, 1, -1).reshape(-1, self.shape[0])
-        self._channel_count, self._channel_mean, self._channel_m2 = _merge_moments(
-            self._channel_count,
-            self._channel_mean,
-            self._channel_m2,
-            channel_observations,
-            axis=0,
-        )
+        self._channel_moments = _merge_moments(self._channel_moments, channel_observations, axis=0)
         flattened = values.reshape(-1)
-        self._global_count, self._global_mean, self._global_m2 = _merge_moments(
-            self._global_count,
-            self._global_mean,
-            self._global_m2,
-            flattened,
-            axis=None,
-        )
+        self._global_moments = _merge_moments(self._global_moments, flattened, axis=None)
         self._global_min = min(self._global_min, float(flattened.min()))
         self._global_max = max(self._global_max, float(flattened.max()))
 
@@ -197,13 +203,7 @@ class StreamingStatistics:
         :param values: Validated float64 rows.
         """
         row_norms = np.linalg.norm(values.reshape(len(values), -1), axis=1)
-        self._row_count, self._row_mean, self._row_m2 = _merge_moments(
-            self._row_count,
-            self._row_mean,
-            self._row_m2,
-            row_norms,
-            axis=None,
-        )
+        self._row_moments = _merge_moments(self._row_moments, row_norms, axis=None)
 
     def _update_frame_cv(self, values: Float64Array) -> None:
         """Accumulate within-row frame-norm variation for sequences.
@@ -231,59 +231,51 @@ class StreamingStatistics:
         """
         if self.rows == 0:
             raise ValueError("cannot report statistics for zero rows")
-        channel_std = np.sqrt(self._channel_m2 / self._channel_count)
+        channel_std = np.sqrt(np.asarray(self._channel_moments.m2) / self._channel_moments.count)
         return ColumnStatistics(
             rows=self.rows,
-            channel_mean=_min_median_max(np.asarray(self._channel_mean)),
+            channel_mean=_min_median_max(np.asarray(self._channel_moments.mean)),
             channel_std=_min_median_max(channel_std),
-            global_mean=float(self._global_mean),
-            global_std=math.sqrt(float(self._global_m2) / self._global_count),
+            global_mean=float(self._global_moments.mean),
+            global_std=math.sqrt(float(self._global_moments.m2) / self._global_moments.count),
             global_min=self._global_min,
             global_max=self._global_max,
             dead_channels=int(np.count_nonzero(channel_std < DEAD_CHANNEL_STD)),
-            row_l2_mean=float(self._row_mean),
-            row_l2_std=math.sqrt(float(self._row_m2) / self._row_count),
+            row_l2_mean=float(self._row_moments.mean),
+            row_l2_std=math.sqrt(float(self._row_moments.m2) / self._row_moments.count),
             frame_l2_cv_mean=(self._frame_cv_sum / self.rows if len(self.shape) == 2 else None),
         )
 
 
 def _merge_moments(
-    count: int,
-    mean: MomentValue,
-    m2: MomentValue,
+    existing: _MomentState,
     values: Float64Array,
     *,
     axis: int | None,
-) -> tuple[
-    int,
-    MomentValue,
-    MomentValue,
-]:
+) -> _MomentState:
     """Merge one numeric batch into scalar or per-channel moments.
 
-    :param count: Existing observation count.
-    :param mean: Existing scalar or channel means.
-    :param m2: Existing sum of squared deviations.
+    :param existing: Existing observation count and moments.
     :param values: New observations.
     :param axis: Observation axis, or ``None`` for scalar moments.
-    :returns: Merged count, mean, and sum of squared deviations.
+    :returns: Merged count and moments.
     """
     batch_count = values.shape[axis] if axis is not None else values.size
     batch_mean = values.mean(axis=axis)
     batch_m2 = ((values - batch_mean) ** 2).sum(axis=axis)
-    if count == 0:
-        return batch_count, batch_mean, batch_m2
-    total = count + batch_count
-    delta = batch_mean - mean
-    merged_mean = mean + delta * batch_count / total
-    merged_m2 = m2 + batch_m2 + delta**2 * count * batch_count / total
-    return total, merged_mean, merged_m2
+    if existing.count == 0:
+        return _MomentState(batch_count, batch_mean, batch_m2)
+    total = existing.count + batch_count
+    delta = batch_mean - existing.mean
+    merged_mean = existing.mean + delta * batch_count / total
+    merged_m2 = existing.m2 + batch_m2 + delta**2 * existing.count * batch_count / total
+    return _MomentState(total, merged_mean, merged_m2)
 
 
 def _min_median_max(values: Float64Array) -> tuple[float, float, float]:
     """Summarize a numeric vector.
 
-    :param values: Values to summarize.
+    :param values: Nonempty per-channel statistics.
     :returns: Minimum, median, and maximum.
     """
     return float(values.min()), float(np.median(values)), float(values.max())
@@ -345,7 +337,12 @@ def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> FloatArray:
     if callable(to_tensor):
         values = to_tensor()
     elif pa.types.is_fixed_size_list(array.type):
-        values = array.values.to_numpy(zero_copy_only=False).reshape(len(array), *shape)
+        primitive = array
+        while pa.types.is_fixed_size_list(primitive.type):
+            primitive = primitive.values
+            if primitive.null_count:
+                raise ValueError("conditioning columns must not contain null values")
+        values = primitive.to_numpy(zero_copy_only=False).reshape(len(array), *shape)
     else:
         values = np.asarray(array.to_pylist())
     return cast(FloatArray, np.asarray(values).reshape(len(array), *shape))
@@ -361,8 +358,10 @@ def _open_dataset(dataset_uri: str) -> lance.LanceDataset:
     try:
         if r2_io.is_r2_uri(dataset_uri):
             target, storage_options = r2_io.lance_target(dataset_uri)
+        elif is_file_uri(dataset_uri):
+            target, storage_options = str(file_uri_to_path(dataset_uri)), None
         else:
-            target, storage_options = dataset_uri.removeprefix("file://"), None
+            target, storage_options = dataset_uri, None
         return _retry_lance_read(
             "conditioning_statistics_open",
             lambda: lance.dataset(target, storage_options=storage_options),
@@ -407,11 +406,8 @@ def _stream_column(
     """
     accumulator = StreamingStatistics(shape)
     band_accumulators = _band_accumulators(column, shape)
-    for batch in dataset.scanner(columns=[column], batch_size=batch_size).to_batches():
-        remaining = row_limit - accumulator.rows
-        if remaining <= 0:
-            break
-        values = _array_to_numpy(batch.column(0), shape)[:remaining]
+    for batch in dataset.to_batches(columns=[column], limit=row_limit, batch_size=batch_size):
+        values = _array_to_numpy(batch.column(0), shape)
         accumulator.update(values)
         if band_accumulators:
             for band_accumulator, band in zip(
@@ -514,7 +510,7 @@ def render_markdown(results: dict[str, ColumnStatistics], dataset_uri: str) -> s
 def _format(value: float) -> str:
     """Format one report value to six decimal places.
 
-    :param value: Numeric report value.
+    :param value: Finite statistic rendered in a report cell.
     :returns: Fixed-precision decimal text.
     """
     return f"{value:.6f}"
@@ -523,7 +519,7 @@ def _format(value: float) -> str:
 def _triple(values: tuple[float, float, float]) -> str:
     """Format a minimum/median/maximum triple.
 
-    :param values: Three report values.
+    :param values: Minimum, median, and maximum in that order.
     :returns: Slash-separated fixed-precision text.
     """
     return " / ".join(_format(value) for value in values)
