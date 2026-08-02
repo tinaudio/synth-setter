@@ -21,6 +21,7 @@ from synth_setter.clap import (
 from synth_setter.conditioning import NUM_SKETCH_CONTROLS
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
+from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
@@ -30,7 +31,10 @@ from synth_setter.pupujepa import (
 )
 from synth_setter.resources import configs_dir
 from synth_setter.utils import extras
-from tests.conftest import _build_surge_xt_smoke_cfg
+from tests.conftest import (
+    _build_surge_xt_smoke_cfg,
+    cached_embedding_conditioning_profiles,
+)
 
 
 def test_train_config(cfg_train: DictConfig) -> None:
@@ -440,6 +444,20 @@ def test_ssondo_conditioning_profile_projects_960_vector() -> None:
     assert encoder(torch.randn(2, 960)).shape == (2, cfg.model.encoder_output_dim)
 
 
+def test_cached_conditioning_profiles_match_embedding_registry_contract() -> None:
+    """Persisted Hydra profiles and registry producers cover each other."""
+    discovered = {
+        (case.profile, case.embedding) for case in cached_embedding_conditioning_profiles()
+    }
+    registered = {
+        (spec.conditioning_profile, name)
+        for name, spec in EMBEDDING_REGISTRY.items()
+        if spec.conditioning_profile is not None
+    }
+
+    assert discovered == registered
+
+
 def _conditioning_profile_names() -> list[str]:
     """Enumerate every shipped conditioning profile.
 
@@ -452,23 +470,7 @@ def _conditioning_profile_names() -> list[str]:
     )
 
 
-# Waveform profiles interpolate datamodule geometry, which this bare composition lacks.
-_WAVEFORM_CONDITIONING_PROFILES = frozenset(
-    {
-        "ast_online",
-        "clap_online",
-        "log_mel",
-        "pupujepa_large_online",
-        "pupujepa_tiny_online",
-        "same_l_online",
-        "same_s_online",
-    }
-)
-_CACHED_CONDITIONING_PROFILES = [
-    profile
-    for profile in _conditioning_profile_names()
-    if profile not in _WAVEFORM_CONDITIONING_PROFILES
-]
+_CACHED_CONDITIONING_PROFILES = [case.profile for case in cached_embedding_conditioning_profiles()]
 
 
 @pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)
