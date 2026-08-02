@@ -49,6 +49,7 @@ from synth_setter.data.vst.shapes import (
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
+    PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
@@ -67,6 +68,16 @@ from synth_setter.pipeline.data.meanaudio import (
     encode_meanaudio_column,
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
+)
+from synth_setter.pipeline.data.pupujepa import (
+    PupuJepaEncodeFn,
+    encode_pupujepa_column,
+    load_pupujepa_audio_encoder,
+)
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    PUPUJEPA_EMBEDDING_DIM,
+    pupujepa_artifact_digest,
 )
 from synth_setter.pipeline.data.param_shift import (
     PARAM_SHIFT_INPUT_FIELDS,
@@ -139,7 +150,13 @@ type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = (
-    M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn | ParamShifter
+    M2LEncodeFn
+    | ClapEncodeFn
+    | SameEncodeFn
+    | SSONDOEncodeFn
+    | PupuJepaEncodeFn
+    | ParamTextEncodeFn
+    | ParamShifter
 )
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[Mapping[str, np.ndarray], int, Encoder], pa.Array]
@@ -371,6 +388,15 @@ def _meanaudio_artifact_identity(checkpoint: str) -> str:
     :returns: Versioned package and checkpoint identity.
     """
     return _versioned_artifact_identity("meanaudio_16k", meanaudio_artifact_digest(checkpoint))
+
+
+def _pupujepa_artifact_identity(checkpoint: str) -> str:
+    """Return the pinned source and teacher-checkpoint identity.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :returns: Versioned source and checkpoint identity.
+    """
+    return _versioned_artifact_identity("pupujepa_tiny", pupujepa_artifact_digest(checkpoint))
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -621,6 +647,19 @@ def _load_meanaudio_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -
     )
 
 
+def _load_pupujepa_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load PupuJEPA through the registry's uniform factory signature.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :param config: Run config supplying the device.
+    :returns: Frozen PupuJEPA Tiny encoder over source audio.
+    """
+    return load_pupujepa_audio_encoder(
+        checkpoint,
+        device=_resolve_torch_device(config.device),
+    )
+
+
 def _load_param_shift_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Build the re-render shifter through the registry's uniform factory signature.
 
@@ -811,6 +850,20 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_m2l_spec_encoder,
         encode_column=_encode_m2l_column,
         resolve_artifact_identity=_m2l_artifact_identity,
+    ),
+    "pupujepa_tiny": EmbeddingSpec(
+        name="pupujepa_tiny",
+        column=PUPUJEPA_TINY_FIELD,
+        default_checkpoint=DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{PUPUJEPA_TINY_FIELD}_vec",
+            vector_dim=PUPUJEPA_EMBEDDING_DIM,
+        ),
+        load_encoder=_load_pupujepa_spec_encoder,
+        encode_column=encode_pupujepa_column,
+        resolve_artifact_identity=_pupujepa_artifact_identity,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",

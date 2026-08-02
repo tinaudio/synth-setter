@@ -1,0 +1,18 @@
+# @package _global_
+
+# Online PupuJEPA Tiny conditioning pools frozen teacher states from waveforms.
+defaults:
+  - override /model/encoder: pupujepa_online
+
+model:
+  conditioning: audio
+  encoder:
+    backbone:
+      checkpoint: spellbrush/PupuJEPA
+      revision: 2ba230e41440c5b450a8dc8ad5d4a3cc9930f01d
+  encoder_output_dim: ${model.encoder.out_dim}
+  vector_field:
+    conditioning_dim: ${model.encoder.out_dim}
+
+datamodule:
+  conditioning: audio

@@ -1129,16 +1129,17 @@ invocation augments one finalized Lance dataset without modifying finalize-owned
 dataset cards or completion markers. It writes global vector columns for `clap`
 (LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
 dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, `matpac_plus`,
-and `meanaudio_16k`) stored as fixed-shape tensors. All are derived from the audio column and
-selectable via `embeddings=` (the selectable set is
+`meanaudio_16k`, and `pupujepa_tiny`) stored as fixed-shape tensors. All are
+derived from the audio column and selectable via `embeddings=` (the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
 are each loaded and written in their own sequential pass). SAME-S and SAME-L
 use Stable Audio 3's autoencoder factory with strict safetensors state loading;
 local directories, R2 mirrors, and HuggingFace repo IDs retain the same
 checkpoint-resolution behavior. Each sequence embedding also writes a mean-pooled
 `FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`,
-`matpac_plus_vec`, or `meanaudio_16k_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`, and the
-selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
+`matpac_plus_vec`, `meanaudio_16k_vec`, or `pupujepa_tiny_vec`); when
+`build_index=true`, IVF_PQ indexes `clap`, `ssondo`, and the selected companion
+columns for `nearest=` search. S-SONDO audio is downmixed,
 resampled to 32 kHz, and right-padded to its 10-second input window; longer
 clips fail instead of silently losing a partial tail. Its PyPI runtime is pinned
 to `ssondo==0.3.1`, and the MIT checkpoint is pinned by Hugging Face revision
@@ -1193,6 +1194,14 @@ existing `EmbeddingPool`. The 20-wide mean-pooled companion uses four PQ
 sub-vectors. MeanAudio's repository and Hugging Face card declare MIT licensing,
 while its imported EDM2 VAE utility carries CC BY-NC-SA 4.0; synth-setter accepts
 this integration for research/non-commercial use under those upstream terms.
+
+`pupujepa_tiny` uses one shared Torch implementation for offline augmentation
+and online waveform conditioning. It loads only the pinned checkpoint's patch
+embed and frozen teacher, produces a 1,536-wide 25 Hz sequence, and runs in a
+solo bounded-batch pass. The Hugging Face revision, frontend, output geometry,
+and `conditioning=pupujepa_tiny` /
+`conditioning=pupujepa_tiny_online` profiles are documented in
+[PupuJEPA Tiny audio embeddings](../reference/pupujepa-embeddings.md).
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,

@@ -16,7 +16,7 @@ docs:
     description: uv sync command surface, relock cadence, Linux resync flip
     sources:
       - pattern: "pyproject.toml"
-        covers: "MATPAC++ and MeanAudio runtime dependencies."
+        covers: "Pinned embedding-model runtime dependencies."
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
@@ -35,6 +35,20 @@ docs:
         covers: "Four-second MATPAC++ generic conditioning profile"
       - pattern: "pyproject.toml"
         covers: "The commit-pinned `tinymu` runtime dependency"
+
+  - doc: docs/reference/pupujepa-embeddings.md
+    description: PupuJEPA Tiny encoder interface
+    sources:
+      - pattern: "src/synth_setter/pupujepa.py"
+        covers: "Pinned artifact identity and frame geometry"
+      - pattern: "src/synth_setter/models/components/pupujepa_encoder.py"
+        covers: "Shared Torch frontend and frozen teacher"
+      - pattern: "src/synth_setter/pipeline/data/pupujepa.py"
+        covers: "Bounded offline Lance adapter"
+      - pattern: "src/synth_setter/configs/conditioning/pupujepa_tiny*.yaml"
+        covers: "Cached and online conditioning profiles"
+      - pattern: "pyproject.toml"
+        covers: "Exact timm runtime pin"
 
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference

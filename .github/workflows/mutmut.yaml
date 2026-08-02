@@ -93,6 +93,9 @@ jobs:
           - name: pipeline-meanaudio
             patterns:
               - synth_setter.pipeline.data.meanaudio.*
+          - name: pipeline-pupujepa
+            patterns:
+              - synth_setter.pipeline.data.pupujepa.*
           - name: ci-scripts
             patterns:
               - scripts.ci.*
