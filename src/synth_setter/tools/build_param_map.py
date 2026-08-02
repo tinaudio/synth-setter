@@ -671,6 +671,7 @@ def dump_dawdreamer(
     dawdreamer = import_module("dawdreamer")
     engine = dawdreamer.RenderEngine(INTROSPECTION_SAMPLE_RATE, INTROSPECTION_BLOCK_SIZE)
     loaded = engine.make_plugin_processor("synth", str(plugin.resolve()))
+    # DawDreamer processes restored preset state only after the plugin enters an active graph.
     engine.load_graph([(loaded, [])])
     loaded.load_vst3_preset(str(preset.resolve()))
     settle_dawdreamer_preset(

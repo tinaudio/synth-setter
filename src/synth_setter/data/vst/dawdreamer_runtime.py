@@ -10,7 +10,7 @@ from typing import Protocol
 
 from synth_setter.renderer_backend import RendererBackend as RendererBackend
 
-# Surge publishes some preset-dependent identities several audio callbacks after restore.
+# Compatibility window measured against Surge identity and Cardinal audio-thread restoration.
 _PRESET_SETTLE_CALLBACKS = 8
 _SUPPORTED_PYTHON_MINOR = (3, 12)
 _SUPPORTED_TARGETS = {
