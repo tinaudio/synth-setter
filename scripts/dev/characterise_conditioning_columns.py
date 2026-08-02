@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -326,6 +327,20 @@ def matpac_band_views(values: FloatArray, band_width: int = MATPAC_BAND_WIDTH) -
     return list(np.split(values, values.shape[1] // band_width, axis=1))
 
 
+def _has_nested_nulls(array: pa.Array) -> bool:
+    """Return whether an Arrow tensor/list contains row or child nulls.
+
+    :param array: Arrow extension or nested-list row batch.
+    :returns: Whether any storage level contains nulls.
+    """
+    current = array.storage if isinstance(array, pa.ExtensionArray) else array
+    while pa.types.is_fixed_size_list(current.type):
+        if current.null_count:
+            return True
+        current = current.values
+    return bool(current.null_count)
+
+
 def _validate_stored_shape(array: pa.Array, shape: tuple[int, ...]) -> None:
     """Reject Arrow tensors whose structured shape differs from the profile.
 
@@ -369,8 +384,8 @@ def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> FloatArray:
     :returns: Dense NumPy rows.
     :raises ValueError: The column contains null rows.
     """
-    if array.null_count:
-        raise ValueError("conditioning columns must not contain null rows")
+    if _has_nested_nulls(array):
+        raise ValueError("conditioning columns must not contain null values")
     _validate_stored_shape(array, shape)
     to_tensor = getattr(array, "to_numpy_ndarray", None)
     if callable(to_tensor):
@@ -497,7 +512,7 @@ def _analyse_column(
 
 def analyse_dataset(
     dataset_uri: str,
-    columns: dict[str, tuple[int, ...]],
+    columns: Mapping[str, tuple[int, ...]],
     *,
     row_limit: int,
     batch_size: int,
@@ -519,7 +534,7 @@ def analyse_dataset(
     return results
 
 
-def render_markdown(results: dict[str, ColumnStatistics], dataset_uri: str) -> str:
+def render_markdown(results: Mapping[str, ColumnStatistics], dataset_uri: str) -> str:
     """Render statistics as a markdown table.
 
     :param results: Statistics keyed by report row name.

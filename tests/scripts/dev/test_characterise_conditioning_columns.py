@@ -111,6 +111,22 @@ def test_matpac_band_views_with_zero_band_width_raises_value_error() -> None:
         matpac_band_views(values, band_width=0)
 
 
+def test_analyse_dataset_tensor_child_null_raises(tmp_path: Path) -> None:
+    """A tensor child null cannot silently enter statistics as zero.
+
+    :param tmp_path: Directory holding the child-null Lance fixture.
+    """
+    primitive = pa.array([1.0, None, 3.0, 4.0], type=pa.float32())
+    storage = pa.FixedSizeListArray.from_arrays(primitive, 2)
+    tensor_type = pa.fixed_shape_tensor(pa.float32(), [2])
+    values = pa.ExtensionArray.from_storage(tensor_type, storage)
+    dataset_path = tmp_path / "child-null.lance"
+    lance.write_dataset(pa.table({"vector": values}), dataset_path)
+
+    with pytest.raises(RuntimeError, match="failed to scan conditioning column"):
+        analyse_dataset(str(dataset_path), {"vector": (2,)}, row_limit=2, batch_size=1)
+
+
 def test_analyse_dataset_mismatched_tensor_shape_raises(tmp_path: Path) -> None:
     """A stored tensor cannot be regrouped into a different configured shape.
 
