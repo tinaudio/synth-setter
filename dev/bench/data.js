@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785660535520,
+  "lastUpdate": 1785660537860,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -23058,6 +23058,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.773413968199998,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92e7e623e0141270f331b4b9962037a208827859",
+          "message": "internal-feat(training): add PupuJEPA conditioning (#2792)\n\nExpose the pinned PupuJEPA Tiny teacher through add_embeddings and\nboth cached and online conditioning profiles. Share one float32 Torch\nfrontend so stored and live sequences remain aligned, and preserve\nMATPAC resume identity across the required timm upgrade.\n\nFixes #2789",
+          "timestamp": "2026-08-01T23:23:34-07:00",
+          "tree_id": "cb828cb8fe3b72f25d3774cfdbf6fac6289145bd",
+          "url": "https://github.com/tinaudio/synth-setter/commit/92e7e623e0141270f331b4b9962037a208827859"
+        },
+        "date": 1785660537314,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.0111083984375,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.7599618832767,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.0819874033331871,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.004075586795806885,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.209873676300049,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.5727995083,
             "unit": "seconds"
           }
         ]
