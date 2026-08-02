@@ -224,6 +224,30 @@ def test_datamodule_default_num_params_matches_spec_encoded_width() -> None:
     )
 
 
+def test_datamodule_positive_workers_persist_by_default() -> None:
+    """Worker processes stay alive between epochs unless explicitly disabled."""
+    datamodule = TorchSynthDataModule(num_workers=1)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is True
+
+
+def test_datamodule_persistent_workers_false_disables_persistence() -> None:
+    """An explicit false option keeps positive-count workers nonpersistent."""
+    datamodule = TorchSynthDataModule(num_workers=1, persistent_workers=False)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is False
+
+
+def test_datamodule_zero_workers_disables_persistence_safely() -> None:
+    """The persistent default remains valid when loading in the main process."""
+    datamodule = TorchSynthDataModule(num_workers=0)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is False
+
+
 def test_datamodule_test_dataloader_yields_finite_batch() -> None:
     """``setup('test')`` builds the test split and ``test_dataloader`` yields a finite batch."""
     datamodule = TorchSynthDataModule(
@@ -268,6 +292,22 @@ def test_datamodule_train_and_validation_loaders_use_independent_worker_counts()
 
     assert datamodule.train_dataloader().num_workers == 2
     assert datamodule.val_dataloader().num_workers == 0
+
+
+def test_datamodule_zero_validation_workers_disable_persistence() -> None:
+    """In-process validation remains compatible with persistent training workers."""
+    datamodule = TorchSynthDataModule(num_workers=2, val_num_workers=0)
+    datamodule.val = TorchSynthDataset(1, 456, **_RENDER_KWARGS)
+
+    assert datamodule.val_dataloader().persistent_workers is False
+
+
+def test_datamodule_positive_validation_workers_persist_by_default() -> None:
+    """Explicit validation workers use the configured persistence behavior."""
+    datamodule = TorchSynthDataModule(num_workers=0, val_num_workers=1)
+    datamodule.val = TorchSynthDataset(1, 456, **_RENDER_KWARGS)
+
+    assert datamodule.val_dataloader().persistent_workers is True
 
 
 def test_datamodule_validation_workers_default_to_zero() -> None:

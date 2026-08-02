@@ -1,8 +1,9 @@
-# PupuJEPA Tiny audio embeddings
+# PupuJEPA audio embeddings
 
-`synth-setter-add-embeddings` exposes the frozen PupuJEPA Tiny teacher as
-`embeddings=[pupujepa_tiny]`. Offline augmentation and online waveform conditioning both use
-`PupuJepaAudioEncoder`; the predictor, student, masking, and training runtime are not included.
+`synth-setter-add-embeddings` exposes the frozen PupuJEPA Tiny and Large teachers as
+`embeddings=[pupujepa_tiny]` and `embeddings=[pupujepa_large]`. Offline augmentation and online
+waveform conditioning both use `PupuJepaAudioEncoder`; the predictor, student, masking, and
+training runtime are not included.
 
 ## Provenance and identity
 
@@ -13,14 +14,16 @@ The inference subset is adapted from MIT-licensed
 [`spellbrush/PupuJEPA`](https://huggingface.co/spellbrush/PupuJEPA) revision
 `2ba230e41440c5b450a8dc8ad5d4a3cc9930f01d`:
 
-- `pupujepaV2_25hz_tiny/args.json`
-- `pupujepaV2_25hz_tiny/checkpoint/step-0500000_loss-0.125064/model.safetensors`
+| Variant | Args                              | Weights                                                                         | Selected-file digest                                               |
+| ------- | --------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Tiny    | `pupujepaV2_25hz_tiny/args.json`  | `pupujepaV2_25hz_tiny/checkpoint/step-0500000_loss-0.125064/model.safetensors`  | `7bfd3e04fce4131496362a69eed5b478980181668e918adfaaef4e602bbceb2a` |
+| Large   | `pupujepaV2_25hz_large/args.json` | `pupujepaV2_25hz_large/checkpoint/step-0500000_loss-0.176985/model.safetensors` | `9e16f31ee25371dcb0e7e97264dfeab2d9318f55f6939504d22fc66e29c3fc84` |
 
-Only those files are materialized through `huggingface_hub`; no remote code is loaded. Their tree
-digest is pinned to `7bfd3e04fce4131496362a69eed5b478980181668e918adfaaef4e602bbceb2a`.
-The configuration is validated before safetensors loading, and the patch embed plus teacher key set
-is loaded strictly. The implementation pins `timm==1.0.28`, tested against both PupuJEPA's
-EVA/RoPE teacher and the existing TinyMU MATPAC path.
+Only the selected variant's two files are materialized through `huggingface_hub`; no remote code
+is loaded. Digests frame snapshot-relative paths and contents while ignoring files from another
+variant in the shared snapshot. Configuration is validated before safetensors loading, and the
+patch embed plus teacher key set is loaded strictly. The implementation pins `timm==1.0.28`,
+tested against PupuJEPA's EVA/RoPE teachers and the existing TinyMU MATPAC path.
 
 ## Representation contract
 
@@ -30,23 +33,31 @@ and 128 default librosa mel filters over 0–12 kHz. Magnitude is clamped to `1e
 scaled, then normalized by mean `-4.089994845986366` and standard deviation
 `2.0242277159094813`.
 
-The teacher patches four mel frames by 16 frequency bins. Its 192-dimensional states are grouped
-across eight frequency patches, yielding `(batch, 1536, time_patches)`. Four-second audio produces
-400 mel frames and 100 time patches. Other nonempty lengths are accepted when they contain at
-least one complete four-frame patch. Values, rank, orientation, and frame geometry are validated
-before Lance persistence. `pupujepa_tiny_vec` stores the temporal mean for the registry's cosine
-IVF_PQ policy; the encoder runs alone (`co_resident=False`) and uses bounded 16-row chunks.
+Both teachers patch four mel frames by 16 frequency bins. Four-second audio produces 400 mel
+frames and 100 time patches. Other nonempty lengths are accepted when they contain at least one
+complete four-frame patch.
+
+| Variant | Teacher                        | Sequence shape                | Mean-pooled vector   | Offline batch cap |
+| ------- | ------------------------------ | ----------------------------- | -------------------- | ----------------- |
+| Tiny    | width 192, depth 12, 3 heads   | `(batch, 1536, time_patches)` | `pupujepa_tiny_vec`  | 16                |
+| Large   | width 1024, depth 24, 16 heads | `(batch, 8192, time_patches)` | `pupujepa_large_vec` | 1                 |
+
+Values, rank, orientation, and frame geometry are validated before Lance persistence. Both vectors
+use the registry's cosine IVF_PQ policy, and both encoders run alone (`co_resident=False`). Large's
+one-row cap limits attention memory. Its monolithic checkpoint is about 3.13 GiB, the loaded
+teacher subset is about 1.50 GiB in float32, and one four-second sequence occupies about 3.125 MiB
+before Lance overhead.
 
 ## Usage
 
 ```bash
 synth-setter-add-embeddings \
   lance_uri=/path/to/dataset/train.lance \
-  embeddings=[pupujepa_tiny]
+  embeddings=[pupujepa_tiny,pupujepa_large]
 ```
 
-Use `conditioning=pupujepa_tiny` for cached four-second sequences. Use
-`conditioning=pupujepa_tiny_online` to resample waveforms and pool the frozen teacher sequence at
-training or evaluation time. Both profiles use the existing `EmbeddingPool` head; the online head
-accepts up to 256 time patches, matching the checkpoint's 1,024-frame training window. The frozen
-teacher runs in float32 even when the surrounding trainer uses mixed precision.
+Use `conditioning=pupujepa_tiny` or `conditioning=pupujepa_large` for cached four-second
+sequences. Use the corresponding `_online` profile to resample waveforms and pool the frozen
+teacher sequence at training or evaluation time. All profiles use the existing `EmbeddingPool`
+head; online heads accept up to 256 time patches, matching the checkpoint's 1,024-frame training
+window. Frozen teachers run in float32 even when the surrounding trainer uses mixed precision.

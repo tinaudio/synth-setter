@@ -49,6 +49,7 @@ from synth_setter.data.vst.shapes import (
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
+    PUPUJEPA_LARGE_FIELD,
     PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
@@ -72,11 +73,13 @@ from synth_setter.pipeline.data.meanaudio import (
 from synth_setter.pipeline.data.pupujepa import (
     PupuJepaEncodeFn,
     encode_pupujepa_column,
+    encode_pupujepa_large_column,
     load_pupujepa_audio_encoder,
 )
 from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
-    PUPUJEPA_EMBEDDING_DIM,
+    DEFAULT_PUPUJEPA_CHECKPOINT,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_EMBEDDING_DIM,
     pupujepa_artifact_digest,
 )
 from synth_setter.pipeline.data.param_shift import (
@@ -390,13 +393,26 @@ def _meanaudio_artifact_identity(checkpoint: str) -> str:
     return _versioned_artifact_identity("meanaudio_16k", meanaudio_artifact_digest(checkpoint))
 
 
-def _pupujepa_artifact_identity(checkpoint: str) -> str:
+def _pupujepa_tiny_artifact_identity(checkpoint: str) -> str:
     """Return the pinned source and teacher-checkpoint identity.
 
     :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
     :returns: Versioned source and checkpoint identity.
     """
-    return _versioned_artifact_identity("pupujepa_tiny", pupujepa_artifact_digest(checkpoint))
+    return _versioned_artifact_identity(
+        "pupujepa_tiny", pupujepa_artifact_digest(checkpoint, "tiny")
+    )
+
+
+def _pupujepa_large_artifact_identity(checkpoint: str) -> str:
+    """Return the pinned source and Large teacher-checkpoint identity.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :returns: Versioned source and checkpoint identity.
+    """
+    return _versioned_artifact_identity(
+        "pupujepa_large", pupujepa_artifact_digest(checkpoint, "large")
+    )
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -647,7 +663,9 @@ def _load_meanaudio_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -
     )
 
 
-def _load_pupujepa_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+def _load_pupujepa_tiny_spec_encoder(
+    checkpoint: str, config: AddEmbeddingsConfig
+) -> Encoder:
     """Load PupuJEPA through the registry's uniform factory signature.
 
     :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
@@ -657,6 +675,23 @@ def _load_pupujepa_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) ->
     return load_pupujepa_audio_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
+        variant="tiny",
+    )
+
+
+def _load_pupujepa_large_spec_encoder(
+    checkpoint: str, config: AddEmbeddingsConfig
+) -> Encoder:
+    """Load PupuJEPA Large through the registry factory signature.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :param config: Run config supplying the device.
+    :returns: Frozen PupuJEPA Large encoder over source audio.
+    """
+    return load_pupujepa_audio_encoder(
+        checkpoint,
+        device=_resolve_torch_device(config.device),
+        variant="large",
     )
 
 
@@ -854,16 +889,30 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "pupujepa_tiny": EmbeddingSpec(
         name="pupujepa_tiny",
         column=PUPUJEPA_TINY_FIELD,
-        default_checkpoint=DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+        default_checkpoint=DEFAULT_PUPUJEPA_CHECKPOINT,
         co_resident=False,
         index=IndexSpec(
             pool="mean",
             vector_column=f"{PUPUJEPA_TINY_FIELD}_vec",
-            vector_dim=PUPUJEPA_EMBEDDING_DIM,
+            vector_dim=PUPUJEPA_TINY_EMBEDDING_DIM,
         ),
-        load_encoder=_load_pupujepa_spec_encoder,
+        load_encoder=_load_pupujepa_tiny_spec_encoder,
         encode_column=encode_pupujepa_column,
-        resolve_artifact_identity=_pupujepa_artifact_identity,
+        resolve_artifact_identity=_pupujepa_tiny_artifact_identity,
+    ),
+    "pupujepa_large": EmbeddingSpec(
+        name="pupujepa_large",
+        column=PUPUJEPA_LARGE_FIELD,
+        default_checkpoint=DEFAULT_PUPUJEPA_CHECKPOINT,
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{PUPUJEPA_LARGE_FIELD}_vec",
+            vector_dim=PUPUJEPA_LARGE_EMBEDDING_DIM,
+        ),
+        load_encoder=_load_pupujepa_large_spec_encoder,
+        encode_column=encode_pupujepa_large_column,
+        resolve_artifact_identity=_pupujepa_large_artifact_identity,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",

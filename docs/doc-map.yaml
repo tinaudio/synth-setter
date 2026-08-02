@@ -37,7 +37,7 @@ docs:
         covers: "The commit-pinned `tinymu` runtime dependency"
 
   - doc: docs/reference/pupujepa-embeddings.md
-    description: PupuJEPA Tiny encoder interface
+    description: PupuJEPA Tiny and Large encoder interface
     sources:
       - pattern: "src/synth_setter/pupujepa.py"
         covers: "Pinned artifact identity and frame geometry"
@@ -45,8 +45,8 @@ docs:
         covers: "Shared Torch frontend and frozen teacher"
       - pattern: "src/synth_setter/pipeline/data/pupujepa.py"
         covers: "Bounded offline Lance adapter"
-      - pattern: "src/synth_setter/configs/conditioning/pupujepa_tiny*.yaml"
-        covers: "Cached and online conditioning profiles"
+      - pattern: "src/synth_setter/configs/conditioning/pupujepa_*.yaml"
+        covers: "PupuJEPA conditioning profiles"
       - pattern: "pyproject.toml"
         covers: "Exact timm runtime pin"
 

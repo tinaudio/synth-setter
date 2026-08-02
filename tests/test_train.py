@@ -352,25 +352,30 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert np.isfinite(logged_values).all()
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
     cfg_torchsynth_train: DictConfig,
 ) -> None:
-    """Train two epochs with per-epoch resampling through the real entrypoint.
+    """Train two epochs with a persistent render worker through the real entrypoint.
 
-    Pins that Lightning's fit loop accepts the fresh-index train sampler across
-    epoch boundaries (one ``iter()`` per epoch on the same loader).
+    Pins that Lightning's fit loop accepts the fresh-index train sampler across epoch boundaries
+    while reusing the same worker process.
 
     :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
     """
     HydraConfig().set_config(cfg_torchsynth_train)
     with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.datamodule.num_workers = 1
         cfg_torchsynth_train.datamodule.resample_train_per_epoch = True
         cfg_torchsynth_train.trainer.fast_dev_run = False
         cfg_torchsynth_train.trainer.max_epochs = 2
-    metric_dict, _ = train(cfg_torchsynth_train)
+    metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
     assert torch.isfinite(metric_dict["train/loss"])
+    assert object_dict["datamodule"].train_dataloader().persistent_workers is True
 
 
 @pytest.mark.gpu
@@ -2248,10 +2253,10 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
-def _assert_model_predictions_depend_on_cached_conditioning(
+def _assert_model_predictions_depend_on_conditioning(
     object_dict: dict[str, Any],
 ) -> None:
-    """Assert the trained model keeps a gradient path from cached vectors.
+    """Assert the trained model keeps a gradient path from conditioning.
 
     :param object_dict: Objects returned by the train entrypoint.
     """
@@ -2259,7 +2264,7 @@ def _assert_model_predictions_depend_on_cached_conditioning(
     datamodule = object_dict["datamodule"]
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
-    conditioning = batch["conditioning"].detach().requires_grad_(True)
+    conditioning = batch[model._conditioning_key].detach().requires_grad_(True)
     predictions = model._sample(
         conditioning,
         torch.zeros_like(batch["params"]),
@@ -2271,6 +2276,83 @@ def _assert_model_predictions_depend_on_cached_conditioning(
 
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
+
+
+def _assert_model_predictions_change_with_conditioning(object_dict: dict[str, Any]) -> None:
+    """Assert conditioning rows alter predictions under identical noise.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch[model._conditioning_key]
+    noise = torch.zeros_like(batch["params"])
+
+    predictions = model._sample(conditioning, noise, steps=1, cfg_strength=1.0)
+    swapped_predictions = model._sample(
+        conditioning.roll(1, dims=0),
+        noise,
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    assert torch.isfinite(predictions).all()
+    assert torch.isfinite(swapped_predictions).all()
+    assert not torch.allclose(predictions, swapped_predictions, equal_nan=True)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_pupujepa_large_cached_conditioning_returns_finite_loss(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train one real step from cached PupuJEPA Large sequences.
+
+    :param tmp_path: Training output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(
+        surge_xt_embedding_smoke_datasets, "pupujepa_large"
+    )
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="pupujepa_large",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_depend_on_conditioning(object_dict)
+
+
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_pupujepa_large_online_conditioning_returns_finite_loss(
+    cfg_torchsynth_pupujepa_large_online_train: DictConfig,
+) -> None:
+    """Train one real-weight step through online PupuJEPA Large conditioning.
+
+    :param cfg_torchsynth_pupujepa_large_online_train: Two-row production-path config.
+    """
+    cfg = cfg_torchsynth_pupujepa_large_online_train
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_change_with_conditioning(object_dict)
 
 
 @pytest.mark.requires_vst
@@ -2351,7 +2433,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
         )
         assert_finite_train_loss(metric_dict)
         if conditioning in {"ssondo", "meanaudio_16k"}:
-            _assert_model_predictions_depend_on_cached_conditioning(object_dict)
+            _assert_model_predictions_depend_on_conditioning(object_dict)
         if conditioning == "ssondo":
             _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 

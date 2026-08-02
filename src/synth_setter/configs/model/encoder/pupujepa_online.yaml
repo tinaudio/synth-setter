@@ -5,9 +5,10 @@ backbone:
   sample_rate: ${datamodule.sample_rate}
   checkpoint: ???
   revision: ???
+  variant: ???
 head:
   _target_: synth_setter.models.components.embed_pool.EmbeddingPool
-  embed_dim: 1536
+  embed_dim: ???
   d_model: ${model.encoder.out_dim}
   num_heads: ${model.encoder_num_heads}
   pos_enc: sin

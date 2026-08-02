@@ -1,4 +1,4 @@
-"""Frozen PupuJEPA Tiny teacher from waveform to frequency-concatenated sequences.
+"""Frozen PupuJEPA teachers from waveform to frequency-concatenated sequences.
 
 The architecture is adapted from PupuJEPA commit
 ``54a621e9f879be7659d81b6a3c493bba855cc85f`` under the MIT license retained in
@@ -19,10 +19,12 @@ from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
 
 from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    DEFAULT_PUPUJEPA_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
+    PUPUJEPA_CHECKPOINT_SPECS,
     PUPUJEPA_TINY_CONFIG,
     PupuJepaConfig,
+    PupuJepaVariant,
     load_pupujepa_config,
     pupujepa_checkpoint_files,
     pupujepa_num_time_patches,
@@ -30,6 +32,7 @@ from synth_setter.pupujepa import (
 )
 
 _BATCH_AUDIO = "batch ... samples"
+_BATCH_MONO = "batch samples"
 _BATCH_MEL = "batch 1 frames mel"
 _BATCH_PATCHES = "batch patches hidden"
 _BATCH_SEQUENCE = "batch embedding time_patches"
@@ -259,17 +262,32 @@ class PupuJepaAudioEncoder(nn.Module):
         *,
         sample_rate: int,
         config: PupuJepaConfig = PUPUJEPA_TINY_CONFIG,
+        max_batch_size: int | None = None,
     ) -> None:
         """Build a frozen teacher for waveforms arriving at ``sample_rate``.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param config: Explicit PupuJEPA frontend and teacher geometry.
-        :raises ValueError: The source rate is non-positive.
+        :param max_batch_size: Maximum waveforms per teacher forward; released variant cap when
+            omitted.
+        :raises ValueError: The source rate or batch cap is non-positive.
         """
         super().__init__()
         if sample_rate < 1:
             raise ValueError(f"PupuJEPA needs a positive sample_rate, got {sample_rate}")
+        if max_batch_size is None:
+            max_batch_size = next(
+                (
+                    spec.encode_max_batch
+                    for spec in PUPUJEPA_CHECKPOINT_SPECS.values()
+                    if spec.config == config
+                ),
+                PUPUJEPA_CHECKPOINT_SPECS["tiny"].encode_max_batch,
+            )
+        if max_batch_size < 1:
+            raise ValueError(f"PupuJEPA needs a positive max_batch_size, got {max_batch_size}")
         self.sample_rate = sample_rate
+        self.max_batch_size = max_batch_size
         self.config = config
         self.out_dim = config.output_dim
         self.frontend = PupuJepaMelFrontend(config)
@@ -283,26 +301,35 @@ class PupuJepaAudioEncoder(nn.Module):
         cls,
         *,
         sample_rate: int,
-        checkpoint: str = DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+        checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
         revision: str = PUPUJEPA_CHECKPOINT_REVISION,
+        variant: PupuJepaVariant = "tiny",
     ) -> PupuJepaAudioEncoder:
         """Load only the patch embed and teacher from the pinned safetensors file.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param checkpoint: Canonical Hugging Face repo id or local checkpoint directory.
         :param revision: Immutable Hugging Face commit required for remote loading.
+        :param variant: Released teacher size to load.
         :returns: Frozen eval-mode PupuJEPA audio encoder.
         :raises RuntimeError: Teacher state is missing, unexpected, or shape-incompatible.
-        :raises ValueError: Checkpoint geometry differs from PupuJEPA Tiny.
+        :raises ValueError: Checkpoint geometry differs from the selected variant.
         """
         from safetensors import safe_open
 
-        checkpoint_dir = resolve_pupujepa_checkpoint(checkpoint, revision)
-        config = load_pupujepa_config(checkpoint_dir)
-        if config != PUPUJEPA_TINY_CONFIG:
-            raise ValueError(f"checkpoint is not the pinned PupuJEPA Tiny architecture: {config}")
-        encoder = cls(sample_rate=sample_rate, config=config)
-        _, weights_path = pupujepa_checkpoint_files(checkpoint_dir)
+        checkpoint_dir = resolve_pupujepa_checkpoint(checkpoint, revision, variant)
+        config = load_pupujepa_config(checkpoint_dir, variant)
+        expected_config = PUPUJEPA_CHECKPOINT_SPECS[variant].config
+        if config != expected_config:
+            raise ValueError(
+                f"checkpoint is not the pinned PupuJEPA {variant} architecture: {config}"
+            )
+        encoder = cls(
+            sample_rate=sample_rate,
+            config=config,
+            max_batch_size=PUPUJEPA_CHECKPOINT_SPECS[variant].encode_max_batch,
+        )
+        _, weights_path = pupujepa_checkpoint_files(checkpoint_dir, variant)
         with safe_open(weights_path, framework="pt", device="cpu") as checkpoint_file:
             state = {
                 key: checkpoint_file.get_tensor(key)
@@ -327,6 +354,36 @@ class PupuJepaAudioEncoder(nn.Module):
         return self
 
     @jaxtyped(typechecker=beartype)
+    def _validate_and_downmix(
+        self, audio: Float[Tensor, _BATCH_AUDIO]
+    ) -> Float[Tensor, _BATCH_MONO]:
+        """Validate a waveform batch and return mono audio.
+
+        :param audio: Waveforms shaped ``(B, T)`` or ``(B, C, T)``.
+        :returns: Mono waveforms shaped ``(B, T)``.
+        :raises ValueError: Shape or amplitude violates the teacher contract.
+        """
+        if len(audio) < 1:
+            raise ValueError("PupuJEPA expects a non-empty batch")
+        if audio.ndim not in (2, 3):
+            raise ValueError(
+                f"PupuJEPA audio must have shape (B, T) or (B, C, T), got {tuple(audio.shape)}"
+            )
+        if audio.shape[-1] < 1:
+            raise ValueError("PupuJEPA requires positive num_samples, got 0")
+        if not torch.isfinite(audio).all():
+            raise ValueError("PupuJEPA input audio contains non-finite values")
+        if audio.ndim == 3:
+            if audio.shape[1] not in (1, 2):
+                raise ValueError(f"PupuJEPA expects 1 or 2 channels, got {audio.shape[1]}")
+            if audio.amin() < -1.0 or audio.amax() > 1.0:
+                raise ValueError("PupuJEPA input audio channels must lie within [-1, 1]")
+            audio = audio.mean(dim=1)
+        if audio.amin() < -1.0 or audio.amax() > 1.0:
+            raise ValueError("PupuJEPA input audio must lie within [-1, 1] after downmixing")
+        return audio
+
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
         audio: Float[Tensor, _BATCH_AUDIO],
@@ -342,14 +399,7 @@ class PupuJepaAudioEncoder(nn.Module):
         source_rate = self.sample_rate if sample_rate is None else sample_rate
         if source_rate < 1:
             raise ValueError(f"PupuJEPA needs a positive sample_rate, got {source_rate}")
-        if len(audio) < 1:
-            raise ValueError("PupuJEPA expects a non-empty batch")
-        if audio.ndim == 3:
-            audio = audio.mean(dim=1)
-        elif audio.ndim != 2:
-            raise ValueError(
-                f"PupuJEPA audio must have shape (B, T) or (B, C, T), got {tuple(audio.shape)}"
-            )
+        audio = self._validate_and_downmix(audio)
         expected_patches = pupujepa_num_time_patches(audio.shape[-1], source_rate, self.config)
         with torch.autocast(device_type=audio.device.type, enabled=False):
             waveform = audio.float()
@@ -359,7 +409,12 @@ class PupuJepaAudioEncoder(nn.Module):
                     source_rate,
                     self.config.sample_rate,
                 )
-            sequence = self.teacher_model(self.frontend(waveform))
+            sequence = torch.cat(
+                [
+                    self.teacher_model(self.frontend(chunk))
+                    for chunk in waveform.split(self.max_batch_size)
+                ]
+            )
         expected_shape = (len(audio), self.out_dim, expected_patches)
         if tuple(sequence.shape) != expected_shape:
             raise ValueError(
