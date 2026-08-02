@@ -26,6 +26,18 @@ docs:
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
 
+  - doc: docs/design/conditioning-column-statistics.md
+    description: Measured cached-conditioning scales and normalization recommendations
+    sources:
+      - pattern: "scripts/dev/characterise_conditioning_columns.py"
+        covers: "Streaming Lance statistics and markdown report generation"
+      - pattern: "src/synth_setter/configs/conditioning/*.yaml"
+        covers: "Materialized conditioning-column names and channel-first shapes"
+      - pattern: "src/synth_setter/models/components/pretrained_encoder.py"
+        covers: "CLAP get_audio_features output path"
+      - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
+        covers: "T5Gemma float32 reproducibility rationale"
+
   - doc: docs/reference/matpac-plus-embeddings.md
     description: MATPAC encoder interface
     sources:
