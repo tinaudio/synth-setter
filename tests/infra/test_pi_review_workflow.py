@@ -179,5 +179,6 @@ def test_pi_review_workflow_pins_runtime_and_uploads_aftercare_audit(
     assert "sh==2.2.2" in install_command
     assert upload_step["if"] == "${{ always() }}"
     assert upload_inputs["path"] == ".agent-reviews/"
+    assert upload_inputs["include-hidden-files"] is True
     assert upload_inputs["if-no-files-found"] == "ignore"
     assert upload_inputs["retention-days"] == 7

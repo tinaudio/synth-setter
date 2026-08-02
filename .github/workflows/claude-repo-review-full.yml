@@ -85,5 +85,6 @@ jobs:
         with:
           name: pi-review-${{ github.run_id }}-${{ github.run_attempt }}
           path: .agent-reviews/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

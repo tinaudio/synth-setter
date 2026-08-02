@@ -429,6 +429,7 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
         _cwd=REPO_ROOT,
         _env={
             **os.environ,
+            "CI": "",
             "AFTERCARE_MARKER": str(marker),
             "MANIFEST_PATH_FILE": str(manifest_path_file),
             "PATH": f"{tmp_path}:{os.environ['PATH']}",

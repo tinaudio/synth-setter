@@ -726,7 +726,7 @@ docs:
     description: Workflow catalog, secrets table, concurrency gotchas
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "Pi review catalog, secrets, aftercare, and concurrency"
+        covers: "Pi review workflow"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
