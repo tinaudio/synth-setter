@@ -2292,7 +2292,9 @@ def _assert_model_predictions_change_with_conditioning(object_dict: dict[str, An
         cfg_strength=1.0,
     )
 
-    assert not torch.equal(predictions, swapped_predictions)
+    assert torch.isfinite(predictions).all()
+    assert torch.isfinite(swapped_predictions).all()
+    assert not torch.allclose(predictions, swapped_predictions, equal_nan=True)
 
 
 @pytest.mark.requires_vst
