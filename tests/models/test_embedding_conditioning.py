@@ -13,7 +13,7 @@ from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
-from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
+from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 
 _ModelFactory = Callable[[], VSTFeedForwardModule | VSTFlowMatchingModule]
 _BatchFactory = Callable[[], dict[str, torch.Tensor]]
@@ -47,14 +47,16 @@ class _TinyVectorField(torch.nn.Module):
         super().__init__()
         self.projection = torch.nn.Linear(7, 2)
 
-    def apply_dropout(self, conditioning: torch.Tensor, dropout_rate: float) -> torch.Tensor:
+    def apply_dropout(
+        self, conditioning: torch.Tensor, dropout_rate: float
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return conditioning unchanged for deterministic training.
 
         :param conditioning: Encoded conditioning vectors.
         :param dropout_rate: Unused classifier-free guidance dropout probability.
-        :returns: The unchanged vectors.
+        :returns: The unchanged vectors and an all-keep mask.
         """
-        return conditioning
+        return conditioning, torch.ones(conditioning.shape[0], dtype=torch.bool)
 
     def forward(
         self, params: torch.Tensor, time: torch.Tensor, conditioning: torch.Tensor
@@ -116,14 +118,14 @@ def _ff_embedding_batch() -> dict[str, torch.Tensor]:
     }
 
 
-def _tinymu_flow_module() -> VSTFlowMatchingModule:
-    """Build a tiny flow module over production-shaped TinyMU conditioning.
+def _matpac_plus_flow_module() -> VSTFlowMatchingModule:
+    """Build a tiny flow module over production-shaped MATPAC++ conditioning.
 
-    :returns: Flow module using TinyMU's embedding width and sequence length.
+    :returns: Flow module using MATPAC++'s embedding width and sequence length.
     """
     return VSTFlowMatchingModule(
         encoder=EmbeddingPool(
-            embed_dim=TINYMU_FRONTEND.embedding_dim,
+            embed_dim=MATPAC_PLUS_FRONTEND.embedding_dim,
             d_model=4,
             num_heads=1,
             max_seq_len=25,
@@ -133,18 +135,18 @@ def _tinymu_flow_module() -> VSTFlowMatchingModule:
         scheduler=None,  # pyright: ignore[reportArgumentType]
         num_params=2,
         conditioning=EmbeddingConditioningSpec(
-            column="tinymu", input_shape=(TINYMU_FRONTEND.embedding_dim, 25)
+            column="matpac_plus", input_shape=(MATPAC_PLUS_FRONTEND.embedding_dim, 25)
         ),
     )
 
 
-def _tinymu_flow_batch() -> dict[str, torch.Tensor]:
-    """Build one production-shaped TinyMU conditioning batch.
+def _matpac_plus_flow_batch() -> dict[str, torch.Tensor]:
+    """Build one production-shaped MATPAC++ conditioning batch.
 
-    :returns: Batch containing TinyMU conditioning, targets, and flow noise.
+    :returns: Batch containing MATPAC++ conditioning, targets, and flow noise.
     """
     return {
-        "conditioning": torch.randn(2, TINYMU_FRONTEND.embedding_dim, 25),
+        "conditioning": torch.randn(2, MATPAC_PLUS_FRONTEND.embedding_dim, 25),
         "noise": torch.randn(2, 2),
         "params": torch.randn(2, 2),
     }
@@ -167,9 +169,9 @@ _cached_embedding_arms = pytest.mark.parametrize(
     [
         (_flow_embedding_module, _flow_embedding_batch),
         (_ff_embedding_module, _ff_embedding_batch),
-        (_tinymu_flow_module, _tinymu_flow_batch),
+        (_matpac_plus_flow_module, _matpac_plus_flow_batch),
     ],
-    ids=["flow", "feed_forward", "tinymu_flow"],
+    ids=["flow", "feed_forward", "matpac_plus_flow"],
 )
 
 

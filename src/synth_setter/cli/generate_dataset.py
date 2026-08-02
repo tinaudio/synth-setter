@@ -1059,13 +1059,14 @@ def _worker_python_bootstrap_cmd() -> str:
     )
 
 
-def _build_worker_cmd() -> str:
+def _build_worker_cmd(*, worker_checkout_dir: str = _WORKER_REPO_ROOT) -> str:
     """Build the worker command around the launcher's uploaded canonical spec.
 
+    :param worker_checkout_dir: Repository checkout directory inside the worker.
     :returns: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
     parts = [
-        f"cd {shlex.quote(_WORKER_REPO_ROOT)}",
+        f"cd {shlex.quote(worker_checkout_dir)}",
         _worker_python_bootstrap_cmd(),
         "bash scripts/sync_worker_checkout.sh --python-ready",
         'if [[ "${SYNTH_SETTER_WORKER_PYTHON_RECREATED:-0}" == "1" && '
@@ -1217,7 +1218,7 @@ def main(cfg: DictConfig) -> None:
 
     sky_cfg = sky_cfg.model_copy(
         update={
-            "cmd": _build_worker_cmd(),
+            "cmd": _build_worker_cmd(worker_checkout_dir=sky_cfg.worker_checkout_dir),
             "job_name": sky_cfg.job_name or _smoke_job_name(spec),
             "extra_envs": {WORKER_SPEC_URI_ENV: spec_uri},
         }

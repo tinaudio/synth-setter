@@ -1,5 +1,7 @@
 defaults:
   - encoder: ast
+  # Off by default: the render-feedback term is opt-in per experiment (#2585).
+  - audio_loss: null
   - _self_
 
 _target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
@@ -49,9 +51,15 @@ vector_field:
   outer_residual: false
 
 num_params: ${param_spec_width:${synth.param_spec_name}}
+param_spec: ${synth.param_spec_name}
 
 # training
 cfg_dropout_rate: 0.1
+
+# sketch-control token conditioning; the `sketch=on` group fills the spec
+sketch_controls: null
+sketch_dropout_rate: 0.2
+all_conditioning_dropout_rate: 0.2
 
 rectified_sigma_min: 0.0
 

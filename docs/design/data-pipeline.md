@@ -1128,17 +1128,18 @@ endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 invocation augments one finalized Lance dataset without modifying finalize-owned
 dataset cards or completion markers. It writes global vector columns for `clap`
 (LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
-dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, and `tinymu`)
-stored as fixed-shape tensors. All are derived from the audio column and
+dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, `matpac_plus`,
+`pupujepa_tiny`, and `pupujepa_large`) stored as fixed-shape tensors. All are derived from the audio column and
 selectable via `embeddings=` (the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
 are each loaded and written in their own sequential pass). SAME-S and SAME-L
 use Stable Audio 3's autoencoder factory with strict safetensors state loading;
 local directories, R2 mirrors, and HuggingFace repo IDs retain the same
 checkpoint-resolution behavior. Each sequence embedding also writes a mean-pooled
-`FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`, or
-`tinymu_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`, and the
-selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
+`FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`,
+`matpac_plus_vec`, `pupujepa_tiny_vec`, or `pupujepa_large_vec`); when
+`build_index=true`, IVF_PQ indexes
+`clap`, `ssondo`, and the selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
 resampled to 32 kHz, and right-padded to its 10-second input window; longer
 clips fail instead of silently losing a partial tail. Its PyPI runtime is pinned
 to `ssondo==0.3.1`, and the MIT checkpoint is pinned by Hugging Face revision
@@ -1155,20 +1156,30 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 `sketch` is not a learned embedding: it extracts the Sketch2Sound-style
 loudness, spectral-centroid, and PESTO pitch tracks
 (`features/sketch_controls.py`) from `audio` on the mel frame grid and writes
-them as a `(NUM_SKETCH_CONTROLS, F)` tensor column plus a mean-pooled
-`sketch_ctrl_vec` companion for contour-similarity search. Its `IndexSpec`
+them as a `sketch` struct column (#2707) with `loudness`/`centroid`
+fixed-size-list children, a `pitch` fixed-shape-tensor child, and a
+frame-mean `vec` child indexed via its dotted path for contour-similarity
+search. The struct is an atomic write unit — refreshing one child means
+rewriting the whole column (requires Lance data storage 2.2). Its `IndexSpec`
 fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
 leaves `num_sub_vectors` null to let each spec's default apply.
 
-`tinymu` runs TinyMU's frozen MATPAC encoder through its public package API,
-installed from an exact Git commit in the normal heavy runtime. The pinned R2
-checkpoint is verified by SHA-256, and each generated Lance field records that
-immutable checkpoint digest for safe retry. The integration rejects incompatible model state,
-malformed audio, shape drift, and non-finite output. The measured preprocessing,
-sequence shape, cache identity, package boundary, and `conditioning=tinymu` profile are documented
-in [TinyMU audio embeddings](../reference/tinymu-embeddings.md).
+`matpac_plus` runs the frozen MATPAC++ encoder through TinyMU's public package
+API, installed from an exact Git commit in the normal heavy runtime. The pinned
+R2 checkpoint is verified by SHA-256, and each generated Lance field records
+that immutable checkpoint digest for safe retry. The integration rejects
+incompatible model state, malformed audio, shape drift, and non-finite output.
+The measured preprocessing, sequence shape, cache identity, package boundary,
+and `conditioning=matpac_plus` profile are documented in
+[MATPAC++ audio embeddings](../reference/matpac-plus-embeddings.md).
+
+`pupujepa_tiny` and `pupujepa_large` use one shared Torch implementation for offline
+augmentation and online waveform conditioning. Each loads only its pinned patch embed and frozen
+teacher, producing a 1,536- or 8,192-wide 25 Hz sequence in a solo bounded-batch pass. The Hugging
+Face revision, variant-specific digests, frontend, output geometry, and cached/online conditioning
+profiles are documented in [PupuJEPA audio embeddings](../reference/pupujepa-embeddings.md).
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,
@@ -1248,33 +1259,12 @@ class RenderConfig(BaseModel):
 
     synth: SynthSpec  # Param spec, rendering artifact, preset, and synth_version
     renderer_backend: RendererBackend
-    sample_rate: int
-    channels: int
-    velocity: int
-    signal_duration_seconds: float
-    min_loudness: float
-    audio_dtype: Literal["float16", "float32"] = "float16"
-    mel_spec_dtype: Literal["float16", "float32"] = "float32"
-    samples_per_render_batch: int = 32
-    samples_per_shard: int
-    sample_offset: int = 0      # split-local index of this shard's first row
-    attempts_per_sample: int = 100
-    max_retries: int = 0        # per-shard retry budget for transient renderer failures
-    parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
-    plugin_reload_cadence: Literal["once", "render"] = "once"  # per-shard load (#1999)
-    # Platform-aware default via Field(default_factory=...): "never" on Darwin
-    # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere
-    # (preserves historical per-render warm-up). An explicit
-    # gui_toggle_cadence="render" is still rejected on Darwin by a
-    # model_validator; "always_on" requires plugin_reload_cadence="once".
-    # Source of truth: _GuiToggleCadence / RenderConfig in pipeline/schemas/spec.py.
-    gui_toggle_cadence: Literal["never", "once", "render", "always_on"] = Field(
-        default_factory=_default_gui_toggle_cadence
-    )
-    # "shard" reuses one patch for every sample in the shard (a #489 per-patch
-    # variance probe; a partial shard re-renders from row 0 rather than resuming).
-    # Source of truth: _ParamSampleCadence / RenderConfig in pipeline/schemas/spec.py.
-    param_sample_cadence: Literal["sample", "shard"] = "sample"
+    # Audio/shard geometry, retry budgets, and the cadence knobs
+    # (plugin_reload_cadence #1999, gui_toggle_cadence #714,
+    # param_sample_cadence #489) are documented field-by-field on the
+    # authoritative RenderConfig in pipeline/schemas/spec.py; this block is
+    # an abridged sketch, not the definition.
+    ...
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""

@@ -44,6 +44,7 @@ def test_manifest_load_valid_project_returns_pinned_plugin(tmp_path: Path) -> No
     assert plugin.renderer_version == "1.2.3"
     assert plugin.bundle == "Example Synth.vst3"
     assert plugin.reference == "example/synth@1.2.3"
+    assert manifest.vst3_versions is None
 
 
 def test_manifest_explicit_renderer_version_differs_from_package_version(tmp_path: Path) -> None:
@@ -62,6 +63,37 @@ def test_manifest_explicit_renderer_version_differs_from_package_version(tmp_pat
     assert plugin.version == "2026.2.0"
     assert plugin.renderer_version == "0.26.2"
     assert plugin.reference == "example/synth@2026.2.0"
+
+
+def test_committed_manifests_match_plugin_manifest_contract() -> None:
+    """Repository manifests remain consumable by the plugin installer."""
+    for filename in ("studiorack-cardinal.json", "studiorack.json"):
+        PluginManifest.load(PROJECT_ROOT / filename)
+
+
+def test_manifest_vst3_prerelease_with_build_metadata_accepted(tmp_path: Path) -> None:
+    """Exact runtime versions may carry prerelease and build metadata.
+
+    :param tmp_path: Scratch root for the test manifest.
+    """
+    path = _manifest(tmp_path / "studiorack.json", renderer_version="4.5.6-rc.1+build.7")
+
+    plugin = PluginManifest.load(path).resolve("example/synth")
+
+    assert plugin.renderer_version == "4.5.6-rc.1+build.7"
+
+
+@pytest.mark.parametrize("version", ["4.5.6-rc..1", "4.5.6+build..7", "^4.5.6"])
+def test_manifest_invalid_vst3_version_rejected(tmp_path: Path, version: str) -> None:
+    """Malformed or ranged runtime versions fail manifest validation.
+
+    :param tmp_path: Scratch root for the test manifest.
+    :param version: Invalid runtime version.
+    """
+    path = _manifest(tmp_path / "studiorack.json", renderer_version=version)
+
+    with pytest.raises(ValidationError, match="VST3 version must be an exact semantic version"):
+        PluginManifest.load(path)
 
 
 def test_plugins_cli_archive_renderer_version_mismatch_creates_no_alias(
@@ -679,7 +711,7 @@ def test_plugins_cli_install_configures_studiorack_and_links_bundle(tmp_path: Pa
     :param tmp_path: Scratch root for the CLI boundary and call log.
     """
     manifest_path = _manifest(tmp_path / "studiorack.json")
-    _artifact_lock(tmp_path / "studiorack.lock.json")
+    artifact_lock = _artifact_lock(tmp_path / "studiorack.lock.json")
     managed = tmp_path / "managed"
     bundle = _bundle(managed / "VST3/example/synth/1.2.3/Example Synth.vst3")
     _seal_bundle(bundle)
@@ -715,6 +747,12 @@ def test_plugins_cli_install_configures_studiorack_and_links_bundle(tmp_path: Pa
     assert result.exit_code == 0, result.output
     assert [json.loads(line) for line in calls.read_text().splitlines()] == [
         ["config", "set", "pluginsDir", str(managed.resolve())],
+        [
+            "config",
+            "set",
+            "artifactLockPath",
+            str(artifact_lock.resolve()),
+        ],
         ["plugins", "install", "example/synth@1.2.3"],
     ]
     alias = tmp_path / "checkout/plugins/Example Synth.vst3"

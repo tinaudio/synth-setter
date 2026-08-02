@@ -15,7 +15,6 @@ concurrency:
 
 env:
   COVERAGE_KEY: ci/gpu/${{ github.run_id }}/${{ github.run_attempt }}/coverage.xml
-  LAUNCH_CONFIG: src/synth_setter/configs/launch/gpu-tests-runpod.yaml
   R2_BUCKET: intermediate-data
 
 jobs:
@@ -62,9 +61,16 @@ jobs:
           WORKER_GIT_REF: ${{ github.sha }}
         run: |
           set -euo pipefail
-          uv run python -m synth_setter.pipeline.skypilot_launch "$LAUNCH_CONFIG" \
-            --extra-env COVERAGE_KEY "$COVERAGE_KEY" \
-            --extra-env R2_BUCKET "$R2_BUCKET"
+          uv run python -m synth_setter.pipeline.skypilot_launch \
+            skypilot_launch/compute=runpod/gpu-tests \
+            skypilot_launch.tier=low \
+            skypilot_launch.worker_image_tag=dev-snapshot \
+            skypilot_launch.tail=true \
+            "+skypilot_launch.extra_envs.COVERAGE_KEY=$COVERAGE_KEY" \
+            "+skypilot_launch.extra_envs.R2_BUCKET=$R2_BUCKET" \
+            "skypilot_launch.cmd=exec bash scripts/ci/gpu_tests.sh" \
+            hydra.run.dir=/tmp/synth-setter-skypilot-launch \
+            hydra.output_subdir=null
 
       # moveto, not copyto: retrieving the run-scoped object also cleans it up,
       # so a skipped cleanup step can never leak coverage blobs into R2.

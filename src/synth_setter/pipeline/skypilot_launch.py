@@ -5,9 +5,9 @@ fully populated ``SkypilotLaunchConfig`` — ``compute`` and ``cmd`` required;
 dataset-specific envs flow through ``sky_cfg.extra_envs``; the worker
 job-name stem comes from ``sky_cfg.job_name`` (callers pin a domain-specific
 stem) or falls back to ``synth-setter-<uuid8>``. The
-``synth-setter-skypilot-launch`` CLI (``main``) wraps it for checked-in launch
-configs under ``src/synth_setter/configs/launch/`` (train/eval workflows),
-whose ``compute:`` field names a ``skypilot_launch/compute`` Hydra option.
+``synth-setter-skypilot-launch`` CLI composes ``skypilot_launch/default``;
+operators select a reusable ``skypilot_launch/compute`` option and supply the
+generic worker ``cmd``.
 
 Provider-neutral: the same call launches against ``runpod/*``, ``vast/*``, or
 ``local/*`` (kubernetes-via-``sky local up``) compute options;
@@ -35,6 +35,8 @@ Managed jobs differ from cluster-level launches:
 
 Each Resources entry's `image_id` is pinned to `docker:<image>` from
 ``sky_cfg.worker_image_tag`` so the controller provisions the worker image.
+The Hydra CLI prepends checkout synchronization to ``cmd``; programmatic
+callers provide their complete worker command.
 
 ``sky_cfg.num_workers > 1`` fans out N independent managed jobs in parallel
 (neither backend supports num_nodes>1 for this workload). Each rank gets
@@ -47,6 +49,7 @@ import base64
 import functools
 import os
 import re
+import shlex
 import subprocess
 import tomllib
 import uuid
@@ -55,10 +58,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
+import hydra
 import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
+from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import InterpolationResolutionError
 from pydantic import BaseModel, ValidationError
 
 from synth_setter.pipeline.compute_task import (
@@ -66,7 +72,6 @@ from synth_setter.pipeline.compute_task import (
     build_task_doc,
     load_compute_option,
     resolve_run_block,
-    resolve_volumes,
 )
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.compute import ComputeConfig
@@ -567,7 +572,6 @@ def _launch_one_rank(
     worker_image: str,
     compute: ComputeConfig,
     cmd: str,
-    network_volume: str | None,
 ) -> int:
     """Submit one rank from a native SkyPilot task document.
 
@@ -577,7 +581,6 @@ def _launch_one_rank(
     :param worker_image: Resolved ``repo:tag`` Docker image reference.
     :param compute: Validated compute option to build the task from.
     :param cmd: Worker command injected as the task's run block.
-    :param network_volume: SkyPilot volume name for the option's mount, if any.
     :return: SkyPilot-assigned ``job_id`` for this rank.
     :raises RuntimeError: ``sky.jobs.launch`` / ``sky.stream_and_get`` yielded
         no ``job_id``.
@@ -590,7 +593,7 @@ def _launch_one_rank(
         NUM_WORKERS_ENV_VAR: str(num_workers),
         _IMAGE_TAG_ENV: worker_image.rpartition(":")[2],
     }
-    task_doc = build_task_doc(compute, cmd=cmd, network_volume=network_volume)
+    task_doc = build_task_doc(compute, cmd=cmd)
     task = sky.Task.from_yaml_config(task_doc)
     _override_image_id(task, worker_image)
     task.update_envs(env_for_rank)
@@ -611,7 +614,6 @@ def _run_workers(
     worker_env_base: dict[str, str],
     compute: ComputeConfig,
     cmd: str,
-    network_volume: str | None,
     job_names: list[str],
     worker_image_tag: str,
     tail: bool,
@@ -621,7 +623,6 @@ def _run_workers(
     :param worker_env_base: Env dict forwarded to every rank (rank/world keys added per call).
     :param compute: Validated compute option to build each rank's task from.
     :param cmd: Worker command injected as each task's run block.
-    :param network_volume: SkyPilot volume name for the option's mount, if any.
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
     :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
     :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
@@ -636,7 +637,6 @@ def _run_workers(
         worker_image=worker_image,
         compute=compute,
         cmd=cmd,
-        network_volume=network_volume,
     )
     if tail:
         return _run_workers_tail(job_names, launch_get_job_id)
@@ -671,9 +671,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         raise ValueError("api_server and local are mutually exclusive")
 
     compute = apply_tier_filter(sky_cfg.compute, sky_cfg.tier)
-    # Fail on cmd/run_script conflicts and volume mismatches before any side effect.
     resolve_run_block(compute, sky_cfg.cmd)
-    resolve_volumes(compute, sky_cfg.network_volume)
 
     if sky_cfg.job_name is not None and not _JOB_NAME_RE.fullmatch(sky_cfg.job_name):
         raise ValueError(
@@ -773,7 +771,6 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
         worker_env_base=worker_env,
         compute=compute,
         cmd=sky_cfg.cmd,
-        network_volume=sky_cfg.network_volume,
         job_names=job_names,
         worker_image_tag=sky_cfg.worker_image_tag,
         tail=sky_cfg.tail,
@@ -794,9 +791,7 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 def load_launch_config(path: Path) -> SkypilotLaunchConfig:
     """Load a checked-in launch-config YAML into a validated ``SkypilotLaunchConfig``.
 
-    The YAML is the full launch description (``cmd`` included) — unlike the
-    Hydra ``skypilot_launch`` group, which forbids ``cmd`` because the
-    generate-dataset entrypoint builds it from argv. Its ``compute:`` field
+    The YAML supplies the full launch description. Its ``compute:`` field
     names a ``skypilot_launch/compute`` option (e.g. ``runpod/smoke``),
     resolved here via the Hydra Compose API. ``extra="forbid"`` on the model
     surfaces config typos instead of silently ignoring them.
@@ -826,52 +821,47 @@ def load_launch_config(path: Path) -> SkypilotLaunchConfig:
     return SkypilotLaunchConfig(**doc)
 
 
-@click.command()
-@click.option(
-    "--extra-env",
-    nargs=2,
-    multiple=True,
-    metavar="KEY VALUE",
-    help="Worker environment entry; repeat to set multiple values.",
-)
-@click.option(
-    "--network-volume",
-    default=None,
-    metavar="NAME",
-    help="SkyPilot volume name overriding the config's network_volume.",
-)
-@click.argument("launch_config", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def main(
-    launch_config: Path,
-    extra_env: tuple[tuple[str, str], ...],
-    network_volume: str | None,
-) -> None:
-    """Dispatch the SkyPilot launch config at LAUNCH_CONFIG.
+def _sky_cfg_from_hydra(cfg: DictConfig) -> SkypilotLaunchConfig:
+    """Validate and prepare one Hydra-composed generic worker launch.
 
-    Relative paths inside the config (``env_file``) are resolved against the
-    working directory, so run from the repo root.
-
-    :param launch_config: Path to a launch-config YAML (see ``load_launch_config``).
-    :param extra_env: Worker environment entries that override config ``extra_envs``.
-    :param network_volume: Volume-name override; retargets the launch to another
-        data center's volume without editing the config.
-    :raises click.ClickException: The config or worker environment fails validation.
+    :param cfg: Config composed from ``skypilot_launch/default``.
+    :return: Validated launch config with the standard worker checkout preamble.
+    :raises TypeError: ``cfg.skypilot_launch`` does not resolve to a mapping.
+    :raises ValueError: ``cmd`` contains an unescaped worker shell interpolation.
+    :raises InterpolationResolutionError: Another launcher field cannot resolve.
     """
     try:
-        sky_cfg = load_launch_config(launch_config)
-        sky_cfg = SkypilotLaunchConfig.model_validate(
-            {
-                **sky_cfg.model_dump(),
-                "extra_envs": {**sky_cfg.extra_envs, **dict(extra_env)},
-                **({"network_volume": network_volume} if network_volume is not None else {}),
-            }
-        )
-    except (ValueError, yaml.YAMLError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    try:
-        dispatch_via_skypilot(sky_cfg)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+        raw: object = OmegaConf.to_container(cfg.skypilot_launch, resolve=True)
+    except InterpolationResolutionError as error:
+        if error.full_key != "skypilot_launch.cmd":
+            raise
+        raise ValueError(
+            "skypilot_launch.cmd contains an unescaped interpolation; write every "
+            r"worker shell expansion as \${...}"
+        ) from error
+    if not isinstance(raw, dict):
+        raise TypeError(f"cfg.skypilot_launch must compose to a mapping; got {type(raw).__name__}")
+    sky_cfg = SkypilotLaunchConfig(**{str(key): value for key, value in raw.items()})
+    if sky_cfg.cmd is None:
+        return sky_cfg
+    checkout_dir = shlex.quote(sky_cfg.worker_checkout_dir)
+    worker_cmd = (
+        f"cd {checkout_dir} && bash scripts/sync_worker_checkout.sh && (\n{sky_cfg.cmd}\n)"
+    )
+    return sky_cfg.model_copy(update={"cmd": worker_cmd})
+
+
+@hydra.main(
+    version_base="1.3",
+    config_path="pkg://synth_setter.configs",
+    config_name="skypilot_launch/default",
+)
+def main(cfg: DictConfig) -> None:
+    """Compose and dispatch a generic SkyPilot worker command.
+
+    :param cfg: Hydra-composed ``skypilot_launch`` configuration.
+    """
+    dispatch_via_skypilot(_sky_cfg_from_hydra(cfg))
 
 
 if __name__ == "__main__":

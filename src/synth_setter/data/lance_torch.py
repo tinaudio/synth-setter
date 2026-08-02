@@ -57,6 +57,29 @@ def _column_to_tensor(array: pa.Array | pa.ChunkedArray, name: str) -> torch.Ten
     return torch.from_numpy(values if values.flags.writeable else values.copy())
 
 
+def _expand_column(
+    array: pa.Array | pa.ChunkedArray, name: str, out: dict[str, torch.Tensor]
+) -> None:
+    """Convert one column into ``out``, flattening struct children to dotted keys.
+
+    Normalizes Lance's projection asymmetry: ``take`` returns a (pruned) struct
+    while a scanner's dotted projection returns flat ``parent.child`` columns —
+    both land under identical ``parent.child`` keys.
+
+    :param array: Column values for one batch.
+    :param name: Column name; struct children append ``.child``.
+    :param out: Destination mapping receiving one tensor per leaf column.
+    """
+    if isinstance(array, pa.ChunkedArray):
+        array = array.combine_chunks()
+    if pa.types.is_struct(array.type):
+        struct = cast(pa.StructArray, array)
+        for index, field in enumerate(struct.type):
+            _expand_column(struct.field(index), f"{name}.{field.name}", out)
+        return
+    out[name] = _column_to_tensor(array, name)
+
+
 def batch_to_shaped_tensors(
     batch: pa.RecordBatch | dict[str, Any],
     *,
@@ -77,7 +100,10 @@ def batch_to_shaped_tensors(
     del hf_converter, use_blob_api, kwargs
     if isinstance(batch, dict):
         raise TypeError("blob columns are not supported by the lance_torch dataloaders")
-    return {name: _column_to_tensor(batch[name], name) for name in batch.column_names}
+    tensors: dict[str, torch.Tensor] = {}
+    for name in batch.column_names:
+        _expand_column(batch[name], name, tensors)
+    return tensors
 
 
 def _dataset_options(storage_options: dict[str, str] | None) -> dict[str, dict[str, str]] | None:
@@ -132,7 +158,10 @@ class LanceMapDataset(SafeLanceDataset):
             self._ds = lance.dataset(self.uri, **self.dataset_options)
             self._opening_pid = current_pid
         table = self._ds.take(list(indices), columns=self._columns)
-        return {name: _column_to_tensor(table[name], name) for name in table.column_names}
+        tensors: dict[str, torch.Tensor] = {}
+        for name in table.column_names:
+            _expand_column(table[name], name, tensors)
+        return tensors
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Fetch one row as a dict of per-row tensors.

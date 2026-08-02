@@ -94,6 +94,22 @@ def test_build_review_payload_comment_keeps_empty_comments_key(helper: ModuleTyp
     assert payload["comments"] == []
 
 
+def test_build_review_payload_pi_audit_is_collapsed_by_default(helper: ModuleType) -> None:
+    """The verbose Pi audit remains available without obscuring review findings.
+
+    :param helper: The loaded ``post_review`` module.
+    """
+    payload = helper.build_review_payload(
+        "Actionable summary.\n\n## Pi review audit\n\n| Skill | Status |\n| --- | --- |\n| ml-test | success |",
+        [],
+        [],
+    )
+    assert payload["body"] == (
+        "Actionable summary.\n\n<details>\n<summary>Pi review audit</summary>\n\n"
+        "| Skill | Status |\n| --- | --- |\n| ml-test | success |\n\n</details>"
+    )
+
+
 def _fake_run_factory(responses: list[SimpleNamespace]) -> tuple:
     """Build a fake ``subprocess.run`` that returns queued responses in order.
 

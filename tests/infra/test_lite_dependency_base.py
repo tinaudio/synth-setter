@@ -104,3 +104,20 @@ def test_smoosense_viewer_deps_are_notebook_only(project_root: Path) -> None:
     assert all("duckdb" not in str(dep) for dep in pyproject["project"]["dependencies"])
     assert all("smoosense" not in str(dep) for dep in dependency_groups["runtime"])
     assert all("duckdb" not in str(dep) for dep in dependency_groups["runtime"])
+
+
+def test_notebook_execution_toolchain_is_notebook_only(project_root: Path) -> None:
+    """`jupyter nbconvert --execute` deps ship in `notebooks`, never in the base.
+
+    :param project_root: Repo root holding ``pyproject.toml`` (from conftest).
+    """
+    with (project_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    dependency_groups = pyproject["dependency-groups"]
+    notebook_names = {_requirement_name(dep) for dep in dependency_groups["notebooks"]}
+
+    assert {"nbconvert", "ipykernel"} <= notebook_names
+    for name in ("nbconvert", "ipykernel"):
+        assert all(name not in str(dep) for dep in pyproject["project"]["dependencies"])
+        assert all(name not in str(dep) for dep in dependency_groups["runtime"])

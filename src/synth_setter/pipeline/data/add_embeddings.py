@@ -5,11 +5,12 @@ The registry keeps checkpoint loading, Arrow encoding, residency, optional depen
 index policy together for each embedding. Co-resident encoders share one Lance UDF pass; large
 SAME encoders run in separate load-write-release passes.
 
-CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,tinymu]``.
+CLI: ``synth-setter-add-embeddings lance_uri=DATASET embeddings=[clap,m2l,matpac_plus]``.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.metadata
 import json
@@ -31,6 +32,7 @@ from beartype import beartype
 from einops import rearrange
 from jaxtyping import Float, jaxtyped
 
+from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -39,16 +41,50 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
+    SHIFT_FIELD,
     NUM_SKETCH_CONTROLS,
-    SKETCH_CTRL_FIELD,
     SKETCH_PITCH_BINS,
+    SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
-    TINYMU_FIELD,
+    MATPAC_PLUS_FIELD,
+    PUPUJEPA_LARGE_FIELD,
+    PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
-from synth_setter.model_cache import embedding_model_dir, synth_setter_cache_dir
+from synth_setter.model_cache import checkpoint_tree_sha256
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_CHECKPOINT,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_EMBEDDING_DIM,
+    pupujepa_artifact_digest,
+)
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT,
+    SAME_EMBEDDING_DIM,
+    SAME_SAMPLE_RATE,
+    load_same_autoencoder,
+    resolve_same_checkpoint,
+    same_l_num_latent_frames,
+    same_s_num_latent_frames,
+)
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.pupujepa import (
+    PupuJepaEncodeFn,
+    encode_pupujepa_column,
+    encode_pupujepa_large_column,
+    load_pupujepa_audio_encoder,
+)
+from synth_setter.pipeline.data.param_shift import (
+    PARAM_SHIFT_INPUT_FIELDS,
+    ROW_ID_FIELD,
+    ParamShifter,
+    encode_param_shift_column,
+    load_param_shifter,
+    param_shift_policy_values,
+)
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
     SSONDO_CHECKPOINT_SHA256,
@@ -58,12 +94,12 @@ from synth_setter.pipeline.data.ssondo import (
     load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
 )
-from synth_setter.pipeline.data.tinymu import (
-    DEFAULT_TINYMU_CHECKPOINT,
-    TINYMU_FRONTEND,
-    encode_tinymu_column,
-    load_tinymu_audio_encoder,
-    tinymu_artifact_digest,
+from synth_setter.pipeline.data.matpac_plus import (
+    DEFAULT_MATPAC_PLUS_CHECKPOINT,
+    MATPAC_PLUS_FRONTEND,
+    encode_matpac_plus_column,
+    load_matpac_plus_audio_encoder,
+    matpac_plus_artifact_digest,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -76,16 +112,8 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 operator_workspace()
 
-DEFAULT_CLAP_CHECKPOINT: str = "laion/clap-htsat-unfused"
 DEFAULT_M2L_CHECKPOINT: str = ""
-DEFAULT_SAME_S_CHECKPOINT: str = "r2://intermediate-data/models/same-s"
-DEFAULT_SAME_L_CHECKPOINT: str = "r2://intermediate-data/models/same-l"
 DEFAULT_T5GEMMA_CHECKPOINT: str = "r2://intermediate-data/models/sa3-small-music"
-_DEFAULT_SAME_CACHE_NAMES: dict[str, str] = {
-    DEFAULT_SAME_L_CHECKPOINT: "same-l",
-    DEFAULT_SAME_S_CHECKPOINT: "same-s",
-}
-CLAP_SAMPLE_RATE: int = 48000
 CLAP_EMBEDDING_DIM: int = 512
 M2L_ENCODE_MAX_BATCH: int = 64
 CLAP_ENCODE_MAX_BATCH: int = 32
@@ -98,13 +126,16 @@ DEFAULT_LANCE_LOG: str = "warn"
 PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 _EMBEDDING_NAME_METADATA = b"synth_setter.embedding.name"
 _EMBEDDING_ARTIFACT_METADATA = b"synth_setter.embedding.artifact"
-SAME_EMBEDDING_DIM: int = 256
-SAME_SAMPLE_RATE: int = 44100
-SAME_DOWNSAMPLING_RATIO: int = 4096
-SAME_S_PAD_BLOCK_SAMPLES: int = 2 * SAME_DOWNSAMPLING_RATIO
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
 SKETCH_INDEX_SUB_VECTORS: int = 2
+# PESTO's per-clip intermediates scale with batch size: a full 128-row Lance
+# batch peaked at ~8.8 GiB RSS and drew earlyoom SIGTERMs in the field (#2707).
+SKETCH_ENCODE_MAX_BATCH: int = 32
+# Dotted path of the nested IVF companion inside the sketch struct (#2707).
+# Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
+# per-child schema evolution (unused here) is the 2.2-only operation.
+SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
@@ -113,7 +144,15 @@ type SketchEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
 type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
-type Encoder = M2LEncodeFn | ClapEncodeFn | SameEncodeFn | SSONDOEncodeFn | ParamTextEncodeFn
+type Encoder = (
+    M2LEncodeFn
+    | ClapEncodeFn
+    | SameEncodeFn
+    | SSONDOEncodeFn
+    | PupuJepaEncodeFn
+    | ParamTextEncodeFn
+    | ParamShifter
+)
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[Mapping[str, np.ndarray], int, Encoder], pa.Array]
 type ResolveArtifactIdentityFn = Callable[[str], str]
@@ -161,7 +200,7 @@ class EmbeddingSpec:
 
     .. attribute :: column
 
-        Lance column written by the encoder.
+        Lance column carrying the embedding and targeted by the index policy.
 
     .. attribute :: default_checkpoint
 
@@ -181,7 +220,7 @@ class EmbeddingSpec:
 
     .. attribute :: encode_column
 
-        Source batch, sample rate, and encoder to Arrow array transform.
+        Decoded source columns, sample rate, and encoder to one Arrow column.
 
     .. attribute :: resolve_artifact_identity
 
@@ -190,6 +229,11 @@ class EmbeddingSpec:
     .. attribute :: input_fields
 
         Dataset columns supplying this embedding's encoder input.
+
+    .. attribute :: rerenders
+
+        Whether the encoder re-renders audio, making the run's render config and seed
+        part of its output identity.
     """
 
     name: str
@@ -201,6 +245,7 @@ class EmbeddingSpec:
     encode_column: EncodeColumnFn
     resolve_artifact_identity: ResolveArtifactIdentityFn
     input_fields: tuple[str, ...] = (AUDIO_FIELD,)
+    rerenders: bool = False
 
 
 EMBEDDING_POLICY_VERSION = 1
@@ -225,31 +270,6 @@ def _update_framed_digest(digest: _Digest, value: bytes) -> None:
     """
     digest.update(len(value).to_bytes(8, "big"))
     digest.update(value)
-
-
-def _checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
-    """Hash checkpoint file paths and contents in deterministic order.
-
-    :param checkpoint_dir: Materialized checkpoint directory.
-    :returns: SHA-256 identity for the complete checkpoint tree.
-    :raises ValueError: The checkpoint directory contains no files.
-    """
-    digest = hashlib.sha256()
-    files = sorted(
-        path
-        for path in checkpoint_dir.rglob("*")
-        if path.is_file()
-        and not path.relative_to(checkpoint_dir).parts[:2] == (".cache", "huggingface")
-    )
-    if not files:
-        raise ValueError(f"checkpoint directory has no files: {checkpoint_dir}")
-    for path in files:
-        _update_framed_digest(digest, path.relative_to(checkpoint_dir).as_posix().encode())
-        digest.update(path.stat().st_size.to_bytes(8, "big"))
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _versioned_artifact_identity(name: str, digest: str) -> str:
@@ -282,7 +302,7 @@ def _clap_artifact_identity(checkpoint: str) -> str:
     :returns: Versioned content identity.
     """
     checkpoint_dir = Path(_resolve_clap_checkpoint(checkpoint))
-    return _versioned_artifact_identity("clap", _checkpoint_tree_sha256(checkpoint_dir))
+    return _versioned_artifact_identity("clap", checkpoint_tree_sha256(checkpoint_dir))
 
 
 def _same_artifact_identity(checkpoint: str) -> str:
@@ -291,8 +311,8 @@ def _same_artifact_identity(checkpoint: str) -> str:
     :param checkpoint: Local, R2, or HuggingFace checkpoint source.
     :returns: Versioned content identity.
     """
-    checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
-    return _versioned_artifact_identity("same", _checkpoint_tree_sha256(checkpoint_dir))
+    checkpoint_dir = resolve_same_checkpoint(checkpoint)
+    return _versioned_artifact_identity("same", checkpoint_tree_sha256(checkpoint_dir))
 
 
 def _t5gemma_artifact_identity(checkpoint: str) -> str:
@@ -304,7 +324,7 @@ def _t5gemma_artifact_identity(checkpoint: str) -> str:
     from synth_setter.pipeline.data.t5gemma import _resolve_t5gemma_checkpoint_dir
 
     checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
-    return _versioned_artifact_identity("t5gemma", _checkpoint_tree_sha256(checkpoint_dir))
+    return _versioned_artifact_identity("t5gemma", checkpoint_tree_sha256(checkpoint_dir))
 
 
 def _sketch_artifact_identity(checkpoint: str) -> str:
@@ -332,13 +352,50 @@ def _ssondo_artifact_identity(checkpoint: str) -> str:
     return _versioned_artifact_identity("ssondo", digest)
 
 
-def _tinymu_artifact_identity(checkpoint: str) -> str:
-    """Return TinyMU's generic-policy-wrapped artifact identity.
+def _param_shift_artifact_identity(checkpoint: str) -> str:
+    """Return the re-render embedder's identity stem.
+
+    The output-determining settings are the render config and seed, which
+    :func:`_resolve_artifact_identity` folds in through ``EmbeddingSpec.rerenders``.
+
+    :param checkpoint: Empty placeholder; the embedder loads no checkpoint.
+    :returns: Versioned identity stem.
+    :raises ValueError: A checkpoint override was supplied for a checkpoint-free embedder.
+    """
+    if checkpoint:
+        raise ValueError("param_shift renders through a render config, not a checkpoint")
+    return _versioned_artifact_identity("param_shift", "renderer")
+
+
+def _matpac_plus_artifact_identity(checkpoint: str) -> str:
+    """Return the MATPAC++ package/checkpoint artifact identity.
 
     :param checkpoint: Pinned R2 URI or SHA-identical local checkpoint.
     :returns: Versioned package and checkpoint identity.
     """
-    return _versioned_artifact_identity("tinymu", tinymu_artifact_digest(checkpoint))
+    return _versioned_artifact_identity("matpac_plus", matpac_plus_artifact_digest(checkpoint))
+
+
+def _pupujepa_tiny_artifact_identity(checkpoint: str) -> str:
+    """Return the pinned source and teacher-checkpoint identity.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :returns: Versioned source and checkpoint identity.
+    """
+    return _versioned_artifact_identity(
+        "pupujepa_tiny", pupujepa_artifact_digest(checkpoint, "tiny")
+    )
+
+
+def _pupujepa_large_artifact_identity(checkpoint: str) -> str:
+    """Return the pinned source and Large teacher-checkpoint identity.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :returns: Versioned source and checkpoint identity.
+    """
+    return _versioned_artifact_identity(
+        "pupujepa_large", pupujepa_artifact_digest(checkpoint, "large")
+    )
 
 
 def _downmix_to_mono(audio: np.ndarray) -> np.ndarray:
@@ -420,41 +477,6 @@ def _encode_clap_column(
             f"{CLAP_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
         )
     return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
-
-
-def _same_resampled_samples(num_samples: int, sample_rate: int) -> int:
-    """Return the ceiling sample count after resampling to SAME's 44.1 kHz input rate.
-
-    :param num_samples: Positive source clip length in samples.
-    :param sample_rate: Positive source sample rate in Hz.
-    :returns: Resampled clip length in samples.
-    :raises ValueError: Either input is non-positive.
-    """
-    if num_samples < 1 or sample_rate < 1:
-        raise ValueError(f"need positive num_samples/sample_rate, got {num_samples}/{sample_rate}")
-    return math.ceil(num_samples * SAME_SAMPLE_RATE / sample_rate)
-
-
-def same_s_num_latent_frames(num_samples: int, sample_rate: int) -> int:
-    """Return SAME-S's even frame count after resampling and two-hop padding.
-
-    :param num_samples: Positive source clip length in samples.
-    :param sample_rate: Positive source sample rate in Hz.
-    :returns: Two frames per complete or partial 8192-sample block.
-    """
-    resampled = _same_resampled_samples(num_samples, sample_rate)
-    return 2 * math.ceil(resampled / SAME_S_PAD_BLOCK_SAMPLES)
-
-
-def same_l_num_latent_frames(num_samples: int, sample_rate: int) -> int:
-    """Return SAME-L's frame count after resampling to its 4096-sample hop.
-
-    :param num_samples: Positive source clip length in samples.
-    :param sample_rate: Positive source sample rate in Hz.
-    :returns: One frame per complete or partial 4096-sample block.
-    """
-    resampled = _same_resampled_samples(num_samples, sample_rate)
-    return math.ceil(resampled / SAME_DOWNSAMPLING_RATIO)
 
 
 def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -598,17 +620,60 @@ def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
 
 
-def _load_tinymu_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
-    """Load TinyMU through its managed package dependency.
+def _load_matpac_plus_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load MATPAC++ through TinyMU's managed package dependency.
 
     :param checkpoint: Exact pinned URI or a hash-identical local artifact.
     :param config: Run config supplying the device.
-    :returns: Frozen MATPAC encoder.
+    :returns: Frozen TinyMU encoder.
     """
-    return load_tinymu_audio_encoder(
+    return load_matpac_plus_audio_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
     )
+
+
+def _load_pupujepa_tiny_spec_encoder(
+    checkpoint: str, config: AddEmbeddingsConfig
+) -> Encoder:
+    """Load PupuJEPA through the registry's uniform factory signature.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :param config: Run config supplying the device.
+    :returns: Frozen PupuJEPA Tiny encoder over source audio.
+    """
+    return load_pupujepa_audio_encoder(
+        checkpoint,
+        device=_resolve_torch_device(config.device),
+        variant="tiny",
+    )
+
+
+def _load_pupujepa_large_spec_encoder(
+    checkpoint: str, config: AddEmbeddingsConfig
+) -> Encoder:
+    """Load PupuJEPA Large through the registry factory signature.
+
+    :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
+    :param config: Run config supplying the device.
+    :returns: Frozen PupuJEPA Large encoder over source audio.
+    """
+    return load_pupujepa_audio_encoder(
+        checkpoint,
+        device=_resolve_torch_device(config.device),
+        variant="large",
+    )
+
+
+def _load_param_shift_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Build the re-render shifter through the registry's uniform factory signature.
+
+    :param checkpoint: Unused registry placeholder.
+    :param config: Run config supplying the composed render selection and seed.
+    :returns: Renderer-bound param shifter.
+    """
+    del checkpoint
+    return load_param_shifter(config)
 
 
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -690,12 +755,17 @@ def _encode_t5gemma_column(
 
 @jaxtyped(typechecker=beartype)
 def _sketch_encode(
-    audio: Float[np.ndarray, "batch channel time"], sample_rate: int
+    audio: Float[np.ndarray, "batch channel time"], sample_rate: int, device: str = "cpu"
 ) -> Float[np.ndarray, "batch control frame"]:
-    """Extract sketch controls for one audio batch.
+    """Extract sketch controls for one audio batch in memory-capped chunks.
+
+    Every track is per-clip independent, so chunking only moves values within
+    float32 kernel jitter (~1e-6, already batch-size-dependent) while bounding
+    extraction RSS at the default Lance batch size.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
+    :param device: Torch device the extractor runs on.
     :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
     """
     import torch
@@ -703,7 +773,15 @@ def _sketch_encode(
     from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
-    return extract_sketch_controls_batch(batch, sample_rate).cpu().numpy()
+    chunks = [
+        extract_sketch_controls_batch(
+            batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate, device=device
+        )
+        .cpu()
+        .numpy()
+        for start in range(0, len(batch), SKETCH_ENCODE_MAX_BATCH)
+    ]
+    return np.concatenate(chunks, axis=0)
 
 
 def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -713,47 +791,48 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     artifact fails before any row is processed.
 
     :param checkpoint: Bundled PESTO checkpoint name.
-    :param config: Unused run config; PESTO runs on CPU, device is not plumbed.
+    :param config: Run config supplying the device.
     :returns: Encoder over the original audio batch.
     """
     from synth_setter.features.sketch_controls import load_pesto_model
 
-    del config
-    load_pesto_model(checkpoint)
-    return _sketch_encode
+    device = _resolve_torch_device(config.device)
+    load_pesto_model(checkpoint, device=device)
+    return functools.partial(_sketch_encode, device=device)
 
 
 def _encode_sketch_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
 ) -> pa.Array:
-    """Encode one audio batch as a fixed-shape sketch-control tensor column.
+    """Encode one audio batch as the nested sketch-control struct column (#2707).
 
     :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param encoder: Sketch extractor over the original audio batch.
-    :returns: Fixed-shape tensor array.
+    :returns: Struct array with loudness/centroid/pitch children and the
+        frame-mean ``vec`` IVF companion.
     :raises ValueError: The encoder output is off the frame grid, non-finite,
         or outside the documented control bounds.
     """
-    from synth_setter.pipeline.data.lance_shard import tensor_array
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
 
     audio = sources[AUDIO_FIELD]
     encode = cast("SketchEncodeFn", encoder)
-    controls = _finite_embedding(SKETCH_CTRL_FIELD, encode(audio, sample_rate))
+    controls = _finite_embedding(SKETCH_STRUCT_FIELD, encode(audio, sample_rate))
     frames = mel_n_frames_from_samples(audio.shape[-1], sample_rate)
     expected = (len(audio), NUM_SKETCH_CONTROLS, frames)
     if controls.shape != expected:
         raise ValueError(
-            f"{SKETCH_CTRL_FIELD} encoder produced shape {controls.shape}, expected {expected}"
+            f"{SKETCH_STRUCT_FIELD} encoder produced shape {controls.shape}, expected {expected}"
         )
     affine = controls[:, : NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS]
     pitch = controls[:, NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS :]
     if affine.min() < -1.0 or affine.max() > 1.0 or pitch.min() < 0.0 or pitch.max() > 1.0:
         raise ValueError(
-            f"{SKETCH_CTRL_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
+            f"{SKETCH_STRUCT_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
             "and pitch rows in [0, 1]"
         )
-    return tensor_array(controls, np.dtype("float32"), controls.shape[1:])
+    return sketch_struct_array(controls)
 
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
@@ -777,6 +856,34 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         encode_column=_encode_m2l_column,
         resolve_artifact_identity=_m2l_artifact_identity,
     ),
+    "pupujepa_tiny": EmbeddingSpec(
+        name="pupujepa_tiny",
+        column=PUPUJEPA_TINY_FIELD,
+        default_checkpoint=DEFAULT_PUPUJEPA_CHECKPOINT,
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{PUPUJEPA_TINY_FIELD}_vec",
+            vector_dim=PUPUJEPA_TINY_EMBEDDING_DIM,
+        ),
+        load_encoder=_load_pupujepa_tiny_spec_encoder,
+        encode_column=encode_pupujepa_column,
+        resolve_artifact_identity=_pupujepa_tiny_artifact_identity,
+    ),
+    "pupujepa_large": EmbeddingSpec(
+        name="pupujepa_large",
+        column=PUPUJEPA_LARGE_FIELD,
+        default_checkpoint=DEFAULT_PUPUJEPA_CHECKPOINT,
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{PUPUJEPA_LARGE_FIELD}_vec",
+            vector_dim=PUPUJEPA_LARGE_EMBEDDING_DIM,
+        ),
+        load_encoder=_load_pupujepa_large_spec_encoder,
+        encode_column=encode_pupujepa_large_column,
+        resolve_artifact_identity=_pupujepa_large_artifact_identity,
+    ),
     "same_s": EmbeddingSpec(
         name="same_s",
         column=SAME_S_FIELD,
@@ -797,16 +904,17 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         encode_column=_encode_same_l_column,
         resolve_artifact_identity=_same_artifact_identity,
     ),
-    # PQ sub-vectors must divide the pooled control-vector width.
+    # PQ sub-vectors must divide the control-vector width. The companion vec
+    # is a struct child written by the encoder, so pooling is "none" (#2707).
     "sketch": EmbeddingSpec(
         name="sketch",
-        column=SKETCH_CTRL_FIELD,
+        column=SKETCH_STRUCT_FIELD,
         default_checkpoint=DEFAULT_PESTO_CHECKPOINT,
         co_resident=True,
         index=IndexSpec(
-            pool="mean",
+            pool="none",
             num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
-            vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+            vector_column=SKETCH_VEC_COLUMN,
             vector_dim=NUM_SKETCH_CONTROLS,
         ),
         load_encoder=_load_sketch_spec_encoder,
@@ -836,32 +944,70 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         resolve_artifact_identity=_t5gemma_artifact_identity,
         input_fields=(PARAM_ARRAY_FIELD,),
     ),
-    "tinymu": EmbeddingSpec(
-        name="tinymu",
-        column=TINYMU_FIELD,
-        default_checkpoint=DEFAULT_TINYMU_CHECKPOINT,
+    # Not an encoder: every row is re-rendered with one parameter redrawn, so the run's
+    # render config replaces a checkpoint and the pass is solo (it holds a plugin host).
+    "param_shift": EmbeddingSpec(
+        name="param_shift",
+        column=SHIFT_FIELD,
+        default_checkpoint="",
+        co_resident=False,
+        index=None,
+        load_encoder=_load_param_shift_encoder,
+        encode_column=encode_param_shift_column,
+        resolve_artifact_identity=_param_shift_artifact_identity,
+        input_fields=PARAM_SHIFT_INPUT_FIELDS,
+        rerenders=True,
+    ),
+    "matpac_plus": EmbeddingSpec(
+        name="matpac_plus",
+        column=MATPAC_PLUS_FIELD,
+        default_checkpoint=DEFAULT_MATPAC_PLUS_CHECKPOINT,
         co_resident=False,
         index=IndexSpec(
             pool="mean",
-            vector_column=f"{TINYMU_FIELD}_vec",
-            vector_dim=TINYMU_FRONTEND.embedding_dim,
+            vector_column=f"{MATPAC_PLUS_FIELD}_vec",
+            vector_dim=MATPAC_PLUS_FRONTEND.embedding_dim,
         ),
-        load_encoder=_load_tinymu_spec_encoder,
-        encode_column=encode_tinymu_column,
-        resolve_artifact_identity=_tinymu_artifact_identity,
+        load_encoder=_load_matpac_plus_spec_encoder,
+        encode_column=encode_matpac_plus_column,
+        resolve_artifact_identity=_matpac_plus_artifact_identity,
     ),
 }
 
 
 def _output_columns(spec: EmbeddingSpec) -> tuple[str, ...]:
-    """Return every dataset column emitted by one embedding policy.
+    """Return every top-level dataset column emitted by one embedding policy.
 
     :param spec: Embedding write and index policy.
-    :returns: Sequence column followed by its optional vector companion.
+    :returns: Sequence column followed by its optional vector companion; a dotted companion is a
+        struct child the sequence column already carries.
     """
     if spec.index is None or spec.index.vector_column is None:
         return (spec.column,)
+    if spec.index.vector_column.startswith(f"{spec.column}."):
+        return (spec.column,)
     return spec.column, spec.index.vector_column
+
+
+def _nested_schema_field(schema: pa.Schema, column: str) -> pa.Field | None:
+    """Resolve a possibly dotted column path against a schema.
+
+    :param schema: Dataset schema.
+    :param column: Top-level name or dotted struct-child path.
+    :returns: The resolved field, or ``None`` when any path segment is absent.
+    """
+    head, *rest = column.split(".")
+    if schema.get_field_index(head) < 0:
+        return None
+    field = schema.field(head)
+    for segment in rest:
+        if not pa.types.is_struct(field.type):
+            return None
+        index = field.type.get_field_index(segment)
+        if index < 0:
+            return None
+        field = field.type.field(index)
+    return field
 
 
 def _guard_existing_columns(dataset: lance.LanceDataset, specs: Sequence[EmbeddingSpec]) -> None:
@@ -890,6 +1036,9 @@ def _validate_write_source(
         positive.
     """
     for field in input_fields:
+        # ``_rowid`` is synthesized by Lance per scan, so it is never in the schema.
+        if field == ROW_ID_FIELD:
+            continue
         if field not in dataset.schema.names:
             raise ValueError(f"dataset has no {field!r} column to embed")
     if batch_size < 1:
@@ -1028,10 +1177,15 @@ def _resolve_artifact_identity(spec: EmbeddingSpec, config: AddEmbeddingsConfig)
     """
     checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
     identity = spec.resolve_artifact_identity(checkpoint)
-    if PARAM_ARRAY_FIELD not in spec.input_fields:
+    policy_values: tuple[str, ...] = ()
+    if PARAM_ARRAY_FIELD in spec.input_fields:
+        policy_values += (config.param_spec_name or "", config.param_text_normalizer)
+    if spec.rerenders:
+        policy_values += tuple(param_shift_policy_values(config))
+    if not policy_values:
         return identity
     digest = hashlib.sha256()
-    for value in (config.param_spec_name or "", config.param_text_normalizer):
+    for value in policy_values:
         _update_framed_digest(digest, value.encode())
     return f"{identity}:input-policy:{digest.hexdigest()}"
 
@@ -1081,7 +1235,18 @@ def _decoded_sources(batch: pa.RecordBatch, input_fields: Sequence[str]) -> dict
     :param input_fields: Column names the selected policies read.
     :returns: Decoded arrays keyed by field name.
     """
-    return {field: batch.column(field).to_numpy_ndarray() for field in input_fields}
+    return {field: _decoded_column(batch.column(field)) for field in input_fields}
+
+
+def _decoded_column(column: pa.Array) -> np.ndarray:
+    """Decode one Arrow column, preserving tensor columns' per-row shape.
+
+    :param column: Arrow column read from the source batch.
+    :returns: ``(B, *inner_shape)`` for tensor columns, ``(B,)`` for flat ones.
+    """
+    if isinstance(column, pa.FixedShapeTensorArray):
+        return column.to_numpy_ndarray()
+    return column.to_numpy(zero_copy_only=False)
 
 
 def _encode_columns(
@@ -1128,6 +1293,8 @@ def _write_columns(
     :param sample_rate: Dataset sample rate in Hz.
     :param config: Batch, checkpoint, logging, and resume settings.
     :raises ValueError: Policies are empty or dataset write preconditions fail.
+    :raises RuntimeError: ``add_columns`` returns without committing every
+        target column (a silent no-op write).
     """
     import lance
     import torch
@@ -1213,11 +1380,22 @@ def _write_columns(
         source_version=dataset.version,
     )
     dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+    # A zero-batch replay is valid only when the target columns are already committed.
+    uncommitted = [
+        column for column in output_columns if column not in dataset.schema.names
+    ]
+    if uncommitted:
+        raise RuntimeError(
+            f"add_columns returned without committing column(s) {uncommitted} "
+            f"(rows_processed={rows_processed} of {total_rows}); refusing to "
+            "treat the write as done"
+        )
     _delete_resume_cache(resume_cache)
     logger.info(
         "wrote_embeddings",
         columns=output_columns,
         total_rows=total_rows,
+        rows_processed=rows_processed,
         committed_version=dataset.version,
     )
     encoders.clear()
@@ -1245,7 +1423,10 @@ def build_index(
         raise ValueError(f"num_sub_vectors must be >= 1, got {num_sub_vectors}")
     if config.num_partitions is not None and config.num_partitions < 1:
         raise ValueError(f"num_partitions must be >= 1, got {config.num_partitions}")
-    vector_dim = dataset.schema.field(column).type.list_size
+    vector_field = _nested_schema_field(dataset.schema, column)
+    if vector_field is None:
+        raise ValueError(f"dataset has no {column!r} vector column to index")
+    vector_dim = vector_field.type.list_size
     if vector_dim % num_sub_vectors != 0:
         raise ValueError(
             f"num_sub_vectors={num_sub_vectors} does not divide {column} dim {vector_dim}"
@@ -1455,7 +1636,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if spec.index is None:
                 continue
             vector_column = spec.index.vector_column or spec.column
-            if vector_column in dataset.schema.names:
+            if _nested_schema_field(dataset.schema, vector_column) is not None:
                 _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
         _validate_write_source(dataset, config.batch_size)
@@ -1537,22 +1718,8 @@ def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
     return encode
 
 
-def _resolve_clap_checkpoint(checkpoint: str) -> str:
-    """Resolve a local or HuggingFace CLAP checkpoint directory.
-
-    :param checkpoint: Local directory or HuggingFace model id.
-    :returns: Local directory accepted by the Transformers loaders.
-    """
-    local = Path(checkpoint).expanduser()
-    if local.is_dir():
-        return str(local)
-
-    from huggingface_hub import snapshot_download
-
-    if checkpoint == DEFAULT_CLAP_CHECKPOINT:
-        cache_dir = embedding_model_dir("clap-htsat-unfused")
-        return snapshot_download(checkpoint, local_dir=str(cache_dir))
-    return snapshot_download(checkpoint)
+# Retain the private resolver alias for callers importing it.
+_resolve_clap_checkpoint = resolve_clap_checkpoint
 
 
 def load_clap_audio_encoder(
@@ -1561,7 +1728,7 @@ def load_clap_audio_encoder(
 ) -> ClapEncodeFn:
     """Load CLAP and return an encoder over mono audio.
 
-    :param checkpoint: HuggingFace CLAP model id.
+    :param checkpoint: Local directory, R2 prefix, or Hugging Face CLAP model id.
     :param device: Torch device, or ``None`` for automatic selection.
     :returns: Encoder producing ``(B, CLAP_EMBEDDING_DIM)`` vectors.
     """
@@ -1579,15 +1746,16 @@ def load_clap_audio_encoder(
     checkpoint_dir = _resolve_clap_checkpoint(checkpoint)
     model = ClapModel.from_pretrained(checkpoint_dir).to(resolved_device).eval()  # pyright: ignore
     processor = ClapProcessor.from_pretrained(checkpoint_dir)
+    target_sample_rate = processor.feature_extractor.sampling_rate
 
     @torch.no_grad()
     def _encode_chunk(chunk: np.ndarray, sample_rate: int) -> np.ndarray:
         wav = torch.from_numpy(np.ascontiguousarray(chunk, dtype=np.float32))
-        if sample_rate != CLAP_SAMPLE_RATE:
-            wav = audio_fn.resample(wav, sample_rate, CLAP_SAMPLE_RATE)
+        if sample_rate != target_sample_rate:
+            wav = audio_fn.resample(wav, sample_rate, target_sample_rate)
         processor_kwargs = {
             "audio": list(wav.numpy()),
-            "sampling_rate": CLAP_SAMPLE_RATE,
+            "sampling_rate": target_sample_rate,
             "return_tensors": "pt",
         }
         inputs = processor(**processor_kwargs)
@@ -1605,30 +1773,6 @@ def load_clap_audio_encoder(
     return encode
 
 
-def _resolve_same_checkpoint_dir(checkpoint: str) -> Path:
-    """Resolve a local, R2, or HuggingFace SAME checkpoint directory.
-
-    :param checkpoint: Checkpoint directory, R2 prefix, or HuggingFace repo id.
-    :returns: Local directory containing SAME model files.
-    """
-    if r2_io.is_r2_uri(checkpoint):
-        cache_name = _DEFAULT_SAME_CACHE_NAMES.get(checkpoint)
-        if cache_name is None:
-            cache_key = checkpoint.removeprefix("r2://").strip("/")
-            cache_dir = synth_setter_cache_dir() / "models" / cache_key
-        else:
-            cache_dir = embedding_model_dir(cache_name)
-        r2_io.ensure_r2_env_loaded()
-        r2_io.download_dir_no_overwrite(checkpoint, cache_dir)
-        return cache_dir
-    local = Path(checkpoint)
-    if local.is_dir():
-        return local
-    from huggingface_hub import snapshot_download
-
-    return Path(snapshot_download(checkpoint))
-
-
 def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameEncodeFn:
     """Load SAME and return an encoder over prepared stereo 44.1 kHz audio.
 
@@ -1636,19 +1780,12 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
     :param device: Torch device, or ``None`` for automatic selection.
     :returns: Encoder producing ``(B, SAME_EMBEDDING_DIM, T_lat)`` latents.
     """
-    import json
-
     import torch
-    from safetensors.torch import load_file
-    from stable_audio_3.factory import create_autoencoder_from_config
 
-    checkpoint_dir = _resolve_same_checkpoint_dir(checkpoint)
+    checkpoint_dir = resolve_same_checkpoint(checkpoint)
     resolved_device = _resolve_torch_device(device)
     logger.info("loading_same_checkpoint", checkpoint=checkpoint, device=resolved_device)
-    model_config = json.loads((checkpoint_dir / "model_config.json").read_text())
-    model = create_autoencoder_from_config(model_config["model"], model_config["sample_rate"])
-    model.load_state_dict(load_file(checkpoint_dir / "model.safetensors"), strict=True)
-    model = model.to(resolved_device).eval().requires_grad_(False)
+    model = load_same_autoencoder(checkpoint_dir).to(resolved_device)
 
     @torch.no_grad()
     def _encode_chunk(chunk: np.ndarray) -> np.ndarray:

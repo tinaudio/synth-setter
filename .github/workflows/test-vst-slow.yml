@@ -270,7 +270,8 @@ jobs:
         if: always() && matrix.synth == 'surge_xt'
         run: |
           files=(
-            surge-host-parity.json
+            surge-host-parity-diverse-patches.json
+            surge-host-parity-repeated-patch.json
             vst-noise-floor-1-preset-n-renders.json
             vst-noise-floor-random-preset-replay.json
           )
@@ -293,7 +294,8 @@ jobs:
         with:
           name: vst-benchmark-json
           path: |
-            ${{ github.workspace }}/surge-host-parity.json
+            ${{ github.workspace }}/surge-host-parity-diverse-patches.json
+            ${{ github.workspace }}/surge-host-parity-repeated-patch.json
             ${{ github.workspace }}/vst-noise-floor-1-preset-n-renders.json
             ${{ github.workspace }}/vst-noise-floor-random-preset-replay.json
           if-no-files-found: ignore
@@ -402,13 +404,28 @@ jobs:
           fail-on-alert: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish Surge host parity metrics to benchmark history
-        if: hashFiles('surge-host-parity.json') != ''
+      - name: Publish repeated-patch Surge host parity metrics
+        if: hashFiles('surge-host-parity-repeated-patch.json') != ''
         uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
-          name: Surge host parity and throughput
+          name: Surge host parity (repeated patch)
           tool: customSmallerIsBetter
-          output-file-path: surge-host-parity.json
+          output-file-path: surge-host-parity-repeated-patch.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish diverse-patch Surge host parity metrics
+        if: hashFiles('surge-host-parity-diverse-patches.json') != ''
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
+        with:
+          name: Surge host parity (diverse patches)
+          tool: customSmallerIsBetter
+          output-file-path: surge-host-parity-diverse-patches.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           auto-push: true

@@ -8,6 +8,8 @@ from pathlib import Path
 import lance
 import numpy as np
 import pyarrow as pa
+from beartype import beartype
+from jaxtyping import Float, jaxtyped
 from lance.file import LanceFileReader
 from pydantic import ValidationError
 
@@ -18,6 +20,13 @@ from synth_setter.data.vst.shapes import (
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
     DEBUG_FIELD,
+    SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_CHILD,
+    SKETCH_PITCH_SLICE,
+    SKETCH_VEC_CHILD,
 )
 from synth_setter.pipeline.schemas.seed_debug import ParameterSource, SeedDebugDocument
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
@@ -100,6 +109,47 @@ def tensor_array(values: np.ndarray, dtype: np.dtype, inner_shape: tuple[int, ..
     if rows.shape[0] == 0:
         raise ValueError(f"expected a non-empty batch of {inner_shape} tensors, got 0 rows")
     return pa.FixedShapeTensorArray.from_numpy_ndarray(rows)
+
+
+def _fixed_size_list_array(values: np.ndarray) -> pa.FixedSizeListArray:
+    """Encode ``(N, dim)`` float32 vectors as a fixed-size-list array.
+
+    :param values: Contiguous float32 vectors.
+    :returns: Fixed-size-list float32 array.
+    """
+    flat = pa.array(np.ascontiguousarray(values, dtype=np.float32).reshape(-1), pa.float32())
+    return pa.FixedSizeListArray.from_arrays(flat, values.shape[1])
+
+
+@jaxtyped(typechecker=beartype)
+def sketch_struct_array(
+    controls: Float[np.ndarray, "batch control frame"],
+) -> pa.StructArray:
+    """Encode stacked sketch controls as the nested storage struct (#2707).
+
+    Children: ``loudness``/``centroid`` fixed-size-list(F), ``pitch``
+    fixed-shape-tensor (bins, F), and ``vec`` — the frame-mean of the full
+    control stack, the IVF companion.
+
+    :param controls: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 control stack.
+    :returns: Struct array; requires Lance data storage >= 2.2 to commit.
+    """
+    contiguous = np.ascontiguousarray(controls, dtype=np.float32)
+    pitch = contiguous[:, SKETCH_PITCH_SLICE]
+    return pa.StructArray.from_arrays(
+        [
+            _fixed_size_list_array(contiguous[:, SKETCH_LOUDNESS_ROW]),
+            _fixed_size_list_array(contiguous[:, SKETCH_CENTROID_ROW]),
+            tensor_array(pitch, np.dtype("float32"), pitch.shape[1:]),
+            _fixed_size_list_array(contiguous.mean(axis=-1, dtype=np.float32)),
+        ],
+        names=[
+            SKETCH_LOUDNESS_CHILD,
+            SKETCH_CENTROID_CHILD,
+            SKETCH_PITCH_CHILD,
+            SKETCH_VEC_CHILD,
+        ],
+    )
 
 
 def seed_debug_array(

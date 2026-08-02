@@ -1,0 +1,20 @@
+# @package _global_
+
+# Capacity-matched ablation: a zeroed simulator signal trains the same control network.
+defaults:
+  - torchsynth/flow
+  - override /model: vst_flow_finetune
+  - _self_
+
+run_name: flow_finetune_null
+tags: [torchsynth, flow, finetune, simulator_feedback, "null"]
+
+model:
+  control_mode: "null"
+  cost: null
+
+# The ablation's step budget lives here, not in a launch cmd, so `experiment=` alone
+# reproduces the run (#2118, #2196). torchsynth/flow's own trainer block supplies the
+# validation cadence.
+trainer:
+  max_steps: 20000

@@ -234,6 +234,25 @@ def test_install_plugins_missing_executable_raises(tmp_path: Path) -> None:
         )
 
 
+def test_install_plugins_missing_artifact_lock_raises(tmp_path: Path) -> None:
+    """Installation refuses to run without repository-controlled artifact pins.
+
+    :param tmp_path: Scratch root without an artifact lock.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    executable = tmp_path / "studiorack"
+    executable.write_text("#!/usr/bin/env python3\n")
+    executable.chmod(0o755)
+
+    with pytest.raises(FileNotFoundError, match="missing.lock.json"):
+        install_plugins(
+            (plugin,),
+            artifact_lock=tmp_path / "missing.lock.json",
+            plugins_dir=tmp_path / "managed",
+            studiorack_executable=executable,
+        )
+
+
 def test_install_plugins_seal_permission_error_preserves_managed_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

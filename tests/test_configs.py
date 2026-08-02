@@ -1,6 +1,8 @@
 """Tests that Hydra config groups compose without errors."""
 
 from collections.abc import Sequence
+from functools import partial
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -10,11 +12,21 @@ from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
-from omegaconf.errors import InterpolationKeyError
+from omegaconf.errors import InterpolationKeyError, MissingMandatoryValue
 
+from synth_setter.clap import (
+    DEFAULT_CLAP_TRAINING_CHECKPOINT,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
+)
+from synth_setter.conditioning import NUM_SKETCH_CONTROLS
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
+from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
+from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
-from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    PUPUJEPA_CHECKPOINT_REVISION,
+)
 from synth_setter.resources import configs_dir
 from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
@@ -211,7 +223,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         pytest.param("same_s", (256, 44), id="same-s"),
         pytest.param("same_l", (256, 44), id="same-l"),
         pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
-        pytest.param("tinymu", (TINYMU_FRONTEND.embedding_dim, 25), id="tinymu"),
+        pytest.param("matpac_plus", (MATPAC_PLUS_FRONTEND.embedding_dim, 25), id="matpac_plus"),
     ],
 )
 def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
@@ -250,6 +262,47 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     pooled = encoder(batch["conditioning"])
     assert pooled.shape == (2, cfg.model.vector_field.d_model)
     assert cfg.model.conditioning.column == profile
+
+
+def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
+    """``sketch=on`` composes over ``conditioning=m2l`` and drives a train step."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_4",
+            "model=vst_flow",
+            "conditioning=m2l",
+            "sketch=on",
+            "trainer=cpu",
+            # The scheduler's T_max interpolates ${trainer.max_steps}, which
+            # trainer/cpu.yaml leaves undefined.
+            "+trainer.max_steps=1",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "+datamodule.fake=true",
+            "datamodule.batch_size=2",
+            "datamodule.num_workers=0",
+            "datamodule.persistent_workers=false",
+            "model.compile=false",
+            "model.vector_field.num_layers=1",
+            "model.vector_field.d_model=32",
+            "model.vector_field.d_ff=32",
+            "model.vector_field.projection.num_tokens=8",
+        ],
+    )
+
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    model = hydra.utils.instantiate(cfg.model)
+
+    assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.column == "sketch"
+    assert model.sketch_tokens is not None
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["conditioning"].shape == (2, 128, 42)
+    assert batch["sketch_ctrl"].shape == (2, NUM_SKETCH_CONTROLS, 401)
+    loss = model._train_step(batch).loss  # noqa: SLF001
+    assert torch.isfinite(loss)
 
 
 def _compose_t5gemma_cached_train_cfg(
@@ -386,9 +439,9 @@ def test_ssondo_conditioning_profile_projects_960_vector() -> None:
 
 
 def _conditioning_profile_names() -> list[str]:
-    """Enumerate the ``conditioning/`` Hydra group options from the config dir.
+    """Enumerate every shipped conditioning profile.
 
-    :returns: Sorted profile names (yaml stems) currently shipped in the group.
+    :returns: Sorted conditioning-profile names.
     """
     return sorted(
         entry.name.removesuffix(".yaml")
@@ -397,7 +450,26 @@ def _conditioning_profile_names() -> list[str]:
     )
 
 
-@pytest.mark.parametrize("profile", _conditioning_profile_names())
+# Waveform profiles interpolate datamodule geometry, which this bare composition lacks.
+_WAVEFORM_CONDITIONING_PROFILES = frozenset(
+    {
+        "ast_online",
+        "clap_online",
+        "log_mel",
+        "pupujepa_large_online",
+        "pupujepa_tiny_online",
+        "same_l_online",
+        "same_s_online",
+    }
+)
+_CACHED_CONDITIONING_PROFILES = [
+    profile
+    for profile in _conditioning_profile_names()
+    if profile not in _WAVEFORM_CONDITIONING_PROFILES
+]
+
+
+@pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)
 @pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
 def test_embedding_conditioning_profile_encoder_matches_model_output(
     profile: str, model_name: str
@@ -437,11 +509,87 @@ def test_eval_config_conditioning_profile_composes(profile: str) -> None:
         ["experiment=surge/flow_simple", f"conditioning={profile}", "trainer=cpu"],
     )
 
-    # The profile wires one shared column onto both sides; its name need not equal
-    # the profile name (e.g. the ``m2l`` profile selects the ``music2latent`` column).
-    column = cfg.model.conditioning.column
-    assert column
-    assert cfg.datamodule.conditioning.column == column
+    # Raw modes are literals; cached profiles wire one shared column onto both sides.
+    if isinstance(cfg.model.conditioning, str):
+        assert cfg.datamodule.conditioning == cfg.model.conditioning
+    else:
+        column = cfg.model.conditioning.column
+        assert column
+        assert cfg.datamodule.conditioning.column == column
+
+
+def test_clap_online_profile_matches_training_checkpoint_identity() -> None:
+    """Online CLAP composition retains the shared production checkpoint identity."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=clap_online", "trainer=cpu"],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_CLAP_TRAINING_CHECKPOINT
+    assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
+
+
+def test_pupujepa_tiny_cached_profile_instantiates_100_patch_pool() -> None:
+    """Four-second cached PupuJEPA sequences instantiate the generic pool."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny", "trainer=cpu"],
+    )
+
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert tuple(cfg.model.conditioning.input_shape) == (1536, 100)
+    assert encoder(torch.randn(2, 1536, 100)).shape == (2, cfg.model.encoder_output_dim)
+
+
+def test_pupujepa_large_cached_profile_instantiates_100_patch_pool() -> None:
+    """Four-second cached Large sequences instantiate the generic pool."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_large", "trainer=cpu"],
+    )
+
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert tuple(cfg.model.conditioning.input_shape) == (8192, 100)
+    assert encoder(torch.randn(2, 8192, 100)).shape == (2, cfg.model.encoder_output_dim)
+
+
+def test_pupujepa_large_online_profile_pins_variant_and_width() -> None:
+    """Online Large composition selects the immutable checkpoint and teacher width."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=surge/flow_simple",
+            "conditioning=pupujepa_large_online",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
+    assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
+    assert cfg.model.encoder.backbone.variant == "large"
+    assert cfg.model.encoder.head.embed_dim == 8192
+
+
+def test_pupujepa_tiny_online_profile_pins_checkpoint_identity() -> None:
+    """Online PupuJEPA composition retains the immutable HF revision."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=surge/flow_simple",
+            "conditioning=pupujepa_tiny_online",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
+    assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
+    assert cfg.model.encoder.backbone.variant == "tiny"
+    assert cfg.model.encoder.head.embed_dim == 1536
 
 
 def test_eval_config_conditioning_unset_composes() -> None:
@@ -544,13 +692,11 @@ def test_vst_flowvae_experiment_couples_spec_and_output_width(
     assert cfg.model.net.latent_dim == latent_dim
 
 
-def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
-    """A composed Flow-VAE net predicts at the resolver-derived width, not just configures it.
+@pytest.fixture(scope="module")
+def flowvae_module() -> VSTFlowVAEModule:
+    """Build a small random-weight Flow-VAE module for batch-contract tests.
 
-    Config-value assertions can't catch a decoder or regression flow that ignores
-    ``latent_dim``, so this instantiates the ``obxf`` (187-wide, odd — never a flow-VAE
-    experiment default) composition and forwards a random-weight batch. Flow depth and
-    hidden dims are shrunk for CPU speed; they don't affect output width.
+    :returns: Eval-mode module configured for the 187-wide OB-Xf parameter spec.
     """
     cfg = _compose(
         "train.yaml",
@@ -565,14 +711,46 @@ def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
             "+model.net.regression_flow_hidden_dim=16",
         ],
     )
+    module = VSTFlowVAEModule(
+        net=hydra.utils.instantiate(cfg.model.net),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        param_spec="obxf",
+    )
+    module.eval()
+    return module
 
-    net = hydra.utils.instantiate(cfg.model.net)
-    net.eval()
-    with torch.no_grad():
-        out = net(torch.randn(2, 2, 128, 401))
 
+def test_flowvae_model_step_reads_mel_batch_key(flowvae_module: VSTFlowVAEModule) -> None:
+    """The training path consumes ``mel`` and preserves its output contracts.
+
+    :param flowvae_module: Small random-weight module under test.
+    """
+    mel = torch.randn(2, 2, 128, 401)
+    params = torch.rand(2, 187) * 2 - 1
+
+    losses, actual_mel, actual_params, out = flowvae_module.model_step(
+        {"mel": mel, "params": params}
+    )
+
+    assert set(losses) == {"reconstruction_loss", "latent_loss", "param_loss"}
+    assert actual_mel is mel
+    assert actual_params is params
     assert out.x_hat.shape == (2, 187)
     assert out.y_hat.shape == (2, 2, 128, 401)
+
+
+def test_flowvae_predict_step_reads_mel_batch_key(flowvae_module: VSTFlowVAEModule) -> None:
+    """The prediction path consumes ``mel`` and returns model-width parameters.
+
+    :param flowvae_module: Small random-weight module under test.
+    """
+    batch = {"mel": torch.randn(2, 2, 128, 401)}
+
+    predictions, actual_batch = flowvae_module.predict_step(batch, batch_idx=0)
+
+    assert predictions.shape == (2, 187)
+    assert actual_batch is batch
 
 
 @pytest.mark.parametrize(
@@ -601,7 +779,7 @@ def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
             "vst_flow_matching_module.VSTFlowMatchingModule",
             "num_params",
             92,
-            None,
+            "surge_simple",
             True,
             1e-4,
         ),
@@ -610,7 +788,7 @@ def test_flowvae_instantiated_forward_emits_nondefault_spec_width() -> None:
             "vst_flow_matching_module.VSTFlowMatchingModule",
             "num_params",
             92,
-            None,
+            "surge_simple",
             True,
             1e-4,
         ),
@@ -735,6 +913,20 @@ def test_log_per_param_mse_config_requires_synth_selection() -> None:
         OmegaConf.to_container(cfg.callbacks, resolve=True, throw_on_missing=True)
 
 
+@pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp"])
+def test_vst_flow_config_uses_active_synth_spec_for_structured_metrics(model_name: str) -> None:
+    """Every flow model receives the selected ParamSpec for number-group swaps.
+
+    :param model_name: Hydra flow-model group under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_simple", "synth=surge_simple", f"model={model_name}", "trainer=cpu"],
+    )
+
+    assert cfg.model.param_spec == "surge_simple"
+
+
 def test_surge_training_defaults_enable_bounded_validation_and_auto_probe() -> None:
     """The surge family validates a bounded sample and enables the probe when usable."""
     cfg = _compose("train.yaml", ["experiment=surge/flow_simple"])
@@ -833,6 +1025,32 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.callbacks.model_checkpoint.monitor == "val/param_mse"
     assert cfg.callbacks.model_checkpoint.every_n_train_steps == 1000
     assert cfg.test is False
+
+
+def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
+    """The preliminary A/B arms differ only in sketch conditioning."""
+    base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
+    sketch = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
+
+    for cfg in (base, sketch):
+        assert cfg.datamodule.download_dataset_root_uri == (
+            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
+            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/"
+        )
+        assert cfg.seed == 3407
+        assert cfg.datamodule.param_spec_name == "surge_simple"
+        assert cfg.trainer.max_steps == 10000
+        assert cfg.trainer.min_steps == 10000
+        assert cfg.trainer.val_check_interval == 1000
+        assert cfg.training.val_audio_probe is True
+        assert cfg.test is False
+    assert base.run_name == "flow1k_prelim_base"
+    assert base.model.sketch_controls is None
+    assert base.datamodule.sketch is None
+    assert sketch.run_name == "flow1k_prelim_sketch"
+    assert sketch.model.sketch_controls.column == "sketch"
+    assert sketch.model.sketch_controls.num_frames == 401
+    assert sketch.datamodule.sketch == sketch.model.sketch_controls
 
 
 def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:
@@ -1016,3 +1234,91 @@ def test_extras_validates_synth_before_missing_extras_early_return() -> None:
 
     with pytest.raises(ValueError, match="surge_4"):
         extras(cfg)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "control_mode"),
+    [
+        ("flow_finetune", "gradient_spectral"),
+        ("flow_finetune_learned", "learned_audio"),
+        ("flow_finetune_null", "null"),
+    ],
+)
+def test_torchsynth_finetune_arm_composes_to_its_control_mode(
+    experiment: str, control_mode: str
+) -> None:
+    """Each simulator-feedback arm selects its own control without further overrides.
+
+    :param experiment: ``experiment=torchsynth/...`` name under test.
+    :param control_mode: Control arm the experiment must select.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [f"experiment=torchsynth/{experiment}", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
+    )
+
+    assert cfg.model.control_mode == control_mode
+    # The differentiable render graph-breaks under compile and is single-device (#2585).
+    assert cfg.model.compile is False
+    assert (cfg.model.control_encoder is not None) == (control_mode == "learned_audio")
+    assert (cfg.model.cost is not None) == (control_mode == "gradient_spectral")
+
+
+@pytest.mark.parametrize(
+    "experiment", ["flow_finetune", "flow_finetune_learned", "flow_finetune_null"]
+)
+def test_torchsynth_finetune_arm_instantiates_from_its_experiment(
+    experiment: str, tmp_path: Path
+) -> None:
+    """Each arm's experiment builds a real module through the operator-facing config.
+
+    Composition alone would still pass with a wrong ``_target_``, a broken interpolation, or
+    instantiation-time wiring that only fails once Hydra builds the object.
+
+    :param experiment: ``experiment=torchsynth/...`` name under test.
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    # Small enough that three arms instantiate quickly; the wiring under test is the
+    # experiment's targets and interpolations, not the field's width.
+    small = [
+        "trainer=cpu",
+        # vst_flow's cosine scheduler interpolates it. `++` because the cpu trainer carries
+        # no step cap while the finetune arms pin their own.
+        "++trainer.max_steps=10",
+        "datamodule.sample_rate=16000",
+        "datamodule.signal_length=16384",
+        "model.vector_field.num_layers=1",
+        "model.vector_field.d_model=32",
+        "model.vector_field.d_ff=32",
+        "model.vector_field.projection.num_tokens=4",
+        "model.encoder.backbone.out_dim=32",
+        "model.encoder.backbone.hidden_dim=4",
+    ]
+    pretrained = hydra.utils.instantiate(
+        _compose("train.yaml", ["experiment=torchsynth/flow", *small]).model
+    )
+    checkpoint = tmp_path / "base.ckpt"
+    torch.save({"state_dict": pretrained.state_dict()}, checkpoint)
+
+    cfg = _compose(
+        "train.yaml",
+        [
+            f"experiment=torchsynth/{experiment}",
+            *small,
+            f"model.base_checkpoint={checkpoint}",
+        ],
+    )
+    module = hydra.utils.instantiate(cfg.model)
+
+    assert module.control_mode == cfg.model.control_mode
+    # The control is the only thing this run trains.
+    assert not any(p.requires_grad for p in module.vector_field.flow.parameters())
+    assert any(p.requires_grad for p in module.vector_field.control.parameters())
+
+
+def test_torchsynth_finetune_without_base_checkpoint_raises() -> None:
+    """The finetune arms refuse to run against an unnamed pretrained flow."""
+    cfg = _compose("train.yaml", ["experiment=torchsynth/flow_finetune", "trainer=cpu"])
+
+    with pytest.raises(MissingMandatoryValue):
+        _ = cfg.model.base_checkpoint

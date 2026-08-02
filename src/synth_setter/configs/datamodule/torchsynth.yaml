@@ -7,4 +7,7 @@ train_val_test_sizes: [100_000, 10_000, 10_000]
 train_val_test_seeds: [123, 456, 789]
 batch_size: 32
 num_workers: 4
+val_num_workers: 0
+persistent_workers: true
 resample_train_per_epoch: false
+drop_last: false

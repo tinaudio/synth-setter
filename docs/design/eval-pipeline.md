@@ -331,8 +331,9 @@ _target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
-num_workers: 4  # per dataloader — validation doubles the live worker count
-persistent_workers: true  # automatically disabled when num_workers=0
+num_workers: 4  # train, test, and predict loaders
+val_num_workers: 0  # validation stays in-process by default
+persistent_workers: true  # effective per loader only when its worker count is positive
 ```
 
 The surge datamodule variants (`surge.yaml`, `surge_simple.yaml`, ...) are thin overlays of `vst.yaml` and carry no identity of their own; the synth spec is selected at the config root (e.g. `- override /synth: surge_simple` in `experiment/surge/base.yaml`) and reaches the datamodule through `${synth.param_spec_name}`.

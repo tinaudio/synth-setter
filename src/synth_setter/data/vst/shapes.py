@@ -14,6 +14,21 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+# Re-exported for the writers and validator; canonical home is ``conditioning``.
+from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS as NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_CHILD as SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW as SKETCH_CENTROID_ROW,
+    SKETCH_CTRL_FIELD as SKETCH_CTRL_FIELD,
+    SKETCH_LOUDNESS_CHILD as SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW as SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS as SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD as SKETCH_PITCH_CHILD,
+    SKETCH_PITCH_SLICE as SKETCH_PITCH_SLICE,
+    SKETCH_STRUCT_FIELD as SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD as SKETCH_VEC_CHILD,
+)
+
 if TYPE_CHECKING:
     # Type-only on purpose: a runtime import would risk a cycle (spec.py lazily
     # imports the param-spec registry from data.vst).
@@ -39,13 +54,32 @@ SAME_L_FIELD: str = "same_l"
 SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
 TINYMU_FIELD: str = "tinymu"
-SKETCH_CTRL_FIELD: str = "sketch_ctrl"
-# The pitch-row width below is a property of this PESTO checkpoint.
+MATPAC_PLUS_FIELD: str = "matpac_plus"
+PUPUJEPA_TINY_FIELD: str = "pupujepa_tiny"
+PUPUJEPA_LARGE_FIELD: str = "pupujepa_large"
+# Emits the 128-semitone x 3-bin activation width that ``SKETCH_PITCH_BINS`` pins.
 DEFAULT_PESTO_CHECKPOINT: str = "mir-1k_g7"
-# PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
-SKETCH_PITCH_BINS: int = 384
-# Rows: loudness, centroid, then the pitch-activation block.
-NUM_SKETCH_CONTROLS: int = 2 + SKETCH_PITCH_BINS
+
+# Single-parameter sensitivity struct appended by the ``param_shift`` embedder. One nested
+# column keeps the shift's seven facets together and readable as ``shift.param``,
+# ``shift.audio``, ... rather than seven suffixed siblings of the dataset's own columns.
+SHIFT_FIELD: str = "shift"
+SHIFT_PARAM_SUBFIELD: str = "param"
+SHIFT_AMOUNT_SUBFIELD: str = "amount"
+SHIFT_AUDIO_SUBFIELD: str = "audio"
+SHIFT_RMS_SUBFIELD: str = "rms"
+SHIFT_SOT_SUBFIELD: str = "sot"
+SHIFT_WMFCC_SUBFIELD: str = "wmfcc"
+SHIFT_MSS_SUBFIELD: str = "mss"
+SHIFT_SUBFIELD_NAMES: tuple[str, ...] = (
+    SHIFT_PARAM_SUBFIELD,
+    SHIFT_AMOUNT_SUBFIELD,
+    SHIFT_AUDIO_SUBFIELD,
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_WMFCC_SUBFIELD,
+    SHIFT_MSS_SUBFIELD,
+)
 
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.

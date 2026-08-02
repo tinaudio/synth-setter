@@ -1,0 +1,23 @@
+# @package _global_
+
+# Simulator-feedback finetuning of a pretrained torchsynth flow, equation 9: the spectral
+# cost and its parameter gradient enter as the control network's input, never as a loss term,
+# so the objective stays plain conditional flow matching.
+# Requires model.compile=false and a single device (#2585), and
+# model.base_checkpoint=<path> naming the pretrained flow to refine.
+defaults:
+  - torchsynth/flow
+  - override /model: vst_flow_finetune
+  - _self_
+
+run_name: flow_finetune_gradient
+tags: [torchsynth, flow, finetune, simulator_feedback, gradient_spectral]
+
+model:
+  control_mode: gradient_spectral
+
+# The ablation's step budget lives here, not in a launch cmd, so `experiment=` alone
+# reproduces the run (#2118, #2196). torchsynth/flow's own trainer block supplies the
+# validation cadence.
+trainer:
+  max_steps: 20000

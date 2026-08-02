@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 from synth_setter.data.vst.clap_introspect import ClapParamInfo, ClapPluginInfo, dump_clap_plugin
 from synth_setter.data.vst.clap_map import ClapParamRef
+from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import (
     BackendSnapshot,
     DawDreamerParamRef,
@@ -38,16 +39,6 @@ INTROSPECTION_BLOCK_SIZE = 2_048
 PEDALBOARD_FLUSH_DURATION_SECONDS = 32.0
 PEDALBOARD_FLUSH_CHANNELS = 2
 _SURGE_CLAP_OSCILLATOR_NAMES = {
-    f"a_osc_{oscillator}_{semantic_name}": f"A Osc {oscillator} {host_name}"
-    for oscillator in range(1, 4)
-    for semantic_name, host_name in (
-        ("sawtooth", "Shape"),
-        ("width", "Sub Mix"),
-        ("pulse", "Width 1"),
-        ("triangle", "Width 2"),
-    )
-}
-_SURGE_DAWDREAMER_OSCILLATOR_NAMES = {
     f"a_osc_{oscillator}_{semantic_name}": f"A Osc {oscillator} {host_name}"
     for oscillator in range(1, 4)
     for semantic_name, host_name in (
@@ -205,20 +196,6 @@ def _expected_surgepy_name(semantic_key: str, pedalboard_name: str) -> str:
     :returns: SurgePy patch-tree label.
     """
     return _SURGEPY_FX_NAMES.get(semantic_key, pedalboard_name)
-
-
-def _expected_dawdreamer_name(semantic_key: str) -> str:
-    """Return the DawDreamer label declared for one repository semantic key.
-
-    :param semantic_key: Repository-owned parameter identity.
-    :returns: Surge's stable DawDreamer label.
-    """
-    if semantic_key in _SURGE_FX_NAMES:
-        return _SURGE_FX_NAMES[semantic_key]
-    if semantic_key in _SURGE_DAWDREAMER_OSCILLATOR_NAMES:
-        return _SURGE_DAWDREAMER_OSCILLATOR_NAMES[semantic_key]
-    # Pedalboard appends a ``_v`` value suffix that is not part of the host's own label.
-    return semantic_key.removesuffix("_v")
 
 
 def _validate_surgepy_provenance(
@@ -385,20 +362,24 @@ def _resolve_clap_param(
 
 def _resolve_dawdreamer_param(
     semantic_key: str,
+    pedalboard_name: str,
+    *,
     by_name: dict[str, list[HostParam]],
     errors: list[str],
 ) -> HostParam | None:
-    """Resolve a non-FX DawDreamer parameter from a repository semantic key.
+    """Resolve one preset-settled DawDreamer parameter identity.
 
     :param semantic_key: Repository-owned parameter identity.
+    :param pedalboard_name: Active preset-specific VST parameter name.
     :param by_name: DawDreamer normalized-name index.
     :param errors: Aggregated diagnostics destination.
     :returns: Unique DawDreamer record, or ``None`` after a diagnostic.
     """
-    expected_name = _expected_dawdreamer_name(semantic_key)
-    candidates = by_name.get(_normalized_identity(expected_name), [])
+    candidates = by_name.get(_normalized_identity(pedalboard_name), [])
     if len(candidates) != 1:
-        errors.append(f"{semantic_key}: DawDreamer name {expected_name!r} is missing or ambiguous")
+        errors.append(
+            f"{semantic_key}: DawDreamer name {pedalboard_name!r} is missing or ambiguous"
+        )
         return None
     return candidates[0]
 
@@ -468,7 +449,12 @@ def _resolve_param_identity(
         if not _categorical_grid_matches(spec_param, clap_ref):
             errors.append(f"{semantic_key}: categorical grid does not match CLAP steps")
             return None
-    dawdreamer_param = _resolve_dawdreamer_param(semantic_key, dawdreamer_by_name, errors)
+    dawdreamer_param = _resolve_dawdreamer_param(
+        semantic_key,
+        pedalboard_param.name,
+        by_name=dawdreamer_by_name,
+        errors=errors,
+    )
     if dawdreamer_param is None:
         return None
     surgepy_ref = None
@@ -688,7 +674,14 @@ def dump_dawdreamer(
     engine = dawdreamer.RenderEngine(INTROSPECTION_SAMPLE_RATE, INTROSPECTION_BLOCK_SIZE)
     with validated_bundle_lease(plugin) as validated_plugin:
         loaded = engine.make_plugin_processor("synth", str(validated_plugin))
+        # DawDreamer processes restored preset state only after the plugin enters an active graph.
+        engine.load_graph([(loaded, [])])
     loaded.load_vst3_preset(str(preset.resolve()))
+    settle_dawdreamer_preset(
+        engine,
+        sample_rate=INTROSPECTION_SAMPLE_RATE,
+        block_size=INTROSPECTION_BLOCK_SIZE,
+    )
     dump = HostDump(
         plugin=plugin_name,
         plugin_version=plugin_version,

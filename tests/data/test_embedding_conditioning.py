@@ -114,6 +114,46 @@ def test_conditioning_spec_clap_column_routes_to_batch(tmp_path: Path) -> None:
     torch.testing.assert_close(batch["conditioning"], torch.from_numpy(values[:2]))
 
 
+def test_conditioning_spec_flattened_sequence_restores_configured_shape(
+    tmp_path: Path,
+) -> None:
+    """A flattened Lance UDF column is restored to its declared sequence shape.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    values = np.array(
+        [
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+            [12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
+            [18.0, 19.0, 20.0, 21.0, 22.0, 23.0],
+        ],
+        dtype=np.float32,
+    )
+    _write_embedding_shard(tmp_path / "val.lance", column="sequence", values=values)
+    module = _embedding_module(
+        tmp_path,
+        EmbeddingConditioningSpec(column="sequence", input_shape=(2, 3)),
+    )
+
+    module.setup("validate")
+    try:
+        conditioning = next(iter(module.val_dataloader()))["conditioning"]
+    finally:
+        module.teardown()
+
+    assert conditioning is not None
+    torch.testing.assert_close(
+        conditioning,
+        torch.tensor(
+            [
+                [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]],
+                [[6.0, 7.0, 8.0], [9.0, 10.0, 11.0]],
+            ]
+        ),
+    )
+
+
 def test_conditioning_spec_m2l_nondefault_seq_len_pools(tmp_path: Path) -> None:
     """A fixed m2l sequence uses its configured non-42 sequence length.
 
