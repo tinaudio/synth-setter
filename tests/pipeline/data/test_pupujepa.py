@@ -9,6 +9,7 @@ import pytest
 import torch
 
 import synth_setter.pipeline.data.pupujepa as pupujepa_module
+import synth_setter.pupujepa as pupujepa_core
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     PUPUJEPA_LARGE_FIELD,
@@ -84,6 +85,42 @@ def test_default_checkpoint_with_tampered_artifact_raises(
         resolve_pupujepa_checkpoint(variant=variant)
 
 
+def test_default_checkpoint_transient_download_failure_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient Hugging Face failure retries under the external-I/O policy.
+
+    :param tmp_path: Scratch Hugging Face snapshot.
+    :param monkeypatch: Fixture replacing download, hashing, and retry sleep.
+    """
+    snapshot = tmp_path / PUPUJEPA_CHECKPOINT_REVISION
+    args_path = snapshot / PUPUJEPA_TINY_ARGS_FILE
+    weights_path = snapshot / PUPUJEPA_TINY_WEIGHTS_FILE
+    args_path.parent.mkdir(parents=True)
+    weights_path.parent.mkdir(parents=True)
+    args_path.write_text("{}")
+    weights_path.write_bytes(b"weights")
+    attempts = 0
+
+    def download(**_kwargs: object) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("transient")
+        return str(snapshot)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", download)
+    monkeypatch.setattr(pupujepa_core._download_pupujepa_snapshot.retry, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        pupujepa_core,
+        "checkpoint_files_sha256",
+        lambda *_args: pupujepa_core.PUPUJEPA_TINY_CHECKPOINT_SHA256,
+    )
+
+    assert resolve_pupujepa_checkpoint() == snapshot
+    assert attempts == 2
+
+
 def test_pupujepa_large_registry_spec_pins_solo_mean_pooled_sequence() -> None:
     """The registry exposes the immutable PupuJEPA Large sequence policy."""
     spec = EMBEDDING_REGISTRY["pupujepa_large"]
@@ -128,8 +165,8 @@ def test_pupujepa_num_time_patches_supported_lengths_matches_contract(
     assert pupujepa_num_time_patches(num_samples, sample_rate) == expected_patches
 
 
-def test_pupujepa_encoder_input_opposed_stereo_checks_downmixed_bounds() -> None:
-    """Offline bounds match online bounds after stereo downmixing."""
+def test_pupujepa_encoder_input_opposed_out_of_range_stereo_raises() -> None:
+    """Offline bounds reject malformed channels even when their downmix is in range."""
     opposed = np.stack(
         [
             np.full(960, 1.1, dtype=np.float32),
@@ -137,9 +174,8 @@ def test_pupujepa_encoder_input_opposed_stereo_checks_downmixed_bounds() -> None
         ]
     )[None, ...]
 
-    mono = pupujepa_encoder_input(opposed, PUPUJEPA_SAMPLE_RATE)
-
-    np.testing.assert_array_equal(mono, np.zeros((1, 960), dtype=np.float32))
+    with pytest.raises(ValueError, match=r"within \[-1, 1\]"):
+        pupujepa_encoder_input(opposed, PUPUJEPA_SAMPLE_RATE)
 
 
 def test_pupujepa_encoder_input_duplicated_stereo_matches_mono() -> None:

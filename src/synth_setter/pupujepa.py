@@ -9,8 +9,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
+import httpx
 import yaml
 from pydantic import BaseModel, ConfigDict
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from synth_setter.model_cache import checkpoint_files_sha256
 
@@ -448,6 +450,35 @@ def pupujepa_checkpoint_files(
     )
 
 
+@retry(
+    reraise=True,
+    retry=retry_if_exception_type((ConnectionError, TimeoutError, httpx.TransportError)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=4),
+)
+def _download_pupujepa_snapshot(
+    repo_id: str,
+    revision: str,
+    allow_patterns: list[str],
+) -> Path:
+    """Download one pinned artifact selection under the external-I/O retry policy.
+
+    :param repo_id: Hugging Face repository identity.
+    :param revision: Immutable repository commit.
+    :param allow_patterns: Snapshot-relative files to materialize.
+    :returns: Materialized snapshot directory.
+    """
+    from huggingface_hub import snapshot_download
+
+    return Path(
+        snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            allow_patterns=allow_patterns,
+        )
+    )
+
+
 def resolve_pupujepa_checkpoint(
     checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
     revision: str = PUPUJEPA_CHECKPOINT_REVISION,
@@ -476,14 +507,10 @@ def resolve_pupujepa_checkpoint(
             f"PupuJEPA requires HF revision {PUPUJEPA_CHECKPOINT_REVISION}, got {revision}"
         )
 
-    from huggingface_hub import snapshot_download
-
-    snapshot = Path(
-        snapshot_download(
-            repo_id=checkpoint,
-            revision=revision,
-            allow_patterns=[spec.args_file, spec.weights_file],
-        )
+    snapshot = _download_pupujepa_snapshot(
+        checkpoint,
+        revision,
+        [spec.args_file, spec.weights_file],
     )
     artifacts = pupujepa_checkpoint_files(snapshot, variant)
     if snapshot.name != revision:

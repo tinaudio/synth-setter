@@ -361,6 +361,8 @@ class PupuJepaAudioEncoder(nn.Module):
         if len(audio) < 1:
             raise ValueError("PupuJEPA expects a non-empty batch")
         if audio.ndim == 3:
+            if audio.amin() < -1.0 or audio.amax() > 1.0:
+                raise ValueError("PupuJEPA input audio channels must lie within [-1, 1]")
             audio = audio.mean(dim=1)
         elif audio.ndim != 2:
             raise ValueError(

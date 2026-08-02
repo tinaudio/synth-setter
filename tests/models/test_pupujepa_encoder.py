@@ -293,15 +293,14 @@ def test_encoder_empty_waveform_raises_value_error() -> None:
         encoder(torch.empty(1, 0))
 
 
-def test_encoder_opposed_out_of_range_stereo_checks_downmixed_bounds() -> None:
-    """Online bounds accept an in-range mono result after stereo downmixing."""
+def test_encoder_opposed_out_of_range_stereo_raises_value_error() -> None:
+    """Online bounds reject malformed channels even when their downmix is in range."""
     config = _tiny_config()
     encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
     opposed = torch.stack([torch.full((256,), 1.1), torch.full((256,), -1.1)])[None, ...]
 
-    embeddings = encoder(opposed)
-
-    assert embeddings.shape == (1, config.output_dim, 4)
+    with pytest.raises(ValueError, match=r"within \[-1, 1\]"):
+        encoder(opposed)
 
 
 def test_encoder_out_of_range_waveform_raises() -> None:
