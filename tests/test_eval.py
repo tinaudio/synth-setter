@@ -1884,6 +1884,13 @@ def test_train_eval_pupujepa_large_online_conditioning_returns_finite_metric(
     cfg_train = cfg_torchsynth_pupujepa_large_online_train
     HydraConfig().set_config(cfg_train)
     _, train_objects = train(cfg_train)
+    datamodule = train_objects["datamodule"]
+    datamodule.setup("fit")
+    train_params = next(iter(datamodule.train_dataloader()))["params"]
+    validation_params = next(iter(datamodule.val_dataloader()))["params"]
+    train_rows = {tuple(row.tolist()) for row in train_params}
+    validation_rows = {tuple(row.tolist()) for row in validation_params}
+    assert train_rows.isdisjoint(validation_rows)
     checkpoint_path = tmp_path / "pupujepa-large-online.ckpt"
     train_objects["trainer"].save_checkpoint(checkpoint_path)
 

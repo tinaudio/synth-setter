@@ -487,7 +487,7 @@ def cfg_torchsynth_pupujepa_large_online_train(tmp_path: Path) -> DictConfig:
     _configure_online_conditioning_smoke(cfg, tmp_path)
     with open_dict(cfg):
         cfg.datamodule.sample_rate = 24_000
-        cfg.datamodule.signal_length = 960
+        cfg.datamodule.signal_length = 24_000
         cfg.datamodule.train_val_test_sizes = [2, 2, 2]
         cfg.datamodule.batch_size = 2
     return cfg

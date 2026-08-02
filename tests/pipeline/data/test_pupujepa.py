@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pytest
 import torch
@@ -118,6 +119,53 @@ def test_default_checkpoint_transient_download_failure_retries(
 
     assert resolve_pupujepa_checkpoint() == snapshot
     assert attempts == 2
+
+
+def test_default_checkpoint_transient_http_failure_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hugging Face throttling retries without retrying permanent responses.
+
+    :param tmp_path: Successful second-attempt snapshot path.
+    :param monkeypatch: Fixture replacing the Hugging Face download boundary.
+    """
+    attempts = 0
+
+    def download(**_kwargs: object) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            response = httpx.Response(
+                429,
+                request=httpx.Request("GET", "https://huggingface.co"),
+            )
+            raise pupujepa_core.HfHubHTTPError("throttled", response=response)
+        return str(tmp_path)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", download)
+
+    assert pupujepa_core._download_pupujepa_snapshot("repo", "revision", ["file"]) == tmp_path
+    assert attempts == 2
+
+
+def test_default_checkpoint_named_local_directory_does_not_shadow_remote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The canonical repository ID always resolves through Hugging Face.
+
+    :param tmp_path: Working directory containing a shadowing relative path.
+    :param monkeypatch: Fixture replacing cwd and the download boundary.
+    """
+    (tmp_path / DEFAULT_PUPUJEPA_TINY_CHECKPOINT).mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    def reject_download(**_kwargs: object) -> str:
+        raise RuntimeError("remote resolution used")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", reject_download)
+
+    with pytest.raises(RuntimeError, match="remote resolution used"):
+        resolve_pupujepa_checkpoint()
 
 
 def test_pupujepa_large_registry_spec_pins_solo_mean_pooled_sequence() -> None:

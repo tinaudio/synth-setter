@@ -11,6 +11,7 @@ from typing import Literal
 
 import httpx
 import yaml
+from huggingface_hub.errors import HfHubHTTPError
 from pydantic import BaseModel, ConfigDict
 
 from synth_setter.model_cache import checkpoint_files_sha256, retry_external_io
@@ -463,16 +464,23 @@ def _download_pupujepa_snapshot(
     :param revision: Immutable repository commit.
     :param allow_patterns: Snapshot-relative files to materialize.
     :returns: Materialized snapshot directory.
+    :raises ConnectionError: Hugging Face returns a transient HTTP response.
+    :raises HfHubHTTPError: Hugging Face returns a permanent HTTP response.
     """
     from huggingface_hub import snapshot_download
 
-    return Path(
-        snapshot_download(
+    try:
+        snapshot = snapshot_download(
             repo_id=repo_id,
             revision=revision,
             allow_patterns=allow_patterns,
         )
-    )
+    except HfHubHTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code == 429 or (status_code is not None and status_code >= 500):
+            raise ConnectionError(f"transient Hugging Face response: {status_code}") from exc
+        raise
+    return Path(snapshot)
 
 
 def resolve_pupujepa_checkpoint(
@@ -490,7 +498,7 @@ def resolve_pupujepa_checkpoint(
     """
     spec = PUPUJEPA_CHECKPOINT_SPECS[variant]
     local = Path(checkpoint).expanduser()
-    if local.is_dir():
+    if checkpoint != DEFAULT_PUPUJEPA_CHECKPOINT and local.is_dir():
         pupujepa_checkpoint_files(local, variant)
         return local.resolve()
     if checkpoint != DEFAULT_PUPUJEPA_CHECKPOINT:

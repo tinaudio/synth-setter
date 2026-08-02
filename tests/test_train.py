@@ -2247,10 +2247,10 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
-def _assert_model_predictions_depend_on_cached_conditioning(
+def _assert_model_predictions_depend_on_conditioning(
     object_dict: dict[str, Any],
 ) -> None:
-    """Assert the trained model keeps a gradient path from cached vectors.
+    """Assert the trained model keeps a gradient path from conditioning.
 
     :param object_dict: Objects returned by the train entrypoint.
     """
@@ -2258,7 +2258,7 @@ def _assert_model_predictions_depend_on_cached_conditioning(
     datamodule = object_dict["datamodule"]
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
-    conditioning = batch["conditioning"].detach().requires_grad_(True)
+    conditioning = batch[model._conditioning_key].detach().requires_grad_(True)
     predictions = model._sample(
         conditioning,
         torch.zeros_like(batch["params"]),
@@ -2270,6 +2270,29 @@ def _assert_model_predictions_depend_on_cached_conditioning(
 
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
+
+
+def _assert_model_predictions_change_with_conditioning(object_dict: dict[str, Any]) -> None:
+    """Assert conditioning rows alter predictions under identical noise.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch[model._conditioning_key]
+    noise = torch.zeros_like(batch["params"])
+
+    predictions = model._sample(conditioning, noise, steps=1, cfg_strength=1.0)
+    swapped_predictions = model._sample(
+        conditioning.roll(1, dims=0),
+        noise,
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    assert not torch.equal(predictions, swapped_predictions)
 
 
 @pytest.mark.requires_vst
@@ -2303,7 +2326,7 @@ def test_train_pupujepa_large_cached_conditioning_returns_finite_loss(
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
-    _assert_model_predictions_depend_on_cached_conditioning(object_dict)
+    _assert_model_predictions_depend_on_conditioning(object_dict)
 
 
 @pytest.mark.slow
@@ -2321,6 +2344,7 @@ def test_train_pupujepa_large_online_conditioning_returns_finite_loss(
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_change_with_conditioning(object_dict)
 
 
 @pytest.mark.requires_vst
@@ -2401,7 +2425,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
         )
         assert_finite_train_loss(metric_dict)
         if conditioning == "ssondo":
-            _assert_model_predictions_depend_on_cached_conditioning(object_dict)
+            _assert_model_predictions_depend_on_conditioning(object_dict)
             _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(

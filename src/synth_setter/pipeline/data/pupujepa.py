@@ -109,7 +109,7 @@ def _encode_pupujepa_column(
 def encode_pupujepa_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: object
 ) -> pa.Array:
-    """Encode the PupuJEPA Tiny sequence column.
+    """Return fixed-shape Arrow rows from the Tiny teacher.
 
     :param sources: Decoded source columns carrying ``(B, C, T)`` waveforms.
     :param sample_rate: Dataset sample rate in Hz.
@@ -128,7 +128,7 @@ def encode_pupujepa_column(
 def encode_pupujepa_large_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: object
 ) -> pa.Array:
-    """Encode the PupuJEPA Large sequence column.
+    """Return fixed-shape Arrow rows from the Large teacher.
 
     :param sources: Decoded source columns carrying ``(B, C, T)`` waveforms.
     :param sample_rate: Dataset sample rate in Hz.

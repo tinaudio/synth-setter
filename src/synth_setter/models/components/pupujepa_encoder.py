@@ -262,18 +262,28 @@ class PupuJepaAudioEncoder(nn.Module):
         *,
         sample_rate: int,
         config: PupuJepaConfig = PUPUJEPA_TINY_CONFIG,
-        max_batch_size: int = 16,
+        max_batch_size: int | None = None,
     ) -> None:
         """Build a frozen teacher for waveforms arriving at ``sample_rate``.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param config: Explicit PupuJEPA frontend and teacher geometry.
-        :param max_batch_size: Maximum waveforms per teacher forward.
+        :param max_batch_size: Maximum waveforms per teacher forward; released variant cap when
+            omitted.
         :raises ValueError: The source rate or batch cap is non-positive.
         """
         super().__init__()
         if sample_rate < 1:
             raise ValueError(f"PupuJEPA needs a positive sample_rate, got {sample_rate}")
+        if max_batch_size is None:
+            max_batch_size = next(
+                (
+                    spec.encode_max_batch
+                    for spec in PUPUJEPA_CHECKPOINT_SPECS.values()
+                    if spec.config == config
+                ),
+                PUPUJEPA_CHECKPOINT_SPECS["tiny"].encode_max_batch,
+            )
         if max_batch_size < 1:
             raise ValueError(f"PupuJEPA needs a positive max_batch_size, got {max_batch_size}")
         self.sample_rate = sample_rate
