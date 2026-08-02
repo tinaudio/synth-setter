@@ -59,6 +59,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_clap_preserves_resampler_output,
     assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
@@ -227,6 +228,9 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
     assert encoder.backbone.out_dim == 8
     assert not encoder.backbone.clap.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
+    assert_clap_preserves_resampler_output(
+        encoder.backbone, cfg_torchsynth_clap_online_train.model.encoder.backbone.checkpoint
+    )
 
 
 @pytest.mark.slow

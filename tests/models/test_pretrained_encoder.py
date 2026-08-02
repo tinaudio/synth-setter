@@ -284,10 +284,10 @@ def test_clap_target_sample_rate_comes_from_feature_extractor(
     assert encoder.target_sample_rate == target_sample_rate
 
 
-def test_clap_features_match_huggingface_after_44100_hz_resampling(
+def test_clap_features_match_materialized_path_after_44100_hz_resampling(
     clap_checkpoint: str,
 ) -> None:
-    """The shipped TorchSynth rate matches HF after the documented resampling.
+    """The online frontend preserves the resampler output used by stored embeddings.
 
     :param clap_checkpoint: Self-contained reference extractor checkpoint.
     """
@@ -299,13 +299,14 @@ def test_clap_features_match_huggingface_after_44100_hz_resampling(
         backbone_config=_TINY_CLAP_CONFIG,
     )
     extractor = ClapFeatureExtractor.from_pretrained(clap_checkpoint)
-    resampled = audio_fn.resample(audio, sample_rate, _SAMPLE_RATE).clamp(-1.0, 1.0)
+    resampled = audio_fn.resample(audio, sample_rate, _SAMPLE_RATE)
     expected = extractor(list(resampled.numpy()), sampling_rate=_SAMPLE_RATE, return_tensors="pt")[
         "input_features"
     ]
 
     actual = encoder.features(audio)
 
+    assert resampled.abs().max() > 1.0
     assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
 
 
@@ -607,54 +608,38 @@ def test_checkpoint_load_with_missing_trainable_key_remains_strict(
         module.load_state_dict(state, strict=True)
 
 
-def test_clap_features_clamp_finite_values_before_and_after_resampling(
-    clap_checkpoint: str,
-) -> None:
-    """Finite overshoot follows the extractor path with both boundary clamps applied.
-
-    :param clap_checkpoint: Self-contained tiny CLAP checkpoint.
-    """
-    source_sample_rate = 44_100
-    audio = 2.0 * torch.sin(torch.arange(source_sample_rate, dtype=torch.float32) * 0.01)
-    encoder = ClapAudioEncoder.from_random_config(
-        sample_rate=source_sample_rate,
-        checkpoint=clap_checkpoint,
-        backbone_config=_TINY_CLAP_CONFIG,
-    )
-    resampled = audio_fn.resample(audio.clamp(-1.0, 1.0), source_sample_rate, _SAMPLE_RATE)
-    expected = ClapFeatureExtractor.from_pretrained(clap_checkpoint)(
-        [resampled.clamp(-1.0, 1.0).numpy()],
-        sampling_rate=_SAMPLE_RATE,
-        return_tensors="pt",
-    )["input_features"]
-
-    actual = encoder.features(audio.unsqueeze(0))
-
-    assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
-
-
-def test_clap_finite_value_clamp_preserves_gradient_for_saturated_samples(
+def test_clap_features_with_cancelling_out_of_range_stereo_raises(
     clap_encoder: ClapAudioEncoder,
 ) -> None:
-    """The clamp changes forward values without trapping an overshooting waveform.
+    """Stereo cancellation cannot hide a source-channel bounds violation.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    audio = torch.stack((torch.full((4_800,), 2.0), torch.full((4_800,), -2.0))).unsqueeze(0)
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        clap_encoder.features(audio)
+
+
+def test_clap_features_with_out_of_range_source_audio_raises(
+    clap_encoder: ClapAudioEncoder,
+) -> None:
+    """Source samples outside the waveform contract fail instead of being clipped.
 
     :param clap_encoder: Small frozen CLAP encoder under test.
     """
     audio = (2.0 * torch.sin(torch.arange(4_800, dtype=torch.float32) * 0.01)).unsqueeze(0)
-    audio.requires_grad_()
 
-    (gradient,) = torch.autograd.grad(clap_encoder.features(audio).square().mean(), audio)
-
-    assert torch.isfinite(gradient).all()
-    assert torch.count_nonzero(gradient).item() > 0
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        clap_encoder.features(audio)
 
 
 @pytest.mark.parametrize("non_finite", [float("nan"), float("inf")])
-def test_clap_finite_value_clamp_preserves_non_finite_propagation(
+def test_clap_features_with_non_finite_source_audio_raises(
     clap_encoder: ClapAudioEncoder,
     non_finite: float,
 ) -> None:
-    """NaN and infinity remain observable instead of being hidden by clipping.
+    """NaN and infinity fail at the waveform boundary.
 
     :param clap_encoder: Small frozen CLAP encoder under test.
     :param non_finite: Non-finite sample under test.
@@ -662,9 +647,8 @@ def test_clap_finite_value_clamp_preserves_non_finite_propagation(
     audio = torch.zeros(1, 4_800)
     audio[0, 0] = non_finite
 
-    features = clap_encoder.features(audio)
-
-    assert not torch.isfinite(features).all()
+    with pytest.raises(ValueError, match="finite"):
+        clap_encoder.features(audio)
 
 
 def test_clap_features_with_empty_audio_raises(clap_encoder: ClapAudioEncoder) -> None:
@@ -674,3 +658,12 @@ def test_clap_features_with_empty_audio_raises(clap_encoder: ClapAudioEncoder) -
     """
     with pytest.raises(ValueError, match="empty"):
         clap_encoder.features(torch.empty(1, 0))
+
+
+def test_clap_features_with_zero_channels_raises(clap_encoder: ClapAudioEncoder) -> None:
+    """An empty channel axis fails before downmixing can create NaNs.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    with pytest.raises(ValueError, match="channel"):
+        clap_encoder.features(torch.empty(1, 0, 4_800))

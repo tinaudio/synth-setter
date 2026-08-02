@@ -24,6 +24,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.conditioning import NUM_SKETCH_TRACK_ROWS, SKETCH_PITCH_BINS
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
+from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -70,6 +71,30 @@ _EMBEDDING_E2E_CHECKPOINTS = {
     "same_s": embedding_model_dir("same-s"),
     "t5gemma": embedding_model_dir("sa3-small-music"),
 }
+
+
+def assert_clap_preserves_resampler_output(encoder: ClapAudioEncoder, checkpoint: str) -> None:
+    """Assert that online CLAP matches the materialized preprocessing contract.
+
+    :param encoder: Entrypoint-instantiated online CLAP encoder.
+    :param checkpoint: Feature-extractor checkpoint used by the encoder.
+    """
+    import torchaudio.functional as audio_fn
+    from transformers import ClapFeatureExtractor
+
+    duration_seconds = encoder.max_samples / encoder.target_sample_rate
+    source_samples = round(duration_seconds * encoder.sample_rate)
+    samples = torch.arange(source_samples, dtype=torch.float32)
+    waveform = torch.sin(samples * 0.01).unsqueeze(0)
+    resampled = audio_fn.resample(waveform, encoder.sample_rate, encoder.target_sample_rate)
+    expected = ClapFeatureExtractor.from_pretrained(checkpoint)(
+        list(resampled.numpy()),
+        sampling_rate=encoder.target_sample_rate,
+        return_tensors="pt",
+    )["input_features"]
+
+    assert resampled.abs().max() > 1.0
+    assert torch.allclose(encoder.features(waveform), expected, atol=1e-5, rtol=0.0)
 
 
 def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
@@ -563,13 +588,13 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
         )
     _configure_online_conditioning_smoke(cfg, tmp_path)
     with open_dict(cfg):
-        cfg.datamodule.sample_rate = 48_000
-        cfg.datamodule.signal_length = 4_800
+        cfg.datamodule.sample_rate = 44_100
+        cfg.datamodule.signal_length = 4_410
         cfg.model.audio_loss.t_min = 0.0
         cfg.model.encoder.backbone._target_ = (
             "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_random_config"
         )
-        cfg.model.encoder.backbone.sample_rate = 48_000
+        cfg.model.encoder.backbone.sample_rate = 44_100
         cfg.model.encoder.backbone.checkpoint = str(checkpoint_dir)
         cfg.model.encoder.backbone.checkpoint_sha256 = None
         cfg.model.encoder.backbone.backbone_config = tiny_clap_config

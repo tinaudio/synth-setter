@@ -55,6 +55,7 @@ from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     REAL_VST_VARIANTS,
     _render_smoke_train_subprocess,
+    assert_clap_preserves_resampler_output,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embedding,
     augment_lance_splits_with_embeddings,
@@ -607,6 +608,7 @@ def test_eval_torchsynth_clap_online_validates_real_offline_backbone(
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert_clap_preserves_resampler_output(encoder.backbone, cfg.model.encoder.backbone.checkpoint)
 
 
 @pytest.mark.slow
