@@ -196,6 +196,7 @@ def test_align_native_attack_undersized_source_raises() -> None:
         )
 
 
+@pytest.mark.requires_surgepy
 @pytest.mark.parametrize(
     ("note_end", "expected_release_sample"),
     [
@@ -244,6 +245,7 @@ def test_surgepy_renderer_note_end_preserves_quantized_duration(
     assert np.all(audio[:, expected_release_sample:] == -1.0)
 
 
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_event_after_retained_output_returns_silence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -264,6 +266,7 @@ def test_surgepy_renderer_event_after_retained_output_returns_silence(
     assert synth.method_calls == []
 
 
+@pytest.mark.requires_surgepy
 def test_surgepy_renderer_non_block_aligned_note_preserves_native_attack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
