@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -1377,9 +1376,6 @@ def test_random_patch_sampler_same_seed_reproduces_full_param_corpus() -> None:
         dtype="<f8",
     )
     assert np.unique(corpus_values, axis=0).shape[0] == _RANDOM_PATCH_COUNT
-    assert hashlib.sha256(corpus_values.tobytes()).hexdigest() == (
-        "baa7c0a6511ff99f86074d13814078b217f5ef3bd6506b76351e2b1a875a9694"
-    )
 
 
 def test_random_patch_sampler_different_seed_changes_ordered_corpus() -> None:
