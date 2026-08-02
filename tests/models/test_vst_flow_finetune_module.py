@@ -4,6 +4,7 @@ Every arm renders real torchsynth audio through the production differentiable re
 with the production spectral distance; nothing here stands in for the simulator.
 """
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -241,6 +242,27 @@ def test_finetune_module_from_base_checkpoint_restores_every_pretrained_weight(
     for name, value in base.state_dict().items():
         key = name.replace("vector_field.", _FLOW_PREFIX, 1) if "vector_field." in name else name
         assert torch.equal(restored[key], value), name
+
+
+def test_finetune_module_records_sanitized_base_checkpoint_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loaded bytes and credential-free source are retained for run logging.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Pytest environment isolation fixture.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    expected_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    monkeypatch.setenv(
+        "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE",
+        "https://user:secret@example.test/base.ckpt?token=x#part",
+    )
+
+    module = _finetune(checkpoint)
+
+    assert module.hparams["base_checkpoint_source"] == "https://example.test/base.ckpt"
+    assert module.hparams["base_checkpoint_sha256"] == expected_sha256
 
 
 def test_finetune_module_with_mismatched_checkpoint_raises(tmp_path: Path) -> None:

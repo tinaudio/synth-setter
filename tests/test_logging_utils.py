@@ -23,6 +23,7 @@ from omegaconf import OmegaConf
 
 from synth_setter.utils.logging_utils import (
     LINEAGE_INCOMPLETE_TAG,
+    log_hyperparameters,
     log_wandb_provenance,
     mark_lineage_incomplete,
     pin_wandb_run_id,
@@ -30,6 +31,7 @@ from synth_setter.utils.logging_utils import (
     resolve_run_config_id,
     use_input_artifacts,
 )
+from tests.helpers.recording_wandb_logger import RecordingWandbLogger
 
 # Enables the ``pytester`` fixture used by the singleton-isolation regression test
 # to run a controlled, order-pinned sub-session independent of pytest-randomly.
@@ -57,6 +59,27 @@ def make_fake_wandb(*, has_run: bool = True) -> SimpleNamespace:
         config=FakeWandbConfig(),
         __spec__=object(),
     )
+
+
+def test_log_hyperparameters_includes_runtime_checkpoint_identity() -> None:
+    """W&B receives the source and digest produced while loading."""
+    logger = RecordingWandbLogger()
+    model = SimpleNamespace(
+        hparams={
+            "base_checkpoint_source": "r2:checkpoints/base.ckpt",
+            "base_checkpoint_sha256": "a" * 64,
+        },
+        parameters=lambda: (),
+    )
+    cfg = OmegaConf.create(
+        {"model": {"base_checkpoint": "base.ckpt"}, "datamodule": {}, "trainer": {}}
+    )
+    trainer = SimpleNamespace(logger=logger, loggers=[logger])
+
+    log_hyperparameters({"cfg": cfg, "model": model, "trainer": trainer})
+
+    assert logger.experiment.config["base_checkpoint_source"] == "r2:checkpoints/base.ckpt"
+    assert logger.experiment.config["base_checkpoint_sha256"] == "a" * 64
 
 
 # ---------------------------------------------------------------------------
