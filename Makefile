@@ -173,9 +173,22 @@ install-ultramaster-kr106: install-studiorack ## Install pinned Ultramaster KR-1
 install-plugins: install-studiorack ## Install every VST3 pinned in studiorack.json
 	$(STUDIORACK) install
 
+link-plugins: SHELL := /bin/bash
 link-plugins: ## Link installed Studiorack packages into the checkout's plugins/ namespace
-	@$(STUDIORACK) link
-	@$(STUDIORACK) --manifest studiorack-cardinal.json link
+	@set -e; \
+	primary="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir)")" && pwd)"; \
+	here="$$(git rev-parse --show-toplevel)"; \
+	central="$$primary/plugins"; \
+	if [[ "$$primary" != "$$here" && -L "$$here/plugins" && "$$(readlink "$$here/plugins")" == "$$central" ]]; then \
+		[[ -d "$$central" ]] || { echo "ERROR: primary plugins directory is unavailable: $$central" >&2; exit 1; }; \
+		echo "plugins/ already linked -> $$central"; \
+	elif [[ "$$primary" != "$$here" && -d "$$central" && ! -e "$$here/plugins" && ! -L "$$here/plugins" ]]; then \
+		ln -s "$$central" "$$here/plugins"; \
+		echo "plugins/ linked -> $$central"; \
+	else \
+		$(STUDIORACK) link; \
+		$(STUDIORACK) --manifest studiorack-cardinal.json link; \
+	fi
 
 # Symlink this worktree's gitignored thoughts/ to the primary's central thoughts/
 # so qrspi docs from every worktree converge; migrates pre-existing files first.
