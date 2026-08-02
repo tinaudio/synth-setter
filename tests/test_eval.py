@@ -1841,16 +1841,33 @@ def test_train_eval_pupujepa_large_conditioning_real_lance_returns_finite_metric
     :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
     :param param_spec_name: Parameter specification driving model width.
     """
+    validation_split = surge_xt_embedding_smoke_datasets / "val.lance"
+    shutil.rmtree(validation_split)
+    _render_smoke_train_subprocess(validation_split, param_spec_name, base_seed=1)
+    train_audio = lance.dataset(surge_xt_embedding_smoke_datasets / "train.lance").to_table(
+        columns=[AUDIO_FIELD]
+    )
+    validation_audio = lance.dataset(validation_split).to_table(columns=[AUDIO_FIELD])
+    train_rows = {
+        np.asarray(row.as_py(), dtype=np.float32).tobytes()
+        for row in train_audio.column(AUDIO_FIELD)
+    }
+    validation_rows = {
+        np.asarray(row.as_py(), dtype=np.float32).tobytes()
+        for row in validation_audio.column(AUDIO_FIELD)
+    }
+    assert train_rows.isdisjoint(validation_rows)
     dataset_root = augment_lance_splits_with_embedding(
         surge_xt_embedding_smoke_datasets, "pupujepa_large"
     )
 
-    _assert_conditioning_train_validate_finite(
+    validation_mse = _assert_conditioning_train_validate_finite(
         tmp_path,
         dataset_root,
         param_spec_name,
         "pupujepa_large",
     )
+    assert validation_mse < 2.0
 
 
 @pytest.mark.slow
@@ -1881,7 +1898,9 @@ def test_train_eval_pupujepa_large_online_conditioning_returns_finite_metric(
     finally:
         GlobalHydra.instance().clear()
 
-    assert math.isfinite(metric_dict["val/param_mse"].item())
+    validation_mse = metric_dict["val/param_mse"].item()
+    assert math.isfinite(validation_mse)
+    assert validation_mse < 2.0
 
 
 @pytest.mark.requires_vst

@@ -4,8 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+
+def retry_external_io[**P, R](
+    *, retry_exceptions: tuple[type[BaseException], ...]
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Build the shared bounded retry policy for transient external I/O.
+
+    :param retry_exceptions: Transient exception types safe to retry.
+    :returns: Decorator applying three attempts with bounded exponential backoff.
+    """
+
+    def decorate(operation: Callable[P, R]) -> Callable[P, R]:
+        return retry(
+            reraise=True,
+            retry=retry_if_exception_type(retry_exceptions),
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=1, max=4),
+        )(operation)
+
+    return decorate
 
 
 def synth_setter_cache_dir() -> Path:

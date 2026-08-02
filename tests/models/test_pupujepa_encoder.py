@@ -284,6 +284,40 @@ def test_conditioning_training_step_updates_pool_not_teacher() -> None:
     assert all(parameter.grad is None for parameter in backbone.parameters())
 
 
+@pytest.mark.slow
+def test_pupujepa_online_conditioning_overfits_fixed_batch() -> None:
+    """The trainable pool learns a fixed mapping from frozen teacher states."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PretrainedConditioningEncoder(
+        backbone=PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config),
+        head=EmbeddingPool(
+            embed_dim=config.output_dim,
+            d_model=8,
+            num_heads=1,
+            max_seq_len=4,
+        ),
+        out_dim=8,
+    )
+    predictor = torch.nn.Linear(8, 2)
+    audio = torch.randn(2, 256).clamp(-1.0, 1.0)
+    with torch.no_grad():
+        embeddings = encoder.embed(audio)
+    targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
+    optimizer = torch.optim.Adam((*encoder.head.parameters(), *predictor.parameters()), lr=3e-3)
+
+    initial_loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+    loss = initial_loss
+    for _ in range(1_000):
+        optimizer.zero_grad()
+        loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert loss.item() < initial_loss.item() / 100
+    assert loss.item() < 0.01
+
+
 def test_encoder_empty_waveform_raises_value_error() -> None:
     """Empty online waveforms retain the public validation error contract."""
     config = _tiny_config()
@@ -291,6 +325,15 @@ def test_encoder_empty_waveform_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="positive num_samples"):
         encoder(torch.empty(1, 0))
+
+
+def test_encoder_empty_channel_axis_raises_value_error() -> None:
+    """A channel-first batch must contain one or two channels."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+
+    with pytest.raises(ValueError, match="1 or 2 channels"):
+        encoder(torch.empty(1, 0, 256))
 
 
 def test_encoder_opposed_out_of_range_stereo_raises_value_error() -> None:

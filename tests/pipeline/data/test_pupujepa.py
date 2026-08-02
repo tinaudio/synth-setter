@@ -91,7 +91,7 @@ def test_default_checkpoint_transient_download_failure_retries(
     """A transient Hugging Face failure retries under the external-I/O policy.
 
     :param tmp_path: Scratch Hugging Face snapshot.
-    :param monkeypatch: Fixture replacing download, hashing, and retry sleep.
+    :param monkeypatch: Fixture replacing download and hashing.
     """
     snapshot = tmp_path / PUPUJEPA_CHECKPOINT_REVISION
     args_path = snapshot / PUPUJEPA_TINY_ARGS_FILE
@@ -110,7 +110,6 @@ def test_default_checkpoint_transient_download_failure_retries(
         return str(snapshot)
 
     monkeypatch.setattr("huggingface_hub.snapshot_download", download)
-    monkeypatch.setattr(pupujepa_core._download_pupujepa_snapshot.retry, "sleep", lambda _: None)
     monkeypatch.setattr(
         pupujepa_core,
         "checkpoint_files_sha256",

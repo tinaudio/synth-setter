@@ -32,6 +32,7 @@ from synth_setter.pupujepa import (
 )
 
 _BATCH_AUDIO = "batch ... samples"
+_BATCH_MONO = "batch samples"
 _BATCH_MEL = "batch 1 frames mel"
 _BATCH_PATCHES = "batch patches hidden"
 _BATCH_SEQUENCE = "batch embedding time_patches"
@@ -343,6 +344,34 @@ class PupuJepaAudioEncoder(nn.Module):
         return self
 
     @jaxtyped(typechecker=beartype)
+    def _validate_and_downmix(
+        self, audio: Float[Tensor, _BATCH_AUDIO]
+    ) -> Float[Tensor, _BATCH_MONO]:
+        """Validate a waveform batch and return mono audio.
+
+        :param audio: Waveforms shaped ``(B, T)`` or ``(B, C, T)``.
+        :returns: Mono waveforms shaped ``(B, T)``.
+        :raises ValueError: Shape or amplitude violates the teacher contract.
+        """
+        if len(audio) < 1:
+            raise ValueError("PupuJEPA expects a non-empty batch")
+        if audio.ndim not in (2, 3):
+            raise ValueError(
+                f"PupuJEPA audio must have shape (B, T) or (B, C, T), got {tuple(audio.shape)}"
+            )
+        if audio.shape[-1] < 1:
+            raise ValueError("PupuJEPA requires positive num_samples, got 0")
+        if audio.ndim == 3:
+            if audio.shape[1] not in (1, 2):
+                raise ValueError(f"PupuJEPA expects 1 or 2 channels, got {audio.shape[1]}")
+            if audio.amin() < -1.0 or audio.amax() > 1.0:
+                raise ValueError("PupuJEPA input audio channels must lie within [-1, 1]")
+            audio = audio.mean(dim=1)
+        if audio.amin() < -1.0 or audio.amax() > 1.0:
+            raise ValueError("PupuJEPA input audio must lie within [-1, 1] after downmixing")
+        return audio
+
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
         audio: Float[Tensor, _BATCH_AUDIO],
@@ -358,19 +387,8 @@ class PupuJepaAudioEncoder(nn.Module):
         source_rate = self.sample_rate if sample_rate is None else sample_rate
         if source_rate < 1:
             raise ValueError(f"PupuJEPA needs a positive sample_rate, got {source_rate}")
-        if len(audio) < 1:
-            raise ValueError("PupuJEPA expects a non-empty batch")
-        if audio.ndim == 3:
-            if audio.amin() < -1.0 or audio.amax() > 1.0:
-                raise ValueError("PupuJEPA input audio channels must lie within [-1, 1]")
-            audio = audio.mean(dim=1)
-        elif audio.ndim != 2:
-            raise ValueError(
-                f"PupuJEPA audio must have shape (B, T) or (B, C, T), got {tuple(audio.shape)}"
-            )
+        audio = self._validate_and_downmix(audio)
         expected_patches = pupujepa_num_time_patches(audio.shape[-1], source_rate, self.config)
-        if audio.amin() < -1.0 or audio.amax() > 1.0:
-            raise ValueError("PupuJEPA input audio must lie within [-1, 1] after downmixing")
         with torch.autocast(device_type=audio.device.type, enabled=False):
             waveform = audio.float()
             if source_rate != self.config.sample_rate:

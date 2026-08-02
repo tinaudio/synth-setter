@@ -12,9 +12,8 @@ from typing import Literal
 import httpx
 import yaml
 from pydantic import BaseModel, ConfigDict
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from synth_setter.model_cache import checkpoint_files_sha256
+from synth_setter.model_cache import checkpoint_files_sha256, retry_external_io
 
 PUPUJEPA_UPSTREAM_COMMIT = "54a621e9f879be7659d81b6a3c493bba855cc85f"
 PUPUJEPA_TIMM_VERSION = "1.0.28"
@@ -450,11 +449,8 @@ def pupujepa_checkpoint_files(
     )
 
 
-@retry(
-    reraise=True,
-    retry=retry_if_exception_type((ConnectionError, TimeoutError, httpx.TransportError)),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=4),
+@retry_external_io(
+    retry_exceptions=(ConnectionError, TimeoutError, httpx.TransportError),
 )
 def _download_pupujepa_snapshot(
     repo_id: str,
