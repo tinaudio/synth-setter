@@ -6,7 +6,34 @@ import sys
 
 import pytest
 
-from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
+from synth_setter.data.vst.dawdreamer_runtime import (
+    ensure_dawdreamer_runtime,
+    settle_dawdreamer_preset,
+)
+
+
+def test_settle_dawdreamer_preset_processes_multiple_complete_blocks() -> None:
+    """Preset settlement advances several callbacks at the engine block duration."""
+
+    class Engine:
+        """Record the durations processed by the settlement contract."""
+
+        def __init__(self) -> None:
+            """Create an engine with no processed callbacks."""
+            self.durations: list[float] = []
+
+        def render(self, duration: float) -> None:
+            """Record one processed callback duration.
+
+            :param duration: Processing duration in seconds.
+            """
+            self.durations.append(duration)
+
+    engine = Engine()
+
+    settle_dawdreamer_preset(engine, sample_rate=44_100, block_size=2_048)
+
+    assert engine.durations == [pytest.approx(2_048 / 44_100)] * 8
 
 
 def test_pedalboard_backend_does_not_probe_dawdreamer(
