@@ -47,6 +47,52 @@ DAWDREAMER_BLOCK_SIZE = 2048
 # Surge's legacy automation scale is load-bearing for saved host parameter values.
 _SURGE_INT_NORMALIZED_OFFSET = 0.005
 _SURGE_INT_NORMALIZED_SCALE = 0.99
+_SURGEPY_NATIVE_CHANNELS = 2
+
+
+def _sample_index_at_or_after(time_seconds: float, sample_rate: float) -> int:
+    """Return the first sample at or after an event time.
+
+    :param time_seconds: Requested event time in seconds.
+    :param sample_rate: Samples per second.
+    :returns: First sample at or after the event.
+    """
+    sample_position = time_seconds * sample_rate
+    sample_before = math.floor(sample_position)
+    if time_seconds <= sample_before / sample_rate:
+        return sample_before
+    return sample_before + 1
+
+
+def _align_native_attack(
+    audio: np.ndarray,
+    *,
+    samples: int,
+    start_sample: int,
+    source_start: int,
+) -> np.ndarray:
+    """Place the first native attack sample at the requested output sample.
+
+    :param audio: Native buffer shaped ``(2, N)`` with channels first.
+    :param samples: Retained output sample count.
+    :param start_sample: Requested first output sample.
+    :param source_start: Native buffer index where the attack begins.
+    :returns: Stereo float32 output with a silent pre-event prefix.
+    :raises ValueError: If the buffer shape or sample interval cannot satisfy the output.
+    """
+    source_end = source_start + samples - start_sample
+    if (
+        audio.ndim != 2
+        or audio.shape[0] != _SURGEPY_NATIVE_CHANNELS
+        or not 0 <= start_sample <= samples
+        or source_start < 0
+        or audio.shape[1] < source_end
+    ):
+        raise ValueError("invalid SurgePy attack buffer or sample interval")
+    rendered = np.asarray(audio, dtype=np.float32)
+    aligned = np.zeros((_SURGEPY_NATIVE_CHANNELS, samples), dtype=np.float32)
+    aligned[:, start_sample:] = rendered[:, source_start:source_end]
+    return aligned
 
 
 class _DawDreamerParameterDescription(TypedDict):
@@ -324,7 +370,7 @@ class SurgePyRenderer(AudioRenderer):
         """
         if self.plugin_path != SURGEPY_PLUGIN_NAME:
             raise ValueError('SurgePy renderer requires plugin_path="surgepy"')
-        if self.channels not in (1, 2):
+        if self.channels not in (1, _SURGEPY_NATIVE_CHANNELS):
             raise ValueError("SurgePy renderer supports one or two output channels")
         if not self.plugin_state_path:
             raise ValueError("SurgePy renderer requires an .fxp patch")
@@ -473,15 +519,18 @@ class SurgePyRenderer(AudioRenderer):
         :param samples: Exact output sample count after block trimming.
         :param start: Requested note start in seconds.
         :param end: Requested note end in seconds.
-        :returns: Native stereo output trimmed to ``samples``.
+        :returns: Stereo output with the native attack aligned to the requested start.
         """
+        start_sample = _sample_index_at_or_after(start, self.sample_rate)
+        if start_sample >= samples:
+            return np.zeros((_SURGEPY_NATIVE_CHANNELS, samples), dtype=np.float32)
         block_size = self.synth.getBlockSize()
         num_blocks = math.ceil(samples / block_size)
-        start_block = math.floor(start * self.sample_rate / block_size)
-        end_block = min(
-            num_blocks,
-            max(start_block + 1, math.ceil(end * self.sample_rate / block_size)),
-        )
+        start_block = start_sample // block_size
+        end_sample = _sample_index_at_or_after(end, self.sample_rate)
+        note_samples = max(1, end_sample - start_sample)
+        note_blocks = math.ceil(note_samples / block_size)
+        end_block = min(num_blocks, start_block + note_blocks)
         audio = self.synth.createMultiBlock(num_blocks)
         try:
             self._process_blocks(audio, start_block=0, num_blocks=start_block)
@@ -499,7 +548,12 @@ class SurgePyRenderer(AudioRenderer):
             )
         finally:
             self.synth.allNotesOff()
-        return np.asarray(audio[:, :samples], dtype=np.float32)
+        return _align_native_attack(
+            audio,
+            samples=samples,
+            start_sample=start_sample,
+            source_start=start_block * block_size,
+        )
 
     def render(
         self,
@@ -535,7 +589,11 @@ class SurgePyRenderer(AudioRenderer):
             start=start,
             end=end,
         )
-        matched = trimmed if self.channels == 2 else trimmed.mean(axis=0, keepdims=True)
+        matched = (
+            trimmed
+            if self.channels == _SURGEPY_NATIVE_CHANNELS
+            else trimmed.mean(axis=0, keepdims=True)
+        )
         return _validate_rendered_audio(matched, channels=self.channels, samples=samples)
 
     def _process_blocks(
@@ -557,7 +615,7 @@ class SurgePyRenderer(AudioRenderer):
         required_samples = (start_block + num_blocks) * block_size
         if (
             audio.ndim != 2
-            or audio.shape[0] != 2
+            or audio.shape[0] != _SURGEPY_NATIVE_CHANNELS
             or start_block < 0
             or num_blocks < 0
             or audio.shape[1] < required_samples
