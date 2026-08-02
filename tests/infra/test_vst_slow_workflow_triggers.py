@@ -73,6 +73,18 @@ def test_vst_slow_meanaudio_changes_trigger_real_eval_e2e(
 
 
 @pytest.mark.infra
+def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None:
+    """The real-VST workflow surfaces and publishes the random diagnostic series.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    """
+    workflow_text = (project_root / ".github" / "workflows" / WORKFLOW_FILENAME).read_text()
+
+    assert workflow_text.count("surge-host-parity-random-patches.json") >= 3
+    assert "Surge host diagnostics (random patches)" in workflow_text
+
+
+@pytest.mark.infra
 def test_vst_slow_triggers_declare_no_yaml_anchors(project_root: Path) -> None:
     """Neither trigger deduplicates through an anchor GitHub Actions cannot parse.
 
