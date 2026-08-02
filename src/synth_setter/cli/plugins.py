@@ -71,6 +71,7 @@ def main(
     """
     ctx.ensure_object(dict)
     ctx.obj.update(
+        artifact_lock=manifest.with_suffix(".lock.json"),
         manifest=PluginManifest.load(manifest),
         plugins_dir=plugins_dir,
         links_dir=links_dir,
@@ -98,6 +99,7 @@ def install_command(ctx: click.Context, packages: tuple[str, ...]) -> None:
         selected = manifest.selected(packages)
         install_plugins(
             selected,
+            artifact_lock=ctx.obj["artifact_lock"],
             plugins_dir=ctx.obj["plugins_dir"],
             studiorack_executable=ctx.obj["studiorack_executable"],
         )

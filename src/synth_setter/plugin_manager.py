@@ -20,7 +20,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-_EXACT_SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+_SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+_SEMVER_PRERELEASE_IDENTIFIER = rf"(?:{_SEMVER_NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+_EXACT_SEMVER = re.compile(
+    rf"^{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}"
+    rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 _PACKAGE_SLUG = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*/[0-9A-Za-z][0-9A-Za-z._-]*$")
 
 
@@ -73,6 +79,10 @@ class PluginManifest(BaseModel):
     .. attribute :: vst3_bundles
 
         Package slug to the VST3 bundle synth-setter loads.
+
+    .. attribute :: vst3_versions
+
+        Package slug to the exact version reported by the installed VST3, when declared.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", populate_by_name=True, frozen=True)
@@ -81,21 +91,31 @@ class PluginManifest(BaseModel):
     type: Literal["project"]
     plugins: dict[str, str]
     vst3_bundles: dict[str, str] = Field(alias="vst3Bundles")
+    vst3_versions: dict[str, str] | None = Field(default=None, alias="vst3Versions")
 
     @model_validator(mode="after")
     def _validate_packages(self) -> PluginManifest:
         """Require exact versions and one bundle mapping per package.
 
         :returns: The validated manifest.
-        :raises ValueError: A slug/version is invalid or bundle keys differ from plugin keys.
+        :raises ValueError: A slug/version is invalid or metadata keys differ from plugin keys.
         """
-        if self.plugins.keys() != self.vst3_bundles.keys():
+        package_keys = self.plugins.keys()
+        if package_keys != self.vst3_bundles.keys():
             raise ValueError("plugins and vst3Bundles must contain the same package keys")
-        for package, version in self.plugins.items():
+        vst3_versions = self.vst3_versions
+        if vst3_versions is not None and package_keys != vst3_versions.keys():
+            raise ValueError("plugins and vst3Versions must contain the same package keys")
+        for package, package_version in self.plugins.items():
             if _PACKAGE_SLUG.fullmatch(package) is None:
                 raise ValueError(f"invalid Studiorack package slug: {package!r}")
-            if _EXACT_SEMVER.fullmatch(version) is None:
+            if _EXACT_SEMVER.fullmatch(package_version) is None:
                 raise ValueError(f"{package} version must be an exact semantic version")
+            if (
+                vst3_versions is not None
+                and _EXACT_SEMVER.fullmatch(vst3_versions[package]) is None
+            ):
+                raise ValueError(f"{package} VST3 version must be an exact semantic version")
             bundle = self.vst3_bundles[package]
             if Path(bundle).name != bundle or not bundle.endswith(".vst3"):
                 raise ValueError(f"{package} bundle must be a .vst3 basename")
@@ -270,6 +290,7 @@ def _run_studiorack(argv: Sequence[str]) -> None:
 def install_plugins(
     plugins: Iterable[ManagedPlugin],
     *,
+    artifact_lock: Path,
     plugins_dir: Path,
     studiorack_executable: Path,
     system_dirs: Iterable[Path] | None = None,
@@ -277,6 +298,7 @@ def install_plugins(
     """Install exact packages through the Studiorack CLI.
 
     :param plugins: Exact package metadata.
+    :param artifact_lock: Repository-controlled artifact lock for the selected manifest.
     :param plugins_dir: Absolute Studiorack storage root.
     :param studiorack_executable: Pinned CLI executable.
     :param system_dirs: Native-installer VST3 roots; platform defaults when omitted.
@@ -287,9 +309,13 @@ def install_plugins(
         raise FileNotFoundError(
             f"Studiorack CLI not found at {studiorack_executable}; run `npm ci` first"
         )
+    resolved_lock = artifact_lock.expanduser().resolve()
+    if not resolved_lock.is_file():
+        raise FileNotFoundError(f"Studiorack artifact lock does not exist: {resolved_lock}")
     resolved_dir = plugins_dir.expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
     _run_studiorack([executable, "config", "set", "pluginsDir", str(resolved_dir)])
+    _run_studiorack([executable, "config", "set", "artifactLockPath", str(resolved_lock)])
     roots = default_system_vst3_dirs() if system_dirs is None else tuple(system_dirs)
     for plugin in plugins:
         _run_studiorack([executable, "plugins", "install", plugin.reference])
