@@ -83,6 +83,9 @@ def main(
     lock_path = artifact_lock or manifest.with_suffix(".lock.json")
     try:
         loaded_manifest = PluginManifest.load(manifest)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(f"{manifest}: {exc}") from exc
+    try:
         loaded_lock = ArtifactLock.load(lock_path, loaded_manifest)
     except (OSError, ValueError) as exc:
         raise click.ClickException(f"{lock_path}: {exc}") from exc

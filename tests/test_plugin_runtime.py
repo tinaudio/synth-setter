@@ -468,6 +468,56 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert plugin_manager.validate_plugin_bundle_for_runtime(alias) == alias.resolve(strict=True)
 
 
+def test_replace_managed_alias_symlinked_ownership_rejected_before_target_read(
+    tmp_path: Path,
+) -> None:
+    """A symlinked ownership record is rejected without following its target.
+
+    :param tmp_path: Scratch root containing an unreadable record target.
+    """
+    alias = tmp_path / "plugins/Example Synth.vst3"
+    alias.parent.mkdir(parents=True)
+    ownership, _ = plugin_runtime.managed_alias_paths(alias)
+    sensitive = tmp_path / "sensitive.json"
+    sensitive.write_text('{"managed_bundle":"/outside/secret.vst3"}')
+    sensitive.chmod(0)
+    ownership.symlink_to(sensitive)
+
+    with pytest.raises(FileExistsError, match="not a regular file"):
+        plugin_runtime.replace_managed_alias(alias, tmp_path / "managed/Example Synth.vst3")
+
+
+def test_replace_managed_alias_racing_regular_file_is_not_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file racing temporary symlink creation survives failed publication.
+
+    :param tmp_path: Scratch root for alias publication.
+    :param monkeypatch: Injects a deterministic competing file creation.
+    """
+    alias = tmp_path / "plugins/Example Synth.vst3"
+    alias.parent.mkdir(parents=True)
+    racing_paths: list[Path] = []
+    real_symlink_to = Path.symlink_to
+
+    def _race_symlink(
+        path: Path,
+        target: Path,
+        target_is_directory: bool = False,
+    ) -> None:
+        if path.parent != alias.parent:
+            path.write_text("unrelated")
+            racing_paths.append(path)
+        real_symlink_to(path, target, target_is_directory=target_is_directory)
+
+    monkeypatch.setattr(Path, "symlink_to", _race_symlink)
+
+    with pytest.raises(FileExistsError):
+        plugin_runtime.replace_managed_alias(alias, tmp_path / "managed/Example Synth.vst3")
+
+    assert racing_paths[0].read_text() == "unrelated"
+
+
 def test_link_plugin_ownership_enospc_exposes_no_new_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

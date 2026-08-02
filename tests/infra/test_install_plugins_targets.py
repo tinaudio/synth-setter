@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CI_CONDA_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-conda.yml"
 CI_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test.yml"
 MAKEFILE = PROJECT_ROOT / "Makefile"
 DOCKERFILE = PROJECT_ROOT / "docker/ubuntu22_04/Dockerfile"
@@ -60,6 +61,7 @@ def test_studiorack_manifest_pins_runtime_plugin_set() -> None:
         **payload["plugins"],
         "asb2m10/dexed": "1.0.0",
     }
+    assert payload["vst3PluginNames"] == {"baconpaul/six-sines": "Six Sines"}
 
 
 def test_cardinal_manifest_pins_optional_plugin() -> None:
@@ -143,6 +145,17 @@ def test_ci_executes_installed_patched_core_artifact_lock_test() -> None:
     assert scripts["test"] == "node --test scripts/studiorack/test-artifact-lock.mjs"
     assert "npm ci" in workflow
     assert "npm test" in workflow
+
+
+def test_conda_ci_installs_patched_studiorack_before_pytest() -> None:
+    """Conda CI provisions the Node integration dependency before collection."""
+    workflow = CI_CONDA_WORKFLOW.read_text()
+    parsed = yaml.safe_load(workflow)
+
+    assert "actions/setup-node@" in workflow
+    assert workflow.index("npm ci") < workflow.index("pytest -n auto")
+    for event in ("push", "pull_request"):
+        assert {"package.json", "package-lock.json"} <= set(parsed[True][event]["paths"])
 
 
 def test_package_lock_pins_studiorack_cli_and_core() -> None:

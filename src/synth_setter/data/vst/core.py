@@ -52,7 +52,7 @@ def extract_renderer_version(plugin_path: Path) -> str:
     worker compare against this function's output before rendering (see
     `synth_setter.cli.generate_dataset.generate`).
 
-    :raises FileNotFoundError: plugin_path does not exist.
+    :raises FileNotFoundError: The bundle path or required managed-integrity record is absent.
     """
     if str(plugin_path) == FAUST_PLUGIN_NAME:
         return importlib.metadata.version("dawdreamer")

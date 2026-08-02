@@ -31,15 +31,26 @@ pytestmark = pytest.mark.skipif(
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    """Serve local registry files without request-log noise."""
+
     def log_message(self, format: str, *args: object) -> None:
         pass
 
 
 @contextmanager
 def _https_server(root: Path, certificate: Path, key: Path) -> Iterator[str]:
+    """Serve a fixture directory over loopback TLS 1.2 or newer.
+
+    :param root: Directory exposed by the local registry.
+    :param certificate: Loopback server certificate.
+    :param key: Private key corresponding to ``certificate``.
+    :yields: HTTPS origin for the running server.
+    :ytype: str
+    """
     handler = partial(_QuietHandler, directory=str(root))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certificate, key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     worker = threading.Thread(target=server.serve_forever, daemon=True)

@@ -43,8 +43,54 @@ def test_manifest_load_valid_project_returns_pinned_plugin(tmp_path: Path) -> No
     assert plugin.version == "1.2.3"
     assert plugin.renderer_version == "1.2.3"
     assert plugin.bundle == "Example Synth.vst3"
+    assert plugin.plugin_name is None
     assert plugin.reference == "example/synth@1.2.3"
     assert manifest.vst3_versions is None
+
+
+def test_manifest_multi_class_plugin_name_reaches_version_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manifest selects the class used to validate a multi-class bundle.
+
+    :param tmp_path: Scratch root for one manifest and VST3 bundle.
+    :param monkeypatch: Replaces the Pedalboard factory with a class-selecting fake.
+    """
+    manifest_path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(manifest_path.read_text())
+    payload["vst3PluginNames"] = {"example/synth": "Example Synth"}
+    manifest_path.write_text(json.dumps(payload))
+    plugin = PluginManifest.load(manifest_path).resolve("example/synth")
+    bundle = _bundle(tmp_path / plugin.bundle)
+    (bundle / "Contents/moduleinfo.json").unlink()
+    selected_names: list[str | None] = []
+
+    class _MultiClassPlugin:
+        """Record the factory class selected during version validation.
+
+        .. attribute :: version
+            :type: str
+
+            Renderer version exposed to the validator.
+        """
+
+        version: str = "1.2.3"
+
+        def __init__(self, path: str, plugin_name: str | None = None) -> None:
+            """Capture the requested factory class.
+
+            :param path: Installed bundle passed to the fake factory.
+            :param plugin_name: Selected class name.
+            """
+            del path
+            selected_names.append(plugin_name)
+
+    monkeypatch.setattr("pedalboard.VST3Plugin", _MultiClassPlugin)
+
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=bundle)
+
+    assert managed.resolve(strict=True) == bundle.resolve(strict=True)
+    assert selected_names == ["Example Synth"]
 
 
 def test_manifest_explicit_renderer_version_differs_from_package_version(tmp_path: Path) -> None:
@@ -375,6 +421,21 @@ def test_plugins_cli_link_value_error_renders_click_error(tmp_path: Path) -> Non
     assert result.exit_code == 1
     assert "Error: refusing managed parent symlink" in result.output
     assert "Traceback" not in result.output
+
+
+def test_plugins_cli_invalid_manifest_reports_manifest_path(tmp_path: Path) -> None:
+    """Manifest parse failures identify the manifest rather than its sibling lock.
+
+    :param tmp_path: Scratch root containing malformed manifest JSON.
+    """
+    manifest = tmp_path / "broken.json"
+    manifest.write_text("not json")
+
+    result = CliRunner().invoke(main, ["--manifest", str(manifest), "resolve", "example/synth"])
+
+    assert result.exit_code == 1
+    assert str(manifest) in result.output
+    assert str(manifest.with_suffix(".lock.json")) not in result.output
 
 
 def test_plugins_cli_custom_manifest_missing_sibling_lock_rejected(tmp_path: Path) -> None:

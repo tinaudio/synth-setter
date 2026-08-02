@@ -1,6 +1,7 @@
 """Contract tests for the focused managed-plugin integrity boundary."""
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from synth_setter.plugin_integrity import (
     bundle_is_sealed,
     locked_package_digest,
     seal_plugin_bundle,
+    write_atomic_record,
 )
 from synth_setter.plugin_manager import PluginManifest, resolve_plugin_bundle
 from synth_setter.plugin_runtime import (
@@ -63,6 +65,18 @@ def test_plugin_integrity_public_api_imports_from_focused_module() -> None:
     assert plugin_bundle_version.__module__ == "synth_setter.plugin_runtime"
     assert seal_plugin_bundle.__module__ == "synth_setter.plugin_integrity"
     assert validate_plugin_bundle_for_runtime.__module__ == "synth_setter.plugin_runtime"
+
+
+def test_write_atomic_record_privileged_writer_remains_world_readable(tmp_path: Path) -> None:
+    """Runtime metadata written by another user remains readable.
+
+    :param tmp_path: Scratch root for one public integrity record.
+    """
+    record = tmp_path / "record.json"
+
+    write_atomic_record(record, "{}")
+
+    assert stat.S_IMODE(record.stat().st_mode) == 0o644
 
 
 def test_managed_bundle_storage_validates_and_discards_integrity_records(

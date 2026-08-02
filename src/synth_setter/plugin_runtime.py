@@ -12,6 +12,7 @@ Typical usage holds validation through plugin construction::
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import plistlib
@@ -171,17 +172,40 @@ def discard_managed_bundle_records(bundle: Path) -> None:
 
 
 def _optional_regular_text(path: Path, description: str) -> str | None:
+    """Read an optional regular file without following its final path component.
+
+    :param path: Candidate metadata path.
+    :param description: Record description used in rejection messages.
+    :returns: UTF-8 contents, or ``None`` when the path is absent.
+    :raises FileExistsError: The path is a symlink or another non-regular file.
+    :raises OSError: Opening or inspecting the path fails for another reason.
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
-        mode = path.lstat().st_mode
-        serialized = path.read_text(encoding="utf-8")
+        descriptor = os.open(path, flags)
     except FileNotFoundError:
         return None
-    if not stat.S_ISREG(mode):
-        raise FileExistsError(f"{description} is not a regular file: {path}")
-    return serialized
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise FileExistsError(f"{description} is not a regular file: {path}") from exc
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise FileExistsError(f"{description} is not a regular file: {path}")
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            descriptor = -1
+            return stream.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _existing_alias_record(alias: Path) -> ManagedAliasRecord | None:
+    """Load an alias ownership record when present.
+
+    :param alias: Stable alias whose sidecar is read.
+    :returns: Validated ownership, or ``None`` when no sidecar exists.
+    """
     ownership_path, _ = managed_alias_paths(alias)
     serialized = _optional_regular_text(ownership_path, "managed alias ownership")
     if serialized is None:
@@ -190,6 +214,11 @@ def _existing_alias_record(alias: Path) -> ManagedAliasRecord | None:
 
 
 def _restore_alias_record(alias: Path, record: ManagedAliasRecord | None) -> None:
+    """Restore or remove the ownership sidecar for an alias.
+
+    :param alias: Stable alias whose sidecar is restored.
+    :param record: Prior ownership, or ``None`` when no sidecar should remain.
+    """
     path, _ = managed_alias_paths(alias)
     if record is None:
         path.unlink(missing_ok=True)
@@ -294,10 +323,8 @@ def replace_managed_alias(alias: Path, managed_bundle: Path) -> None:
         transaction_path,
         transaction.model_dump_json(indent=2, by_alias=True),
     )
-    descriptor, temporary_name = tempfile.mkstemp(dir=alias.parent)
-    os.close(descriptor)
-    temporary = Path(temporary_name)
-    temporary.unlink()
+    temporary_directory = Path(tempfile.mkdtemp(dir=alias.parent))
+    temporary = temporary_directory / ".candidate"
     try:
         temporary.symlink_to(managed_bundle.absolute(), target_is_directory=True)
         try:
@@ -308,7 +335,12 @@ def replace_managed_alias(alias: Path, managed_bundle: Path) -> None:
             raise
         transaction_path.unlink()
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary.is_symlink():
+            temporary.unlink()
+        try:
+            temporary_directory.rmdir()
+        except OSError:
+            pass
 
 
 def _managed_storage_identity(managed: Path) -> tuple[Path, str, str] | None:
@@ -534,10 +566,11 @@ def managed_plugin_digest(bundle: Path) -> str | None:
         return integrity.bundle_identity_digest(identity[1])
 
 
-def plugin_bundle_version(bundle: Path) -> str:
+def plugin_bundle_version(bundle: Path, plugin_name: str | None = None) -> str:
     """Read static or factory version metadata while holding the bundle lease.
 
     :param bundle: Existing VST3 bundle.
+    :param plugin_name: Factory class selected when the bundle exposes multiple plugins.
     :returns: Version reported by static metadata or the VST3 factory.
     :raises RuntimeError: The VST3 factory reports no version.
     """
@@ -551,7 +584,12 @@ def plugin_bundle_version(bundle: Path) -> str:
 
         from pedalboard import VST3Plugin
 
-        version = VST3Plugin(str(validated_bundle)).version
+        plugin = (
+            VST3Plugin(str(validated_bundle))
+            if plugin_name is None
+            else VST3Plugin(str(validated_bundle), plugin_name=plugin_name)
+        )
+        version = plugin.version
         if not version:
             raise RuntimeError(f"Could not extract version from {validated_bundle}")
         return version
