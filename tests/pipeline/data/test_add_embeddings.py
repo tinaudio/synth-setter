@@ -431,6 +431,66 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
 
 
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_loader_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Each PupuJEPA registry adapter selects its released teacher size.
+
+    :param monkeypatch: Fixture replacing heavyweight teacher loading.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_pupujepa_audio_encoder",
+        lambda checkpoint, *, device, variant: (
+            calls.append((checkpoint, device, variant)) or (lambda audio, rate: audio)
+        ),
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    spec.load_encoder(
+        "custom/pupujepa",
+        AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"),
+    )
+
+    assert calls == [("custom/pupujepa", "cpu", variant)]
+
+
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_artifact_identity_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Artifact identities hash only the selected teacher size.
+
+    :param monkeypatch: Fixture replacing checkpoint hashing.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.pupujepa_artifact_digest",
+        lambda checkpoint, selected: calls.append((checkpoint, selected)) or "digest",
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    identity = spec.resolve_artifact_identity("custom/pupujepa")
+
+    assert calls == [("custom/pupujepa", variant)]
+    assert "digest" in identity
+
+
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
     """Registry policy objects are immutable after construction."""
     with pytest.raises(FrozenInstanceError):
