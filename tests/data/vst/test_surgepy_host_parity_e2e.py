@@ -179,6 +179,15 @@ _SOT_MAX = 0.01
 _SURGEPY_PRESET_PATH = Path("presets/surge-base.fxp")
 _VST_PRESET_PATH = Path("presets/surge-base.vstpreset")
 _WMFCC_MAX = 2.0
+_OUT_OF_LIMIT_METRIC_ROW: MetricRow = {
+    "sample": 7,
+    "mel_rmse": 50.0,
+    "mss": 60.0,
+    "rms": 0.5,
+    "rms_distance": 0.5,
+    "sot": 0.1,
+    "wmfcc": 20.0,
+}
 
 
 @dataclass(frozen=True)
@@ -349,7 +358,7 @@ def _pair_metric_rows(
     rows: list[MetricRow] = []
     for index in range(len(reference.audio)):
         mel_delta = reference.mel[index] - candidate.mel[index]
-        rms = float(compute_rms(reference.audio[index], candidate.audio[index]))
+        rms = float(np.clip(compute_rms(reference.audio[index], candidate.audio[index]), -1.0, 1.0))
         rows.append(
             {
                 "sample": index,
@@ -1380,15 +1389,7 @@ def test_random_patch_sampler_different_seed_changes_ordered_corpus() -> None:
 
 def test_random_diagnostic_entries_retain_out_of_limit_metric_rows() -> None:
     """Preserve diagnostic values that would fail the strict parity gates."""
-    row: MetricRow = {
-        "sample": 7,
-        "mel_rmse": 50.0,
-        "mss": 60.0,
-        "rms": 0.5,
-        "rms_distance": 0.5,
-        "sot": 0.1,
-        "wmfcc": 20.0,
-    }
+    row = _OUT_OF_LIMIT_METRIC_ROW
     result = _BackendResult(
         audio=np.zeros((1, 2, 8), dtype=np.float32),
         mel=np.zeros((1, *_EXPECTED_MEL_SHAPE), dtype=np.float32),
@@ -1418,15 +1419,7 @@ def test_gated_workloads_reject_out_of_limit_random_metric_row(workload: str) ->
 
     :param workload: Published workload whose quality gates must remain active.
     """
-    row: MetricRow = {
-        "sample": 7,
-        "mel_rmse": 50.0,
-        "mss": 60.0,
-        "rms": 0.5,
-        "rms_distance": 0.5,
-        "sot": 0.1,
-        "wmfcc": 20.0,
-    }
+    row = _OUT_OF_LIMIT_METRIC_ROW
 
     with pytest.raises(AssertionError):
         _assert_pair_metrics(workload, {"pedalboard-vs-surgepy": [row]})
@@ -1439,6 +1432,27 @@ def test_random_patch_config_scopes_loudness_override() -> None:
 
     assert regular.min_loudness == -55.0
     assert diagnostic.min_loudness == _RANDOM_MIN_LOUDNESS
+
+
+def test_pair_metric_rows_store_cosine_distance_as_one_minus_similarity() -> None:
+    """Keep persisted RMS similarity and distance mathematically paired."""
+    config = _config("pedalboard", 1)
+    sample_count = int(config.sample_rate * config.signal_duration_seconds)
+    time_axis = np.arange(sample_count, dtype=np.float32) / config.sample_rate
+    mono = np.sin(2 * np.pi * 220.0 * time_axis, dtype=np.float32)
+    audio = np.stack([[mono, mono]])
+    result = _BackendResult(
+        audio=audio,
+        mel=np.zeros((1, *_EXPECTED_MEL_SHAPE), dtype=np.float32),
+        params=np.zeros((1, 1), dtype=np.float32),
+        total_seconds=0.0,
+    )
+
+    row = _pair_metric_rows(result, result)[0]
+
+    assert row["rms"] == pytest.approx(1.0)
+    assert row["rms_distance"] == pytest.approx(0.0)
+    assert row["rms_distance"] == pytest.approx(1.0 - row["rms"])
 
 
 def test_pair_gate_reports_workload_backend_pair_and_sample() -> None:
