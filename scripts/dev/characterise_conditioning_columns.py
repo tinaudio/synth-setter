@@ -549,7 +549,12 @@ def render_markdown(results: Mapping[str, ColumnStatistics], dataset_uri: str) -
     )
     rows = [header]
     for name, stats in results.items():
-        frame_cv = "—" if stats.frame_l2_cv_mean is None else _format(stats.frame_l2_cv_mean)
+        frame_cv_value = stats.frame_l2_cv_mean
+        frame_cv = (
+            "—"
+            if frame_cv_value is None or not math.isfinite(frame_cv_value)
+            else _format(frame_cv_value)
+        )
         rows.append(
             f"| {name} | {stats.rows} | {_triple(stats.channel_mean)} | "
             f"{_triple(stats.channel_std)} | {_format(stats.global_mean)} | "

@@ -18,6 +18,7 @@ from scripts.dev.characterise_conditioning_columns import (
     analyse_dataset,
     discover_conditioning_columns,
     matpac_band_views,
+    render_markdown,
 )
 
 
@@ -91,6 +92,17 @@ def test_streaming_statistics_zero_magnitude_sequence_reports_undefined_frame_cv
     statistics.update(np.zeros((1, 2, 2), dtype=np.float32))
 
     assert math.isnan(cast(float, statistics.result().frame_l2_cv_mean))
+
+
+def test_render_markdown_undefined_frame_cv_uses_em_dash() -> None:
+    """Undefined frame-norm variation is displayed as unavailable, not NaN."""
+    statistics = StreamingStatistics(shape=(2, 2))
+    statistics.update(np.zeros((1, 2, 2), dtype=np.float32))
+
+    report = render_markdown({"zero": statistics.result()}, "sample.lance")
+
+    assert "nan" not in report
+    assert report.rstrip().endswith("| — |")
 
 
 def test_matpac_band_views_splits_channel_axis_without_changing_frames() -> None:
