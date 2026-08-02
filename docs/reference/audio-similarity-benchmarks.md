@@ -111,11 +111,30 @@ changes filter cutoff and oscillator octave independently to verify that each ho
 applies both mapped controls in the expected direction.
 
 Every matched render is checked separately with MSS, wMFCC, SOT, RMS-envelope
-cosine, and persisted-mel RMSE. The existing broad quality limits remain unchanged
-while workload coverage is established. Audio must also begin no earlier than the
-requested MIDI sample and no backend may lag its independent Pedalboard/DawDreamer
-controls by more than two samples. Failures identify the workload, backend or pair,
-and sample.
+cosine, and persisted-mel RMSE. The inclusive quality limits are mel RMSE ≤ 5.0,
+MSS ≤ 6.0, RMS-envelope cosine ≥ 0.99, SOT ≤ 0.01, and wMFCC ≤ 2.0. Audio must
+also begin no earlier than the requested MIDI sample, and no backend may lag its
+independent Pedalboard/DawDreamer controls by more than two samples. Failures
+identify the workload, backend or pair, and sample.
+
+These limits retain margin above the worst per-render metrics from a fresh local
+production-path run of the schema-v2 stack:
+
+| Workload | Backend pair          | Mel RMSE max |  MSS max | RMS cosine min |  SOT max | wMFCC max |
+| -------- | --------------------- | -----------: | -------: | -------------: | -------: | --------: |
+| Causal   | Pedalboard/DawDreamer |     3.921572 | 4.140047 |       0.997562 | 0.004929 |  1.725243 |
+| Causal   | Pedalboard/SurgePy    |     2.956012 | 3.162385 |       0.996242 | 0.005979 |  1.709796 |
+| Causal   | DawDreamer/SurgePy    |     4.192492 | 4.783963 |       0.995598 | 0.006689 |  1.692569 |
+| Repeated | Pedalboard/DawDreamer |     2.006619 | 0.548264 |       0.999992 | 0.006141 |  1.290381 |
+| Repeated | Pedalboard/SurgePy    |     2.048773 | 0.562696 |       0.999988 | 0.006270 |  1.311894 |
+| Repeated | DawDreamer/SurgePy    |     2.095637 | 0.590306 |       0.999994 | 0.006022 |  1.296896 |
+| Diverse  | Pedalboard/DawDreamer |     2.885695 | 0.631247 |       0.999566 | 0.006062 |  1.406065 |
+| Diverse  | Pedalboard/SurgePy    |     2.985338 | 0.677610 |       0.999293 | 0.006087 |  1.424524 |
+| Diverse  | DawDreamer/SurgePy    |     2.868343 | 0.619145 |       0.999756 | 0.006071 |  1.423413 |
+
+A separate causal calibration attempt reached an RMS-cosine minimum of 0.994525;
+the 0.99 floor preserves run-to-run margin while still replacing the previous 0.8
+gross-regression gate.
 
 | Workload       | Bucket name                           | JSON file                                |
 | -------------- | ------------------------------------- | ---------------------------------------- |
