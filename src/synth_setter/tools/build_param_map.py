@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 from synth_setter.data.vst.clap_introspect import ClapParamInfo, ClapPluginInfo, dump_clap_plugin
 from synth_setter.data.vst.clap_map import ClapParamRef
+from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import (
     BackendSnapshot,
     DawDreamerParamRef,
@@ -385,16 +386,26 @@ def _resolve_clap_param(
 
 def _resolve_dawdreamer_param(
     semantic_key: str,
+    pedalboard_name: str,
     by_name: dict[str, list[HostParam]],
     errors: list[str],
 ) -> HostParam | None:
-    """Resolve a non-FX DawDreamer parameter from a repository semantic key.
+    """Resolve one preset-settled DawDreamer parameter identity.
 
     :param semantic_key: Repository-owned parameter identity.
+    :param pedalboard_name: Active preset-specific VST parameter name.
     :param by_name: DawDreamer normalized-name index.
     :param errors: Aggregated diagnostics destination.
     :returns: Unique DawDreamer record, or ``None`` after a diagnostic.
     """
+    settled_candidates = by_name.get(_normalized_identity(pedalboard_name), [])
+    if len(settled_candidates) == 1:
+        return settled_candidates[0]
+    if len(settled_candidates) > 1:
+        errors.append(
+            f"{semantic_key}: DawDreamer name {pedalboard_name!r} is missing or ambiguous"
+        )
+        return None
     expected_name = _expected_dawdreamer_name(semantic_key)
     candidates = by_name.get(_normalized_identity(expected_name), [])
     if len(candidates) != 1:
@@ -468,7 +479,12 @@ def _resolve_param_identity(
         if not _categorical_grid_matches(spec_param, clap_ref):
             errors.append(f"{semantic_key}: categorical grid does not match CLAP steps")
             return None
-    dawdreamer_param = _resolve_dawdreamer_param(semantic_key, dawdreamer_by_name, errors)
+    dawdreamer_param = _resolve_dawdreamer_param(
+        semantic_key,
+        pedalboard_param.name,
+        dawdreamer_by_name,
+        errors,
+    )
     if dawdreamer_param is None:
         return None
     surgepy_ref = None
@@ -685,7 +701,13 @@ def dump_dawdreamer(
     dawdreamer = import_module("dawdreamer")
     engine = dawdreamer.RenderEngine(INTROSPECTION_SAMPLE_RATE, INTROSPECTION_BLOCK_SIZE)
     loaded = engine.make_plugin_processor("synth", str(plugin.resolve()))
+    engine.load_graph([(loaded, [])])
     loaded.load_vst3_preset(str(preset.resolve()))
+    settle_dawdreamer_preset(
+        engine,
+        sample_rate=INTROSPECTION_SAMPLE_RATE,
+        block_size=INTROSPECTION_BLOCK_SIZE,
+    )
     dump = HostDump(
         plugin=plugin_name,
         plugin_version=plugin_version,

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 import numpy as np
 
+from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import SynthParamMap
 from synth_setter.data.vst.torchsynth_param_spec import (
     DEFAULT_NORMALIZED_PATCH,
@@ -43,8 +44,6 @@ if TYPE_CHECKING:
 
 # Both DawDreamer hosts pin the engine block size as a runtime invariant.
 DAWDREAMER_BLOCK_SIZE = 2048
-# Discarded audio rendered after a preset load so the restored graph is live (#2543).
-PRESET_SETTLE_SECONDS = 0.1
 # Surge's legacy automation scale is load-bearing for saved host parameter values.
 _SURGE_INT_NORMALIZED_OFFSET = 0.005
 _SURGE_INT_NORMALIZED_SCALE = 0.99
@@ -972,6 +971,8 @@ class DawDreamerRenderer(AudioRenderer):
             self.plugin.load_vst3_preset(self.plugin_state_path)
         else:
             self.plugin.load_preset(self.plugin_state_path)
-        # A preset can rebuild the plugin's internal graph, and hosts apply that on the
-        # audio thread; parameters dispatched before it is live are silently dropped.
-        self.engine.render(PRESET_SETTLE_SECONDS)
+        settle_dawdreamer_preset(
+            self.engine,
+            sample_rate=self.sample_rate,
+            block_size=self.block_size,
+        )
