@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785706628947,
+  "lastUpdate": 1785706631460,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -23630,6 +23630,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.845314105299986,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a352d57cb983ba8b2ff4191c8edfed93c7791405",
+          "message": "internal-fix(training): align online CLAP with stored embeddings (#2838)\n\n* internal-fix(training): restore CLAP embedding parity\n\n* test(training): cover CLAP parity through entrypoints\n\n* internal-fix(training): reject invalid CLAP source audio\n\n* test(training): validate stereo CLAP source bounds\n\n* internal-fix(training): harden CLAP waveform validation\n\n* docs(training): clarify CLAP multichannel input",
+          "timestamp": "2026-08-02T13:28:24-07:00",
+          "tree_id": "def6681166d5f9b0b40119f4cc43bbcc481e7208",
+          "url": "https://github.com/tinaudio/synth-setter/commit/a352d57cb983ba8b2ff4191c8edfed93c7791405"
+        },
+        "date": 1785706630880,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.440727233886719,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.49643682103604,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08273584395647049,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.005261659622192383,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2922918796539307,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.795625256699987,
             "unit": "seconds"
           }
         ]
