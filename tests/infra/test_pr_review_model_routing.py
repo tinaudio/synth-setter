@@ -452,6 +452,109 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
         transcript.unlink(missing_ok=True)
 
 
+def _write_ci_aftercare_repo(tmp_path: Path, *, aftercare_exit: int) -> tuple[Path, Path]:
+    """Create a minimal launcher checkout with observable aftercare.
+
+    :param tmp_path: Temporary root for the checkout and fake executable.
+    :param aftercare_exit: Exit status returned by synchronous aftercare.
+    :returns: Minimal repository root and aftercare argument marker.
+    """
+    repo_root = tmp_path / "repo"
+    shared = repo_root / "agent" / "_shared"
+    shared.mkdir(parents=True)
+    launcher = shared / "run_pi_review.sh"
+    launcher.write_text((REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text())
+    launcher.chmod(0o755)
+    (shared / "pi_review_routing.py").write_text(
+        (REPO_ROOT / "agent/_shared/pi_review_routing.py").read_text()
+    )
+    aftercare_args = tmp_path / "aftercare-args"
+    (shared / "run_pi_review_aftercare.py").write_text(
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        'Path(os.environ["AFTERCARE_ARGS"]).write_text(" ".join(sys.argv[1:]))\n'
+        f"raise SystemExit({aftercare_exit})\n"
+    )
+    return repo_root, aftercare_args
+
+
+def _write_manifest_pi(tmp_path: Path) -> None:
+    """Create a fake Pi that emits a deferred manifest and final response.
+
+    :param tmp_path: Temporary directory placed first on PATH.
+    """
+    pi = tmp_path / "pi"
+    pi.write_text(
+        "#!/bin/bash\n"
+        "printf '{}\\n' > \"${PI_REVIEW_AFTERCARE_MANIFEST}\"\n"
+        'printf \'%s\\n\' \'{"type":"message_end","message":{"role":"assistant",'
+        '"content":"foreground-complete"}}\'\n'
+    )
+    pi.chmod(0o755)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_ci_waits_for_supervised_aftercare(tmp_path: Path) -> None:
+    """CI returns the foreground result only after supervised aftercare succeeds.
+
+    :param tmp_path: Temporary minimal repository and fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    repo_root, aftercare_args = _write_ci_aftercare_repo(tmp_path, aftercare_exit=0)
+    _write_manifest_pi(tmp_path)
+
+    result = sh.Command(str(repo_root / "agent/_shared/run_pi_review.sh"))(
+        "repo-review-full",
+        "--target",
+        "2174",
+        _cwd=repo_root,
+        _env={
+            **os.environ,
+            "AFTERCARE_ARGS": str(aftercare_args),
+            "CI": "true",
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        },
+    )
+
+    assert str(result).strip() == "foreground-complete"
+    arguments = aftercare_args.read_text().split()
+    assert arguments[0] == "--supervise"
+    assert Path(arguments[1]).is_absolute()
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_ci_aftercare_failure_withholds_foreground_result(
+    tmp_path: Path,
+) -> None:
+    """CI fails closed instead of publishing success when aftercare fails.
+
+    :param tmp_path: Temporary minimal repository and fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    repo_root, aftercare_args = _write_ci_aftercare_repo(tmp_path, aftercare_exit=9)
+    _write_manifest_pi(tmp_path)
+    stdout = io.BytesIO()
+
+    with pytest.raises(sh.ErrorReturnCode):
+        sh.Command(str(repo_root / "agent/_shared/run_pi_review.sh"))(
+            "repo-review-full",
+            "--target",
+            "2174",
+            _cwd=repo_root,
+            _env={
+                **os.environ,
+                "AFTERCARE_ARGS": str(aftercare_args),
+                "CI": "true",
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            },
+            _out=stdout,
+        )
+
+    assert aftercare_args.read_text().split()[0] == "--supervise"
+    assert stdout.getvalue() == b""
+
+
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_falls_back_to_path_python_without_repo_venv(
     tmp_path: Path,

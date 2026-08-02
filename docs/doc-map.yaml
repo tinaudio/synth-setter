@@ -726,7 +726,7 @@ docs:
     description: Workflow catalog, secrets table, concurrency gotchas
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "Catalog row (repo-owned /repo-review-full on every PR incl. drafts, posts inline comments), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
+        covers: "Pi-native trusted-PR review, PI_AUTH_JSON/GIT_PAT secrets, synchronous aftercare, audit retention, and PR-number concurrency"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
@@ -735,6 +735,6 @@ docs:
     description: Credential inventory + rotation/verification procedures
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row with its rotation/verification procedure"
+        covers: "PI_AUTH_JSON and GIT_PAT inventory with rotation and real-PR verification procedures"
       - pattern: ".github/workflows/claude.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

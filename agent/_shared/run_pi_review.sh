@@ -104,18 +104,29 @@ return only the specified foreground deliverable."
     return 1
   fi
   if [[ -s "${PI_REVIEW_AFTERCARE_MANIFEST}" ]]; then
-    local aftercare_pid
-    if aftercare_pid="$(
-      "${review_python}" agent/_shared/run_pi_review_aftercare.py \
-        "${PI_REVIEW_AFTERCARE_MANIFEST}"
-    )"; then
-      echo \
-        "Deferred Pi review aftercare: ${PI_REVIEW_AFTERCARE_MANIFEST} (PID ${aftercare_pid})" \
-        >&2
+    if [[ "${CI:-}" == "true" ]]; then
+      if ! "${review_python}" agent/_shared/run_pi_review_aftercare.py \
+        --supervise "${PI_REVIEW_AFTERCARE_MANIFEST}"; then
+        echo \
+          "Synchronous Pi review aftercare failed: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
+          >&2
+        return 1
+      fi
+      echo "Synchronous Pi review aftercare completed: ${PI_REVIEW_AFTERCARE_MANIFEST}" >&2
     else
-      echo \
-        "Deferred Pi review aftercare failed to launch: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
-        >&2
+      local aftercare_pid
+      if aftercare_pid="$(
+        "${review_python}" agent/_shared/run_pi_review_aftercare.py \
+          "${PI_REVIEW_AFTERCARE_MANIFEST}"
+      )"; then
+        echo \
+          "Deferred Pi review aftercare: ${PI_REVIEW_AFTERCARE_MANIFEST} (PID ${aftercare_pid})" \
+          >&2
+      else
+        echo \
+          "Deferred Pi review aftercare failed to launch: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
+          >&2
+      fi
     fi
   fi
   printf '%s\n' "${final_output}"
