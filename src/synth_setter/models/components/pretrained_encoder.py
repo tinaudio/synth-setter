@@ -350,8 +350,8 @@ class ClapAudioEncoder(nn.Module):
 
         :param audio: Mono waveform batch at ``sample_rate``.
         :returns: Log-mel in dB shaped ``(batch, 1, frames, mels)``.
-        :raises ValueError: Audio is empty, on MPS, or exceeds the extractor's
-            deterministic short-audio window.
+        :raises ValueError: Audio is empty, non-finite, outside ``[-1, 1]``, on MPS,
+            or exceeds the extractor's deterministic short-audio window.
         """
         if audio.ndim == 3:
             audio = audio.mean(dim=1)
@@ -363,9 +363,14 @@ class ClapAudioEncoder(nn.Module):
             raise ValueError("CLAP online features do not support MPS float64 FFT")
         if audio.shape[-1] == 0:
             raise ValueError("audio waveform cannot be empty")
+        if not torch.isfinite(audio).all():
+            raise ValueError("audio waveform must contain only finite values")
+        if (audio.abs() > 1.0).any():
+            raise ValueError("audio waveform values must be in [-1, 1]")
 
         if self.sample_rate != self.target_sample_rate:
             audio = audio_fn.resample(audio, self.sample_rate, self.target_sample_rate)
+        # Stored add_embeddings CLAP features preserve finite resampler overshoot.
         length = audio.shape[-1]
         if length > self.max_samples:
             raise ValueError(

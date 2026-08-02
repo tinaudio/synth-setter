@@ -608,52 +608,25 @@ def test_checkpoint_load_with_missing_trainable_key_remains_strict(
         module.load_state_dict(state, strict=True)
 
 
-def test_clap_features_preserve_out_of_range_finite_values(
-    clap_checkpoint: str,
-) -> None:
-    """The online frontend matches stored embeddings for finite waveform overshoot.
-
-    :param clap_checkpoint: Self-contained tiny CLAP checkpoint.
-    """
-    audio = 2.0 * torch.sin(torch.arange(_SAMPLE_RATE, dtype=torch.float32) * 0.01)
-    encoder = ClapAudioEncoder.from_random_config(
-        sample_rate=_SAMPLE_RATE,
-        checkpoint=clap_checkpoint,
-        backbone_config=_TINY_CLAP_CONFIG,
-    )
-    expected = ClapFeatureExtractor.from_pretrained(clap_checkpoint)(
-        [audio.numpy()],
-        sampling_rate=_SAMPLE_RATE,
-        return_tensors="pt",
-    )["input_features"]
-
-    actual = encoder.features(audio.unsqueeze(0))
-
-    assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
-
-
-def test_clap_features_backpropagate_for_out_of_range_samples(
+def test_clap_features_with_out_of_range_source_audio_raises(
     clap_encoder: ClapAudioEncoder,
 ) -> None:
-    """Finite waveform overshoot retains a usable input gradient.
+    """Source samples outside the waveform contract fail instead of being clipped.
 
     :param clap_encoder: Small frozen CLAP encoder under test.
     """
     audio = (2.0 * torch.sin(torch.arange(4_800, dtype=torch.float32) * 0.01)).unsqueeze(0)
-    audio.requires_grad_()
 
-    (gradient,) = torch.autograd.grad(clap_encoder.features(audio).square().mean(), audio)
-
-    assert torch.isfinite(gradient).all()
-    assert torch.count_nonzero(gradient).item() > 0
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        clap_encoder.features(audio)
 
 
 @pytest.mark.parametrize("non_finite", [float("nan"), float("inf")])
-def test_clap_features_preserve_non_finite_propagation(
+def test_clap_features_with_non_finite_source_audio_raises(
     clap_encoder: ClapAudioEncoder,
     non_finite: float,
 ) -> None:
-    """NaN and infinity remain observable instead of being hidden by clipping.
+    """NaN and infinity fail at the waveform boundary.
 
     :param clap_encoder: Small frozen CLAP encoder under test.
     :param non_finite: Non-finite sample under test.
@@ -661,9 +634,8 @@ def test_clap_features_preserve_non_finite_propagation(
     audio = torch.zeros(1, 4_800)
     audio[0, 0] = non_finite
 
-    features = clap_encoder.features(audio)
-
-    assert not torch.isfinite(features).all()
+    with pytest.raises(ValueError, match="finite"):
+        clap_encoder.features(audio)
 
 
 def test_clap_features_with_empty_audio_raises(clap_encoder: ClapAudioEncoder) -> None:
