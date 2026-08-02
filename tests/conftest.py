@@ -61,6 +61,10 @@ _EMBEDDING_E2E_CHECKPOINTS = {
     "same_s": embedding_model_dir("same-s"),
     "t5gemma": embedding_model_dir("sa3-small-music"),
 }
+_NON_CACHED_EMBEDDING_POLICIES = frozenset({"param_shift", "sketch"})
+# PupuJEPA's real-weight CLI coverage lives in
+# tests/pipeline/data/test_pupujepa_encoder_e2e.py.
+_CACHED_EMBEDDING_POLICIES_WITH_DEDICATED_E2E = frozenset({"pupujepa_tiny"})
 
 
 def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
@@ -1837,7 +1841,12 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(_EMBEDDING_KEYS) == set(EMBEDDING_REGISTRY)
+    covered_registry_policies = (
+        set(_EMBEDDING_KEYS)
+        | _NON_CACHED_EMBEDDING_POLICIES
+        | _CACHED_EMBEDDING_POLICIES_WITH_DEDICATED_E2E
+    )
+    assert covered_registry_policies == set(EMBEDDING_REGISTRY)
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
