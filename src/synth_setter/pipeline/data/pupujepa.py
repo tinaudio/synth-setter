@@ -1,4 +1,4 @@
-"""Offline PupuJEPA Tiny adapter over the shared Torch waveform encoder."""
+"""Offline PupuJEPA adapters over the shared Torch waveform encoder."""
 
 from __future__ import annotations
 
@@ -9,12 +9,19 @@ import numpy as np
 import pyarrow as pa
 import structlog
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD, PUPUJEPA_TINY_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    PUPUJEPA_LARGE_FIELD,
+    PUPUJEPA_TINY_FIELD,
+)
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
-    PUPUJEPA_EMBEDDING_DIM,
+    PUPUJEPA_LARGE_CONFIG,
     PUPUJEPA_SAMPLE_RATE,
+    PUPUJEPA_TINY_CONFIG,
+    PupuJepaConfig,
+    PupuJepaVariant,
     PUPUJEPA_UPSTREAM_COMMIT,
     pupujepa_num_time_patches,
 )
@@ -23,6 +30,7 @@ from synth_setter.utils.logging_utils import resolve_git_sha
 logger = structlog.get_logger(__name__)
 
 PUPUJEPA_ENCODE_MAX_BATCH = 16
+PUPUJEPA_LARGE_ENCODE_MAX_BATCH = 1
 
 type PupuJepaEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 
@@ -49,17 +57,22 @@ def pupujepa_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return np.ascontiguousarray(audio.mean(axis=1, dtype=np.float32))
 
 
-def encode_pupujepa_column(
+def _encode_pupujepa_column(
     sources: Mapping[str, np.ndarray],
     sample_rate: int,
     encoder: object,
+    *,
+    field: str,
+    config: PupuJepaConfig,
 ) -> pa.Array:
-    """Encode one audio batch as a fixed-shape PupuJEPA Tiny tensor column.
+    """Encode one audio batch as a fixed-shape PupuJEPA tensor column.
 
     :param sources: Decoded source columns carrying ``(B, C, T)`` waveforms.
     :param sample_rate: Dataset sample rate in Hz.
     :param encoder: Loaded shared PupuJEPA waveform encoder adapter.
-    :returns: Float32 tensor array shaped ``(1536, time_patches)`` per row.
+    :param field: Lance field receiving the selected variant.
+    :param config: Selected teacher geometry.
+    :returns: Float32 tensor array shaped ``(output_dim, time_patches)`` per row.
     :raises ValueError: Encoder rank, orientation, shape, or values violate the contract.
     """
     audio = sources[AUDIO_FIELD]
@@ -67,16 +80,16 @@ def encode_pupujepa_column(
     embeddings = np.asarray(encode(audio, sample_rate), dtype=np.float32)
     expected_shape = (
         len(audio),
-        PUPUJEPA_EMBEDDING_DIM,
-        pupujepa_num_time_patches(audio.shape[-1], sample_rate),
+        config.output_dim,
+        pupujepa_num_time_patches(audio.shape[-1], sample_rate, config),
     )
     if embeddings.shape != expected_shape:
         raise ValueError(
-            f"{PUPUJEPA_TINY_FIELD} encoder produced shape {embeddings.shape}, "
+            f"{field} encoder produced shape {embeddings.shape}, "
             f"expected {expected_shape}"
         )
     if not np.isfinite(embeddings).all():
-        raise ValueError(f"{PUPUJEPA_TINY_FIELD} encoder produced non-finite values")
+        raise ValueError(f"{field} encoder produced non-finite values")
 
     from synth_setter.pipeline.data.lance_shard import tensor_array
 
@@ -87,16 +100,56 @@ def encode_pupujepa_column(
     )
 
 
+def encode_pupujepa_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: object
+) -> pa.Array:
+    """Encode the PupuJEPA Tiny sequence column.
+
+    :param sources: Decoded source columns carrying waveform batches.
+    :param sample_rate: Dataset sample rate in Hz.
+    :param encoder: Loaded Tiny encoder adapter.
+    :returns: Float32 Tiny tensor column.
+    """
+    return _encode_pupujepa_column(
+        sources,
+        sample_rate,
+        encoder,
+        field=PUPUJEPA_TINY_FIELD,
+        config=PUPUJEPA_TINY_CONFIG,
+    )
+
+
+def encode_pupujepa_large_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: object
+) -> pa.Array:
+    """Encode the PupuJEPA Large sequence column.
+
+    :param sources: Decoded source columns carrying waveform batches.
+    :param sample_rate: Dataset sample rate in Hz.
+    :param encoder: Loaded Large encoder adapter.
+    :returns: Float32 Large tensor column.
+    """
+    return _encode_pupujepa_column(
+        sources,
+        sample_rate,
+        encoder,
+        field=PUPUJEPA_LARGE_FIELD,
+        config=PUPUJEPA_LARGE_CONFIG,
+    )
+
+
 def load_pupujepa_audio_encoder(
     checkpoint: str = DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     *,
     device: str = "cpu",
+    variant: PupuJepaVariant = "tiny",
 ) -> PupuJepaEncodeFn:
     """Load the frozen teacher and return the bounded offline NumPy adapter.
 
     :param checkpoint: Canonical pinned Hugging Face repo or local checkpoint directory.
     :param device: Explicit Torch inference device.
-    :returns: Encoder from ``(B, C, T)`` audio to ``(B, 1536, time_patches)``.
+    :param variant: Released teacher size to load.
+    :returns: Encoder from waveform batches to frequency-concatenated sequences.
     """
     import torch
 
@@ -106,13 +159,15 @@ def load_pupujepa_audio_encoder(
         sample_rate=PUPUJEPA_SAMPLE_RATE,
         checkpoint=checkpoint,
         revision=PUPUJEPA_CHECKPOINT_REVISION,
+        variant=variant,
     ).to(device)
     logger.info(
-        "loaded_pupujepa_tiny_checkpoint",
+        "loaded_pupujepa_checkpoint",
         checkpoint=checkpoint,
         checkpoint_revision=PUPUJEPA_CHECKPOINT_REVISION,
         device=device,
         source_commit=PUPUJEPA_UPSTREAM_COMMIT,
+        variant=variant,
         synth_setter_git_sha=resolve_git_sha(),
     )
 
@@ -125,11 +180,12 @@ def load_pupujepa_audio_encoder(
         """
         mono = pupujepa_encoder_input(audio, sample_rate)
         chunks: list[np.ndarray] = []
+        max_batch = (
+            PUPUJEPA_ENCODE_MAX_BATCH if variant == "tiny" else PUPUJEPA_LARGE_ENCODE_MAX_BATCH
+        )
         with torch.inference_mode():
-            for start in range(0, len(mono), PUPUJEPA_ENCODE_MAX_BATCH):
-                waveform = torch.from_numpy(
-                    mono[start : start + PUPUJEPA_ENCODE_MAX_BATCH]
-                ).to(device)
+            for start in range(0, len(mono), max_batch):
+                waveform = torch.from_numpy(mono[start : start + max_batch]).to(device)
                 sequence = model(waveform, sample_rate=sample_rate)
                 chunks.append(sequence.float().cpu().numpy())
         return np.ascontiguousarray(np.concatenate(chunks, axis=0), dtype=np.float32)

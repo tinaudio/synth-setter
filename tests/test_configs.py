@@ -456,6 +456,7 @@ _WAVEFORM_CONDITIONING_PROFILES = frozenset(
         "ast_online",
         "clap_online",
         "log_mel",
+        "pupujepa_large_online",
         "pupujepa_tiny_online",
         "same_l_online",
         "same_s_online",
@@ -542,6 +543,37 @@ def test_pupujepa_tiny_cached_profile_instantiates_100_patch_pool() -> None:
     assert encoder(torch.randn(2, 1536, 100)).shape == (2, cfg.model.encoder_output_dim)
 
 
+def test_pupujepa_large_cached_profile_instantiates_100_patch_pool() -> None:
+    """Four-second cached Large sequences instantiate the generic pool."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_large", "trainer=cpu"],
+    )
+
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert tuple(cfg.model.conditioning.input_shape) == (8192, 100)
+    assert encoder(torch.randn(2, 8192, 100)).shape == (2, cfg.model.encoder_output_dim)
+
+
+def test_pupujepa_large_online_profile_pins_variant_and_width() -> None:
+    """Online Large composition selects the immutable checkpoint and teacher width."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=surge/flow_simple",
+            "conditioning=pupujepa_large_online",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
+    assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
+    assert cfg.model.encoder.backbone.variant == "large"
+    assert cfg.model.encoder.head.embed_dim == 8192
+
+
 def test_pupujepa_tiny_online_profile_pins_checkpoint_identity() -> None:
     """Online PupuJEPA composition retains the immutable HF revision."""
     cfg = _compose(
@@ -556,6 +588,7 @@ def test_pupujepa_tiny_online_profile_pins_checkpoint_identity() -> None:
     assert cfg.datamodule.conditioning == "audio"
     assert cfg.model.encoder.backbone.checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
     assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
+    assert cfg.model.encoder.backbone.variant == "tiny"
     assert cfg.model.encoder.head.embed_dim == 1536
 
 

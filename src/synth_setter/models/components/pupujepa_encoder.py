@@ -1,4 +1,4 @@
-"""Frozen PupuJEPA Tiny teacher from waveform to frequency-concatenated sequences.
+"""Frozen PupuJEPA teachers from waveform to frequency-concatenated sequences.
 
 The architecture is adapted from PupuJEPA commit
 ``54a621e9f879be7659d81b6a3c493bba855cc85f`` under the MIT license retained in
@@ -21,8 +21,10 @@ from torch import Tensor, nn
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
+    PUPUJEPA_CHECKPOINT_SPECS,
     PUPUJEPA_TINY_CONFIG,
     PupuJepaConfig,
+    PupuJepaVariant,
     load_pupujepa_config,
     pupujepa_checkpoint_files,
     pupujepa_num_time_patches,
@@ -285,24 +287,29 @@ class PupuJepaAudioEncoder(nn.Module):
         sample_rate: int,
         checkpoint: str = DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
         revision: str = PUPUJEPA_CHECKPOINT_REVISION,
+        variant: PupuJepaVariant = "tiny",
     ) -> PupuJepaAudioEncoder:
         """Load only the patch embed and teacher from the pinned safetensors file.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param checkpoint: Canonical Hugging Face repo id or local checkpoint directory.
         :param revision: Immutable Hugging Face commit required for remote loading.
+        :param variant: Released teacher size to load.
         :returns: Frozen eval-mode PupuJEPA audio encoder.
         :raises RuntimeError: Teacher state is missing, unexpected, or shape-incompatible.
-        :raises ValueError: Checkpoint geometry differs from PupuJEPA Tiny.
+        :raises ValueError: Checkpoint geometry differs from the selected variant.
         """
         from safetensors import safe_open
 
-        checkpoint_dir = resolve_pupujepa_checkpoint(checkpoint, revision)
-        config = load_pupujepa_config(checkpoint_dir)
-        if config != PUPUJEPA_TINY_CONFIG:
-            raise ValueError(f"checkpoint is not the pinned PupuJEPA Tiny architecture: {config}")
+        checkpoint_dir = resolve_pupujepa_checkpoint(checkpoint, revision, variant)
+        config = load_pupujepa_config(checkpoint_dir, variant)
+        expected_config = PUPUJEPA_CHECKPOINT_SPECS[variant].config
+        if config != expected_config:
+            raise ValueError(
+                f"checkpoint is not the pinned PupuJEPA {variant} architecture: {config}"
+            )
         encoder = cls(sample_rate=sample_rate, config=config)
-        _, weights_path = pupujepa_checkpoint_files(checkpoint_dir)
+        _, weights_path = pupujepa_checkpoint_files(checkpoint_dir, variant)
         with safe_open(weights_path, framework="pt", device="cpu") as checkpoint_file:
             state = {
                 key: checkpoint_file.get_tensor(key)

@@ -9,24 +9,41 @@ import pytest
 import torch
 
 import synth_setter.pipeline.data.pupujepa as pupujepa_module
-from synth_setter.data.vst.shapes import AUDIO_FIELD, PUPUJEPA_TINY_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    PUPUJEPA_LARGE_FIELD,
+    PUPUJEPA_TINY_FIELD,
+)
 from synth_setter.models.components.pupujepa_encoder import PupuJepaAudioEncoder
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, IndexSpec
 from synth_setter.pipeline.data.pupujepa import (
     PUPUJEPA_ENCODE_MAX_BATCH,
+    PUPUJEPA_LARGE_ENCODE_MAX_BATCH,
     encode_pupujepa_column,
+    encode_pupujepa_large_column,
     pupujepa_encoder_input,
 )
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
-    PUPUJEPA_EMBEDDING_DIM,
     PUPUJEPA_CHECKPOINT_REVISION,
+    PUPUJEPA_EMBEDDING_DIM,
+    PUPUJEPA_LARGE_CONFIG,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
     PUPUJEPA_SAMPLE_RATE,
     PUPUJEPA_TINY_ARGS_FILE,
     PUPUJEPA_TINY_WEIGHTS_FILE,
     pupujepa_num_time_patches,
     resolve_pupujepa_checkpoint,
 )
+
+
+def test_pupujepa_large_config_exposes_released_teacher_geometry() -> None:
+    """Large preserves the frontend grid while expanding the teacher width."""
+    assert PUPUJEPA_LARGE_CONFIG.embed_dim == 1024
+    assert PUPUJEPA_LARGE_CONFIG.depth == 24
+    assert PUPUJEPA_LARGE_CONFIG.num_heads == 16
+    assert PUPUJEPA_LARGE_EMBEDDING_DIM == 8192
+    assert pupujepa_num_time_patches(96_000, 24_000, PUPUJEPA_LARGE_CONFIG) == 100
 
 
 def test_default_checkpoint_with_tampered_artifact_raises(
@@ -48,6 +65,20 @@ def test_default_checkpoint_with_tampered_artifact_raises(
 
     with pytest.raises(ValueError, match="checkpoint digest mismatch"):
         resolve_pupujepa_checkpoint()
+
+
+def test_pupujepa_large_registry_spec_pins_solo_mean_pooled_sequence() -> None:
+    """The registry exposes the immutable PupuJEPA Large sequence policy."""
+    spec = EMBEDDING_REGISTRY["pupujepa_large"]
+
+    assert spec.column == PUPUJEPA_LARGE_FIELD
+    assert spec.default_checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
+    assert spec.co_resident is False
+    assert spec.index == IndexSpec(
+        pool="mean",
+        vector_column=f"{PUPUJEPA_LARGE_FIELD}_vec",
+        vector_dim=PUPUJEPA_LARGE_EMBEDDING_DIM,
+    )
 
 
 def test_pupujepa_registry_spec_pins_solo_mean_pooled_sequence() -> None:
@@ -115,6 +146,20 @@ def test_pupujepa_encoder_input_invalid_audio_raises(
         pupujepa_encoder_input(audio, sample_rate)
 
 
+def test_encode_pupujepa_large_column_valid_sequence_preserves_orientation() -> None:
+    """Large channel-major teacher sequences persist without transposition."""
+    audio = np.zeros((2, 1, 96_000), dtype=np.float32)
+    output = np.ones((2, PUPUJEPA_LARGE_EMBEDDING_DIM, 100), dtype=np.float32)
+
+    encoded = encode_pupujepa_large_column(
+        {AUDIO_FIELD: audio},
+        PUPUJEPA_SAMPLE_RATE,
+        lambda _audio, _sample_rate: output,
+    )
+
+    assert encoded.to_numpy_ndarray().shape == (2, PUPUJEPA_LARGE_EMBEDDING_DIM, 100)
+
+
 def test_encode_pupujepa_column_valid_sequence_preserves_orientation() -> None:
     """Channel-major teacher sequences persist without transposition."""
     audio = np.zeros((2, 1, 96_000), dtype=np.float32)
@@ -157,9 +202,13 @@ def test_encode_pupujepa_column_invalid_output_raises(
 class _BatchRecordingEncoder(torch.nn.Module):
     """Return row-identifying sequences while recording bounded batches."""
 
-    def __init__(self) -> None:
-        """Initialize an empty batch-size ledger."""
+    def __init__(self, output_dim: int = PUPUJEPA_EMBEDDING_DIM) -> None:
+        """Initialize an empty batch-size ledger.
+
+        :param output_dim: Teacher sequence width to emit.
+        """
         super().__init__()
+        self.output_dim = output_dim
         self.batch_sizes: list[int] = []
 
     def forward(self, audio: torch.Tensor, sample_rate: int | None = None) -> torch.Tensor:
@@ -172,7 +221,7 @@ class _BatchRecordingEncoder(torch.nn.Module):
         assert sample_rate is not None
         self.batch_sizes.append(len(audio))
         frames = pupujepa_num_time_patches(audio.shape[-1], sample_rate)
-        return audio[:, :1, None].expand(-1, PUPUJEPA_EMBEDDING_DIM, frames)
+        return audio[:, :1, None].expand(-1, self.output_dim, frames)
 
 
 def test_load_pupujepa_audio_encoder_bounds_chunks_and_preserves_rows(
@@ -199,3 +248,22 @@ def test_load_pupujepa_audio_encoder_bounds_chunks_and_preserves_rows(
     assert model.batch_sizes == [PUPUJEPA_ENCODE_MAX_BATCH, 1]
     assert embeddings.shape == (rows, PUPUJEPA_EMBEDDING_DIM, 1)
     np.testing.assert_allclose(embeddings[:, 0, 0], np.arange(rows) / rows)
+
+
+def test_load_pupujepa_large_audio_encoder_processes_one_row_per_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Large inference bounds model residency to one waveform per forward.
+
+    :param monkeypatch: Fixture replacing only the pretrained materialization boundary.
+    """
+    model = _BatchRecordingEncoder(PUPUJEPA_LARGE_EMBEDDING_DIM)
+    monkeypatch.setattr(PupuJepaAudioEncoder, "from_pretrained", lambda **_kwargs: model)
+    rows = PUPUJEPA_LARGE_ENCODE_MAX_BATCH + 1
+    audio = np.zeros((rows, 1, 960), dtype=np.float32)
+
+    encode = pupujepa_module.load_pupujepa_audio_encoder(device="cpu", variant="large")
+    embeddings = encode(audio, PUPUJEPA_SAMPLE_RATE)
+
+    assert model.batch_sizes == [1, 1]
+    assert embeddings.shape == (rows, PUPUJEPA_LARGE_EMBEDDING_DIM, 1)
