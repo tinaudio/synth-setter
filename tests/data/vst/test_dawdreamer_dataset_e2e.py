@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from click.testing import CliRunner
+from hydra import compose, initialize_config_module
 import lance
 import numpy as np
 import pytest
-from click.testing import CliRunner
-from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.renderers import DawDreamerRenderer
