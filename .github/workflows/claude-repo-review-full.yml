@@ -20,8 +20,6 @@ jobs:
       checks: read
       contents: read
       pull-requests: write
-    env:
-      PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
 
     steps:
       - name: Checkout repository
@@ -53,6 +51,7 @@ jobs:
       - name: Configure Pi authentication
         env:
           PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
         run: |
           set -euo pipefail
           install -d -m 700 "${PI_CODING_AGENT_DIR}"
@@ -60,6 +59,8 @@ jobs:
           printf '%s' "${PI_AUTH_JSON}" > "${PI_CODING_AGENT_DIR}/auth.json"
 
       - name: Install Pi review runtime
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
         run: |
           set -euo pipefail
           npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.83.0
@@ -72,6 +73,7 @@ jobs:
         env:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
           PI_REVIEW_SKILLS_ROOT: ${{ github.workspace }}/.review-skills/codex/synth-setter-skills
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash agent/_shared/run_pi_review.sh repo-review-full --target "${PR_NUMBER}"

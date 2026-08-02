@@ -132,10 +132,17 @@ def test_pi_review_workflow_restores_pi_auth_and_runs_canonical_launcher(
     workflow_text = (project_root / ".github" / "workflows" / WORKFLOW_FILENAME).read_text()
     steps = _steps(project_root)
     auth_step = next(step for step in steps if step.get("name") == "Configure Pi authentication")
+    install_step = next(step for step in steps if step.get("name") == "Install Pi review runtime")
     review_step = next(step for step in steps if step.get("name") == "Run Pi repo-review-full")
     auth_env = cast(dict[str, object], auth_step["env"])
+    install_env = cast(dict[str, object], install_step["env"])
     review_env = cast(dict[str, object], review_step["env"])
 
+    assert "env" not in _job(project_root)
+    expected_agent_dir = "${{ runner.temp }}/pi-agent"
+    assert auth_env["PI_CODING_AGENT_DIR"] == expected_agent_dir
+    assert install_env["PI_CODING_AGENT_DIR"] == expected_agent_dir
+    assert review_env["PI_CODING_AGENT_DIR"] == expected_agent_dir
     assert auth_env["PI_AUTH_JSON"] == "${{ secrets.PI_AUTH_JSON }}"
     assert "install -m 600" in str(auth_step["run"])
     assert "anthropics/" not in workflow_text
