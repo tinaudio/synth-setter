@@ -7,6 +7,7 @@ from pathlib import Path
 import lance
 import numpy as np
 import pytest
+from click.testing import CliRunner
 from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst.param_map import load_param_map
@@ -21,6 +22,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
+from synth_setter.tools import build_param_map
 from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
@@ -102,6 +104,45 @@ def test_dawdreamer_parameter_map_matches_live_plugin(
         plugin_state_path=str(Path(preset_path).resolve()),
         parameter_map=load_param_map(Path(parameter_map_path)),
     )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_dump_dawdreamer_cli_writes_settled_live_identities(tmp_path: Path) -> None:
+    """The real introspection CLI emits identities consumable by the runtime map.
+
+    :param tmp_path: Temporary output directory.
+    """
+    if TEST_SYNTH != "surge_xt":
+        pytest.skip("DawDreamer parameter map fixture uses the Surge XT plugin")
+    parameter_map = load_param_map(Path("src/synth_setter/data/vst/surge_xt_param_map.json"))
+    output_path = tmp_path / "dawdreamer.json"
+
+    result = CliRunner().invoke(
+        build_param_map.main,
+        [
+            "dump-dawdreamer",
+            "--plugin",
+            str(Path(PLUGIN_PATH).resolve()),
+            "--plugin-name",
+            parameter_map.plugin,
+            "--plugin-version",
+            parameter_map.dawdreamer.plugin_version,
+            "--preset",
+            str(Path(TEST_PRESET_PATH).resolve()),
+            "--preset-resource",
+            parameter_map.preset_resource,
+            "--out",
+            str(output_path),
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    dump = build_param_map.HostDump.model_validate_json(output_path.read_text(encoding="utf-8"))
+    live_names = {parameter.index: parameter.name for parameter in dump.params}
+    for identity in parameter_map.params.values():
+        assert live_names[identity.dawdreamer.index] == identity.dawdreamer.name
 
 
 @pytest.mark.slow

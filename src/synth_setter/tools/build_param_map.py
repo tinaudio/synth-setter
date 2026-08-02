@@ -387,6 +387,7 @@ def _resolve_clap_param(
 def _resolve_dawdreamer_param(
     semantic_key: str,
     pedalboard_name: str,
+    *,
     by_name: dict[str, list[HostParam]],
     errors: list[str],
 ) -> HostParam | None:
@@ -482,8 +483,8 @@ def _resolve_param_identity(
     dawdreamer_param = _resolve_dawdreamer_param(
         semantic_key,
         pedalboard_param.name,
-        dawdreamer_by_name,
-        errors,
+        by_name=dawdreamer_by_name,
+        errors=errors,
     )
     if dawdreamer_param is None:
         return None

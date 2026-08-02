@@ -217,7 +217,7 @@ def test_join_param_map_prefers_settled_dawdreamer_identity(
     """A settled DawDreamer label matches the active Pedalboard preset identity.
 
     :param registry: Minimal builder registry.
-    :param monkeypatch: Pytest monkeypatch fixture.
+    :param monkeypatch: Overrides the CLAP alias table for this focused registry.
     """
     semantic_key = "a_osc_1_sawtooth"
     registry["test"] = ParamSpec([ContinuousParameter(semantic_key, 0.0, 1.0)], [])

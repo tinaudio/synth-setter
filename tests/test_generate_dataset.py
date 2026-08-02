@@ -778,6 +778,46 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
 
 
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_dawdreamer_settles_real_preset_before_writing_shard(
+    cfg_dataset_dawdreamer: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public operator renders a real shard from settled DawDreamer identities.
+
+    :param cfg_dataset_dawdreamer: Composed DawDreamer smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Configures the single local worker process.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_dawdreamer):
+        cfg_dataset_dawdreamer.output_format = "lance"
+        cfg_dataset_dawdreamer.synth.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset_dawdreamer.synth.plugin_state_path = str(
+            (_REPO_ROOT / "presets/surge-base.vstpreset").resolve()
+        )
+        cfg_dataset_dawdreamer.r2.prefix = "fake-r2/dawdreamer-settled-run/"
+        cfg_dataset_dawdreamer.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_dawdreamer)
+    from_hydra(cfg_dataset_dawdreamer)
+
+    shard = spec.shards[0]
+    staging = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard.shard_id:06d}"
+    )
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+
 def test_from_hydra_surgepy_experiment_forwards_backend_and_uploads_shard(
     cfg_dataset_dawdreamer: DictConfig,
     fake_r2_remote: Path,
