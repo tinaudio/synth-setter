@@ -150,21 +150,6 @@ def _plain_config_value(value: object) -> object:
 
 
 @jaxtyped(typechecker=beartype)
-def _straight_through_clamp_finite(
-    audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE],
-) -> Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]:
-    """Clamp finite waveform values while preserving gradients and non-finite values.
-
-    :param audio: Waveform tensor.
-    :returns: Tensor with finite forward values in ``[-1, 1]`` and identity backward.
-    """
-    finite = torch.isfinite(audio)
-    bounded = torch.where(finite, audio.clamp(-1.0, 1.0), audio)
-    straight_through = audio + (bounded - audio).detach()
-    return torch.where(finite, straight_through, audio)
-
-
-@jaxtyped(typechecker=beartype)
 def _verified_checkpoint_dir(checkpoint: str | None, expected_sha256: str | None) -> str:
     """Resolve and verify a checkpoint without mutating its shared cache.
 
@@ -379,10 +364,8 @@ class ClapAudioEncoder(nn.Module):
         if audio.shape[-1] == 0:
             raise ValueError("audio waveform cannot be empty")
 
-        audio = _straight_through_clamp_finite(audio)
         if self.sample_rate != self.target_sample_rate:
             audio = audio_fn.resample(audio, self.sample_rate, self.target_sample_rate)
-        audio = _straight_through_clamp_finite(audio)
         length = audio.shape[-1]
         if length > self.max_samples:
             raise ValueError(

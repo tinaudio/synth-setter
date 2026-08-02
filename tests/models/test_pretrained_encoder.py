@@ -284,10 +284,10 @@ def test_clap_target_sample_rate_comes_from_feature_extractor(
     assert encoder.target_sample_rate == target_sample_rate
 
 
-def test_clap_features_match_huggingface_after_44100_hz_resampling(
+def test_clap_features_match_materialized_path_after_44100_hz_resampling(
     clap_checkpoint: str,
 ) -> None:
-    """The shipped TorchSynth rate matches HF after the documented resampling.
+    """The online frontend preserves the resampler output used by stored embeddings.
 
     :param clap_checkpoint: Self-contained reference extractor checkpoint.
     """
@@ -299,13 +299,14 @@ def test_clap_features_match_huggingface_after_44100_hz_resampling(
         backbone_config=_TINY_CLAP_CONFIG,
     )
     extractor = ClapFeatureExtractor.from_pretrained(clap_checkpoint)
-    resampled = audio_fn.resample(audio, sample_rate, _SAMPLE_RATE).clamp(-1.0, 1.0)
+    resampled = audio_fn.resample(audio, sample_rate, _SAMPLE_RATE)
     expected = extractor(list(resampled.numpy()), sampling_rate=_SAMPLE_RATE, return_tensors="pt")[
         "input_features"
     ]
 
     actual = encoder.features(audio)
 
+    assert resampled.abs().max() > 1.0
     assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
 
 
@@ -607,23 +608,21 @@ def test_checkpoint_load_with_missing_trainable_key_remains_strict(
         module.load_state_dict(state, strict=True)
 
 
-def test_clap_features_clamp_finite_values_before_and_after_resampling(
+def test_clap_features_preserve_out_of_range_finite_values(
     clap_checkpoint: str,
 ) -> None:
-    """Finite overshoot follows the extractor path with both boundary clamps applied.
+    """The online frontend matches stored embeddings for finite waveform overshoot.
 
     :param clap_checkpoint: Self-contained tiny CLAP checkpoint.
     """
-    source_sample_rate = 44_100
-    audio = 2.0 * torch.sin(torch.arange(source_sample_rate, dtype=torch.float32) * 0.01)
+    audio = 2.0 * torch.sin(torch.arange(_SAMPLE_RATE, dtype=torch.float32) * 0.01)
     encoder = ClapAudioEncoder.from_random_config(
-        sample_rate=source_sample_rate,
+        sample_rate=_SAMPLE_RATE,
         checkpoint=clap_checkpoint,
         backbone_config=_TINY_CLAP_CONFIG,
     )
-    resampled = audio_fn.resample(audio.clamp(-1.0, 1.0), source_sample_rate, _SAMPLE_RATE)
     expected = ClapFeatureExtractor.from_pretrained(clap_checkpoint)(
-        [resampled.clamp(-1.0, 1.0).numpy()],
+        [audio.numpy()],
         sampling_rate=_SAMPLE_RATE,
         return_tensors="pt",
     )["input_features"]
@@ -633,10 +632,10 @@ def test_clap_features_clamp_finite_values_before_and_after_resampling(
     assert torch.allclose(actual, expected, atol=1e-5, rtol=0.0)
 
 
-def test_clap_finite_value_clamp_preserves_gradient_for_saturated_samples(
+def test_clap_features_backpropagate_for_out_of_range_samples(
     clap_encoder: ClapAudioEncoder,
 ) -> None:
-    """The clamp changes forward values without trapping an overshooting waveform.
+    """Finite waveform overshoot retains a usable input gradient.
 
     :param clap_encoder: Small frozen CLAP encoder under test.
     """
@@ -650,7 +649,7 @@ def test_clap_finite_value_clamp_preserves_gradient_for_saturated_samples(
 
 
 @pytest.mark.parametrize("non_finite", [float("nan"), float("inf")])
-def test_clap_finite_value_clamp_preserves_non_finite_propagation(
+def test_clap_features_preserve_non_finite_propagation(
     clap_encoder: ClapAudioEncoder,
     non_finite: float,
 ) -> None:
