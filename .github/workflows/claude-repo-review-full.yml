@@ -10,11 +10,7 @@ concurrency:
 
 jobs:
   repo-review-full:
-    if: >-
-      ${{
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
-      }}
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:

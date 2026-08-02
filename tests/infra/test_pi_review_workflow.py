@@ -65,21 +65,18 @@ def test_pi_review_workflow_triggers_for_pr_heads_and_cancels_stale_runs(
 
 
 @pytest.mark.infra
-def test_pi_review_workflow_secrets_are_restricted_to_trusted_same_repo_prs(
+def test_pi_review_workflow_secrets_are_restricted_to_same_repo_prs(
     project_root: Path,
 ) -> None:
-    """Fork and untrusted-author PRs cannot reach provider or repository secrets.
+    """Fork PRs cannot reach provider or repository secrets.
 
     :param project_root: Repository root containing the workflow.
     """
     job = _job(project_root)
-    condition = str(job["if"])
 
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in condition
-    assert "github.event.pull_request.author_association" in condition
-    assert "OWNER" in condition
-    assert "MEMBER" in condition
-    assert "COLLABORATOR" in condition
+    assert job["if"] == (
+        "${{ github.event.pull_request.head.repo.full_name == github.repository }}"
+    )
     assert job["permissions"] == {
         "actions": "read",
         "checks": "read",
