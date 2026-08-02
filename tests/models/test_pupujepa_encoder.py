@@ -284,6 +284,26 @@ def test_conditioning_training_step_updates_pool_not_teacher() -> None:
     assert all(parameter.grad is None for parameter in backbone.parameters())
 
 
+def test_encoder_empty_waveform_raises_value_error() -> None:
+    """Empty online waveforms retain the public validation error contract."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+
+    with pytest.raises(ValueError, match="positive num_samples"):
+        encoder(torch.empty(1, 0))
+
+
+def test_encoder_opposed_out_of_range_stereo_checks_downmixed_bounds() -> None:
+    """Online bounds accept an in-range mono result after stereo downmixing."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+    opposed = torch.stack([torch.full((256,), 1.1), torch.full((256,), -1.1)])[None, ...]
+
+    embeddings = encoder(opposed)
+
+    assert embeddings.shape == (1, config.output_dim, 4)
+
+
 def test_encoder_out_of_range_waveform_raises() -> None:
     """Online waveforms outside the normalized audio contract fail early."""
     config = _tiny_config()

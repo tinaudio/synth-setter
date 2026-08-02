@@ -2303,6 +2303,24 @@ def test_train_pupujepa_large_cached_conditioning_returns_finite_loss(
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_depend_on_cached_conditioning(object_dict)
+
+
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_pupujepa_large_online_conditioning_returns_finite_loss(
+    cfg_torchsynth_pupujepa_large_online_train: DictConfig,
+) -> None:
+    """Train one real-weight step through online PupuJEPA Large conditioning.
+
+    :param cfg_torchsynth_pupujepa_large_online_train: Two-row production-path config.
+    """
+    cfg = cfg_torchsynth_pupujepa_large_online_train
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
 
 
 @pytest.mark.requires_vst

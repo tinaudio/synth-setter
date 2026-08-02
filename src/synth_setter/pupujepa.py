@@ -16,7 +16,8 @@ from synth_setter.model_cache import checkpoint_files_sha256
 
 PUPUJEPA_UPSTREAM_COMMIT = "54a621e9f879be7659d81b6a3c493bba855cc85f"
 PUPUJEPA_TIMM_VERSION = "1.0.28"
-DEFAULT_PUPUJEPA_TINY_CHECKPOINT = "spellbrush/PupuJEPA"
+DEFAULT_PUPUJEPA_CHECKPOINT = "spellbrush/PupuJEPA"
+DEFAULT_PUPUJEPA_TINY_CHECKPOINT = DEFAULT_PUPUJEPA_CHECKPOINT
 PUPUJEPA_CHECKPOINT_REVISION = "2ba230e41440c5b450a8dc8ad5d4a3cc9930f01d"
 PUPUJEPA_TINY_ARGS_FILE = "pupujepaV2_25hz_tiny/args.json"
 PUPUJEPA_TINY_WEIGHTS_FILE = (
@@ -223,12 +224,17 @@ class PupuJepaCheckpointSpec:
     .. attribute :: config
 
         Expected frontend and teacher geometry.
+
+    .. attribute :: encode_max_batch
+
+        Maximum waveforms per teacher forward.
     """
 
     args_file: str
     weights_file: str
     checkpoint_sha256: str
     config: PupuJepaConfig
+    encode_max_batch: int
 
 
 PUPUJEPA_CHECKPOINT_SPECS: Mapping[PupuJepaVariant, PupuJepaCheckpointSpec] = MappingProxyType(
@@ -238,12 +244,14 @@ PUPUJEPA_CHECKPOINT_SPECS: Mapping[PupuJepaVariant, PupuJepaCheckpointSpec] = Ma
             weights_file=PUPUJEPA_TINY_WEIGHTS_FILE,
             checkpoint_sha256=PUPUJEPA_TINY_CHECKPOINT_SHA256,
             config=PUPUJEPA_TINY_CONFIG,
+            encode_max_batch=16,
         ),
         "large": PupuJepaCheckpointSpec(
             args_file=PUPUJEPA_LARGE_ARGS_FILE,
             weights_file=PUPUJEPA_LARGE_WEIGHTS_FILE,
             checkpoint_sha256=PUPUJEPA_LARGE_CHECKPOINT_SHA256,
             config=PUPUJEPA_LARGE_CONFIG,
+            encode_max_batch=1,
         ),
     }
 )
@@ -441,7 +449,7 @@ def pupujepa_checkpoint_files(
 
 
 def resolve_pupujepa_checkpoint(
-    checkpoint: str = DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
     revision: str = PUPUJEPA_CHECKPOINT_REVISION,
     variant: PupuJepaVariant = "tiny",
 ) -> Path:
@@ -458,9 +466,9 @@ def resolve_pupujepa_checkpoint(
     if local.is_dir():
         pupujepa_checkpoint_files(local, variant)
         return local.resolve()
-    if checkpoint != DEFAULT_PUPUJEPA_TINY_CHECKPOINT:
+    if checkpoint != DEFAULT_PUPUJEPA_CHECKPOINT:
         raise ValueError(
-            f"PupuJEPA requires {DEFAULT_PUPUJEPA_TINY_CHECKPOINT!r} or a local directory, "
+            f"PupuJEPA requires {DEFAULT_PUPUJEPA_CHECKPOINT!r} or a local directory, "
             f"got {checkpoint!r}"
         )
     if revision != PUPUJEPA_CHECKPOINT_REVISION:
@@ -589,7 +597,7 @@ def pupujepa_artifact_digest(
     checkpoint_dir = resolve_pupujepa_checkpoint(checkpoint, variant=variant)
     load_pupujepa_config(checkpoint_dir, variant)
     artifacts = pupujepa_checkpoint_files(checkpoint_dir, variant)
-    if checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT:
+    if checkpoint == DEFAULT_PUPUJEPA_CHECKPOINT:
         identity = (
             f"hf:{checkpoint}@{PUPUJEPA_CHECKPOINT_REVISION};sha256:{spec.checkpoint_sha256}"
         )

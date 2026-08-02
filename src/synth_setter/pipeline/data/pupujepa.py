@@ -15,8 +15,9 @@ from synth_setter.data.vst.shapes import (
     PUPUJEPA_TINY_FIELD,
 )
 from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    DEFAULT_PUPUJEPA_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
+    PUPUJEPA_CHECKPOINT_SPECS,
     PUPUJEPA_LARGE_CONFIG,
     PUPUJEPA_SAMPLE_RATE,
     PUPUJEPA_TINY_CONFIG,
@@ -29,8 +30,8 @@ from synth_setter.utils.logging_utils import resolve_git_sha
 
 logger = structlog.get_logger(__name__)
 
-PUPUJEPA_ENCODE_MAX_BATCH = 16
-PUPUJEPA_LARGE_ENCODE_MAX_BATCH = 1
+PUPUJEPA_ENCODE_MAX_BATCH = PUPUJEPA_CHECKPOINT_SPECS["tiny"].encode_max_batch
+PUPUJEPA_LARGE_ENCODE_MAX_BATCH = PUPUJEPA_CHECKPOINT_SPECS["large"].encode_max_batch
 
 type PupuJepaEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 
@@ -54,9 +55,10 @@ def pupujepa_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     pupujepa_num_time_patches(audio.shape[-1], sample_rate)
     if not np.isfinite(audio).all():
         raise ValueError("PupuJEPA input audio contains non-finite values")
-    if audio.min() < -1.0 or audio.max() > 1.0:
-        raise ValueError("PupuJEPA input audio must lie within [-1, 1]")
-    return np.ascontiguousarray(audio.mean(axis=1, dtype=np.float32))
+    mono = audio.mean(axis=1, dtype=np.float32)
+    if mono.min() < -1.0 or mono.max() > 1.0:
+        raise ValueError("PupuJEPA input audio must lie within [-1, 1] after downmixing")
+    return np.ascontiguousarray(mono)
 
 
 def _encode_pupujepa_column(
@@ -107,10 +109,10 @@ def encode_pupujepa_column(
 ) -> pa.Array:
     """Encode the PupuJEPA Tiny sequence column.
 
-    :param sources: Decoded source columns carrying waveform batches.
+    :param sources: Decoded source columns carrying ``(B, C, T)`` waveforms.
     :param sample_rate: Dataset sample rate in Hz.
     :param encoder: Loaded Tiny encoder adapter.
-    :returns: Float32 Tiny tensor column.
+    :returns: Float32 tensor rows shaped ``(1536, time_patches)``.
     """
     return _encode_pupujepa_column(
         sources,
@@ -126,10 +128,10 @@ def encode_pupujepa_large_column(
 ) -> pa.Array:
     """Encode the PupuJEPA Large sequence column.
 
-    :param sources: Decoded source columns carrying waveform batches.
+    :param sources: Decoded source columns carrying ``(B, C, T)`` waveforms.
     :param sample_rate: Dataset sample rate in Hz.
     :param encoder: Loaded Large encoder adapter.
-    :returns: Float32 Large tensor column.
+    :returns: Float32 tensor rows shaped ``(8192, time_patches)``.
     """
     return _encode_pupujepa_column(
         sources,
@@ -141,7 +143,7 @@ def encode_pupujepa_large_column(
 
 
 def load_pupujepa_audio_encoder(
-    checkpoint: str = DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
     *,
     device: str = "cpu",
     variant: PupuJepaVariant = "tiny",
@@ -151,7 +153,8 @@ def load_pupujepa_audio_encoder(
     :param checkpoint: Canonical pinned Hugging Face repo or local checkpoint directory.
     :param device: Explicit Torch inference device.
     :param variant: Released teacher size to load.
-    :returns: Encoder from waveform batches to frequency-concatenated sequences.
+    :returns: Encoder from ``(B, C, T)`` waveforms to
+        ``(B, config.output_dim, time_patches)`` sequences.
     """
     import torch
 
@@ -182,9 +185,7 @@ def load_pupujepa_audio_encoder(
         """
         mono = pupujepa_encoder_input(audio, sample_rate)
         chunks: list[np.ndarray] = []
-        max_batch = (
-            PUPUJEPA_ENCODE_MAX_BATCH if variant == "tiny" else PUPUJEPA_LARGE_ENCODE_MAX_BATCH
-        )
+        max_batch = PUPUJEPA_CHECKPOINT_SPECS[variant].encode_max_batch
         with torch.inference_mode():
             for start in range(0, len(mono), max_batch):
                 waveform = torch.from_numpy(mono[start : start + max_batch]).to(device)

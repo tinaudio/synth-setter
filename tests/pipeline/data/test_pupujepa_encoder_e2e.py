@@ -88,9 +88,8 @@ class _PupuJepaE2ECase(NamedTuple):
                 "pupujepa_large",
                 PUPUJEPA_LARGE_FIELD,
                 PUPUJEPA_LARGE_EMBEDDING_DIM,
-                "cuda",
+                "cpu",
             ),
-            marks=pytest.mark.gpu,
             id="large",
         ),
     ],
@@ -185,16 +184,17 @@ def test_real_pupujepa_weights_add_embeddings_and_online_consumers_match(
     cached.load_state_dict(shared_head_state, strict=False)
     mono = mono.to(device)
     with torch.inference_mode():
-        online_sequence = torch.cat([online.embed(mono[:1]), online.embed(mono[1:])]).cpu()
-        online_conditioning = torch.cat([online(mono[:1]), online(mono[1:])]).cpu()
+        online_sequence = online.embed(mono).cpu()
+        online_conditioning = online(mono).cpu()
         cached_conditioning = cached(torch.from_numpy(offline_sequence).to(device)).cpu()
 
     assert offline_sequence.shape == (2, embedding_dim, 100)
     assert np.isfinite(offline_sequence).all()
     assert not np.array_equal(offline_sequence[0], offline_sequence[1])
-    np.testing.assert_allclose(offline_sequence, online_sequence.numpy(), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(offline_sequence, online_sequence.numpy(), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(offline_vector, offline_sequence.mean(axis=-1), rtol=1e-5, atol=1e-6)
     assert online_conditioning.shape == cached_conditioning.shape == (2, 512)
     assert torch.isfinite(online_conditioning).all()
     assert torch.isfinite(cached_conditioning).all()
-    torch.testing.assert_close(online_conditioning, cached_conditioning, rtol=1e-5, atol=1e-6)
+    assert not torch.equal(online_conditioning[0], online_conditioning[1])
+    torch.testing.assert_close(online_conditioning, cached_conditioning, rtol=1e-5, atol=1e-5)

@@ -27,11 +27,14 @@ from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
     PUPUJEPA_EMBEDDING_DIM,
+    PUPUJEPA_LARGE_ARGS_FILE,
     PUPUJEPA_LARGE_CONFIG,
     PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_LARGE_WEIGHTS_FILE,
     PUPUJEPA_SAMPLE_RATE,
     PUPUJEPA_TINY_ARGS_FILE,
     PUPUJEPA_TINY_WEIGHTS_FILE,
+    PupuJepaVariant,
     pupujepa_num_time_patches,
     resolve_pupujepa_checkpoint,
 )
@@ -46,17 +49,31 @@ def test_pupujepa_large_config_exposes_released_teacher_geometry() -> None:
     assert pupujepa_num_time_patches(96_000, 24_000, PUPUJEPA_LARGE_CONFIG) == 100
 
 
+@pytest.mark.parametrize(
+    ("variant", "args_file", "weights_file"),
+    [
+        ("tiny", PUPUJEPA_TINY_ARGS_FILE, PUPUJEPA_TINY_WEIGHTS_FILE),
+        ("large", PUPUJEPA_LARGE_ARGS_FILE, PUPUJEPA_LARGE_WEIGHTS_FILE),
+    ],
+)
 def test_default_checkpoint_with_tampered_artifact_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variant: PupuJepaVariant,
+    args_file: str,
+    weights_file: str,
 ) -> None:
     """A pinned revision cannot label modified cached bytes as canonical.
 
     :param tmp_path: Scratch Hugging Face snapshot.
     :param monkeypatch: Fixture replacing the download boundary.
+    :param variant: Released teacher size under test.
+    :param args_file: Variant configuration path.
+    :param weights_file: Variant weights path.
     """
     snapshot = tmp_path / PUPUJEPA_CHECKPOINT_REVISION
-    args_path = snapshot / PUPUJEPA_TINY_ARGS_FILE
-    weights_path = snapshot / PUPUJEPA_TINY_WEIGHTS_FILE
+    args_path = snapshot / args_file
+    weights_path = snapshot / weights_file
     args_path.parent.mkdir(parents=True)
     weights_path.parent.mkdir(parents=True)
     args_path.write_text("{}")
@@ -64,7 +81,7 @@ def test_default_checkpoint_with_tampered_artifact_raises(
     monkeypatch.setattr("huggingface_hub.snapshot_download", lambda **_kwargs: str(snapshot))
 
     with pytest.raises(ValueError, match="checkpoint digest mismatch"):
-        resolve_pupujepa_checkpoint()
+        resolve_pupujepa_checkpoint(variant=variant)
 
 
 def test_pupujepa_large_registry_spec_pins_solo_mean_pooled_sequence() -> None:
@@ -109,6 +126,20 @@ def test_pupujepa_num_time_patches_supported_lengths_matches_contract(
     :param expected_patches: Expected temporal patch count.
     """
     assert pupujepa_num_time_patches(num_samples, sample_rate) == expected_patches
+
+
+def test_pupujepa_encoder_input_opposed_stereo_checks_downmixed_bounds() -> None:
+    """Offline bounds match online bounds after stereo downmixing."""
+    opposed = np.stack(
+        [
+            np.full(960, 1.1, dtype=np.float32),
+            np.full(960, -1.1, dtype=np.float32),
+        ]
+    )[None, ...]
+
+    mono = pupujepa_encoder_input(opposed, PUPUJEPA_SAMPLE_RATE)
+
+    np.testing.assert_array_equal(mono, np.zeros((1, 960), dtype=np.float32))
 
 
 def test_pupujepa_encoder_input_duplicated_stereo_matches_mono() -> None:

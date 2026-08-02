@@ -19,7 +19,7 @@ from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
 
 from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    DEFAULT_PUPUJEPA_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
     PUPUJEPA_CHECKPOINT_SPECS,
     PUPUJEPA_TINY_CONFIG,
@@ -261,17 +261,22 @@ class PupuJepaAudioEncoder(nn.Module):
         *,
         sample_rate: int,
         config: PupuJepaConfig = PUPUJEPA_TINY_CONFIG,
+        max_batch_size: int = 16,
     ) -> None:
         """Build a frozen teacher for waveforms arriving at ``sample_rate``.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param config: Explicit PupuJEPA frontend and teacher geometry.
-        :raises ValueError: The source rate is non-positive.
+        :param max_batch_size: Maximum waveforms per teacher forward.
+        :raises ValueError: The source rate or batch cap is non-positive.
         """
         super().__init__()
         if sample_rate < 1:
             raise ValueError(f"PupuJEPA needs a positive sample_rate, got {sample_rate}")
+        if max_batch_size < 1:
+            raise ValueError(f"PupuJEPA needs a positive max_batch_size, got {max_batch_size}")
         self.sample_rate = sample_rate
+        self.max_batch_size = max_batch_size
         self.config = config
         self.out_dim = config.output_dim
         self.frontend = PupuJepaMelFrontend(config)
@@ -285,7 +290,7 @@ class PupuJepaAudioEncoder(nn.Module):
         cls,
         *,
         sample_rate: int,
-        checkpoint: str = DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+        checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
         revision: str = PUPUJEPA_CHECKPOINT_REVISION,
         variant: PupuJepaVariant = "tiny",
     ) -> PupuJepaAudioEncoder:
@@ -308,7 +313,11 @@ class PupuJepaAudioEncoder(nn.Module):
             raise ValueError(
                 f"checkpoint is not the pinned PupuJEPA {variant} architecture: {config}"
             )
-        encoder = cls(sample_rate=sample_rate, config=config)
+        encoder = cls(
+            sample_rate=sample_rate,
+            config=config,
+            max_batch_size=PUPUJEPA_CHECKPOINT_SPECS[variant].encode_max_batch,
+        )
         _, weights_path = pupujepa_checkpoint_files(checkpoint_dir, variant)
         with safe_open(weights_path, framework="pt", device="cpu") as checkpoint_file:
             state = {
@@ -357,9 +366,9 @@ class PupuJepaAudioEncoder(nn.Module):
             raise ValueError(
                 f"PupuJEPA audio must have shape (B, T) or (B, C, T), got {tuple(audio.shape)}"
             )
-        if audio.amin() < -1.0 or audio.amax() > 1.0:
-            raise ValueError("PupuJEPA input audio must lie within [-1, 1]")
         expected_patches = pupujepa_num_time_patches(audio.shape[-1], source_rate, self.config)
+        if audio.amin() < -1.0 or audio.amax() > 1.0:
+            raise ValueError("PupuJEPA input audio must lie within [-1, 1] after downmixing")
         with torch.autocast(device_type=audio.device.type, enabled=False):
             waveform = audio.float()
             if source_rate != self.config.sample_rate:
@@ -368,7 +377,12 @@ class PupuJepaAudioEncoder(nn.Module):
                     source_rate,
                     self.config.sample_rate,
                 )
-            sequence = self.teacher_model(self.frontend(waveform))
+            sequence = torch.cat(
+                [
+                    self.teacher_model(self.frontend(chunk))
+                    for chunk in waveform.split(self.max_batch_size)
+                ]
+            )
         expected_shape = (len(audio), self.out_dim, expected_patches)
         if tuple(sequence.shape) != expected_shape:
             raise ValueError(

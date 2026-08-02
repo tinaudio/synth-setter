@@ -1853,6 +1853,37 @@ def test_train_eval_pupujepa_large_conditioning_real_lance_returns_finite_metric
     )
 
 
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_eval_pupujepa_large_online_conditioning_returns_finite_metric(
+    tmp_path: Path,
+    cfg_torchsynth_pupujepa_large_online_train: DictConfig,
+) -> None:
+    """Train and validate real-weight PupuJEPA Large through both entrypoints.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param cfg_torchsynth_pupujepa_large_online_train: Two-row production-path config.
+    """
+    cfg_train = cfg_torchsynth_pupujepa_large_online_train
+    HydraConfig().set_config(cfg_train)
+    _, train_objects = train(cfg_train)
+    checkpoint_path = tmp_path / "pupujepa-large-online.ckpt"
+    train_objects["trainer"].save_checkpoint(checkpoint_path)
+
+    cfg_eval = cfg_train.copy()
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(checkpoint_path)
+        cfg_eval.mode = "validate"
+        cfg_eval.trainer.limit_val_batches = 1
+    HydraConfig().set_config(cfg_eval)
+    try:
+        metric_dict, _ = evaluate(cfg_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert math.isfinite(metric_dict["val/param_mse"].item())
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.integration_r2

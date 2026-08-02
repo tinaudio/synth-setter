@@ -55,7 +55,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    DEFAULT_PUPUJEPA_CHECKPOINT,
     PUPUJEPA_LARGE_EMBEDDING_DIM,
     PUPUJEPA_TINY_EMBEDDING_DIM,
     pupujepa_artifact_digest,
@@ -859,7 +859,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "pupujepa_tiny": EmbeddingSpec(
         name="pupujepa_tiny",
         column=PUPUJEPA_TINY_FIELD,
-        default_checkpoint=DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+        default_checkpoint=DEFAULT_PUPUJEPA_CHECKPOINT,
         co_resident=False,
         index=IndexSpec(
             pool="mean",
@@ -873,7 +873,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "pupujepa_large": EmbeddingSpec(
         name="pupujepa_large",
         column=PUPUJEPA_LARGE_FIELD,
-        default_checkpoint=DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+        default_checkpoint=DEFAULT_PUPUJEPA_CHECKPOINT,
         co_resident=False,
         index=IndexSpec(
             pool="mean",
