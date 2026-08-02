@@ -49,6 +49,20 @@ _SURGE_INT_NORMALIZED_OFFSET = 0.005
 _SURGE_INT_NORMALIZED_SCALE = 0.99
 
 
+def _sample_index_at_or_after(time_seconds: float, sample_rate: float) -> int:
+    """Return the first sample at or after an event time.
+
+    :param time_seconds: Requested event time in seconds.
+    :param sample_rate: Samples per second.
+    :returns: First sample at or after the event.
+    """
+    sample_position = time_seconds * sample_rate
+    nearest_sample = round(sample_position)
+    if time_seconds == nearest_sample / sample_rate:
+        return nearest_sample
+    return math.ceil(sample_position)
+
+
 class _DawDreamerParameterDescription(TypedDict):
     """Parameter identity fields returned by DawDreamer.
 
@@ -473,15 +487,18 @@ class SurgePyRenderer(AudioRenderer):
         :param samples: Exact output sample count after block trimming.
         :param start: Requested note start in seconds.
         :param end: Requested note end in seconds.
-        :returns: Native stereo output trimmed to ``samples``.
+        :returns: Stereo output with the native attack aligned to the requested start.
         """
+        start_sample = _sample_index_at_or_after(start, self.sample_rate)
+        if start_sample >= samples:
+            return np.zeros((2, samples), dtype=np.float32)
         block_size = self.synth.getBlockSize()
         num_blocks = math.ceil(samples / block_size)
-        start_block = math.floor(start * self.sample_rate / block_size)
-        end_block = min(
-            num_blocks,
-            max(start_block + 1, math.ceil(end * self.sample_rate / block_size)),
-        )
+        start_block = start_sample // block_size
+        end_sample = _sample_index_at_or_after(end, self.sample_rate)
+        note_samples = max(1, end_sample - start_sample)
+        note_blocks = math.ceil(note_samples / block_size)
+        end_block = min(num_blocks, start_block + note_blocks)
         audio = self.synth.createMultiBlock(num_blocks)
         try:
             self._process_blocks(audio, start_block=0, num_blocks=start_block)
@@ -499,7 +516,14 @@ class SurgePyRenderer(AudioRenderer):
             )
         finally:
             self.synth.allNotesOff()
-        return np.asarray(audio[:, :samples], dtype=np.float32)
+        rendered = np.asarray(audio, dtype=np.float32)
+        aligned = np.zeros((2, samples), dtype=np.float32)
+        source_start = start_block * block_size
+        aligned[:, start_sample:] = rendered[
+            :,
+            source_start : source_start + samples - start_sample,
+        ]
+        return aligned
 
     def render(
         self,
