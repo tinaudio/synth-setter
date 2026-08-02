@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785692246216,
+  "lastUpdate": 1785692248674,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -23201,6 +23201,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.5727995083,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b2dcd4d7282d4b4c6f995472654db40daa3ffadc",
+          "message": "internal-fix(data-pipeline): align SurgePy note onsets exactly (#2827)\n\n* internal-fix(data-pipeline): align SurgePy note onsets exactly\n\n* test(data-pipeline): cover SurgePy onset generation path\n\n* internal-fix(data-pipeline): harden SurgePy timing boundaries\n\n* test(data-pipeline): pin SurgePy attack placement transform\n\n* test(data-pipeline): gate native SurgePy timing fixtures",
+          "timestamp": "2026-08-02T12:43:27-04:00",
+          "tree_id": "a2671b35a72ae59262e1331b55e028bce47bb2e3",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b2dcd4d7282d4b4c6f995472654db40daa3ffadc"
+        },
+        "date": 1785692248380,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.012016296386719,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.285921055600047,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08396705985069275,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0028450489044189453,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.204293966293335,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.557273957100005,
             "unit": "seconds"
           }
         ]
