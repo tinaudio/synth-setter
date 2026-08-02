@@ -1,0 +1,31 @@
+defaults:
+  - vst_flow
+  - _self_
+  # Residual-encoder width is probed; listed after _self_ so a chosen encoder overrides null.
+  - encoder@control_encoder: null
+
+_target_: synth_setter.models.vst_flow_finetune_module.VSTFlowFinetuneModule
+
+# No default: every arm must start from the same pretrained flow to be comparable, and the
+# module logs this file's sha256 so two runs cannot silently differ behind one path.
+base_checkpoint: ???
+
+control_mode: gradient_spectral
+# Filled by the encoder@control_encoder slot above; declared so the key exists to override.
+control_encoder: null
+control_hidden_dim: 256
+# Below this flow time the one-step estimate is too poor to score (paper section 3.2).
+control_t_min: 0.8
+
+sample_rate: ${datamodule.sample_rate}
+signal_length: ${datamodule.signal_length}
+# The renderer's voice is allocated once at this size; shorter batches pad up to it.
+render_batch_size: ${datamodule.batch_size}
+
+# Parameter-free, so the space the control is scored in cannot drift under training.
+cost:
+  _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
+  sample_rate: ${datamodule.sample_rate}
+
+# The renderer graph-breaks under torch.compile, and wrong gradients beat no run (#2585).
+compile: false

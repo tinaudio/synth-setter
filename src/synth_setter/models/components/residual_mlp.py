@@ -4,9 +4,15 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float, Shaped
+from torch import Tensor
 
-from synth_setter.models.components.cnn import LogMelEncoder, ResidualEncoder
+from synth_setter.models.components.cnn import MelCNN, ResidualEncoder
+from synth_setter.models.components.spec_encoder import LogMelFrontend, SpecEncoder
 from synth_setter.models.components.transformer import SinusoidalEncoding
+
+_BATCH_ANY_SHAPE = "batch ..."
+_BATCH_SHAPE = "batch"
 
 
 class ResidualMLPBlock(nn.Module):
@@ -129,21 +135,33 @@ class ConditionalResidualMLP(nn.Module):
     def penalty(self):
         return 0.0
 
-    def apply_dropout(self, z: torch.tensor, rate: float = 0.1):
-        if rate == 0.0:
-            return z
+    def apply_dropout(
+        self,
+        z: Float[Tensor, _BATCH_ANY_SHAPE],
+        rate: float = 0.1,
+    ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
+        """Replace a random subset of conditioning rows with the CFG token.
 
-        dropout_mask = torch.rand(z.shape[0], device=z.device) > rate
+        :param z: Conditioning rows, rank 2 or rank 3.
+        :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
+        :returns: The conditioning after dropout, and the keep mask that produced it
+            (True = row kept its conditioning; all-True when ``rate`` is zero).
+        :raises ValueError: ``z`` is neither rank 2 nor rank 3.
+        """
+        if rate == 0.0:
+            return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
+
+        keep = torch.rand(z.shape[0], device=z.device) > rate
         if z.ndim == 2:
-            dropout_mask = dropout_mask[..., None]
+            broadcast_keep = keep[..., None]
             dropout_token = self.cfg_dropout_token[0]
         elif z.ndim == 3:
-            dropout_mask = dropout_mask[..., None, None]
+            broadcast_keep = keep[..., None, None]
             dropout_token = self.cfg_dropout_token
         else:
             raise ValueError("unexpected z shape")
 
-        return torch.where(dropout_mask, z, dropout_token)
+        return torch.where(broadcast_keep, z, dropout_token), keep
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, c: torch.Tensor | None) -> torch.Tensor:
         if c is None:
@@ -282,27 +300,31 @@ class LogMelCNNResidualMLP(nn.Module):
         top_db: float | None = 80.0,
     ) -> None:
         super().__init__()
-        self.encoder = LogMelEncoder(
-            in_dim=in_dim,
-            hidden_dim=channels,
-            out_dim=hidden_dim,
-            sample_rate=sample_rate,
-            center=center,
-            f_min=f_min,
-            f_max=f_max,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            n_mels=n_mels,
-            pad_mode=pad_mode,
-            power=power,
-            mel_norm=mel_norm,
-            mel_scale=mel_scale,
-            window=window,
-            amin=amin,
-            top_db=top_db,
-            num_blocks=encoder_blocks,
-            kernel_size=kernel_size,
-            norm=norm,
+        self.encoder = SpecEncoder(
+            frontend=LogMelFrontend(
+                in_dim,
+                sample_rate=sample_rate,
+                center=center,
+                f_min=f_min,
+                f_max=f_max,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                n_mels=n_mels,
+                pad_mode=pad_mode,
+                power=power,
+                mel_norm=mel_norm,
+                mel_scale=mel_scale,
+                window=window,
+                amin=amin,
+                top_db=top_db,
+            ),
+            backbone=MelCNN(
+                channels,
+                hidden_dim,
+                num_blocks=encoder_blocks,
+                kernel_size=kernel_size,
+                norm=norm,
+            ),
         )
         self.trunk = ResidualMLP(hidden_dim, hidden_dim, out_dim, trunk_blocks)
 

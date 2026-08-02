@@ -26,6 +26,10 @@ defaults:
   # encoder settings on both the datamodule and the model (e.g. `conditioning=same_s`)
   - conditioning: null
 
+  # sketch-control token conditioning (#2612); composable with any
+  # `conditioning=` choice (e.g. `conditioning=m2l sketch=on`)
+  - sketch: null
+
   # experiment configs allow for version control of specific hyperparameters
   # e.g. best hyperparameters for given model and datamodule
   - experiment: null

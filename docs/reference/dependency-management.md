@@ -100,8 +100,9 @@ are the ones you wanted.
 entrypoints (`validate_spec`, `r2_io.ensure_r2_env_loaded`,
 `load_image_config`). The heavy runtime lives in PEP 735 `[dependency-groups]`
 (`torch`/`config`/`compute`/`data`/`audio`/`metrics`/`util`, aggregated under
-`runtime`, folded into `dev`). Notebook-only viewer dependencies live in the
-`notebooks` group, folded into `dev` but not `runtime`. pip never installs
+`runtime`, folded into `dev`). Notebook-only viewer dependencies and the
+`jupyter nbconvert --execute` toolchain live in the `notebooks` group, folded
+into `dev` but not `runtime`. pip never installs
 groups, and `uv pip` only with an explicit `--group`, so a plain
 `pip install -e .` yields a light env; `default-groups = ["dev"]` keeps a bare
 `uv sync` installing everything.

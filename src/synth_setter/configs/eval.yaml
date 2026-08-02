@@ -19,6 +19,8 @@ defaults:
   # embedding-conditioning profiles pairing a stored Lance column with its
   # encoder settings on both the datamodule and the model (e.g. `conditioning=same_s`)
   - conditioning: null
+  # sketch controls must compose identically for checkpoint train and eval.
+  - sketch: null
   - experiment: null
 
 task_name: "eval"

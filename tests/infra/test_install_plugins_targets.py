@@ -177,6 +177,7 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
     assert "src/synth_setter/plugin_runtime.py" in stage
     assert "update-alternatives --install /usr/bin/gcc" in DOCKERFILE.read_text()
     assert "studiorack.json" in stage
+    assert "studiorack-cardinal.lock.json" in stage
     assert "studiorack.lock.json" in stage
 
 

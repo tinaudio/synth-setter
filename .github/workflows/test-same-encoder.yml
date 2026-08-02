@@ -10,9 +10,12 @@ on:
     branches: [main]
     paths:
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/same.py"
+      - "src/synth_setter/models/components/same_encoder.py"
       - "tests/conftest.py"
       - "tests/helpers/same_reference.py"
       - "tests/pipeline/data/test_same_encoder_e2e.py"
+      - "tests/models/test_same_encoder.py"
       - "tests/pipeline/data/generate_same_legacy_reference.py"
       - "tests/fixtures/same/**"
       - "pyproject.toml"
@@ -22,9 +25,12 @@ on:
   pull_request:
     paths:
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/same.py"
+      - "src/synth_setter/models/components/same_encoder.py"
       - "tests/conftest.py"
       - "tests/helpers/same_reference.py"
       - "tests/pipeline/data/test_same_encoder_e2e.py"
+      - "tests/models/test_same_encoder.py"
       - "tests/pipeline/data/generate_same_legacy_reference.py"
       - "tests/fixtures/same/**"
       - "pyproject.toml"
@@ -80,6 +86,7 @@ jobs:
           uv run --no-sync pytest \
             -m same_e2e \
             tests/pipeline/data/test_same_encoder_e2e.py \
+            tests/models/test_same_encoder.py \
             -k "${{ matrix.model }}" \
             -vv \
             --cov=src \

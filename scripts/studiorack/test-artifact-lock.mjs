@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { exec, spawnSync } from "node:child_process";
+import { exec, execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFile,
@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import AdmZip from "adm-zip";
 import sudoPrompt from "@vscode/sudo-prompt";
 import {
@@ -29,6 +30,11 @@ import {
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
+);
+const execFileAsync = promisify(execFile);
+const artifactInstallFixture = path.join(
+  projectRoot,
+  "tests/fixtures/studiorack/install-locked-artifact.mjs",
 );
 const patchScript = path.join(projectRoot, "scripts/studiorack/patch-core.mjs");
 const managerSourceFixture = path.join(
@@ -325,7 +331,7 @@ async function withTemporaryRoot(body) {
 /**
  * Run a body against a disposable HTTPS artifact server.
  * @param {Buffer} archive Archive bytes served by the preferred endpoint.
- * @param {(server: {baseUrl: string, requests: (string | undefined)[]}) => Promise<void>} body Server assertions.
+ * @param {(server: {baseUrl: string, certificatePath: string, requests: (string | undefined)[]}) => Promise<void>} body Server assertions.
  * @returns {Promise<void>} Promise resolved after server cleanup.
  */
 async function withArtifactServer(archive, body) {
@@ -334,6 +340,19 @@ async function withArtifactServer(archive, body) {
   );
   const keyPath = path.join(certificateRoot, "key.pem");
   const certificatePath = path.join(certificateRoot, "certificate.pem");
+  const certificateConfigPath = path.join(certificateRoot, "openssl.cnf");
+  await writeFile(
+    certificateConfigPath,
+    "[req]\n" +
+      "distinguished_name=subject\n" +
+      "prompt=no\n" +
+      "x509_extensions=extensions\n" +
+      "[subject]\n" +
+      "CN=127.0.0.1\n" +
+      "[extensions]\n" +
+      "basicConstraints=critical,CA:TRUE\n" +
+      "subjectAltName=IP:127.0.0.1\n",
+  );
   const certificate = spawnSync(
     "openssl",
     [
@@ -342,8 +361,8 @@ async function withArtifactServer(archive, body) {
       "-newkey",
       "rsa:2048",
       "-nodes",
-      "-subj",
-      "/CN=127.0.0.1",
+      "-config",
+      certificateConfigPath,
       "-keyout",
       keyPath,
       "-out",
@@ -373,24 +392,49 @@ async function withArtifactServer(archive, body) {
     },
   );
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const previousTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   try {
     const address = server.address();
     assert(address && typeof address !== "string");
     await body({
       baseUrl: `https://127.0.0.1:${address.port}`,
+      certificatePath,
       requests,
     });
   } finally {
-    if (previousTlsSetting === undefined)
-      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTlsSetting;
     await new Promise((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
     await rm(certificateRoot, { force: true, recursive: true });
   }
+}
+
+/**
+ * @typedef {object} TrustedInstallOptions
+ * @property {string} certificatePath Certificate trusted only by the child.
+ * @property {string} lock Artifact-lock path consumed by the child.
+ * @property {string} root Temporary installation root.
+ */
+
+/**
+ * Install locked artifacts in a child that trusts the disposable certificate.
+ * @param {TrustedInstallOptions} options Child trust and installation paths.
+ * @returns {Promise<void>} Promise resolved after the child exits successfully.
+ */
+async function installLockedArtifactInTrustedChild({
+  certificatePath,
+  lock,
+  root,
+}) {
+  const env = {
+    ...process.env,
+    NODE_EXTRA_CA_CERTS: certificatePath,
+  };
+  delete env.NODE_TLS_REJECT_UNAUTHORIZED;
+  await execFileAsync(
+    process.execPath,
+    [artifactInstallFixture, root, lock],
+    { env, timeout: 30_000 },
+  );
 }
 
 /**
@@ -730,54 +774,44 @@ test("patched core installs only the preferred archive from a mixed lock", async
     const archive = zip.toBuffer();
     const archiveSha256 = createHash("sha256").update(archive).digest("hex");
 
-    await withArtifactServer(archive, async ({ baseUrl, requests }) => {
-      const archiveArtifact = artifact({
-        sha256: archiveSha256,
-        url: `${baseUrl}/preferred.zip`,
-      });
-      const installerArtifact = artifact({
-        sha256: "b".repeat(64),
-        type: "installer",
-        url: `${baseUrl}/forbidden.deb`,
-      });
-      const lock = await writeArtifactLock({
-        artifacts: [installerArtifact, archiveArtifact],
-        filename: "studiorack.lock.json",
-        root,
-      });
-      const pluginsDir = path.join(root, "plugins");
-      const manager = new ManagerLocal(RegistryType.Plugins, {
-        appDir: path.join(root, "app"),
-        artifactLockPath: lock,
-        pluginsDir,
-      });
-      manager.packages.set(
-        "example/synth",
-        new Package("example/synth", {
-          "1.2.3": {
-            files: [installerArtifact, archiveArtifact].map((file) => ({
-              ...file,
-              systems: [{ type: getSystem() }],
-            })),
-          },
-        }),
-      );
+    await withArtifactServer(
+      archive,
+      async ({ baseUrl, certificatePath, requests }) => {
+        assert.notEqual(process.env.NODE_TLS_REJECT_UNAUTHORIZED, "0");
+        const archiveArtifact = artifact({
+          sha256: archiveSha256,
+          url: `${baseUrl}/preferred.zip`,
+        });
+        const installerArtifact = artifact({
+          sha256: "b".repeat(64),
+          type: "installer",
+          url: `${baseUrl}/forbidden.deb`,
+        });
+        const lock = await writeArtifactLock({
+          artifacts: [installerArtifact, archiveArtifact],
+          filename: "studiorack.lock.json",
+          root,
+        });
 
-      const installed = await manager.install("example/synth", "1.2.3");
+        await installLockedArtifactInTrustedChild({
+          certificatePath,
+          lock,
+          root,
+        });
 
-      assert.equal(installed.installed, true);
-      assert.deepEqual(requests, ["/preferred.zip"]);
-      assert.equal(
-        await readFile(
-          path.join(
-            pluginsDir,
-            "VST3/example/synth/1.2.3/Preferred.vst3/Contents/x86_64-linux/Preferred.so",
+        assert.deepEqual(requests, ["/preferred.zip"]);
+        assert.equal(
+          await readFile(
+            path.join(
+              root,
+              "plugins/VST3/example/synth/1.2.3/Preferred.vst3/Contents/x86_64-linux/Preferred.so",
+            ),
+            "utf8",
           ),
-          "utf8",
-        ),
-        "preferred archive",
-      );
-    });
+          "preferred archive",
+        );
+      },
+    );
   });
 });
 

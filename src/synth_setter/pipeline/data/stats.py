@@ -195,7 +195,7 @@ def get_stats_directory(directory, mask_degenerate: bool = False):
     existing = (0, 0, 0)
     # we run Welford's online algorithm
     for i in range(len(dataset)):
-        x = dataset[i]["mel_spec"]
+        x = dataset[i]["mel"]
         existing = update(existing, x)
 
         if i % 10 == 0:

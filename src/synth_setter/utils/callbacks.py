@@ -395,7 +395,9 @@ class PlotLossPerTimestep(Callback):
 
         # Get conditioning vector
         conditioning = pl_module.encoder(signal)
-        z = pl_module.vector_field.apply_dropout(conditioning, pl_module.hparams.cfg_dropout_rate)
+        z, _ = pl_module.vector_field.apply_dropout(
+            conditioning, pl_module.hparams.cfg_dropout_rate
+        )
 
         x0, x1, z = pl_module._sample_x0_and_x1(params, z)
 
@@ -584,6 +586,15 @@ class PlotLearntProjection(Callback):
             self._do_plotting(trainer, pl_module)
 
 
+def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Detach an artifact tensor, move it to CPU, and erase tensor subclasses.
+
+    :param tensor: Callback output to make safe for weights-only serialization.
+    :returns: Exact base :class:`torch.Tensor` value on CPU.
+    """
+    return tensor.detach().to(device="cpu", copy=True).as_subclass(torch.Tensor)
+
+
 class PredictionWriter(BasePredictionWriter):
     """Save per-batch and per-epoch predictions plus target tensors to disk."""
 
@@ -603,25 +614,33 @@ class PredictionWriter(BasePredictionWriter):
         dataloader_idx,
     ):
         prediction, batch = prediction
-        torch.save(prediction, os.path.join(self.output_dir, f"pred-{batch_idx}.pt"))
         torch.save(
-            batch["audio"],
+            _plain_cpu_tensor(prediction),
+            os.path.join(self.output_dir, f"pred-{batch_idx}.pt"),
+        )
+        torch.save(
+            _plain_cpu_tensor(batch["audio"]),
             os.path.join(self.output_dir, f"target-audio-{batch_idx}.pt"),
         )
 
         if "params" in batch:
             torch.save(
-                batch["params"],
+                _plain_cpu_tensor(batch["params"]),
                 os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"),
             )
 
     def write_on_epoch_end(self, trainer, pl_module, predictions, batch_indices):
         predictions, batch = predictions
-        torch.save(predictions, os.path.join(self.output_dir, "predictions.pt"))
-        torch.save(batch["audio"], os.path.join(self.output_dir, "target-audio.pt"))
+        torch.save(_plain_cpu_tensor(predictions), os.path.join(self.output_dir, "predictions.pt"))
+        torch.save(
+            _plain_cpu_tensor(batch["audio"]), os.path.join(self.output_dir, "target-audio.pt")
+        )
 
         if "params" in batch:
-            torch.save(batch["params"], os.path.join(self.output_dir, "target-params.pt"))
+            torch.save(
+                _plain_cpu_tensor(batch["params"]),
+                os.path.join(self.output_dir, "target-params.pt"),
+            )
 
 
 class ValAudioProbe(Callback):
@@ -726,7 +745,7 @@ class ValAudioProbe(Callback):
             ("pred", outputs["preds"]),
             ("target-params", params),
         ):
-            torch.save(tensor[:limit].detach().cpu(), predictions_dir / f"{name}-0.pt")
+            torch.save(_plain_cpu_tensor(tensor[:limit]), predictions_dir / f"{name}-0.pt")
         self._staged = (probe_dir, trainer.global_step)
 
     def on_validation_epoch_end(self, trainer: "Trainer", pl_module: "LightningModule") -> None:
@@ -809,7 +828,11 @@ class ValAudioProbe(Callback):
         self._future_step = step
 
 
-_PER_PARAM_MSE_OUTPUTS = ("per_param_mse", "per_param_mse_best_swap")
+_PER_PARAM_MSE_OUTPUTS = (
+    "per_param_mse",
+    "per_param_mse_best_swap",
+    "per_param_mse_number_group_swap",
+)
 
 
 class LogPerParamMSE(Callback):

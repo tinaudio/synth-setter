@@ -11,13 +11,16 @@ from typing import cast
 import pytest
 from workflow_fixtures import load_workflow
 
-from synth_setter.pipeline.compute_task import apply_tier_filter, build_task_doc
+from synth_setter.pipeline.compute_task import (
+    apply_tier_filter,
+    build_task_doc,
+    load_compute_option,
+)
 from synth_setter.pipeline.schemas.gpu_tier import GpuTier
-from synth_setter.pipeline.skypilot_launch import load_launch_config, resolve_worker_env
+from synth_setter.pipeline.skypilot_launch import resolve_worker_env
 
 _REPO_ROOT = Path(__file__).parents[2]
 _CRED_SCRIPT = _REPO_ROOT / "scripts/skypilot/write_provider_creds.sh"
-_LAUNCH_CONFIG = _REPO_ROOT / "src/synth_setter/configs/launch/gpu-tests-runpod.yaml"
 _WORKER_SCRIPT = _REPO_ROOT / "scripts/ci/gpu_tests.sh"
 _WORKFLOW = "test-gpu.yml"
 
@@ -83,24 +86,26 @@ def _launch_step(project_root: Path) -> dict[str, object]:
 
 
 @pytest.mark.infra
-def test_gpu_launch_config_pins_low_tier_smoke_pool_on_dev_snapshot() -> None:
-    """Pin the low-tier consumer pool and dev-snapshot worker image."""
-    config = load_launch_config(_LAUNCH_CONFIG)
+def test_gpu_workflow_pins_low_tier_pool_and_worker_image(project_root: Path) -> None:
+    """The Hydra launcher invocation pins the GPU test infrastructure.
 
-    assert config.compute is not None
-    assert config.compute.name == "runpod-gpu-tests"
-    assert config.tier is GpuTier.LOW
-    assert config.worker_image_tag == "dev-snapshot"
-    assert config.tail is True
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    launch_command = cast(str, _launch_step(project_root)["run"])
+
+    assert "skypilot_launch/compute=runpod/gpu-tests" in launch_command
+    assert "skypilot_launch.tier=low" in launch_command
+    assert "skypilot_launch.worker_image_tag=dev-snapshot" in launch_command
+    assert "skypilot_launch.tail=true" in launch_command
+    assert "hydra.output_subdir=null" in launch_command
 
 
 @pytest.mark.infra
 def test_gpu_compute_option_yaml_mounts_the_pinned_rclone() -> None:
     """RunPod rejects programmatic file_mounts (#749), so the mount must be YAML-declared."""
-    config = load_launch_config(_LAUNCH_CONFIG)
-    assert config.compute is not None
+    compute = load_compute_option("runpod/gpu-tests")
 
-    task_doc = build_task_doc(config.compute, cmd=config.cmd)
+    task_doc = build_task_doc(compute, cmd="bash scripts/ci/gpu_tests.sh")
 
     pod_destination = "/tmp/synth-setter-tools/rclone"  # noqa: S108 — remote pod path
 
@@ -118,26 +123,27 @@ def test_gpu_worker_script_prefers_the_mounted_rclone_over_the_image_one() -> No
 
 
 @pytest.mark.infra
-def test_gpu_launch_config_resolves_to_cheap_consumer_gpus() -> None:
+def test_gpu_compute_option_resolves_to_cheap_consumer_gpus() -> None:
     """Tier filtering keeps the paid pool on consumer cards, excluding A40-class SKUs."""
-    config = load_launch_config(_LAUNCH_CONFIG)
-    assert config.compute is not None
+    compute = load_compute_option("runpod/gpu-tests")
 
-    task_doc = build_task_doc(apply_tier_filter(config.compute, config.tier), cmd=config.cmd)
+    task_doc = build_task_doc(
+        apply_tier_filter(compute, GpuTier.LOW), cmd="bash scripts/ci/gpu_tests.sh"
+    )
 
     resources = cast(dict[str, object], task_doc["resources"])
     assert resources["accelerators"] == {"RTX3070": 1, "RTX3080": 1, "RTX3090": 1, "RTX4090": 1}
 
 
 @pytest.mark.infra
-def test_gpu_launch_config_syncs_worker_checkout_before_running_tests() -> None:
-    """The worker runs the dispatched commit's script, not the image-baked checkout."""
-    config = load_launch_config(_LAUNCH_CONFIG)
-    assert config.compute is not None
+def test_gpu_workflow_runs_generic_worker_command(project_root: Path) -> None:
+    """The workflow supplies the GPU script through ``skypilot_launch.cmd``.
 
-    run_block = cast(str, build_task_doc(config.compute, cmd=config.cmd)["run"])
+    :param project_root: Repo root supplied by the infra test fixtures.
+    """
+    launch_command = cast(str, _launch_step(project_root)["run"])
 
-    assert run_block.index("sync_worker_checkout.sh") < run_block.index("scripts/ci/gpu_tests.sh")
+    assert "skypilot_launch.cmd=exec bash scripts/ci/gpu_tests.sh" in launch_command
 
 
 @pytest.mark.infra
@@ -229,19 +235,6 @@ def test_gpu_workflow_dispatches_through_the_shared_launcher(project_root: Path)
     assert "python -m synth_setter.pipeline.skypilot_launch" in launch_command
     assert "sky.launch" not in launch_command
     assert "task.workdir" not in launch_command
-
-
-@pytest.mark.infra
-def test_gpu_workflow_dispatches_a_launch_config_that_exists(project_root: Path) -> None:
-    """The dispatched config path is the one this suite pins the contract of.
-
-    :param project_root: Repo root supplied by the infra test fixtures.
-    """
-    workflow = load_workflow(project_root, _WORKFLOW)
-    dispatched = cast(dict[str, str], workflow["env"])["LAUNCH_CONFIG"]
-
-    assert (project_root / dispatched).is_file()
-    assert (project_root / dispatched) == _LAUNCH_CONFIG
 
 
 @pytest.mark.infra

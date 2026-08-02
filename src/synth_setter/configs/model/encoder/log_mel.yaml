@@ -1,0 +1,14 @@
+# Waveform-in encoder for online-render synths: computes log-mel inside the model, so
+# no stored mel column is needed.
+defaults:
+  - /model/frontend@frontend: log_mel
+  - _self_
+
+_target_: synth_setter.models.components.spec_encoder.SpecEncoder
+backbone:
+  _target_: synth_setter.models.components.cnn.MelCNN
+  hidden_dim: 16
+  out_dim: 512
+  num_blocks: 4
+  kernel_size: 7
+  norm: bn

@@ -78,15 +78,21 @@ jobs:
           - name: pipeline-finalize
             patterns:
               - synth_setter.pipeline.data.finalize_progress.*
+          - name: pipeline-param-shift
+            patterns:
+              - synth_setter.pipeline.data.param_shift.*
           - name: pipeline-ssondo
             patterns:
               - synth_setter.pipeline.data.ssondo.*
           - name: pipeline-t5gemma
             patterns:
               - synth_setter.pipeline.data.t5gemma.*
-          - name: pipeline-tinymu
+          - name: pipeline-matpac-plus
             patterns:
-              - synth_setter.pipeline.data.tinymu.*
+              - synth_setter.pipeline.data.matpac_plus.*
+          - name: pipeline-pupujepa
+            patterns:
+              - synth_setter.pipeline.data.pupujepa.*
           - name: ci-scripts
             patterns:
               - scripts.ci.*

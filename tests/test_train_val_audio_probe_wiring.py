@@ -26,6 +26,8 @@ from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import ValAudioProbe
 
 _LAUNCH_NAMESPACE = f"train-20260720T000000000Z-{'0' * 32}"
+_PLUGIN_PATH = "plugins/Surge XT.vst3"
+_PRESET_PATH = "presets/surge-base.vstpreset"
 
 
 @pytest.fixture(autouse=True)
@@ -37,12 +39,34 @@ def _skip_r2_auth_ping(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
 
 
+@pytest.fixture(autouse=True)
+def _render_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run each test from a workspace holding the default synth's bundle and preset.
+
+    The probe pre-flight resolves the declared relative paths against the process
+    CWD, so a stub workspace keeps these tests independent of whether a real
+    ``plugins/`` mirror exists (it is gitignored and absent on CI runners).
+
+    :param tmp_path: Root of the stub workspace.
+    :param monkeypatch: Switches the process CWD to it.
+    :returns: The stub workspace root.
+    """
+    (tmp_path / _PLUGIN_PATH).mkdir(parents=True)
+    (tmp_path / _PRESET_PATH).parent.mkdir(parents=True)
+    (tmp_path / _PRESET_PATH).write_bytes(b"stub preset")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
 def _cfg(
     *,
     enabled: bool | Literal["auto"],
     with_render: bool = True,
     with_synth: bool = True,
     output_dir: str = "/runs/out",
+    plugin_path: str = _PLUGIN_PATH,
+    plugin_state_path: str = _PRESET_PATH,
+    renderer_backend: str = "pedalboard",
 ) -> DictConfig:
     """Build the minimal train cfg slice ``_configure_val_audio_probe`` reads.
 
@@ -50,6 +74,9 @@ def _cfg(
     :param with_render: When ``False``, omit the ``render`` group entirely.
     :param with_synth: When ``False``, omit the root ``synth`` group (#2565).
     :param output_dir: Value for ``paths.output_dir``.
+    :param plugin_path: Value for ``synth.plugin_path``.
+    :param plugin_state_path: Value for ``synth.plugin_state_path``.
+    :param renderer_backend: Value for ``render.renderer_backend``.
     :returns: Composed cfg fragment.
     """
     cfg = OmegaConf.create(
@@ -65,13 +92,14 @@ def _cfg(
             cfg.synth = {
                 "name": "surge_xt",
                 "param_spec_name": "surge_xt",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": plugin_state_path,
+                "plugin_path": plugin_path,
                 "synth_version": "1.3.4",
             }
     if with_render:
         with open_dict(cfg):
             cfg.render = {
+                "renderer_backend": renderer_backend,
                 "sample_rate": 44100,
                 "channels": 2,
                 "velocity": 100,
@@ -325,6 +353,69 @@ def test_configure_val_audio_probe_auto_skips_when_r2_unavailable(
     _configure_val_audio_probe(_cfg(enabled="auto"), callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
+
+
+def test_configure_val_audio_probe_raises_when_plugin_bundle_unresolvable(
+    _render_artifacts: Path,
+) -> None:
+    """A run whose plugin path resolves nowhere fails at launch, not once per validation.
+
+    :param _render_artifacts: Stub workspace whose plugin bundle is removed first.
+    """
+    (_render_artifacts / _PLUGIN_PATH).rmdir()
+
+    with pytest.raises(ValueError, match="link-plugins"):
+        _configure_val_audio_probe(_cfg(enabled=True), [], _LAUNCH_NAMESPACE)
+
+
+def test_configure_val_audio_probe_raises_when_preset_unresolvable(
+    _render_artifacts: Path,
+) -> None:
+    """A declared preset the renderer cannot open is as fatal as a missing bundle.
+
+    :param _render_artifacts: Stub workspace whose preset is removed first.
+    """
+    (_render_artifacts / _PRESET_PATH).unlink()
+
+    with pytest.raises(ValueError, match=_PRESET_PATH):
+        _configure_val_audio_probe(_cfg(enabled=True), [], _LAUNCH_NAMESPACE)
+
+
+def test_configure_val_audio_probe_auto_skips_when_plugin_bundle_unresolvable(
+    _render_artifacts: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``auto`` on a host without the plugin skips the probe and says which path is missing.
+
+    :param _render_artifacts: Stub workspace whose plugin bundle is removed first.
+    :param caplog: Captures the operator-visible warning.
+    """
+    (_render_artifacts / _PLUGIN_PATH).rmdir()
+    callbacks: list[Callback] = []
+
+    with caplog.at_level(logging.WARNING):
+        _configure_val_audio_probe(_cfg(enabled="auto"), callbacks, _LAUNCH_NAMESPACE)
+
+    assert callbacks == []
+    assert any(_PLUGIN_PATH in message for message in caplog.messages)
+
+
+def test_configure_val_audio_probe_wires_online_render_synth_without_plugin_bundle() -> None:
+    """An in-process backend declares no bundle or preset, so the pre-flight must not gate it."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(
+        _cfg(
+            enabled=True,
+            plugin_path="torchsynth",
+            plugin_state_path="",
+            renderer_backend="torchsynth",
+        ),
+        callbacks,
+        _LAUNCH_NAMESPACE,
+    )
+
+    assert len(callbacks) == 1
+    assert isinstance(callbacks[0], ValAudioProbe)
 
 
 def test_configure_val_audio_probe_true_propagates_r2_failure(

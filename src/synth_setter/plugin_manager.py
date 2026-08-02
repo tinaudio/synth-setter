@@ -73,7 +73,13 @@ __all__ = [
     "validate_plugin_bundle_for_runtime",
 ]
 
-_EXACT_SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+_SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+_SEMVER_PRERELEASE_IDENTIFIER = rf"(?:{_SEMVER_NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+_EXACT_SEMVER = re.compile(
+    rf"^{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}"
+    rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 _PACKAGE_SLUG = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*/[0-9A-Za-z][0-9A-Za-z._-]*$")
 _INSTALL_LOCK_DIR = ".synth-setter-install-locks"
 _NATIVE_TRANSACTION_DIR = ".synth-setter-native-install"
@@ -220,7 +226,7 @@ class PluginManifest(pydantic.BaseModel):
 
     .. attribute :: vst3_versions
 
-        Optional package slug to exact VST3-reported version.
+        Package slug to the exact version reported by the installed VST3, when declared.
     """
 
     model_config = pydantic.ConfigDict(
@@ -238,20 +244,20 @@ class PluginManifest(pydantic.BaseModel):
         """Require exact versions and one bundle mapping per package.
 
         :returns: The validated manifest.
-        :raises ValueError: A slug/version is invalid or bundle keys differ from plugin keys.
+        :raises ValueError: A slug/version is invalid or metadata keys differ from plugin keys.
         """
-        if self.plugins.keys() != self.vst3_bundles.keys():
+        package_keys = self.plugins.keys()
+        if package_keys != self.vst3_bundles.keys():
             raise ValueError("plugins and vst3Bundles must contain the same package keys")
-        if self.vst3_versions is not None and self.plugins.keys() != self.vst3_versions.keys():
+        vst3_versions = self.vst3_versions
+        if vst3_versions is not None and package_keys != vst3_versions.keys():
             raise ValueError("plugins and vst3Versions must contain the same package keys")
-        for package, version in self.plugins.items():
+        for package, package_version in self.plugins.items():
             if _PACKAGE_SLUG.fullmatch(package) is None:
                 raise ValueError(f"invalid Studiorack package slug: {package!r}")
-            if _EXACT_SEMVER.fullmatch(version) is None:
+            if _EXACT_SEMVER.fullmatch(package_version) is None:
                 raise ValueError(f"{package} version must be an exact semantic version")
-            renderer_version = (
-                version if self.vst3_versions is None else self.vst3_versions[package]
-            )
+            renderer_version = package_version if vst3_versions is None else vst3_versions[package]
             if _EXACT_SEMVER.fullmatch(renderer_version) is None:
                 raise ValueError(f"{package} VST3 version must be an exact semantic version")
             bundle = self.vst3_bundles[package]
@@ -925,7 +931,7 @@ def install_plugins(
     """Install exact packages through the Studiorack CLI.
 
     :param plugins: Exact package metadata.
-    :param artifact_lock: Repository artifact lock passed to the patched core.
+    :param artifact_lock: Repository-controlled artifact lock for the selected manifest.
     :param plugins_dir: Absolute Studiorack storage root.
     :param studiorack_executable: Pinned CLI executable.
     :param system_dirs: Native-installer VST3 roots; platform defaults when omitted.
@@ -944,7 +950,9 @@ def install_plugins(
         **os.environ,
         "SYNTH_SETTER_STUDIORACK_ARTIFACT_LOCK": str(lock_path),
     }
+    # Persist the lock for elevated children while the environment pins this invocation.
     _run_studiorack([executable, "config", "set", "pluginsDir", str(resolved_dir)], env=env)
+    _run_studiorack([executable, "config", "set", "artifactLockPath", str(lock_path)], env=env)
     roots = default_system_vst3_dirs() if system_dirs is None else tuple(system_dirs)
     for plugin in plugins:
         _install_plugin(

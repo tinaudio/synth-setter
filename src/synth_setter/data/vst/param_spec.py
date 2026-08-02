@@ -1,9 +1,12 @@
 """Synth/note parameter definitions, sampling, and encoding for VST param specs."""
 
 from collections.abc import Iterator, Mapping
-from typing import Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import torch
 
 # Synth values are renderer-native; semantic values are interpretable; encoded values use [0, 1].
 
@@ -15,6 +18,9 @@ class Parameter:
         self.name = name
 
     def sample(self, rng: np.random.Generator) -> Any:
+        raise NotImplementedError
+
+    def encode(self, raw_value: Any) -> np.ndarray:
         raise NotImplementedError
 
 
@@ -309,13 +315,35 @@ class ParamSpec:
     def encode(
         self, synth_param_dict: dict[str, float], note_param_dict: Mapping[str, object]
     ) -> np.ndarray:
-        synth_params = [p.encode(synth_param_dict[p.name]) for p in self.synth_params]
-        note_params = [p.encode(note_param_dict[p.name]) for p in self.note_params]
-
-        synth_params = np.concatenate(synth_params).astype(np.float32)
-        note_params = np.concatenate(note_params).astype(np.float32)
+        synth_params = np.concatenate(
+            [p.encode(synth_param_dict[p.name]) for p in self.synth_params]
+        ).astype(np.float32)
+        note_params = np.concatenate(
+            [p.encode(note_param_dict[p.name]) for p in self.note_params]
+        ).astype(np.float32)
 
         return np.concatenate((synth_params, note_params))
+
+    def encoded_to_model(self, encoded: np.ndarray) -> np.ndarray:
+        """Rescale encoded values onto the ``[-1, 1]`` scale the model predicts in.
+
+        Elementwise, so it applies to a whole row or to any column span of one.
+
+        :param encoded: Values in ``[0, 1]``.
+        :returns: The same values on the model's ``[-1, 1]`` scale.
+        """
+        return encoded * 2 - 1
+
+    def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
+        """Rescale model-space values onto the encoded ``[0, 1]`` domain, clipped.
+
+        Inverse of :meth:`encoded_to_model` for in-range inputs; predictions
+        overshooting ``[-1, 1]`` saturate rather than decode out of domain.
+
+        :param model: Values on the model's ``[-1, 1]`` scale.
+        :returns: The same values clipped into ``[0, 1]``.
+        """
+        return ((model + 1) / 2).clip(0, 1)
 
     def decode(self, params: np.ndarray) -> tuple[dict[str, float], NoteParams]:
         """Decode one encoded row of values in ``[0, 1]``.
@@ -358,8 +386,8 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
     """Invert the model-output scale and decode one prediction row.
 
     Model prediction rows live in ``[-1, 1]``; the encoded param domain is
-    ``[0, 1]``, so the row is rescaled via ``(x + 1) / 2`` and clipped before
-    :meth:`ParamSpec.decode`.
+    ``[0, 1]``, so the row goes through :meth:`ParamSpec.model_to_encoded`
+    before :meth:`ParamSpec.decode`.
 
     :param row: One prediction row, nominally ``(len(spec),)`` wide, values in
         ``[-1, 1]``; width is not enforced (see :meth:`ParamSpec.decode`).
@@ -368,5 +396,4 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
         selected renderer's native parameter domains, while note params contain
         pitch as int and start/end seconds.
     """
-    scaled = np.clip((row + 1) / 2, 0, 1)
-    return spec.decode(scaled)
+    return spec.decode(spec.model_to_encoded(row))

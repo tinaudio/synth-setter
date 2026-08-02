@@ -234,6 +234,32 @@ class TestMaterializedSubsetLayout:
         assert train_split.schema.names == ["param_array", "mel_spec"]
         assert train_split.count_rows() == 8
 
+    def test_prepare_data_audio_conditioning_projects_waveform_once_per_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Raw-audio conditioning hydrates one audio column for train, val, and test.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = LanceVSTDataModule(
+            dataset_root=tmp_path / "local",
+            download_dataset_root_uri=source_root.as_uri(),
+            conditioning="audio",
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        module.prepare_data()
+
+        for split in ("train", "val", "test"):
+            dataset = lance.dataset(str(module.dataset_root / f"{split}.lance"))
+            assert dataset.schema.names == ["param_array", "audio"]
+
     def test_prepare_data_names_subset_directory_for_the_conditioning_column(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

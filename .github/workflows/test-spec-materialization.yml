@@ -19,9 +19,12 @@ on:
       - "src/synth_setter/pipeline/ci/materialize_spec.py"
       - "src/synth_setter/pipeline/ci/validate_spec.py"
       - "src/synth_setter/pipeline/schemas/**"
+      - "src/synth_setter/plugin_manager.py"
       - "src/synth_setter/scripts/run-linux-vst-headless.sh"
+      - "studiorack.json"
       - "tests/infra/test_deep_premerge_workflows.py"
       - "tests/pipeline/ci_config/test_materialize_spec.py"
+      - "tests/test_plugin_manager.py"
       - "uv.lock"
 
 permissions:

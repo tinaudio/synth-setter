@@ -7,9 +7,12 @@ use_saved_mean_and_variance: true
 batch_size: 128
 ot: true
 conditioning: mel
-# Per dataloader, so enabling validation doubles the live worker count. Sized
-# against host RAM, not cores — see getting-started.md §8.
+# Optional sketch-control spec; the `sketch=on` group fills it (#2612).
+sketch: null
+# Train, test, and predict worker count; size against host RAM, not cores.
 num_workers: 4
+# Validation is intentionally in-process to avoid a second worker pool.
+val_num_workers: 0
 persistent_workers: true
 # Null delegates prefetch depth to PyTorch; in-process loading ignores it.
 prefetch_factor: null

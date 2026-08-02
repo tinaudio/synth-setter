@@ -92,6 +92,7 @@ class EmbeddingPool(nn.Module):
     ):
         super().__init__()
 
+        self.input_dim = embed_dim
         self.attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
         self.query = nn.Parameter(torch.randn(1, 1, d_model))
         self.positional_encoding = PosEnc(embed_dim, max_seq_len, pos_enc)

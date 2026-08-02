@@ -24,6 +24,7 @@ from synth_setter.pipeline.dataset_lineage import (
     describe_unresolved_dataset_root,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_backend import missing_render_artifacts
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.utils import (
     RankedLogger,
@@ -205,7 +206,8 @@ def _configure_val_audio_probe(
         - A present mode is not ``true``, ``false``, or ``"auto"``.
         - No root ``synth`` identity group is composed alongside ``render``.
         - The sample count is not a positive integer.
-        - Mode ``true`` lacks a render group or validation is disabled.
+        - Mode ``true`` lacks a render group, has validation disabled, or declares
+          a plugin bundle or preset that resolves nowhere.
 
         Mode ``"auto"`` skips the probe for the final condition.
     :raises RuntimeError: Propagated from the R2 pre-flight under mode ``true``.
@@ -249,6 +251,20 @@ def _configure_val_audio_probe(
     # Identity comes from the root synth group (#2565) — the same node the
     # datamodule interpolates — so the probe's spec cannot skew from the model's.
     settings = RenderConfig.from_cfg_nodes(cfg.render, cfg.get("synth"))
+    # Checked here because the probe swallows its own render failures, so an
+    # unresolvable path costs a whole run's worth of metrics rather than a launch.
+    missing = missing_render_artifacts(settings.plugin_path, settings.plugin_state_path)
+    if missing:
+        listed = ", ".join(repr(path) for path in missing)
+        _skip_auto_probe_or_raise(
+            auto,
+            f"render artifacts missing relative to {Path.cwd()}: {listed}",
+            "training.val_audio_probe=true requires every render artifact it loads, but "
+            f"these do not exist relative to the run's working directory {Path.cwd()}: "
+            f"{listed}. Run `make link-plugins` — `plugins/` is gitignored, so each "
+            "worktree needs its own mirror.",
+        )
+        return
     try:
         r2_io.ensure_r2_env_loaded()
     except (RuntimeError, OSError) as exc:

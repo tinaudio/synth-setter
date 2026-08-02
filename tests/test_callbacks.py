@@ -11,6 +11,7 @@ real.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -18,9 +19,10 @@ import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
+from torchsynth.signal import Signal
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.utils.callbacks import LogPerParamMSE, _log_figure
+from synth_setter.utils.callbacks import LogPerParamMSE, PredictionWriter, _log_figure
 
 
 class _RecordingWandbLogger(WandbLogger):
@@ -121,6 +123,107 @@ def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
     """Per-parameter metric labels require callers to select a ParamSpec."""
     with pytest.raises(TypeError, match="param_spec"):
         LogPerParamMSE()  # type: ignore[call-arg]
+
+
+def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
+    tmp_path: Path,
+) -> None:
+    """Prediction, audio, and parameter artifacts load safely as exact base tensors.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    prediction = (
+        torch.arange(6, dtype=torch.float32).reshape(2, 3).as_subclass(Signal).requires_grad_()
+    )
+    audio = torch.arange(8, dtype=torch.float32).reshape(2, 4).as_subclass(Signal).requires_grad_()
+    params = (
+        torch.arange(10, dtype=torch.float32).reshape(2, 5).as_subclass(Signal).requires_grad_()
+    )
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+
+    writer.write_on_batch_end(
+        cast("Trainer", None),
+        cast("LightningModule", None),
+        (prediction, {"audio": audio, "params": params}),
+        None,
+        None,
+        0,
+        0,
+    )
+
+    loaded_prediction = torch.load(tmp_path / "pred-0.pt", weights_only=True)
+    loaded_audio = torch.load(tmp_path / "target-audio-0.pt", weights_only=True)
+    loaded_params = torch.load(tmp_path / "target-params-0.pt", weights_only=True)
+    assert type(loaded_prediction) is torch.Tensor
+    assert type(loaded_audio) is torch.Tensor
+    assert type(loaded_params) is torch.Tensor
+    assert not loaded_prediction.requires_grad
+    assert not loaded_audio.requires_grad
+    assert not loaded_params.requires_grad
+    assert (
+        loaded_prediction.device.type
+        == loaded_audio.device.type
+        == loaded_params.device.type
+        == "cpu"
+    )
+    assert torch.equal(loaded_prediction, prediction)
+    assert torch.equal(loaded_audio, audio)
+    assert torch.equal(loaded_params, params)
+
+
+def test_prediction_writer_serializes_views_without_backing_storage(
+    tmp_path: Path,
+) -> None:
+    """Staged tensor slices serialize only their visible values.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    backing = torch.arange(4096, dtype=torch.float32)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+
+    writer.write_on_batch_end(
+        cast("Trainer", None),
+        cast("LightningModule", None),
+        (backing[:2], {"audio": backing[2:4], "params": backing[4:6]}),
+        None,
+        None,
+        0,
+        0,
+    )
+
+    for artifact in ("pred-0.pt", "target-audio-0.pt", "target-params-0.pt"):
+        loaded = torch.load(tmp_path / artifact, weights_only=True)
+        assert loaded.untyped_storage().nbytes() == loaded.numel() * loaded.element_size()
+
+
+def test_prediction_writer_epoch_serializes_torchsynth_signals_as_plain_tensors(
+    tmp_path: Path,
+) -> None:
+    """Epoch artifacts from Signal values reload through the weights-only boundary.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    prediction = torch.arange(6, dtype=torch.float32).reshape(2, 3).as_subclass(Signal)
+    audio = torch.arange(8, dtype=torch.float32).reshape(2, 4).as_subclass(Signal)
+    params = torch.arange(10, dtype=torch.float32).reshape(2, 5).as_subclass(Signal)
+    writer = PredictionWriter(tmp_path, write_interval="epoch")
+
+    writer.write_on_epoch_end(
+        cast("Trainer", None),
+        cast("LightningModule", None),
+        (prediction, {"audio": audio, "params": params}),
+        [],
+    )
+
+    loaded_prediction = torch.load(tmp_path / "predictions.pt", weights_only=True)
+    loaded_audio = torch.load(tmp_path / "target-audio.pt", weights_only=True)
+    loaded_params = torch.load(tmp_path / "target-params.pt", weights_only=True)
+    assert type(loaded_prediction) is torch.Tensor
+    assert type(loaded_audio) is torch.Tensor
+    assert type(loaded_params) is torch.Tensor
+    assert torch.equal(loaded_prediction, prediction)
+    assert torch.equal(loaded_audio, audio)
+    assert torch.equal(loaded_params, params)
 
 
 class _RecordingModule:

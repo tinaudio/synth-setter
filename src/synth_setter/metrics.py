@@ -1,9 +1,18 @@
 """TorchMetrics-based audio and parameter-space distance metrics."""
 
+import re
+from collections import defaultdict
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import torch
+from scipy.optimize import linear_sum_assignment
 from torchmetrics import Metric
+
+if TYPE_CHECKING:
+    from synth_setter.data.vst.param_spec import ParamSpec
+
+_NUMBER_VALUE_PATTERN = re.compile(r"[\s_.-]*\d+[\s_.-]*")
 
 
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):
@@ -73,6 +82,72 @@ class SpectralDistance(Metric):
         return self.sd / self.count
 
 
+def _number_group_indices(
+    param_spec: "ParamSpec",
+) -> tuple[tuple[tuple[int, ...], ...], ...]:
+    grouped_spans: defaultdict[tuple[str, int], list[tuple[int, ...]]] = defaultdict(list)
+    for param, span in param_spec.encoded_slices():
+        number_group_name = _NUMBER_VALUE_PATTERN.sub("#", param.name)
+        grouped_spans[(number_group_name, len(param))].append(tuple(range(span.start, span.stop)))
+    return tuple(tuple(spans) for spans in grouped_spans.values())
+
+
+def number_group_swap_per_param_mse(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> torch.Tensor:
+    """Return per-parameter MSE after swaps within number-collapsed name groups.
+
+    :param predicted: Parameter vectors, shape ``(batch, num_params)``.
+    :param target: Ground-truth vectors, same shape as ``predicted``.
+    :param param_spec: Parameter names and encoded spans defining eligible swaps.
+    :returns: Per-target-dimension mean squared error, shape ``(num_params,)``.
+    :raises ValueError: If tensor shapes or the ParamSpec width do not match.
+    """
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+    if predicted.shape[1] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
+        )
+
+    per_target_errors = torch.empty_like(predicted, dtype=torch.float32)
+    for group in _number_group_indices(param_spec):
+        block_indices = [torch.tensor(block, device=predicted.device) for block in group]
+        predicted_blocks = torch.stack([predicted[:, block] for block in block_indices], dim=1)
+        target_blocks = torch.stack([target[:, block] for block in block_indices], dim=1)
+        if predicted_blocks.shape[-1] == 1:
+            sorted_predicted = predicted_blocks.squeeze(-1).sort(dim=1, stable=True).values.float()
+            sorted_target, target_indices = target_blocks.squeeze(-1).sort(dim=1, stable=True)
+            sorted_errors = (sorted_predicted - sorted_target.float()).square()
+            target_errors = torch.empty_like(sorted_errors).scatter(
+                1, target_indices, sorted_errors
+            )
+            per_target_errors[:, torch.cat(block_indices)] = target_errors
+            continue
+
+        costs = (
+            (predicted_blocks.unsqueeze(2) - target_blocks.unsqueeze(1))
+            .float()
+            .square()
+            .sum(dim=-1)
+        )
+        for sample_index, sample_costs in enumerate(costs.detach().cpu()):
+            predicted_indices, target_indices = linear_sum_assignment(sample_costs)
+            for predicted_index, target_index in zip(
+                predicted_indices, target_indices, strict=True
+            ):
+                errors = (
+                    predicted_blocks[sample_index, predicted_index].float()
+                    - target_blocks[sample_index, target_index].float()
+                ).square()
+                per_target_errors[sample_index, block_indices[target_index]] = errors
+    return per_target_errors.mean(dim=0)
+
+
 def best_swap_per_param_mse(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Return best-swap MSE attributed to each target parameter dimension.
 
@@ -91,6 +166,37 @@ def best_swap_per_param_mse(predicted: torch.Tensor, target: torch.Tensor) -> to
     sorted_errors = (sorted_predicted - sorted_target.float()).square()
     per_target_errors = torch.empty_like(sorted_errors).scatter(1, target_indices, sorted_errors)
     return per_target_errors.mean(dim=0)
+
+
+class NumberGroupSwapParamMSE(Metric):
+    """MSE after optimal swaps within number-collapsed parameter-name groups."""
+
+    def __init__(self, param_spec: "ParamSpec") -> None:
+        """Register accumulators and the ParamSpec defining eligible swaps.
+
+        :param param_spec: Parameter names and encoded spans defining eligible swaps.
+        """
+        super().__init__()
+        self.param_spec = param_spec
+        self.add_state("sum_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("element_count", default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
+        """Accumulate number-group-constrained squared errors.
+
+        :param predicted: Parameter vectors, shape ``(batch, num_params)``.
+        :param target: Ground-truth vectors, same shape as ``predicted``.
+        """
+        per_param_mse = number_group_swap_per_param_mse(predicted, target, self.param_spec)
+        self.sum_squared_error = self.sum_squared_error + per_param_mse.sum() * predicted.shape[0]
+        self.element_count = self.element_count + predicted.numel()
+
+    def compute(self) -> torch.Tensor:
+        """Return the accumulated mean constrained-swap squared error.
+
+        :returns: Scalar mean over every accumulated element.
+        """
+        return self.sum_squared_error / self.element_count
 
 
 class BestSwapParamMSE(Metric):

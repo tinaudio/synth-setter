@@ -7,12 +7,14 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import weakref
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import lance
 import numpy as np
@@ -25,15 +27,29 @@ from omegaconf import DictConfig
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
+from synth_setter.clap import (
+    DEFAULT_CLAP_TRAINING_CHECKPOINT,
+    DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
+    clap_checkpoint_sha256,
+)
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
+    PUPUJEPA_LARGE_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
-    SKETCH_CTRL_FIELD,
+    SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD,
+    SKETCH_PITCH_SLICE,
+    SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD,
     T5GEMMA_FIELD,
     dataset_field_shapes,
 )
@@ -42,24 +58,21 @@ from synth_setter.features.sketch_controls import (
     extract_sketch_controls_batch,
     sketch_num_frames,
 )
+from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     DEFAULT_CLAP_CHECKPOINT,
     DEFAULT_LANCE_BATCH_SIZE,
-    DEFAULT_SAME_L_CHECKPOINT,
-    DEFAULT_SAME_S_CHECKPOINT,
     EMBEDDING_REGISTRY,
-    SKETCH_INDEX_SUB_VECTORS,
-    SAME_DOWNSAMPLING_RATIO,
-    SAME_EMBEDDING_DIM,
     SAME_LATENT_FRAMES,
-    SAME_SAMPLE_RATE,
+    SKETCH_INDEX_SUB_VECTORS,
+    SKETCH_VEC_COLUMN,
+    SKETCH_INDEX_SUB_VECTORS,
     EmbeddingSpec,
     Encoder,
     IndexSpec,
     ParamTextEncodeFn,
-    _checkpoint_tree_sha256,
     _configure_lance_logging,
     _downmix_to_mono,
     _encode_t5gemma_column,
@@ -72,7 +85,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     _prepare_resume_cache,
     _resolve_artifact_identity,
     _resolve_clap_checkpoint,
-    _resolve_same_checkpoint_dir,
     _resume_source_identity,
     _versioned_artifact_identity,
     _write_columns,
@@ -85,17 +97,39 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
-from synth_setter.pipeline.data.tinymu import TINYMU_FRONTEND, tinymu_num_latent_frames
+from synth_setter.pipeline.data.matpac_plus import (
+    MATPAC_PLUS_FRONTEND,
+    matpac_plus_num_latent_frames,
+)
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT,
+    SAME_DOWNSAMPLING_RATIO,
+    SAME_EMBEDDING_DIM,
+    SAME_SAMPLE_RATE,
+    resolve_same_checkpoint,
+)
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
+from tests.helpers.run_if import RunIf
 
 _SAMPLE_RATE = 44100
 _FIXTURE_SAMPLES = 16
 _FIXTURE_FRAMES = 2
 _M2L_TIME = 3
 _LANCE_URI = "r2://bucket/run/train.lance"
+_CLAP_MIRROR_FILES = (
+    "config.json",
+    "preprocessor_config.json",
+    "pytorch_model.bin",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "vocab.json",
+    "merges.txt",
+)
 
 
 def _fake_m2l(audio: np.ndarray) -> np.ndarray:
@@ -180,17 +214,17 @@ def _fake_sketch(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return np.ascontiguousarray(np.repeat(cells, frames, axis=2))
 
 
-def _fake_tinymu(audio: np.ndarray, sample_rate: int) -> np.ndarray:
-    """Encode audio as deterministic MATPAC-shaped sequences.
+def _fake_matpac_plus(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Encode audio as deterministic MATPAC++-shaped sequences.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate in Hz.
-    :returns: Deterministic TinyMU-shaped embeddings.
+    :returns: Deterministic MATPAC++-shaped embeddings.
     """
-    frames = tinymu_num_latent_frames(audio.shape[-1], sample_rate)
+    frames = matpac_plus_num_latent_frames(audio.shape[-1], sample_rate)
     fill = audio.astype(np.float32).mean(axis=(1, 2))
     return np.broadcast_to(
-        fill[:, None, None], (len(audio), TINYMU_FRONTEND.embedding_dim, frames)
+        fill[:, None, None], (len(audio), MATPAC_PLUS_FRONTEND.embedding_dim, frames)
     ).copy()
 
 
@@ -211,8 +245,8 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_same(0.25)
     if name == "same_l":
         return _fake_same(0.75, same_l_num_latent_frames)
-    if name == "tinymu":
-        return _fake_tinymu
+    if name == "matpac_plus":
+        return _fake_matpac_plus
     raise ValueError(f"no fake encoder for {name!r}")
 
 
@@ -277,6 +311,9 @@ def _empty_audio_dataset(uri: Path) -> None:
     )
 
 
+_REAL_ADD_COLUMNS = lance.LanceDataset.add_columns
+
+
 def _run_udf_in_process(
     dataset: lance.LanceDataset,
     udf: Callable[[pa.RecordBatch], pa.RecordBatch],
@@ -284,15 +321,22 @@ def _run_udf_in_process(
     read_columns: list[str],
     batch_size: int,
 ) -> None:
-    """Run a Lance batch UDF synchronously for deterministic assertions.
+    """Run a Lance batch UDF synchronously, then commit its outputs.
+
+    Committing keeps the writer's post-commit column check satisfied while the UDF invocations stay
+    observable in-process.
 
     :param dataset: Local dataset supplying batches.
     :param udf: Batch transform under test.
     :param read_columns: Source columns supplied to the transform.
     :param batch_size: Maximum rows per invocation.
     """
-    for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
+    outputs = [
         udf(batch)
+        for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size)
+    ]
+    reader = pa.RecordBatchReader.from_batches(outputs[0].schema, outputs)
+    _REAL_ADD_COLUMNS(dataset, reader, batch_size=batch_size)
 
 
 def _compose_add_embeddings(*overrides: str) -> DictConfig:
@@ -341,17 +385,20 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert set(EMBEDDING_REGISTRY) == {
         "clap",
         "m2l",
+        "param_shift",
+        "pupujepa_large",
+        "pupujepa_tiny",
         "same_l",
         "same_s",
         "sketch",
         "ssondo",
         "t5gemma",
-        "tinymu",
+        "matpac_plus",
     }
     assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
-        pool="mean",
+        pool="none",
         num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
-        vector_column=f"{SKETCH_CTRL_FIELD}_vec",
+        vector_column=SKETCH_VEC_COLUMN,
         vector_dim=NUM_SKETCH_CONTROLS,
     )
     assert EMBEDDING_REGISTRY["sketch"].co_resident is True
@@ -372,11 +419,76 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["t5gemma"].input_fields == (PARAM_ARRAY_FIELD,)
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
+    assert EMBEDDING_REGISTRY["pupujepa_tiny"].co_resident is False
+    assert EMBEDDING_REGISTRY["pupujepa_large"].index == IndexSpec(
+        pool="mean", vector_column=f"{PUPUJEPA_LARGE_FIELD}_vec", vector_dim=8192
+    )
+    assert EMBEDDING_REGISTRY["pupujepa_large"].co_resident is False
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
-    assert EMBEDDING_REGISTRY["tinymu"].co_resident is False
+    assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
+
+
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_loader_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Each PupuJEPA registry adapter selects its released teacher size.
+
+    :param monkeypatch: Fixture replacing heavyweight teacher loading.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_pupujepa_audio_encoder",
+        lambda checkpoint, *, device, variant: (
+            calls.append((checkpoint, device, variant)) or (lambda audio, rate: audio)
+        ),
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    spec.load_encoder(
+        "custom/pupujepa",
+        AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"),
+    )
+
+    assert calls == [("custom/pupujepa", "cpu", variant)]
+
+
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_artifact_identity_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Artifact identities hash only the selected teacher size.
+
+    :param monkeypatch: Fixture replacing checkpoint hashing.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.pupujepa_artifact_digest",
+        lambda checkpoint, selected: calls.append((checkpoint, selected)) or "digest",
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    identity = spec.resolve_artifact_identity("custom/pupujepa")
+
+    assert calls == [("custom/pupujepa", variant)]
+    assert "digest" in identity
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
@@ -869,17 +981,17 @@ def test_checkpoint_tree_identity_ignores_huggingface_download_bookkeeping(
     metadata.parent.mkdir(parents=True)
     model.write_bytes(b"weights")
     metadata.write_text("first timestamp")
-    first = _checkpoint_tree_sha256(tmp_path)
+    first = checkpoint_tree_sha256(tmp_path)
     metadata.write_text("different timestamp")
 
-    assert _checkpoint_tree_sha256(tmp_path) == first
+    assert checkpoint_tree_sha256(tmp_path) == first
 
 
 def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
     """Unrelated repository revisions do not alter artifact identity."""
     assert (
-        _versioned_artifact_identity("tinymu", "checkpoint:sha256:abc")
-        == "tinymu:policy-v1:checkpoint:sha256:abc"
+        _versioned_artifact_identity("matpac_plus", "checkpoint:sha256:abc")
+        == "matpac_plus:policy-v1:checkpoint:sha256:abc"
     )
 
 
@@ -2006,13 +2118,17 @@ def test_load_clap_audio_encoder_with_mps_available_selects_mps(
     model.eval = lambda: model
     transformers = SimpleNamespace(
         ClapModel=SimpleNamespace(from_pretrained=lambda checkpoint: model),
-        ClapProcessor=SimpleNamespace(from_pretrained=lambda checkpoint: SimpleNamespace()),
+        ClapProcessor=SimpleNamespace(
+            from_pretrained=lambda checkpoint: SimpleNamespace(
+                feature_extractor=SimpleNamespace(sampling_rate=48_000)
+            )
+        ),
     )
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
     monkeypatch.setattr("torch.backends.mps.is_available", lambda: True)
     monkeypatch.setattr(
-        "huggingface_hub.snapshot_download",
-        lambda *_args, **_kwargs: "/cache/clap",
+        "synth_setter.pipeline.data.add_embeddings._resolve_clap_checkpoint",
+        lambda _checkpoint: "/cache/clap",
     )
     monkeypatch.setitem(sys.modules, "transformers", transformers)
 
@@ -2032,6 +2148,8 @@ def test_load_clap_audio_encoder_uses_checkpoint_argument(
     downloads: list[str] = []
 
     class Model:
+        feature_extractor = SimpleNamespace(sampling_rate=48_000)
+
         def to(self, device: str) -> Model:
             del device
             return self
@@ -2062,6 +2180,56 @@ def test_load_clap_audio_encoder_uses_checkpoint_argument(
     assert checkpoints == ["/cache/custom-clap", "/cache/custom-clap"]
 
 
+def test_load_clap_audio_encoder_uses_processor_sample_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkpoint's feature extractor controls CLAP resampling.
+
+    :param monkeypatch: Fixture installing a dependency-free Transformers boundary.
+    """
+
+    class Model:
+        def to(self, device: str) -> Model:
+            del device
+            return self
+
+        def eval(self) -> Model:
+            return self
+
+        def get_audio_features(self, input_features: torch.Tensor) -> SimpleNamespace:
+            samples = input_features[:, :1]
+            return SimpleNamespace(pooler_output=samples.repeat(1, CLAP_EMBEDDING_DIM))
+
+    class Processor:
+        feature_extractor = SimpleNamespace(sampling_rate=32_000)
+
+        def __call__(
+            self, *, audio: list[np.ndarray], sampling_rate: int, return_tensors: str
+        ) -> dict[str, torch.Tensor]:
+            assert sampling_rate == 32_000
+            assert return_tensors == "pt"
+            return {"input_features": torch.tensor([[len(audio[0])]], dtype=torch.float32)}
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings._resolve_clap_checkpoint",
+        lambda _checkpoint: "/cache/clap",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            ClapModel=SimpleNamespace(from_pretrained=lambda _checkpoint: Model()),
+            ClapProcessor=SimpleNamespace(from_pretrained=lambda _checkpoint: Processor()),
+        ),
+    )
+
+    encode = load_clap_audio_encoder(device="cpu")
+    embedding = encode(np.zeros((1, 16_000), dtype=np.float32), 16_000)
+
+    assert embedding.shape == (1, CLAP_EMBEDDING_DIM)
+    assert embedding[0, 0] == 32_000
+
+
 def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
     tmp_path: Path,
 ) -> None:
@@ -2072,13 +2240,100 @@ def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
     assert _resolve_clap_checkpoint(str(tmp_path)) == str(tmp_path)
 
 
-def test_resolve_clap_checkpoint_with_default_source_uses_canonical_cache(
+def _materialize_clap_stub(
+    downloads: list[tuple[str, Path]], uri: str, destination: Path
+) -> None:
+    """Record a checkpoint download and materialize the mirror contract.
+
+    :param downloads: Download call ledger.
+    :param uri: Source URI.
+    :param destination: Local checkpoint directory.
+    """
+    downloads.append((uri, destination))
+    destination.mkdir(parents=True, exist_ok=True)
+    for filename in _CLAP_MIRROR_FILES:
+        (destination / filename).write_bytes(b"downloaded")
+
+
+def _write_tiny_clap_checkpoint(destination: Path) -> None:
+    """Write an eight-file checkpoint loadable by real Transformers consumers.
+
+    :param destination: Checkpoint directory to materialize.
+    """
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from transformers import ClapConfig, ClapFeatureExtractor, ClapModel, PreTrainedTokenizerFast
+
+    config = ClapConfig(
+        projection_dim=8,
+        text_config={
+            "vocab_size": 8,
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "max_position_embeddings": 16,
+            "projection_dim": 8,
+        },
+        audio_config={
+            "num_mel_bins": 64,
+            "spec_size": 256,
+            "hidden_size": 32,
+            "projection_dim": 8,
+            "depths": [1, 1, 1, 1],
+            "num_attention_heads": [1, 2, 4, 8],
+            "patch_embeds_hidden_size": 4,
+            "patch_size": 4,
+            "patch_stride": [4, 4],
+            "num_classes": 8,
+            "window_size": 4,
+        },
+    )
+    model = ClapModel(config)
+    config.save_pretrained(destination)
+    torch.save(model.state_dict(), destination / "pytorch_model.bin")
+    ClapFeatureExtractor(feature_size=64, sampling_rate=48_000).save_pretrained(destination)
+    backend = Tokenizer(
+        WordLevel(
+            {"<unk>": 0, "<s>": 1, "</s>": 2, "<pad>": 3, "sound": 4},
+            unk_token="<unk>",
+        )
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="<unk>",
+        bos_token="<s>",
+        eos_token="</s>",
+        pad_token="<pad>",
+    )
+    tokenizer.save_pretrained(destination)
+    (destination / "special_tokens_map.json").write_text(
+        '{"unk_token":"<unk>","bos_token":"<s>","eos_token":"</s>","pad_token":"<pad>"}'
+    )
+    (destination / "vocab.json").write_text('{"<unk>":0}')
+    (destination / "merges.txt").write_text("#version: 0.2\n")
+
+
+def test_clap_checkpoint_defaults_keep_pipeline_and_training_sources_distinct() -> None:
+    """Offline augmentation remains on HF while training uses its pinned R2 mirror."""
+    assert DEFAULT_CLAP_CHECKPOINT == "laion/clap-htsat-unfused"
+    assert (
+        DEFAULT_CLAP_TRAINING_CHECKPOINT
+        == "r2://intermediate-data/models/encoders/clap-htsat-unfused"
+    )
+    assert (
+        DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
+        == "4a120dac122423e69160d8653fd9e5505fb35c6a482e564b62ce5ca07a7c54ca"
+    )
+
+
+def test_resolve_clap_checkpoint_with_default_hf_source_uses_legacy_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Hydrate the default CLAP snapshot into its stable model directory.
+    """The add-embeddings default retains its established HF cache path.
 
-    :param monkeypatch: Fixture isolating cache location and snapshot download.
+    :param monkeypatch: Fixture isolating and recording the HF snapshot download.
     :param tmp_path: XDG cache root for the assertion.
     """
     downloads: list[tuple[str, str | None]] = []
@@ -2095,6 +2350,215 @@ def test_resolve_clap_checkpoint_with_default_source_uses_canonical_cache(
     assert downloads == [(DEFAULT_CLAP_CHECKPOINT, str(expected))]
 
 
+def test_resolve_clap_checkpoint_with_training_r2_source_uses_uri_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The training mirror hydrates outside the legacy HF cache.
+
+    :param monkeypatch: Fixture isolating cache location and R2 download.
+    :param tmp_path: XDG cache root for the assertion.
+    """
+    downloads: list[tuple[str, Path]] = []
+    legacy = tmp_path / "synth-setter/models/embeddings/clap-htsat-unfused"
+    legacy.mkdir(parents=True)
+    (legacy / "legacy").write_text("preserve")
+    expected = (
+        tmp_path
+        / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
+    )
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
+    )
+
+    resolved = _resolve_clap_checkpoint(DEFAULT_CLAP_TRAINING_CHECKPOINT)
+
+    assert resolved == str(expected)
+    assert legacy.joinpath("legacy").read_text() == "preserve"
+    assert downloads[0][0] == DEFAULT_CLAP_TRAINING_CHECKPOINT
+    assert downloads[0][1].parent == expected.parent
+    assert downloads[0][1] != expected
+
+
+def test_resolve_clap_checkpoint_from_r2_loads_real_transformers_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An atomically published mirror loads as a real model and processor.
+
+    :param monkeypatch: Fixture routing the R2 boundary through a local valid mirror.
+    :param tmp_path: Scratch source and XDG cache root.
+    """
+    from transformers import ClapModel, ClapProcessor
+
+    source = tmp_path / "source"
+    _write_tiny_clap_checkpoint(source)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: shutil.copytree(source, destination, dirs_exist_ok=True),
+    )
+
+    resolved = _resolve_clap_checkpoint("r2://bucket/tiny-clap")
+    model = ClapModel.from_pretrained(resolved)
+    processor = ClapProcessor.from_pretrained(resolved)
+
+    assert model.config.projection_dim == 8
+    assert processor.feature_extractor.sampling_rate == 48_000
+
+
+@pytest.mark.parametrize("missing_file", _CLAP_MIRROR_FILES)
+def test_resolve_clap_checkpoint_with_missing_required_file_repairs_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    missing_file: str,
+) -> None:
+    """Every model and tokenizer artifact participates in completeness.
+
+    :param monkeypatch: Fixture isolating cache location and recording R2 access.
+    :param tmp_path: XDG cache root holding the incomplete checkpoint.
+    :param missing_file: Required mirror file omitted from the published cache.
+    """
+    checkpoint_dir = (
+        tmp_path
+        / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
+    )
+    _materialize_clap_stub([], DEFAULT_CLAP_TRAINING_CHECKPOINT, checkpoint_dir)
+    (checkpoint_dir / missing_file).unlink()
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
+    )
+
+    resolved = Path(_resolve_clap_checkpoint(DEFAULT_CLAP_TRAINING_CHECKPOINT))
+
+    assert resolved == checkpoint_dir
+    assert {path.name for path in resolved.iterdir()} == set(_CLAP_MIRROR_FILES)
+    assert len(downloads) == 1
+
+
+@pytest.mark.parametrize("tree_state", ["absent", "empty"])
+def test_clap_checkpoint_sha256_without_files_raises_value_error(
+    tmp_path: Path, tree_state: str
+) -> None:
+    """A missing checkpoint tree cannot masquerade as the empty-string digest.
+
+    :param tmp_path: Scratch root for the absent or empty tree.
+    :param tree_state: Whether the checkpoint directory exists without files.
+    """
+    checkpoint_dir = tmp_path / "checkpoint"
+    if tree_state == "empty":
+        checkpoint_dir.mkdir()
+
+    with pytest.raises(ValueError, match="CLAP checkpoint .* has no files"):
+        clap_checkpoint_sha256(checkpoint_dir)
+
+
+def test_resolve_clap_checkpoint_when_download_incomplete_preserves_cache_and_cleans_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed hydration leaves prior data untouched and removes staging.
+
+    :param monkeypatch: Fixture forcing an incomplete R2 download.
+    :param tmp_path: XDG cache root holding prior incomplete data.
+    """
+    checkpoint_dir = tmp_path / "synth-setter/models/r2/bucket/clap"
+    checkpoint_dir.mkdir(parents=True)
+    sentinel = checkpoint_dir / "prior"
+    sentinel.write_text("preserve")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+
+    def download_incomplete(uri: str, destination: Path) -> None:
+        del uri
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "config.json").write_text("partial")
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite", download_incomplete
+    )
+
+    with pytest.raises(RuntimeError, match="downloaded CLAP checkpoint is incomplete"):
+        _resolve_clap_checkpoint("r2://bucket/clap")
+
+    assert sentinel.read_text() == "preserve"
+    assert list(checkpoint_dir.parent.glob(".clap.staging-*")) == []
+
+
+def test_resolve_clap_checkpoint_with_concurrent_callers_downloads_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Concurrent callers observe one atomically published checkpoint.
+
+    :param monkeypatch: Fixture coordinating the R2 boundary.
+    :param tmp_path: XDG cache root shared by both callers.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+
+    def controlled_download(uri: str, destination: Path) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+        _materialize_clap_stub(downloads, uri, destination)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite", controlled_download
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(_resolve_clap_checkpoint, DEFAULT_CLAP_TRAINING_CHECKPOINT)
+        assert entered.wait(timeout=5)
+        second = executor.submit(_resolve_clap_checkpoint, DEFAULT_CLAP_TRAINING_CHECKPOINT)
+        release.set()
+        resolved = [first.result(timeout=5), second.result(timeout=5)]
+
+    assert resolved[0] == resolved[1]
+    assert len(downloads) == 1
+    assert set(Path(resolved[0]).iterdir()) == {
+        Path(resolved[0]) / filename for filename in _CLAP_MIRROR_FILES
+    }
+
+
+def test_resolve_clap_checkpoint_with_full_r2_path_uses_distinct_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """R2 mirrors sharing a basename retain distinct local cache directories.
+
+    :param monkeypatch: Fixture replacing credential loading and download.
+    :param tmp_path: XDG cache root for the custom sources.
+    """
+    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.r2_io.download_dir_no_overwrite",
+        lambda uri, destination: _materialize_clap_stub(downloads, uri, destination),
+    )
+
+    resolved_a = _resolve_clap_checkpoint("r2://bucket/team-a/clap")
+    resolved_b = _resolve_clap_checkpoint("r2://bucket/team-b/clap")
+
+    assert resolved_a != resolved_b
+    assert resolved_a.endswith("models/r2/bucket/team-a/clap")
+    assert resolved_b.endswith("models/r2/bucket/team-b/clap")
+    assert [download[0] for download in downloads] == [
+        "r2://bucket/team-a/clap",
+        "r2://bucket/team-b/clap",
+    ]
+
+
 @pytest.mark.parametrize(
     ("checkpoint", "model_name"),
     [
@@ -2102,7 +2566,7 @@ def test_resolve_clap_checkpoint_with_default_source_uses_canonical_cache(
         (DEFAULT_SAME_L_CHECKPOINT, "same-l"),
     ],
 )
-def test_resolve_same_checkpoint_dir_with_default_r2_source_uses_canonical_cache(
+def test_resolve_same_checkpoint_with_default_r2_source_uses_canonical_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     checkpoint: str,
@@ -2124,13 +2588,13 @@ def test_resolve_same_checkpoint_dir_with_default_r2_source_uses_canonical_cache
         lambda uri, destination: downloads.append((uri, destination)),
     )
 
-    resolved = _resolve_same_checkpoint_dir(checkpoint)
+    resolved = resolve_same_checkpoint(checkpoint)
 
     assert resolved == expected
     assert downloads == [(checkpoint, expected)]
 
 
-def test_resolve_same_checkpoint_dir_with_full_r2_path_uses_distinct_cache_keys(
+def test_resolve_same_checkpoint_with_full_r2_path_uses_distinct_cache_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R2 mirrors sharing a basename retain distinct local cache directories.
@@ -2144,8 +2608,8 @@ def test_resolve_same_checkpoint_dir_with_full_r2_path_uses_distinct_cache_keys(
         lambda uri, destination: downloads.append((uri, destination)),
     )
 
-    dir_a = _resolve_same_checkpoint_dir("r2://bucket/team-a/same-s")
-    dir_b = _resolve_same_checkpoint_dir("r2://bucket/team-b/same-s/")
+    dir_a = resolve_same_checkpoint("r2://bucket/team-a/same-s")
+    dir_b = resolve_same_checkpoint("r2://bucket/team-b/same-s/")
 
     assert dir_a != dir_b
     assert downloads == [
@@ -2154,17 +2618,17 @@ def test_resolve_same_checkpoint_dir_with_full_r2_path_uses_distinct_cache_keys(
     ]
 
 
-def test_resolve_same_checkpoint_dir_with_existing_local_path_returns_it(
+def test_resolve_same_checkpoint_with_existing_local_path_returns_it(
     tmp_path: Path,
 ) -> None:
     """An existing local checkpoint directory needs no download.
 
     :param tmp_path: Existing local checkpoint directory.
     """
-    assert _resolve_same_checkpoint_dir(str(tmp_path)) == tmp_path
+    assert resolve_same_checkpoint(str(tmp_path)) == tmp_path
 
 
-def test_resolve_same_checkpoint_dir_with_repo_id_uses_hub_snapshot(
+def test_resolve_same_checkpoint_with_repo_id_uses_hub_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A HuggingFace repo ID resolves to its downloaded snapshot directory.
@@ -2178,7 +2642,7 @@ def test_resolve_same_checkpoint_dir_with_repo_id_uses_hub_snapshot(
         lambda repo_id: downloads.append(repo_id) or str(tmp_path),
     )
 
-    resolved = _resolve_same_checkpoint_dir("org/same-checkpoint")
+    resolved = resolve_same_checkpoint("org/same-checkpoint")
 
     assert resolved == tmp_path
     assert downloads == ["org/same-checkpoint"]
@@ -2831,7 +3295,7 @@ def test_add_embeddings_config_with_dataset_root_target_raises() -> None:
     """Every embedding uses the same single-Lance-dataset target contract."""
     with pytest.raises(ValidationError, match="dataset_root_uri"):
         AddEmbeddingsConfig.model_validate(
-            {"dataset_root_uri": "dataset", "embeddings": ("tinymu",)}
+            {"dataset_root_uri": "dataset", "embeddings": ("matpac_plus",)}
         )
 
 
@@ -2965,17 +3429,66 @@ def test_encode_t5gemma_column_with_malformed_encoder_output_raises(
         )
 
 
-def test_sketch_encode_column_builds_fixed_shape_tensor_array() -> None:
-    """The sketch closure preserves the fake encoder's exact control values."""
+def _struct_sketch_controls(struct: pa.StructArray) -> np.ndarray:
+    """Reassemble a stored sketch struct into the flat control stack.
+
+    :param struct: Nested sketch column values.
+    :returns: ``(rows, NUM_SKETCH_CONTROLS, F)`` float32 controls.
+    """
+    pitch = cast(
+        "pa.FixedShapeTensorArray", struct.field(SKETCH_PITCH_CHILD)
+    ).to_numpy_ndarray()
+    rows, _, frames = pitch.shape
+    stacked = np.empty((rows, NUM_SKETCH_CONTROLS, frames), dtype=np.float32)
+    for child, row in (
+        (SKETCH_LOUDNESS_CHILD, SKETCH_LOUDNESS_ROW),
+        (SKETCH_CENTROID_CHILD, SKETCH_CENTROID_ROW),
+    ):
+        child_array = struct.field(child)
+        stacked[:, row] = np.asarray(child_array.flatten()).reshape(rows, frames)
+    stacked[:, SKETCH_PITCH_SLICE] = pitch
+    return stacked
+
+
+def _struct_sketch_vec(struct: pa.StructArray) -> np.ndarray:
+    """Extract the nested IVF companion vectors from a stored sketch struct.
+
+    :param struct: Nested sketch column values.
+    :returns: ``(rows, NUM_SKETCH_CONTROLS)`` float32 vectors.
+    """
+    vec = struct.field(SKETCH_VEC_CHILD)
+    return np.asarray(vec.flatten()).reshape(len(struct), NUM_SKETCH_CONTROLS)
+
+
+def _stored_sketch_struct(dataset: lance.LanceDataset) -> pa.StructArray:
+    """Read the full sketch struct column from a dataset.
+
+    :param dataset: Dataset carrying the nested sketch column.
+    :returns: Combined struct array.
+    """
+    table = dataset.to_table(columns=[SKETCH_STRUCT_FIELD])
+    return cast("pa.StructArray", table.column(SKETCH_STRUCT_FIELD).combine_chunks())
+
+
+def test_sketch_encode_column_builds_struct_with_split_children_and_vec() -> None:
+    """The sketch closure splits controls into struct children without value drift."""
     audio = np.random.default_rng(7).random((3, 2, _FIXTURE_SAMPLES)).astype(np.float16)
     spec = EMBEDDING_REGISTRY["sketch"]
 
     array = spec.encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, _fake_sketch)
 
-    assert isinstance(array.type, pa.FixedShapeTensorType)
-    assert array.type.value_type == pa.float32()
-    values = pa.chunked_array([array]).combine_chunks().to_numpy_ndarray()
-    np.testing.assert_allclose(values, _fake_sketch(audio, _SAMPLE_RATE))
+    assert pa.types.is_struct(array.type)
+    struct = cast("pa.StructArray", array)
+    frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
+    child_types = {field.name: field.type for field in struct.type}
+    assert child_types[SKETCH_LOUDNESS_CHILD] == pa.list_(pa.float32(), frames)
+    assert child_types[SKETCH_CENTROID_CHILD] == pa.list_(pa.float32(), frames)
+    pitch_type = cast("pa.FixedShapeTensorType", child_types[SKETCH_PITCH_CHILD])
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, frames]
+    assert child_types[SKETCH_VEC_CHILD] == pa.list_(pa.float32(), NUM_SKETCH_CONTROLS)
+    expected = _fake_sketch(audio, _SAMPLE_RATE)
+    np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
+    np.testing.assert_allclose(_struct_sketch_vec(struct), expected.mean(axis=-1), rtol=1e-6)
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf])
@@ -2991,7 +3504,9 @@ def test_sketch_encode_column_with_nonfinite_output_raises(value: float) -> None
         output.flat[0] = value
         return output
 
-    with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} embeddings contain non-finite values"):
+    with pytest.raises(
+        ValueError, match=f"{SKETCH_STRUCT_FIELD} embeddings contain non-finite values"
+    ):
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
@@ -3013,8 +3528,66 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         output[0, row, 0] = value
         return output
 
-    with pytest.raises(ValueError, match=f"{SKETCH_CTRL_FIELD} controls out of bounds"):
+    with pytest.raises(ValueError, match=f"{SKETCH_STRUCT_FIELD} controls out of bounds"):
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
+
+
+def test_sketch_encode_never_exceeds_extraction_batch_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every extractor invocation stays within SKETCH_ENCODE_MAX_BATCH.
+
+    :param monkeypatch: Fixture recording extractor input batch sizes.
+    """
+    import synth_setter.features.sketch_controls as sketch_controls
+    from synth_setter.pipeline.data.add_embeddings import (
+        SKETCH_ENCODE_MAX_BATCH,
+        _sketch_encode,
+    )
+
+    seen_sizes: list[int] = []
+
+    def record(batch: torch.Tensor, sample_rate: int, device: str = "cpu") -> torch.Tensor:
+        del sample_rate, device
+        seen_sizes.append(len(batch))
+        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
+
+    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
+    rows = 2 * SKETCH_ENCODE_MAX_BATCH + 5
+    audio = np.zeros((rows, 1, _FIXTURE_SAMPLES), dtype=np.float32)
+
+    controls = _sketch_encode(audio, _SAMPLE_RATE)
+
+    assert len(controls) == rows
+    assert sum(seen_sizes) == rows
+    assert max(seen_sizes) == SKETCH_ENCODE_MAX_BATCH
+    assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
+
+
+@pytest.mark.slow
+def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
+    """Memory-capped chunking preserves control values within float32 kernel jitter.
+
+    Torch reduction kernels can vary by batch shape at approximately 1e-6.
+    """
+    from synth_setter.pipeline.data.add_embeddings import (
+        SKETCH_ENCODE_MAX_BATCH,
+        _sketch_encode,
+    )
+
+    rows = SKETCH_ENCODE_MAX_BATCH + 3
+    # Clips long enough for PESTO's CQT and the loudness STFT windows.
+    samples = 8192
+    audio = (
+        (np.random.default_rng(23).random((rows, 1, samples)) - 0.5) * 0.8
+    ).astype(np.float32)
+
+    chunked = _sketch_encode(audio, _SAMPLE_RATE)
+
+    full = (
+        extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE).cpu().numpy()
+    )
+    np.testing.assert_allclose(chunked, full, atol=1e-5)
 
 
 def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
@@ -3029,15 +3602,30 @@ def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, off_grid)
 
 
-def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(
-    tmp_path: Path,
+@pytest.mark.parametrize("storage_version", ["2.1", "2.2"])
+def test_write_columns_appends_sketch_struct_to_existing_dataset(
+    tmp_path: Path, storage_version: Literal["2.1", "2.2"]
 ) -> None:
-    """The writer stores the control matrix plus its time-axis mean vector.
+    """The add_columns UDF appends the whole nested struct on either storage format.
+
+    The production dataset may carry Lance file format 2.1 or 2.2; whole-struct append must land
+    identically on both.
 
     :param tmp_path: Scratch directory for the dataset.
+    :param storage_version: Lance data storage version of the pre-existing dataset.
     """
     uri = tmp_path / "sketch.lance"
-    audio = _audio_dataset(uri, rows=4)
+    rng = np.random.default_rng(4)
+    audio = rng.random((4, 2, _FIXTURE_SAMPLES)).astype(np.float16)
+    base = pa.record_batch(
+        {
+            AUDIO_FIELD: pa.FixedShapeTensorArray.from_numpy_ndarray(audio),
+            PARAM_ARRAY_FIELD: pa.FixedShapeTensorArray.from_numpy_ndarray(
+                rng.random((4, 3)).astype(np.float32)
+            ),
+        }
+    )
+    lance.write_dataset(base, str(uri), data_storage_version=storage_version)
 
     _write_columns(
         lance.dataset(str(uri)),
@@ -3047,30 +3635,97 @@ def test_write_columns_for_sketch_spec_writes_sequence_and_mean_companion(
     )
 
     dataset = lance.dataset(str(uri))
-    assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
-    ctrl_type = cast("pa.FixedShapeTensorType", dataset.schema.field(SKETCH_CTRL_FIELD).type)
-    assert isinstance(ctrl_type, pa.FixedShapeTensorType)
-    assert ctrl_type.value_type == pa.float32()
+    assert SKETCH_STRUCT_FIELD in dataset.schema.names
+    struct_type = dataset.schema.field(SKETCH_STRUCT_FIELD).type
+    assert pa.types.is_struct(struct_type)
     frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
-    assert list(ctrl_type.shape) == [NUM_SKETCH_CONTROLS, frames]
-    vec_type = cast(
-        "pa.FixedSizeListType", dataset.schema.field(f"{SKETCH_CTRL_FIELD}_vec").type
+    pitch_type = cast(
+        "pa.FixedShapeTensorType",
+        struct_type.field(struct_type.get_field_index(SKETCH_PITCH_CHILD)).type,
     )
-    assert pa.types.is_fixed_size_list(vec_type)
-    assert vec_type.list_size == NUM_SKETCH_CONTROLS
-    assert vec_type.value_type == pa.float32()
-    table = dataset.to_table(columns=[SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"])
-    controls = (
-        pa.chunked_array([table.column(SKETCH_CTRL_FIELD).chunk(0)])
-        .combine_chunks()
-        .to_numpy_ndarray()
-    )
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, frames]
+    struct = _stored_sketch_struct(dataset)
     expected = _fake_sketch(audio, _SAMPLE_RATE)
-    np.testing.assert_allclose(controls, expected)
-    pooled = np.asarray(
-        table.column(f"{SKETCH_CTRL_FIELD}_vec").combine_chunks().to_pylist(), dtype=np.float32
+    np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
+    np.testing.assert_allclose(_struct_sketch_vec(struct), expected.mean(axis=-1), rtol=1e-6)
+    # Dotted-path child projection must serve reads without the sibling children.
+    pitch_only = lance.dataset(str(uri)).to_table(
+        columns=[f"{SKETCH_STRUCT_FIELD}.{SKETCH_PITCH_CHILD}"]
     )
-    np.testing.assert_allclose(pooled, expected.mean(axis=-1), rtol=1e-6)
+    projected = cast(
+        "pa.FixedShapeTensorArray", pitch_only.column(0).combine_chunks()
+    ).to_numpy_ndarray()
+    np.testing.assert_array_equal(projected, expected[:, SKETCH_PITCH_SLICE])
+
+
+def test_write_columns_with_noop_add_columns_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write pass whose commit silently lands nothing fails hard, never cleanly.
+
+    Guards the observed field failure mode where a run logs
+    ``embedding_write_started`` and exits without committing (#2707).
+
+    :param tmp_path: Scratch directory for the dataset.
+    :param monkeypatch: Fixture stubbing the Lance commit to a no-op.
+    """
+    uri = tmp_path / "sketch-noop.lance"
+    _audio_dataset(uri, rows=4)
+    dataset = lance.dataset(str(uri))
+    monkeypatch.setattr(dataset, "add_columns", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="without committing"):
+        _write_columns(
+            dataset,
+            [_fake_spec("sketch")],
+            _SAMPLE_RATE,
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
+        )
+
+
+def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
+    """The whole-struct rewrite path (add + drop + rename) refreshes stored controls.
+
+    The struct is an atomic write unit — no per-child recompute exists — so this add-new-column /
+    drop / rename flow is the escape hatch for refreshing any child (#2707).
+
+    :param tmp_path: Scratch directory for the dataset.
+    """
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+
+    uri = tmp_path / "sketch-rewrite.lance"
+    audio = _audio_dataset(uri, rows=4)
+    _write_columns(
+        lance.dataset(str(uri)),
+        [_fake_spec("sketch")],
+        _SAMPLE_RATE,
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
+    )
+    refreshed = np.clip(_fake_sketch(audio, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+    replacement = f"{SKETCH_STRUCT_FIELD}_refreshed"
+
+    dataset = lance.dataset(str(uri))
+
+    def rewrite(batch: pa.RecordBatch) -> pa.RecordBatch:
+        # Stateless recompute from source rows: Lance also invokes the UDF for
+        # schema inference, so call order carries no row-position information.
+        decoded = batch.column(AUDIO_FIELD).to_numpy_ndarray()
+        rows = np.clip(_fake_sketch(decoded, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+        return pa.RecordBatch.from_arrays([sketch_struct_array(rows)], names=[replacement])
+
+    dataset.add_columns(rewrite, read_columns=[AUDIO_FIELD])
+    dataset.drop_columns([SKETCH_STRUCT_FIELD])
+    # Runtime type-checks demand a bare AlterColumn dict although the stub
+    # declares Iterable[AlterColumn]; cast bridges the disagreement.
+    rename = {"path": replacement, "name": SKETCH_STRUCT_FIELD}
+    dataset.alter_columns(cast("Any", rename))
+
+    reread = lance.dataset(str(uri))
+    assert SKETCH_STRUCT_FIELD in reread.schema.names
+    assert replacement not in reread.schema.names
+    np.testing.assert_array_equal(
+        _struct_sketch_controls(_stored_sketch_struct(reread)), refreshed
+    )
 
 
 def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
@@ -3103,12 +3758,9 @@ def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
     main()
 
     dataset = lance.dataset(str(uri))
-    assert {SKETCH_CTRL_FIELD, f"{SKETCH_CTRL_FIELD}_vec"} <= set(dataset.schema.names)
-    controls = (
-        pa.chunked_array([dataset.to_table(columns=[SKETCH_CTRL_FIELD]).column(SKETCH_CTRL_FIELD).chunk(0)])
-        .combine_chunks()
-        .to_numpy_ndarray()
-    )
+    assert SKETCH_STRUCT_FIELD in dataset.schema.names
+    assert pa.types.is_struct(dataset.schema.field(SKETCH_STRUCT_FIELD).type)
+    controls = _struct_sketch_controls(_stored_sketch_struct(dataset))
     render = spec.render_for_shard(spec.shards[0])
     audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
     frames = sketch_num_frames(audio_shape[-1], int(render.sample_rate))
@@ -3130,20 +3782,18 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
     audio = ((rng.random(audio_shape) - 0.5) * 0.8).astype(np.float16)
     write_minimal_lance_shard(uri, spec, audio=audio)
 
+    # Pinned to CPU so the stored column and the reference share a device;
+    # PESTO's convolutions drift ~1e-2 between CPU and CUDA kernels.
     add_embeddings(
-        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False)
+        AddEmbeddingsConfig(
+            lance_uri=str(uri), embeddings=("sketch",), build_index=False, device="cpu"
+        )
     )
 
-    controls = (
-        pa.chunked_array(
-            [lance.dataset(str(uri)).to_table(columns=[SKETCH_CTRL_FIELD]).column(SKETCH_CTRL_FIELD).chunk(0)]
-        )
-        .combine_chunks()
-        .to_numpy_ndarray()
-    )
+    controls = _struct_sketch_controls(_stored_sketch_struct(lance.dataset(str(uri))))
     sample_rate = int(render.sample_rate)
     expected = extract_sketch_controls_batch(
-        torch.from_numpy(audio.astype(np.float32)), sample_rate
+        torch.from_numpy(audio.astype(np.float32)), sample_rate, device="cpu"
     ).numpy()
     frames = sketch_num_frames(audio_shape[-1], sample_rate)
     assert controls.shape == (audio_shape[0], NUM_SKETCH_CONTROLS, frames)
@@ -3152,27 +3802,40 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
     assert controls.min() >= -1.0 and controls.max() <= 1.0
 
 
-def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Path) -> None:
-    """A spec's PQ split applies unset-override runs and serves ANN self-queries.
+def _nested_vec_dataset(uri: Path, rows: int) -> np.ndarray:
+    """Write a dataset whose sketch struct carries only the nested vec child.
+
+    :param uri: Output dataset path.
+    :param rows: Number of rows.
+    :returns: The vec vectors written into the struct.
+    """
+    rng = np.random.default_rng(3)
+    vectors = rng.random((rows, NUM_SKETCH_CONTROLS)).astype(np.float32)
+    vec = pa.FixedSizeListArray.from_arrays(
+        pa.array(vectors.reshape(-1), pa.float32()), NUM_SKETCH_CONTROLS
+    )
+    struct = pa.StructArray.from_arrays([vec], names=[SKETCH_VEC_CHILD])
+    table = pa.table(
+        {SKETCH_STRUCT_FIELD: struct, "row": pa.array(np.arange(rows), pa.int32())}
+    )
+    lance.write_dataset(table, str(uri))
+    return vectors
+
+
+def test_build_index_on_nested_vec_child_serves_ann_self_query(tmp_path: Path) -> None:
+    """The registry PQ split builds on the dotted vec child and answers ANN queries.
 
     :param tmp_path: Scratch directory for the dataset.
     """
     uri = tmp_path / "sketch-index.lance"
-    rng = np.random.default_rng(3)
-    vectors = rng.random((300, NUM_SKETCH_CONTROLS)).astype(np.float32)
-    flat = pa.array(vectors.reshape(-1), pa.float32())
-    column = pa.FixedSizeListArray.from_arrays(flat, NUM_SKETCH_CONTROLS)
-    rows = pa.array(np.arange(len(vectors)), pa.int32())
-    lance.write_dataset(
-        pa.table({f"{SKETCH_CTRL_FIELD}_vec": column, "row": rows}), str(uri)
-    )
+    vectors = _nested_vec_dataset(uri, rows=300)
     dataset = lance.dataset(str(uri))
     spec_index = EMBEDDING_REGISTRY["sketch"].index
     assert spec_index is not None
 
     built = build_index(
         dataset,
-        f"{SKETCH_CTRL_FIELD}_vec",
+        SKETCH_VEC_COLUMN,
         index=spec_index,
         config=AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",)),
     )
@@ -3180,10 +3843,89 @@ def test_build_index_with_default_config_uses_spec_num_sub_vectors(tmp_path: Pat
     assert built is True
     indices = cast("list[dict[str, object]]", dataset.list_indices())
     index_fields = [index["fields"] for index in indices]
-    assert [f"{SKETCH_CTRL_FIELD}_vec"] in index_fields
+    assert [SKETCH_VEC_COLUMN] in index_fields
     target_row = 137
     hits = dataset.to_table(
-        nearest={"column": f"{SKETCH_CTRL_FIELD}_vec", "q": vectors[target_row], "k": 1},
+        nearest={"column": SKETCH_VEC_COLUMN, "q": vectors[target_row], "k": 1},
         columns=["row"],
     )
     assert hits.column("row")[0].as_py() == target_row
+
+
+def test_add_embeddings_sketch_end_to_end_writes_struct_and_nested_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint lands the nested layout and builds the vec index in one run.
+
+    :param tmp_path: Scratch directory for the dataset.
+    :param monkeypatch: Fixture installing the dependency-free sketch spec.
+    """
+    uri = tmp_path / "sketch-e2e.lance"
+    spec = build_lance_smoke_spec(task_name="sketch-nested-e2e")
+    render = spec.render_for_shard(spec.shards[0])
+    audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
+    rows = 300  # Above MIN_ROWS_FOR_INDEX so the vec index really builds.
+    rng = np.random.default_rng(17)
+    audio = ((rng.random((rows, *audio_shape[1:])) - 0.5) * 0.8).astype(np.float16)
+    write_minimal_lance_shard(uri, spec, num_rows=rows, audio=audio)
+    _install_fake_specs(monkeypatch, ("sketch",))
+
+    add_embeddings(
+        AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=True)
+    )
+
+    dataset = lance.dataset(str(uri))
+    assert pa.types.is_struct(dataset.schema.field(SKETCH_STRUCT_FIELD).type)
+    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    assert [SKETCH_VEC_COLUMN] in [index["fields"] for index in indices]
+    struct = _stored_sketch_struct(dataset)
+    expected = _fake_sketch(audio.astype(np.float32), int(render.sample_rate))
+    np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
+    hits = dataset.to_table(
+        nearest={"column": SKETCH_VEC_COLUMN, "q": _struct_sketch_vec(struct)[7], "k": 1}
+    )
+    assert hits.num_rows == 1
+
+
+def test_sketch_spec_encoder_loads_pesto_on_the_configured_device() -> None:
+    """The registry loader honours config.device instead of pinning PESTO to CPU."""
+    from synth_setter.features.sketch_controls import DEFAULT_PESTO_CHECKPOINT, load_pesto_model
+    from synth_setter.pipeline.data.add_embeddings import _load_sketch_spec_encoder
+
+    config = AddEmbeddingsConfig(lance_uri=_LANCE_URI, embeddings=("sketch",), device="cpu")
+    _load_sketch_spec_encoder(DEFAULT_PESTO_CHECKPOINT, config)
+
+    assert next(load_pesto_model().parameters()).device.type == "cpu"
+
+
+@RunIf(min_gpus=1)
+@pytest.mark.slow
+def test_sketch_spec_encoder_with_cuda_config_extracts_on_cuda() -> None:
+    """A cuda run config moves PESTO and the extraction itself onto the GPU."""
+    from synth_setter.features.sketch_controls import DEFAULT_PESTO_CHECKPOINT, load_pesto_model
+    from synth_setter.pipeline.data.add_embeddings import (
+        SketchEncodeFn,
+        _load_sketch_spec_encoder,
+    )
+
+    # Long enough for PESTO's CQT and the loudness STFT windows.
+    audio = ((np.random.default_rng(7).random((4, 1, 8192)) - 0.5) * 0.8).astype(np.float32)
+    config = AddEmbeddingsConfig(lance_uri=_LANCE_URI, embeddings=("sketch",), device="cuda")
+
+    encode = cast("SketchEncodeFn", _load_sketch_spec_encoder(DEFAULT_PESTO_CHECKPOINT, config))
+    controls = encode(audio, _SAMPLE_RATE)
+
+    assert next(load_pesto_model().parameters()).device.type == "cuda"
+    on_cpu = (
+        extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE, device="cpu")
+        .cpu()
+        .numpy()
+    )
+    assert controls.shape == on_cpu.shape
+    affine = [SKETCH_LOUDNESS_ROW, SKETCH_CENTROID_ROW]
+    np.testing.assert_allclose(controls[:, affine], on_cpu[:, affine], atol=1e-5)
+    # Pitch activations are not bitwise portable across devices; the bin is.
+    assert np.array_equal(
+        controls[:, SKETCH_PITCH_SLICE].argmax(axis=1),
+        on_cpu[:, SKETCH_PITCH_SLICE].argmax(axis=1),
+    )

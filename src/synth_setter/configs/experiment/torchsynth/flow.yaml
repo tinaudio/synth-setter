@@ -1,0 +1,47 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: torchsynth
+  - override /synth: torchsynth_full
+  - override /render: torchsynth
+  - override /model: vst_flow
+  - override /conditioning: log_mel
+  - override /callbacks: default
+  # vst_flow's cosine scheduler interpolates ${trainer.max_steps}.
+  - override /trainer: gpu_400k_steps
+  - _self_
+
+experiment_name: torchsynth
+run_name: flow
+tags: [torchsynth, flow]
+
+# The conditioning group owns the modality, its encoder, and the widths that follow, so
+# `conditioning=` alone swaps them; setting them here would clobber the chosen profile.
+model:
+  # torch.compile traces through the renderer for audio-loss runs and graph-breaks;
+  # keeping it off here keeps this config swappable with flow_audio.
+  compile: false
+  num_params: ${datamodule.num_params}
+
+datamodule:
+  collate_fn:
+    _target_: synth_setter.data.torchsynth_datamodule.collate_audio_dict
+    _partial_: true
+  resample_train_per_epoch: true
+
+callbacks:
+  model_checkpoint:
+    monitor: val/param_mse
+
+  early_stopping: null
+
+# Matches the surge production cadence: at the trainer default of 10k an epoch of this
+# size ends before validation ever fires, so nothing is checkpointed.
+trainer:
+  val_check_interval: 2000
+  limit_val_batches: 20
+
+# Audio quality comes from the off-loop probe, not an in-module metric. Explicit rather
+# than auto so a missing prerequisite fails the run instead of warning and continuing.
+training:
+  val_audio_probe: true

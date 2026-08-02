@@ -293,7 +293,9 @@ Datasets are Lance: `datamodule=surge_lance` reads `train/val/test.lance` datase
 the format the data pipeline's finalize step emits — via `LanceVSTDataModule`
 (`src/synth_setter/data/lance_datamodule.py`). It uses sample-indexed `LanceMapDataset`
 instances with standard PyTorch batching, shuffling, worker persistence, and Lightning DDP
-sampler replacement. `lance_iterable_dataloader` in `src/synth_setter/data/lance_torch.py`
+sampler replacement. Train, test, and predict loaders use `datamodule.num_workers`; validation
+uses `datamodule.val_num_workers`, which defaults to in-process loading. `lance_iterable_dataloader`
+in `src/synth_setter/data/lance_torch.py`
 remains available for native sequential streaming with `batch_size=None`; both native factories
 accept `storage_options` for direct R2 reads. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
 output dir; a fixed dataset is pinned by overriding to the storage-spec provenance layout:
@@ -308,7 +310,7 @@ dataset_root: ${paths.output_dir}/data # shipped default (per-run Hydra dir)
 Behavior:
 
 - Local-only by default; no hidden default R2 fetch
-- If `download_dataset_root_uri` is specified, every split is rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`) — only the columns the loaders read (`param_array` + the conditioning column, plus `audio` for the split serving prediction) cross the wire. There is no whole-dataset copy mode; only non-Lance sidecars still download via `download_dir_no_overwrite`
+- If `download_dataset_root_uri` is specified, every split is rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`) — only the columns the loaders read cross the wire — the projection is derived by `VSTDataModule._loader_columns` (`param_array`, the conditioning column, the sketch-control struct when configured, plus `audio` for the split serving prediction), never user-configured. There is no whole-dataset copy mode; only non-Lance sidecars still download via `download_dir_no_overwrite`
 - The source must expose `dataset.complete` plus the `train`/`val`/`test` `.lance` split layout. Hydration checks the finalize marker before writing any local split; an incomplete root is a hard failure, not a fallback to a raw copy
 - Splits land in `dataset_root/<prefix>-<digest>/`, where `<prefix>` is the conditioning column truncated to `_DIRNAME_PREFIX_CHARS` and the digest covers the source URI, txids, per-split projection, and row limit (see `subset_dirname` in `lance_materialize.py`). The name is derivable from configuration alone so rank-0 `prepare_data` and all-rank `setup` agree without a source read, and changing conditioning hydrates a sibling subset instead of colliding with the old one. `predict_file` naming the configured root rebases onto the subset
 - Nothing reclaims stale subsets yet; a persistent `dataset_root` accumulates one per distinct request (#2569)

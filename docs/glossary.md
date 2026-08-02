@@ -19,7 +19,7 @@ Project terminology for synth-setter. Grouped by domain.
 | **Flow matching**      | A generative modeling technique used for parameter prediction. Learns a vector field that transports noise to the target parameter distribution. Implemented in `VSTFlowMatchingModule`. |
 | **Optimal transport**  | A mathematical framework for comparing probability distributions. Used in flow matching training and in the SOT evaluation metric.                                                       |
 | **FlowVAE**            | A variational autoencoder variant combined with flow-based generation. Implemented in `FlowVAE` / `VSTFlowVAEModule`.                                                                    |
-| **Feed-forward model** | A direct regression model for parameter prediction (no iterative sampling). Implemented in `VSTFeedForwardModule` and `TorchSynthFeedForwardModule`.                                     |
+| **Feed-forward model** | A direct regression model for parameter prediction (no iterative sampling). Implemented in `VSTFeedForwardModule`.                                                                       |
 
 ## Audio & Synthesis
 

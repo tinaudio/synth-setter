@@ -1,0 +1,29 @@
+# @package _global_
+
+# Preliminary 1k sketch A/B, base arm (#2707): owns the dataset pin, cadence,
+# and shared seed per the one-selector convention (#2196); the sketch arm
+# composes this config and only flips `sketch=on`.
+
+defaults:
+  - /experiment/surge/flow_simple
+  - override /render: vst
+  - _self_
+
+run_name: flow1k_prelim_base
+
+# Both A/B arms share this seed so the comparison isolates conditioning.
+seed: 3407
+
+datamodule:
+  download_dataset_root_uri: r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
+
+training:
+  val_audio_probe: true
+
+# The eval workflow owns test-set evaluation; skip Lightning's post-fit test stage.
+test: false
+
+trainer:
+  max_steps: 10000
+  min_steps: 10000
+  val_check_interval: 1000

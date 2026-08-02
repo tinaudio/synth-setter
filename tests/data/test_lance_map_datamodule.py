@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import multiprocessing
 import pickle
 import shutil
 from collections.abc import Iterator
@@ -377,10 +378,10 @@ class TestLanceMapDataModuleSetup:
     ) -> None:
         """Mel statistics hydrate into the subset directory the loaders read.
 
-        :param tmp_path: Parent of the mounted source and local destination.
+        :param tmp_path: Parent of the local source and destination.
         :param monkeypatch: Fixture replacing the separately tested rclone boundary.
         """
-        source = tmp_path / "network-volume"
+        source = tmp_path / "local-source"
         source.mkdir()
         for split in ("train", "val", "test"):
             write_seeded_lance_shard(source / f"{split}.lance", num_rows=4, seed=1)
@@ -450,6 +451,63 @@ class TestLanceMapDataModuleSetup:
                 assert loader.batch_size == 2, name
                 assert len(loader.dataset) == num_rows, name  # type: ignore[arg-type]
 
+    def test_train_and_validation_loaders_use_independent_worker_counts(
+        self, dataset_root: Path
+    ) -> None:
+        """A nonzero training worker count must not enable validation workers.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=3,
+            val_num_workers=0,
+        ) as module:
+            assert module.train_dataloader().num_workers == 3
+            assert module.val_dataloader().num_workers == 0
+
+    def test_validation_loader_worker_override_is_honored(
+        self, dataset_root: Path
+    ) -> None:
+        """Validation can opt into workers without changing training workers.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            val_num_workers=1,
+        ) as module:
+            assert module.val_dataloader().num_workers == 1
+
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
+    @pytest.mark.slow
+    def test_validation_worker_override_consumes_batch_in_child_processes(
+        self, dataset_root: Path
+    ) -> None:
+        """A validation override must start workers that produce a real Lance batch.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        existing_children = {child.pid for child in multiprocessing.active_children()}
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            val_num_workers=2,
+        ) as module:
+            iterator = iter(module.val_dataloader())
+            batch = next(iterator)
+            validation_workers = {
+                child.pid for child in multiprocessing.active_children()
+            } - existing_children
+            assert len(validation_workers) == 2
+            assert _unwrap(batch["params"]).shape == (2, NUM_PARAMS)
+            del iterator
+
     def test_persistent_workers_without_workers_is_effectively_disabled(
         self, dataset_root: Path
     ) -> None:
@@ -478,8 +536,10 @@ class TestLanceMapDataModuleSetup:
             dataset_root=dataset_root,
             batch_size=2,
             num_workers=1,
+            val_num_workers=1,
             persistent_workers=True,
         ) as module:
+            assert module.train_dataloader().persistent_workers is True
             assert module.val_dataloader().persistent_workers is True
 
     def test_prefetch_factor_with_workers_reaches_loader(self, dataset_root: Path) -> None:
@@ -490,7 +550,7 @@ class TestLanceMapDataModuleSetup:
         with _set_up_map_module(
             dataset_root=dataset_root,
             batch_size=2,
-            num_workers=1,
+            val_num_workers=1,
             prefetch_factor=4,
         ) as module:
             assert module.val_dataloader().prefetch_factor == 4
@@ -540,6 +600,41 @@ class TestLanceMapDataModuleSetup:
         )
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             module.setup()
+
+    @pytest.mark.parametrize(
+        ("stage", "loader_name"),
+        [("fit", "train_dataloader"), ("fit", "val_dataloader"), ("test", "test_dataloader")],
+        ids=["train", "val", "test"],
+    )
+    def test_audio_conditioning_reads_waveform_without_mel_stats(
+        self, tmp_path: Path, stage: str, loader_name: str
+    ) -> None:
+        """Raw-audio conditioning serves each model split without ``stats.npz``.
+
+        :param tmp_path: Pytest fixture providing a dataset root without mel statistics.
+        :param stage: Lightning setup stage selecting the requested split.
+        :param loader_name: Dataloader method for the requested split.
+        """
+        root = tmp_path / "audio-data"
+        root.mkdir()
+        for split in ("train", "val", "test"):
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            batch_size=2,
+            conditioning="audio",
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+        module.setup(stage)
+        try:
+            batch = next(iter(getattr(module, loader_name)()))
+        finally:
+            module.teardown(stage)
+
+        assert batch["mel"] is None
+        assert _unwrap(batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
 
     def test_map_unregistered_param_spec_raises_at_setup(self, dataset_root: Path) -> None:
         """Legacy parity: an unregistered ``param_spec_name`` fails fast at setup.
@@ -895,6 +990,24 @@ class TestLanceMapDataModuleModes:
         assert val_batch["audio"] is None
         assert _unwrap(predict_batch["audio"]).shape == (2, 2, 44100 * 4)
 
+    def test_fake_audio_conditioning_populates_waveform_for_training(self, tmp_path: Path) -> None:
+        """Fake raw-audio batches expose waveform conditioning on non-predict splits.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        """
+        with _set_up_map_module(
+            dataset_root=tmp_path,
+            batch_size=2,
+            fake=True,
+            conditioning="audio",
+            use_saved_mean_and_variance=True,
+        ) as module:
+            batch = next(iter(module.train_dataloader()))
+
+        assert batch["mel"] is None
+        assert batch["conditioning"] is None
+        assert _unwrap(batch["audio"]).shape == (2, 2, 44_100 * 4)
+
     def test_fake_mode_same_global_seed_reproduces_batch(self, tmp_path: Path) -> None:
         """Fake sample generation remains governed by the global PyTorch RNG.
 
@@ -1033,7 +1146,10 @@ class TestLanceMapDataModuleModes:
 
         def collect(num_workers: int) -> np.ndarray:
             with _set_up_map_module(
-                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=num_workers
+                dataset_root=dataset_root,
+                batch_size=2,
+                ot=False,
+                val_num_workers=num_workers,
             ) as module:
                 return _params_in_order(module.val_dataloader())
 
@@ -1053,7 +1169,7 @@ class TestLanceMapDataModuleModes:
         def collect() -> torch.Tensor:
             torch.manual_seed(47)
             with _set_up_map_module(
-                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=2
+                dataset_root=dataset_root, batch_size=2, ot=False, val_num_workers=2
             ) as module:
                 batches = [_unwrap(batch["noise"]) for batch in module.val_dataloader()]
             return torch.stack(batches)

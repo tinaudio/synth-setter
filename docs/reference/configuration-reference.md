@@ -84,11 +84,12 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - Provenance: W&B config (hyperparams, `github_sha`) + frozen `config.yaml` in R2
 - Resume: Lightning native `ckpt_path=` with W&B artifact download
 - Single-job model — no reconciliation, no distributed coordination
-- `datamodule.num_workers` applies to *each* dataloader, so enabling validation
-  doubles the live worker count — size it against host RAM, not core count
-  (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
-- VST configs set `datamodule.persistent_workers=true`; it is effective only when
-  `num_workers > 0`, so CPU debugging with `num_workers=0` needs no extra override
+- `datamodule.num_workers` controls train, test, and predict workers;
+  `datamodule.val_num_workers` controls validation and defaults to `0`. Size any
+  positive counts against host RAM, not core count (measured ~1.4 GB per Lance
+  worker; see `getting-started.md` §8)
+- VST configs set `datamodule.persistent_workers=true`; it is effective per loader
+  only when that loader's worker count is positive
 - `datamodule.download_dataset_root_uri` hydrates a finalized `r2://` or absolute
   `file://` root into a request-addressed child of `dataset_root`. The source must
   contain `dataset.complete`; optional per-split transaction pins select snapshots,
@@ -123,15 +124,32 @@ Reference: `eval-pipeline.md` §4–5
 
 ### 2.5 Cloud Infrastructure
 
-`dispatch_via_skypilot` is the single entry point a `synth-setter-*` CLI takes
-to dispatch onto SkyPilot. Each console script that supports compute carries
-a `skypilot_launch` sub-config (today: `synth-setter-generate-dataset`; more
-entrypoints are expected to follow). Selecting a compute option via
-`skypilot_launch/compute=<option>` flips the command from "run
-in-process" to "materialize the spec, then dispatch via SkyPilot" — no
-separate launcher invocation is involved.
+`dispatch_via_skypilot` is the shared programmatic boundary for SkyPilot.
+Dataset generation composes its `skypilot_launch` subtree inline; arbitrary
+commands use the Hydra-native `synth-setter-skypilot-launch` endpoint with
+`skypilot_launch/compute=<option>` and a quoted `skypilot_launch.cmd` value.
 
-#### Dispatch flow
+#### Generic dispatch
+
+```bash
+synth-setter-skypilot-launch \
+  skypilot_launch/compute=runpod/training \
+  'skypilot_launch.cmd="exec synth-setter-train experiment=torchsynth/flow_audio_same"'
+```
+
+The launcher prepends repository checkout synchronization under
+`skypilot_launch.worker_checkout_dir` (default `/home/build/synth-setter`) before
+executing `cmd`. Override that field for worker images with a different checkout
+location. Every literal `${...}` intended for the worker command—including
+shell environment expansion—must be written `\${...}` so the launcher does not
+treat it as OmegaConf interpolation. An unescaped value fails with a
+`skypilot_launch.cmd` diagnostic before dispatch.
+
+`load_launch_config` and `configs/launch/*.yaml` remain only for compatibility
+with manual Python callers during migration; their removal is tracked by
+[#2780](https://github.com/tinaudio/synth-setter/issues/2780).
+
+#### Dataset dispatch flow
 
 ```
 synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smoke
@@ -184,7 +202,6 @@ ______________________________________________________________________
 | GPU selection       | `gpu_type_id` from catalog               | Query: `gpu_name=RTX_4090 num_gpus>=1 gpu_ram>=24`                           |
 | Pricing model       | Fixed $/hr per GPU type                  | Market-based: on-demand or bid (interruptible)                               |
 | Spot / preemptible  | Community cloud (cheaper, less reliable) | `--type=bid` with custom bid price                                           |
-| Persistent storage  | Network volumes (`networkVolumeId`)      | Volumes (create new or attach existing by ID)                                |
 | Docker image        | `image_name` parameter                   | `image` parameter                                                            |
 | Environment vars    | `env` dict (key-value pairs)             | Docker-flag format: `"-e KEY=VALUE"`                                         |
 | Startup command     | `docker_args` string                     | `onstart` script (SSH mode) or `args` array (args mode)                      |
@@ -314,15 +331,15 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.5 Cloud Infrastructure
 
-| Input                                               | Type                 | What's Needed                                                                                                                                                                                                                                                                                                                   | Reference                                                                                     |
-| --------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| RunPod config                                       | Hydra compute option | Smoke, training, and persistent network-volume options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/`; the volume-backed 440k launch hydrates local disk from `/workspace/network-volume`; launch configs select the mounted volume (and thus the data center) via `network_volume` / `--network-volume` | data-pipeline.md §14, [RunPod dataset network volume](../operations/runpod-network-volume.md) |
-| Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                                                                                                                                                                                                       | new provider                                                                                  |
-| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast.ai, local Kubernetes)                                                                                                                                                                                                                                              | —                                                                                             |
-| `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                                                                                                                                                                                                          | training-pipeline.md §2                                                                       |
-| `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
-| `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                                                                                                                                                                                                       | training-pipeline.md §2                                                                       |
-| `make resume`                                       | Makefile target      | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                                                                                                                                                                                               | training-pipeline.md §2                                                                       |
+| Input                                               | Type                 | What's Needed                                                                                                                                      | Reference                                                                                                                                 |
+| --------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| RunPod config                                       | Hydra compute option | Smoke, 750 GB training, and H100-SXM/H200-SXM/B200 `training-hclass` options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/` | [SkyPilot compute integration](../design/skypilot-compute-integration.md#41-compute-options-srcsynth_setterconfigsskypilot_launchcompute) |
+| Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                          | new provider                                                                                                                              |
+| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast.ai, local Kubernetes)                                                                 | —                                                                                                                                         |
+| `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                             | training-pipeline.md §2                                                                                                                   |
+| `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                          | training-pipeline.md §2                                                                                                                   |
+| `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                          | training-pipeline.md §2                                                                                                                   |
+| `make resume`                                       | Makefile target      | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                  | training-pipeline.md §2                                                                                                                   |
 
 ### 5.6 Other
 
