@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import runpy
 import sys
 from pathlib import Path
+from typing import cast
 
 import lance
 import numpy as np
@@ -83,6 +85,14 @@ def test_streaming_statistics_dead_channel_counts_constant_channel() -> None:
     assert statistics.result().dead_channels == 1
 
 
+def test_streaming_statistics_zero_magnitude_sequence_reports_undefined_frame_cv() -> None:
+    """An all-zero sequence has no defined frame-norm coefficient of variation."""
+    statistics = StreamingStatistics(shape=(2, 2))
+    statistics.update(np.zeros((1, 2, 2), dtype=np.float32))
+
+    assert math.isnan(cast(float, statistics.result().frame_l2_cv_mean))
+
+
 def test_matpac_band_views_splits_channel_axis_without_changing_frames() -> None:
     """MATPAC band views split only the channel dimension."""
     values = np.arange(24, dtype=np.float32).reshape(1, 8, 3)
@@ -99,6 +109,34 @@ def test_matpac_band_views_with_zero_band_width_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="positive"):
         matpac_band_views(values, band_width=0)
+
+
+def test_analyse_dataset_mismatched_tensor_shape_raises(tmp_path: Path) -> None:
+    """A stored tensor cannot be regrouped into a different configured shape.
+
+    :param tmp_path: Directory holding the mismatched Lance fixture.
+    """
+    values = pa.FixedShapeTensorArray.from_numpy_ndarray(
+        np.arange(6, dtype=np.float32).reshape(1, 3, 2)
+    )
+    dataset_path = tmp_path / "mismatched.lance"
+    lance.write_dataset(pa.table({"sequence": values}), dataset_path)
+
+    with pytest.raises(RuntimeError, match="failed to scan conditioning column"):
+        analyse_dataset(str(dataset_path), {"sequence": (2, 3)}, row_limit=1, batch_size=1)
+
+
+def test_analyse_dataset_invalid_matpac_width_raises(tmp_path: Path) -> None:
+    """MATPAC++ must retain its five 768-channel frequency bands.
+
+    :param tmp_path: Directory holding the invalid MATPAC++ Lance fixture.
+    """
+    values = pa.FixedShapeTensorArray.from_numpy_ndarray(np.zeros((1, 4, 3), dtype=np.float32))
+    dataset_path = tmp_path / "matpac.lance"
+    lance.write_dataset(pa.table({"matpac_plus": values}), dataset_path)
+
+    with pytest.raises(RuntimeError, match="failed to scan conditioning column"):
+        analyse_dataset(str(dataset_path), {"matpac_plus": (4, 3)}, row_limit=1, batch_size=1)
 
 
 def test_analyse_dataset_nested_fixed_size_lists_reports_sequence_statistics(

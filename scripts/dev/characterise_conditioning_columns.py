@@ -214,6 +214,9 @@ class StreamingStatistics:
             return
         frame_norms = np.linalg.norm(values, axis=1)
         frame_means = frame_norms.mean(axis=1)
+        if np.any(frame_means == 0):
+            self._frame_cv_sum = math.nan
+            return
         frame_stds = frame_norms.std(axis=1)
         frame_cv = np.divide(
             frame_stds,
@@ -323,6 +326,41 @@ def matpac_band_views(values: FloatArray, band_width: int = MATPAC_BAND_WIDTH) -
     return list(np.split(values, values.shape[1] // band_width, axis=1))
 
 
+def _validate_stored_shape(array: pa.Array, shape: tuple[int, ...]) -> None:
+    """Reject Arrow tensors whose structured shape differs from the profile.
+
+    Flat fixed-size lists may encode any registered shape with the same element count; nested lists
+    and tensor extensions retain structure and must match it.
+
+    :param array: Arrow extension or fixed-size-list row batch.
+    :param shape: Registered shape excluding the row dimension.
+    :raises ValueError: Structured storage and registered shapes differ.
+    """
+    if isinstance(array.type, pa.FixedShapeTensorType):
+        stored_shape = tuple(array.type.shape)
+        if stored_shape != shape:
+            raise ValueError(
+                f"stored shape {stored_shape} does not match registered shape {shape}"
+            )
+        return
+    if not pa.types.is_fixed_size_list(array.type):
+        return
+    list_sizes: list[int] = []
+    value_type = array.type
+    while isinstance(value_type, pa.FixedSizeListType):
+        list_sizes.append(value_type.list_size)
+        value_type = value_type.value_type
+    stored_shape = tuple(list_sizes)
+    if len(stored_shape) > 1:
+        shape_matches = stored_shape == shape
+    elif len(stored_shape) == 1:
+        shape_matches = math.prod(shape) == stored_shape[0]
+    else:
+        shape_matches = False
+    if not shape_matches:
+        raise ValueError(f"stored shape {stored_shape} does not match registered shape {shape}")
+
+
 def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> FloatArray:
     """Decode a Lance Arrow array to its registered dense shape.
 
@@ -333,6 +371,7 @@ def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> FloatArray:
     """
     if array.null_count:
         raise ValueError("conditioning columns must not contain null rows")
+    _validate_stored_shape(array, shape)
     to_tensor = getattr(array, "to_numpy_ndarray", None)
     if callable(to_tensor):
         values = to_tensor()
@@ -382,6 +421,9 @@ def _band_accumulators(column: str, shape: tuple[int, ...]) -> list[StreamingSta
         return []
     if len(shape) != 2:
         raise ValueError(f"matpac_plus must be a sequence, got shape {shape}")
+    expected_channels = MATPAC_BAND_WIDTH * MATPAC_FREQUENCY_BANDS
+    if shape[0] != expected_channels:
+        raise ValueError(f"matpac_plus must have {expected_channels} channels, got shape {shape}")
     return [
         StreamingStatistics((MATPAC_BAND_WIDTH, shape[1])) for _ in range(MATPAC_FREQUENCY_BANDS)
     ]
