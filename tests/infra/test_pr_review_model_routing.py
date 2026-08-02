@@ -535,6 +535,7 @@ def test_pi_review_launcher_ci_waits_for_supervised_aftercare(tmp_path: Path) ->
             "CI": "true",
             "MANIFEST_PATH_FILE": str(manifest_path_file),
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "SYNTH_SETTER_PI_REVIEW": "",
         },
     )
 
@@ -571,6 +572,7 @@ def test_pi_review_launcher_ci_aftercare_failure_withholds_foreground_result(
                 "CI": "true",
                 "MANIFEST_PATH_FILE": str(manifest_path_file),
                 "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "SYNTH_SETTER_PI_REVIEW": "",
             },
             _out=stdout,
         )
