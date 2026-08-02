@@ -353,9 +353,7 @@ class ClapAudioEncoder(nn.Module):
         :raises ValueError: Audio is empty, non-finite, outside ``[-1, 1]``, on MPS,
             or exceeds the extractor's deterministic short-audio window.
         """
-        if audio.ndim == 3:
-            audio = audio.mean(dim=1)
-        elif audio.ndim != 2:
+        if audio.ndim not in (2, 3):
             raise ValueError(
                 f"audio must have shape (batch, [channels,] samples), got {audio.shape}"
             )
@@ -367,6 +365,8 @@ class ClapAudioEncoder(nn.Module):
             raise ValueError("audio waveform must contain only finite values")
         if (audio.abs() > 1.0).any():
             raise ValueError("audio waveform values must be in [-1, 1]")
+        if audio.ndim == 3:
+            audio = audio.mean(dim=1)
 
         if self.sample_rate != self.target_sample_rate:
             audio = audio_fn.resample(audio, self.sample_rate, self.target_sample_rate)

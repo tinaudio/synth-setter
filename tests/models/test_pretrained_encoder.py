@@ -608,6 +608,19 @@ def test_checkpoint_load_with_missing_trainable_key_remains_strict(
         module.load_state_dict(state, strict=True)
 
 
+def test_clap_features_with_cancelling_out_of_range_stereo_raises(
+    clap_encoder: ClapAudioEncoder,
+) -> None:
+    """Stereo cancellation cannot hide a source-channel bounds violation.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    audio = torch.stack((torch.full((4_800,), 2.0), torch.full((4_800,), -2.0))).unsqueeze(0)
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        clap_encoder.features(audio)
+
+
 def test_clap_features_with_out_of_range_source_audio_raises(
     clap_encoder: ClapAudioEncoder,
 ) -> None:
