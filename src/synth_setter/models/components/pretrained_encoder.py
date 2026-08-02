@@ -357,6 +357,8 @@ class ClapAudioEncoder(nn.Module):
             raise ValueError(
                 f"audio must have shape (batch, [channels,] samples), got {audio.shape}"
             )
+        if audio.ndim == 3 and audio.shape[1] == 0:
+            raise ValueError("audio waveform must have at least one channel")
         if audio.device.type == "mps":
             raise ValueError("CLAP online features do not support MPS float64 FFT")
         if audio.shape[-1] == 0:

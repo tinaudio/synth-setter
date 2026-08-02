@@ -82,9 +82,11 @@ def assert_clap_preserves_resampler_output(encoder: ClapAudioEncoder, checkpoint
     import torchaudio.functional as audio_fn
     from transformers import ClapFeatureExtractor
 
-    samples = torch.arange(4_410, dtype=torch.float32)
+    duration_seconds = encoder.max_samples / encoder.target_sample_rate
+    source_samples = round(duration_seconds * encoder.sample_rate)
+    samples = torch.arange(source_samples, dtype=torch.float32)
     waveform = torch.sin(samples * 0.01).unsqueeze(0)
-    resampled = audio_fn.resample(waveform, 44_100, encoder.target_sample_rate)
+    resampled = audio_fn.resample(waveform, encoder.sample_rate, encoder.target_sample_rate)
     expected = ClapFeatureExtractor.from_pretrained(checkpoint)(
         list(resampled.numpy()),
         sampling_rate=encoder.target_sample_rate,

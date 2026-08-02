@@ -658,3 +658,12 @@ def test_clap_features_with_empty_audio_raises(clap_encoder: ClapAudioEncoder) -
     """
     with pytest.raises(ValueError, match="empty"):
         clap_encoder.features(torch.empty(1, 0))
+
+
+def test_clap_features_with_zero_channels_raises(clap_encoder: ClapAudioEncoder) -> None:
+    """An empty channel axis fails before downmixing can create NaNs.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    with pytest.raises(ValueError, match="channel"):
+        clap_encoder.features(torch.empty(1, 0, 4_800))
