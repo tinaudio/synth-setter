@@ -1,4 +1,4 @@
-"""Execution-time capability checks for the optional DawDreamer backend."""
+"""Runtime contracts for the optional DawDreamer backend."""
 
 from __future__ import annotations
 
