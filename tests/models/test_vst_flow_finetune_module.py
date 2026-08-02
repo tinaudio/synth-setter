@@ -428,6 +428,50 @@ def test_finetune_render_decodes_model_space_before_rendering(tmp_path: Path) ->
     assert not torch.equal(rendered, undecoded)
 
 
+def _logged_control_metrics(
+    module: VSTFlowFinetuneModule, batch: dict[str, torch.Tensor]
+) -> dict[str, tuple[float, dict[str, object]]]:
+    """Run an attached training step and capture its control telemetry.
+
+    :param module: Finetune module to attach to a trainer.
+    :param batch: Training batch to process.
+    :returns: Metric names mapped to scalar values and logging options.
+    """
+    module.trainer = _trainer()  # pyright: ignore[reportAttributeAccessIssue]
+    logged: dict[str, tuple[float, dict[str, object]]] = {}
+
+    def capture(
+        values: dict[str, object],
+        *,
+        on_step: bool,
+        on_epoch: bool,
+        sync_dist: bool,
+        batch_size: int,
+    ) -> None:
+        """Capture one Lightning metric group.
+
+        :param values: Metric keys and scalar values.
+        :param on_step: Whether Lightning emits the per-step values.
+        :param on_epoch: Whether Lightning aggregates metrics over the epoch.
+        :param sync_dist: Whether Lightning synchronizes values across ranks.
+        :param batch_size: Number of rows represented by each scalar.
+        """
+        options = {
+            "on_step": on_step,
+            "on_epoch": on_epoch,
+            "sync_dist": sync_dist,
+            "batch_size": batch_size,
+        }
+        logged.update(
+            (name, (float(torch.as_tensor(value).detach()), options))
+            for name, value in values.items()
+        )
+
+    module.log_dict = capture  # pyright: ignore[reportAttributeAccessIssue]
+    module._train_step(batch)
+    return logged
+
+
 def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:
     """The cost reaches the run only as control input, so the objective stays pure flow matching.
 
@@ -824,6 +868,145 @@ def test_finetune_predict_step_samples_with_a_bound_observation(tmp_path: Path) 
     assert predicted.shape == (_BATCH, _WIDTH)
     assert torch.isfinite(predicted).all()
     assert module._sampling_target is None
+
+
+def test_finetune_gradient_control_logs_positive_whole_batch_telemetry(tmp_path: Path) -> None:
+    """Active gradient feedback reports signal, cost, and gradient magnitudes.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    torch.manual_seed(1)
+    metrics = _logged_control_metrics(_finetune(_base_checkpoint(tmp_path)), _batch())
+    options = {
+        "on_step": True,
+        "on_epoch": False,
+        "sync_dist": True,
+        "batch_size": _BATCH,
+    }
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_cost",
+        "train/control_grad_norm",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"] == (1.0, options)
+    assert metrics["train/control_signal_norm"][0] > 0.0
+    assert metrics["train/control_cost"][0] > 0.0
+    assert metrics["train/control_grad_norm"][0] > 0.0
+    assert metrics["train/control_signal_norm"][1] == options
+    assert metrics["train/control_cost"][1] == options
+    assert metrics["train/control_grad_norm"][1] == options
+
+
+def test_finetune_null_control_logs_active_gate_and_zero_signal(tmp_path: Path) -> None:
+    """The null arm distinguishes an active gate from its intentionally zero signal.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    metrics = _logged_control_metrics(
+        _finetune(_base_checkpoint(tmp_path), control_mode="null"), _batch()
+    )
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"][0] == 1.0
+    assert metrics["train/control_signal_norm"][0] == 0.0
+
+
+def test_finetune_learned_control_logs_common_metric_key_set(tmp_path: Path) -> None:
+    """The learned arm emits only the telemetry shared by every control mode.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(
+        _base_checkpoint(tmp_path),
+        control_mode="learned_audio",
+        overrides={"control_encoder": _WaveformEncoder(out_dim=12)},
+    )
+
+    metrics = _logged_control_metrics(module, _batch())
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"][0] == 1.0
+    assert metrics["train/control_signal_norm"][0] > 0.0
+
+
+def test_finetune_inactive_batch_logs_finite_zero_control_telemetry(tmp_path: Path) -> None:
+    """An entirely inactive gradient batch emits every metric as a finite zero.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), overrides={"cfg_dropout_rate": 1.0})
+
+    metrics = _logged_control_metrics(module, _batch())
+
+    assert set(metrics) == {
+        "train/control_active_fraction",
+        "train/control_cost",
+        "train/control_grad_norm",
+        "train/control_signal_norm",
+    }
+    assert metrics["train/control_active_fraction"][0] == 0.0
+    assert metrics["train/control_signal_norm"][0] == 0.0
+    assert metrics["train/control_cost"][0] == 0.0
+    assert metrics["train/control_grad_norm"][0] == 0.0
+
+
+def test_finetune_mixed_control_mask_logs_whole_batch_means(tmp_path: Path) -> None:
+    """Inactive zeros remain in each telemetry denominator for mixed batches.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path))
+    module.trainer = _trainer()  # pyright: ignore[reportAttributeAccessIssue]
+    metrics: dict[str, torch.Tensor] = {}
+    logging_options: dict[str, object] = {}
+
+    def capture(
+        values: dict[str, torch.Tensor],
+        *,
+        on_step: bool,
+        on_epoch: bool,
+        sync_dist: bool,
+        batch_size: int,
+    ) -> None:
+        """Retain telemetry emitted at the Lightning logging boundary.
+
+        :param values: Metric mapping emitted by the module.
+        :param on_step: Whether Lightning emits per-step values.
+        :param on_epoch: Whether Lightning aggregates over the epoch.
+        :param sync_dist: Whether Lightning synchronizes distributed values.
+        :param batch_size: Rows represented by each metric.
+        """
+        metrics.update(values)
+        logging_options.update(
+            on_step=on_step,
+            on_epoch=on_epoch,
+            sync_dist=sync_dist,
+            batch_size=batch_size,
+        )
+
+    module.log_dict = capture  # pyright: ignore[reportAttributeAccessIssue]
+    module._log_control_telemetry(
+        torch.tensor([[3.0, 4.0], [0.0, 0.0]]), torch.tensor([True, False])
+    )
+
+    assert float(metrics["train/control_active_fraction"]) == 0.5
+    assert float(metrics["train/control_signal_norm"]) == 2.5
+    assert float(metrics["train/control_cost"]) == 1.5
+    assert float(metrics["train/control_grad_norm"]) == 2.0
+    assert logging_options == {
+        "on_step": True,
+        "on_epoch": False,
+        "sync_dist": True,
+        "batch_size": 2,
+    }
 
 
 def test_controlled_sampling_scores_the_conditional_velocity(tmp_path: Path) -> None:
