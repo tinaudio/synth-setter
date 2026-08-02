@@ -1364,17 +1364,21 @@ def test_random_patch_sampler_same_seed_reproduces_full_param_corpus() -> None:
 
     patches = _sample_random_patches(config, seed=_RANDOM_PATCH_SEED)
     repeated = _sample_random_patches(config, seed=_RANDOM_PATCH_SEED)
-    serialized = json.dumps(patches, sort_keys=True, separators=(",", ":")).encode()
-
     assert patches == repeated
     param_spec = resolve_param_spec(config.param_spec_name)
     expected_names = {parameter.name for parameter in param_spec.synth_params}
     assert len(patches) == _RANDOM_PATCH_COUNT
     assert {frozenset(patch) for patch in patches} == {frozenset(expected_names)}
     assert {len(patch) for patch in patches} == {_SURGE_SYNTH_PARAMETER_COUNT}
-    assert len({json.dumps(patch, sort_keys=True) for patch in patches}) == _RANDOM_PATCH_COUNT
-    assert hashlib.sha256(serialized).hexdigest() == (
-        "4ec13bc7daf6da143ad7050dad18a34645ad091dd9bc5348cce4abee8c71fab8"
+
+    parameter_order = sorted(expected_names)
+    corpus_values = np.asarray(
+        [[patch[name] for name in parameter_order] for patch in patches],
+        dtype="<f8",
+    )
+    assert np.unique(corpus_values, axis=0).shape[0] == _RANDOM_PATCH_COUNT
+    assert hashlib.sha256(corpus_values.tobytes()).hexdigest() == (
+        "baa7c0a6511ff99f86074d13814078b217f5ef3bd6506b76351e2b1a875a9694"
     )
 
 
