@@ -348,7 +348,8 @@ class ClapAudioEncoder(nn.Module):
         single log-mel is taken — the ``np.random`` crops fire only past that window, so
         this path has no randomness to reproduce.
 
-        :param audio: Mono waveform batch at ``sample_rate``.
+        :param audio: Mono or multichannel waveform batch at ``sample_rate``; channels are
+            downmixed by their mean.
         :returns: Log-mel in dB shaped ``(batch, 1, frames, mels)``.
         :raises ValueError: Audio is empty, non-finite, outside ``[-1, 1]``, on MPS,
             or exceeds the extractor's deterministic short-audio window.
@@ -415,7 +416,8 @@ class ClapAudioEncoder(nn.Module):
     ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
         """Embed a waveform batch with gradient intact all the way to the input.
 
-        :param audio: Mono waveform batch at ``sample_rate``.
+        :param audio: Mono or multichannel waveform batch at ``sample_rate``; channels are
+            downmixed by their mean.
         :returns: Pooled CLAP audio embedding shaped ``(batch, out_dim)``.
         :raises RuntimeError: The Transformers audio branch returns no pooled embedding.
         """
