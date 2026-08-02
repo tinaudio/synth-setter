@@ -452,12 +452,11 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
         transcript.unlink(missing_ok=True)
 
 
-def _write_ci_aftercare_repo(tmp_path: Path, *, aftercare_exit: int) -> tuple[Path, Path]:
-    """Create a minimal launcher checkout with observable aftercare.
+def _write_ci_aftercare_repo(tmp_path: Path) -> Path:
+    """Create a minimal launcher checkout with the real aftercare consumer.
 
     :param tmp_path: Temporary root for the checkout and fake executable.
-    :param aftercare_exit: Exit status returned by synchronous aftercare.
-    :returns: Minimal repository root and aftercare argument marker.
+    :returns: Minimal repository root.
     """
     repo_root = tmp_path / "repo"
     shared = repo_root / "agent" / "_shared"
@@ -465,44 +464,66 @@ def _write_ci_aftercare_repo(tmp_path: Path, *, aftercare_exit: int) -> tuple[Pa
     launcher = shared / "run_pi_review.sh"
     launcher.write_text((REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text())
     launcher.chmod(0o755)
-    (shared / "pi_review_routing.py").write_text(
-        (REPO_ROOT / "agent/_shared/pi_review_routing.py").read_text()
-    )
-    aftercare_args = tmp_path / "aftercare-args"
-    (shared / "run_pi_review_aftercare.py").write_text(
-        "import os\n"
-        "import sys\n"
-        "from pathlib import Path\n"
-        'Path(os.environ["AFTERCARE_ARGS"]).write_text(" ".join(sys.argv[1:]))\n'
-        f"raise SystemExit({aftercare_exit})\n"
-    )
-    return repo_root, aftercare_args
+    for filename in ("pi_review_routing.py", "run_pi_review_aftercare.py"):
+        (shared / filename).write_text((REPO_ROOT / "agent/_shared" / filename).read_text())
+    return repo_root
 
 
 def _write_manifest_pi(tmp_path: Path) -> None:
-    """Create a fake Pi that emits a deferred manifest and final response.
+    """Create a fake Pi that drives foreground and real aftercare protocols.
 
     :param tmp_path: Temporary directory placed first on PATH.
     """
     pi = tmp_path / "pi"
     pi.write_text(
-        "#!/bin/bash\n"
-        "printf '{}\\n' > \"${PI_REVIEW_AFTERCARE_MANIFEST}\"\n"
-        'printf \'%s\\n\' \'{"type":"message_end","message":{"role":"assistant",'
-        '"content":"foreground-complete"}}\'\n'
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "if os.environ.get('SYNTH_SETTER_PI_REVIEW_AFTERCARE') == '1':\n"
+        "    if os.environ.get('AFTERCARE_FAIL') == '1':\n"
+        "        raise SystemExit(9)\n"
+        "    runtime = Path(os.environ['PI_REVIEW_AFTERCARE_RUNTIME_MANIFEST'])\n"
+        "    result = {\n"
+        "        'status': 'complete',\n"
+        "        'attempts': [{'skill': 'correctness-review', 'pass_name': 'free-pool', "
+        "'model': 'kimi-coding/k3', 'status': 'success', 'agent_id': 'agent-aftercare', "
+        "'output_path': '.pi/output/agent-aftercare.jsonl', "
+        "'detail': 'validated report'}],\n"
+        "        'diagnostics': [], 'late_findings': [], 'posted_review_url': None,\n"
+        "        'child_exit_code': None, 'log_tail': '', "
+        "'completed_at': '2026-08-02T00:00:00Z',\n"
+        "    }\n"
+        "    Path(f'{runtime}.result.json').write_text(json.dumps(result))\n"
+        "    raise SystemExit(0)\n"
+        "manifest = Path(os.environ['PI_REVIEW_AFTERCARE_MANIFEST'])\n"
+        "Path(os.environ['MANIFEST_PATH_FILE']).write_text(str(manifest))\n"
+        "manifest.write_text(json.dumps({\n"
+        "    'version': 1, 'mode': 'full', 'repo': 'tinaudio/synth-setter',\n"
+        "    'pr_number': 2174, 'base_sha': 'a' * 40, 'head_sha': 'b' * 40,\n"
+        "    'target': 'PR #2174',\n"
+        "    'deferred_passes': [{'skill': 'correctness-review', "
+        "'pass_name': 'free-pool', 'origin': 'primary', 'model': 'kimi-coding/k3', "
+        "'verification_model': 'openai-codex/gpt-5.6-sol', 'thinking': 'high'}],\n"
+        "    'foreground_fingerprints': [],\n"
+        "}))\n"
+        "print(json.dumps({'type': 'message_end', 'message': {\n"
+        "    'role': 'assistant', 'content': 'foreground-complete'\n"
+        "}}))\n"
     )
     pi.chmod(0o755)
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_ci_waits_for_supervised_aftercare(tmp_path: Path) -> None:
-    """CI returns the foreground result only after supervised aftercare succeeds.
+    """CI returns the foreground result only after real aftercare succeeds.
 
     :param tmp_path: Temporary minimal repository and fake Pi executable.
     """
     sh = importlib.import_module("sh")
-    repo_root, aftercare_args = _write_ci_aftercare_repo(tmp_path, aftercare_exit=0)
+    repo_root = _write_ci_aftercare_repo(tmp_path)
     _write_manifest_pi(tmp_path)
+    manifest_path_file = tmp_path / "manifest-path"
 
     result = sh.Command(str(repo_root / "agent/_shared/run_pi_review.sh"))(
         "repo-review-full",
@@ -511,29 +532,31 @@ def test_pi_review_launcher_ci_waits_for_supervised_aftercare(tmp_path: Path) ->
         _cwd=repo_root,
         _env={
             **os.environ,
-            "AFTERCARE_ARGS": str(aftercare_args),
             "CI": "true",
+            "MANIFEST_PATH_FILE": str(manifest_path_file),
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
         },
     )
 
     assert str(result).strip() == "foreground-complete"
-    arguments = aftercare_args.read_text().split()
-    assert arguments[0] == "--supervise"
-    assert Path(arguments[1]).is_absolute()
+    manifest = Path(manifest_path_file.read_text())
+    aftercare_result = json.loads(Path(f"{manifest}.result.json").read_text())
+    assert aftercare_result["status"] == "complete"
+    assert aftercare_result["child_exit_code"] == 0
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_pi_review_launcher_ci_aftercare_failure_withholds_foreground_result(
     tmp_path: Path,
 ) -> None:
-    """CI fails closed instead of publishing success when aftercare fails.
+    """CI fails closed instead of publishing success when real aftercare fails.
 
     :param tmp_path: Temporary minimal repository and fake Pi executable.
     """
     sh = importlib.import_module("sh")
-    repo_root, aftercare_args = _write_ci_aftercare_repo(tmp_path, aftercare_exit=9)
+    repo_root = _write_ci_aftercare_repo(tmp_path)
     _write_manifest_pi(tmp_path)
+    manifest_path_file = tmp_path / "manifest-path"
     stdout = io.BytesIO()
 
     with pytest.raises(sh.ErrorReturnCode):
@@ -544,14 +567,17 @@ def test_pi_review_launcher_ci_aftercare_failure_withholds_foreground_result(
             _cwd=repo_root,
             _env={
                 **os.environ,
-                "AFTERCARE_ARGS": str(aftercare_args),
+                "AFTERCARE_FAIL": "1",
                 "CI": "true",
+                "MANIFEST_PATH_FILE": str(manifest_path_file),
                 "PATH": f"{tmp_path}:{os.environ['PATH']}",
             },
             _out=stdout,
         )
 
-    assert aftercare_args.read_text().split()[0] == "--supervise"
+    manifest = Path(manifest_path_file.read_text())
+    aftercare_result = json.loads(Path(f"{manifest}.result.json").read_text())
+    assert aftercare_result["status"] == "failed"
     assert stdout.getvalue() == b""
 
 

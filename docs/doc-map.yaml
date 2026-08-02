@@ -735,6 +735,6 @@ docs:
     description: Credential inventory + rotation/verification procedures
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "PI_AUTH_JSON and GIT_PAT inventory with rotation and real-PR verification procedures"
+        covers: "Pi review credential rotation procedures"
       - pattern: ".github/workflows/claude.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

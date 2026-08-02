@@ -146,8 +146,8 @@ Or use the Actions tab UI.
 `claude-repo-review-full.yml` retains its historical filename but runs Pi, not
 Claude. It installs pinned Pi and Tintin releases, checks out an immutable
 `tinaudio/skills` commit with `GIT_PAT`, and restores the provider document from
-`PI_AUTH_JSON`. Only same-repository PRs reach those secrets; never convert this workflow to
-`pull_request_target`.
+`PI_AUTH_JSON`. Only owner-authored same-repository PRs reach those secrets; never convert
+this workflow to `pull_request_target`.
 GitHub Actions runs aftercare synchronously so the job cannot report success
 while deferred passes remain. Local launcher calls keep detached aftercare.
 The `.agent-reviews/` audit is retained as a repository-private artifact for

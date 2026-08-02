@@ -289,8 +289,8 @@ ______________________________________________________________________
 **What:** `PI_AUTH_JSON` contains the Pi credentials for the approved
 `openai-codex`, `kimi-coding`, and `openrouter` review pool. `GIT_PAT` gives the
 automatic review workflow read-only Contents access to private
-`tinaudio/skills`. The workflow admits only trusted same-repository PRs before
-loading either secret.
+`tinaudio/skills`. The workflow admits only owner-authored same-repository PRs
+before loading either secret.
 
 **Where stored:**
 
