@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""Stream conditioning columns from Lance and report their numeric scales."""
+"""Stream conditioning columns from Lance and report their numeric scales.
+
+Typical usage::
+
+    uv run python scripts/dev/characterise_conditioning_columns.py DATASET.lance \
+        --rows 1000 --output conditioning-statistics.md
+"""
 
 from __future__ import annotations
 
@@ -8,21 +14,27 @@ import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import lance
 import numpy as np
+import numpy.typing as npt
 import pyarrow as pa
 import yaml
 from pydantic import BaseModel, ConfigDict
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
 
 DEFAULT_ROWS = 1_000
 DEFAULT_BATCH_SIZE = 16
 DEAD_CHANNEL_STD = 1e-6
 MATPAC_BAND_WIDTH = 768
 MATPAC_FREQUENCY_BANDS = 5
+
+type FloatArray = npt.NDArray[np.float16 | np.float32 | np.float64]
+type Float64Array = npt.NDArray[np.float64]
+type MomentValue = float | Float64Array
 
 
 class _ConditioningConfig(BaseModel):
@@ -135,7 +147,7 @@ class StreamingStatistics:
         self._row_m2 = 0.0
         self._frame_cv_sum = 0.0
 
-    def update(self, values: np.ndarray[Any, np.dtype[np.floating[Any]]]) -> None:
+    def update(self, values: FloatArray) -> None:
         """Add a row batch shaped ``(rows, *shape)``.
 
         :param values: Finite vector or channel-frame rows.
@@ -150,7 +162,17 @@ class StreamingStatistics:
         if not np.isfinite(values64).all():
             raise ValueError("conditioning values must be finite")
 
-        channel_observations = np.moveaxis(values64, 1, -1).reshape(-1, self.shape[0])
+        self._update_value_moments(values64)
+        self._update_row_norms(values64)
+        self._update_frame_cv(values64)
+        self.rows += len(values64)
+
+    def _update_value_moments(self, values: Float64Array) -> None:
+        """Accumulate channel and global value moments.
+
+        :param values: Validated float64 rows.
+        """
+        channel_observations = np.moveaxis(values, 1, -1).reshape(-1, self.shape[0])
         self._channel_count, self._channel_mean, self._channel_m2 = _merge_moments(
             self._channel_count,
             self._channel_mean,
@@ -158,7 +180,7 @@ class StreamingStatistics:
             channel_observations,
             axis=0,
         )
-        flattened = values64.reshape(-1)
+        flattened = values.reshape(-1)
         self._global_count, self._global_mean, self._global_m2 = _merge_moments(
             self._global_count,
             self._global_mean,
@@ -169,7 +191,12 @@ class StreamingStatistics:
         self._global_min = min(self._global_min, float(flattened.min()))
         self._global_max = max(self._global_max, float(flattened.max()))
 
-        row_norms = np.linalg.norm(values64.reshape(len(values64), -1), axis=1)
+    def _update_row_norms(self, values: Float64Array) -> None:
+        """Accumulate whole-row L2-norm moments.
+
+        :param values: Validated float64 rows.
+        """
+        row_norms = np.linalg.norm(values.reshape(len(values), -1), axis=1)
         self._row_count, self._row_mean, self._row_m2 = _merge_moments(
             self._row_count,
             self._row_mean,
@@ -177,18 +204,24 @@ class StreamingStatistics:
             row_norms,
             axis=None,
         )
-        if len(self.shape) == 2:
-            frame_norms = np.linalg.norm(values64, axis=1)
-            frame_means = frame_norms.mean(axis=1)
-            frame_stds = frame_norms.std(axis=1)
-            frame_cv = np.divide(
-                frame_stds,
-                frame_means,
-                out=np.zeros_like(frame_stds),
-                where=frame_means > 0,
-            )
-            self._frame_cv_sum += float(frame_cv.sum())
-        self.rows += len(values64)
+
+    def _update_frame_cv(self, values: Float64Array) -> None:
+        """Accumulate within-row frame-norm variation for sequences.
+
+        :param values: Validated float64 rows.
+        """
+        if len(self.shape) != 2:
+            return
+        frame_norms = np.linalg.norm(values, axis=1)
+        frame_means = frame_norms.mean(axis=1)
+        frame_stds = frame_norms.std(axis=1)
+        frame_cv = np.divide(
+            frame_stds,
+            frame_means,
+            out=np.zeros_like(frame_stds),
+            where=frame_means > 0,
+        )
+        self._frame_cv_sum += float(frame_cv.sum())
 
     def result(self) -> ColumnStatistics:
         """Return the accumulated population statistics.
@@ -216,15 +249,15 @@ class StreamingStatistics:
 
 def _merge_moments(
     count: int,
-    mean: float | np.ndarray[Any, np.dtype[np.float64]],
-    m2: float | np.ndarray[Any, np.dtype[np.float64]],
-    values: np.ndarray[Any, np.dtype[np.float64]],
+    mean: MomentValue,
+    m2: MomentValue,
+    values: Float64Array,
     *,
     axis: int | None,
 ) -> tuple[
     int,
-    float | np.ndarray[Any, np.dtype[np.float64]],
-    float | np.ndarray[Any, np.dtype[np.float64]],
+    MomentValue,
+    MomentValue,
 ]:
     """Merge one numeric batch into scalar or per-channel moments.
 
@@ -247,7 +280,7 @@ def _merge_moments(
     return total, merged_mean, merged_m2
 
 
-def _min_median_max(values: np.ndarray[Any, np.dtype[np.float64]]) -> tuple[float, float, float]:
+def _min_median_max(values: Float64Array) -> tuple[float, float, float]:
     """Summarize a numeric vector.
 
     :param values: Values to summarize.
@@ -283,20 +316,22 @@ def discover_conditioning_columns(config_dir: Path) -> dict[str, tuple[int, ...]
     return columns
 
 
-def matpac_band_views(values: np.ndarray, band_width: int = MATPAC_BAND_WIDTH) -> list[np.ndarray]:
+def matpac_band_views(values: FloatArray, band_width: int = MATPAC_BAND_WIDTH) -> list[FloatArray]:
     """Split MATPAC++ values into contiguous frequency-band channel views.
 
     :param values: Channel-first sequence rows.
     :param band_width: ViT width represented by each frequency patch.
     :returns: Non-copying views, one per frequency patch.
-    :raises ValueError: The channel count is not divisible by ``band_width``.
+    :raises ValueError: The width is non-positive or does not divide the channel count.
     """
+    if band_width <= 0:
+        raise ValueError(f"band width must be positive, got {band_width}")
     if values.ndim != 3 or values.shape[1] % band_width:
         raise ValueError(f"cannot split shape {values.shape} into {band_width}-channel bands")
     return list(np.split(values, values.shape[1] // band_width, axis=1))
 
 
-def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> np.ndarray:
+def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> FloatArray:
     """Decode a Lance Arrow array to its registered dense shape.
 
     :param array: Arrow extension or fixed-size-list row batch.
@@ -313,7 +348,113 @@ def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> np.ndarray:
         values = array.values.to_numpy(zero_copy_only=False).reshape(len(array), *shape)
     else:
         values = np.asarray(array.to_pylist())
-    return np.asarray(values).reshape(len(array), *shape)
+    return cast(FloatArray, np.asarray(values).reshape(len(array), *shape))
+
+
+def _open_dataset(dataset_uri: str) -> lance.LanceDataset:
+    """Open a local or R2 Lance dataset with bounded transient retries.
+
+    :param dataset_uri: Local, ``file://``, or R2 Lance dataset URI.
+    :returns: Open Lance dataset.
+    :raises RuntimeError: The dataset cannot be opened.
+    """
+    try:
+        if r2_io.is_r2_uri(dataset_uri):
+            target, storage_options = r2_io.lance_target(dataset_uri)
+        else:
+            target, storage_options = dataset_uri.removeprefix("file://"), None
+        return _retry_lance_read(
+            "conditioning_statistics_open",
+            lambda: lance.dataset(target, storage_options=storage_options),
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        raise RuntimeError("failed to open conditioning statistics Lance dataset") from error
+
+
+def _band_accumulators(column: str, shape: tuple[int, ...]) -> list[StreamingStatistics]:
+    """Build MATPAC++ band accumulators when required.
+
+    :param column: Conditioning column name.
+    :param shape: Registered channel-first shape.
+    :returns: Five band accumulators for MATPAC++, otherwise an empty list.
+    :raises ValueError: MATPAC++ is not registered as a sequence.
+    """
+    if column != "matpac_plus":
+        return []
+    if len(shape) != 2:
+        raise ValueError(f"matpac_plus must be a sequence, got shape {shape}")
+    return [
+        StreamingStatistics((MATPAC_BAND_WIDTH, shape[1])) for _ in range(MATPAC_FREQUENCY_BANDS)
+    ]
+
+
+def _stream_column(
+    dataset: lance.LanceDataset,
+    column: str,
+    shape: tuple[int, ...],
+    *,
+    row_limit: int,
+    batch_size: int,
+) -> dict[str, ColumnStatistics]:
+    """Stream one column and return its report rows.
+
+    :param dataset: Open Lance dataset.
+    :param column: Conditioning column name.
+    :param shape: Registered channel-first shape.
+    :param row_limit: Maximum sampled rows.
+    :param batch_size: Lance scanner batch size.
+    :returns: Main statistics plus MATPAC++ band statistics when applicable.
+    """
+    accumulator = StreamingStatistics(shape)
+    band_accumulators = _band_accumulators(column, shape)
+    for batch in dataset.scanner(columns=[column], batch_size=batch_size).to_batches():
+        remaining = row_limit - accumulator.rows
+        if remaining <= 0:
+            break
+        values = _array_to_numpy(batch.column(0), shape)[:remaining]
+        accumulator.update(values)
+        if band_accumulators:
+            for band_accumulator, band in zip(
+                band_accumulators, matpac_band_views(values), strict=True
+            ):
+                band_accumulator.update(band)
+    results = {column: accumulator.result()}
+    results.update(
+        {
+            f"{column} band {index}": band.result()
+            for index, band in enumerate(band_accumulators, start=1)
+        }
+    )
+    return results
+
+
+def _analyse_column(
+    dataset: lance.LanceDataset,
+    column: str,
+    shape: tuple[int, ...],
+    *,
+    row_limit: int,
+    batch_size: int,
+) -> dict[str, ColumnStatistics]:
+    """Analyze one column under the bounded Lance retry policy.
+
+    :param dataset: Open Lance dataset.
+    :param column: Conditioning column name.
+    :param shape: Registered channel-first shape.
+    :param row_limit: Maximum sampled rows.
+    :param batch_size: Lance scanner batch size.
+    :returns: Main and optional MATPAC++ band report rows.
+    :raises RuntimeError: The column cannot be scanned.
+    """
+    try:
+        return _retry_lance_read(
+            "conditioning_statistics_scan",
+            lambda: _stream_column(
+                dataset, column, shape, row_limit=row_limit, batch_size=batch_size
+            ),
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        raise RuntimeError(f"failed to scan conditioning column {column!r}") from error
 
 
 def analyse_dataset(
@@ -331,39 +472,11 @@ def analyse_dataset(
     :param batch_size: Lance scanner batch size.
     :returns: Statistics keyed by column, plus MATPAC++ band rows when selected.
     """
-    if r2_io.is_r2_uri(dataset_uri):
-        target, storage_options = r2_io.lance_target(dataset_uri)
-    else:
-        target, storage_options = dataset_uri.removeprefix("file://"), None
-    dataset = lance.dataset(target, storage_options=storage_options)
+    dataset = _open_dataset(dataset_uri)
     results: dict[str, ColumnStatistics] = {}
     for column, shape in columns.items():
-        accumulator = StreamingStatistics(shape)
-        band_accumulators = (
-            [
-                StreamingStatistics((MATPAC_BAND_WIDTH, shape[1]))
-                for _ in range(MATPAC_FREQUENCY_BANDS)
-            ]
-            if column == "matpac_plus"
-            else []
-        )
-        for batch in dataset.scanner(columns=[column], batch_size=batch_size).to_batches():
-            remaining = row_limit - accumulator.rows
-            if remaining <= 0:
-                break
-            values = _array_to_numpy(batch.column(0), shape)[:remaining]
-            accumulator.update(values)
-            if band_accumulators:
-                for band_accumulator, band in zip(
-                    band_accumulators, matpac_band_views(values), strict=True
-                ):
-                    band_accumulator.update(band)
-        results[column] = accumulator.result()
         results.update(
-            {
-                f"{column} band {index}": band.result()
-                for index, band in enumerate(band_accumulators, start=1)
-            }
+            _analyse_column(dataset, column, shape, row_limit=row_limit, batch_size=batch_size)
         )
     return results
 

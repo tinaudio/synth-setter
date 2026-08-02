@@ -92,6 +92,14 @@ def test_matpac_band_views_splits_channel_axis_without_changing_frames() -> None
     np.testing.assert_array_equal(bands[2], values[:, 4:6, :])
 
 
+def test_matpac_band_views_with_zero_band_width_raises_value_error() -> None:
+    """A zero-width band is rejected as an invalid shape contract."""
+    values = np.zeros((1, 8, 3), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="positive"):
+        matpac_band_views(values, band_width=0)
+
+
 def test_cli_real_lance_dataset_writes_markdown_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
