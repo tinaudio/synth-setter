@@ -382,7 +382,7 @@ def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> FloatArray:
     :param array: Arrow extension or fixed-size-list row batch.
     :param shape: Registered shape excluding the row dimension.
     :returns: Dense NumPy rows.
-    :raises ValueError: The column contains null rows.
+    :raises ValueError: Values are null, the type is unsupported, or shapes differ.
     """
     if _has_nested_nulls(array):
         raise ValueError("conditioning columns must not contain null values")
@@ -398,7 +398,7 @@ def _array_to_numpy(array: pa.Array, shape: tuple[int, ...]) -> FloatArray:
                 raise ValueError("conditioning columns must not contain null values")
         values = primitive.to_numpy(zero_copy_only=False).reshape(len(array), *shape)
     else:
-        values = np.asarray(array.to_pylist())
+        raise ValueError(f"unsupported conditioning Arrow type {array.type}")
     return cast(FloatArray, np.asarray(values).reshape(len(array), *shape))
 
 

@@ -24,7 +24,7 @@ from scripts.dev.characterise_conditioning_columns import (
 def test_discover_conditioning_columns_cached_profiles_returns_shapes(tmp_path: Path) -> None:
     """Cached profiles contribute columns while online profiles do not.
 
-    :param tmp_path: Directory holding test conditioning profiles.
+    :param tmp_path: Isolates generated profiles from shipped Hydra configs.
     """
     (tmp_path / "cached.yaml").write_text(
         "model:\n"
@@ -109,6 +109,22 @@ def test_matpac_band_views_with_zero_band_width_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="positive"):
         matpac_band_views(values, band_width=0)
+
+
+def test_analyse_dataset_variable_lists_raises(tmp_path: Path) -> None:
+    """Variable-size lists cannot be silently regrouped as fixed tensors.
+
+    :param tmp_path: Isolates the unsupported-list Lance fixture.
+    """
+    values = pa.array(
+        [[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]],
+        type=pa.list_(pa.list_(pa.float32())),
+    )
+    dataset_path = tmp_path / "variable-list.lance"
+    lance.write_dataset(pa.table({"sequence": values}), dataset_path)
+
+    with pytest.raises(RuntimeError, match="failed to scan conditioning column"):
+        analyse_dataset(str(dataset_path), {"sequence": (2, 3)}, row_limit=1, batch_size=1)
 
 
 def test_analyse_dataset_tensor_child_null_raises(tmp_path: Path) -> None:
