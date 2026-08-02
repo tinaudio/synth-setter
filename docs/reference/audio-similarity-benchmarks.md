@@ -127,11 +127,13 @@ Metric name prefix: `surge-host-parity/<workload>/`.
 The workflow retains an evaluator-friendly `surge-host-parity-comparison`
 artifact for 14 days. Trusted main-branch runs copy the same directory with
 checksums to
-`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. Each workload keeps the
-existing pairwise `target.wav` and `pred.wav` listening layout, persisted mel
-arrays and previews, exact normalized parameters, per-render metrics, thresholds,
-and provenance. Pull requests never receive R2 credentials. Backend-named WAVs are
-introduced separately by the artifact-schema-v2 change.
+`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. Artifact schema v2 stores
+one `audio/sample_NN/` directory per workload row with `pedalboard.wav`,
+`dawdreamer.wav`, and `surgepy.wav`. Each workload also includes same-backend
+persisted mel arrays and previews, exact normalized parameters, per-render onset and
+pair metrics, thresholds, renderer versions, container image, commit SHA, and
+workflow run ID. Consumption recomputes every mel from its same-named WAV so a label
+swap cannot pass. Pull requests never receive R2 credentials.
 
 ## Metric series
 

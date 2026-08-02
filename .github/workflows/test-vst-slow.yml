@@ -224,6 +224,7 @@ jobs:
             -v /tmp/bench:/bench \
             -e BENCHMARK_OUTPUT_DIR=/bench \
             -e SURGE_PARITY_OUTPUT_DIR=/bench/surge-host-parity \
+            -e GITHUB_RUN_ID \
             -e GITHUB_SHA \
             -e "SYNTH_SETTER_BENCHMARK_IMAGE=${IMAGE}@${image_id}" \
             -e HYDRA_FULL_ERROR=1 \

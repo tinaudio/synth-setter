@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 from scipy.io import wavfile
 
+from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import NoteParams
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
@@ -30,7 +31,6 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_rms,
     compute_sot,
     compute_wmfcc,
-    find_possible_subdirs,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from tests._vst import TEST_SYNTH
@@ -475,30 +475,26 @@ def _benchmark_entries(
     return entries
 
 
-def _write_audio_comparisons(
+def _write_audio_artifacts(
     output_dir: Path,
     results: dict[ParityBackend, _BackendResult],
-    pairs: list[str],
 ) -> None:
-    """Write the existing pairwise target/pred listening layout.
+    """Write one backend-named WAV per workload row.
 
     :param output_dir: Workload comparison artifact root.
     :param results: Materialized real artifacts keyed by rendering backend.
-    :param pairs: Ordered backend pair names.
     """
     render_count = len(next(iter(results.values())).audio)
     sample_rate = _config("pedalboard", render_count).sample_rate
-    for pair in pairs:
-        raw_reference, raw_candidate = pair.split("-vs-")
-        reference = cast(ParityBackend, raw_reference)
-        candidate = cast(ParityBackend, raw_candidate)
-        for index in range(render_count):
-            sample_dir = output_dir / "audio" / pair / f"sample_{index:02d}"
-            sample_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(render_count):
+        sample_dir = output_dir / "audio" / f"sample_{index:02d}"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        for backend, result in results.items():
             wavfile.write(
-                sample_dir / "target.wav", sample_rate, results[reference].audio[index].T
+                sample_dir / f"{backend}.wav",
+                sample_rate,
+                result.audio[index].T,
             )
-            wavfile.write(sample_dir / "pred.wav", sample_rate, results[candidate].audio[index].T)
 
 
 def _write_mel_artifacts(
@@ -512,7 +508,7 @@ def _write_mel_artifacts(
     """
     render_count = len(next(iter(results.values())).audio)
     for index in range(render_count):
-        mel_dir = output_dir / "mel" / f"{index:02d}"
+        mel_dir = output_dir / "mel" / f"sample_{index:02d}"
         mel_dir.mkdir(parents=True, exist_ok=True)
         for backend, result in results.items():
             np.save(mel_dir / f"{backend}.npy", result.mel[index])
@@ -533,14 +529,18 @@ def _comparison_manifest(
     render_count = len(next(iter(results.values())).audio)
     config = _config("pedalboard", render_count)
     return {
-        "artifact_schema_version": 1,
+        "artifact_schema_version": 2,
         "workload": workload,
         "backends": {
-            backend: {"renderer_version": _config(backend, render_count).synth.synth_version}
+            backend: {
+                "filename": f"{backend}.wav",
+                "renderer_version": _config(backend, render_count).synth.synth_version,
+            }
             for backend in results
         },
         "container_image": os.environ.get("SYNTH_SETTER_BENCHMARK_IMAGE"),
         "git_sha": os.environ.get("GITHUB_SHA"),
+        "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "parameter_map": str(_PARAMETER_MAP_PATH),
         "parameter_map_preset_sha256": parameter_map.preset_sha256,
         "surgepy_preset": str(_SURGEPY_PRESET_PATH),
@@ -552,6 +552,10 @@ def _comparison_manifest(
             "amplitude": _ONSET_AMPLITUDE,
             "control_backends": list(_TRUSTED_BACKENDS),
             "control_lag_tolerance_samples": _ONSET_CONTROL_LAG_TOLERANCE_SAMPLES,
+        },
+        "workload_gates": {
+            "adjacent_mel_rmse_min": _ADJACENT_MEL_RMSE_MIN,
+            "diverse_centroid_shift_min": _DIVERSE_CENTROID_SHIFT_MIN,
         },
         "thresholds": {
             "mel_rmse_max": _MEL_RMSE_MAX,
@@ -582,7 +586,7 @@ def _write_comparison_directory(
     :param onset_rows: Per-render onset diagnostics.
     """
     shutil.rmtree(output_dir, ignore_errors=True)
-    _write_audio_comparisons(output_dir, results, list(pair_rows))
+    _write_audio_artifacts(output_dir, results)
     _write_mel_artifacts(output_dir, results)
     parameters = [
         {
@@ -652,9 +656,19 @@ def _assert_manifest_artifact(output_dir: Path, workload: str, render_count: int
     :param render_count: Expected workload row count.
     """
     manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest["artifact_schema_version"] == 1
+    assert manifest["artifact_schema_version"] == 2
     assert manifest["workload"] == workload
     assert manifest["render_count"] == render_count
+    assert set(manifest["backends"]) == set(_BACKENDS)
+    for backend in _BACKENDS:
+        assert manifest["backends"][backend]["filename"] == f"{backend}.wav"
+    assert "container_image" in manifest
+    assert "git_sha" in manifest
+    assert "github_run_id" in manifest
+    assert manifest["workload_gates"] == {
+        "adjacent_mel_rmse_min": _ADJACENT_MEL_RMSE_MIN,
+        "diverse_centroid_shift_min": _DIVERSE_CENTROID_SHIFT_MIN,
+    }
     assert manifest["thresholds"] == {
         "mel_rmse_max": _MEL_RMSE_MAX,
         "mss_max": _MSS_MAX,
@@ -712,6 +726,17 @@ def _assert_metrics_artifact(output_dir: Path, render_count: int, pairs: list[st
     metrics = json.loads((output_dir / "metrics.json").read_text())
     assert set(metrics) == {"onsets", "pairwise"}
     assert len(metrics["onsets"]) == render_count * len(_BACKENDS)
+    for row in metrics["onsets"]:
+        assert set(row) == {
+            "backend",
+            "sample",
+            "onset_sample",
+            "requested_sample",
+        }
+        assert row["backend"] in _BACKENDS
+        assert type(row["sample"]) is int
+        assert type(row["onset_sample"]) is int
+        assert type(row["requested_sample"]) is int
     assert {
         (row["backend"], row["sample"]) for row in metrics["onsets"]
     } == set(product(_BACKENDS, range(render_count)))
@@ -744,6 +769,36 @@ def _assert_comparison_json_artifacts(
     _assert_metrics_artifact(output_dir, render_count, pairs)
 
 
+def _assert_audio_and_mel_artifacts(output_dir: Path, render_count: int) -> None:
+    """Consume each backend WAV and its same-named persisted mel.
+
+    :param output_dir: Workload comparison artifact root.
+    :param render_count: Expected workload row count.
+    """
+    config = _config("pedalboard", render_count)
+    expected_samples = int(config.sample_rate * config.signal_duration_seconds)
+    wav_paths = sorted((output_dir / "audio").glob("sample_*/*.wav"))
+    assert len(wav_paths) == render_count * len(_BACKENDS)
+    assert {path.parent.name for path in wav_paths} == {
+        f"sample_{index:02d}" for index in range(render_count)
+    }
+    assert {path.name for path in wav_paths} == {f"{backend}.wav" for backend in _BACKENDS}
+    for path in wav_paths:
+        sample_rate, audio = wavfile.read(path)
+        assert sample_rate == config.sample_rate, path
+        assert audio.shape == (expected_samples, 2), path
+        assert audio.dtype == np.float32, path
+        assert np.isfinite(audio).all(), path
+        mel_path = output_dir / "mel" / path.parent.name / f"{path.stem}.npy"
+        persisted_mel = np.load(mel_path)
+        assert persisted_mel.shape == _EXPECTED_MEL_SHAPE, mel_path
+        assert persisted_mel.dtype == np.float32, mel_path
+        recomputed_mel = make_spectrogram(audio.T, sample_rate)
+        np.testing.assert_allclose(persisted_mel, recomputed_mel, rtol=1e-6, atol=1e-6)
+    assert len(list((output_dir / "mel").glob("sample_*/*.npy"))) == len(wav_paths)
+    assert len(list((output_dir / "mel").glob("sample_*/*.png"))) == len(wav_paths)
+
+
 def _assert_comparison_artifact(
     output_dir: Path,
     workload: str,
@@ -751,35 +806,14 @@ def _assert_comparison_artifact(
     synth_params: list[dict[str, float]],
     pairs: list[str],
 ) -> None:
-    """Consume every file in one pairwise listening artifact.
+    """Consume every file in one schema-v2 listening artifact.
 
     :param output_dir: Workload comparison artifact root.
     :param workload: Expected workload identity.
     :param synth_params: Exact normalized patches expected in row order.
     :param pairs: Ordered backend pair names.
     """
-    render_count = len(synth_params)
-    config = _config("pedalboard", render_count)
-    expected_samples = int(config.sample_rate * config.signal_duration_seconds)
-    assert len(list((output_dir / "audio").glob("*/sample_*/*.wav"))) == (
-        render_count * len(pairs) * 2
-    )
-    mel_paths = sorted((output_dir / "mel").glob("*/*.npy"))
-    assert len(mel_paths) == render_count * len(_BACKENDS)
-    assert len(list((output_dir / "mel").glob("*/*.png"))) == render_count * len(_BACKENDS)
-    for path in mel_paths:
-        mel = np.load(path)
-        assert mel.shape == _EXPECTED_MEL_SHAPE, path
-        assert mel.dtype == np.float32, path
-        assert np.isfinite(mel).all(), path
-    for pair in pairs:
-        sample_dirs = find_possible_subdirs(output_dir / "audio" / pair)
-        assert len(sample_dirs) == render_count
-        for sample_dir in sample_dirs:
-            for filename in ("target.wav", "pred.wav"):
-                sample_rate, audio = wavfile.read(sample_dir / filename)
-                assert sample_rate == config.sample_rate
-                assert audio.shape == (expected_samples, 2)
+    _assert_audio_and_mel_artifacts(output_dir, len(synth_params))
     _assert_comparison_json_artifacts(
         output_dir,
         workload,
@@ -1040,6 +1074,41 @@ def test_repeated_backend_stability_rejects_anomalous_render() -> None:
         _assert_repeated_backend_stability({"pedalboard": result})
 
 
+def test_manifest_rejects_backend_filename_swap(tmp_path: Path) -> None:
+    """Manifest backend keys must identify their same-named WAVs.
+
+    :param tmp_path: Temporary schema-v2 artifact root.
+    """
+    manifest = {
+        "artifact_schema_version": 2,
+        "workload": "diverse-patches",
+        "backends": {
+            "pedalboard": {"filename": "surgepy.wav"},
+            "dawdreamer": {"filename": "dawdreamer.wav"},
+            "surgepy": {"filename": "pedalboard.wav"},
+        },
+        "container_image": "local-vst",
+        "git_sha": "abc123",
+        "github_run_id": "local",
+        "render_count": 1,
+        "workload_gates": {
+            "adjacent_mel_rmse_min": _ADJACENT_MEL_RMSE_MIN,
+            "diverse_centroid_shift_min": _DIVERSE_CENTROID_SHIFT_MIN,
+        },
+        "thresholds": {
+            "mel_rmse_max": _MEL_RMSE_MAX,
+            "mss_max": _MSS_MAX,
+            "rms_envelope_cosine_min": _RMS_MIN,
+            "sot_max": _SOT_MAX,
+            "wmfcc_max": _WMFCC_MAX,
+        },
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(AssertionError):
+        _assert_manifest_artifact(tmp_path, "diverse-patches", 1)
+
+
 def test_comparison_json_rejects_missing_pair_metrics(tmp_path: Path) -> None:
     """The artifact consumer rejects incomplete persisted diagnostics.
 
@@ -1048,9 +1117,19 @@ def test_comparison_json_rejects_missing_pair_metrics(tmp_path: Path) -> None:
     (tmp_path / "manifest.json").write_text(
         json.dumps(
             {
-                "artifact_schema_version": 1,
+                "artifact_schema_version": 2,
                 "workload": "diverse-patches",
+                "backends": {
+                    backend: {"filename": f"{backend}.wav"} for backend in _BACKENDS
+                },
+                "container_image": "local-vst",
+                "git_sha": "abc123",
+                "github_run_id": "local",
                 "render_count": 1,
+                "workload_gates": {
+                    "adjacent_mel_rmse_min": _ADJACENT_MEL_RMSE_MIN,
+                    "diverse_centroid_shift_min": _DIVERSE_CENTROID_SHIFT_MIN,
+                },
                 "thresholds": {
                     "mel_rmse_max": _MEL_RMSE_MAX,
                     "mss_max": _MSS_MAX,
@@ -1108,6 +1187,38 @@ def test_comparison_json_rejects_missing_pair_metrics(tmp_path: Path) -> None:
             synth_params=[_PARITY_SYNTH_PARAMS],
             pairs=["pedalboard-vs-surgepy"],
         )
+
+
+def test_backend_named_artifact_rejects_wav_label_swap(tmp_path: Path) -> None:
+    """A WAV moved under another backend name cannot match its persisted mel.
+
+    :param tmp_path: Temporary schema-v2 artifact root.
+    """
+    config = _config("pedalboard", 1)
+    samples = int(config.sample_rate * config.signal_duration_seconds)
+    time_axis = np.arange(samples, dtype=np.float32) / config.sample_rate
+    audio_by_backend = {
+        "pedalboard": np.sin(2 * np.pi * 220.0 * time_axis, dtype=np.float32),
+        "dawdreamer": np.sin(2 * np.pi * 440.0 * time_axis, dtype=np.float32),
+        "surgepy": np.sin(2 * np.pi * 880.0 * time_axis, dtype=np.float32),
+    }
+    sample_dir = tmp_path / "audio" / "sample_00"
+    mel_dir = tmp_path / "mel" / "sample_00"
+    sample_dir.mkdir(parents=True)
+    mel_dir.mkdir(parents=True)
+    swapped_labels = {
+        "pedalboard": "surgepy",
+        "dawdreamer": "dawdreamer",
+        "surgepy": "pedalboard",
+    }
+    for backend, mono in audio_by_backend.items():
+        stereo = np.stack([mono, mono])
+        wav_backend = swapped_labels[backend]
+        wavfile.write(sample_dir / f"{wav_backend}.wav", config.sample_rate, stereo.T)
+        np.save(mel_dir / f"{backend}.npy", make_spectrogram(stereo, config.sample_rate))
+
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
+        _assert_audio_and_mel_artifacts(tmp_path, 1)
 
 
 @pytest.mark.slow
