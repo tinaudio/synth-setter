@@ -405,7 +405,7 @@
       },
       "dawdreamer": {
         "index": 259,
-        "name": "A Osc 1 Shape"
+        "name": "A Osc 1 Sawtooth"
       },
       "surgepy": {
         "synth_side_id": 225,
@@ -427,7 +427,7 @@
       },
       "dawdreamer": {
         "index": 262,
-        "name": "A Osc 1 Sub Mix"
+        "name": "A Osc 1 Width"
       },
       "surgepy": {
         "synth_side_id": 228,
@@ -493,7 +493,7 @@
       },
       "dawdreamer": {
         "index": 260,
-        "name": "A Osc 1 Width 1"
+        "name": "A Osc 1 Pulse"
       },
       "surgepy": {
         "synth_side_id": 226,
@@ -515,7 +515,7 @@
       },
       "dawdreamer": {
         "index": 261,
-        "name": "A Osc 1 Width 2"
+        "name": "A Osc 1 Triangle"
       },
       "surgepy": {
         "synth_side_id": 227,
@@ -559,7 +559,7 @@
       },
       "dawdreamer": {
         "index": 271,
-        "name": "A Osc 2 Shape"
+        "name": "A Osc 2 Sawtooth"
       },
       "surgepy": {
         "synth_side_id": 237,
@@ -581,7 +581,7 @@
       },
       "dawdreamer": {
         "index": 274,
-        "name": "A Osc 2 Sub Mix"
+        "name": "A Osc 2 Width"
       },
       "surgepy": {
         "synth_side_id": 240,
@@ -647,7 +647,7 @@
       },
       "dawdreamer": {
         "index": 272,
-        "name": "A Osc 2 Width 1"
+        "name": "A Osc 2 Pulse"
       },
       "surgepy": {
         "synth_side_id": 238,
@@ -669,7 +669,7 @@
       },
       "dawdreamer": {
         "index": 273,
-        "name": "A Osc 2 Width 2"
+        "name": "A Osc 2 Triangle"
       },
       "surgepy": {
         "synth_side_id": 239,
@@ -713,7 +713,7 @@
       },
       "dawdreamer": {
         "index": 283,
-        "name": "A Osc 3 Shape"
+        "name": "A Osc 3 Sawtooth"
       },
       "surgepy": {
         "synth_side_id": 249,
@@ -735,7 +735,7 @@
       },
       "dawdreamer": {
         "index": 286,
-        "name": "A Osc 3 Sub Mix"
+        "name": "A Osc 3 Width"
       },
       "surgepy": {
         "synth_side_id": 252,
@@ -801,7 +801,7 @@
       },
       "dawdreamer": {
         "index": 284,
-        "name": "A Osc 3 Width 1"
+        "name": "A Osc 3 Pulse"
       },
       "surgepy": {
         "synth_side_id": 250,
@@ -823,7 +823,7 @@
       },
       "dawdreamer": {
         "index": 285,
-        "name": "A Osc 3 Width 2"
+        "name": "A Osc 3 Triangle"
       },
       "surgepy": {
         "synth_side_id": 251,

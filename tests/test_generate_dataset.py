@@ -59,10 +59,11 @@ from synth_setter.data.vst.shapes import (
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
     PARAM_ARRAY_FIELD,
+    dataset_field_shapes,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
-from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
+from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt, split_for_shard
 from synth_setter.pipeline.schemas.render_metrics import (
     RenderRejectionMetrics,
     render_metrics_path,
@@ -92,6 +93,25 @@ _REAL_PLUGIN_VST3 = (
 # .so, so generate()'s renderer-version guard passes with no real plugin.
 _TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / "TestPlugin.vst3"
 _TEST_PLUGIN_VERSION = "1.0.0-test"
+
+
+def _worker_shard_staging_path(root: Path, spec: DatasetSpec, shard_id: int) -> Path:
+    """Return the fake-R2 staging directory for one worker shard attempt.
+
+    :param root: Local-filesystem root backing the ``r2:`` remote.
+    :param spec: Dataset whose R2 layout owns the attempt.
+    :param shard_id: Shard identity encoded in the staging path.
+    :returns: Worker staging directory for the shard.
+    """
+    return (
+        root
+        / spec.r2.bucket
+        / spec.r2.prefix
+        / "metadata"
+        / "workers"
+        / "shards"
+        / f"shard-{shard_id:06d}"
+    )
 
 
 def test_generate_dataset_removed_oci_compute_option_exits_nonzero() -> None:
@@ -765,17 +785,63 @@ def test_from_hydra_dawdreamer_experiment_forwards_backend_and_uploads_shard(
     backend_index = captured_renderer_argv.index("--renderer_backend")
     assert captured_renderer_argv[backend_index + 1] == "dawdreamer"
     shard = spec.shards[0]
-    # The rendered Lance shard stages a complete attempt (sidecar + stats + .valid).
-    staging = (
-        fake_r2_remote
-        / spec.r2.bucket
-        / spec.r2.prefix
-        / "metadata"
-        / "workers"
-        / "shards"
-        / f"shard-{shard.shard_id:06d}"
-    )
+    staging = _worker_shard_staging_path(fake_r2_remote, spec, shard.shard_id)
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_dawdreamer_settles_real_preset_before_writing_shard(
+    cfg_dataset_dawdreamer: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The public operator renders a real shard from settled DawDreamer identities.
+
+    :param cfg_dataset_dawdreamer: Composed DawDreamer smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Configures the single local worker process.
+    :param tmp_path: Finalize workspace.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_dawdreamer):
+        cfg_dataset_dawdreamer.output_format = "lance"
+        cfg_dataset_dawdreamer.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_dawdreamer.mask_degenerate_bins = True
+        cfg_dataset_dawdreamer.render.samples_per_shard = 2
+        cfg_dataset_dawdreamer.synth.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset_dawdreamer.synth.plugin_state_path = str(
+            (_REPO_ROOT / "presets/surge-base.vstpreset").resolve()
+        )
+        cfg_dataset_dawdreamer.r2.prefix = "fake-r2/dawdreamer-settled-run/"
+        cfg_dataset_dawdreamer.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_dawdreamer)
+    from_hydra(cfg_dataset_dawdreamer)
+
+    shard = spec.shards[0]
+    staging = _worker_shard_staging_path(fake_r2_remote, spec, shard.shard_id)
+    assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+    finalize_dir = tmp_path / "finalize"
+    finalize_dir.mkdir()
+    finalize_lance(spec, finalize_dir)
+    split = split_for_shard(spec, shard.shard_id)
+    dataset_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / f"{split}.lance"
+    table = lance.dataset(dataset_path).to_table(columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD])
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
+    expected_shapes = dataset_field_shapes(spec.render, spec.num_params)
+
+    assert audio.shape == expected_shapes[AUDIO_FIELD]
+    assert params.shape == expected_shapes[PARAM_ARRAY_FIELD]
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) <= 1.0
+    assert np.any(audio != 0.0)
+    assert np.isfinite(params).all()
+    assert ((params >= 0.0) & (params <= 1.0)).all()
 
 
 def test_from_hydra_surgepy_experiment_forwards_backend_and_uploads_shard(

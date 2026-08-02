@@ -29,6 +29,7 @@ def _manifest(path: Path) -> Path:
                 "type": "project",
                 "plugins": {"example/synth": "1.2.3"},
                 "vst3Bundles": {"example/synth": "Example Synth.vst3"},
+                "vst3Versions": {"example/synth": "4.5.6"},
             }
         )
     )
@@ -48,6 +49,29 @@ def test_manifest_load_valid_project_returns_pinned_plugin(tmp_path: Path) -> No
     assert plugin.version == "1.2.3"
     assert plugin.bundle == "Example Synth.vst3"
     assert plugin.reference == "example/synth@1.2.3"
+    assert manifest.vst3_versions == {"example/synth": "4.5.6"}
+
+
+def test_committed_manifests_match_the_plugin_manifest_contract() -> None:
+    """Repository manifests remain consumable by the plugin installer."""
+    project_root = Path(__file__).parents[1]
+    for filename in ("studiorack-cardinal.json", "studiorack.json"):
+        PluginManifest.load(project_root / filename)
+
+
+def test_manifest_load_without_vst3_versions_preserves_legacy_contract(tmp_path: Path) -> None:
+    """Runtime-version metadata is optional.
+
+    :param tmp_path: Scratch root for the legacy manifest.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    del payload["vst3Versions"]
+    path.write_text(json.dumps(payload))
+
+    manifest = PluginManifest.load(path)
+
+    assert manifest.vst3_versions is None
 
 
 def test_manifest_resolve_unknown_package_raises(tmp_path: Path) -> None:
@@ -82,11 +106,34 @@ def test_install_plugins_missing_executable_raises(tmp_path: Path) -> None:
     """
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
 
+    artifact_lock = tmp_path / "studiorack.lock.json"
+    artifact_lock.write_text("{}")
+
     with pytest.raises(FileNotFoundError, match="npm ci"):
         install_plugins(
             (plugin,),
+            artifact_lock=artifact_lock,
             plugins_dir=tmp_path / "managed",
             studiorack_executable=tmp_path / "missing-studiorack",
+        )
+
+
+def test_install_plugins_missing_artifact_lock_raises(tmp_path: Path) -> None:
+    """Installation refuses to run without repository-controlled artifact pins.
+
+    :param tmp_path: Scratch root without an artifact lock.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    executable = tmp_path / "studiorack"
+    executable.write_text("#!/usr/bin/env bash\nexit 0\n")
+    executable.chmod(0o755)
+
+    with pytest.raises(FileNotFoundError, match="artifact lock"):
+        install_plugins(
+            (plugin,),
+            artifact_lock=tmp_path / "missing.lock.json",
+            plugins_dir=tmp_path / "managed",
+            studiorack_executable=executable,
         )
 
 
@@ -104,17 +151,68 @@ def test_manifest_load_unpinned_version_rejected(tmp_path: Path) -> None:
         PluginManifest.load(path)
 
 
-def test_manifest_load_bundle_keys_differ_from_plugins_rejected(tmp_path: Path) -> None:
-    """Every package must name its expected VST3 bundle.
+@pytest.mark.parametrize("field", ["vst3Bundles", "vst3Versions"])
+def test_manifest_load_metadata_keys_differ_from_plugins_rejected(
+    tmp_path: Path, field: str
+) -> None:
+    """Every package must carry bundle and runtime-version metadata.
+
+    :param tmp_path: Scratch root for the test manifest.
+    :param field: Metadata mapping corrupted for the scenario.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    payload[field] = {"other/synth": "Example Synth.vst3"}
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValidationError, match="same package keys"):
+        PluginManifest.load(path)
+
+
+def test_manifest_load_vst3_prerelease_with_build_metadata_accepted(tmp_path: Path) -> None:
+    """Exact runtime versions may carry both prerelease and build metadata.
 
     :param tmp_path: Scratch root for the test manifest.
     """
     path = _manifest(tmp_path / "studiorack.json")
     payload = json.loads(path.read_text())
-    payload["vst3Bundles"] = {"other/synth": "Example Synth.vst3"}
+    payload["vst3Versions"]["example/synth"] = "4.5.6-rc.1+build.7"
     path.write_text(json.dumps(payload))
 
-    with pytest.raises(ValidationError, match="same package keys"):
+    manifest = PluginManifest.load(path)
+
+    assert manifest.vst3_versions == {"example/synth": "4.5.6-rc.1+build.7"}
+
+
+@pytest.mark.parametrize("version", ["4.5.6-rc..1", "4.5.6+build..7"])
+def test_manifest_load_vst3_version_with_empty_identifier_rejected(
+    tmp_path: Path, version: str
+) -> None:
+    """Runtime versions reject empty prerelease and build identifiers.
+
+    :param tmp_path: Scratch root for the test manifest.
+    :param version: Malformed runtime version for the scenario.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    payload["vst3Versions"]["example/synth"] = version
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValidationError, match="VST3 version must be an exact semantic version"):
+        PluginManifest.load(path)
+
+
+def test_manifest_load_unpinned_vst3_version_rejected(tmp_path: Path) -> None:
+    """Runtime version ranges are rejected at the manifest boundary.
+
+    :param tmp_path: Scratch root for the test manifest.
+    """
+    path = _manifest(tmp_path / "studiorack.json")
+    payload = json.loads(path.read_text())
+    payload["vst3Versions"]["example/synth"] = "^4.5.6"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValidationError, match="VST3 version must be an exact semantic version"):
         PluginManifest.load(path)
 
 
@@ -195,8 +293,11 @@ def test_install_plugins_adopts_native_installer_bundle(
     executable.chmod(0o755)
     monkeypatch.setenv("STUDIORACK_TEST_BUNDLE", str(bundle))
 
+    artifact_lock = tmp_path / "studiorack.lock.json"
+    artifact_lock.write_text("{}")
     install_plugins(
         (plugin,),
+        artifact_lock=artifact_lock,
         plugins_dir=tmp_path / "managed",
         studiorack_executable=executable,
         system_dirs=(system_dir,),
@@ -359,6 +460,7 @@ def test_plugins_cli_link_without_selection_links_only_installed_packages(tmp_pa
     payload = json.loads(manifest_path.read_text())
     payload["plugins"]["missing/synth"] = "2.0.0"
     payload["vst3Bundles"]["missing/synth"] = "Missing Synth.vst3"
+    payload["vst3Versions"]["missing/synth"] = "2.0.0"
     manifest_path.write_text(json.dumps(payload))
     managed = tmp_path / "managed"
     bundle = managed / "VST3/example/synth/1.2.3/Example Synth.vst3"
@@ -389,6 +491,8 @@ def test_plugins_cli_install_configures_studiorack_and_links_bundle(tmp_path: Pa
     :param tmp_path: Scratch root for the CLI boundary and call log.
     """
     manifest_path = _manifest(tmp_path / "studiorack.json")
+    artifact_lock = tmp_path / "studiorack.lock.json"
+    artifact_lock.write_text("{}")
     managed = tmp_path / "managed"
     bundle = managed / "VST3/example/synth/1.2.3/Example Synth.vst3"
     bundle.mkdir(parents=True)
@@ -424,6 +528,7 @@ def test_plugins_cli_install_configures_studiorack_and_links_bundle(tmp_path: Pa
     assert result.exit_code == 0, result.output
     assert [json.loads(line) for line in calls.read_text().splitlines()] == [
         ["config", "set", "pluginsDir", str(managed.resolve())],
+        ["config", "set", "artifactLockPath", str(artifact_lock.resolve())],
         ["plugins", "install", "example/synth@1.2.3"],
     ]
     alias = tmp_path / "checkout/plugins/Example Synth.vst3"
