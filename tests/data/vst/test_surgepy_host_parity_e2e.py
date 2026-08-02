@@ -425,15 +425,17 @@ def _onset_rows(
 
 def _diagnostic_onset_rows(
     results: dict[ParityBackend, _BackendResult],
+    sample_rate: int,
 ) -> list[DiagnosticOnsetRow]:
     """Return optional onset diagnostics without rejecting silent random rows.
 
     :param results: Materialized artifacts keyed by backend.
+    :param sample_rate: Rendered audio sample rate in Hz.
     :returns: Per-render onset samples, retaining ``None`` for silence.
     """
     requested_sample = _sample_index_at_or_after(
         _HARDCODED_NOTE_PARAMS["note_start_and_end"][0],
-        _random_patch_config("pedalboard").sample_rate,
+        sample_rate,
     )
     rows: list[DiagnosticOnsetRow] = []
     for backend, result in results.items():
@@ -601,9 +603,9 @@ def _diagnostic_benchmark_entries(
         pair_prefix = f"{prefix}/{pair}"
         entries.append(
             {
-                "name": f"{pair_prefix}/negative-rms-envelope-cosine-max",
-                "unit": "-cosine",
-                "value": -min(float(row["rms"]) for row in rows),
+                "name": f"{pair_prefix}/rms-envelope-cosine-loss-max",
+                "unit": "1-cos",
+                "value": max(float(row["rms_distance"]) for row in rows),
             }
         )
         for row in rows:
@@ -611,7 +613,7 @@ def _diagnostic_benchmark_entries(
             metric_values = (
                 ("mel-rmse", "mel_rmse", float(row["mel_rmse"])),
                 ("mss", "mss", float(row["mss"])),
-                ("negative-rms-envelope-cosine", "-cosine", -float(row["rms"])),
+                ("rms-envelope-cosine-loss", "1-cos", float(row["rms_distance"])),
                 ("rms-envelope-cosine-distance", "1-cos", float(row["rms_distance"])),
                 ("sot", "sot", float(row["sot"])),
                 ("wmfcc", "wmfcc", float(row["wmfcc"])),
@@ -1228,7 +1230,8 @@ def _collect_random_diagnostics(
     )
     _assert_structural_artifact_contract(workload, results, _RANDOM_PATCH_COUNT)
     assert np.unique(results["pedalboard"].params, axis=0).shape[0] == _RANDOM_PATCH_COUNT
-    return results, _pair_metrics(results), _diagnostic_onset_rows(results)
+    sample_rate = _random_patch_config("pedalboard").sample_rate
+    return results, _pair_metrics(results), _diagnostic_onset_rows(results, sample_rate)
 
 
 def _run_parity_workload(
@@ -1368,7 +1371,7 @@ def test_random_patch_sampler_same_seed_reproduces_full_param_corpus() -> None:
     assert len(patches) == _RANDOM_PATCH_COUNT
     assert {frozenset(patch) for patch in patches} == {frozenset(expected_names)}
     assert {len(patch) for patch in patches} == {_SURGE_SYNTH_PARAMETER_COUNT}
-    assert len({json.dumps(patch, sort_keys=True) for patch in patches}) == 30
+    assert len({json.dumps(patch, sort_keys=True) for patch in patches}) == _RANDOM_PATCH_COUNT
     assert hashlib.sha256(serialized).hexdigest() == (
         "4ec13bc7daf6da143ad7050dad18a34645ad091dd9bc5348cce4abee8c71fab8"
     )
@@ -1411,12 +1414,12 @@ def test_random_diagnostic_entries_retain_out_of_limit_metric_rows() -> None:
     prefix = "surge-host-parity/random-patches/pedalboard-vs-surgepy"
     assert values[f"{prefix}/sample-07/mel-rmse"] == 50.0
     assert values[f"{prefix}/sample-07/mss"] == 60.0
-    assert values[f"{prefix}/sample-07/negative-rms-envelope-cosine"] == -0.5
+    assert values[f"{prefix}/sample-07/rms-envelope-cosine-loss"] == 0.5
     assert values[f"{prefix}/sample-07/rms-envelope-cosine-distance"] == 0.5
     assert values[f"{prefix}/sample-07/sot"] == 0.1
     assert values[f"{prefix}/sample-07/wmfcc"] == 20.0
     assert values[f"{prefix}/mel_rmse-max"] == 50.0
-    assert values[f"{prefix}/negative-rms-envelope-cosine-max"] == -0.5
+    assert values[f"{prefix}/rms-envelope-cosine-loss-max"] == 0.5
 
 
 @pytest.mark.parametrize("workload", ["repeated-patch", "diverse-patches"])

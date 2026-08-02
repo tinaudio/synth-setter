@@ -129,10 +129,10 @@ more than two samples. Failures identify the workload, backend or pair, and samp
 `random-patches` is diagnostic-only. No audio-quality or onset-parity limit is
 asserted for its rows; the dashboard emits every per-row value and each pair's worst
 value. Because the bucket uses `customSmallerIsBetter`, dashboard cosine series store
-negative RMS cosine while schema-v2 metrics retain raw cosine and cosine distance.
-This keeps every chart direction honest: a lower raw cosine produces a larger, worse
-negative-cosine value. Green means all 30 fixed patches rendered through the
-production Lance path,
+RMS cosine loss (`1 - cosine`) while schema-v2 metrics retain raw cosine and cosine
+distance. This keeps every chart nonnegative and smaller-is-better without inverting
+percentage alerts. Green means all 30 fixed patches rendered through the production
+Lance path,
 shared encoded parameter rows remained byte-identical across hosts, schema-v2
 artifacts were consumed, and diagnostics were recorded. It does **not** mean
 full-dimensional host parity passed. Sample 1 is known to fall just below the normal
