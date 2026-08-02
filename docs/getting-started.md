@@ -537,15 +537,13 @@ nothing:
 journalctl --since "1 hour ago" | grep -E "earlyoom.*(SIGTERM|SIGKILL)"
 ```
 
-The usual cause is dataloader workers. `num_workers` applies to *each*
-dataloader, and the VST config keeps positive worker pools persistent between
-epochs. Setting `num_workers=0` automatically disables persistence. Enabling
-validation doubles the live worker count — a run that
-fits with `limit_val_batches: 0` can be killed once validation is on. Lance
-workers are heavy, so the count matters more than it looks: a measured
-`surge_lance` train pool alone is ~6 GB at 2 workers and ~19 GB at 11, and a
-concurrent validation pool roughly doubles the worker share. At 11 workers that
-exceeds a 32 GB host. If a run is killed, lower it below the default:
+The usual cause is dataloader workers. `num_workers` controls the train, test,
+and predict loaders; `val_num_workers` controls validation and defaults to `0`
+for both VST and TorchSynth training. The VST config keeps positive worker pools
+persistent between epochs, while a zero worker count automatically disables
+persistence for that loader. Lance workers are heavy, so the count matters more
+than it looks: a measured `surge_lance` train pool alone is ~6 GB at 2 workers
+and ~19 GB at 11. If a run is killed, lower it below the default:
 
 ```bash
 python -m synth_setter.cli.train experiment=surge/ffn_simple datamodule=surge_lance \
@@ -554,7 +552,9 @@ python -m synth_setter.cli.train experiment=surge/ffn_simple datamodule=surge_la
 
 Raising it rarely helps. On a GPU-bound run, throughput is flat from 2 to 11
 workers while memory grows linearly, so extra workers only prefetch batches the
-GPU cannot consume. Size up only if the GPU is starved (low utilisation).
+GPU cannot consume. Size up only if the GPU is starved (low utilisation). Opting
+validation into workers can create a concurrent second pool, so budget both
+counts against host RAM.
 
 Pair a long run with a checkpoint interval shorter than the run's survival time
 (`callbacks.model_checkpoint.every_n_train_steps`) — a run killed inside its own

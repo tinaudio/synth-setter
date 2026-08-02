@@ -293,7 +293,9 @@ Datasets are Lance: `datamodule=surge_lance` reads `train/val/test.lance` datase
 the format the data pipeline's finalize step emits — via `LanceVSTDataModule`
 (`src/synth_setter/data/lance_datamodule.py`). It uses sample-indexed `LanceMapDataset`
 instances with standard PyTorch batching, shuffling, worker persistence, and Lightning DDP
-sampler replacement. `lance_iterable_dataloader` in `src/synth_setter/data/lance_torch.py`
+sampler replacement. Train, test, and predict loaders use `datamodule.num_workers`; validation
+uses `datamodule.val_num_workers`, which defaults to in-process loading. `lance_iterable_dataloader`
+in `src/synth_setter/data/lance_torch.py`
 remains available for native sequential streaming with `batch_size=None`; both native factories
 accept `storage_options` for direct R2 reads. The shipped `src/synth_setter/configs/datamodule/surge*.yaml` default `dataset_root` to the per-run Hydra
 output dir; a fixed dataset is pinned by overriding to the storage-spec provenance layout:

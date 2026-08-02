@@ -1114,12 +1114,12 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
-    """Run one spawned-worker train, val, and test step from Lance shards.
+    """Run train, validation, and test steps with split-specific Lance workers.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
-    reads end-to-end through the in-process ``train(cfg)`` entrypoint with
-    spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
-    fixture. Also pins the
+    reads end-to-end through the in-process ``train(cfg)`` entrypoint. Training
+    and test use a worker while validation uses the in-process default; the Hydra
+    composition path lives on the ``cfg_train_lance`` fixture. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
@@ -1133,8 +1133,11 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
 
     # Pin the Dataset-API migration e2e: the split the datamodule trained over
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
-    train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
+    datamodule = object_dict["datamodule"]
+    train_split = Path(datamodule.dataset_root) / "train.lance"
     assert train_split.is_dir()
+    assert datamodule.num_workers == 1
+    assert datamodule.val_num_workers == 0
 
 
 def test_train_fast_dev_run_sketch_tokens_lance(
