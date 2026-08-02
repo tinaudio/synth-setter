@@ -145,6 +145,8 @@ torch = [
   "timm==1.0.28",
   # Commit-pinned until TinyMU publishes a package release.
   "tinymu @ git+https://github.com/ktinubu/TinyMU@fef8564593fceb5625c10f56a46b256216e7173d",
+  # Commit-pinned; package metadata below limits installation to the 16 kHz VAE closure.
+  "meanaudio @ git+https://github.com/xiquan-li/MeanAudio.git@8740a3e8df4c891a8d9deee1f820d051584d2671",
   # Commit-pinned: upstream has no PyPI release or Git tags. Package-scoped metadata
   # below relaxes its torch pins without changing cpu/cu128 wheel routing.
   "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
@@ -295,6 +297,20 @@ requires-dist = [
   "transformers>=5.8.0",
 ]
 
+# Upstream ships full text-to-audio app metadata, including numpy<2.1 and timm>=1.0.12.
+# The adapter imports only this package-scoped mel/VAE closure.
+[[tool.uv.dependency-metadata]]
+name = "meanaudio"
+version = "1.0.0"
+requires-dist = [
+  "einops>=0.6",
+  "huggingface-hub>=0.26",
+  "librosa>=0.8.1",
+  "numpy>=1.21",
+  "omegaconf",
+  "torch>=2.5.1",
+]
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
@@ -389,6 +405,7 @@ markers = [
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
   "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
+  "meanaudio_e2e: real-weight MeanAudio VAE tests with an immutable HF checkpoint (own GHA workflow)",
   "same_e2e: real-weight SAME encoder tests with immutable HF checkpoints (own GHA workflow)",
 ]
 minversion = "6.0"
