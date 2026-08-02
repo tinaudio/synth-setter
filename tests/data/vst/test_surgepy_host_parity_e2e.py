@@ -601,19 +601,11 @@ def _diagnostic_benchmark_entries(
     prefix = f"surge-host-parity/{workload}"
     for pair, rows in pair_rows.items():
         pair_prefix = f"{prefix}/{pair}"
-        entries.append(
-            {
-                "name": f"{pair_prefix}/rms-envelope-cosine-loss-max",
-                "unit": "1-cos",
-                "value": max(float(row["rms_distance"]) for row in rows),
-            }
-        )
         for row in rows:
             sample_prefix = f"{pair_prefix}/sample-{int(row['sample']):02d}"
             metric_values = (
                 ("mel-rmse", "mel_rmse", float(row["mel_rmse"])),
                 ("mss", "mss", float(row["mss"])),
-                ("rms-envelope-cosine-loss", "1-cos", float(row["rms_distance"])),
                 ("rms-envelope-cosine-distance", "1-cos", float(row["rms_distance"])),
                 ("sot", "sot", float(row["sot"])),
                 ("wmfcc", "wmfcc", float(row["wmfcc"])),
@@ -1414,12 +1406,10 @@ def test_random_diagnostic_entries_retain_out_of_limit_metric_rows() -> None:
     prefix = "surge-host-parity/random-patches/pedalboard-vs-surgepy"
     assert values[f"{prefix}/sample-07/mel-rmse"] == 50.0
     assert values[f"{prefix}/sample-07/mss"] == 60.0
-    assert values[f"{prefix}/sample-07/rms-envelope-cosine-loss"] == 0.5
     assert values[f"{prefix}/sample-07/rms-envelope-cosine-distance"] == 0.5
     assert values[f"{prefix}/sample-07/sot"] == 0.1
     assert values[f"{prefix}/sample-07/wmfcc"] == 20.0
     assert values[f"{prefix}/mel_rmse-max"] == 50.0
-    assert values[f"{prefix}/rms-envelope-cosine-loss-max"] == 0.5
 
 
 @pytest.mark.parametrize("workload", ["repeated-patch", "diverse-patches"])

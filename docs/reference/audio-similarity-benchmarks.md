@@ -127,11 +127,11 @@ sample, and no backend may lag its independent Pedalboard/DawDreamer controls by
 more than two samples. Failures identify the workload, backend or pair, and sample.
 
 `random-patches` is diagnostic-only. No audio-quality or onset-parity limit is
-asserted for its rows; the dashboard emits every per-row value and each pair's worst
-value. Because the bucket uses `customSmallerIsBetter`, dashboard cosine series store
-RMS cosine loss (`1 - cosine`) while schema-v2 metrics retain raw cosine and cosine
-distance. This keeps every chart nonnegative and smaller-is-better without inverting
-percentage alerts. Green means all 30 fixed patches rendered through the production
+asserted for its rows. The dashboard emits every per-row distance and each pair's
+worst distance; schema-v2 metrics additionally retain raw RMS cosine alongside its
+canonical cosine distance. This avoids duplicate chart series and keeps the
+`customSmallerIsBetter` percentage alerts directionally honest. Green means all 30
+fixed patches rendered through the production
 Lance path,
 shared encoded parameter rows remained byte-identical across hosts, schema-v2
 artifacts were consumed, and diagnostics were recorded. It does **not** mean

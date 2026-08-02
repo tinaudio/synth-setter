@@ -74,14 +74,41 @@ def test_vst_slow_meanaudio_changes_trigger_real_eval_e2e(
 
 @pytest.mark.infra
 def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None:
-    """Pin the JSON handoff and benchmark bucket label required for publication.
+    """Pin the JSON handoff and benchmark action required for publication.
 
     :param project_root: Repo root holding ``.github/workflows/``.
     """
-    workflow_text = (project_root / ".github" / "workflows" / WORKFLOW_FILENAME).read_text()
+    workflow = cast(dict[str, object], load_workflow(project_root, WORKFLOW_FILENAME))
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    run_steps = cast(list[dict[str, object]], jobs["run_vst_slow_tests"]["steps"])
+    publish_steps = cast(list[dict[str, object]], jobs["publish_benchmarks"]["steps"])
+    filename = "surge-host-parity-random-patches.json"
 
-    assert workflow_text.count("surge-host-parity-random-patches.json") >= 3
-    assert "Surge host diagnostics (random patches)" in workflow_text
+    surface = next(
+        step
+        for step in run_steps
+        if step.get("name") == "Surface per-bucket bench JSON files on the runner"
+    )
+    upload = next(
+        step
+        for step in run_steps
+        if step.get("name") == "Upload benchmark JSON for the publish job"
+    )
+    publish = next(
+        step
+        for step in publish_steps
+        if step.get("name") == "Publish random-patch Surge host diagnostics"
+    )
+
+    assert filename in cast(str, surface["run"])
+    expected_upload_path = "${{ github.workspace }}/" + filename
+    assert expected_upload_path in cast(dict[str, str], upload["with"])["path"].splitlines()
+    assert publish["if"] == "hashFiles('surge-host-parity-random-patches.json') != ''"
+    assert str(publish["uses"]).startswith("benchmark-action/github-action-benchmark@")
+    publish_inputs = cast(dict[str, object], publish["with"])
+    assert publish_inputs["name"] == "Surge host diagnostics (random patches)"
+    assert publish_inputs["tool"] == "customSmallerIsBetter"
+    assert publish_inputs["output-file-path"] == filename
 
 
 @pytest.mark.infra
