@@ -166,6 +166,23 @@ def test_sample_index_at_or_after_float_boundary_quantizes_event_exactly(
     assert _sample_index_at_or_after(event_time, 44_100) == expected_sample
 
 
+def test_align_native_attack_places_unmodified_source_after_silent_prefix() -> None:
+    """Alignment shifts the native attack without altering retained samples."""
+    audio = np.tile(np.arange(8, dtype=np.float32), (2, 1))
+
+    aligned = _align_native_attack(
+        audio,
+        samples=6,
+        start_sample=2,
+        source_start=1,
+    )
+
+    assert aligned.shape == (2, 6)
+    assert aligned.dtype == np.float32
+    np.testing.assert_array_equal(aligned[:, :2], np.zeros((2, 2), dtype=np.float32))
+    np.testing.assert_array_equal(aligned[:, 2:], audio[:, 1:5])
+
+
 def test_align_native_attack_undersized_source_raises() -> None:
     """Alignment rejects a native buffer that cannot fill the retained output."""
     audio = np.zeros((2, 31), dtype=np.float32)
