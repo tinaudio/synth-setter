@@ -74,7 +74,7 @@ def test_vst_slow_meanaudio_changes_trigger_real_eval_e2e(
 
 @pytest.mark.infra
 def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None:
-    """The real-VST workflow surfaces and publishes the random diagnostic series.
+    """Pin the JSON handoff and benchmark bucket label required for publication.
 
     :param project_root: Repo root holding ``.github/workflows/``.
     """

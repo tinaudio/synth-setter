@@ -138,12 +138,15 @@ class OnsetRow(TypedDict):
     onset_sample: int
     requested_sample: int
 
+
 _BACKENDS: tuple[ParityBackend, ...] = ("pedalboard", "dawdreamer", "surgepy")
 _TRUSTED_BACKENDS: tuple[ParityBackend, ...] = ("pedalboard", "dawdreamer")
 _REPEATED_RENDER_COUNT = 30
+_RANDOM_MIN_LOUDNESS = float("-inf")
 _RANDOM_PATCH_COUNT = 30
 _RANDOM_PATCH_SEED = 20260330
 _RANDOM_WORKLOAD = "random-patches"
+_SURGE_SYNTH_PARAMETER_COUNT = 162
 _RANDOM_LOUDNESS_OVERRIDE_RATIONALE = (
     "Sample 1 falls below the normal -55 dB validity floor; retaining the fixed corpus "
     "requires accepting every diagnostic render without rejection or resampling."
@@ -248,7 +251,7 @@ def _random_patch_config(backend: ParityBackend) -> RenderConfig:
     :param backend: Host selected for the real dataset path.
     :returns: Random-workload config with loudness rejection disabled.
     """
-    return _config(backend, _RANDOM_PATCH_COUNT, min_loudness=float("-inf"))
+    return _config(backend, _RANDOM_PATCH_COUNT, min_loudness=_RANDOM_MIN_LOUDNESS)
 
 
 def _sample_random_patches(config: RenderConfig, *, seed: int) -> list[dict[str, float]]:
@@ -598,9 +601,9 @@ def _diagnostic_benchmark_entries(
         pair_prefix = f"{prefix}/{pair}"
         entries.append(
             {
-                "name": f"{pair_prefix}/rms-envelope-cosine-min",
-                "unit": "cosine",
-                "value": min(float(row["rms"]) for row in rows),
+                "name": f"{pair_prefix}/negative-rms-envelope-cosine-max",
+                "unit": "-cosine",
+                "value": -min(float(row["rms"]) for row in rows),
             }
         )
         for row in rows:
@@ -608,7 +611,7 @@ def _diagnostic_benchmark_entries(
             metric_values = (
                 ("mel-rmse", "mel_rmse", float(row["mel_rmse"])),
                 ("mss", "mss", float(row["mss"])),
-                ("rms-envelope-cosine", "cosine", float(row["rms"])),
+                ("negative-rms-envelope-cosine", "-cosine", -float(row["rms"])),
                 ("rms-envelope-cosine-distance", "1-cos", float(row["rms_distance"])),
                 ("sot", "sot", float(row["sot"])),
                 ("wmfcc", "wmfcc", float(row["wmfcc"])),
@@ -726,12 +729,10 @@ def _comparison_manifest(
                     "api": "resolve_param_spec(config.param_spec_name).sample(rng)",
                     "generator": "numpy.random.default_rng",
                     "seed": _RANDOM_PATCH_SEED,
-                    "synth_parameter_count": len(
-                        resolve_param_spec(config.param_spec_name).synth_params
-                    ),
+                    "synth_parameter_count": _SURGE_SYNTH_PARAMETER_COUNT,
                 },
                 "loudness_policy": {
-                    "min_loudness_db": "-inf",
+                    "min_loudness_db": str(_RANDOM_MIN_LOUDNESS),
                     "rationale": _RANDOM_LOUDNESS_OVERRIDE_RATIONALE,
                 },
                 "onset_diagnostics": {
@@ -859,6 +860,7 @@ def _assert_structural_artifact_contract(
             assert np.all((result.params[sample] >= 0.0) & (result.params[sample] <= 1.0)), (
                 row_identity
             )
+            assert np.max(np.abs(result.audio[sample])) <= 1.0, row_identity
     np.testing.assert_array_equal(results["pedalboard"].params, results["dawdreamer"].params)
     np.testing.assert_array_equal(results["pedalboard"].params, results["surgepy"].params)
 
@@ -879,7 +881,6 @@ def _assert_artifact_contract(
         for sample in range(render_count):
             identity = {"workload": workload, "backend": backend, "sample": sample}
             assert np.max(np.abs(result.audio[sample])) > 1e-4, identity
-            assert np.max(np.abs(result.audio[sample])) <= 1.0, identity
 
 
 def _assert_manifest_artifact(output_dir: Path, workload: str, render_count: int) -> None:
@@ -907,10 +908,10 @@ def _assert_manifest_artifact(output_dir: Path, workload: str, render_count: int
             "api": "resolve_param_spec(config.param_spec_name).sample(rng)",
             "generator": "numpy.random.default_rng",
             "seed": _RANDOM_PATCH_SEED,
-            "synth_parameter_count": 162,
+            "synth_parameter_count": _SURGE_SYNTH_PARAMETER_COUNT,
         }
         assert manifest["loudness_policy"] == {
-            "min_loudness_db": "-inf",
+            "min_loudness_db": str(_RANDOM_MIN_LOUDNESS),
             "rationale": _RANDOM_LOUDNESS_OVERRIDE_RATIONALE,
         }
         assert manifest["onset_diagnostics"]["asserted"] is False
@@ -1002,9 +1003,9 @@ def _assert_metrics_artifact(
         else:
             assert type(row["onset_sample"]) is int
         assert type(row["requested_sample"]) is int
-    assert {
-        (row["backend"], row["sample"]) for row in metrics["onsets"]
-    } == set(product(_BACKENDS, range(render_count)))
+    assert {(row["backend"], row["sample"]) for row in metrics["onsets"]} == set(
+        product(_BACKENDS, range(render_count))
+    )
     assert set(metrics["pairwise"]) == set(pairs)
     for rows in metrics["pairwise"].values():
         assert len(rows) == render_count
@@ -1223,7 +1224,7 @@ def _collect_random_diagnostics(
         tmp_path,
         workload,
         synth_params,
-        min_loudness=float("-inf"),
+        min_loudness=_RANDOM_MIN_LOUDNESS,
     )
     _assert_structural_artifact_contract(workload, results, _RANDOM_PATCH_COUNT)
     assert np.unique(results["pedalboard"].params, axis=0).shape[0] == _RANDOM_PATCH_COUNT
@@ -1354,7 +1355,7 @@ def test_onset_gate_rejects_backend_lag() -> None:
 
 
 def test_random_patch_sampler_same_seed_reproduces_full_param_corpus() -> None:
-    """The real ParamSpec sampler reproduces the fixed full-dimensional corpus."""
+    """Pin the corpus hash so sampler changes cannot alter benchmark comparability."""
     config = _config("pedalboard", _RANDOM_PATCH_COUNT)
 
     patches = _sample_random_patches(config, seed=_RANDOM_PATCH_SEED)
@@ -1366,7 +1367,7 @@ def test_random_patch_sampler_same_seed_reproduces_full_param_corpus() -> None:
     expected_names = {parameter.name for parameter in param_spec.synth_params}
     assert len(patches) == _RANDOM_PATCH_COUNT
     assert {frozenset(patch) for patch in patches} == {frozenset(expected_names)}
-    assert {len(patch) for patch in patches} == {162}
+    assert {len(patch) for patch in patches} == {_SURGE_SYNTH_PARAMETER_COUNT}
     assert len({json.dumps(patch, sort_keys=True) for patch in patches}) == 30
     assert hashlib.sha256(serialized).hexdigest() == (
         "4ec13bc7daf6da143ad7050dad18a34645ad091dd9bc5348cce4abee8c71fab8"
@@ -1374,7 +1375,7 @@ def test_random_patch_sampler_same_seed_reproduces_full_param_corpus() -> None:
 
 
 def test_random_patch_sampler_different_seed_changes_ordered_corpus() -> None:
-    """A different seed changes the ordered ParamSpec sample corpus."""
+    """Ensure deterministic replay still depends on the supplied generator seed."""
     config = _config("pedalboard", _RANDOM_PATCH_COUNT)
 
     assert _sample_random_patches(config, seed=_RANDOM_PATCH_SEED) != _sample_random_patches(
@@ -1383,7 +1384,7 @@ def test_random_patch_sampler_different_seed_changes_ordered_corpus() -> None:
 
 
 def test_random_diagnostic_entries_retain_out_of_limit_metric_rows() -> None:
-    """Random diagnostics emit quality divergences without asserting limits."""
+    """Preserve diagnostic values that would fail the strict parity gates."""
     row: MetricRow = {
         "sample": 7,
         "mel_rmse": 50.0,
@@ -1410,17 +1411,17 @@ def test_random_diagnostic_entries_retain_out_of_limit_metric_rows() -> None:
     prefix = "surge-host-parity/random-patches/pedalboard-vs-surgepy"
     assert values[f"{prefix}/sample-07/mel-rmse"] == 50.0
     assert values[f"{prefix}/sample-07/mss"] == 60.0
-    assert values[f"{prefix}/sample-07/rms-envelope-cosine"] == 0.5
+    assert values[f"{prefix}/sample-07/negative-rms-envelope-cosine"] == -0.5
     assert values[f"{prefix}/sample-07/rms-envelope-cosine-distance"] == 0.5
     assert values[f"{prefix}/sample-07/sot"] == 0.1
     assert values[f"{prefix}/sample-07/wmfcc"] == 20.0
     assert values[f"{prefix}/mel_rmse-max"] == 50.0
-    assert values[f"{prefix}/rms-envelope-cosine-min"] == 0.5
+    assert values[f"{prefix}/negative-rms-envelope-cosine-max"] == -0.5
 
 
 @pytest.mark.parametrize("workload", ["repeated-patch", "diverse-patches"])
 def test_gated_workloads_reject_out_of_limit_random_metric_row(workload: str) -> None:
-    """Existing workloads continue to enforce quality limits.
+    """Protect strict parity gates from diagnostic-workload relaxation.
 
     :param workload: Published workload whose quality gates must remain active.
     """
@@ -1444,7 +1445,7 @@ def test_random_patch_config_scopes_loudness_override() -> None:
     diagnostic = _random_patch_config("pedalboard")
 
     assert regular.min_loudness == -55.0
-    assert diagnostic.min_loudness == float("-inf")
+    assert diagnostic.min_loudness == _RANDOM_MIN_LOUDNESS
 
 
 def test_pair_gate_reports_workload_backend_pair_and_sample() -> None:
@@ -1477,9 +1478,7 @@ def test_repeated_backend_stability_rejects_anomalous_render() -> None:
         mel=np.stack(
             [
                 np.zeros(_EXPECTED_MEL_SHAPE, dtype=np.float32),
-                np.full(
-                    _EXPECTED_MEL_SHAPE, 5.1, dtype=np.float32
-                ),
+                np.full(_EXPECTED_MEL_SHAPE, 5.1, dtype=np.float32),
             ]
         ),
         params=np.zeros((2, 1), dtype=np.float32),
@@ -1528,23 +1527,63 @@ def test_pair_metrics_accept_documented_boundary_values() -> None:
     "row",
     [
         pytest.param(
-            {"sample": 0, "mel_rmse": 5.1, "mss": 0.0, "rms": 1.0, "rms_distance": 0.0, "sot": 0.0, "wmfcc": 0.0},
+            {
+                "sample": 0,
+                "mel_rmse": 5.1,
+                "mss": 0.0,
+                "rms": 1.0,
+                "rms_distance": 0.0,
+                "sot": 0.0,
+                "wmfcc": 0.0,
+            },
             id="mel-rmse",
         ),
         pytest.param(
-            {"sample": 0, "mel_rmse": 0.0, "mss": 6.1, "rms": 1.0, "rms_distance": 0.0, "sot": 0.0, "wmfcc": 0.0},
+            {
+                "sample": 0,
+                "mel_rmse": 0.0,
+                "mss": 6.1,
+                "rms": 1.0,
+                "rms_distance": 0.0,
+                "sot": 0.0,
+                "wmfcc": 0.0,
+            },
             id="mss",
         ),
         pytest.param(
-            {"sample": 0, "mel_rmse": 0.0, "mss": 0.0, "rms": 0.98, "rms_distance": 0.02, "sot": 0.0, "wmfcc": 0.0},
+            {
+                "sample": 0,
+                "mel_rmse": 0.0,
+                "mss": 0.0,
+                "rms": 0.98,
+                "rms_distance": 0.02,
+                "sot": 0.0,
+                "wmfcc": 0.0,
+            },
             id="rms",
         ),
         pytest.param(
-            {"sample": 0, "mel_rmse": 0.0, "mss": 0.0, "rms": 1.0, "rms_distance": 0.0, "sot": 0.02, "wmfcc": 0.0},
+            {
+                "sample": 0,
+                "mel_rmse": 0.0,
+                "mss": 0.0,
+                "rms": 1.0,
+                "rms_distance": 0.0,
+                "sot": 0.02,
+                "wmfcc": 0.0,
+            },
             id="sot",
         ),
         pytest.param(
-            {"sample": 0, "mel_rmse": 0.0, "mss": 0.0, "rms": 1.0, "rms_distance": 0.0, "sot": 0.0, "wmfcc": 2.1},
+            {
+                "sample": 0,
+                "mel_rmse": 0.0,
+                "mss": 0.0,
+                "rms": 1.0,
+                "rms_distance": 0.0,
+                "sot": 0.0,
+                "wmfcc": 2.1,
+            },
             id="wmfcc",
         ),
     ],
@@ -1603,9 +1642,7 @@ def test_comparison_json_rejects_missing_pair_metrics(tmp_path: Path) -> None:
             {
                 "artifact_schema_version": 2,
                 "workload": "diverse-patches",
-                "backends": {
-                    backend: {"filename": f"{backend}.wav"} for backend in _BACKENDS
-                },
+                "backends": {backend: {"filename": f"{backend}.wav"} for backend in _BACKENDS},
                 "container_image": "local-vst",
                 "git_sha": "abc123",
                 "github_run_id": "local",
@@ -1660,9 +1697,7 @@ def test_comparison_json_rejects_missing_pair_metrics(tmp_path: Path) -> None:
         }
         for backend in _BACKENDS
     ]
-    (tmp_path / "metrics.json").write_text(
-        json.dumps({"onsets": onset_rows, "pairwise": {}})
-    )
+    (tmp_path / "metrics.json").write_text(json.dumps({"onsets": onset_rows, "pairwise": {}}))
 
     with pytest.raises(AssertionError):
         _assert_comparison_json_artifacts(
@@ -1751,7 +1786,7 @@ def test_surge_hosts_diverse_patches_have_per_render_parity(tmp_path: Path) -> N
 def test_surge_hosts_random_patches_record_diagnostics_without_quality_gate(
     tmp_path: Path,
 ) -> None:
-    """Every fixed full-dimensional patch renders and records diagnostics.
+    """Exercise production Lance persistence for ungated random-corpus diagnostics.
 
     :param tmp_path: Temporary destination for all three real Lance datasets.
     """
@@ -1761,7 +1796,7 @@ def test_surge_hosts_random_patches_record_diagnostics_without_quality_gate(
 
     results = _run_random_diagnostic_workload(tmp_path, synth_params)
 
-    assert all(len(patch) == 162 for patch in synth_params)
+    assert all(len(patch) == _SURGE_SYNTH_PARAMETER_COUNT for patch in synth_params)
     assert np.unique(results["pedalboard"].params, axis=0).shape[0] == _RANDOM_PATCH_COUNT
 
 
