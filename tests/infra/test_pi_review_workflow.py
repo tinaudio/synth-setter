@@ -65,10 +65,10 @@ def test_pi_review_workflow_triggers_for_pr_heads_and_cancels_stale_runs(
 
 
 @pytest.mark.infra
-def test_pi_review_workflow_secrets_are_restricted_to_owner_same_repo_prs(
+def test_pi_review_workflow_secrets_are_restricted_to_allowlisted_same_repo_prs(
     project_root: Path,
 ) -> None:
-    """Only owner-authored same-repository PRs can reach review secrets.
+    """Only allowlisted same-repository PRs can reach review secrets.
 
     :param project_root: Repository root containing the workflow.
     """
@@ -76,7 +76,7 @@ def test_pi_review_workflow_secrets_are_restricted_to_owner_same_repo_prs(
 
     assert job["if"] == (
         "${{ github.event.pull_request.head.repo.full_name == github.repository && "
-        "github.event.pull_request.author_association == 'OWNER' }}"
+        "github.event.pull_request.user.login == 'ktinubu' }}"
     )
     assert job["permissions"] == {
         "actions": "read",
