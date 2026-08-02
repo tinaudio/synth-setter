@@ -2186,6 +2186,13 @@ MAKE_STUB
 }
 it "worktree-post-setup: valid path → links assets and installs git hooks" T_wt_post_setup_runs_make_in_new_worktree
 
+#######################################
+# Verify a fresh worktree shares the primary VST fixture without Git dirtiness.
+# Outputs:
+#   Failure diagnostics to stdout.
+# Returns:
+#   0 when the fixture is shared cleanly, non-zero otherwise.
+#######################################
 T_link_plugins_reuses_primary_fixture_in_fresh_worktree() {
   local primary target
   primary="$TEST_DIR/plugin-primary-$$"
@@ -2214,6 +2221,13 @@ T_link_plugins_reuses_primary_fixture_in_fresh_worktree() {
 }
 it "link-plugins: fresh worktree → exposes primary VST fixture cleanly" T_link_plugins_reuses_primary_fixture_in_fresh_worktree
 
+#######################################
+# Verify a shared plugins link fails clearly after its primary target disappears.
+# Outputs:
+#   Failure diagnostics to stdout.
+# Returns:
+#   0 for the expected actionable failure, non-zero otherwise.
+#######################################
 T_link_plugins_dangling_primary_link_fails_loudly() {
   local out primary target
   primary="$TEST_DIR/plugin-missing-primary-$$"
