@@ -1217,7 +1217,7 @@ def test_backend_named_artifact_rejects_wav_label_swap(tmp_path: Path) -> None:
         wavfile.write(sample_dir / f"{wav_backend}.wav", config.sample_rate, stereo.T)
         np.save(mel_dir / f"{backend}.npy", make_spectrogram(stereo, config.sample_rate))
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="Not equal to tolerance"):
         _assert_audio_and_mel_artifacts(tmp_path, 1)
 
 
