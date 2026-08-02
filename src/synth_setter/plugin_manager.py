@@ -21,9 +21,10 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
-from collections.abc import Iterable, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -517,21 +518,58 @@ def _adoption_paths(
 
 
 def _managed_adoption_matches(managed: Path, source: Path) -> bool:
+    """Return whether a managed symlink still resolves to the adopted source.
+
+    :param managed: Expected managed alias path.
+    :param source: Resolved source bundle path.
+    :returns: Whether the live target equals the source; dangling targets do not match.
+    """
     target = runtime.managed_alias_target(managed)
-    return target is not None and target.resolve(strict=True) == source
+    if target is None:
+        return False
+    try:
+        return target.resolve(strict=True) == source
+    except FileNotFoundError:
+        return False
+
+
+def _bundle_snapshot(source: Path) -> AbstractContextManager[Path]:
+    """Copy one external bundle into private storage for inspection and sealing.
+
+    :param source: Installer- or caller-owned source bundle.
+    :returns: Context manager yielding a manager-owned immutable snapshot.
+    """
+
+    @contextmanager
+    def _snapshot() -> Iterator[Path]:
+        with tempfile.TemporaryDirectory(prefix="synth-setter-adopt-") as temporary:
+            snapshot = Path(temporary) / source.name
+            shutil.copytree(source, snapshot, symlinks=True)
+            yield snapshot
+
+    return _snapshot()
 
 
 def _reseal_adopted_bundle(
     plugin: ManagedPlugin,
-    source: Path,
+    snapshot: Path,
     managed: Path,
     *,
     locked_package: LockedPackage,
     source_kind: Literal["artifact-lock", "explicit"],
 ) -> Path:
+    """Replace invalid adoption records from one inspected source snapshot.
+
+    :param plugin: Exact package represented by the snapshot.
+    :param snapshot: Private copy inspected under the package lock.
+    :param managed: Existing managed source alias.
+    :param locked_package: Repository artifact identity.
+    :param source_kind: Registry-backed or explicit adoption provenance.
+    :returns: Resealed managed alias.
+    """
     runtime.record_managed_alias(managed, managed)
     seal_plugin_bundle(
-        source,
+        snapshot,
         plugin,
         locked_package=locked_package,
         record_for=managed,
@@ -543,13 +581,25 @@ def _reseal_adopted_bundle(
 def _create_adopted_bundle_alias(
     plugin: ManagedPlugin,
     source: Path,
+    snapshot: Path,
     managed: Path,
     *,
     locked_package: LockedPackage,
     source_kind: Literal["artifact-lock", "explicit"],
 ) -> Path:
+    """Publish an adopted source alias sealed from its private snapshot.
+
+    :param plugin: Exact package represented by the snapshot.
+    :param source: Installer- or caller-owned source bundle.
+    :param snapshot: Private copy inspected under the package lock.
+    :param managed: Managed alias to publish.
+    :param locked_package: Repository artifact identity.
+    :param source_kind: Registry-backed or explicit adoption provenance.
+    :returns: Published managed alias.
+    :raises OSError: Alias or ownership publication fails.
+    """
     seal_plugin_bundle(
-        source,
+        snapshot,
         plugin,
         locked_package=locked_package,
         record_for=managed,
@@ -620,24 +670,26 @@ def _adopt_plugin_bundle(
     if (managed.exists() or managed.is_symlink()) and not is_same_source:
         raise FileExistsError(f"refusing to replace managed bundle {managed}")
 
-    _require_renderer_version(plugin, source)
-    resolved_dir = plugins_dir.expanduser().resolve()
-    _ensure_managed_version_dir(version_dir, resolved_dir)
-    if is_same_source:
-        return _reseal_adopted_bundle(
+    with _bundle_snapshot(source) as snapshot:
+        _require_renderer_version(plugin, snapshot)
+        resolved_dir = plugins_dir.expanduser().resolve()
+        _ensure_managed_version_dir(version_dir, resolved_dir)
+        if is_same_source:
+            return _reseal_adopted_bundle(
+                plugin,
+                snapshot,
+                managed,
+                locked_package=locked_package,
+                source_kind=source_kind,
+            )
+        return _create_adopted_bundle_alias(
             plugin,
             source,
+            snapshot,
             managed,
             locked_package=locked_package,
             source_kind=source_kind,
         )
-    return _create_adopted_bundle_alias(
-        plugin,
-        source,
-        managed,
-        locked_package=locked_package,
-        source_kind=source_kind,
-    )
 
 
 def _snapshot_bundle(bundle: Path) -> list[BundleEntry] | None:

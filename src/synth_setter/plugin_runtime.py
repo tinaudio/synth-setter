@@ -13,9 +13,11 @@ Typical usage holds validation through plugin construction::
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import plistlib
+import shutil
 import stat
 import tempfile
 from collections.abc import Iterator
@@ -374,43 +376,78 @@ def _managed_from_publication(
     return None
 
 
+def _stable_alias_snapshot(
+    alias: Path,
+) -> tuple[ManagedAliasRecord | None, Path | None, _AliasPublicationTransaction | None] | None:
+    """Sample alias ownership and target across one stable transaction read.
+
+    :param alias: Consumer-facing alias under concurrent publication.
+    :returns: Ownership, target, and transaction, or ``None`` when publication changed.
+    :raises ValueError: A stable transaction names another alias.
+    """
+    _, transaction_path = managed_alias_paths(alias)
+    transaction_before = _optional_regular_text(
+        transaction_path,
+        "managed alias publication transaction",
+    )
+    ownership = _existing_alias_record(alias)
+    target = _absolute_alias_target(alias)
+    transaction_after = _optional_regular_text(
+        transaction_path,
+        "managed alias publication transaction",
+    )
+    if transaction_before != transaction_after:
+        return None
+    transaction = (
+        None
+        if transaction_before is None
+        else _AliasPublicationTransaction.model_validate_json(transaction_before)
+    )
+    if transaction is not None and Path(transaction.alias) != alias.absolute():
+        raise ValueError("managed alias publication transaction belongs to another alias")
+    return ownership, target, transaction
+
+
+def _adjudicate_alias_snapshot(
+    alias: Path,
+    ownership: ManagedAliasRecord | None,
+    target: Path | None,
+    transaction: _AliasPublicationTransaction | None,
+) -> tuple[bool, Path | None]:
+    """Resolve a sampled alias state to a final managed identity.
+
+    :param alias: Consumer-facing alias represented by the sample.
+    :param ownership: Stable ownership record, if present.
+    :param target: Stable lexical alias target, if present.
+    :param transaction: Stable in-progress publication, if present.
+    :returns: Final-state flag and managed bundle, where ``None`` may mean unmanaged.
+    """
+    if ownership is not None:
+        managed = Path(ownership.managed_bundle)
+        if managed == alias.absolute():
+            return True, alias
+        if target is None and alias.resolve(strict=True) == managed.resolve(strict=True):
+            return True, managed
+        if _target_matches_record(target, ownership):
+            return True, managed
+    if transaction is not None:
+        published = _managed_from_publication(target, ownership, transaction)
+        if published is not None:
+            return True, published
+    if ownership is None and transaction is None:
+        return True, None
+    return False, None
+
+
 def _runtime_alias_managed_bundle(alias: Path) -> Path | None:
     mismatch: ValueError | None = None
-    _, transaction_path = managed_alias_paths(alias)
     for _ in range(4):
-        transaction_before = _optional_regular_text(
-            transaction_path,
-            "managed alias publication transaction",
-        )
-        ownership = _existing_alias_record(alias)
-        target = _absolute_alias_target(alias)
-        transaction_after = _optional_regular_text(
-            transaction_path,
-            "managed alias publication transaction",
-        )
-        if transaction_before != transaction_after:
+        snapshot = _stable_alias_snapshot(alias)
+        if snapshot is None:
             continue
-        transaction = (
-            None
-            if transaction_before is None
-            else _AliasPublicationTransaction.model_validate_json(transaction_before)
-        )
-        if transaction is not None and Path(transaction.alias) != alias.absolute():
-            raise ValueError("managed alias publication transaction belongs to another alias")
-        if ownership is not None:
-            managed = Path(ownership.managed_bundle)
-            if managed == alias.absolute():
-                return alias
-            if target is None and alias.resolve(strict=True) == managed.resolve(strict=True):
-                return managed
-            if _target_matches_record(target, ownership):
-                return managed
-        if transaction is not None:
-            published = _managed_from_publication(target, ownership, transaction)
-            if published is not None:
-                return published
-        if ownership is None and transaction is None:
-            return None
+        is_stable, managed = _adjudicate_alias_snapshot(alias, *snapshot)
+        if is_stable:
+            return managed
         mismatch = ValueError("managed alias target does not match its ownership record")
     if mismatch is not None:
         raise mismatch
@@ -436,12 +473,94 @@ def _runtime_managed_bundle(bundle: Path) -> Path | None:
     raise ValueError("managed alias chain contains a cycle")
 
 
+def _snapshot_digest(seal: BundleSeal) -> str:
+    """Return the content-and-provenance key for a runtime snapshot.
+
+    :param seal: Validated managed content record.
+    :returns: Lowercase SHA256 key.
+    """
+    serialized = seal.model_dump_json(by_alias=True)
+    return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+def _remove_runtime_snapshot(path: Path) -> None:
+    """Remove one rejected snapshot without following a top-level symlink.
+
+    :param path: Snapshot path to remove when present.
+    """
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(mode):
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _ensure_runtime_snapshot_directory(path: Path) -> None:
+    """Create a private snapshot directory and reject symlink substitution.
+
+    :param path: Managed snapshot directory.
+    :raises ValueError: The resulting path is not a real directory.
+    """
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not stat.S_ISDIR(path.lstat().st_mode):
+        raise ValueError(f"runtime snapshot path is not a directory: {path}")
+
+
+def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) -> Path:
+    """Return manager-owned bytes matching an adopted source seal.
+
+    :param managed: Managed bundle whose top-level symlink marks adoption.
+    :param source: Resolved installer- or caller-owned content.
+    :param seal: Validated expected content and provenance.
+    :returns: Persistent managed snapshot, or the source for direct managed bundles.
+    :raises ValueError: Snapshot publication escapes storage or copies changed content.
+    """
+    try:
+        is_adopted = stat.S_ISLNK(managed.lstat().st_mode)
+    except FileNotFoundError:
+        is_adopted = False
+    if not is_adopted:
+        return source
+
+    snapshots = managed.parent / ".synth-setter-runtime-snapshots"
+    destination = snapshots / _snapshot_digest(seal) / managed.name
+    _ensure_runtime_snapshot_directory(snapshots)
+    _ensure_runtime_snapshot_directory(destination.parent)
+    try:
+        is_directory = stat.S_ISDIR(destination.lstat().st_mode)
+    except FileNotFoundError:
+        is_directory = False
+    try:
+        if is_directory and integrity.bundle_entries(destination) == seal.entries:
+            return destination
+    except ValueError:
+        pass
+    _remove_runtime_snapshot(destination)
+
+    with tempfile.TemporaryDirectory(dir=snapshots) as temporary:
+        candidate = Path(temporary) / managed.name
+        shutil.copytree(source, candidate, symlinks=True)
+        if integrity.bundle_entries(candidate) != seal.entries:
+            raise ValueError("managed source changed while creating its runtime snapshot")
+        os.replace(candidate, destination)
+    return destination
+
+
 def _validated_runtime_bundle_identity(bundle: Path) -> tuple[Path, Path, BundleSeal] | None:
+    """Resolve managed identity and immutable runtime content.
+
+    :param bundle: Candidate managed bundle or alias.
+    :returns: Managed path, consumable path, and seal, or ``None`` when unmanaged.
+    """
     managed = _runtime_managed_bundle(bundle)
     if managed is None:
         return None
     resolved_bundle, recorded = integrity.ManagedBundleStorage(managed).validate()
-    return managed, resolved_bundle, recorded
+    snapshot = _verified_runtime_snapshot(managed, resolved_bundle, recorded)
+    return managed, snapshot, recorded
 
 
 def _runtime_lock_path(
@@ -505,7 +624,7 @@ def _validated_runtime_identity_lease(
             with integrity.advisory_file_lock(lock_path):
                 try:
                     locked_candidate, identity = _locked_runtime_identity(bundle, lock_path)
-                except (FileNotFoundError, ValueError) as exc:
+                except (OSError, ValueError) as exc:
                     raise PluginIntegrityError(
                         f"{bundle} failed managed bundle integrity"
                     ) from exc
@@ -520,10 +639,12 @@ def _validated_runtime_identity_lease(
 
 
 def validated_bundle_lease(bundle: Path) -> AbstractContextManager[Path]:
-    """Lease validated content against same-path installation replacement.
+    """Lease validated content against managed or external-source replacement.
 
-    Entering the returned context raises :class:`PluginIntegrityError` when managed
-    ownership, provenance, or content is invalid.
+    Adopted external content is copied into a manager-owned snapshot and checked
+    against its seal before this context yields. Entering raises
+    :class:`PluginIntegrityError` when managed ownership, provenance, or content
+    is invalid.
 
     :param bundle: VST3 bundle or stable manager-owned alias.
     :returns: Context manager yielding validated content or the original unmanaged path.

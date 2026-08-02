@@ -88,10 +88,12 @@ its host-selected registry artifact with `studiorack.lock.json` before download.
 Studiorack stores archive packages under its versioned `pluginsDir`; native
 installers may use the platform VST3 directory. Before invoking a native
 installer, `synth-setter-plugins` atomically records candidate snapshots beneath
-the managed package version. A retry compares output with that original snapshot
-and resumes adoption without rerunning an installer that already changed its
-bundle. Native bundles remain installer-owned symlink targets; their managed
-content seal makes later target mutation fail closed before alias resolution.
+the managed package version. Transient failures retry the same pinned installer,
+even when an earlier attempt changed a candidate; adoption proceeds only after a
+successful installer exit and compares output with the original snapshot. Native
+bundles remain installer-owned symlink targets, but runtime consumption uses a
+manager-owned content snapshot verified against the seal. A source change during
+snapshotting fails closed before the plugin opens.
 
 The default managed directory is
 `~/.local/share/synth-setter/studiorack` on Linux and
