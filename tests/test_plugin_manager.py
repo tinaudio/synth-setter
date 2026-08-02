@@ -106,11 +106,34 @@ def test_install_plugins_missing_executable_raises(tmp_path: Path) -> None:
     """
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
 
+    artifact_lock = tmp_path / "studiorack.lock.json"
+    artifact_lock.write_text("{}")
+
     with pytest.raises(FileNotFoundError, match="npm ci"):
         install_plugins(
             (plugin,),
+            artifact_lock=artifact_lock,
             plugins_dir=tmp_path / "managed",
             studiorack_executable=tmp_path / "missing-studiorack",
+        )
+
+
+def test_install_plugins_missing_artifact_lock_raises(tmp_path: Path) -> None:
+    """Installation refuses to run without repository-controlled artifact pins.
+
+    :param tmp_path: Scratch root without an artifact lock.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    executable = tmp_path / "studiorack"
+    executable.write_text("#!/usr/bin/env bash\nexit 0\n")
+    executable.chmod(0o755)
+
+    with pytest.raises(FileNotFoundError, match="artifact lock"):
+        install_plugins(
+            (plugin,),
+            artifact_lock=tmp_path / "missing.lock.json",
+            plugins_dir=tmp_path / "managed",
+            studiorack_executable=executable,
         )
 
 
@@ -270,8 +293,11 @@ def test_install_plugins_adopts_native_installer_bundle(
     executable.chmod(0o755)
     monkeypatch.setenv("STUDIORACK_TEST_BUNDLE", str(bundle))
 
+    artifact_lock = tmp_path / "studiorack.lock.json"
+    artifact_lock.write_text("{}")
     install_plugins(
         (plugin,),
+        artifact_lock=artifact_lock,
         plugins_dir=tmp_path / "managed",
         studiorack_executable=executable,
         system_dirs=(system_dir,),
@@ -465,6 +491,8 @@ def test_plugins_cli_install_configures_studiorack_and_links_bundle(tmp_path: Pa
     :param tmp_path: Scratch root for the CLI boundary and call log.
     """
     manifest_path = _manifest(tmp_path / "studiorack.json")
+    artifact_lock = tmp_path / "studiorack.lock.json"
+    artifact_lock.write_text("{}")
     managed = tmp_path / "managed"
     bundle = managed / "VST3/example/synth/1.2.3/Example Synth.vst3"
     bundle.mkdir(parents=True)
@@ -500,6 +528,7 @@ def test_plugins_cli_install_configures_studiorack_and_links_bundle(tmp_path: Pa
     assert result.exit_code == 0, result.output
     assert [json.loads(line) for line in calls.read_text().splitlines()] == [
         ["config", "set", "pluginsDir", str(managed.resolve())],
+        ["config", "set", "artifactLockPath", str(artifact_lock.resolve())],
         ["plugins", "install", "example/synth@1.2.3"],
     ]
     alias = tmp_path / "checkout/plugins/Example Synth.vst3"

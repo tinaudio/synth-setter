@@ -290,6 +290,7 @@ def _run_studiorack(argv: Sequence[str]) -> None:
 def install_plugins(
     plugins: Iterable[ManagedPlugin],
     *,
+    artifact_lock: Path,
     plugins_dir: Path,
     studiorack_executable: Path,
     system_dirs: Iterable[Path] | None = None,
@@ -297,6 +298,7 @@ def install_plugins(
     """Install exact packages through the Studiorack CLI.
 
     :param plugins: Exact package metadata.
+    :param artifact_lock: Repository-controlled artifact lock for the selected manifest.
     :param plugins_dir: Absolute Studiorack storage root.
     :param studiorack_executable: Pinned CLI executable.
     :param system_dirs: Native-installer VST3 roots; platform defaults when omitted.
@@ -307,9 +309,13 @@ def install_plugins(
         raise FileNotFoundError(
             f"Studiorack CLI not found at {studiorack_executable}; run `npm ci` first"
         )
+    resolved_lock = artifact_lock.expanduser().resolve()
+    if not resolved_lock.is_file():
+        raise FileNotFoundError(f"Studiorack artifact lock does not exist: {resolved_lock}")
     resolved_dir = plugins_dir.expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
     _run_studiorack([executable, "config", "set", "pluginsDir", str(resolved_dir)])
+    _run_studiorack([executable, "config", "set", "artifactLockPath", str(resolved_lock)])
     roots = default_system_vst3_dirs() if system_dirs is None else tuple(system_dirs)
     for plugin in plugins:
         _run_studiorack([executable, "plugins", "install", plugin.reference])
