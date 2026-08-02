@@ -17,7 +17,11 @@ from synth_setter.models.components.pupujepa_encoder import (
     PupuJepaAudioEncoder,
     PupuJepaMelFrontend,
 )
-from synth_setter.pupujepa import PUPUJEPA_TINY_CONFIG, PupuJepaConfig
+from synth_setter.pupujepa import (
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_CONFIG,
+    PupuJepaConfig,
+)
 
 
 def _tiny_config() -> PupuJepaConfig:
@@ -316,6 +320,44 @@ def test_pupujepa_online_conditioning_overfits_fixed_batch() -> None:
 
     assert loss.item() < initial_loss.item() / 100
     assert loss.item() < 0.01
+
+
+@pytest.mark.slow
+def test_pupujepa_large_pool_overfits_fixed_teacher_states() -> None:
+    """The released 8,192-wide conditioning pool learns a fixed mapping."""
+    torch.manual_seed(0)
+    head = EmbeddingPool(
+        embed_dim=PUPUJEPA_LARGE_EMBEDDING_DIM,
+        d_model=8,
+        num_heads=1,
+        max_seq_len=1,
+    )
+    predictor = torch.nn.Linear(8, 2)
+    embeddings = torch.randn(2, PUPUJEPA_LARGE_EMBEDDING_DIM, 1)
+    targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
+    optimizer = torch.optim.Adam((*head.parameters(), *predictor.parameters()), lr=3e-3)
+
+    initial_loss = torch.nn.functional.mse_loss(predictor(head(embeddings)), targets)
+    loss = initial_loss
+    for _ in range(1_000):
+        optimizer.zero_grad()
+        loss = torch.nn.functional.mse_loss(predictor(head(embeddings)), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert loss.item() < initial_loss.item() / 100
+    assert loss.item() < 0.01
+
+
+def test_encoder_nonfinite_waveform_raises_value_error() -> None:
+    """Online waveforms reject non-finite values before teacher inference."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+    audio = torch.zeros(1, 256)
+    audio[0, 0] = torch.nan
+
+    with pytest.raises(ValueError, match="non-finite"):
+        encoder(audio)
 
 
 def test_encoder_empty_waveform_raises_value_error() -> None:

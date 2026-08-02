@@ -361,6 +361,8 @@ class PupuJepaAudioEncoder(nn.Module):
             )
         if audio.shape[-1] < 1:
             raise ValueError("PupuJEPA requires positive num_samples, got 0")
+        if not torch.isfinite(audio).all():
+            raise ValueError("PupuJEPA input audio contains non-finite values")
         if audio.ndim == 3:
             if audio.shape[1] not in (1, 2):
                 raise ValueError(f"PupuJEPA expects 1 or 2 channels, got {audio.shape[1]}")
