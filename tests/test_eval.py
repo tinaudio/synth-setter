@@ -1829,6 +1829,89 @@ def test_train_eval_embedding_conditioning_real_e2e(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.network
+def test_train_eval_pupujepa_large_conditioning_real_lance_returns_finite_metric(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train and validate cached PupuJEPA Large sequences through both entrypoints.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    validation_split = surge_xt_embedding_smoke_datasets / "val.lance"
+    shutil.rmtree(validation_split)
+    _render_smoke_train_subprocess(validation_split, param_spec_name, base_seed=1)
+    train_audio = lance.dataset(surge_xt_embedding_smoke_datasets / "train.lance").to_table(
+        columns=[AUDIO_FIELD]
+    )
+    validation_audio = lance.dataset(validation_split).to_table(columns=[AUDIO_FIELD])
+    train_rows = {
+        np.asarray(row.as_py(), dtype=np.float32).tobytes()
+        for row in train_audio.column(AUDIO_FIELD)
+    }
+    validation_rows = {
+        np.asarray(row.as_py(), dtype=np.float32).tobytes()
+        for row in validation_audio.column(AUDIO_FIELD)
+    }
+    assert train_rows.isdisjoint(validation_rows)
+    dataset_root = augment_lance_splits_with_embedding(
+        surge_xt_embedding_smoke_datasets, "pupujepa_large"
+    )
+
+    validation_mse = _assert_conditioning_train_validate_finite(
+        tmp_path,
+        dataset_root,
+        param_spec_name,
+        "pupujepa_large",
+    )
+    assert validation_mse < 2.0
+
+
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_eval_pupujepa_large_online_conditioning_returns_finite_metric(
+    tmp_path: Path,
+    cfg_torchsynth_pupujepa_large_online_train: DictConfig,
+) -> None:
+    """Train and validate real-weight PupuJEPA Large through both entrypoints.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param cfg_torchsynth_pupujepa_large_online_train: Two-row production-path config.
+    """
+    cfg_train = cfg_torchsynth_pupujepa_large_online_train
+    HydraConfig().set_config(cfg_train)
+    _, train_objects = train(cfg_train)
+    datamodule = train_objects["datamodule"]
+    datamodule.setup("fit")
+    train_params = next(iter(datamodule.train_dataloader()))["params"]
+    validation_params = next(iter(datamodule.val_dataloader()))["params"]
+    train_rows = {tuple(row.tolist()) for row in train_params}
+    validation_rows = {tuple(row.tolist()) for row in validation_params}
+    assert train_rows.isdisjoint(validation_rows)
+    checkpoint_path = tmp_path / "pupujepa-large-online.ckpt"
+    train_objects["trainer"].save_checkpoint(checkpoint_path)
+
+    cfg_eval = cfg_train.copy()
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(checkpoint_path)
+        cfg_eval.mode = "validate"
+        cfg_eval.trainer.limit_val_batches = 1
+    HydraConfig().set_config(cfg_eval)
+    try:
+        metric_dict, _ = evaluate(cfg_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    validation_mse = metric_dict["val/param_mse"].item()
+    assert math.isfinite(validation_mse)
+    assert validation_mse < 2.0
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
 @pytest.mark.integration_r2
 @pytest.mark.r2
 def test_train_eval_matpac_plus_conditioning_real_lance_returns_finite_metric(

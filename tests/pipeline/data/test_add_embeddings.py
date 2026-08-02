@@ -38,6 +38,7 @@ from synth_setter.data.vst.shapes import (
     CLAP_FIELD,
     M2L_FIELD,
     PARAM_ARRAY_FIELD,
+    PUPUJEPA_LARGE_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SKETCH_CENTROID_CHILD,
@@ -385,6 +386,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "clap",
         "m2l",
         "param_shift",
+        "pupujepa_large",
         "pupujepa_tiny",
         "same_l",
         "same_s",
@@ -418,11 +420,75 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["pupujepa_tiny"].co_resident is False
+    assert EMBEDDING_REGISTRY["pupujepa_large"].index == IndexSpec(
+        pool="mean", vector_column=f"{PUPUJEPA_LARGE_FIELD}_vec", vector_dim=8192
+    )
+    assert EMBEDDING_REGISTRY["pupujepa_large"].co_resident is False
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
     assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
+
+
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_loader_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Each PupuJEPA registry adapter selects its released teacher size.
+
+    :param monkeypatch: Fixture replacing heavyweight teacher loading.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_pupujepa_audio_encoder",
+        lambda checkpoint, *, device, variant: (
+            calls.append((checkpoint, device, variant)) or (lambda audio, rate: audio)
+        ),
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    spec.load_encoder(
+        "custom/pupujepa",
+        AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"),
+    )
+
+    assert calls == [("custom/pupujepa", "cpu", variant)]
+
+
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_artifact_identity_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Artifact identities hash only the selected teacher size.
+
+    :param monkeypatch: Fixture replacing checkpoint hashing.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.pupujepa_artifact_digest",
+        lambda checkpoint, selected: calls.append((checkpoint, selected)) or "digest",
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    identity = spec.resolve_artifact_identity("custom/pupujepa")
+
+    assert calls == [("custom/pupujepa", variant)]
+    assert "digest" in identity
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:

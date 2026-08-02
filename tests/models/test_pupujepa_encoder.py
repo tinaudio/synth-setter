@@ -11,13 +11,19 @@ import torch
 import yaml
 from safetensors.torch import save_file
 
+import synth_setter.models.components.pupujepa_encoder as pupujepa_encoder_module
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.pupujepa_encoder import (
     PupuJepaAudioEncoder,
     PupuJepaMelFrontend,
 )
-from synth_setter.pupujepa import PUPUJEPA_TINY_CONFIG, PupuJepaConfig
+from synth_setter.pupujepa import (
+    PUPUJEPA_LARGE_CONFIG,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_CONFIG,
+    PupuJepaConfig,
+)
 
 
 def _tiny_config() -> PupuJepaConfig:
@@ -282,6 +288,155 @@ def test_conditioning_training_step_updates_pool_not_teacher() -> None:
 
     assert not torch.equal(head.query, original_query)
     assert all(parameter.grad is None for parameter in backbone.parameters())
+
+
+@pytest.mark.slow
+def test_pupujepa_online_conditioning_overfits_fixed_batch() -> None:
+    """The trainable pool learns a fixed mapping from frozen teacher states."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PretrainedConditioningEncoder(
+        backbone=PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config),
+        head=EmbeddingPool(
+            embed_dim=config.output_dim,
+            d_model=8,
+            num_heads=1,
+            max_seq_len=4,
+        ),
+        out_dim=8,
+    )
+    predictor = torch.nn.Linear(8, 2)
+    audio = torch.randn(2, 256).clamp(-1.0, 1.0)
+    with torch.no_grad():
+        embeddings = encoder.embed(audio)
+    targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
+    optimizer = torch.optim.Adam((*encoder.head.parameters(), *predictor.parameters()), lr=3e-3)
+
+    initial_loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+    loss = initial_loss
+    for _ in range(1_000):
+        optimizer.zero_grad()
+        loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert loss.item() < initial_loss.item() / 100
+    assert loss.item() < 0.01
+
+
+@pytest.mark.slow
+def test_pupujepa_large_pool_overfits_fixed_teacher_states() -> None:
+    """The released 8,192-wide conditioning pool learns a fixed mapping."""
+    torch.manual_seed(0)
+    head = EmbeddingPool(
+        embed_dim=PUPUJEPA_LARGE_EMBEDDING_DIM,
+        d_model=8,
+        num_heads=1,
+        max_seq_len=1,
+    )
+    predictor = torch.nn.Linear(8, 2)
+    embeddings = torch.randn(2, PUPUJEPA_LARGE_EMBEDDING_DIM, 1)
+    targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
+    optimizer = torch.optim.Adam((*head.parameters(), *predictor.parameters()), lr=3e-3)
+
+    initial_loss = torch.nn.functional.mse_loss(predictor(head(embeddings)), targets)
+    loss = initial_loss
+    for _ in range(1_000):
+        optimizer.zero_grad()
+        loss = torch.nn.functional.mse_loss(predictor(head(embeddings)), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert loss.item() < initial_loss.item() / 100
+    assert loss.item() < 0.01
+
+
+def test_large_direct_construction_defaults_to_single_row_teacher_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Released Large geometry retains its safe runtime batch cap.
+
+    :param monkeypatch: Fixture replacing the expensive teacher construction.
+    """
+    monkeypatch.setattr(
+        pupujepa_encoder_module,
+        "_PupuJepaTeacherModel",
+        lambda _config: torch.nn.Identity(),
+    )
+
+    encoder = PupuJepaAudioEncoder(
+        sample_rate=PUPUJEPA_LARGE_CONFIG.sample_rate,
+        config=PUPUJEPA_LARGE_CONFIG,
+    )
+
+    assert encoder.max_batch_size == 1
+
+
+def test_encoder_splits_teacher_forwards_at_configured_batch_cap() -> None:
+    """In-model chunking prevents oversized teacher forwards."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(
+        sample_rate=config.sample_rate,
+        config=config,
+        max_batch_size=1,
+    )
+    batch_sizes: list[int] = []
+    hook = encoder.teacher_model.register_forward_pre_hook(
+        lambda _module, args: batch_sizes.append(len(args[0]))
+    )
+
+    encoder(torch.zeros(2, 256))
+    hook.remove()
+
+    assert batch_sizes == [1, 1]
+
+
+def test_encoder_nonfinite_waveform_raises_value_error() -> None:
+    """Online waveforms reject non-finite values before teacher inference."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+    audio = torch.zeros(1, 256)
+    audio[0, 0] = torch.nan
+
+    with pytest.raises(ValueError, match="non-finite"):
+        encoder(audio)
+
+
+def test_encoder_empty_waveform_raises_value_error() -> None:
+    """Empty online waveforms retain the public validation error contract."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+
+    with pytest.raises(ValueError, match="positive num_samples"):
+        encoder(torch.empty(1, 0))
+
+
+def test_encoder_empty_channel_axis_raises_value_error() -> None:
+    """A channel-first batch must contain one or two channels."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+
+    with pytest.raises(ValueError, match="1 or 2 channels"):
+        encoder(torch.empty(1, 0, 256))
+
+
+def test_encoder_opposed_out_of_range_stereo_raises_value_error() -> None:
+    """Online bounds reject malformed channels even when their downmix is in range."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+    opposed = torch.stack([torch.full((256,), 1.1), torch.full((256,), -1.1)])[None, ...]
+
+    with pytest.raises(ValueError, match=r"within \[-1, 1\]"):
+        encoder(opposed)
+
+
+def test_encoder_out_of_range_waveform_raises() -> None:
+    """Online waveforms outside the normalized audio contract fail early."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        encoder(torch.full((1, 256), 1.01))
 
 
 def test_encoder_too_short_for_one_time_patch_raises() -> None:

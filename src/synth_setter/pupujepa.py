@@ -1,19 +1,25 @@
-"""Pinned PupuJEPA Tiny identity, configuration, cache, and frame geometry."""
+"""Pinned PupuJEPA identity, variant configurations, cache, and frame geometry."""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
+from typing import Literal
 
+import httpx
 import yaml
+from huggingface_hub.errors import HfHubHTTPError
 from pydantic import BaseModel, ConfigDict
 
-from synth_setter.model_cache import checkpoint_tree_sha256
+from synth_setter.model_cache import checkpoint_files_sha256, retry_external_io
 
 PUPUJEPA_UPSTREAM_COMMIT = "54a621e9f879be7659d81b6a3c493bba855cc85f"
 PUPUJEPA_TIMM_VERSION = "1.0.28"
-DEFAULT_PUPUJEPA_TINY_CHECKPOINT = "spellbrush/PupuJEPA"
+DEFAULT_PUPUJEPA_CHECKPOINT = "spellbrush/PupuJEPA"
+DEFAULT_PUPUJEPA_TINY_CHECKPOINT = DEFAULT_PUPUJEPA_CHECKPOINT
 PUPUJEPA_CHECKPOINT_REVISION = "2ba230e41440c5b450a8dc8ad5d4a3cc9930f01d"
 PUPUJEPA_TINY_ARGS_FILE = "pupujepaV2_25hz_tiny/args.json"
 PUPUJEPA_TINY_WEIGHTS_FILE = (
@@ -22,6 +28,15 @@ PUPUJEPA_TINY_WEIGHTS_FILE = (
 PUPUJEPA_TINY_CHECKPOINT_SHA256 = (
     "7bfd3e04fce4131496362a69eed5b478980181668e918adfaaef4e602bbceb2a"
 )
+PUPUJEPA_LARGE_ARGS_FILE = "pupujepaV2_25hz_large/args.json"
+PUPUJEPA_LARGE_WEIGHTS_FILE = (
+    "pupujepaV2_25hz_large/checkpoint/step-0500000_loss-0.176985/model.safetensors"
+)
+PUPUJEPA_LARGE_CHECKPOINT_SHA256 = (
+    "9e16f31ee25371dcb0e7e97264dfeab2d9318f55f6939504d22fc66e29c3fc84"
+)
+
+type PupuJepaVariant = Literal["tiny", "large"]
 
 
 @dataclass(frozen=True)
@@ -180,8 +195,68 @@ PUPUJEPA_TINY_CONFIG = PupuJepaConfig(
     use_swiglu=True,
     qk_norm=True,
 )
+PUPUJEPA_LARGE_CONFIG = replace(
+    PUPUJEPA_TINY_CONFIG,
+    embed_dim=1_024,
+    depth=24,
+    num_heads=16,
+)
 PUPUJEPA_SAMPLE_RATE = PUPUJEPA_TINY_CONFIG.sample_rate
-PUPUJEPA_EMBEDDING_DIM = PUPUJEPA_TINY_CONFIG.output_dim
+PUPUJEPA_TINY_EMBEDDING_DIM = PUPUJEPA_TINY_CONFIG.output_dim
+PUPUJEPA_LARGE_EMBEDDING_DIM = PUPUJEPA_LARGE_CONFIG.output_dim
+PUPUJEPA_EMBEDDING_DIM = PUPUJEPA_TINY_EMBEDDING_DIM
+
+
+@dataclass(frozen=True)
+class PupuJepaCheckpointSpec:
+    """Bind one public variant to its immutable artifacts and geometry.
+
+    .. attribute :: args_file
+
+        Snapshot-relative configuration path.
+
+    .. attribute :: weights_file
+
+        Snapshot-relative safetensors path.
+
+    .. attribute :: checkpoint_sha256
+
+        Framed digest of the selected configuration and weights.
+
+    .. attribute :: config
+
+        Expected frontend and teacher geometry.
+
+    .. attribute :: encode_max_batch
+
+        Maximum waveforms per teacher forward.
+    """
+
+    args_file: str
+    weights_file: str
+    checkpoint_sha256: str
+    config: PupuJepaConfig
+    encode_max_batch: int
+
+
+PUPUJEPA_CHECKPOINT_SPECS: Mapping[PupuJepaVariant, PupuJepaCheckpointSpec] = MappingProxyType(
+    {
+        "tiny": PupuJepaCheckpointSpec(
+            args_file=PUPUJEPA_TINY_ARGS_FILE,
+            weights_file=PUPUJEPA_TINY_WEIGHTS_FILE,
+            checkpoint_sha256=PUPUJEPA_TINY_CHECKPOINT_SHA256,
+            config=PUPUJEPA_TINY_CONFIG,
+            encode_max_batch=16,
+        ),
+        "large": PupuJepaCheckpointSpec(
+            args_file=PUPUJEPA_LARGE_ARGS_FILE,
+            weights_file=PUPUJEPA_LARGE_WEIGHTS_FILE,
+            checkpoint_sha256=PUPUJEPA_LARGE_CHECKPOINT_SHA256,
+            config=PUPUJEPA_LARGE_CONFIG,
+            encode_max_batch=1,
+        ),
+    }
+)
 
 
 class _PreprocessArgs(BaseModel):
@@ -350,47 +425,85 @@ class _CheckpointArgs(BaseModel):
     model: _ModelArgs
 
 
-def pupujepa_checkpoint_files(checkpoint_dir: Path) -> tuple[Path, Path]:
-    """Locate PupuJEPA Tiny args and weights under a snapshot or direct directory.
+def pupujepa_checkpoint_files(
+    checkpoint_dir: Path,
+    variant: PupuJepaVariant = "tiny",
+) -> tuple[Path, Path]:
+    """Locate one PupuJEPA variant under a snapshot or direct directory.
 
     :param checkpoint_dir: Materialized Hugging Face snapshot or local model directory.
+    :param variant: Released teacher size to locate.
     :returns: Configuration and safetensors paths.
     :raises FileNotFoundError: Either required file is absent.
     """
+    spec = PUPUJEPA_CHECKPOINT_SPECS[variant]
     candidates = (
-        (
-            checkpoint_dir / PUPUJEPA_TINY_ARGS_FILE,
-            checkpoint_dir / PUPUJEPA_TINY_WEIGHTS_FILE,
-        ),
+        (checkpoint_dir / spec.args_file, checkpoint_dir / spec.weights_file),
         (checkpoint_dir / "args.json", checkpoint_dir / "model.safetensors"),
     )
     for args_path, weights_path in candidates:
         if args_path.is_file() and weights_path.is_file():
             return args_path, weights_path
     raise FileNotFoundError(
-        f"PupuJEPA checkpoint lacks {PUPUJEPA_TINY_ARGS_FILE!r} and "
-        f"{PUPUJEPA_TINY_WEIGHTS_FILE!r}: {checkpoint_dir}"
+        f"PupuJEPA {variant} checkpoint lacks {spec.args_file!r} and "
+        f"{spec.weights_file!r}: {checkpoint_dir}"
     )
 
 
+@retry_external_io(
+    retry_exceptions=(ConnectionError, TimeoutError, httpx.TransportError),
+)
+def _download_pupujepa_snapshot(
+    repo_id: str,
+    revision: str,
+    allow_patterns: list[str],
+) -> Path:
+    """Download one pinned artifact selection under the external-I/O retry policy.
+
+    :param repo_id: Hugging Face repository identity.
+    :param revision: Immutable repository commit.
+    :param allow_patterns: Snapshot-relative files to materialize.
+    :returns: Materialized snapshot directory.
+    :raises ConnectionError: Hugging Face returns a transient HTTP response.
+    :raises HfHubHTTPError: Hugging Face returns a permanent HTTP response.
+    """
+    from huggingface_hub import snapshot_download
+
+    try:
+        snapshot = snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            allow_patterns=allow_patterns,
+        )
+    except HfHubHTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code == 429 or (status_code is not None and status_code >= 500):
+            raise ConnectionError(f"transient Hugging Face response: {status_code}") from exc
+        raise
+    return Path(snapshot)
+
+
 def resolve_pupujepa_checkpoint(
-    checkpoint: str = DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
     revision: str = PUPUJEPA_CHECKPOINT_REVISION,
+    variant: PupuJepaVariant = "tiny",
 ) -> Path:
     """Resolve the pinned Hugging Face snapshot or an explicit local checkpoint.
 
     :param checkpoint: Canonical Hugging Face repo id or local checkpoint directory.
     :param revision: Required immutable Hugging Face commit.
+    :param variant: Released teacher size to resolve.
     :returns: Local directory containing the two inference artifacts.
     :raises ValueError: A remote source or revision is not the pinned identity.
     """
+    spec = PUPUJEPA_CHECKPOINT_SPECS[variant]
     local = Path(checkpoint).expanduser()
-    if local.is_dir():
-        pupujepa_checkpoint_files(local)
+    if checkpoint != DEFAULT_PUPUJEPA_CHECKPOINT and local.is_dir():
+        pupujepa_checkpoint_files(local, variant)
         return local.resolve()
-    if checkpoint != DEFAULT_PUPUJEPA_TINY_CHECKPOINT:
+    if checkpoint != DEFAULT_PUPUJEPA_CHECKPOINT:
         raise ValueError(
-            f"PupuJEPA requires {DEFAULT_PUPUJEPA_TINY_CHECKPOINT!r} or a local directory, "
+            f"PupuJEPA requires {DEFAULT_PUPUJEPA_CHECKPOINT!r} or a local directory, "
             f"got {checkpoint!r}"
         )
     if revision != PUPUJEPA_CHECKPOINT_REVISION:
@@ -398,35 +511,35 @@ def resolve_pupujepa_checkpoint(
             f"PupuJEPA requires HF revision {PUPUJEPA_CHECKPOINT_REVISION}, got {revision}"
         )
 
-    from huggingface_hub import snapshot_download
-
-    snapshot = Path(
-        snapshot_download(
-            repo_id=checkpoint,
-            revision=revision,
-            allow_patterns=[PUPUJEPA_TINY_ARGS_FILE, PUPUJEPA_TINY_WEIGHTS_FILE],
-        )
+    snapshot = _download_pupujepa_snapshot(
+        checkpoint,
+        revision,
+        [spec.args_file, spec.weights_file],
     )
-    pupujepa_checkpoint_files(snapshot)
+    artifacts = pupujepa_checkpoint_files(snapshot, variant)
     if snapshot.name != revision:
         raise ValueError(f"Hugging Face resolved PupuJEPA to {snapshot.name}, expected {revision}")
-    actual_sha256 = checkpoint_tree_sha256(snapshot)
-    if actual_sha256 != PUPUJEPA_TINY_CHECKPOINT_SHA256:
+    actual_sha256 = checkpoint_files_sha256(snapshot, artifacts)
+    if actual_sha256 != spec.checkpoint_sha256:
         raise ValueError(
-            "PupuJEPA checkpoint digest mismatch: expected "
-            f"{PUPUJEPA_TINY_CHECKPOINT_SHA256}, got {actual_sha256}"
+            f"PupuJEPA {variant} checkpoint digest mismatch: expected "
+            f"{spec.checkpoint_sha256}, got {actual_sha256}"
         )
     return snapshot
 
 
-def load_pupujepa_config(checkpoint_dir: Path) -> PupuJepaConfig:
+def load_pupujepa_config(
+    checkpoint_dir: Path,
+    variant: PupuJepaVariant = "tiny",
+) -> PupuJepaConfig:
     """Parse and validate the frontend and teacher geometry in ``args.json``.
 
     :param checkpoint_dir: Materialized snapshot or direct model directory.
+    :param variant: Released teacher size whose args should be parsed.
     :returns: Validated PupuJEPA architecture.
     :raises ValueError: The checkpoint requests an unsupported inference variant.
     """
-    args_path, _ = pupujepa_checkpoint_files(checkpoint_dir)
+    args_path, _ = pupujepa_checkpoint_files(checkpoint_dir, variant)
     args = _CheckpointArgs.model_validate(yaml.safe_load(args_path.read_text()))
     preprocess = args.preprocess
     model = args.model
@@ -501,19 +614,24 @@ def pupujepa_num_time_patches(
     return time_patches
 
 
-def pupujepa_artifact_digest(checkpoint: str) -> str:
+def pupujepa_artifact_digest(
+    checkpoint: str,
+    variant: PupuJepaVariant = "tiny",
+) -> str:
     """Identify the pinned source and materialized teacher artifacts.
 
     :param checkpoint: Canonical Hugging Face repo id or local checkpoint directory.
+    :param variant: Released teacher size to identify.
     :returns: Version string suitable for embedding policy metadata.
     """
-    checkpoint_dir = resolve_pupujepa_checkpoint(checkpoint)
-    load_pupujepa_config(checkpoint_dir)
-    if checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT:
+    spec = PUPUJEPA_CHECKPOINT_SPECS[variant]
+    checkpoint_dir = resolve_pupujepa_checkpoint(checkpoint, variant=variant)
+    load_pupujepa_config(checkpoint_dir, variant)
+    artifacts = pupujepa_checkpoint_files(checkpoint_dir, variant)
+    if checkpoint == DEFAULT_PUPUJEPA_CHECKPOINT:
         identity = (
-            f"hf:{checkpoint}@{PUPUJEPA_CHECKPOINT_REVISION};"
-            f"sha256:{PUPUJEPA_TINY_CHECKPOINT_SHA256}"
+            f"hf:{checkpoint}@{PUPUJEPA_CHECKPOINT_REVISION};sha256:{spec.checkpoint_sha256}"
         )
     else:
-        identity = f"local:sha256:{checkpoint_tree_sha256(checkpoint_dir)}"
+        identity = f"local:sha256:{checkpoint_files_sha256(checkpoint_dir, artifacts)}"
     return f"source:{PUPUJEPA_UPSTREAM_COMMIT};checkpoint:{identity}"
