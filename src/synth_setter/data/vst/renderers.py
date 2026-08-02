@@ -63,6 +63,28 @@ def _sample_index_at_or_after(time_seconds: float, sample_rate: float) -> int:
     return math.ceil(sample_position)
 
 
+def _align_native_attack(
+    audio: np.ndarray,
+    *,
+    samples: int,
+    start_sample: int,
+    source_start: int,
+) -> np.ndarray:
+    """Place the first native attack sample at the requested output sample.
+
+    :param audio: Native channel-leading block buffer.
+    :param samples: Retained output sample count.
+    :param start_sample: Requested first output sample.
+    :param source_start: Native buffer index where the attack begins.
+    :returns: Stereo float32 output with a silent pre-event prefix.
+    """
+    rendered = np.asarray(audio, dtype=np.float32)
+    aligned = np.zeros((2, samples), dtype=np.float32)
+    source_end = source_start + samples - start_sample
+    aligned[:, start_sample:] = rendered[:, source_start:source_end]
+    return aligned
+
+
 class _DawDreamerParameterDescription(TypedDict):
     """Parameter identity fields returned by DawDreamer.
 
@@ -516,14 +538,12 @@ class SurgePyRenderer(AudioRenderer):
             )
         finally:
             self.synth.allNotesOff()
-        rendered = np.asarray(audio, dtype=np.float32)
-        aligned = np.zeros((2, samples), dtype=np.float32)
-        source_start = start_block * block_size
-        aligned[:, start_sample:] = rendered[
-            :,
-            source_start : source_start + samples - start_sample,
-        ]
-        return aligned
+        return _align_native_attack(
+            audio,
+            samples=samples,
+            start_sample=start_sample,
+            source_start=start_block * block_size,
+        )
 
     def render(
         self,

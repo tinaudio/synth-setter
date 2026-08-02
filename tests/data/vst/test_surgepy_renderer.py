@@ -34,6 +34,32 @@ def _simple_renderer() -> SurgePyRenderer:
     )
 
 
+def _mock_renderer(
+    *,
+    block_size: int,
+    output_samples: int,
+) -> tuple[SurgePyRenderer, Mock, dict[str, int | bool]]:
+    """Build a renderer around a stateful block-processing mock.
+
+    :param block_size: Native samples per block.
+    :param output_samples: Native stereo buffer length.
+    :returns: Renderer, synth mock, and mutable note state.
+    """
+    state: dict[str, int | bool] = {"playing": False, "note_age": 0}
+    synth = Mock()
+    synth.getBlockSize.return_value = block_size
+    synth.createMultiBlock.return_value = np.zeros(
+        (2, output_samples),
+        dtype=np.float32,
+    )
+    synth.playNote.side_effect = lambda *_: state.__setitem__("playing", True)
+    synth.releaseNote.side_effect = lambda *_: state.__setitem__("playing", False)
+    renderer = object.__new__(SurgePyRenderer)
+    renderer.sample_rate = 44_100
+    renderer.synth = synth
+    return renderer, synth, state
+
+
 def test_surge_component_state_rejects_unstructured_marker_bytes(tmp_path: Path) -> None:
     """Marker-like bytes outside a valid container cannot establish provenance.
 
@@ -142,12 +168,7 @@ def test_surgepy_renderer_note_end_preserves_quantized_duration(
     :param expected_release_sample: First output sample rendered after note release.
     """
     block_size = 32
-    state = {"playing": False}
-    synth = Mock()
-    synth.getBlockSize.return_value = block_size
-    synth.createMultiBlock.return_value = np.zeros((2, 96), dtype=np.float32)
-    synth.playNote.side_effect = lambda *_: state.__setitem__("playing", True)
-    synth.releaseNote.side_effect = lambda *_: state.__setitem__("playing", False)
+    renderer, synth, state = _mock_renderer(block_size=block_size, output_samples=96)
 
     def process_blocks(output: np.ndarray, start_block: int, num_blocks: int) -> None:
         """Mark each processed block with the current note state.
@@ -161,9 +182,6 @@ def test_surgepy_renderer_note_end_preserves_quantized_duration(
         output[:, start_sample : start_sample + num_blocks * block_size] = value
 
     synth.processMultiBlock.side_effect = process_blocks
-    renderer = object.__new__(SurgePyRenderer)
-    renderer.sample_rate = 44_100
-    renderer.synth = synth
 
     audio = renderer._render_note_blocks(
         midi_note=60,
@@ -198,12 +216,7 @@ def test_surgepy_renderer_event_after_retained_output_returns_silence() -> None:
 def test_surgepy_renderer_non_block_aligned_note_preserves_native_attack() -> None:
     """Sub-block placement delays the attack without discarding native samples."""
     block_size = 32
-    state = {"playing": False, "note_age": 0}
-    synth = Mock()
-    synth.getBlockSize.return_value = block_size
-    synth.createMultiBlock.return_value = np.zeros((2, 128), dtype=np.float32)
-    synth.playNote.side_effect = lambda *_: state.__setitem__("playing", True)
-    synth.releaseNote.side_effect = lambda *_: state.__setitem__("playing", False)
+    renderer, synth, state = _mock_renderer(block_size=block_size, output_samples=128)
 
     def process_blocks(output: np.ndarray, start_block: int, num_blocks: int) -> None:
         """Emit increasing native attack samples while the note is active.
@@ -225,9 +238,6 @@ def test_surgepy_renderer_non_block_aligned_note_preserves_native_attack() -> No
             state["note_age"] += block_size
 
     synth.processMultiBlock.side_effect = process_blocks
-    renderer = object.__new__(SurgePyRenderer)
-    renderer.sample_rate = 44_100
-    renderer.synth = synth
 
     audio = renderer._render_note_blocks(
         midi_note=60,
