@@ -123,6 +123,26 @@ def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None
     assert publish_inputs["output-file-path"] == filename
 
 
+def _install_fixed_utc_date(tmp_path: Path) -> Path:
+    """Install a deterministic ``date`` executable for the upload step.
+
+    :param tmp_path: Temporary directory that will contain the executable.
+    :returns: Directory to prepend to ``PATH``.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_date = bin_dir / "date"
+    fake_date.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = "-u"\n'
+        'test "$2" = "+%Y-%m-%dT%H-%M-%SZ"\n'
+        "printf '%s\\n' '2026-08-03T12-34-56Z'\n"
+    )
+    fake_date.chmod(0o755)
+    return bin_dir
+
+
 @pytest.mark.infra
 def test_vst_slow_surge_r2_upload_folder_starts_with_utc_datetime(
     project_root: Path,
@@ -148,18 +168,7 @@ def test_vst_slow_surge_r2_upload_folder_starts_with_utc_datetime(
     comparison_dir.mkdir()
     (comparison_dir / "comparison.wav").write_bytes(b"comparison")
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake_date = bin_dir / "date"
-    fake_date.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        'test "$1" = "-u"\n'
-        'test "$2" = "+%Y-%m-%dT%H-%M-%SZ"\n'
-        "printf '%s\\n' '2026-08-03T12-34-56Z'\n"
-    )
-    fake_date.chmod(0o755)
-
+    bin_dir = _install_fixed_utc_date(tmp_path)
     env = os.environ | {
         "GITHUB_RUN_ATTEMPT": "2",
         "GITHUB_RUN_ID": "123456",
