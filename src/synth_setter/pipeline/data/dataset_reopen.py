@@ -314,12 +314,55 @@ def _copy_preserved_state(plan: ReopenPlan, source_spec: DatasetSpec) -> None:
 
 
 # DOC502: documented errors propagate from the strict storage helpers.
+# DOC502/DOC503: documented errors propagate from source loading and its strict storage probe.
+def _load_reopen_source(source_root_uri: str) -> DatasetSpec:  # noqa: DOC502, DOC503
+    """Load a finalized source whose embedded storage identity matches its requested root.
+
+    :param source_root_uri: Requested finalized dataset root.
+    :returns: Strict source spec loaded from that exact root.
+    :raises FileNotFoundError: The source is not finalized.
+    :raises ValueError: The loaded spec belongs to another root.
+    :raises subprocess.CalledProcessError: A required R2 probe fails.
+    """
+    source_spec = load_spec_from_root(source_root_uri)
+    if source_spec.r2.dataset_root_uri() != source_root_uri:
+        raise ValueError("source spec dataset root does not match the requested source root")
+    _require_source_complete(source_spec)
+    return source_spec
+
+
+# DOC502: documented errors propagate from strict source loading.
+def plan_dataset_reopen(  # noqa: DOC502
+    source_root_uri: str,
+    new_sizes: Sequence[int],
+    *,
+    dest_run_id: str | None = None,
+) -> ReopenPlan:
+    """Plan a dataset reopen without writing destination state.
+
+    :param source_root_uri: ``r2://`` root of the finalized dataset to extend.
+    :param new_sizes: Target ``(train, val, test)`` sizes.
+    :param dest_run_id: Run id owning the destination prefix; defaults to a
+        fresh timestamped id derived from the source's task name.
+    :returns: The validated reopen plan.
+    :raises FileNotFoundError: The source is not finalized.
+    :raises ValueError: The source spec belongs to another root or cannot be reopened.
+    :raises subprocess.CalledProcessError: A required R2 probe fails.
+    """
+    source_spec = _load_reopen_source(source_root_uri)
+    return plan_reopen(
+        source_spec,
+        new_sizes,
+        dest_run_id=dest_run_id or make_dataset_wandb_run_id(source_spec.task_name),
+    )
+
+
+# DOC502: documented errors propagate from the strict storage helpers.
 def reopen_dataset(  # noqa: DOC502
     source_root_uri: str,
     new_sizes: Sequence[int],
     *,
     dest_run_id: str | None = None,
-    dry_run: bool = False,
 ) -> ReopenPlan:
     """Copy preserved train state into an incomplete grown destination.
 
@@ -332,28 +375,17 @@ def reopen_dataset(  # noqa: DOC502
     :param new_sizes: Target ``(train, val, test)`` sizes.
     :param dest_run_id: Run id owning the destination prefix; defaults to a
         fresh timestamped id derived from the source's task name.
-    :param dry_run: When true, plan and return without writing anything.
-    :returns: The reopen plan describing what was (or would be) done.
+    :returns: The reopen plan describing the applied operation.
     :raises FileNotFoundError: The source is not finalized.
     :raises ValueError: Existing destination state is not an exact resume.
     :raises subprocess.CalledProcessError: A required R2 operation fails.
     """
-    source_spec = load_spec_from_root(source_root_uri)
-    _require_source_complete(source_spec)
+    source_spec = _load_reopen_source(source_root_uri)
     plan = plan_reopen(
         source_spec,
         new_sizes,
         dest_run_id=dest_run_id or make_dataset_wandb_run_id(source_spec.task_name),
     )
-    if dry_run:
-        logger.info(
-            "reopen_dry_run",
-            dest_root=plan.dest_root_uri,
-            preserved=len(plan.preserved_shard_ids),
-            pending=len(plan.pending_shard_ids),
-        )
-        return plan
-
     _prepare_destination_identity(plan, source_spec)
     r2_io.delete_object(plan.dest_spec.r2.dataset_complete_marker_uri())
     _clear_destination_state(plan)
@@ -396,13 +428,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    source_spec = load_spec_from_root(args.source)
+    source_spec = _load_reopen_source(args.source)
     _, val_size, test_size = source_spec.train_val_test_sizes
-    plan = reopen_dataset(
+    operation = reopen_dataset if args.apply else plan_dataset_reopen
+    plan = operation(
         args.source,
         (args.train_size, val_size, test_size),
         dest_run_id=args.dest_run_id,
-        dry_run=not args.apply,
     )
     logger.info(
         "reopen_plan",

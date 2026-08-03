@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,9 +12,11 @@ from typing import cast
 
 import pytest
 
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.dataset_reopen import (
     ReopenPlan,
     main,
+    plan_dataset_reopen,
     plan_reopen,
     reopen_dataset,
     validate_reopenable,
@@ -408,12 +411,30 @@ def test_reopen_dataset_dry_run_writes_no_destination(
     """
     _seed_finalized_root(fake_r2_remote, source_spec)
 
-    plan = reopen_dataset(
-        source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run", dry_run=True
+    plan = plan_dataset_reopen(
+        source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
     )
 
     dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
     assert not dest.exists()
+
+
+def test_reopen_dataset_source_spec_for_another_root_raises(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Reject a copied source spec whose embedded root names another dataset.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    source = _seed_finalized_root(fake_r2_remote, source_spec)
+    alias_root_uri = source_spec.r2.dataset_root_uri().replace(source_spec.run_id, "alias-run")
+    alias = Path(str(source).replace(source_spec.run_id, "alias-run"))
+    alias.mkdir(parents=True)
+    shutil.copy2(source / "input_spec.json", alias / "input_spec.json")
+
+    with pytest.raises(ValueError, match="requested source root"):
+        reopen_dataset(alias_root_uri, (80, 20, 20), dest_run_id="grown-run")
 
 
 def test_reopen_dataset_incomplete_source_raises(
@@ -520,12 +541,13 @@ def test_reopen_dataset_exact_partial_resume_restores_copied_state(
 
 
 def test_reopen_dataset_marker_deletion_failure_preserves_destination_state(
-    source_spec: DatasetSpec, fake_r2_remote: Path
+    source_spec: DatasetSpec, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Abort before any mutation when the existing completion marker cannot be removed.
 
     :param source_spec: Finalized 8-shard source spec built by the module fixture.
     :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    :param monkeypatch: Pytest patcher used to inject a storage deletion failure.
     """
     _seed_finalized_root(fake_r2_remote, source_spec)
     plan = reopen_dataset(
@@ -536,26 +558,25 @@ def test_reopen_dataset_marker_deletion_failure_preserves_destination_state(
     (dest / "dataset.json").write_text("keep-card")
     before = {path.relative_to(dest): path.read_bytes() for path in dest.rglob("*") if path.is_file()}
 
-    dest.chmod(0o555)
-    try:
-        with pytest.raises(subprocess.CalledProcessError):
-            reopen_dataset(
-                source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
-            )
-    finally:
-        dest.chmod(0o755)
+    def fail_delete(_uri: str) -> None:
+        raise subprocess.CalledProcessError(1, ["rclone", "deletefile"])
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.delete_object", fail_delete)
+    with pytest.raises(subprocess.CalledProcessError):
+        reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
 
     after = {path.relative_to(dest): path.read_bytes() for path in dest.rglob("*") if path.is_file()}
     assert after == before
 
 
 def test_reopen_dataset_required_cleanup_failure_aborts_before_spec_upload(
-    source_spec: DatasetSpec, fake_r2_remote: Path
+    source_spec: DatasetSpec, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Propagate strict cleanup failure and leave the grown spec unpublished.
 
     :param source_spec: Finalized 8-shard source spec built by the module fixture.
     :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    :param monkeypatch: Pytest patcher used to inject a storage cleanup failure.
     """
     _seed_finalized_root(fake_r2_remote, source_spec)
     plan = reopen_dataset(
@@ -567,15 +588,16 @@ def test_reopen_dataset_required_cleanup_failure_aborts_before_spec_upload(
     blocked_prefix.mkdir()
     blocked = blocked_prefix / "fragment.lance"
     blocked.write_text("must-remain")
+    original_delete_prefix = r2_io.delete_prefix
 
-    blocked_prefix.chmod(0o555)
-    try:
-        with pytest.raises(subprocess.CalledProcessError):
-            reopen_dataset(
-                source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
-            )
-    finally:
-        blocked_prefix.chmod(0o755)
+    def fail_val_cleanup(uri: str) -> None:
+        if uri == f'{plan.dest_spec.r2.split_lance_uri("val")}/':
+            raise subprocess.CalledProcessError(1, ["rclone", "purge"])
+        original_delete_prefix(uri)
+
+    monkeypatch.setattr("synth_setter.pipeline.r2_io.delete_prefix", fail_val_cleanup)
+    with pytest.raises(subprocess.CalledProcessError):
+        reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
 
     assert blocked.read_text() == "must-remain"
     assert not (dest / "input_spec.json").exists()

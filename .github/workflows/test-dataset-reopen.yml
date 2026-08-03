@@ -22,13 +22,17 @@ on:
       - "src/synth_setter/cli/finalize_dataset.py"
       - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "src/synth_setter/data/vst/**"
       - "src/synth_setter/pipeline/data/dataset_reopen.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
       - "src/synth_setter/pipeline/data/lance_finalize.py"
       - "src/synth_setter/pipeline/data/lance_staging.py"
+      - "src/synth_setter/pipeline/partitioning.py"
       - "src/synth_setter/pipeline/r2_io.py"
       - "src/synth_setter/pipeline/schemas/**"
       - "src/synth_setter/pipeline/shard_claims.py"
       - "src/synth_setter/pipeline/spec_io.py"
+      - "src/synth_setter/renderer_factory.py"
       - "tests/integration/test_dataset_reopen_e2e.py"
       - "uv.lock"
 
@@ -44,7 +48,7 @@ jobs:
     name: Dataset reopen production E2E
     # Forked PRs cannot read the R2 secrets, so the job would fail on the
     # prerequisite probe rather than on anything it is meant to validate.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

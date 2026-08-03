@@ -9,6 +9,7 @@ runs:
     - name: Install Surge XT with Studiorack
       shell: bash
       run: |
+        set -euo pipefail
         managed_dir="/Library/Application Support/synth-setter/studiorack"
         npm ci
         sudo -E env "PATH=${PATH}" "CI=" \

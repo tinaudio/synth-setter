@@ -95,16 +95,17 @@ def _run_cli(argv: list[str], *, timeout: int, stage: str) -> None:
     )
 
 
-def _purge_r2_prefix(spec: DatasetSpec) -> None:
+def _purge_r2_prefix(root_uri: str) -> None:
     """Best-effort exact-prefix cleanup after the production-path run.
 
-    :param spec: Dataset identity whose prefix can be deleted safely.
+    :param root_uri: Non-root ``r2://`` dataset prefix ending in ``/``.
     """
+    assert root_uri.startswith("r2://intermediate-data/data/") and root_uri.endswith("/")
     result = subprocess.run(  # noqa: S603
         [
             _cli("rclone"),
             "purge",
-            f"r2:{spec.r2.bucket}/{spec.r2.prefix}",
+            f"r2:{root_uri.removeprefix('r2://')}",
             "--checksum",
             "--contimeout=10s",
             "--timeout=60s",
@@ -116,7 +117,7 @@ def _purge_r2_prefix(spec: DatasetSpec) -> None:
     if result.returncode:
         sys.stderr.write(
             f"WARN: exact-prefix cleanup exited {result.returncode} for "
-            f"r2:{spec.r2.bucket}/{spec.r2.prefix}\n{result.stderr[-1000:]}\n"
+            f"{root_uri}\n{result.stderr[-1000:]}\n"
         )
 
 
@@ -267,24 +268,25 @@ def _finalized_source(tmp_path: Path) -> Iterator[DatasetSpec]:
     )
 
     run_id = _run_id("source")
-    _generate(
-        run_id,
-        _SOURCE_SIZES[0],
-        tmp_path / "generate-source",
-        stage="source generation",
-    )
-    _finalize(
-        f"r2://intermediate-data/data/{_TASK_NAME}/{run_id}/",
-        tmp_path / "finalize-source",
-        "source finalization",
-    )
-    spec = load_spec_from_root(f"r2://intermediate-data/data/{_TASK_NAME}/{run_id}/")
+    root_uri = f"r2://intermediate-data/data/{_TASK_NAME}/{run_id}/"
     try:
+        _generate(
+            run_id,
+            _SOURCE_SIZES[0],
+            tmp_path / "generate-source",
+            stage="source generation",
+        )
+        _finalize(
+            root_uri,
+            tmp_path / "finalize-source",
+            "source finalization",
+        )
+        spec = load_spec_from_root(root_uri)
         assert spec.train_val_test_sizes == _SOURCE_SIZES
         assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
         yield spec
     finally:
-        _purge_r2_prefix(spec)
+        _purge_r2_prefix(root_uri)
 
 
 def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shards(
@@ -300,22 +302,22 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
         }
         dest_run_id = _run_id("grown")
         dest_root_uri = f"r2://intermediate-data/data/{_TASK_NAME}/{dest_run_id}/"
-        _run_cli(
-            [
-                _cli("synth-setter-reopen-dataset"),
-                "--source",
-                source_spec.r2.dataset_root_uri(),
-                "--train-size",
-                str(_GROWN_TRAIN_SIZE),
-                "--dest-run-id",
-                dest_run_id,
-                "--apply",
-            ],
-            timeout=_FINALIZE_TIMEOUT_SECONDS,
-            stage="dataset reopen",
-        )
-        dest_spec = load_spec_from_root(dest_root_uri)
         try:
+            _run_cli(
+                [
+                    _cli("synth-setter-reopen-dataset"),
+                    "--source",
+                    source_spec.r2.dataset_root_uri(),
+                    "--train-size",
+                    str(_GROWN_TRAIN_SIZE),
+                    "--dest-run-id",
+                    dest_run_id,
+                    "--apply",
+                ],
+                timeout=_FINALIZE_TIMEOUT_SECONDS,
+                stage="dataset reopen",
+            )
+            dest_spec = load_spec_from_root(dest_root_uri)
             assert dest_spec.train_val_test_sizes == (_GROWN_TRAIN_SIZE, 2, 2)
             assert dest_spec.split_shard_ranges == {
                 "train": (0, 2),
@@ -325,13 +327,11 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
 
             # The preserved shard keeps its staged attempt; the renumbered
             # val/test ids must not, or the skip-probe would skip real train work.
+            preserved_entries_before = r2_io.list_entries(
+                dest_spec.r2.shard_staging_dir_uri(0), recursive=True
+            )
             preserved_attempts_before = complete_attempt_names(
-                [
-                    entry.path
-                    for entry in r2_io.list_entries(
-                        dest_spec.r2.shard_staging_dir_uri(0), recursive=True
-                    )
-                ]
+                [entry.path for entry in preserved_entries_before]
             )
             assert preserved_attempts_before
             assert not shard_has_complete_attempt(dest_spec, 1)
@@ -344,15 +344,14 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
                 stage="grown generation",
             )
 
-            preserved_attempts_after = complete_attempt_names(
-                [
-                    entry.path
-                    for entry in r2_io.list_entries(
-                        dest_spec.r2.shard_staging_dir_uri(0), recursive=True
-                    )
-                ]
+            preserved_entries_after = r2_io.list_entries(
+                dest_spec.r2.shard_staging_dir_uri(0), recursive=True
             )
-            assert preserved_attempts_after == preserved_attempts_before, (
+            preserved_attempts_after = complete_attempt_names(
+                [entry.path for entry in preserved_entries_after]
+            )
+            assert preserved_attempts_after == preserved_attempts_before
+            assert preserved_entries_after == preserved_entries_before, (
                 "preserved shard 0 was re-rendered instead of skipped"
             )
             for shard_id in range(1, 4):
@@ -383,4 +382,4 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
             assert val_rows.isdisjoint(test_rows)
             _assert_stats_match_train(dest_spec, grown_arrays["train"])
         finally:
-            _purge_r2_prefix(dest_spec)
+            _purge_r2_prefix(dest_root_uri)
