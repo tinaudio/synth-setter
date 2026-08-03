@@ -25,7 +25,7 @@ from synth_setter.clap import (
     clap_checkpoint_sha256,
     resolve_clap_checkpoint,
 )
-from synth_setter.conditioning import resolve_embedding_conditioning
+from synth_setter.conditioning import EmbeddingConditioningSpec, resolve_embedding_conditioning
 from synth_setter.data.vst.core import write_wav
 from synth_setter.data.vst.param_spec import decode_model_output
 from synth_setter.data.vst.param_spec_registry import param_specs
@@ -40,6 +40,10 @@ from synth_setter.workspace import operator_workspace
 _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 _EXPECTED_CONDITIONING_COLUMN = "clap"
 _EXPECTED_CONDITIONING_SHAPE = (512,)
+_CLAP_CONDITIONING = EmbeddingConditioningSpec(
+    column=_EXPECTED_CONDITIONING_COLUMN,
+    input_shape=_EXPECTED_CONDITIONING_SHAPE,
+)
 _DEFAULT_CONFIG_NAME = "clap_render"
 _HASH_CHUNK_BYTES = 1024 * 1024
 _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
@@ -446,21 +450,24 @@ def _encode_audio(
     return embedding
 
 
-def _validate_inverse_model(model: VSTFlowMatchingModule, render: RenderConfig) -> None:
-    """Require a text-compatible CLAP checkpoint for the selected Surge spec.
+def _validate_inverse_model(
+    model: VSTFlowMatchingModule,
+    render: RenderConfig,
+    expected_conditioning: EmbeddingConditioningSpec = _CLAP_CONDITIONING,
+) -> None:
+    """Require the selected embedding contract and Surge parameter width.
 
     :param model: Loaded inverse model.
     :param render: Active Surge renderer identity.
+    :param expected_conditioning: Embedding column and per-row tensor shape.
     :raises ValueError: Conditioning, sketch controls, or output width is incompatible.
     """
     conditioning = resolve_embedding_conditioning(model.hparams["conditioning"])
-    if (
-        conditioning is None
-        or conditioning.column != _EXPECTED_CONDITIONING_COLUMN
-        or conditioning.input_shape != _EXPECTED_CONDITIONING_SHAPE
-    ):
+    if conditioning != expected_conditioning:
+        shape = ", ".join(str(size) for size in expected_conditioning.input_shape)
         raise ValueError(
-            "inverse checkpoint must use cached CLAP conditioning with input shape [512]"
+            f"inverse checkpoint must use cached {expected_conditioning.column} "
+            f"conditioning with input shape [{shape}]"
         )
     if model.hparams["sketch_controls"] is not None:
         raise ValueError("text-only rendering does not support sketch-conditioned checkpoints")
@@ -479,14 +486,16 @@ def _predict_patch(
     render: RenderConfig,
     device: torch.device,
     seed: int,
+    expected_conditioning: EmbeddingConditioningSpec = _CLAP_CONDITIONING,
 ) -> torch.Tensor:
     """Sample one model-space Surge parameter row reproducibly.
 
-    :param embedding: CLAP condition shaped ``(1, 512)``.
+    :param embedding: Conditioning batch matching ``expected_conditioning``.
     :param checkpoint: Trusted Lightning checkpoint.
     :param render: Renderer identity used for compatibility validation.
     :param device: Torch inference device.
     :param seed: Flow noise seed.
+    :param expected_conditioning: Required checkpoint embedding contract.
     :returns: CPU prediction shaped ``(1, len(param_spec))``.
     """
     model = VSTFlowMatchingModule.load_from_checkpoint(
@@ -494,7 +503,7 @@ def _predict_patch(
         map_location=device,
         weights_only=False,
     )
-    _validate_inverse_model(model, render)
+    _validate_inverse_model(model, render, expected_conditioning)
     model.to(device).eval()
     torch.manual_seed(seed)
     with torch.inference_mode():

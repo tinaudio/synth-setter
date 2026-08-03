@@ -1,0 +1,29 @@
+defaults:
+  - _self_
+  - synth: surge_simple_surgepy
+  - render: surgepy
+
+profiles:
+  small:
+    model_name: small-music
+    repo_id: stabilityai/stable-audio-3-small-music
+    revision: 0fef1392cd842149a2b6d445e181c97608faac06
+    conditioning:
+      column: same_s
+      input_shape: [256, 44]
+    inverse_checkpoint: r2://intermediate-data/checkpoints/flow_simple_440k_1m_same_s/flow_simple_440k_1m_same_s-20260730T215716091Z-51831583598f4f7c9807d2e3dd2ce350/last.ckpt
+    inverse_checkpoint_sha256: 1babdd6bc88deca4abf046b5528fbbcf0099e3e35c24320c308c996e964e3b34
+  medium:
+    model_name: medium
+    repo_id: stabilityai/stable-audio-3-medium
+    revision: 27b5a21b791b1b033d193a9e1e3ce78493f102f9
+    conditioning:
+      column: same_l
+      input_shape: [256, 44]
+    inverse_checkpoint: r2://intermediate-data/checkpoints/flow_simple_440k_1m_same_l/flow_simple_440k_1m_same_l-20260730T215551120Z-5f57c6d43c6e48fe90ef61f3399af684/last.ckpt
+    inverse_checkpoint_sha256: 824ef5cd7577cc5ca7cf1235ca80fd3d0027b261e71e296b6b4272dbbba89cfb
+
+output_dir: logs/stable-audio-renders
+upload_prefix: r2://experiments/stable-audio-renders
+device: auto
+seed: 0
