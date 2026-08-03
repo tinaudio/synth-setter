@@ -8,8 +8,8 @@ augmented dataset is reopened from R2 and its embedding columns, indexability,
 and ``nearest=`` query path are asserted. The prefix is purged on teardown
 regardless of pass/fail.
 
-Auto-skips when the VST plugin is absent (``requires_vst``) or R2 credentials
-are missing (``integration_r2``); also skips when R2 is unreachable at runtime.
+The encoder tests skip when the VST plugin is absent; all tests skip when R2
+credentials are missing or R2 is unreachable at runtime.
 """
 
 from __future__ import annotations
@@ -43,10 +43,12 @@ from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     MIN_ROWS_FOR_INDEX,
 )
+from synth_setter.pipeline.data.lance_shard import SHARD_METADATA_SCHEMA_KEY
 from synth_setter.pipeline.data.t5gemma import (
     T5GEMMA_EMBEDDING_DIM,
     T5GEMMA_MAX_LENGTH,
 )
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 from synth_setter.resources import as_file, vst_headless_wrapper
 from tests._vst import (
@@ -57,21 +59,21 @@ from tests._vst import (
     VST_SUBPROCESS_TIMEOUT_SECONDS,
 )
 
-pytestmark = [
-    pytest.mark.slow,
-    pytest.mark.requires_vst,
-    pytest.mark.integration_r2,
-    pytest.mark.r2,
-]
+pytestmark = [pytest.mark.slow, pytest.mark.integration_r2, pytest.mark.r2]
 
-# Kept tiny so the real encoders stay fast: one 4-row shard. 4 < MIN_ROWS_FOR_INDEX,
-# so the IVF_PQ build is skipped and the test asserts the exact ``nearest`` fallback.
+# Keep real-encoder coverage below the IVF-PQ floor; indexing has its own fixture.
 _SAMPLES_PER_SHARD = 4
-# Short clips keep both the VST render and the CLAP/m2l forward pass cheap;
-# CLAP resamples to 48 kHz internally, so 1 s still yields a valid embedding.
+# Short clips keep rendering and inference cheap while remaining valid after CLAP resampling.
 _SIGNAL_DURATION_SECONDS = 1.0
 _SAMPLE_RATE = 44100
 _CHANNELS = 2
+_R2_BUCKET = "intermediate-data"
+_INDEX_EMBEDDING_DIM = CLAP_EMBEDDING_DIM
+_INDEX_M2L_FRAMES = 2
+_INDEX_NUM_PARTITIONS = 4
+_INDEX_NUM_SUB_VECTORS = 16
+_INDEX_RANDOM_SEED = 0
+_INDEX_TEST_TIMEOUT_SECONDS = 120
 
 # The add_embeddings CLI is the system under test; invoke it as the console
 # script the operator runs, against the uploaded ``r2://`` dataset directory.
@@ -79,8 +81,7 @@ _ADD_EMBEDDINGS_CMD = "synth-setter-add-embeddings"
 # Generous: covers a real VST render plus the first-run checkpoint downloads
 # and CPU/GPU forward passes of music2latent + CLAP.
 _EMBED_SUBPROCESS_TIMEOUT_SECONDS = 1800
-# Observed real-VST throughput is ~2.5 s/sample (param load + render + flush);
-# 5 s/sample keeps a 256-row render comfortably inside its scaled timeout.
+# Account for parameter loading and host flushes beyond the fixed VST startup budget.
 _RENDER_SECONDS_PER_SAMPLE = 5
 
 
@@ -104,7 +105,7 @@ def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpe
     """Build a 1-shard Lance ``DatasetSpec`` pinned to the real test synth + R2 prefix.
 
     :param prefix: Unique R2 prefix the shard is rendered + uploaded under.
-    :param rows: Train samples; ``>= MIN_ROWS_FOR_INDEX`` makes indexing run.
+    :param rows: Train samples in the rendered shard.
     :returns: A frozen Lance spec whose single train shard is renderable by the
         real VST and whose ``r2`` layout is safe to ``purge_prefix`` on teardown.
     """
@@ -129,8 +130,7 @@ def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpe
             "velocity": 100,
             "signal_duration_seconds": _SIGNAL_DURATION_SECONDS,
             "min_loudness": -55.0,
-            # Render the whole shard in one batch and load the plugin once, so a
-            # 256-row shard does not pay 64 per-batch plugin reloads.
+            # One batch avoids repeated plugin startup in this serial fixture.
             "samples_per_render_batch": rows,
             "samples_per_shard": rows,
             "plugin_reload_cadence": "once",
@@ -152,8 +152,7 @@ def _render_shard_locally(spec: DatasetSpec, shard: ShardSpec, work_dir: Path) -
     :param work_dir: Local dir the ``.lance`` dataset directory is written into.
     :returns: Path to the produced local Lance dataset directory.
     """
-    # The per-sample render cost (param load + render + flush) dominates, so the
-    # timeout scales with shard size atop the fixed base for a 256-row shard.
+    # Scale the fixed host-startup budget by the requested render work.
     timeout = (
         VST_SUBPROCESS_TIMEOUT_SECONDS + _RENDER_SECONDS_PER_SAMPLE * spec.render.samples_per_shard
     )
@@ -209,15 +208,76 @@ def remote_lance_dataset_uri() -> Iterator[str]:
     yield from _render_and_upload(_SAMPLES_PER_SHARD)
 
 
+def _indexable_embedding_table() -> pa.Table:
+    """Build deterministic schema-compatible embedding columns at the index floor.
+
+    :returns: Table carrying CLAP, M2L, and pooled M2L vectors plus shard metadata.
+    """
+    rng = np.random.default_rng(_INDEX_RANDOM_SEED)
+    clap = rng.standard_normal((MIN_ROWS_FOR_INDEX, _INDEX_EMBEDDING_DIM), dtype=np.float32)
+    m2l = rng.standard_normal(
+        (MIN_ROWS_FOR_INDEX, _INDEX_EMBEDDING_DIM, _INDEX_M2L_FRAMES),
+        dtype=np.float32,
+    )
+    m2l_vectors = m2l.mean(axis=-1, dtype=np.float32)
+    metadata = ShardMetadata(
+        velocity=100,
+        signal_duration_seconds=_SIGNAL_DURATION_SECONDS,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=-55.0,
+    )
+    schema = pa.schema(
+        [
+            pa.field(
+                CLAP_FIELD,
+                pa.list_(pa.float32(), _INDEX_EMBEDDING_DIM),
+                nullable=False,
+            ),
+            pa.field(
+                M2L_FIELD, pa.fixed_shape_tensor(pa.float32(), m2l.shape[1:]), nullable=False
+            ),
+            pa.field(
+                f"{M2L_FIELD}_vec",
+                pa.list_(pa.float32(), _INDEX_EMBEDDING_DIM),
+                nullable=False,
+            ),
+        ],
+        metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode()},
+    )
+    return pa.Table.from_arrays(
+        [
+            pa.FixedSizeListArray.from_arrays(pa.array(clap.reshape(-1)), _INDEX_EMBEDDING_DIM),
+            pa.FixedShapeTensorArray.from_numpy_ndarray(m2l),
+            pa.FixedSizeListArray.from_arrays(
+                pa.array(m2l_vectors.reshape(-1)), _INDEX_EMBEDDING_DIM
+            ),
+        ],
+        schema=schema,
+    )
+
+
 @pytest.fixture()
 def remote_indexed_lance_dataset_uri() -> Iterator[str]:
-    """Yield an uploaded Lance dataset URI with ``>= MIN_ROWS_FOR_INDEX`` rows.
-
-    Enough rows that the downstream IVF_PQ build trains rather than skips.
+    """Yield a real-R2 Lance dataset with index-ready embedding columns.
 
     :yields str: ``r2://`` URI of the uploaded dataset.
     """
-    yield from _render_and_upload(MIN_ROWS_FOR_INDEX)
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
+    r2_io.ensure_r2_env_loaded()
+
+    prefix = _unique_test_prefix()
+    shard_uri = r2_io.shard_uri(_R2_BUCKET, prefix, "shard-000000.lance")
+    try:
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            local_shard = Path(raw_work_dir) / "shard-000000.lance"
+            lance.write_dataset(_indexable_embedding_table(), local_shard)
+            r2_io.upload_dir(local_shard, shard_uri)
+        assert r2_io.r2_directory_exists(shard_uri), f"upload left nothing at {shard_uri}"
+        yield shard_uri
+    finally:
+        r2_io.purge_prefix(_R2_BUCKET, prefix)
 
 
 def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
@@ -229,6 +289,7 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
 
 
+@pytest.mark.requires_vst
 def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
     remote_lance_dataset_uri: str,
 ) -> None:
@@ -260,6 +321,7 @@ def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
     assert np.isfinite(values.combine_chunks().to_numpy_ndarray()).all()
 
 
+@pytest.mark.requires_vst
 def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
     remote_lance_dataset_uri: str,
 ) -> None:
@@ -369,32 +431,27 @@ def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
     assert neighbours.num_rows >= 1, "nearest query returned no rows"
 
 
+@pytest.mark.timeout(_INDEX_TEST_TIMEOUT_SECONDS)
 def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     remote_indexed_lance_dataset_uri: str,
 ) -> None:
     """``synth-setter-add-embeddings build_index=true`` trains an IVF_PQ index on a real R2 dataset.
 
-    Renders + uploads a ``MIN_ROWS_FOR_INDEX``-row shard via the VST renderer,
-    runs the real ``add_embeddings`` CLI with ``build_index=true`` and tuning sized
-    for the row count (so PQ training succeeds rather than skips), then reopens
-    the remote dataset and asserts IVF_PQ indexes exist on ``clap`` and
-    ``m2l_vec``; a CLAP ANN ``nearest=`` query returns a stored row's own vector
-    as the top hit.
+    Uploads schema-compatible embedding columns at ``MIN_ROWS_FOR_INDEX``, runs
+    the real ``add_embeddings`` CLI with ``build_index=true``, then reopens the
+    remote dataset and asserts IVF_PQ indexes exist on ``clap`` and ``m2l_vec``;
+    a CLAP ANN query returns a stored row's own vector as the top hit.
 
     :param remote_indexed_lance_dataset_uri: Fixture-provided ``r2://`` URI of a
         dataset with enough rows to train the index.
     """
-    # num_partitions=4 / num_sub_vectors=16 (512 % 16 == 0) train cleanly at 256
-    # rows; the partition count stays well under the row floor PQ needs. No
-    # --batch-size: exercise the default path, since the encoders self-bound their
-    # GPU memory (CLAP_ENCODE_MAX_BATCH / M2L_ENCODE_MAX_BATCH).
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
         [
             _ADD_EMBEDDINGS_CMD,
             f"lance_uri={remote_indexed_lance_dataset_uri}",
             "build_index=true",
-            "num_partitions=4",
-            "num_sub_vectors=16",
+            f"num_partitions={_INDEX_NUM_PARTITIONS}",
+            f"num_sub_vectors={_INDEX_NUM_SUB_VECTORS}",
         ],
         check=False,
         capture_output=True,
