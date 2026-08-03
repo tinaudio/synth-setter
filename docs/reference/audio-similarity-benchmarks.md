@@ -58,9 +58,9 @@ safety net; the chart is the early warning.
 The chart's left-hand legend lets you toggle individual metric series on
 and off; the dropdown at the top selects the dashboard ("bucket").
 
-## Three dashboards
+## Five dashboards
 
-The workflow publishes three independent dashboards, each representing a
+The workflow publishes five independent dashboards, each representing a
 different question.
 
 ### `VST noise floor (1 preset N renders)`
@@ -98,26 +98,101 @@ This view is _broader_ in patch coverage but noisier between runs (each
 run picks a different random sample), so trend signal is lower per
 point but covers more of the patch space than the hardcoded fixture.
 
-### `Surge host parity and throughput`
+### `Surge host parity`
 
-Sourced from `test_surgepy_pedalboard_dawdreamer_have_real_artifact_parity_and_benchmarks`.
-Pedalboard, DawDreamer, and SurgePy each render 30 rows from the same native
-Surge patch, normalized parameter vector, and MIDI event through the production
-Lance writer and reader. Every backend pair is checked with MSS, wMFCC, SOT,
-RMS-envelope cosine, and persisted-mel RMSE.
+The real tests in
+[`test_surgepy_host_parity_e2e.py`](../../tests/data/vst/test_surgepy_host_parity_e2e.py)
+render matched Pedalboard, DawDreamer, and SurgePy datasets through the production
+Lance writer and reader. The repeated workload renders one deterministic patch 30
+times, while the diverse workload renders eight deterministic cutoff and octave
+combinations. Both set oscillator drift to zero so host scheduling and parameter
+dispatch determine differences. A causal workload isolates oscillator one, then
+changes filter cutoff and oscillator octave independently to verify that each host
+applies both mapped controls in the expected direction.
 
-Bucket name: `Surge host parity and throughput`<br>
-JSON file: `surge-host-parity.json`<br>
-Metric name prefix: `surge-host-parity/`
+The `random-patches` workload samples exactly 30 ordered, full-dimensional patches
+directly from `resolve_param_spec(config.param_spec_name).sample(rng)` with
+`np.random.default_rng(20260330)`. Each dictionary contains all 162 Surge synth
+parameters. The corpus is sampled once, then the same dictionaries in the same order
+are passed to all three `make_lance_dataset` runs. A prior full-dimensional probe
+showed expected host divergence outside the narrow repeated/diverse quality limits;
+that observation motivates retaining complete diagnostics instead of hiding rows or
+loosening the established gates.
 
-The workflow also retains an evaluator-friendly `surge-host-parity-comparison`
+Every matched render records MSS, wMFCC, SOT, RMS-envelope cosine and distance, and
+persisted-mel RMSE. The repeated, diverse, and causal workloads retain the inclusive
+quality limits: mel RMSE ≤ 5.0, MSS ≤ 6.0, RMS-envelope cosine ≥ 0.99, SOT ≤ 0.01,
+and wMFCC ≤ 2.0. Their audio must also begin no earlier than the requested MIDI
+sample, and no backend may lag its independent Pedalboard/DawDreamer controls by
+more than two samples. Failures identify the workload, backend or pair, and sample.
+
+`random-patches` is diagnostic-only. No audio-quality or onset-parity limit is
+asserted for its rows. The dashboard emits every per-row distance and each pair's
+worst distance; schema-v2 metrics additionally retain raw RMS cosine alongside its
+canonical cosine distance. This avoids duplicate chart series and keeps the
+`customSmallerIsBetter` percentage alerts directionally honest. Green means all 30
+fixed patches rendered through the production
+Lance path,
+shared encoded parameter rows remained byte-identical across hosts, schema-v2
+artifacts were consumed, and diagnostics were recorded. It does **not** mean
+full-dimensional host parity passed. Sample 1 is known to fall just below the normal
+-55 dB validity floor, so only this workload sets `min_loudness=-inf`. This preserves
+the exact corpus without rejection or resampling; production defaults and all other
+workloads remain unchanged.
+
+These limits retain margin above the worst per-render metrics from a fresh local
+production-path run of the schema-v2 stack:
+
+| Workload | Backend pair          | Mel RMSE max |  MSS max | RMS cosine min |  SOT max | wMFCC max |
+| -------- | --------------------- | -----------: | -------: | -------------: | -------: | --------: |
+| Causal   | Pedalboard/DawDreamer |     3.921572 | 4.140047 |       0.997562 | 0.004929 |  1.725243 |
+| Causal   | Pedalboard/SurgePy    |     2.956012 | 3.162385 |       0.996242 | 0.005979 |  1.709796 |
+| Causal   | DawDreamer/SurgePy    |     4.192492 | 4.783963 |       0.995598 | 0.006689 |  1.692569 |
+| Repeated | Pedalboard/DawDreamer |     2.006619 | 0.548264 |       0.999992 | 0.006141 |  1.290381 |
+| Repeated | Pedalboard/SurgePy    |     2.048773 | 0.562696 |       0.999988 | 0.006270 |  1.311894 |
+| Repeated | DawDreamer/SurgePy    |     2.095637 | 0.590306 |       0.999994 | 0.006022 |  1.296896 |
+| Diverse  | Pedalboard/DawDreamer |     2.885695 | 0.631247 |       0.999566 | 0.006062 |  1.406065 |
+| Diverse  | Pedalboard/SurgePy    |     2.985338 | 0.677610 |       0.999293 | 0.006087 |  1.424524 |
+| Diverse  | DawDreamer/SurgePy    |     2.868343 | 0.619145 |       0.999756 | 0.006071 |  1.423413 |
+
+A local diagnostic run of the fixed random corpus completed in 225 seconds and
+recorded the expected broader divergence. “Rows outside envelope” counts a row when
+any existing repeated/diverse limit would have failed; it is reported for context
+and is not a random-workload assertion.
+
+| Backend pair          | Mel RMSE max |  MSS max | RMS cosine min | RMS distance max |  SOT max | wMFCC max | Rows outside envelope |
+| --------------------- | -----------: | -------: | -------------: | ---------------: | -------: | --------: | --------------------: |
+| Pedalboard/DawDreamer |    10.234047 | 7.363658 |       0.773084 |         0.226916 | 0.083054 | 11.175849 |                    18 |
+| Pedalboard/SurgePy    |     8.152526 | 4.403924 |       0.605363 |         0.394637 | 0.101489 |  6.254781 |                    18 |
+| DawDreamer/SurgePy    |    10.712527 | 7.805167 |       0.710663 |         0.289337 | 0.056300 | 11.510325 |                    15 |
+
+A separate causal calibration attempt reached an RMS-cosine minimum of 0.994525;
+the 0.99 floor preserves run-to-run margin while still replacing the previous 0.8
+gross-regression gate.
+
+| Workload       | Bucket name                               | JSON file                                |
+| -------------- | ----------------------------------------- | ---------------------------------------- |
+| Repeated patch | `Surge host parity (repeated patch)`      | `surge-host-parity-repeated-patch.json`  |
+| Diverse patch  | `Surge host parity (diverse patches)`     | `surge-host-parity-diverse-patches.json` |
+| Random patches | `Surge host diagnostics (random patches)` | `surge-host-parity-random-patches.json`  |
+
+Metric name prefix: `surge-host-parity/<workload>/`.
+
+The workflow retains an evaluator-friendly `surge-host-parity-comparison`
 artifact for 14 days. Trusted main-branch runs copy the same directory with
 checksums to
-`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. It contains
-180 evaluator-layout WAV files, 90 persisted mel arrays, 90 mel PNG previews,
-normalized parameters,
-per-sample metrics, worst-case metrics, thresholds, and provenance. Pull requests
-never receive R2 credentials.
+`r2:experiments/surge-host-parity/<UTC-datetime>-<git-sha>-<run-id>-<run-attempt>/`.
+The datetime uses the fixed-width `YYYY-MM-DDTHH-MM-SSZ` format, so R2's default
+lexicographic ordering is chronological. Artifact schema v2 stores
+one `audio/sample_NN/` directory per workload row with `pedalboard.wav`,
+`dawdreamer.wav`, and `surgepy.wav`. Each workload also includes same-backend
+persisted mel arrays and previews, exact normalized parameters, per-render onset and
+pair metrics, renderer versions, container image, commit SHA, and workflow run ID.
+The random workload exports 30 sample directories and 90 WAVs, mel arrays, and mel
+previews. Its manifest marks thresholds as inapplicable and records the sampler,
+seed, diagnostic-only green definition, and loudness override rationale. Consumption
+recomputes every mel from its same-named WAV so a label swap cannot pass. Pull
+requests never receive R2 credentials.
 
 ## Metric series
 

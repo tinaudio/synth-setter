@@ -55,6 +55,19 @@ class TestDataModuleConfigAcceptsEveryConfig:
         parsed = DataModuleConfig.model_validate(datamodule_subtree)
         assert parsed.target_.endswith("TorchSynthDataModule")
 
+    @pytest.mark.parametrize("datamodule_name", _all_datamodule_config_names())
+    def test_training_datamodule_yaml_defaults_validation_workers_to_zero(
+        self, datamodule_name: str
+    ) -> None:
+        """Every training-capable datamodule composes with in-process validation.
+
+        :param datamodule_name: Parametrized YAML stem under ``configs/datamodule/``.
+        """
+        datamodule_subtree = compose_subtree("datamodule", datamodule_name)
+        if datamodule_subtree["_target_"].endswith("AudioDataModule"):
+            pytest.skip("audio datamodules only implement prediction")
+        assert datamodule_subtree["val_num_workers"] == 0
+
 
 class TestSurgeDatamoduleOverlays:
     """The thin surge instances overlay ``vst`` and target ``VSTDataModule``."""

@@ -53,10 +53,13 @@ under the GPL-3.0 license.
 `make install` handles uv, Python 3.12, and Python dependencies.
 `make install-surge-xt` installs the exact package pinned in
 [`studiorack.json`](studiorack.json) through the locked Studiorack CLI and
-creates the stable `plugins/Surge XT.vst3` alias. `make install-plugins`
-installs every package in that manifest. Platform availability is determined
-by the Studiorack registry; unsupported package/host combinations fail
-explicitly.
+creates the stable `plugins/Surge XT.vst3` alias. Selected artifact URLs and
+digests must match each manifest's same-stem lock, such as
+[`studiorack.lock.json`](studiorack.lock.json) or
+[`studiorack-cardinal.lock.json`](studiorack-cardinal.lock.json), and completed
+bundles receive a content seal before aliasing. `make install-plugins` installs
+every package in the manifest. Unsupported package/host combinations and
+registry drift fail explicitly.
 
 ## Installation
 
@@ -86,10 +89,11 @@ make install-surge-xt
 > [getting-started §4c](docs/getting-started.md#4c-weights--biases-wb) for
 > the full configuration workflow.
 
-> **Already have Surge XT installed system-wide?** Run `make link-plugins` to
-> resolve installed manifest packages from Studiorack storage or standard VST3
-> directories. `SYNTH_SETTER_PLUGIN_PATH` remains available for unmanaged and
-> legacy Surge installs. See
+> **Already have Surge XT installed system-wide?** Adopt the exact version with
+> `synth-setter-plugins adopt --plugin surge-synthesizer/surge --bundle-path
+> "/path/to/Surge XT.vst3"`, then run `make link-plugins`. Adoption verifies the
+> plugin version and seals its content. `SYNTH_SETTER_PLUGIN_PATH` remains
+> available for unmanaged and legacy Surge installs. See
 > [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
@@ -121,6 +125,9 @@ in [docs/reference/dependency-management.md](docs/reference/dependency-managemen
 ## Quick Start
 
 ```bash
+# Render a CLAP-conditioned Surge patch and upload the WAV to R2
+synth-setter-clap "frog croak"
+
 # Run tests
 make test-fast
 
@@ -130,6 +137,12 @@ make format
 # See all available targets
 make help
 ```
+
+The CLAP command selects CUDA, MPS, or CPU automatically, caches its pinned
+checkpoints, and writes `logs/clap-renders/<run-id>.{wav,csv}`. It uploads both
+files under `r2://experiments/clap-renders/`; the CSV records the prompt-to-rendered-audio
+CLAP cosine similarity and distance. Run `synth-setter-clap --help` for checkpoint,
+device, output, seed, and upload overrides.
 
 See the project documentation for a full walkthrough.
 

@@ -46,10 +46,9 @@ def _instantiate_train_datamodule(*overrides: str) -> LanceVSTDataModule:
 def test_train_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
     """The datamodule train instantiates carries the RAM-bounded worker default.
 
-    ``num_workers`` is applied per dataloader, so enabling validation doubles the
-    live worker count. Lance workers are ~1.4 GB each, and the previous default
-    of 11 put train+val pools past a 32 GB host, where the OOM killer reaped the
-    run before its first checkpoint (#1916).
+    ``num_workers`` sizes the training pool independently from the in-process
+    validation default. Lance workers are ~1.4 GB each, so this default remains
+    bounded against host RAM rather than CPU count (#1916).
 
     Instantiates the datamodule the way ``train`` does rather than asserting the
     composed dict, so the default is checked where it is consumed. Composed
@@ -57,6 +56,16 @@ def test_train_builds_vst_datamodule_with_ram_bounded_num_workers() -> None:
     themselves, so no other train test would notice the default drifting up.
     """
     assert _instantiate_train_datamodule().num_workers == 4
+
+
+def test_train_datamodule_validation_workers_default_to_zero() -> None:
+    """The composed training datamodule validates in the trainer process by default."""
+    assert _instantiate_train_datamodule().val_num_workers == 0
+
+
+def test_train_datamodule_persistent_workers_default_remains_enabled() -> None:
+    """The validation worker split does not alter configured worker persistence."""
+    assert _instantiate_train_datamodule().persistent_workers is True
 
 
 def test_train_datamodule_prefetch_factor_defaults_to_none() -> None:

@@ -10,6 +10,8 @@ on:
       - "src/synth_setter/configs/**"
       - "scripts/**"
       - "environment.yaml"
+      - "package-lock.json"
+      - "package.json"
       - "pyproject.toml"
       # This is the only test env without a project `.venv`, so it is the only
       # one that catches `agent/_shared` entry points assuming one — see #1914.
@@ -23,6 +25,8 @@ on:
       - "src/synth_setter/configs/**"
       - "scripts/**"
       - "environment.yaml"
+      - "package-lock.json"
+      - "package.json"
       - "pyproject.toml"
       # This is the only test env without a project `.venv`, so it is the only
       # one that catches `agent/_shared` entry points assuming one — see #1914.
@@ -42,6 +46,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install patched Studiorack CLI
+        run: npm ci
 
       - name: Set up conda env from environment.yaml
         uses: mamba-org/setup-micromamba@v2

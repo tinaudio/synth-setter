@@ -7,6 +7,7 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import json
 import logging
 import os
 import re
@@ -44,8 +45,6 @@ from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
@@ -60,6 +59,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_clap_preserves_resampler_output,
     assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
@@ -228,6 +228,9 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
     assert encoder.backbone.out_dim == 8
     assert not encoder.backbone.clap.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
+    assert_clap_preserves_resampler_output(
+        encoder.backbone, cfg_torchsynth_clap_online_train.model.encoder.backbone.checkpoint
+    )
 
 
 @pytest.mark.slow
@@ -353,25 +356,30 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert np.isfinite(logged_values).all()
 
 
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
     cfg_torchsynth_train: DictConfig,
 ) -> None:
-    """Train two epochs with per-epoch resampling through the real entrypoint.
+    """Train two epochs with a persistent render worker through the real entrypoint.
 
-    Pins that Lightning's fit loop accepts the fresh-index train sampler across
-    epoch boundaries (one ``iter()`` per epoch on the same loader).
+    Pins that Lightning's fit loop accepts the fresh-index train sampler across epoch boundaries
+    while reusing the same worker process.
 
     :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
     """
     HydraConfig().set_config(cfg_torchsynth_train)
     with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.datamodule.num_workers = 1
         cfg_torchsynth_train.datamodule.resample_train_per_epoch = True
         cfg_torchsynth_train.trainer.fast_dev_run = False
         cfg_torchsynth_train.trainer.max_epochs = 2
-    metric_dict, _ = train(cfg_torchsynth_train)
+    metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
     assert torch.isfinite(metric_dict["train/loss"])
+    assert object_dict["datamodule"].train_dataloader().persistent_workers is True
 
 
 @pytest.mark.gpu
@@ -1114,12 +1122,12 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
-    """Run one spawned-worker train, val, and test step from Lance shards.
+    """Run train, validation, and test steps with split-specific Lance workers.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
-    reads end-to-end through the in-process ``train(cfg)`` entrypoint with
-    spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
-    fixture. Also pins the
+    reads end-to-end through the in-process ``train(cfg)`` entrypoint. Training
+    and test use a worker while validation uses the in-process default; the Hydra
+    composition path lives on the ``cfg_train_lance`` fixture. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
@@ -1133,8 +1141,11 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
 
     # Pin the Dataset-API migration e2e: the split the datamodule trained over
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
-    train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
+    datamodule = object_dict["datamodule"]
+    train_split = Path(datamodule.dataset_root) / "train.lance"
     assert train_split.is_dir()
+    assert datamodule.num_workers == 1
+    assert datamodule.val_num_workers == 0
 
 
 def test_train_fast_dev_run_sketch_tokens_lance(
@@ -1181,31 +1192,28 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
 
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
-def test_train_lance_records_dataset_lineage_from_local_spec(
+def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
     cfg_train_lance: DictConfig,
-    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
-    """A real Lance training run records its local dataset artifact as a W&B input.
+    """A real Lance training run records a schema-drifted dataset as a W&B input.
 
     :param cfg_train_lance: Composed Lance training configuration.
-    :param dataset_spec_factory: Factory producing the frozen dataset provenance.
     """
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
     dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
-    write_spec_to_path(
-        dataset_spec_factory(
-            task_name="lineage-lance",
-            train_val_test_sizes=[4, 4, 0],
-            r2={"bucket": "intermediate-data"},
-            render={"samples_per_shard": 4},
-        ),
-        dataset_root / "input_spec.json",
-    )
+    (dataset_root / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
     HydraConfig().set_config(cfg_train_lance)
     logger = _RecordingWandbLogger()
     with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
         train(cfg_train_lance)
 
-    assert logger.used_artifacts == ["data-lineage-lance:lineage-lance-20260520T000000000Z"]
+    assert logger.used_artifacts == [
+        "data-surge-simple-lance-440k-20k-20k:surge-simple-lance-440k-20k-20k-20260706T005448315Z"
+    ]
 
 
 def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:
@@ -2169,6 +2177,7 @@ _ALL_EMBEDDING_CONDITIONING_PROFILES = (
     "ssondo",
     "t5gemma",
     "matpac_plus",
+    "meanaudio_16k",
 )
 
 
@@ -2248,10 +2257,10 @@ def _assert_t5gemma_feed_forward_checkpoint_validates(
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
-def _assert_model_predictions_depend_on_cached_conditioning(
+def _assert_model_predictions_depend_on_conditioning(
     object_dict: dict[str, Any],
 ) -> None:
-    """Assert the trained model keeps a gradient path from cached vectors.
+    """Assert the trained model keeps a gradient path from conditioning.
 
     :param object_dict: Objects returned by the train entrypoint.
     """
@@ -2259,7 +2268,7 @@ def _assert_model_predictions_depend_on_cached_conditioning(
     datamodule = object_dict["datamodule"]
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
-    conditioning = batch["conditioning"].detach().requires_grad_(True)
+    conditioning = batch[model._conditioning_key].detach().requires_grad_(True)
     predictions = model._sample(
         conditioning,
         torch.zeros_like(batch["params"]),
@@ -2271,6 +2280,83 @@ def _assert_model_predictions_depend_on_cached_conditioning(
 
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
+
+
+def _assert_model_predictions_change_with_conditioning(object_dict: dict[str, Any]) -> None:
+    """Assert conditioning rows alter predictions under identical noise.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch[model._conditioning_key]
+    noise = torch.zeros_like(batch["params"])
+
+    predictions = model._sample(conditioning, noise, steps=1, cfg_strength=1.0)
+    swapped_predictions = model._sample(
+        conditioning.roll(1, dims=0),
+        noise,
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    assert torch.isfinite(predictions).all()
+    assert torch.isfinite(swapped_predictions).all()
+    assert not torch.allclose(predictions, swapped_predictions, equal_nan=True)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_pupujepa_large_cached_conditioning_returns_finite_loss(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train one real step from cached PupuJEPA Large sequences.
+
+    :param tmp_path: Training output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(
+        surge_xt_embedding_smoke_datasets, "pupujepa_large"
+    )
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="pupujepa_large",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_depend_on_conditioning(object_dict)
+
+
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_pupujepa_large_online_conditioning_returns_finite_loss(
+    cfg_torchsynth_pupujepa_large_online_train: DictConfig,
+) -> None:
+    """Train one real-weight step through online PupuJEPA Large conditioning.
+
+    :param cfg_torchsynth_pupujepa_large_online_train: Two-row production-path config.
+    """
+    cfg = cfg_torchsynth_pupujepa_large_online_train
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_change_with_conditioning(object_dict)
 
 
 @pytest.mark.requires_vst
@@ -2318,7 +2404,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
     surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
-    """Train every profile and validate S-SONDO and T5Gemma checkpoints.
+    """Train every profile and validate their downstream conditioning paths.
 
     :param local_embedding_checkpoints: Preflighted real model directories.
     :param tmp_path: Per-profile training output parent.
@@ -2350,8 +2436,9 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
+        if conditioning in {"ssondo", "meanaudio_16k"}:
+            _assert_model_predictions_depend_on_conditioning(object_dict)
         if conditioning == "ssondo":
-            _assert_model_predictions_depend_on_cached_conditioning(object_dict)
             _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(

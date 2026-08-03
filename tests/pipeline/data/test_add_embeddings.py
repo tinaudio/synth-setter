@@ -37,7 +37,9 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
     M2L_FIELD,
+    MEANAUDIO_16K_FIELD,
     PARAM_ARRAY_FIELD,
+    PUPUJEPA_LARGE_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SKETCH_CENTROID_CHILD,
@@ -67,7 +69,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     SAME_LATENT_FRAMES,
     SKETCH_INDEX_SUB_VECTORS,
     SKETCH_VEC_COLUMN,
-    SKETCH_INDEX_SUB_VECTORS,
     EmbeddingSpec,
     Encoder,
     IndexSpec,
@@ -99,6 +100,11 @@ from synth_setter.pipeline.data.add_embeddings import (
 from synth_setter.pipeline.data.matpac_plus import (
     MATPAC_PLUS_FRONTEND,
     matpac_plus_num_latent_frames,
+)
+from synth_setter.pipeline.data.meanaudio import (
+    MEANAUDIO_EMBEDDING_DIM,
+    MEANAUDIO_INDEX_SUB_VECTORS,
+    meanaudio_num_latent_frames,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.same import (
@@ -213,6 +219,20 @@ def _fake_sketch(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     return np.ascontiguousarray(np.repeat(cells, frames, axis=2))
 
 
+def _fake_meanaudio(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Encode audio as deterministic MeanAudio-shaped sequences.
+
+    :param audio: ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :returns: Deterministic ``(B, 20, F)`` posterior means.
+    """
+    frames = meanaudio_num_latent_frames(audio.shape[-1], sample_rate)
+    fill = audio.astype(np.float32).mean(axis=(1, 2))
+    return np.broadcast_to(
+        fill[:, None, None], (len(audio), MEANAUDIO_EMBEDDING_DIM, frames)
+    ).copy()
+
+
 def _fake_matpac_plus(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Encode audio as deterministic MATPAC++-shaped sequences.
 
@@ -246,6 +266,8 @@ def _encoder_for(name: str) -> Callable[..., np.ndarray]:
         return _fake_same(0.75, same_l_num_latent_frames)
     if name == "matpac_plus":
         return _fake_matpac_plus
+    if name == "meanaudio_16k":
+        return _fake_meanaudio
     raise ValueError(f"no fake encoder for {name!r}")
 
 
@@ -385,12 +407,15 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "clap",
         "m2l",
         "param_shift",
+        "pupujepa_large",
+        "pupujepa_tiny",
         "same_l",
         "same_s",
         "sketch",
         "ssondo",
         "t5gemma",
         "matpac_plus",
+        "meanaudio_16k",
     }
     assert EMBEDDING_REGISTRY["sketch"].index == IndexSpec(
         pool="none",
@@ -416,11 +441,83 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["t5gemma"].input_fields == (PARAM_ARRAY_FIELD,)
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
+    assert EMBEDDING_REGISTRY["pupujepa_tiny"].co_resident is False
+    assert EMBEDDING_REGISTRY["pupujepa_large"].index == IndexSpec(
+        pool="mean", vector_column=f"{PUPUJEPA_LARGE_FIELD}_vec", vector_dim=8192
+    )
+    assert EMBEDDING_REGISTRY["pupujepa_large"].co_resident is False
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
     assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
     assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
+    assert EMBEDDING_REGISTRY["meanaudio_16k"].index == IndexSpec(
+        pool="mean",
+        num_sub_vectors=MEANAUDIO_INDEX_SUB_VECTORS,
+        vector_column=f"{MEANAUDIO_16K_FIELD}_vec",
+        vector_dim=MEANAUDIO_EMBEDDING_DIM,
+    )
+    assert EMBEDDING_REGISTRY["meanaudio_16k"].co_resident is False
+
+
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_loader_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Each PupuJEPA registry adapter selects its released teacher size.
+
+    :param monkeypatch: Fixture replacing heavyweight teacher loading.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_pupujepa_audio_encoder",
+        lambda checkpoint, *, device, variant: (
+            calls.append((checkpoint, device, variant)) or (lambda audio, rate: audio)
+        ),
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    spec.load_encoder(
+        "custom/pupujepa",
+        AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"),
+    )
+
+    assert calls == [("custom/pupujepa", "cpu", variant)]
+
+
+@pytest.mark.parametrize(
+    ("name", "variant"),
+    [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
+)
+def test_pupujepa_registry_artifact_identity_threads_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    variant: str,
+) -> None:
+    """Artifact identities hash only the selected teacher size.
+
+    :param monkeypatch: Fixture replacing checkpoint hashing.
+    :param name: Registry profile under test.
+    :param variant: Expected teacher size.
+    """
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.pupujepa_artifact_digest",
+        lambda checkpoint, selected: calls.append((checkpoint, selected)) or "digest",
+    )
+    spec = EMBEDDING_REGISTRY[name]
+
+    identity = spec.resolve_artifact_identity("custom/pupujepa")
+
+    assert calls == [("custom/pupujepa", variant)]
+    assert "digest" in identity
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:

@@ -8,9 +8,22 @@ from typing import TypedDict, cast
 
 import pytest
 
-from synth_setter.pipeline.data.matpac_plus import TINYMU_PACKAGE_COMMIT
+from synth_setter.pipeline.data.matpac_plus import TINYMU_PACKAGE_COMMIT, TINYMU_TIMM_VERSION
+from synth_setter.pipeline.data.meanaudio import MEANAUDIO_PACKAGE_COMMIT
+from synth_setter.pupujepa import PUPUJEPA_TIMM_VERSION
 
 _TINYMU_REQUIREMENT = f"tinymu @ git+https://github.com/ktinubu/TinyMU@{TINYMU_PACKAGE_COMMIT}"
+_MEANAUDIO_REQUIREMENT = (
+    f"meanaudio @ git+https://github.com/xiquan-li/MeanAudio.git@{MEANAUDIO_PACKAGE_COMMIT}"
+)
+_MEANAUDIO_REQUIRES_DIST = [
+    "einops>=0.6",
+    "huggingface-hub>=0.26",
+    "librosa>=0.8.1",
+    "numpy>=1.21",
+    "omegaconf",
+    "torch>=2.5.1",
+]
 _SA3_REQUIREMENT = (
     "stable-audio-3 @ "
     "git+https://github.com/Stability-AI/stable-audio-3@"
@@ -85,13 +98,65 @@ def test_tinymu_package_is_pinned_in_normal_torch_runtime(
     :param project_root: Repository root containing ``uv.lock``.
     :param pyproject: Parsed project metadata.
     """
-    assert _TINYMU_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    torch_dependencies = pyproject["dependency-groups"]["torch"]
+    assert _TINYMU_REQUIREMENT in torch_dependencies
+    assert f"timm=={PUPUJEPA_TIMM_VERSION}" in torch_dependencies
     lock_text = (project_root / "uv.lock").read_text()
     assert (
         'source = { git = "https://github.com/ktinubu/TinyMU?rev='
         f"{TINYMU_PACKAGE_COMMIT}#{TINYMU_PACKAGE_COMMIT}"
         '" }'
     ) in lock_text
+
+
+def test_meanaudio_package_and_metadata_override_match_lock(
+    project_root: Path, pyproject: _Pyproject
+) -> None:
+    """MeanAudio is direct, immutable, and limited to the VAE import closure.
+
+    :param project_root: Repository root containing ``uv.lock``.
+    :param pyproject: Parsed project metadata.
+    """
+    assert _MEANAUDIO_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    assert _MEANAUDIO_REQUIREMENT not in pyproject["project"]["dependencies"]
+    metadata = next(
+        item
+        for item in pyproject["tool"]["uv"]["dependency-metadata"]
+        if item["name"] == "meanaudio"
+    )
+    assert metadata == {
+        "name": "meanaudio",
+        "version": "1.0.0",
+        "requires-dist": _MEANAUDIO_REQUIRES_DIST,
+    }
+
+    lock_text = (project_root / "uv.lock").read_text()
+    lock = cast("_Lock", tomllib.loads(lock_text))
+    lock_metadata = next(
+        item for item in lock["manifest"]["dependency-metadata"] if item["name"] == "meanaudio"
+    )
+    assert lock_metadata == metadata
+    assert any(package["name"] == "meanaudio" for package in lock["package"])
+    assert (
+        'source = { git = "https://github.com/xiquan-li/MeanAudio.git?rev='
+        f"{MEANAUDIO_PACKAGE_COMMIT}#{MEANAUDIO_PACKAGE_COMMIT}"
+        '" }'
+    ) in lock_text
+
+
+def test_tinymu_metadata_uses_the_pupujepa_compatible_timm(
+    pyproject: _Pyproject,
+) -> None:
+    """TinyMU and PupuJEPA share the tested modern timm runtime.
+
+    :param pyproject: Parsed project metadata.
+    """
+    metadata = next(
+        item for item in pyproject["tool"]["uv"]["dependency-metadata"] if item["name"] == "tinymu"
+    )
+
+    assert TINYMU_TIMM_VERSION == PUPUJEPA_TIMM_VERSION
+    assert f"timm=={TINYMU_TIMM_VERSION}" in metadata["requires-dist"]
 
 
 def test_legacy_same_runtime_is_absent_from_metadata_and_lock(

@@ -46,6 +46,25 @@ CODE_QUALITY_PR_PATHS: frozenset[str] = frozenset(
         "uv.lock",
     }
 )
+DOCKER_BUILD_PR_PATHS: frozenset[str] = frozenset(
+    {
+        ".github/actions/setup-surge-xt/**",
+        ".github/workflows/docker-build-validation.yml",
+        "docker/**",
+        "package-lock.json",
+        "package.json",
+        "pyproject.toml",
+        "scripts/studiorack/**",
+        "src/synth_setter/plugin_manager.py",
+        "studiorack-cardinal.json",
+        "studiorack-cardinal.lock.json",
+        "studiorack.json",
+        "studiorack.lock.json",
+        "tests/docker/**",
+        "tests/test_plugin_manager.py",
+        "uv.lock",
+    }
+)
 DATASET_GENERATION_PR_PATHS: frozenset[str] = frozenset(
     {
         ".github/workflows/generate-dataset-shards.yaml",
@@ -62,10 +81,14 @@ SPEC_MATERIALIZATION_PR_PATHS: frozenset[str] = frozenset(
     {
         ".github/workflows/spec-materialization.yml",
         ".github/workflows/test-spec-materialization.yml",
+        "docker/ubuntu22_04/ensure_plugin_symlinks.sh",
         "src/synth_setter/configs/experiment/generate_dataset/ci-materialize-test.yaml",
         "src/synth_setter/pipeline/ci/materialize_spec.py",
         "src/synth_setter/pipeline/ci/validate_spec.py",
+        "src/synth_setter/plugin_manager.py",
+        "studiorack.json",
         "tests/pipeline/ci_config/test_materialize_spec.py",
+        "tests/test_plugin_manager.py",
     }
 )
 
@@ -197,6 +220,16 @@ def workflows(project_root: Path) -> WorkflowSet:
         "test-spec-materialization.yml",
     )
     return {name: cast(YamlMapping, load_workflow(project_root, name)) for name in filenames}
+
+
+def test_docker_build_pr_paths_cover_owned_surfaces(project_root: Path) -> None:
+    """Docker validation follows dependencies and plugin installation inputs.
+
+    :param project_root: Repository root containing the workflow document.
+    """
+    workflow = cast(YamlMapping, load_workflow(project_root, "docker-build-validation.yml"))
+
+    assert DOCKER_BUILD_PR_PATHS <= _pull_request_paths(workflow)
 
 
 def test_cpu_slow_pr_paths_cover_owned_surfaces(workflows: WorkflowSet) -> None:

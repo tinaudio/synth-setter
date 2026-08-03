@@ -84,11 +84,12 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - Provenance: W&B config (hyperparams, `github_sha`) + frozen `config.yaml` in R2
 - Resume: Lightning native `ckpt_path=` with W&B artifact download
 - Single-job model — no reconciliation, no distributed coordination
-- `datamodule.num_workers` applies to *each* dataloader, so enabling validation
-  doubles the live worker count — size it against host RAM, not core count
-  (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
-- VST configs set `datamodule.persistent_workers=true`; it is effective only when
-  `num_workers > 0`, so CPU debugging with `num_workers=0` needs no extra override
+- `datamodule.num_workers` controls train, test, and predict workers;
+  `datamodule.val_num_workers` controls validation and defaults to `0`. Size any
+  positive counts against host RAM, not core count (measured ~1.4 GB per Lance
+  worker; see `getting-started.md` §8)
+- VST configs set `datamodule.persistent_workers=true`; it is effective per loader
+  only when that loader's worker count is positive
 - `datamodule.download_dataset_root_uri` hydrates a finalized `r2://` or absolute
   `file://` root into a request-addressed child of `dataset_root`. The source must
   contain `dataset.complete`; optional per-split transaction pins select snapshots,

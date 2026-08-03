@@ -22,7 +22,12 @@ from synth_setter.conditioning import NUM_SKETCH_CONTROLS
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
+from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    PUPUJEPA_CHECKPOINT_REVISION,
+)
 from synth_setter.resources import configs_dir
 from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
@@ -220,6 +225,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         pytest.param("same_l", (256, 44), id="same-l"),
         pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
         pytest.param("matpac_plus", (MATPAC_PLUS_FRONTEND.embedding_dim, 25), id="matpac_plus"),
+        pytest.param("meanaudio_16k", (MEANAUDIO_EMBEDDING_DIM, 125), id="meanaudio_16k"),
     ],
 )
 def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
@@ -448,7 +454,15 @@ def _conditioning_profile_names() -> list[str]:
 
 # Waveform profiles interpolate datamodule geometry, which this bare composition lacks.
 _WAVEFORM_CONDITIONING_PROFILES = frozenset(
-    {"ast_online", "clap_online", "log_mel", "same_l_online", "same_s_online"}
+    {
+        "ast_online",
+        "clap_online",
+        "log_mel",
+        "pupujepa_large_online",
+        "pupujepa_tiny_online",
+        "same_l_online",
+        "same_s_online",
+    }
 )
 _CACHED_CONDITIONING_PROFILES = [
     profile
@@ -516,6 +530,68 @@ def test_clap_online_profile_matches_training_checkpoint_identity() -> None:
     assert cfg.datamodule.conditioning == "audio"
     assert cfg.model.encoder.backbone.checkpoint == DEFAULT_CLAP_TRAINING_CHECKPOINT
     assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
+
+
+def test_pupujepa_tiny_cached_profile_instantiates_100_patch_pool() -> None:
+    """Four-second cached PupuJEPA sequences instantiate the generic pool."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny", "trainer=cpu"],
+    )
+
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert tuple(cfg.model.conditioning.input_shape) == (1536, 100)
+    assert encoder(torch.randn(2, 1536, 100)).shape == (2, cfg.model.encoder_output_dim)
+
+
+def test_pupujepa_large_cached_profile_instantiates_100_patch_pool() -> None:
+    """Four-second cached Large sequences instantiate the generic pool."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_large", "trainer=cpu"],
+    )
+
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    assert tuple(cfg.model.conditioning.input_shape) == (8192, 100)
+    assert encoder(torch.randn(2, 8192, 100)).shape == (2, cfg.model.encoder_output_dim)
+
+
+def test_pupujepa_large_online_profile_pins_variant_and_width() -> None:
+    """Online Large composition selects the immutable checkpoint and teacher width."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=surge/flow_simple",
+            "conditioning=pupujepa_large_online",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
+    assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
+    assert cfg.model.encoder.backbone.variant == "large"
+    assert cfg.model.encoder.head.embed_dim == 8192
+
+
+def test_pupujepa_tiny_online_profile_pins_checkpoint_identity() -> None:
+    """Online PupuJEPA composition retains the immutable HF revision."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=surge/flow_simple",
+            "conditioning=pupujepa_tiny_online",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
+    assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
+    assert cfg.model.encoder.backbone.variant == "tiny"
+    assert cfg.model.encoder.head.embed_dim == 1536
 
 
 def test_eval_config_conditioning_unset_composes() -> None:
