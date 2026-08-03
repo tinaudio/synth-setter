@@ -211,6 +211,13 @@ def _seed_finalized_root(remote: Path, spec: DatasetSpec) -> Path:
         staged = root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
         staged.mkdir(parents=True, exist_ok=True)
         (staged / "w0-a0.valid").write_text("")
+    for split in ("train", "val", "test"):
+        versions = root / f"{split}.lance" / "_versions"
+        versions.mkdir(parents=True, exist_ok=True)
+        (versions / "1.manifest").write_text("manifest")
+        data = root / f"{split}.lance" / "data"
+        data.mkdir(parents=True, exist_ok=True)
+        (data / "frag.lance").write_text("fragment")
     claims = root / "metadata" / "shard-claims.lance"
     claims.mkdir(parents=True, exist_ok=True)
     (claims / "manifest").write_text("claims")
@@ -445,6 +452,23 @@ def test_main_carries_source_val_and_test_sizes_through(
     )
     written = DatasetSpec.model_validate_json((dest / "input_spec.json").read_text())
     assert written.train_val_test_sizes[1:] == source_spec.train_val_test_sizes[1:]
+
+
+def test_reopen_dataset_drops_split_manifests_but_keeps_fragment_data(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Drop copied manifests so new fragments take the spec-derived schema, not the committed one.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    _seed_finalized_root(fake_r2_remote, source_spec)
+
+    plan = reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
+
+    dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
+    assert not (dest / "train.lance" / "_versions").exists()
+    assert (dest / "train.lance" / "data" / "frag.lance").exists()
 
 
 def test_reopen_plan_is_immutable(source_spec: DatasetSpec) -> None:

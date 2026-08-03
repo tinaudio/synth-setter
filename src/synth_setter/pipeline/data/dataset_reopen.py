@@ -22,13 +22,16 @@ import structlog
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
 from synth_setter.pipeline.schemas.prefix import make_dataset_wandb_run_id, make_r2_prefix
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from synth_setter.pipeline.spec_io import load_spec_from_root, load_spec_from_uri, upload_spec
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 logger = structlog.get_logger(__name__)
+
+# Split datasets whose copied manifests reopen must drop before re-generation.
+SPLITS: tuple[Split, ...] = ("train", "val", "test")
 
 
 @dataclass(frozen=True)
@@ -251,6 +254,12 @@ def reopen_dataset(  # noqa: DOC502
     r2_io.copy_prefix(
         plan.source_root_uri, plan.dest_root_uri, exclude=DATASET_COMPLETE_FILENAME
     )
+    # Drop the copied manifests, keeping each split's data/ files. A committed
+    # dataset makes worker fragments adopt its schema instead of the
+    # spec-derived one (#2084/#2109); finalize's Overwrite re-commits every
+    # winner, preserved and new, from the staged sidecars.
+    for split in SPLITS:
+        _purge_uri(f"{plan.dest_spec.r2.split_lance_uri(split)}/_versions/")
     upload_spec(plan.dest_spec)
     # Idempotency guard for a re-run over a destination a previous attempt finalized.
     r2_io.delete_object(plan.dest_spec.r2.dataset_complete_marker_uri())
