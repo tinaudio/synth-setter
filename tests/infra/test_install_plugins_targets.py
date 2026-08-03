@@ -16,6 +16,7 @@ from synth_setter.plugin_integrity import package_install_lock
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CI_CONDA_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-conda.yml"
 CI_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test.yml"
+MPS_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-mps.yml"
 MAKEFILE = PROJECT_ROOT / "Makefile"
 DOCKERFILE = PROJECT_ROOT / "docker/ubuntu22_04/Dockerfile"
 ARTIFACT_LOCK = PROJECT_ROOT / "studiorack.lock.json"
@@ -251,6 +252,15 @@ def test_docker_fetched_plugins_have_no_manual_download_stage() -> None:
     assert "DEXED_SHA256" not in dockerfile
     assert "OBXF_SHA256" not in dockerfile
     assert "SIX_SINES_SHA256" not in dockerfile
+
+
+def test_mps_workflow_runs_for_surge_setup_changes() -> None:
+    """The real macOS lane validates changes to its plugin setup boundary."""
+    workflow = yaml.safe_load(MPS_TEST_WORKFLOW.read_text())
+    paths = workflow[True]["pull_request"]["paths"]
+
+    assert ".github/actions/setup-surge-xt/**" in paths
+    assert "tests/infra/test_install_plugins_targets.py" in paths
 
 
 def test_macos_provisioners_install_surge_through_studiorack() -> None:
