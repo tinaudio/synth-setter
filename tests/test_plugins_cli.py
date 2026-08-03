@@ -129,7 +129,17 @@ def test_manifest_vst3_prerelease_with_build_metadata_accepted(tmp_path: Path) -
     assert plugin.renderer_version == "4.5.6-rc.1+build.7"
 
 
-@pytest.mark.parametrize("version", ["4.5.6-rc..1", "4.5.6+build..7", "^4.5.6"])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "4.5.6-rc..1",
+        "4.5.6+build..7",
+        "^4.5.6",
+        "4.5.6.abcdef",
+        "4.5.6.abcdefz",
+        "4.5.6.abcdef12",
+    ],
+)
 def test_manifest_invalid_vst3_version_rejected(tmp_path: Path, version: str) -> None:
     """Malformed or ranged runtime versions fail manifest validation.
 
@@ -138,7 +148,10 @@ def test_manifest_invalid_vst3_version_rejected(tmp_path: Path, version: str) ->
     """
     path = _manifest(tmp_path / "studiorack.json", renderer_version=version)
 
-    with pytest.raises(ValidationError, match="VST3 version must be an exact semantic version"):
+    with pytest.raises(
+        ValidationError,
+        match="VST3 version must be an exact semantic or source-qualified version",
+    ):
         PluginManifest.load(path)
 
 

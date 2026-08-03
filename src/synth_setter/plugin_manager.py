@@ -81,6 +81,9 @@ _EXACT_SEMVER = re.compile(
     rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+_SOURCE_QUALIFIED_VST3_VERSION = re.compile(
+    rf"^{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}\.[0-9a-f]{{7}}$"
+)
 _PACKAGE_SLUG = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*/[0-9A-Za-z][0-9A-Za-z._-]*$")
 _INSTALL_LOCK_DIR = ".synth-setter-install-locks"
 _NATIVE_TRANSACTION_DIR = ".synth-setter-native-install"
@@ -284,8 +287,13 @@ class PluginManifest(pydantic.BaseModel):
             if _EXACT_SEMVER.fullmatch(package_version) is None:
                 raise ValueError(f"{package} version must be an exact semantic version")
             renderer_version = package_version if vst3_versions is None else vst3_versions[package]
-            if _EXACT_SEMVER.fullmatch(renderer_version) is None:
-                raise ValueError(f"{package} VST3 version must be an exact semantic version")
+            if (
+                _EXACT_SEMVER.fullmatch(renderer_version) is None
+                and _SOURCE_QUALIFIED_VST3_VERSION.fullmatch(renderer_version) is None
+            ):
+                raise ValueError(
+                    f"{package} VST3 version must be an exact semantic or source-qualified version"
+                )
             bundle = self.vst3_bundles[package]
             if Path(bundle).name != bundle or not bundle.endswith(".vst3"):
                 raise ValueError(f"{package} bundle must be a .vst3 basename")

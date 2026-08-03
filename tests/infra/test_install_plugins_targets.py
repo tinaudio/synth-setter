@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from synth_setter.plugin_manager import PluginManifest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CI_CONDA_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-conda.yml"
 CI_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test.yml"
@@ -60,8 +62,17 @@ def test_studiorack_manifest_pins_runtime_plugin_set() -> None:
     assert payload["vst3Versions"] == {
         **payload["plugins"],
         "asb2m10/dexed": "1.0.0",
+        "baconpaul/six-sines": "1.1.0.43d10b2",
     }
     assert payload["vst3PluginNames"] == {"baconpaul/six-sines": "Six Sines"}
+
+
+def test_six_sines_manifest_pins_source_qualified_runtime_version() -> None:
+    """Six Sines validates the exact runtime identity of its pinned release."""
+    plugin = PluginManifest.load(MANIFEST).resolve("baconpaul/six-sines")
+
+    assert plugin.version == "1.1.0"
+    assert plugin.renderer_version == "1.1.0.43d10b2"
 
 
 def test_cardinal_manifest_pins_optional_plugin() -> None:
