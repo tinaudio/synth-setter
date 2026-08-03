@@ -186,6 +186,9 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         return
 
     hparams["model"] = cfg["model"]
+    for key in ("base_checkpoint_source", "base_checkpoint_sha256"):
+        if key in model.hparams:
+            hparams[key] = model.hparams[key]
 
     # save number of model parameters
     hparams["model/params/total"] = sum(p.numel() for p in model.parameters())

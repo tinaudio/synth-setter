@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import torch
 from beartype import beartype
@@ -53,6 +55,24 @@ _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_TIME_SHAPE = "batch 1"
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_SHAPE = "batch"
+_BASE_CHECKPOINT_SOURCE_ENV = "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE"
+
+
+@jaxtyped(typechecker=beartype)
+def _checkpoint_source_uri(checkpoint: str | Path) -> str:
+    """Return the credential-free source URI for a materialized checkpoint.
+
+    :param checkpoint: Materialized local checkpoint path.
+    :returns: Sanitized original source or the local file URI.
+    """
+    raw_source = os.getenv(_BASE_CHECKPOINT_SOURCE_ENV)
+    if raw_source is None:
+        return Path(checkpoint).expanduser().resolve(strict=True).as_uri()
+    parsed = urlsplit(raw_source)
+    if not parsed.scheme:
+        return Path(raw_source).expanduser().resolve(strict=True).as_uri()
+    host = parsed.netloc.rsplit("@", maxsplit=1)[-1]
+    return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
 
 
 @jaxtyped(typechecker=beartype)
@@ -177,7 +197,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        self._load_pretrained(base_checkpoint)
+        self.hparams["base_checkpoint_source"] = _checkpoint_source_uri(base_checkpoint)
+        self.hparams["base_checkpoint_sha256"] = self._load_pretrained(base_checkpoint)
         self.requires_grad_(False)
 
         self.control_mode: ControlMode = control_mode
@@ -228,21 +249,22 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self.vector_field.flow.eval()
 
     @jaxtyped(typechecker=beartype)
-    def _load_pretrained(self, checkpoint: str | Path) -> None:
-        """Restore every pretrained weight, refusing a checkpoint that does not fit.
+    def _load_pretrained(self, checkpoint: str | Path) -> str:
+        """Restore every pretrained weight and return the loaded bytes' SHA-256.
 
         Runs before the control is attached, so the module's own shape is exactly the base
         run's: any missing or unexpected key means the wrong checkpoint, and a silent
         ``strict=False`` here would "finetune" a randomly initialised field.
 
         :param checkpoint: Path to a Lightning checkpoint of the base run.
+        :returns: SHA-256 of the bytes passed to ``torch.load``.
         :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
         """
-        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
-        # The config records a mutable path, so without this two arms started from
-        # different flows would still read as comparable runs.
+        with Path(checkpoint).open("rb") as checkpoint_file:
+            digest = hashlib.file_digest(checkpoint_file, "sha256").hexdigest()
+            checkpoint_file.seek(0)
+            payload = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
         logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
         state = payload.get("state_dict") if isinstance(payload, dict) else None
         if not isinstance(state, dict):
             raise ValueError(f"{checkpoint} holds no Lightning state_dict")
@@ -256,6 +278,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
                 f"{len(missing)} missing key(s) {missing[:5]}, "
                 f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
             )
+        return digest
 
     @jaxtyped(typechecker=beartype)
     def _control_signal_width(self) -> int:
