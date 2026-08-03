@@ -526,12 +526,13 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     """
     spec = param_specs[render.param_spec_name]
     synth_params, note_params = decode_model_output(prediction[0].float().numpy(), spec)
+    note_start, note_end = sorted(note_params["note_start_and_end"])
     renderer = make_audio_renderer(render)
     audio = renderer.render(
         synth_params,
         int(note_params["pitch"]),
         render.velocity,
-        note_params["note_start_and_end"],
+        (note_start, note_end),
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     write_wav(audio, str(output), render.sample_rate, render.channels)
