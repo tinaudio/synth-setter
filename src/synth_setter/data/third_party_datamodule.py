@@ -296,11 +296,9 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :param index: Row index.
         :returns: ``audio`` and, when configured, ``mel`` for one clip.
         """
-        blob = self._open().take_blobs(self.audio_column, indices=[index])[0]
-        try:
-            data = blob.read()
-        finally:
-            blob.close()
+        # read_blobs plans the payload read through Lance's scheduler and returns
+        # (row_id, bytes); take_blobs would hand back a file handle to drain here.
+        _, data = self._open().read_blobs(self.audio_column, indices=[index])[0]
         audio = decode_clip(
             data,
             sample_rate=self.sample_rate,
@@ -441,16 +439,13 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             staged.replace(destination)
         return destination
 
-    def setup(self, stage: str | None = None) -> None:
-        """Open the corpus and load the conditioning encoders for a predict run.
+    def _open_corpus(self) -> tuple[_BlobAudioDataset, int]:
+        """Open the corpus, validate its audio column, and build the predict split.
 
-        :param stage: Lightning stage hint; only prediction is served.
-        :raises ValueError: ``stage`` is not a prediction stage, or the audio column is
-            not blob-encoded.
+        :returns: The predict dataset and the pinned Lance version.
         :raises KeyError: The corpus has no column named ``audio_column``.
+        :raises ValueError: The audio column is not blob-encoded.
         """
-        if stage not in _PREDICT_STAGES:
-            raise ValueError(f"{type(self).__name__} serves prediction only, got stage {stage!r}")
         uri, storage_options = (
             r2_io.lance_target(self.dataset_uri)
             if r2_io.is_r2_uri(self.dataset_uri)
@@ -471,26 +466,46 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         rows = dataset.count_rows()
         # Workers reopen the URI; pinning setup's version keeps every reader on the
         # snapshot the row count came from, even if the corpus gains a commit mid-sweep.
-        log.info(f"third-party corpus {self.dataset_uri} pinned at version {dataset.version}")
-        self.dataset_version = dataset.version
-        self._predict_dataset = _BlobAudioDataset(
-            uri,
-            storage_options=storage_options,
-            version=self.dataset_version,
-            audio_column=self.audio_column,
-            sample_rate=self.sample_rate,
-            channels=self.channels,
-            num_samples=self.num_samples,
-            amplitude_scale=self.amplitude_scale,
-            with_mel=self._with_mel,
-            rows=rows if self.row_limit is None else min(rows, self.row_limit),
+        log.info(
+            "third-party corpus %s pinned at version %s", self.dataset_uri, dataset.version
         )
+        return (
+            _BlobAudioDataset(
+                uri,
+                storage_options=storage_options,
+                version=dataset.version,
+                audio_column=self.audio_column,
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                num_samples=self.num_samples,
+                amplitude_scale=self.amplitude_scale,
+                with_mel=self._with_mel,
+                rows=rows if self.row_limit is None else min(rows, self.row_limit),
+            ),
+            dataset.version,
+        )
+
+    def setup(self, stage: str | None = None) -> None:
+        """Open the corpus and load the conditioning encoders for a predict run.
+
+        :param stage: Lightning stage hint; only prediction is served.
+        :raises ValueError: ``stage`` is not a prediction stage, or the configured
+            statistics underflow float32.
+        """
+        if stage not in _PREDICT_STAGES:
+            raise ValueError(f"{type(self).__name__} serves prediction only, got stage {stage!r}")
+        self._predict_dataset, self.dataset_version = self._open_corpus()
         if self.mel_stats_uri is not None and self._statistics is None:
             mean, std = load_mel_statistics(self._local_stats_file())
-            self._statistics = (
-                torch.as_tensor(mean, dtype=torch.float32),
-                torch.as_tensor(std, dtype=torch.float32),
-            )
+            std_f32 = torch.as_tensor(std, dtype=torch.float32)
+            # float64 positivity is not float32 positivity: a std like 1e-50 passes
+            # load_mel_statistics and then underflows to zero, yielding infinities.
+            if not bool((std_f32 > 0).all()):
+                raise ValueError(
+                    f"mel statistics from {self.mel_stats_uri} contain standard deviations "
+                    "that underflow to zero in float32"
+                )
+            self._statistics = (torch.as_tensor(mean, dtype=torch.float32), std_f32)
         self._live = self._load_encoders()
 
     def _load_encoders(self) -> dict[str, LiveEmbedding]:

@@ -2141,6 +2141,7 @@ def _run_third_party_eval(
             "experiment=surge/flow_simple",
             "datamodule=third_party/nsynth_test",
             "render=vst",
+            "seed=3407",
             f"datamodule.dataset_uri={corpus}",
             "datamodule.use_saved_mean_and_variance=false",
             "datamodule.num_workers=0",

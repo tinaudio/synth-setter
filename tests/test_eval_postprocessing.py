@@ -1297,3 +1297,26 @@ def test_postprocessing_no_params_with_rerender_target_raises(
         _run_predict_postprocessing(cfg)
 
     assert captured_argv == []
+
+
+def test_postprocessing_non_boolean_no_params_raises(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """A quoted ``"false"`` must not silently select the no-params render path.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
+    )
+    cfg.evaluation.no_params = "false"
+
+    with pytest.raises(ValueError, match="must be a boolean"):
+        _run_predict_postprocessing(cfg)
+
+    assert captured_argv == []

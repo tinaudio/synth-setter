@@ -388,7 +388,7 @@ def test_embedding_conditioning_populates_the_model_batch_key(tmp_path: Path) ->
 
     def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
         del sample_rate
-        return np.ones((len(source), SSONDO_EMBEDDING_DIM), dtype=np.float32)
+        return np.full((len(source), SSONDO_EMBEDDING_DIM), 0.25, dtype=np.float64)
 
     datamodule = _datamodule(
         tmp_path / "corpus.lance",
@@ -397,8 +397,12 @@ def test_embedding_conditioning_populates_the_model_batch_key(tmp_path: Path) ->
         ),
         embedding_encoder=encode,
     )
+    conditioning = _first_batch(datamodule)["conditioning"]
 
-    assert _first_batch(datamodule)["conditioning"].shape == (1, SSONDO_EMBEDDING_DIM)
+    assert conditioning.shape == (1, SSONDO_EMBEDDING_DIM)
+    assert conditioning.dtype == torch.float32
+    assert torch.isfinite(conditioning).all()
+    assert conditioning == pytest.approx(0.25)
 
 
 def test_embedding_conditioning_shape_mismatch_raises(tmp_path: Path) -> None:
@@ -709,10 +713,10 @@ def test_non_integer_row_limit_raises(tmp_path: Path, limit: object) -> None:
 
 
 def test_legacy_m2l_conditioning_is_rejected(tmp_path: Path) -> None:
-    """The legacy mode maps to a column no live encoder can produce, so it fails loudly.
+    """The m2l mode maps to a column no live encoder can produce.
 
-    ``conditioning="m2l"`` resolves to the stored ``music2latent`` column, which
-    predates the embedding registry; a corpus has no way to generate it.
+    ``conditioning="m2l"`` resolves to ``music2latent``, which is not an
+    embedding-registry column and has no corpus source.
 
     :param tmp_path: Isolated corpus fixture directory.
     """
@@ -752,6 +756,28 @@ def test_sketch_pitch_below_threshold_is_zero_binned(tmp_path: Path) -> None:
 
     assert served[0, SKETCH_LOUDNESS_ROW] == pytest.approx([-0.5] * frames)
     assert served[0, SKETCH_CENTROID_ROW] == pytest.approx([0.25] * frames)
-    # Below the 0.1 threshold: zero-binned. Above it: passed through untouched.
+    # Below the configured threshold: zero-binned; above it: preserved.
     assert served[0, SKETCH_PITCH_SLICE.start] == pytest.approx([0.0] * frames)
     assert served[0, SKETCH_PITCH_SLICE.start + 1] == pytest.approx([0.4] * frames, abs=1e-6)
+
+
+def test_statistics_underflowing_float32_are_rejected(tmp_path: Path) -> None:
+    """Statistics that survive float64 validation but vanish in float32 are rejected.
+
+    A positive ``std`` such as ``1e-50`` casts to float32 zero, and dividing by
+    it would hand the checkpoint infinities rather than features.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=30)])
+    stats_file = tmp_path / "stats.npz"
+    np.savez(stats_file, mean=np.float64(-30.0), std=np.float64(1e-50))
+
+    with pytest.raises(ValueError, match="float32"):
+        _first_batch(
+            _datamodule(
+                tmp_path / "corpus.lance",
+                use_saved_mean_and_variance=True,
+                mel_stats_uri=str(stats_file),
+            )
+        )

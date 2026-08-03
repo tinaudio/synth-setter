@@ -187,7 +187,12 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     audio_dir = output_dir / "audio"
     metrics_dir = output_dir / "metrics"
 
-    no_params = bool(cfg.evaluation.get("no_params", False))
+    no_params = cfg.evaluation.get("no_params", False)
+    if not isinstance(no_params, bool):
+        raise ValueError(
+            f"evaluation.no_params must be a boolean, got {no_params!r}; a quoted "
+            '"false" would otherwise select the no-params render path'
+        )
     if no_params and cfg.evaluation.rerender_target:
         raise ValueError(
             "evaluation.no_params=true means the predict split carries no ground-truth "
