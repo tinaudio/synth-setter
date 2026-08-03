@@ -6,6 +6,7 @@ import errno
 import json
 import multiprocessing
 import os
+import shutil
 import stat
 import threading
 import traceback
@@ -139,6 +140,12 @@ def _removed_same_path_reinstall_worker(
 
 
 def _rotated_package(artifact_lock: ArtifactLock, plugin: ManagedPlugin) -> ArtifactLock:
+    """Return a lock with changed artifact identity for one plugin.
+
+    :param artifact_lock: Original immutable artifact lock.
+    :param plugin: Plugin whose artifact identity changes.
+    :returns: Validated lock carrying the changed digest.
+    """
     payload = artifact_lock.model_dump(mode="json")
     payload[plugin.reference]["artifacts"][0]["sha256"] = "c" * 64
     return ArtifactLock.model_validate(payload)
@@ -149,6 +156,12 @@ def _replace_managed_bundle(
     plugin: ManagedPlugin,
     artifact_lock: ArtifactLock,
 ) -> None:
+    """Replace and reseal the binary bytes in a managed bundle.
+
+    :param bundle: Existing managed bundle.
+    :param plugin: Package identity used for sealing.
+    :param artifact_lock: Rotated artifact provenance.
+    """
     _binary_path(bundle).write_bytes(_test_binary_magic() + b"artifact-b")
     plugin_integrity.seal_plugin_bundle(
         bundle,
@@ -522,6 +535,36 @@ def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Pa
     plugin_runtime.publish_runtime_snapshot_permissions(tmp_path / "version")
 
 
+def test_package_install_lock_replaces_invalid_snapshot_container(tmp_path: Path) -> None:
+    """Installer preparation replaces invalid snapshot-container state.
+
+    :param tmp_path: Scratch managed alias and snapshot path.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "system/Example Synth.vst3")
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    snapshots = managed.parent / ".synth-setter-runtime-snapshots"
+    shutil.rmtree(snapshots)
+    snapshots.write_text("invalid")
+
+    with plugin_manager._package_install_lock(plugin, tmp_path / "managed"):
+        pass
+
+    assert snapshots.is_dir()
+    assert plugin_manager.validate_plugin_bundle_for_runtime(managed).is_dir()
+
+
+def _restrict_runtime_tree_permissions(root: Path) -> None:
+    """Restrict every directory and regular file in one runtime tree.
+
+    :param root: Existing bundle or snapshot tree.
+    """
+    for current, _, files in os.walk(root):
+        Path(current).chmod(0o700)
+        for name in files:
+            (Path(current) / name).chmod(0o600)
+
+
 def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path: Path) -> None:
     """Docker native fallback keeps its source but consumes a managed snapshot.
 
@@ -530,6 +573,7 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
     system_vst3 = tmp_path / "usr/lib/vst3"
     source = _bundle(system_vst3 / plugin.bundle)
+    _restrict_runtime_tree_permissions(source)
     managed = _adopt_bundle(
         plugin,
         plugins_dir=tmp_path / "managed",
@@ -549,10 +593,6 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert not alias.is_symlink()
     assert managed.is_symlink()
     assert managed.resolve() == alias.resolve()
-    for current, _, files in os.walk(source):
-        Path(current).chmod(0o700)
-        for name in files:
-            (Path(current) / name).chmod(0o600)
     initial_snapshot = plugin_manager.validate_plugin_bundle_for_runtime(alias)
     assert stat.S_IMODE(_binary_path(initial_snapshot).stat().st_mode) == 0o644
     snapshots = managed.parent / ".synth-setter-runtime-snapshots"
@@ -678,6 +718,7 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
     source = _bundle(tmp_path / "system/Example Synth.vst3")
     managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    shutil.rmtree(managed.parent / ".synth-setter-runtime-snapshots")
     publication_started = threading.Event()
     release_publication = threading.Event()
     second_completed = threading.Event()
@@ -1184,6 +1225,7 @@ def test_load_plugin_source_mutation_after_validation_fails_before_open(
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
     source = _bundle(tmp_path / "source/Example Synth.vst3", payload=b"original")
     managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    shutil.rmtree(managed.parent / ".synth-setter-runtime-snapshots")
     real_validate = plugin_integrity.ManagedBundleStorage.validate
     opened: list[Path] = []
 
@@ -1216,6 +1258,7 @@ def test_load_plugin_symlinked_snapshot_root_rejected_without_outside_write(
     outside = tmp_path / "outside"
     outside.mkdir()
     snapshots = managed.parent / ".synth-setter-runtime-snapshots"
+    shutil.rmtree(snapshots)
     snapshots.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(PluginIntegrityError, match="managed bundle integrity"):

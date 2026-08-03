@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Literal, Protocol, cast
@@ -940,17 +940,14 @@ def _posix_advisory_lease(path: Path) -> AbstractContextManager[None]:
     def _leased() -> Iterator[None]:
         import fcntl
 
-        directory = _posix_lease_directory_descriptor(path.parent)
-        try:
-            with _posix_advisory_descriptor_lock(directory, fcntl.LOCK_SH):
-                marker = _posix_consumer_marker_descriptor(path, directory)
-                try:
-                    with _posix_advisory_descriptor_lock(marker, fcntl.LOCK_SH):
-                        yield
-                finally:
-                    os.close(marker)
-        finally:
-            os.close(directory)
+        with ExitStack() as resources:
+            directory = _posix_lease_directory_descriptor(path.parent)
+            resources.callback(os.close, directory)
+            resources.enter_context(_posix_advisory_descriptor_lock(directory, fcntl.LOCK_SH))
+            marker = _posix_consumer_marker_descriptor(path, directory)
+            resources.callback(os.close, marker)
+            resources.enter_context(_posix_advisory_descriptor_lock(marker, fcntl.LOCK_SH))
+            yield
 
     return _leased()
 

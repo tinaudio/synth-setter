@@ -15,6 +15,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import logging
 import os
 import plistlib
 import shutil
@@ -29,6 +30,8 @@ import pydantic
 
 import synth_setter.plugin_integrity as integrity
 from synth_setter.plugin_integrity import BundleSeal, ManagedBundleRecord, PluginIntegrityError
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ManagedAliasRecord",
@@ -366,6 +369,14 @@ def _managed_from_publication(
     ownership: ManagedAliasRecord | None,
     transaction: _AliasPublicationTransaction,
 ) -> Path | None:
+    """Recover the managed target represented by a publication transaction.
+
+    :param target: Current alias target, if present.
+    :param ownership: Current ownership record, if present.
+    :param transaction: Interrupted publication state.
+    :returns: Recoverable managed target, or ``None`` when neither state matches.
+    :raises ValueError: Ownership is unrelated to the publication transaction.
+    """
     allowed_ownership = (transaction.next_ownership, transaction.prior_ownership)
     if ownership not in allowed_ownership:
         raise ValueError("managed alias ownership does not match its publication transaction")
@@ -523,7 +534,11 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
         try:
             path.chmod(mode | 0o055)
         except PermissionError:
-            pass
+            logger.warning(
+                "Runtime snapshot directory permission publication was denied",
+                extra={"snapshot_path": str(path)},
+                exc_info=True,
+            )
     if stat.S_IMODE(path.lstat().st_mode) & 0o055 != 0o055:
         raise ValueError(f"runtime snapshot path is not runtime-readable: {path}")
 
@@ -565,6 +580,30 @@ def publish_runtime_snapshot_permissions(version_dir: Path) -> None:
     if not stat.S_ISDIR(mode):
         raise ValueError(f"runtime snapshot path is not a directory: {snapshots}")
     _publish_runtime_tree_permissions(snapshots)
+
+
+def prepare_managed_bundle_for_runtime(managed: Path) -> None:
+    """Publish a validated adopted snapshot while installer authority is held.
+
+    :param managed: Managed bundle path produced by the installer transaction.
+    :raises ValueError: Managed integrity or snapshot publication fails.
+    """
+    try:
+        managed.lstat()
+    except FileNotFoundError:
+        return
+    snapshots = managed.parent / ".synth-setter-runtime-snapshots"
+    try:
+        snapshot_mode = snapshots.lstat().st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISDIR(snapshot_mode):
+            _remove_runtime_snapshot(snapshots)
+    identity = _validated_runtime_bundle_identity(managed)
+    if identity is None:
+        raise ValueError(f"managed bundle ownership disappeared while preparing {managed}")
+    publish_runtime_snapshot_permissions(managed.parent)
 
 
 def _runtime_snapshot_matches(destination: Path, seal: BundleSeal) -> bool:
