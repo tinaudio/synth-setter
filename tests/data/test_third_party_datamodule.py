@@ -250,7 +250,11 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=7)])
     stats_file = tmp_path / "stats.npz"
-    np.savez(stats_file, mean=np.float32(-40.0), std=np.float32(4.0))
+    # Per-mel-bin arrays, as a training split stores them: a scalar would hide a
+    # broadcasting mistake across the mel axis.
+    mean = np.full((MEL_N_MELS, 1), -40.0, dtype=np.float32)
+    std = np.full((MEL_N_MELS, 1), 4.0, dtype=np.float32)
+    np.savez(stats_file, mean=mean, std=std)
 
     plain = _first_batch(_datamodule(tmp_path / "corpus.lance"))["mel"]
     normalized = _first_batch(

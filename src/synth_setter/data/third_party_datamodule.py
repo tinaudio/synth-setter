@@ -70,9 +70,8 @@ _BLOB_EXTENSION_NAME = "lance.blob.v2"
 def _is_blob_encoded(field: pa.Field) -> bool:
     """Return whether a column is readable through the blob API.
 
-    Blob v2 columns declare the ``lance.blob.v2`` extension type; datasets
-    written before it carry a ``lance-encoding:blob`` metadata marker instead,
-    and the published corpora use the extension form.
+    Either encoding is readable: the ``lance.blob.v2`` extension type, which the
+    published corpora use, or a ``lance-encoding:blob`` metadata marker.
 
     :param field: Schema field for the configured audio column.
     :returns: True when either blob encoding is present.
