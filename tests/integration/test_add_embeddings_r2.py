@@ -283,6 +283,18 @@ def _indexable_embedding_table() -> pa.Table:
     )
 
 
+def _write_indexable_dataset(work_dir: Path) -> Path:
+    """Persist the deterministic index fixture below ``work_dir``.
+
+    :param work_dir: Temporary parent directory.
+    :returns: Readable local Lance dataset path.
+    """
+    local_shard = work_dir / "shard-000000.lance"
+    lance.write_dataset(_indexable_embedding_table(), local_shard)
+    assert lance.dataset(local_shard).count_rows() == MIN_ROWS_FOR_INDEX
+    return local_shard
+
+
 @pytest.fixture()
 def remote_indexed_lance_dataset_uri() -> Iterator[str]:
     """Yield a real-R2 Lance dataset with index-ready embedding columns.
@@ -293,13 +305,7 @@ def remote_indexed_lance_dataset_uri() -> Iterator[str]:
     prefix = _unique_test_prefix()
     shard_uri = r2_io.shard_uri(_R2_BUCKET, prefix, "shard-000000.lance")
 
-    def build_local_dataset(work_dir: Path) -> Path:
-        local_shard = work_dir / "shard-000000.lance"
-        lance.write_dataset(_indexable_embedding_table(), local_shard)
-        assert lance.dataset(local_shard).count_rows() == MIN_ROWS_FOR_INDEX
-        return local_shard
-
-    yield from _upload_dataset(prefix, shard_uri, build_local_dataset)
+    yield from _upload_dataset(prefix, shard_uri, _write_indexable_dataset)
 
 
 def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
