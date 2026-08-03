@@ -346,6 +346,11 @@ def replace_managed_alias(alias: Path, managed_bundle: Path) -> None:
 
 
 def _managed_storage_identity(managed: Path) -> tuple[Path, str, str] | None:
+    """Parse a canonical versioned managed-bundle path.
+
+    :param managed: Candidate managed bundle path.
+    :returns: Storage root, package, and version, or ``None`` for another layout.
+    """
     absolute = managed.absolute()
     if len(absolute.parents) < 5 or absolute.parents[3].name != "VST3":
         return None
@@ -455,6 +460,12 @@ def _runtime_alias_managed_bundle(alias: Path) -> Path | None:
 
 
 def _runtime_managed_bundle(bundle: Path) -> Path | None:
+    """Follow aliases to the first managed bundle identity.
+
+    :param bundle: Candidate managed bundle or alias.
+    :returns: Managed bundle, or ``None`` when the alias chain is unmanaged.
+    :raises ValueError: The alias chain contains a cycle or invalid ownership.
+    """
     current = bundle
     visited: set[Path] = set()
     while current not in visited:
@@ -499,12 +510,12 @@ def _remove_runtime_snapshot(path: Path) -> None:
 
 
 def _ensure_runtime_snapshot_directory(path: Path) -> None:
-    """Create a private snapshot directory and reject symlink substitution.
+    """Create a runtime-readable snapshot directory and reject symlink substitution.
 
     :param path: Managed snapshot directory.
     :raises ValueError: The resulting path is not a real directory.
     """
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.mkdir(mode=0o755, parents=True, exist_ok=True)
     if not stat.S_ISDIR(path.lstat().st_mode):
         raise ValueError(f"runtime snapshot path is not a directory: {path}")
 
@@ -567,6 +578,13 @@ def _runtime_lock_path(
     managed: Path,
     ownership: ManagedBundleRecord | None,
 ) -> Path:
+    """Select the durable installer or fallback runtime lock path.
+
+    :param managed: Managed bundle identity.
+    :param ownership: Bundle ownership for paths outside versioned storage.
+    :returns: Lock path shared by runtime consumers and installers.
+    :raises ValueError: A non-versioned managed bundle lacks ownership.
+    """
     storage = _managed_storage_identity(managed)
     if storage is not None:
         plugins_dir, package, version = storage
@@ -577,6 +595,11 @@ def _runtime_lock_path(
 
 
 def _runtime_identity_and_lock(bundle: Path) -> tuple[Path, Path] | None:
+    """Resolve the current managed identity and its lock path.
+
+    :param bundle: Candidate managed bundle or alias.
+    :returns: Managed identity and lock path, or ``None`` when unmanaged.
+    """
     managed = _runtime_managed_bundle(bundle)
     if managed is None:
         return None

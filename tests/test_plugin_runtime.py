@@ -6,6 +6,7 @@ import errno
 import json
 import multiprocessing
 import os
+import stat
 import threading
 import traceback
 from collections.abc import Iterator
@@ -533,7 +534,10 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert managed.is_symlink()
     assert managed.resolve() == alias.resolve()
     validated = plugin_manager.validate_plugin_bundle_for_runtime(alias)
+    snapshots = managed.parent / ".synth-setter-runtime-snapshots"
     assert validated != alias.resolve(strict=True)
+    assert stat.S_IMODE(snapshots.stat().st_mode) == 0o755
+    assert stat.S_IMODE(validated.parent.stat().st_mode) == 0o755
     assert plugin_integrity.bundle_entries(validated) == plugin_integrity.bundle_entries(alias)
 
 

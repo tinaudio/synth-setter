@@ -1,5 +1,6 @@
 """Contract tests for the focused managed-plugin integrity boundary."""
 
+import errno
 import json
 import stat
 from pathlib import Path
@@ -77,6 +78,31 @@ def test_write_atomic_record_privileged_writer_remains_world_readable(tmp_path: 
     write_atomic_record(record, "{}")
 
     assert stat.S_IMODE(record.stat().st_mode) == 0o644
+
+
+def test_advisory_file_lock_read_only_filesystem_uses_consumer_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An existing lock remains leasable when its filesystem rejects writes.
+
+    :param tmp_path: Scratch root containing one readable lock file.
+    :param monkeypatch: Simulates a read-only filesystem at write-open time.
+    """
+    lock_path = tmp_path / "managed/package.lock"
+    lock_path.parent.mkdir()
+    lock_path.touch()
+    real_open = Path.open
+
+    def _read_only_open(path: Path, mode: str = "r") -> object:
+        if path == lock_path and mode == "a+b":
+            raise OSError(errno.EROFS, "read-only filesystem", path)
+        return real_open(path, mode)
+
+    monkeypatch.setattr(Path, "open", _read_only_open)
+
+    with plugin_integrity.advisory_file_lock(lock_path):
+        pass
 
 
 def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(

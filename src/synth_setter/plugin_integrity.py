@@ -819,7 +819,9 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
         try:
             stream = path.open("a+b")
             lock_operation = fcntl.LOCK_EX
-        except PermissionError:
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+                raise
             stream = path.open("rb")
             lock_operation = fcntl.LOCK_SH
         with stream:
