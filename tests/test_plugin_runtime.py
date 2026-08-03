@@ -202,7 +202,7 @@ def _read_only_managed_alias(tmp_path: Path) -> tuple[Path, Path, Path]:
         managed_root,
     )
     lock_path.parent.mkdir(parents=True)
-    lock_path.touch(mode=0o000)
+    lock_path.touch(mode=0o444)
     managed_root.chmod(0o555)
     return alias, managed_root, lock_path
 

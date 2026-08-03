@@ -886,12 +886,76 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
     return _locked()
 
 
-def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
-    """Build a shared POSIX consumer lease without writing managed storage.
+def _posix_lease_directory_descriptor(directory: Path) -> int:
+    """Wait briefly for installer permission publication and open its directory.
 
-    POSIX consumers lock the marker's directory, allowing access when the marker itself is
-    unreadable. Readable markers are also locked for rolling-upgrade compatibility. Windows retains
-    the exclusive writable file lock.
+    :param directory: Existing or user-creatable synchronization directory.
+    :returns: Read-only directory descriptor.
+    :raises PermissionError: Permissions remain unpublished after ten seconds.
+    """
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            return _posix_directory_descriptor(directory)
+        except FileNotFoundError:
+            directory.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
+def _posix_consumer_marker_descriptor(path: Path, directory_descriptor: int) -> int:
+    """Open the durable marker read-only, creating it only when absent.
+
+    :param path: Marker path represented relative to the directory descriptor.
+    :param directory_descriptor: Open synchronization directory.
+    :returns: Descriptor suitable for a shared flock.
+    :raises FileExistsError: The marker is not a regular file.
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    try:
+        marker = os.open(path.name, flags, dir_fd=directory_descriptor)
+    except FileNotFoundError:
+        flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+        marker = os.open(path.name, flags, 0o666, dir_fd=directory_descriptor)
+    if stat.S_ISREG(os.fstat(marker).st_mode):
+        return marker
+    os.close(marker)
+    raise FileExistsError(f"lock is not a regular file: {path}")
+
+
+def _posix_advisory_lease(path: Path) -> AbstractContextManager[None]:
+    """Acquire shared directory and marker locks for a POSIX consumer.
+
+    :param path: Durable marker shared with writers from all supported releases.
+    :returns: Context manager holding both shared locks.
+    """
+
+    @contextmanager
+    def _leased() -> Iterator[None]:
+        import fcntl
+
+        directory = _posix_lease_directory_descriptor(path.parent)
+        try:
+            with _posix_advisory_descriptor_lock(directory, fcntl.LOCK_SH):
+                marker = _posix_consumer_marker_descriptor(path, directory)
+                try:
+                    with _posix_advisory_descriptor_lock(marker, fcntl.LOCK_SH):
+                        yield
+                finally:
+                    os.close(marker)
+        finally:
+            os.close(directory)
+
+    return _leased()
+
+
+def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
+    """Build a shared POSIX consumer lease without writing existing markers.
+
+    POSIX consumers lock both the marker directory and marker inode. Windows retains the exclusive
+    writable file lock.
 
     :param path: Durable lock file shared with exclusive writers.
     :returns: Context manager holding the consumer lease around its body.
@@ -903,34 +967,8 @@ def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
             with advisory_file_lock(path):
                 yield
             return
-
-        import fcntl
-
-        while True:
-            try:
-                directory_descriptor = _posix_directory_descriptor(path.parent)
-                break
-            except FileNotFoundError:
-                path.parent.mkdir(parents=True, exist_ok=True)
-            except PermissionError:
-                time.sleep(0.05)
-        try:
-            with _posix_advisory_descriptor_lock(directory_descriptor, fcntl.LOCK_SH):
-                flags = os.O_RDONLY | os.O_NOFOLLOW
-                try:
-                    marker_descriptor = os.open(path.name, flags, dir_fd=directory_descriptor)
-                except (FileNotFoundError, PermissionError):
-                    yield
-                else:
-                    try:
-                        if not stat.S_ISREG(os.fstat(marker_descriptor).st_mode):
-                            raise FileExistsError(f"lock is not a regular file: {path}")
-                        with _posix_advisory_descriptor_lock(marker_descriptor, fcntl.LOCK_SH):
-                            yield
-                    finally:
-                        os.close(marker_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        with _posix_advisory_lease(path):
+            yield
 
     return _leased()
 
@@ -1030,41 +1068,49 @@ def _publish_posix_lock_hierarchy(descriptors: list[int]) -> None:
         os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
 
 
-def package_install_lock(
-    package: str,
-    version: str,
+def _windows_package_install_lock(
+    path: Path,
     plugins_dir: Path,
 ) -> AbstractContextManager[None]:
-    """Acquire the installer lock and publish runtime-readable permissions.
+    """Acquire and publish one Windows package lock.
 
-    Runtime consumers call :func:`advisory_file_lease` directly and never enter
-    this permission-normalizing installer wrapper.
-
-    :param package: Studiorack ``organization/package`` slug.
-    :param version: Exact package version.
-    :param plugins_dir: Resolved managed storage root.
-    :returns: Context manager holding the package lock around its body.
+    :param path: Durable package marker.
+    :param plugins_dir: Managed storage root.
+    :returns: Context manager holding the exclusive lock.
     """
-    path = package_install_lock_path(package, version, plugins_dir)
 
     @contextmanager
     def _locked() -> Iterator[None]:
-        if os.name == "nt":
-            lock_directories = _windows_lock_directories(plugins_dir, path.parent)
-            try:
-                marker_mode = path.lstat().st_mode
-            except FileNotFoundError:
-                pass
-            else:
-                if not stat.S_ISREG(marker_mode):
-                    raise FileExistsError(f"install lock is not a regular file: {path}")
-            with advisory_file_lock(path):
-                path.chmod(path.stat().st_mode | 0o044)
-                for directory in reversed(lock_directories):
-                    directory.chmod(directory.stat().st_mode | 0o055)
-                yield
-            return
+        directories = _windows_lock_directories(plugins_dir, path.parent)
+        try:
+            marker_mode = path.lstat().st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(marker_mode):
+                raise FileExistsError(f"install lock is not a regular file: {path}")
+        with advisory_file_lock(path):
+            path.chmod(path.stat().st_mode | 0o044)
+            for directory in reversed(directories):
+                directory.chmod(directory.stat().st_mode | 0o055)
+            yield
 
+    return _locked()
+
+
+def _posix_package_install_lock(
+    path: Path,
+    plugins_dir: Path,
+) -> AbstractContextManager[None]:
+    """Acquire and publish one descriptor-relative POSIX package lock.
+
+    :param path: Durable package marker.
+    :param plugins_dir: Managed storage root.
+    :returns: Context manager holding directory and marker locks.
+    """
+
+    @contextmanager
+    def _locked() -> Iterator[None]:
         import fcntl
 
         with _posix_lock_hierarchy(plugins_dir, path.parent) as descriptors:
@@ -1083,3 +1129,24 @@ def package_install_lock(
                     os.close(marker)
 
     return _locked()
+
+
+def package_install_lock(
+    package: str,
+    version: str,
+    plugins_dir: Path,
+) -> AbstractContextManager[None]:
+    """Acquire the installer lock and publish runtime-readable permissions.
+
+    Runtime consumers call :func:`advisory_file_lease` directly and never enter
+    this permission-normalizing installer wrapper.
+
+    :param package: Studiorack ``organization/package`` slug.
+    :param version: Exact package version.
+    :param plugins_dir: Resolved managed storage root.
+    :returns: Context manager holding the package lock around its body.
+    """
+    path = package_install_lock_path(package, version, plugins_dir)
+    if os.name == "nt":
+        return _windows_package_install_lock(path, plugins_dir)
+    return _posix_package_install_lock(path, plugins_dir)

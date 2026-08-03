@@ -96,7 +96,7 @@ def test_advisory_file_lease_permission_publication_window_retries(
     """
     lock_path = tmp_path / "managed/package.lock"
     lock_path.parent.mkdir()
-    lock_path.touch(mode=0o000)
+    lock_path.touch(mode=0o444)
     real_open = plugin_integrity._posix_directory_descriptor
     attempts = 0
 
@@ -144,6 +144,43 @@ def _assert_runtime_readable_lock_tree(lock_path: Path, directories: list[Path])
     """
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o755 for path in directories)
     assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX marker permissions")
+def test_advisory_file_lease_unreadable_marker_fails_closed(tmp_path: Path) -> None:
+    """A consumer never bypasses an unreadable marker's writer lock.
+
+    :param tmp_path: Scratch directory containing an unreadable marker.
+    """
+    lock_path = tmp_path / "managed/package.lock"
+    lock_path.parent.mkdir()
+    lock_path.touch(mode=0o000)
+
+    with pytest.raises(PermissionError):
+        with plugin_integrity.advisory_file_lease(lock_path):
+            pass
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory lease semantics")
+def test_posix_lease_directory_permanent_permission_failure_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumer fails after the permission-publication deadline.
+
+    :param tmp_path: Scratch inaccessible lock directory.
+    :param monkeypatch: Makes permission failure and deadline deterministic.
+    """
+    timestamps = iter([0.0, 11.0])
+
+    def _deny(_path: Path) -> int:
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(plugin_integrity.time, "monotonic", lambda: next(timestamps))
+    monkeypatch.setattr(plugin_integrity, "_posix_directory_descriptor", _deny)
+
+    with pytest.raises(PermissionError):
+        plugin_integrity._posix_lease_directory_descriptor(tmp_path / "locks")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX flock compatibility")
@@ -206,6 +243,21 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
 
     assert os.name == "nt" or root_published
     _assert_runtime_readable_lock_tree(lock_path, lock_directories)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows locking semantics")
+def test_package_install_lock_windows_fresh_marker_is_runtime_leasable(tmp_path: Path) -> None:
+    """A fresh Windows package marker supports a subsequent runtime lease.
+
+    :param tmp_path: Scratch managed storage root.
+    """
+    plugins_dir = tmp_path / "managed"
+    with plugin_integrity.package_install_lock("example/synth", "1.2.3", plugins_dir):
+        pass
+    lock_path = plugin_integrity.package_install_lock_path("example/synth", "1.2.3", plugins_dir)
+
+    with plugin_integrity.advisory_file_lease(lock_path):
+        pass
 
 
 def test_windows_lock_directories_real_hierarchy_returns_root_first(tmp_path: Path) -> None:
