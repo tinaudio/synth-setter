@@ -16,13 +16,22 @@ from workflow_fixtures import load_workflow
 WORKFLOW_FILENAME = "test-vst-slow.yml"
 
 
+def _load_workflow(project_root: Path) -> dict[object, object]:
+    """Return the parsed VST workflow.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    :returns: Parsed workflow mapping.
+    """
+    return cast(dict[object, object], load_workflow(project_root, WORKFLOW_FILENAME))
+
+
 def _load_triggers(project_root: Path) -> dict[str, dict[str, list[str]]]:
     """Return the workflow's event-trigger block.
 
     :param project_root: Repo root holding ``.github/workflows/``.
     :returns: Trigger mapping keyed by event name.
     """
-    workflow = cast(dict[object, object], load_workflow(project_root, WORKFLOW_FILENAME))
+    workflow = _load_workflow(project_root)
     # PyYAML resolves a bare ``on`` key to the boolean ``True`` (YAML 1.1).
     on_key: object = "on" if "on" in workflow else True
     return cast(dict[str, dict[str, list[str]]], workflow[on_key])
@@ -109,6 +118,29 @@ def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None
     assert publish_inputs["name"] == "Surge host diagnostics (random patches)"
     assert publish_inputs["tool"] == "customSmallerIsBetter"
     assert publish_inputs["output-file-path"] == filename
+
+
+@pytest.mark.infra
+def test_vst_slow_surge_r2_upload_folder_starts_with_utc_datetime(
+    project_root: Path,
+) -> None:
+    """Surge R2 upload folders sort chronologically by their leading UTC datetime.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    """
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    steps = cast(list[dict[str, object]], jobs["upload_surge_comparison"]["steps"])
+    upload_step = next(
+        step for step in steps if step["name"] == "Upload comparison directory with checksums"
+    )
+    script = cast(str, upload_step["run"])
+
+    assert "upload_datetime=\"$(date -u '+%Y-%m-%dT%H-%M-%SZ')\"" in script
+    assert (
+        'r2_destination="r2:experiments/surge-host-parity/'
+        '${upload_datetime}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"'
+    ) in script
 
 
 @pytest.mark.infra
