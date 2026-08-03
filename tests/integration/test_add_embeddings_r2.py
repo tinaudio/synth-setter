@@ -283,18 +283,6 @@ def _indexable_embedding_table() -> pa.Table:
     )
 
 
-def _write_indexable_dataset(work_dir: Path) -> Path:
-    """Persist the deterministic index fixture below ``work_dir``.
-
-    :param work_dir: Temporary parent directory.
-    :returns: Readable local Lance dataset path.
-    """
-    local_shard = work_dir / "shard-000000.lance"
-    lance.write_dataset(_indexable_embedding_table(), local_shard)
-    assert lance.dataset(local_shard).count_rows() == MIN_ROWS_FOR_INDEX
-    return local_shard
-
-
 @pytest.fixture()
 def remote_indexed_lance_dataset_uri() -> Iterator[str]:
     """Yield a real-R2 Lance dataset with index-ready embedding columns.
@@ -304,8 +292,17 @@ def remote_indexed_lance_dataset_uri() -> Iterator[str]:
     _require_r2()
     prefix = _unique_test_prefix()
     shard_uri = r2_io.shard_uri(_R2_BUCKET, prefix, "shard-000000.lance")
-
-    yield from _upload_dataset(prefix, shard_uri, _write_indexable_dataset)
+    storage_options = r2_io.r2_storage_options()
+    try:
+        lance.write_dataset(
+            _indexable_embedding_table(),
+            r2_io.to_s3_uri(shard_uri),
+            storage_options=storage_options,
+        )
+        assert _open_remote_dataset(shard_uri).count_rows() == MIN_ROWS_FOR_INDEX
+        yield shard_uri
+    finally:
+        r2_io.purge_prefix(_R2_BUCKET, prefix)
 
 
 def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
@@ -458,7 +455,7 @@ def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
 def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     remote_indexed_lance_dataset_uri: str,
 ) -> None:
-    """``synth-setter-add-embeddings build_index=true`` trains an IVF_PQ index on a real R2 dataset.
+    """Train IVF-PQ indexes through the public CLI against a real R2 dataset.
 
     Uploads schema-compatible embedding columns at ``MIN_ROWS_FOR_INDEX``, runs
     the real ``add_embeddings`` CLI with ``build_index=true``, then reopens the
