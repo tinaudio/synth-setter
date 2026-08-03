@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import cast
 
 import pytest
@@ -12,32 +13,36 @@ from workflow_fixtures import load_workflow
 _CITEST_PROJECT = "synth-setter-citest"
 _PRODUCTION_PROJECT = "synth-setter"
 _PRODUCTION_WANDB_WORKFLOWS = frozenset({"eval.yml", "train.yml"})
-_EXPECTED_CI_WANDB_PROJECTS = {
-    "finalize-dataset.yaml": "${{ inputs.wandb_project }}",
-    "generate-dataset-shards.yaml": "${{ inputs.wandb_project }}",
-    "test-gpu.yml": _CITEST_PROJECT,
-    "test-mps.yml": _CITEST_PROJECT,
-}
+_EXPECTED_CI_WANDB_PROJECTS: Mapping[str, str] = MappingProxyType(
+    {
+        "finalize-dataset.yaml": "${{ inputs.wandb_project }}",
+        "generate-dataset-shards.yaml": "${{ inputs.wandb_project }}",
+        "test-gpu.yml": _CITEST_PROJECT,
+        "test-mps.yml": _CITEST_PROJECT,
+    }
+)
 _WANDB_REUSABLE_WORKFLOWS = frozenset(
     {
         "./.github/workflows/finalize-dataset.yaml",
         "./.github/workflows/generate-dataset-shards.yaml",
     }
 )
-_EXPECTED_REUSABLE_WANDB_PROJECTS = {
-    ("generate-dataset-shards.yaml", "./.github/workflows/finalize-dataset.yaml"): (
-        "${{ inputs.wandb_project }}"
-    ),
-    ("test-dataset-finalization.yml", "./.github/workflows/generate-dataset-shards.yaml"): (
-        _CITEST_PROJECT
-    ),
-    ("test-dataset-generation.yml", "./.github/workflows/generate-dataset-shards.yaml"): (
-        _CITEST_PROJECT
-    ),
-}
+_EXPECTED_REUSABLE_WANDB_PROJECTS: Mapping[tuple[str, str], str] = MappingProxyType(
+    {
+        ("generate-dataset-shards.yaml", "./.github/workflows/finalize-dataset.yaml"): (
+            "${{ inputs.wandb_project }}"
+        ),
+        ("test-dataset-finalization.yml", "./.github/workflows/generate-dataset-shards.yaml"): (
+            _CITEST_PROJECT
+        ),
+        ("test-dataset-generation.yml", "./.github/workflows/generate-dataset-shards.yaml"): (
+            _CITEST_PROJECT
+        ),
+    }
+)
 
 
-def _on(workflow: Mapping[str, object]) -> Mapping[str, object]:
+def _workflow_triggers(workflow: Mapping[str, object]) -> Mapping[str, object]:
     """Return workflow triggers parsed by PyYAML's YAML 1.1 loader.
 
     :param workflow: Parsed GitHub Actions workflow.
@@ -106,7 +111,11 @@ def _reusable_wandb_project_offenders(job_scope: str, job: Mapping[str, object])
     :param job: Parsed reusable-workflow job definition.
     :returns: Caller scope when inherited secrets could reach the wrong project.
     """
-    if job.get("secrets") != "inherit":
+    secrets = job.get("secrets")
+    is_authenticated = secrets == "inherit" or (
+        isinstance(secrets, Mapping) and "WANDB_API_KEY" in secrets
+    )
+    if not is_authenticated:
         return []
     workflow_name = job_scope.partition(":")[0]
     reusable = job.get("uses")
@@ -166,7 +175,7 @@ def test_reusable_dataset_workflows_preserve_production_default(project_root: Pa
     """
     for filename in ("generate-dataset-shards.yaml", "finalize-dataset.yaml"):
         workflow = load_workflow(project_root, filename)
-        triggers = _on(workflow)
+        triggers = _workflow_triggers(workflow)
         workflow_call = cast(Mapping[str, object], triggers["workflow_call"])
         workflow_dispatch = cast(Mapping[str, object], triggers["workflow_dispatch"])
         call_inputs = cast(Mapping[str, object], workflow_call["inputs"])
@@ -262,6 +271,35 @@ def test_inherited_reusable_call_without_project_is_reported() -> None:
     )
 
     assert offenders == ["test-dataset-generation.yml:generate-launcher"]
+
+
+def test_mapped_reusable_wandb_key_without_project_is_reported() -> None:
+    """An explicitly mapped API key requires reusable-call project routing."""
+    job = {
+        "secrets": {"WANDB_API_KEY": "${{ secrets.WANDB_API_KEY }}"},
+        "uses": "./.github/workflows/generate-dataset-shards.yaml",
+    }
+
+    offenders = _reusable_wandb_project_offenders(
+        "test-dataset-generation.yml:generate-launcher", job
+    )
+
+    assert offenders == ["test-dataset-generation.yml:generate-launcher"]
+
+
+def test_mapped_reusable_wandb_key_with_citest_project_is_allowed() -> None:
+    """The mapped secret value does not affect valid reusable-call routing."""
+    job = {
+        "secrets": {"WANDB_API_KEY": None},
+        "uses": "./.github/workflows/generate-dataset-shards.yaml",
+        "with": {"wandb_project": _CITEST_PROJECT},
+    }
+
+    offenders = _reusable_wandb_project_offenders(
+        "test-dataset-generation.yml:generate-launcher", job
+    )
+
+    assert offenders == []
 
 
 def test_unknown_inherited_wandb_reusable_call_is_reported() -> None:

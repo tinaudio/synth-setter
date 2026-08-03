@@ -15,8 +15,10 @@ updating one site.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 import wandb
@@ -134,25 +136,41 @@ def read_history_rows(
     return _poll_until(lambda: _scan_history_rows(wandb_binary), until, timeout_s)
 
 
+@contextmanager
+def _iter_records(wandb_binary: Path) -> Iterator[Iterator[Any]]:
+    """Yield parsed records while owning the datastore scan resource.
+
+    :param wandb_binary: Path to an offline ``run-*.wandb`` file.
+    :yields Iterator[Any]: Lazy records before the datastore's ``None`` sentinel.
+    """
+    ds = wandb_datastore.DataStore()
+
+    def _records() -> Iterator[Any]:
+        while True:
+            data = ds.scan_data()
+            if data is None:
+                return
+            record = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
+            record.ParseFromString(data)
+            yield record
+
+    try:
+        ds.open_for_scan(str(wandb_binary))
+        yield _records()
+    finally:
+        ds.close()
+
+
 def _scan_run_project(wandb_binary: Path) -> str | None:
     """Read the project from the datastore's run record.
 
     :param wandb_binary: Path to an offline ``run-*.wandb`` file.
     :returns: Run project when present, otherwise ``None``.
     """
-    ds = wandb_datastore.DataStore()
-    ds.open_for_scan(str(wandb_binary))
-    try:
-        while True:
-            data = ds.scan_data()
-            if data is None:
-                break
-            record = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
-            record.ParseFromString(data)
+    with _iter_records(wandb_binary) as records:
+        for record in records:
             if record.WhichOneof("record_type") == "run":
                 return record.run.project or None
-    finally:
-        ds.close()
     return None
 
 
@@ -162,28 +180,17 @@ def _scan_history_rows(wandb_binary: Path) -> list[dict[str, str]]:
     :param wandb_binary: Path to the offline ``run-*.wandb`` file.
     :returns: One dict per history record found in this scan.
     """
-    ds = wandb_datastore.DataStore()
-    ds.open_for_scan(str(wandb_binary))
-    # ``open_for_scan`` opens a file handle; close it each pass so the polling
-    # loop in ``read_history_rows`` can't leak one handle per re-scan.
-    try:
-        rows: list[dict[str, str]] = []
-        while True:
-            data = ds.scan_data()
-            if data is None:
-                break
-            rec = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
-            rec.ParseFromString(data)
-            if not rec.HasField("history"):
+    rows: list[dict[str, str]] = []
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if not record.HasField("history"):
                 continue
             row: dict[str, str] = {}
-            for item in rec.history.item:
+            for item in record.history.item:
                 key = item.key if item.key else "/".join(item.nested_key)
                 row[key] = item.value_json
             rows.append(row)
-        return rows
-    finally:
-        ds.close()
+    return rows
 
 
 def read_run_config(
@@ -214,23 +221,12 @@ def _scan_run_config(wandb_binary: Path) -> dict[str, str]:
     :param wandb_binary: Path to the offline ``run-*.wandb`` file.
     :returns: Merged config mapping over every config update in this scan.
     """
-    ds = wandb_datastore.DataStore()
-    ds.open_for_scan(str(wandb_binary))
-    # ``open_for_scan`` opens a file handle; close it each pass so the polling
-    # loop in ``read_run_config`` can't leak one handle per re-scan.
-    try:
-        config: dict[str, str] = {}
-        while True:
-            data = ds.scan_data()
-            if data is None:
-                break
-            rec = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
-            rec.ParseFromString(data)
-            if not rec.HasField("config"):
+    config: dict[str, str] = {}
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if not record.HasField("config"):
                 continue
-            for item in rec.config.update:
+            for item in record.config.update:
                 key = item.key if item.key else "/".join(item.nested_key)
                 config[key] = item.value_json
-        return config
-    finally:
-        ds.close()
+    return config

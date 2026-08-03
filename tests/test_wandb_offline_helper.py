@@ -42,6 +42,42 @@ def test_read_run_project_empty_record_before_run_returns_project(
     assert project == "synth-setter-citest"
 
 
+def test_read_run_project_run_before_later_payload_closes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A matching run short-circuits scanning and still closes the datastore.
+
+    :param monkeypatch: Replaces the external datastore scanner with fixed records.
+    """
+    run_record = wandb_offline.wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
+    run_record.run.project = "synth-setter-citest"
+    payloads = iter([run_record.SerializeToString(), b"later payload"])
+    scan_count = 0
+    close_count = 0
+
+    def _scan_data() -> bytes:
+        nonlocal scan_count
+        scan_count += 1
+        return next(payloads)
+
+    def _close() -> None:
+        nonlocal close_count
+        close_count += 1
+
+    data_store = SimpleNamespace(
+        open_for_scan=lambda _path: None,
+        scan_data=_scan_data,
+        close=_close,
+    )
+    monkeypatch.setattr(wandb_offline.wandb_datastore, "DataStore", lambda: data_store)
+
+    project = wandb_offline.read_run_project(Path("ignored.wandb"), timeout_s=0)
+
+    assert project == "synth-setter-citest"
+    assert scan_count == 1
+    assert close_count == 1
+
+
 def test_until_predicate_retries_until_rows_materialize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
