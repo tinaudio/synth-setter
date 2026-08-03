@@ -10,6 +10,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 import torch
+from lance.blob import blob_array, blob_field
 from pedalboard.io import AudioFile
 
 from synth_setter.conditioning import (
@@ -886,8 +887,6 @@ def test_native_blob_v2_column_is_servable(tmp_path: Path) -> None:
 
     :param tmp_path: Isolated corpus fixture directory.
     """
-    from lance.blob import blob_array, blob_field
-
     clip = _tone(_DURATION_SECONDS, seed=35)
     table = pa.table(
         {AUDIO_FIELD: blob_array([_wav_bytes(clip, _SOURCE_SAMPLE_RATE)])},

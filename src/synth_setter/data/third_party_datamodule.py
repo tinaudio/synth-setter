@@ -525,9 +525,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             mean, std = load_mel_statistics(self._local_stats_file())
             mean_f32 = torch.as_tensor(mean, dtype=torch.float32)
             std_f32 = torch.as_tensor(std, dtype=torch.float32)
-            # float64 validity is not float32 validity in either direction: a std of
-            # 1e-50 underflows to zero (infinities), and 1e39 overflows to infinity,
-            # which silently zeroes every feature while staying finite.
+            # float64 validity is not float32 validity in either direction.
             if not bool(torch.isfinite(mean_f32).all() and torch.isfinite(std_f32).all()):
                 raise ValueError(
                     f"mel statistics from {self.mel_stats_uri} are not representable in "
