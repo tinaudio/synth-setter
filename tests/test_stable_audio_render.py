@@ -13,7 +13,7 @@ import pytest
 import torch
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 
 from synth_setter.cli import stable_audio_render
 from synth_setter.cli.stable_audio_render import (
@@ -55,6 +55,77 @@ class _LatentModel:
         """
         self.arguments = kwargs
         return self.latent
+
+
+def test_localize_prompt_conditioner_points_to_pinned_snapshot(tmp_path: Path) -> None:
+    """Nested T5Gemma hydration uses the same immutable local snapshot.
+
+    :param tmp_path: Pinned snapshot path.
+    """
+    model_config: dict[str, object] = {
+        "model": {
+            "conditioning": {
+                "configs": [
+                    {"id": "prompt", "config": {"repo_id": "mutable-upstream"}},
+                    {"id": "seconds_total", "config": {}},
+                ]
+            }
+        }
+    }
+
+    stable_audio_render._localize_prompt_conditioner(model_config, tmp_path)
+
+    model = model_config["model"]
+    assert isinstance(model, dict)
+    conditioning = model["conditioning"]
+    assert isinstance(conditioning, dict)
+    configs = conditioning["configs"]
+    assert isinstance(configs, list)
+    prompt = configs[0]
+    assert isinstance(prompt, dict)
+    prompt_config = prompt["config"]
+    assert isinstance(prompt_config, dict)
+    assert prompt_config["repo_id"] == str(tmp_path)
+
+
+def test_localize_prompt_conditioner_missing_model_raises() -> None:
+    """A malformed pinned config fails before heavyweight model construction."""
+    with pytest.raises(ValueError, match="no model mapping"):
+        stable_audio_render._localize_prompt_conditioner({}, Path("/snapshot"))
+
+
+def test_checkpoint_target_key_accepts_upstream_segment_removal() -> None:
+    """The streaming loader preserves upstream's compatible key remapping."""
+    assert (
+        stable_audio_render._checkpoint_target_key("model.transformer.weight", {"model.weight"})
+        == "model.weight"
+    )
+    assert stable_audio_render._checkpoint_target_key("missing.weight", {"model.weight"}) is None
+
+
+def test_load_cuda_diffusion_streaming_loads_real_safetensors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streaming publication fills and freezes a real tiny model state.
+
+    :param tmp_path: Temporary safetensors checkpoint path.
+    :param monkeypatch: Upstream model-factory boundary replacement fixture.
+    """
+    checkpoint = tmp_path / "model.safetensors"
+    save_file({"weight": torch.tensor([[3.0]], dtype=torch.float32)}, checkpoint)
+    monkeypatch.setattr(
+        "stable_audio_3.factory.create_diffusion_cond_from_config",
+        lambda _config: torch.nn.Linear(1, 1, bias=False),
+    )
+
+    model = stable_audio_render._load_cuda_diffusion_streaming({}, checkpoint, torch.device("cpu"))
+
+    assert isinstance(model, torch.nn.Linear)
+    assert model.weight.dtype == torch.float16
+    assert model.weight.item() == pytest.approx(3.0)
+    assert not model.training
+    assert not model.weight.requires_grad
 
 
 def test_load_profile_small_selects_same_s_inverse() -> None:
@@ -246,6 +317,128 @@ def test_cli_existing_latent_resumes_without_source_model(
 
     assert result.exit_code == 0, result.output
     assert "Reusing SAME latent" in result.output
+
+
+def test_load_latent_artifact_different_prompt_raises(tmp_path: Path) -> None:
+    """A resumable latent cannot silently cross prompt identities.
+
+    :param tmp_path: Temporary latent artifact directory.
+    """
+    path = tmp_path / "latent.safetensors"
+    profile = load_profile("small")
+    stable_audio_render.write_latent_artifact(
+        path,
+        torch.ones(1, 256, 44),
+        stable_audio_render.latent_identity("soft bell", profile, seed=0),
+    )
+
+    with pytest.raises(ValueError, match="identity does not match"):
+        stable_audio_render.load_latent_artifact(
+            path,
+            stable_audio_render.latent_identity("bright bell", profile, seed=0),
+        )
+
+
+def test_load_latent_artifact_without_identity_raises(tmp_path: Path) -> None:
+    """An unidentifiable tensor cannot be treated as resumable pipeline state.
+
+    :param tmp_path: Temporary latent artifact directory.
+    """
+    path = tmp_path / "latent.safetensors"
+    save_file({"latent": torch.ones(1, 256, 44)}, path)
+
+    with pytest.raises(ValueError, match="no identity metadata"):
+        stable_audio_render.load_latent_artifact(
+            path,
+            stable_audio_render.latent_identity("soft bell", load_profile("small"), seed=0),
+        )
+
+
+def test_cli_upload_uri_without_upload_rejected_before_model_loading() -> None:
+    """An upload destination requires explicit remote-side-effect opt-in."""
+    result = CliRunner().invoke(main, ["soft bell", "--upload-uri", "r2://bucket/render.wav"])
+
+    assert result.exit_code != 0
+    assert "cannot be combined with --no-upload" in result.output
+
+
+def test_cli_non_r2_upload_uri_rejected_before_model_loading() -> None:
+    """Upload destinations cannot escape the configured object-store scheme."""
+    result = CliRunner().invoke(
+        main,
+        ["soft bell", "--upload", "--upload-uri", "file:///tmp/render.wav"],
+    )
+
+    assert result.exit_code != 0
+    assert "must use r2://" in result.output
+
+
+def test_cli_upload_writes_wav_latent_and_provenance_to_r2(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit upload publishes all three artifacts through real rclone.
+
+    :param tmp_path: Temporary checkpoint and local output directory.
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param monkeypatch: Heavyweight model, inverse, and renderer boundary patches.
+    """
+    inverse = tmp_path / "model.ckpt"
+    inverse.write_bytes(b"checkpoint")
+    output = tmp_path / "render.wav"
+    monkeypatch.setattr(stable_audio_render, "load_stable_audio_model", lambda *_: object())
+    monkeypatch.setattr(
+        stable_audio_render,
+        "generate_same_latent",
+        lambda *_args, **_kwargs: torch.ones(1, 256, 44),
+    )
+    monkeypatch.setattr(
+        stable_audio_render,
+        "resolve_inverse_checkpoint",
+        lambda *_args, **_kwargs: inverse,
+    )
+    monkeypatch.setattr(
+        stable_audio_render,
+        "predict_patch",
+        lambda *_args, **_kwargs: torch.zeros(1, 92),
+    )
+
+    def render_to_path(_prediction: object, _render: object, path: Path) -> np.ndarray:
+        """Materialize a bounded stand-in at the real publication boundary.
+
+        :param _prediction: Ignored inverse prediction.
+        :param _render: Ignored render configuration.
+        :param path: WAV destination consumed by real rclone.
+        :returns: Finite bounded waveform.
+        """
+        path.write_bytes(b"wav")
+        return np.zeros((2, 176400), dtype=np.float32)
+
+    monkeypatch.setattr(stable_audio_render, "render_wav", render_to_path)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "soft bell",
+            "--checkpoint",
+            str(inverse),
+            "--output",
+            str(output),
+            "--device",
+            "cpu",
+            "--upload",
+            "--upload-uri",
+            "r2://experiments/sao-test/render.wav",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    remote = fake_r2_remote / "experiments" / "sao-test"
+    assert (remote / "render.wav").read_bytes() == b"wav"
+    assert load_file(remote / "render.safetensors")["latent"].shape == (1, 256, 44)
+    with (remote / "render.csv").open(newline="", encoding="utf-8") as stream:
+        assert next(csv.DictReader(stream))["latent_r2_uri"].endswith("render.safetensors")
 
 
 def test_cli_non_wav_output_rejected_before_model_loading(tmp_path: Path) -> None:
