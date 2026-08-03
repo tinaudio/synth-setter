@@ -14,6 +14,4 @@ model:
     max_seq_len: 42
 
 datamodule:
-  conditioning:
-    column: m2l
-    input_shape: [128, 42]
+  conditioning: ${model.conditioning}

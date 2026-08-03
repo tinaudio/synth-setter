@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 ConditioningMode = Literal["mel", "m2l", "audio"]
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
@@ -56,8 +56,21 @@ class EmbeddingConditioningSpec(BaseModel):
     column: str = Field(min_length=1)
     input_shape: tuple[PositiveInt, ...] = Field(min_length=1)
 
+    @field_validator("input_shape", mode="before")
+    @classmethod
+    def normalize_hydra_shape(cls, value: object) -> object:
+        """Convert Hydra's list representation before strict tuple validation.
 
-Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]
+        :param value: Candidate per-row shape.
+        :returns: Tuple-normalized sequence or the original value.
+        """
+        if isinstance(value, Sequence) and not isinstance(value, (str, tuple)):
+            return tuple(value)
+        return value
+
+
+type ConditioningConfig = ConditioningMode | EmbeddingConditioningSpec
+Conditioning = ConditioningConfig | Mapping[str, object]
 
 
 def conditioning_batch_key(conditioning: Conditioning) -> str:
@@ -97,11 +110,7 @@ def resolve_embedding_conditioning(
             f"conditioning must be 'mel', 'm2l', 'audio', or a mapping, got {conditioning!r}"
         )
 
-    values = dict(conditioning)
-    input_shape = values.get("input_shape")
-    if isinstance(input_shape, Sequence) and not isinstance(input_shape, (str, tuple)):
-        values["input_shape"] = tuple(input_shape)
-    return EmbeddingConditioningSpec.model_validate(values)
+    return EmbeddingConditioningSpec.model_validate(dict(conditioning))
 
 
 class SketchControlSpec(BaseModel):
