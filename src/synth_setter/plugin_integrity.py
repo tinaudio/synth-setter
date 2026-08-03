@@ -913,10 +913,11 @@ def package_install_lock_path(package: str, version: str, plugins_dir: Path) -> 
     )
 
 
-def _ensure_runtime_readable_lock_directory(directory: Path) -> None:
-    """Create one real lock directory and publish traversal permissions.
+def _ensure_lock_directory(directory: Path, *, runtime_readable: bool) -> None:
+    """Create and validate one real lock-hierarchy directory.
 
     :param directory: Managed lock-hierarchy component whose parent exists.
+    :param runtime_readable: Whether to publish traversal permissions.
     :raises FileExistsError: The component exists but is not a real directory.
     :raises OSError: Creating, opening, or updating the directory fails.
     """
@@ -928,7 +929,8 @@ def _ensure_runtime_readable_lock_directory(directory: Path) -> None:
     if not stat.S_ISDIR(mode):
         raise FileExistsError(f"install lock hierarchy component is not a directory: {directory}")
     if os.name == "nt":
-        directory.chmod(mode | 0o055)
+        if runtime_readable:
+            directory.chmod(mode | 0o055)
         return
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
@@ -940,7 +942,8 @@ def _ensure_runtime_readable_lock_directory(directory: Path) -> None:
             ) from exc
         raise
     try:
-        os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
+        if runtime_readable:
+            os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
     finally:
         os.close(descriptor)
 
@@ -966,10 +969,12 @@ def package_install_lock(
     def _locked() -> Iterator[None]:
         plugins_dir.mkdir(parents=True, exist_ok=True)
         current = plugins_dir
-        _ensure_runtime_readable_lock_directory(current)
+        lock_directories = [current]
         for component in path.parent.relative_to(plugins_dir).parts:
             current /= component
-            _ensure_runtime_readable_lock_directory(current)
+            lock_directories.append(current)
+        for directory in lock_directories:
+            _ensure_lock_directory(directory, runtime_readable=False)
         try:
             lock_mode = path.lstat().st_mode
         except FileNotFoundError:
@@ -979,6 +984,8 @@ def package_install_lock(
                 raise FileExistsError(f"install lock is not a regular file: {path}")
         with advisory_file_lock(path):
             path.chmod(path.stat().st_mode | 0o044)
+            for directory in reversed(lock_directories):
+                _ensure_lock_directory(directory, runtime_readable=True)
             yield
 
     return _locked()
