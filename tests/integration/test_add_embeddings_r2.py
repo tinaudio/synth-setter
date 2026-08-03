@@ -168,6 +168,13 @@ def _render_shard_locally(spec: DatasetSpec, shard: ShardSpec, work_dir: Path) -
     return shard_path
 
 
+def _require_r2() -> None:
+    """Skip the requesting fixture unless the real R2 remote is usable."""
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
+    r2_io.ensure_r2_env_loaded()
+
+
 def _upload_dataset(
     prefix: str,
     shard_uri: str,
@@ -180,10 +187,6 @@ def _upload_dataset(
     :param build_local_dataset: Builder returning a dataset under its temporary directory.
     :yields str: Uploaded ``r2://`` dataset URI.
     """
-    if not r2_io.is_r2_reachable():
-        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
-    r2_io.ensure_r2_env_loaded()
-
     try:
         with tempfile.TemporaryDirectory() as raw_work_dir:
             local_dataset = build_local_dataset(Path(raw_work_dir))
@@ -220,6 +223,7 @@ def remote_lance_dataset_uri() -> Iterator[str]:
 
     :yields str: ``r2://`` URI of the uploaded dataset.
     """
+    _require_r2()
     yield from _render_and_upload(_SAMPLES_PER_SHARD)
 
 
@@ -285,12 +289,14 @@ def remote_indexed_lance_dataset_uri() -> Iterator[str]:
 
     :yields str: ``r2://`` URI of the uploaded dataset.
     """
+    _require_r2()
     prefix = _unique_test_prefix()
     shard_uri = r2_io.shard_uri(_R2_BUCKET, prefix, "shard-000000.lance")
 
     def build_local_dataset(work_dir: Path) -> Path:
         local_shard = work_dir / "shard-000000.lance"
         lance.write_dataset(_indexable_embedding_table(), local_shard)
+        assert lance.dataset(local_shard).count_rows() == MIN_ROWS_FOR_INDEX
         return local_shard
 
     yield from _upload_dataset(prefix, shard_uri, build_local_dataset)
@@ -305,21 +311,14 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
 
 
-@pytest.mark.requires_vst
-def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
-    remote_lance_dataset_uri: str,
-) -> None:
-    """The public CLI writes real MATPAC columns through the common Lance target.
+def _run_add_embeddings(r2_uri: str, overrides: tuple[str, ...]) -> None:
+    """Run the public CLI against R2 and report captured output on failure.
 
-    :param remote_lance_dataset_uri: Fixture-provided ``r2://`` Lance dataset URI.
+    :param r2_uri: Canonical ``r2://`` Lance dataset URI.
+    :param overrides: Additional Hydra overrides for this scenario.
     """
     result = subprocess.run(  # noqa: S603 — literal command and validated fixture URI
-        [
-            _ADD_EMBEDDINGS_CMD,
-            f"lance_uri={remote_lance_dataset_uri}",
-            "embeddings=[matpac_plus]",
-            "build_index=false",
-        ],
+        [_ADD_EMBEDDINGS_CMD, f"lance_uri={r2_uri}", *overrides],
         check=False,
         capture_output=True,
         text=True,
@@ -328,6 +327,20 @@ def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
     assert result.returncode == 0, (
         f"{_ADD_EMBEDDINGS_CMD} exited {result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+@pytest.mark.requires_vst
+def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
+    remote_lance_dataset_uri: str,
+) -> None:
+    """The public CLI writes real MATPAC columns through the common Lance target.
+
+    :param remote_lance_dataset_uri: Fixture-provided ``r2://`` Lance dataset URI.
+    """
+    _run_add_embeddings(
+        remote_lance_dataset_uri,
+        ("embeddings=[matpac_plus]", "build_index=false"),
     )
 
     dataset = _open_remote_dataset(remote_lance_dataset_uri)
@@ -354,21 +367,9 @@ def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
 
     :param remote_lance_dataset_uri: Fixture-provided ``r2://`` Lance dataset URI.
     """
-    result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
-        [
-            _ADD_EMBEDDINGS_CMD,
-            f"lance_uri={remote_lance_dataset_uri}",
-            "embeddings=[clap,m2l,t5gemma]",
-            f"param_spec_name={TEST_PARAM_SPEC_NAME}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=_EMBED_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-    assert result.returncode == 0, (
-        f"{_ADD_EMBEDDINGS_CMD} exited {result.returncode}\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    _run_add_embeddings(
+        remote_lance_dataset_uri,
+        ("embeddings=[clap,m2l,t5gemma]", f"param_spec_name={TEST_PARAM_SPEC_NAME}"),
     )
 
     dataset = _open_remote_dataset(remote_lance_dataset_uri)
@@ -461,22 +462,13 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     :param remote_indexed_lance_dataset_uri: Fixture-provided ``r2://`` URI of a
         dataset with enough rows to train the index.
     """
-    result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
-        [
-            _ADD_EMBEDDINGS_CMD,
-            f"lance_uri={remote_indexed_lance_dataset_uri}",
+    _run_add_embeddings(
+        remote_indexed_lance_dataset_uri,
+        (
             "build_index=true",
             f"num_partitions={_INDEX_NUM_PARTITIONS}",
             f"num_sub_vectors={_INDEX_NUM_SUB_VECTORS}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=_EMBED_SUBPROCESS_TIMEOUT_SECONDS,
-    )
-    assert result.returncode == 0, (
-        f"{_ADD_EMBEDDINGS_CMD} exited {result.returncode}\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        ),
     )
 
     dataset = _open_remote_dataset(remote_indexed_lance_dataset_uri)
