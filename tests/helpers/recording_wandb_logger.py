@@ -70,6 +70,11 @@ class RecordingWandbLogger(WandbLogger):
         super().__init__(project="pytest", experiment=cast(Any, self._recording_experiment))
 
     @property
+    def recorded_config(self) -> RecordingWandbConfig:
+        """:returns: Hyperparameters recorded on the injected fake run."""
+        return self._recording_experiment.config
+
+    @property
     def used_artifacts(self) -> list[str]:
         """:returns: Artifact references recorded on the injected fake run."""
         return self._recording_experiment.used_artifacts
