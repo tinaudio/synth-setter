@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785777740034,
+  "lastUpdate": 1785777742506,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -23773,6 +23773,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.795625256699987,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "035a9764ce0a94f6cca596666dfbb48876cf4441",
+          "message": "test: add diagnostic random Surge parity workload (#2850)\n\n* internal-fix(testing): add diagnostic random Surge parity workload\n\n* internal-fix(testing): align random diagnostic benchmark semantics\n\n* internal-fix(testing): keep diagnostic alert series nonnegative\n\n* internal-fix(testing): validate random benchmark workflow wiring\n\n* internal-fix(testing): pin random RMS distance semantics\n\n* internal-fix(testing): hash random corpus as canonical float bytes\n\n* internal-fix(testing): avoid cross-platform random corpus digest",
+          "timestamp": "2026-08-03T09:12:25-07:00",
+          "tree_id": "9cc0bd67b1c5a23f7db78348b3b43de1a18b5c5f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/035a9764ce0a94f6cca596666dfbb48876cf4441"
+        },
+        "date": 1785777742116,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.937891960144043,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.51596588127315,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09357969462871552,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0052596330642700195,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3115739822387695,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.522527971400041,
             "unit": "seconds"
           }
         ]
