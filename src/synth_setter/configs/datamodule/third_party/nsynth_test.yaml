@@ -1,0 +1,6 @@
+defaults:
+  - third_party/base@_here_
+  - _self_
+
+# 4,096 held-out NSynth notes; the published corpus is read in place, never rewritten.
+dataset_uri: r2://experiments/third_party/NSynth/test.lance

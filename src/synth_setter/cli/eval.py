@@ -187,6 +187,14 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     audio_dir = output_dir / "audio"
     metrics_dir = output_dir / "metrics"
 
+    no_params = bool(cfg.evaluation.get("no_params", False))
+    if no_params and cfg.evaluation.rerender_target:
+        raise ValueError(
+            "evaluation.no_params=true means the predict split carries no ground-truth "
+            "patch, so evaluation.rerender_target must be false — the target audio can "
+            "only come from the dataset."
+        )
+
     if cfg.evaluation.render_vst:
         if cfg.get("render") is None:
             raise ValueError(
@@ -215,6 +223,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             ]
             if cfg.evaluation.rerender_target:
                 args.extend(["--rerender-target", "True"])
+            if no_params:
+                args.extend(["--no-params", "True"])
             # Each pred file stores at most one configured batch, so this is a
             # conservative timeout budget when the final map-style batch is ragged.
             n_render_samples = (

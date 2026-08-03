@@ -170,3 +170,50 @@ def write_lance_shard_with_sketch(
         pa.field(SKETCH_STRUCT_FIELD, array.type, nullable=False), array
     )
     write_lance_dataset(path, extended.schema, [extended])
+
+
+def write_blob_audio_corpus(
+    path: Path,
+    clips: Sequence[np.ndarray],
+    *,
+    sample_rate: int,
+    audio_column: str = AUDIO_FIELD,
+) -> None:
+    """Write a third-party-style corpus storing WAV bytes in a blob column.
+
+    Mirrors the published ``r2:experiments/third_party`` layout: source
+    containers are stored verbatim, with no fixed-shape audio column.
+
+    :param path: Destination Lance dataset.
+    :param clips: One mono float32 clip per row.
+    :param sample_rate: Encoded sample rate for every clip.
+    :param audio_column: Blob column name; published corpora differ.
+    """
+    import io
+
+    import lance
+    from pedalboard.io import AudioFile
+
+    def _wav_bytes(clip: np.ndarray) -> bytes:
+        buffer = io.BytesIO()
+        with AudioFile(
+            buffer, "w", format="wav", samplerate=sample_rate, num_channels=1
+        ) as handle:
+            handle.write(clip.reshape(1, -1).astype(np.float32))
+        return buffer.getvalue()
+
+    schema = pa.schema(
+        [
+            pa.field(
+                audio_column,
+                pa.large_binary(),
+                nullable=False,
+                metadata={b"lance-encoding:blob": b"true"},
+            )
+        ]
+    )
+    table = pa.table(
+        {audio_column: pa.array([_wav_bytes(clip) for clip in clips], pa.large_binary())},
+        schema=schema,
+    )
+    lance.write_dataset(table, path, mode="create", data_storage_version="2.1")

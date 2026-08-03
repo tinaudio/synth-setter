@@ -51,6 +51,7 @@ def _build_postprocess_cfg(
     render_vst: bool = True,
     compute_metrics: bool = True,
     rerender_target: bool = True,
+    no_params: bool = False,
     num_workers: int = 1,
     shuffle_seed: int = 0,
     metric_prefix: str = "",
@@ -64,6 +65,7 @@ def _build_postprocess_cfg(
     :param render_vst: Drives ``cfg.evaluation.render_vst``.
     :param compute_metrics: Drives ``cfg.evaluation.compute_metrics``.
     :param rerender_target: Drives ``cfg.evaluation.rerender_target``.
+    :param no_params: Drives ``cfg.evaluation.no_params``.
     :param num_workers: Drives ``cfg.evaluation.num_workers``.
     :param shuffle_seed: Drives ``cfg.evaluation.shuffle_seed``.
     :param metric_prefix: Drives ``cfg.evaluation.metric_prefix``; prepended to
@@ -108,6 +110,7 @@ def _build_postprocess_cfg(
                 "render_vst": render_vst,
                 "compute_metrics": compute_metrics,
                 "rerender_target": rerender_target,
+                "no_params": no_params,
                 "num_workers": num_workers,
                 "shuffle_seed": shuffle_seed,
                 "metric_prefix": metric_prefix,
@@ -1228,3 +1231,69 @@ def test_metrics_timeout_scales_with_audio_subdir_count_over_workers(
     # Hard-coded (not mirroring the module constants) so a wrong constant fails:
     # 180 overhead + 30/sample * ceil(7 subdirs / 2 workers)=4 = 300.
     assert captured_timeouts[_COMPUTE_AUDIO_METRICS_MODULE] == 300.0
+
+
+def test_postprocessing_no_params_forwards_flag_to_render(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """A split with no ground-truth patch tells the renderer not to look for target params.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        no_params=True,
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert "--no-params" in captured_argv[0]
+
+
+def test_postprocessing_params_present_omits_no_params_flag(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """The default in-domain split still renders against its staged target params.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=False,
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
+    )
+
+    _run_predict_postprocessing(cfg)
+
+    assert "--no-params" not in captured_argv[0]
+
+
+def test_postprocessing_no_params_with_rerender_target_raises(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """Re-rendering a target needs target params, so the pair cannot both be set.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        compute_metrics=False,
+        rerender_target=True,
+        no_params=True,
+        render={"param_spec_name": "surge/fake_oracle", "plugin_state_path": "preset.fxp"},
+    )
+
+    with pytest.raises(ValueError, match="rerender_target"):
+        _run_predict_postprocessing(cfg)
+
+    assert captured_argv == []
