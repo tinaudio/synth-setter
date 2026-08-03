@@ -90,7 +90,7 @@ def _tone(seconds: float, sample_rate: int = _SOURCE_SAMPLE_RATE, seed: int = 0)
 
 
 def _datamodule(
-    uri: Path,
+    uri: str | Path,
     *,
     sample_rate: int = _TARGET_SAMPLE_RATE,
     audio_column: str = AUDIO_FIELD,
@@ -105,7 +105,7 @@ def _datamodule(
 ) -> ThirdPartyAudioDataModule:
     """Build a datamodule over a corpus with the tiny render contract.
 
-    :param uri: Corpus Lance dataset the datamodule reads in place.
+    :param uri: Corpus Lance path, or an ``r2://`` URI, read in place.
     :param sample_rate: Target render rate the corpus is mapped onto.
     :param audio_column: Blob column the corpus stores its audio in.
     :param amplitude_scale: Gain applied to decoded audio.
@@ -673,3 +673,20 @@ def test_corpus_audio_column_without_blob_encoding_raises(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="blob"):
         _datamodule(tmp_path / "corpus.lance").setup("predict")
+
+
+def test_corpus_served_from_an_r2_uri(fake_r2_remote: Path) -> None:
+    """The shipped configs name ``r2://`` corpora, so that resolution is served too.
+
+    Exercises the ``lance_target`` translation and storage-options wiring the
+    published configs depend on, which a local-path corpus never reaches.
+
+    :param fake_r2_remote: Root backing the ``r2:`` remote as a local filesystem.
+    """
+    corpus = fake_r2_remote / "experiments" / "third_party" / "Tiny" / "test.lance"
+    corpus.parent.mkdir(parents=True)
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=26)])
+
+    batch = _first_batch(_datamodule("r2://experiments/third_party/Tiny/test.lance"))
+
+    assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)

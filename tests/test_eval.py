@@ -2205,7 +2205,8 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
     assert torch.isfinite(prediction).all()
     assert not (output_dir / "predictions" / "target-params-0.pt").exists()
     assert target_audio.shape[1:] == (2, 4 * 44_100)
-    # Assert stored-order, one-second constant clips survive padding and up-mixing.
+    # Each distinct constant occupies one quarter of its render, so mean amplitude
+    # pins content, order, padding, and up-mixing at once.
     served = [float(row.abs().mean()) for row in target_audio]
     assert served == pytest.approx([0.0, 0.025], abs=1e-3)
 
@@ -2215,9 +2216,8 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
 def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Path) -> None:
     """The ``no_params`` render branch scores predictions against the corpus's own audio.
 
-    Exercises the forwarding this PR adds end to end: with no target params on
-    disk, ``target.wav`` can only come from the staged dataset audio, so a
-    dropped or rejected ``--no-params`` fails here rather than silently.
+    With no target params on disk, ``target.wav`` must come from staged dataset
+    audio; a dropped or rejected ``--no-params`` flag fails this test.
 
     :param tmp_path: Isolated corpus, checkpoint, and output directories.
     """
