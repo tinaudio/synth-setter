@@ -77,11 +77,16 @@ orig test shard 184 -> (44, 0) | grown test shard 808 -> (44, 0)
    any other destructive destination mutation.
 4. Strictly clear destination state that generate/finalize rebuild: split Lance
    directories, worker staging, claims, spec, card, stats, and stale config.
-5. Copy only `train.lance/data/` and each preserved shard's card-selected
-   staging attempt. Manifests, transactions, val/test data, and finalized
-   root sidecars never enter the destination copy.
-6. Upload the grown spec only after every required cleanup and copy succeeds.
-7. Run the normal generate + finalize pipeline against `dest_root`.
+5. Write `metadata/reopen.prepared` after cleanup. An exact-identity retry with
+   this marker preserves completed transfers and lets checksum copies fill only
+   missing objects.
+6. Copy only `train.lance/data/` and each preserved shard's card-selected
+   staging attempt. This explicitly sanctioned migration copies finalized
+   worker fragments but writes no Lance manifests or transactions; val/test
+   data and finalized root sidecars never enter the destination copy.
+7. Upload the grown spec only after every required cleanup and copy succeeds.
+   Its presence makes later identical invocations a no-op.
+8. Run the normal generate + finalize pipeline against `dest_root`.
 
 The identity is the load-bearing resume guard: matching only `run_id` would
 admit attempts from a different source or target layout. Operators must serialize

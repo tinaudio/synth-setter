@@ -13,6 +13,7 @@ from typing import cast
 import pytest
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data import dataset_reopen as dataset_reopen_module
 from synth_setter.pipeline.data.dataset_reopen import (
     ReopenPlan,
     main,
@@ -517,25 +518,36 @@ def test_reopen_dataset_different_destination_spec_raises(
         )
 
 
-def test_reopen_dataset_exact_partial_resume_restores_copied_state(
-    source_spec: DatasetSpec, fake_r2_remote: Path
+def test_reopen_dataset_exact_partial_resume_preserves_completed_copy(
+    source_spec: DatasetSpec, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Resume copied state only when its source and destination identity match exactly.
+    """Resume an interrupted spec publish without clearing completed copy work.
 
     :param source_spec: Finalized 8-shard source spec built by the module fixture.
     :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    :param monkeypatch: Pytest patcher used to interrupt publication and guard cleanup.
     """
-    plan = plan_reopen(source_spec, (80, 20, 20), dest_run_id="grown-run")
     _seed_finalized_root(fake_r2_remote, source_spec)
-    reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
+    original_upload_spec = dataset_reopen_module.upload_spec
+
+    def fail_upload(_spec: DatasetSpec) -> None:
+        raise RuntimeError("interrupted spec publication")
+
+    monkeypatch.setattr(dataset_reopen_module, "upload_spec", fail_upload)
+    with pytest.raises(RuntimeError, match="interrupted spec publication"):
+        reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
+
+    monkeypatch.setattr(dataset_reopen_module, "upload_spec", original_upload_spec)
+
+    def fail_cleanup(_uri: str) -> None:
+        raise AssertionError("completed copy was cleared")
+
+    monkeypatch.setattr(r2_io, "delete_prefix", fail_cleanup)
+    plan = reopen_dataset(
+        source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+    )
+
     dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
-    (dest / "input_spec.json").unlink()
-    restored = dest / "metadata" / "workers" / "shards" / "shard-000003" / "w0-a0.valid"
-    restored.unlink()
-
-    reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
-
-    assert restored.exists()
     written = DatasetSpec.model_validate_json((dest / "input_spec.json").read_text())
     assert written == plan.dest_spec
 
@@ -554,6 +566,8 @@ def test_reopen_dataset_marker_deletion_failure_preserves_destination_state(
         source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
     )
     dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
+    (dest / "input_spec.json").unlink()
+    (dest / "metadata" / "reopen.prepared").unlink()
     (dest / "dataset.complete").write_text("")
     (dest / "dataset.json").write_text("keep-card")
     before = {path.relative_to(dest): path.read_bytes() for path in dest.rglob("*") if path.is_file()}
@@ -584,6 +598,7 @@ def test_reopen_dataset_required_cleanup_failure_aborts_before_spec_upload(
     )
     dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
     (dest / "input_spec.json").unlink()
+    (dest / "metadata" / "reopen.prepared").unlink()
     blocked_prefix = dest / "val.lance"
     blocked_prefix.mkdir()
     blocked = blocked_prefix / "fragment.lance"
@@ -697,6 +712,7 @@ def test_reopen_dataset_copies_only_preserved_staging_and_train_fragment_data(
     assert copied_files == {
         "input_spec.json",
         "metadata/reopen.json",
+        "metadata/reopen.prepared",
         "metadata/workers/shards/shard-000000/w0-a0.fragment.json",
         "metadata/workers/shards/shard-000000/w0-a0.shard-stats.npz",
         "metadata/workers/shards/shard-000000/w0-a0.valid",

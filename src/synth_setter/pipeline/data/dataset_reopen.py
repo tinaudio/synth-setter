@@ -37,6 +37,7 @@ logger = structlog.get_logger(__name__)
 
 _SPLITS: tuple[Split, ...] = ("train", "val", "test")
 _REOPEN_IDENTITY_RELATIVE_PATH = "metadata/reopen.json"
+_REOPEN_PREPARED_RELATIVE_PATH = "metadata/reopen.prepared"
 
 
 class _ReopenIdentity(BaseModel):
@@ -223,11 +224,12 @@ def _load_reopen_identity(uri: str) -> _ReopenIdentity:
         return _ReopenIdentity.model_validate_json(path.read_text())
 
 
-def _prepare_destination_identity(plan: ReopenPlan, source_spec: DatasetSpec) -> None:
+def _prepare_destination_identity(plan: ReopenPlan, source_spec: DatasetSpec) -> bool:
     """Publish or verify the identity required for destination mutation.
 
     :param plan: Reopen plan naming the destination.
     :param source_spec: Exact source spec being extended.
+    :returns: Whether the exact grown spec is already published.
     :raises ValueError: Existing state has no identity or does not exactly match this source and
         destination spec.
     """
@@ -248,10 +250,21 @@ def _prepare_destination_identity(plan: ReopenPlan, source_spec: DatasetSpec) ->
         )
 
     spec_uri = plan.dest_spec.r2.input_spec_uri()
-    if r2_io.object_size(spec_uri) is not None and load_spec_from_uri(spec_uri) != plan.dest_spec:
+    spec_exists = r2_io.object_size(spec_uri) is not None
+    if spec_exists and load_spec_from_uri(spec_uri) != plan.dest_spec:
         raise ValueError(
             f"destination {plan.dest_root_uri} spec does not match its reopen identity"
         )
+    return spec_exists
+
+
+def _upload_empty_marker(uri: str) -> None:
+    """Publish an empty lifecycle marker.
+
+    :param uri: Exact destination object URI.
+    """
+    with tempfile.NamedTemporaryFile() as file:
+        r2_io.upload_to_uri(Path(file.name), uri)
 
 
 def _clear_destination_state(plan: ReopenPlan) -> None:
@@ -386,9 +399,14 @@ def reopen_dataset(  # noqa: DOC502
         new_sizes,
         dest_run_id=dest_run_id or make_dataset_wandb_run_id(source_spec.task_name),
     )
-    _prepare_destination_identity(plan, source_spec)
+    if _prepare_destination_identity(plan, source_spec):
+        return plan
+
     r2_io.delete_object(plan.dest_spec.r2.dataset_complete_marker_uri())
-    _clear_destination_state(plan)
+    prepared_uri = f"{plan.dest_root_uri}{_REOPEN_PREPARED_RELATIVE_PATH}"
+    if r2_io.object_size(prepared_uri) is None:
+        _clear_destination_state(plan)
+        _upload_empty_marker(prepared_uri)
     _copy_preserved_state(plan, source_spec)
     upload_spec(plan.dest_spec)
     logger.info(

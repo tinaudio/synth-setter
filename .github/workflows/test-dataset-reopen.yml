@@ -17,11 +17,15 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - ".github/actions/install-rclone/**"
       - ".github/actions/setup-r2/**"
+      - ".github/actions/upload-coverage/**"
       - ".github/workflows/test-dataset-reopen.yml"
       - "src/synth_setter/cli/finalize_dataset.py"
       - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "src/synth_setter/configs/render/faust.yaml"
+      - "src/synth_setter/configs/synth/faust_bright_organ.yaml"
       - "src/synth_setter/data/vst/**"
       - "src/synth_setter/pipeline/data/dataset_reopen.py"
       - "src/synth_setter/pipeline/data/lance_shard.py"

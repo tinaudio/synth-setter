@@ -759,7 +759,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/dataset_reopen.py"
         covers: "Reopen plan/validate/apply contract and the CLI surface"
       - pattern: "tests/pipeline/data/test_dataset_reopen.py"
-        covers: "Dataset-reopen unit-test invariants"
+        covers: "Dataset-reopen unit-test contract"
       - pattern: "tests/integration/test_dataset_reopen_e2e.py"
         covers: "Real-R2 dataset-reopen production round trip."
       - pattern: ".github/workflows/test-dataset-reopen.yml"
