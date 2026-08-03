@@ -41,7 +41,10 @@ from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     MIN_ROWS_FOR_INDEX,
 )
-from synth_setter.pipeline.data.lance_shard import SHARD_METADATA_SCHEMA_KEY
+from synth_setter.pipeline.data.lance_shard import (
+    SHARD_METADATA_SCHEMA_KEY,
+    write_lance_dataset,
+)
 from synth_setter.pipeline.data.t5gemma import (
     T5GEMMA_EMBEDDING_DIM,
     T5GEMMA_MAX_LENGTH,
@@ -294,9 +297,11 @@ def remote_indexed_lance_dataset_uri() -> Iterator[str]:
     shard_uri = r2_io.shard_uri(_R2_BUCKET, prefix, "shard-000000.lance")
     storage_options = r2_io.r2_storage_options()
     try:
-        lance.write_dataset(
-            _indexable_embedding_table(),
+        table = _indexable_embedding_table()
+        write_lance_dataset(
             r2_io.to_s3_uri(shard_uri),
+            table.schema,
+            table.to_batches(),
             storage_options=storage_options,
         )
         assert _open_remote_dataset(shard_uri).count_rows() == MIN_ROWS_FOR_INDEX
