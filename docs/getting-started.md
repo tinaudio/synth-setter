@@ -83,10 +83,17 @@ make install-surge-xt
 
 The target runs `npm ci`, so the Studiorack CLI and its transitive core are
 reproduced from `package-lock.json`. It then installs the exact
-`surge-synthesizer/surge` version in `studiorack.json`. Studiorack stores archive
-packages under its versioned `pluginsDir`; native installers may use the
-platform VST3 directory. `synth-setter-plugins` resolves either layout and
-creates the checkout alias.
+`surge-synthesizer/surge` version in `studiorack.json`. The patched core compares
+its host-selected registry artifact with `studiorack.lock.json` before download.
+Studiorack stores archive packages under its versioned `pluginsDir`; native
+installers may use the platform VST3 directory. Before invoking a native
+installer, `synth-setter-plugins` atomically records candidate snapshots beneath
+the managed package version. Transient failures retry the same pinned installer,
+even when an earlier attempt changed a candidate; adoption proceeds only after a
+successful installer exit and compares output with the original snapshot. Native
+bundles remain installer-owned symlink targets, but runtime consumption uses a
+manager-owned content snapshot verified against the seal. A source change during
+snapshotting fails closed before the plugin opens.
 
 The default managed directory is
 `~/.local/share/synth-setter/studiorack` on Linux and
@@ -101,11 +108,12 @@ make install-plugins
 Studiorack determines artifact compatibility from the host platform and
 architecture. Native installer packages may request administrator privileges;
 headless environments should run the install command with their normal
-privilege mechanism. Unsupported package/host combinations fail rather than
-falling back to an unpinned download.
+privilege mechanism. Unsupported package/host combinations and registry
+URL/digest drift fail rather than falling back to an unpinned download. Re-run
+the install command to repair an empty, partial, or modified managed bundle.
 
-If a manifest package is already installed in Studiorack storage or a standard
-system VST3 directory, refresh checkout aliases without reinstalling it:
+If a manifest package has a valid completion seal in Studiorack storage,
+refresh its checkout alias without reinstalling it:
 
 ```bash
 make link-plugins

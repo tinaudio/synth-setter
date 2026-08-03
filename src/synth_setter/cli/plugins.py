@@ -11,6 +11,7 @@ from pathlib import Path
 
 import click
 
+from synth_setter.plugin_integrity import ArtifactLock
 from synth_setter.plugin_manager import (
     PluginManifest,
     adopt_plugin_bundle,
@@ -31,6 +32,12 @@ _DEFAULT_EXECUTABLE = Path("node_modules/.bin/studiorack")
     default=_DEFAULT_MANIFEST,
     show_default=True,
     help="Pinned Studiorack project manifest.",
+)
+@click.option(
+    "--artifact-lock",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Repository artifact lock; defaults beside --manifest.",
 )
 @click.option(
     "--plugins-dir",
@@ -57,6 +64,7 @@ _DEFAULT_EXECUTABLE = Path("node_modules/.bin/studiorack")
 def main(
     ctx: click.Context,
     manifest: Path,
+    artifact_lock: Path | None,
     plugins_dir: Path,
     links_dir: Path,
     studiorack_executable: Path,
@@ -65,14 +73,26 @@ def main(
 
     :param ctx: Click context carrying validated command configuration.
     :param manifest: Studiorack project manifest.
+    :param artifact_lock: Repository lock, or ``None`` to use the manifest sibling.
     :param plugins_dir: Managed package storage root.
     :param links_dir: Stable alias directory.
     :param studiorack_executable: Pinned Studiorack executable.
+    :raises click.ClickException: The manifest or artifact lock is invalid.
     """
     ctx.ensure_object(dict)
+    lock_path = artifact_lock or manifest.with_suffix(".lock.json")
+    try:
+        loaded_manifest = PluginManifest.load(manifest)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(f"{manifest}: {exc}") from exc
+    try:
+        loaded_lock = ArtifactLock.load(lock_path, loaded_manifest)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(f"{lock_path}: {exc}") from exc
     ctx.obj.update(
-        artifact_lock=manifest.with_suffix(".lock.json"),
-        manifest=PluginManifest.load(manifest),
+        artifact_lock=lock_path,
+        artifact_lock_data=loaded_lock,
+        manifest=loaded_manifest,
         plugins_dir=plugins_dir,
         links_dir=links_dir,
         studiorack_executable=studiorack_executable,
@@ -106,11 +126,19 @@ def install_command(ctx: click.Context, packages: tuple[str, ...]) -> None:
         for plugin in selected:
             alias = link_plugin(
                 plugin,
+                artifact_lock=ctx.obj["artifact_lock_data"],
                 plugins_dir=ctx.obj["plugins_dir"],
                 links_dir=ctx.obj["links_dir"],
             )
             click.echo(f"{plugin.reference} -> {alias}")
-    except (FileNotFoundError, FileExistsError, KeyError, subprocess.CalledProcessError) as exc:
+    except (
+        FileNotFoundError,
+        FileExistsError,
+        KeyError,
+        RuntimeError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ) as exc:
         raise click.ClickException(str(exc)) from exc
 
 
@@ -138,6 +166,7 @@ def link_command(ctx: click.Context, packages: tuple[str, ...]) -> None:
         try:
             alias = link_plugin(
                 plugin,
+                artifact_lock=ctx.obj["artifact_lock_data"],
                 plugins_dir=ctx.obj["plugins_dir"],
                 links_dir=ctx.obj["links_dir"],
             )
@@ -146,7 +175,7 @@ def link_command(ctx: click.Context, packages: tuple[str, ...]) -> None:
                 raise click.ClickException(str(exc)) from exc
             click.echo(str(exc), err=True)
             continue
-        except FileExistsError as exc:
+        except (FileExistsError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(f"{plugin.reference} -> {alias}")
 
@@ -170,12 +199,15 @@ def adopt_command(ctx: click.Context, package: str, bundle_path: Path) -> None:
     """
     manifest: PluginManifest = ctx.obj["manifest"]
     try:
+        plugin = manifest.resolve(package)
+        artifact_lock: ArtifactLock = ctx.obj["artifact_lock_data"]
         managed = adopt_plugin_bundle(
-            manifest.resolve(package),
+            plugin,
             plugins_dir=ctx.obj["plugins_dir"],
             bundle=bundle_path,
+            locked_package=artifact_lock.package_for(plugin),
         )
-    except (FileNotFoundError, FileExistsError, KeyError) as exc:
+    except (FileNotFoundError, FileExistsError, KeyError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(managed)
 
@@ -192,7 +224,11 @@ def resolve_command(ctx: click.Context, package: str) -> None:
     """
     manifest: PluginManifest = ctx.obj["manifest"]
     try:
-        path = resolve_plugin_bundle(manifest.resolve(package), ctx.obj["plugins_dir"])
+        path = resolve_plugin_bundle(
+            manifest.resolve(package),
+            ctx.obj["plugins_dir"],
+            artifact_lock=ctx.obj["artifact_lock_data"],
+        )
     except (FileNotFoundError, KeyError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(path)

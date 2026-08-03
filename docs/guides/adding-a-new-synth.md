@@ -278,10 +278,12 @@ This renders a small smoke dataset, proving the synth resolves through
 ## Optional — bake the synth into the Docker image
 
 To run the synth in CI or on distributed workers, add its exact package version
-and VST3 bundle basename to `studiorack.json`. Include the package in the
-`builder-install-studiorack-plugins` selection and the Docker presence/load
-checks. Keep source-build fallbacks only when the registry has no compatible
-artifact for a supported image platform. Dataset generation resolves the stable
+and VST3 bundle basename to `studiorack.json`. Add every selected Linux x64 and
+macOS artifact identity to `studiorack.lock.json`, verifying each digest against
+the downloaded bytes. Include the package in the `builder-install-studiorack-plugins`
+selection and the Docker presence/load checks. Keep source-build fallbacks only
+when the registry has no compatible artifact for a supported image platform.
+Dataset generation resolves the stable
 alias from the synth identity; `SYNTH_SETTER_PLUGIN_PATH` only sets the default
 for tests and interactive tools that do not compose a synth config.
 

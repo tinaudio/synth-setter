@@ -7,12 +7,18 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CI_CONDA_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-conda.yml"
+CI_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test.yml"
 MAKEFILE = PROJECT_ROOT / "Makefile"
 DOCKERFILE = PROJECT_ROOT / "docker/ubuntu22_04/Dockerfile"
+ARTIFACT_LOCK = PROJECT_ROOT / "studiorack.lock.json"
+CARDINAL_ARTIFACT_LOCK = PROJECT_ROOT / "studiorack-cardinal.lock.json"
 CARDINAL_MANIFEST = PROJECT_ROOT / "studiorack-cardinal.json"
 MANIFEST = PROJECT_ROOT / "studiorack.json"
+PACKAGE_JSON = PROJECT_ROOT / "package.json"
 PACKAGE_LOCK = PROJECT_ROOT / "package-lock.json"
 SETUP_SURGE_ACTION = PROJECT_ROOT / ".github/actions/setup-surge-xt/action.yml"
 TART_TEMPLATE = PROJECT_ROOT / "tart/macos.pkr.hcl"
@@ -51,6 +57,11 @@ def test_studiorack_manifest_pins_runtime_plugin_set() -> None:
         package: (version, payload["vst3Bundles"][package])
         for package, version in payload["plugins"].items()
     } == _EXPECTED_PLUGINS
+    assert payload["vst3Versions"] == {
+        **payload["plugins"],
+        "asb2m10/dexed": "1.0.0",
+    }
+    assert payload["vst3PluginNames"] == {"baconpaul/six-sines": "Six Sines"}
 
 
 def test_cardinal_manifest_pins_optional_plugin() -> None:
@@ -59,6 +70,92 @@ def test_cardinal_manifest_pins_optional_plugin() -> None:
 
     assert payload["plugins"] == {"distrho/cardinal": "2026.2.0"}
     assert payload["vst3Bundles"] == {"distrho/cardinal": "CardinalSynth.vst3"}
+    assert payload["vst3Versions"] == {"distrho/cardinal": "0.26.2"}
+
+
+@pytest.mark.parametrize(
+    ("manifest_path", "artifact_lock_path", "expected_hosts"),
+    [
+        (
+            MANIFEST,
+            ARTIFACT_LOCK,
+            {("linux", "x64"), ("mac", "arm64"), ("mac", "x64")},
+        ),
+        (
+            CARDINAL_MANIFEST,
+            CARDINAL_ARTIFACT_LOCK,
+            {
+                ("linux", "arm64"),
+                ("linux", "x64"),
+                ("mac", "arm64"),
+                ("mac", "x64"),
+            },
+        ),
+    ],
+    ids=("runtime", "cardinal"),
+)
+def test_artifact_lock_exactly_covers_manifest_pins(
+    manifest_path: Path,
+    artifact_lock_path: Path,
+    expected_hosts: set[tuple[str, str]],
+) -> None:
+    """Every manifest has an exact lock covering its supported POSIX hosts.
+
+    :param manifest_path: Manifest whose exact package references must be locked.
+    :param artifact_lock_path: Same-stem repository artifact lock.
+    :param expected_hosts: Host identities supported by the manifest's install flow.
+    """
+    manifest = json.loads(manifest_path.read_text())
+    artifact_lock = json.loads(artifact_lock_path.read_text())
+
+    assert set(artifact_lock) == {
+        f"{package}@{version}" for package, version in manifest["plugins"].items()
+    }
+    selected_hosts = {
+        (system, architecture)
+        for package in artifact_lock.values()
+        for artifact in package["artifacts"]
+        for system in artifact["systems"]
+        for architecture in artifact["architectures"]
+    }
+    assert selected_hosts == expected_hosts
+
+
+def test_ci_test_paths_include_every_studiorack_manifest_and_lock() -> None:
+    """Push and pull-request triggers cover every manifest artifact identity."""
+    workflow = yaml.safe_load(CI_TEST_WORKFLOW.read_text())
+    # PyYAML 1.1 resolves GitHub's unquoted ``on`` key to ``True``.
+    triggers = workflow[True]
+    expected = {
+        "studiorack-cardinal.json",
+        "studiorack-cardinal.lock.json",
+        "studiorack.json",
+        "studiorack.lock.json",
+    }
+
+    assert expected <= set(triggers["push"]["paths"])
+    assert expected <= set(triggers["pull_request"]["paths"])
+
+
+def test_ci_executes_installed_patched_core_artifact_lock_test() -> None:
+    """CI installs the pinned npm graph and executes its real-core test."""
+    scripts = json.loads(PACKAGE_JSON.read_text())["scripts"]
+    workflow = CI_TEST_WORKFLOW.read_text()
+
+    assert scripts["test"] == "node --test scripts/studiorack/test-artifact-lock.mjs"
+    assert "npm ci" in workflow
+    assert "npm test" in workflow
+
+
+def test_conda_ci_installs_patched_studiorack_before_pytest() -> None:
+    """Conda CI provisions the Node integration dependency before collection."""
+    workflow = CI_CONDA_WORKFLOW.read_text()
+    parsed = yaml.safe_load(workflow)
+
+    assert "actions/setup-node@" in workflow
+    assert workflow.index("npm ci") < workflow.index("pytest -n auto")
+    for event in ("push", "pull_request"):
+        assert {"package.json", "package-lock.json"} <= set(parsed[True][event]["paths"])
 
 
 def test_package_lock_pins_studiorack_cli_and_core() -> None:
@@ -89,7 +186,10 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
     assert "COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json" in stage
     assert "npm ci" in stage
     assert "python -m synth_setter.cli.plugins" in stage
+    assert "src/synth_setter/plugin_integrity.py" in stage
+    assert "src/synth_setter/plugin_runtime.py" in stage
     assert "update-alternatives --install /usr/bin/gcc" in DOCKERFILE.read_text()
+    assert "studiorack.json" in stage
     assert "studiorack-cardinal.lock.json" in stage
     assert "studiorack.lock.json" in stage
 
