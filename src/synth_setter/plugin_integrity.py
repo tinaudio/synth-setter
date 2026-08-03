@@ -952,6 +952,10 @@ def _windows_lock_directories(plugins_dir: Path, lock_parent: Path) -> list[Path
     """
     plugins_dir.mkdir(parents=True, exist_ok=True)
     directories = [plugins_dir]
+    if not stat.S_ISDIR(plugins_dir.lstat().st_mode):
+        raise FileExistsError(
+            f"install lock hierarchy component is not a directory: {plugins_dir}"
+        )
     current = plugins_dir
     for component in lock_parent.relative_to(plugins_dir).parts:
         current /= component
@@ -959,9 +963,11 @@ def _windows_lock_directories(plugins_dir: Path, lock_parent: Path) -> list[Path
             current.mkdir()
         except FileExistsError:
             pass
+        if not stat.S_ISDIR(current.lstat().st_mode):
+            raise FileExistsError(
+                f"install lock hierarchy component is not a directory: {current}"
+            )
         directories.append(current)
-    if not all(stat.S_ISDIR(directory.lstat().st_mode) for directory in directories):
-        raise FileExistsError("install lock hierarchy contains a non-directory")
     return directories
 
 

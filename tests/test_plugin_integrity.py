@@ -177,6 +177,45 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
     _assert_runtime_readable_lock_tree(lock_path, lock_directories)
 
 
+def test_windows_lock_directories_real_hierarchy_returns_root_first(tmp_path: Path) -> None:
+    """Windows fallback creates each package-lock directory without symlinks.
+
+    :param tmp_path: Scratch root for a new hierarchy.
+    """
+    plugins_dir = tmp_path / "managed"
+    lock_parent = plugins_dir / ".synth-setter-install-locks/example/synth"
+
+    directories = plugin_integrity._windows_lock_directories(plugins_dir, lock_parent)
+
+    assert directories == [
+        plugins_dir,
+        plugins_dir / ".synth-setter-install-locks",
+        plugins_dir / ".synth-setter-install-locks/example",
+        lock_parent,
+    ]
+    assert all(directory.is_dir() for directory in directories)
+
+
+def test_windows_lock_directories_symlink_rejected_before_target_mutation(tmp_path: Path) -> None:
+    """Windows fallback rejects each symlink before descending through it.
+
+    :param tmp_path: Scratch root containing one external directory target.
+    """
+    plugins_dir = tmp_path / "managed"
+    plugins_dir.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (plugins_dir / ".synth-setter-install-locks").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(FileExistsError, match="not a directory"):
+        plugin_integrity._windows_lock_directories(
+            plugins_dir,
+            plugins_dir / ".synth-setter-install-locks/example/synth",
+        )
+
+    assert list(external.iterdir()) == []
+
+
 def test_package_install_lock_symlinked_hierarchy_rejected_without_target_mutation(
     tmp_path: Path,
 ) -> None:

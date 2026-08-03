@@ -586,6 +586,7 @@ def _shared_lease_observer(
 
 def _pausing_snapshot_publisher(
     managed: Path,
+    *,
     started: threading.Event,
     release: threading.Event,
     destinations: list[Path],
@@ -637,9 +638,9 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
     )
     paused_publisher = _pausing_snapshot_publisher(
         managed,
-        publication_started,
-        release_publication,
-        published_destinations,
+        started=publication_started,
+        release=release_publication,
+        destinations=published_destinations,
     )
 
     def _consume(completed: threading.Event | None = None) -> None:
