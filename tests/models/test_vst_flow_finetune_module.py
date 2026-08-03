@@ -27,6 +27,8 @@ _BUFFER_SECONDS = _SIGNAL_LENGTH / _SAMPLE_RATE
 # Below this peak the render is silence, and scoring silence against silence leaves the
 # control signal identically zero — every simulator assertion then holds for free.
 _AUDIBLE_PEAK = 1e-4
+# Late enough to stay audible and differentiable, but below 1 so estimate and target differ.
+_LATE_DIFFERENTIABLE_FLOW_TIME = 0.9
 
 
 def _audible_model_rows(rows: int, seed: int) -> torch.Tensor:
@@ -190,6 +192,16 @@ def _batch(rows: int = _BATCH) -> dict[str, torch.Tensor]:
         )
     assert audio.abs().max() > _AUDIBLE_PEAK, "batch is silent; simulator assertions are vacuous"
     return {"params": params, "noise": torch.randn(rows, _WIDTH), "audio": audio}
+
+
+def _late_flow_time(batch_size: int, device: torch.device) -> torch.Tensor:
+    """Keep estimates in TorchSynth's differentiable audible region.
+
+    :param batch_size: Current training batch width, preserved in the output.
+    :param device: Training device, avoiding a cross-device sample-time tensor.
+    :returns: Flow times shaped ``(batch_size, 1)``.
+    """
+    return torch.full((batch_size, 1), _LATE_DIFFERENTIABLE_FLOW_TIME, device=device)
 
 
 def _trainer():
@@ -870,13 +882,27 @@ def test_finetune_predict_step_samples_with_a_bound_observation(tmp_path: Path) 
     assert module._sampling_target is None
 
 
+def test_finetune_gradient_control_logs_sampled_time_telemetry(tmp_path: Path) -> None:
+    """Production time sampling reaches whole-batch gradient telemetry.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    metrics = _logged_control_metrics(_finetune(_base_checkpoint(tmp_path)), _batch())
+
+    assert metrics["train/control_active_fraction"][0] == 1.0
+    assert metrics["train/control_signal_norm"][0] > 0.0
+    assert metrics["train/control_cost"][0] > 0.0
+    assert np.isfinite(metrics["train/control_grad_norm"][0])
+
+
 def test_finetune_gradient_control_logs_positive_whole_batch_telemetry(tmp_path: Path) -> None:
     """Active gradient feedback reports signal, cost, and gradient magnitudes.
 
     :param tmp_path: Pytest-provided directory for the base checkpoint.
     """
-    torch.manual_seed(1)
-    metrics = _logged_control_metrics(_finetune(_base_checkpoint(tmp_path)), _batch())
+    module = _finetune(_base_checkpoint(tmp_path))
+    module._sample_time = _late_flow_time  # pyright: ignore[reportAttributeAccessIssue]
+    metrics = _logged_control_metrics(module, _batch())
     options = {
         "on_step": True,
         "on_epoch": False,
