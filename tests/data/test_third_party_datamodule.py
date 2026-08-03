@@ -512,3 +512,30 @@ def test_distinct_stats_uris_sharing_a_basename_cache_separately(tmp_path: Path)
     )
 
     assert first.cached_stats_path() != second.cached_stats_path()
+
+
+def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Path) -> None:
+    """An ``r2://`` statistics object is fetched once and applied to the served mel.
+
+    Drives the real rclone download into the digest-keyed cache slot and feeds
+    the result through its real consumer, so a broken fetch cannot pass as an
+    un-normalized batch.
+
+    :param fake_r2_remote: Root backing the ``r2:`` remote as a local filesystem.
+    """
+    corpus = fake_r2_remote / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=20)])
+    stats_key = fake_r2_remote / "experiments" / "corpus-a"
+    stats_key.mkdir(parents=True)
+    np.savez(stats_key / "stats.npz", mean=np.float32(-30.0), std=np.float32(2.0))
+
+    plain = _first_batch(_datamodule(corpus))["mel"]
+    normalized = _first_batch(
+        _datamodule(
+            corpus,
+            use_saved_mean_and_variance=True,
+            mel_stats_uri="r2://experiments/corpus-a/stats.npz",
+        )
+    )["mel"]
+
+    assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
