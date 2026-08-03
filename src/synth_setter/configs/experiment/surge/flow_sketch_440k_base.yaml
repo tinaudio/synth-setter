@@ -14,8 +14,7 @@ run_name: flow440k_base
 seed: 3407
 
 datamodule:
-  # bs 1024 with 24 workers saturates an H100; bs 64-80 with 4 workers left the
-  # accelerator at 0% median utilization.
+  # This loader shape saturates an H100; smaller shapes left the accelerator idle.
   batch_size: 1024
   num_workers: 24
   prefetch_factor: 4

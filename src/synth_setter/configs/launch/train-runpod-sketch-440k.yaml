@@ -1,8 +1,5 @@
-# RunPod launch for the sketch arm of the 440k sketch A/B.
-#
-# The surge/flow_sketch_440k experiment owns the dataset pin, seed, anneal
-# horizon, and loader shape; the cmd carries only experiment selection and
-# operational flags, so the two arms cannot drift through launch overrides.
+# RunPod launch for the sketch arm of the 440k sketch A/B (#2612).
+# Keep experiment selection in the cmd so arms cannot drift through launch overrides.
 
 compute: runpod/training-h100
 worker_image_tag: devcontainer-tools

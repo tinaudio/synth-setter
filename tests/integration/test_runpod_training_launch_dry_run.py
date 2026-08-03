@@ -190,3 +190,63 @@ def test_sketch_440k_arms_share_one_pinned_accelerator() -> None:
         task.validate()
         resources = next(iter(task.resources))
         assert resources.accelerators == {"H100-SXM": 1}, resources.accelerators
+
+
+_SKETCH_440K_ARMS = {
+    "base": ("train-runpod-sketch-440k-base.yaml", "flow440k_base"),
+    "sketch": ("train-runpod-sketch-440k.yaml", "flow440k_sketch"),
+}
+
+
+@pytest.mark.parametrize(
+    ("arm", "expected_run_name"), [(k, v[1]) for k, v in _SKETCH_440K_ARMS.items()]
+)
+def test_sketch_440k_launch_resolves_its_own_arm(arm: str, expected_run_name: str) -> None:
+    """Each launch resolves to the arm it is named for.
+
+    Composition alone cannot catch a launch that points at the wrong experiment: both arms are
+    valid configs, so a base-pointing sketch launch would submit two identical jobs and the A/B
+    would silently compare nothing.
+
+    :param arm: Key into the shipped launch configs under test.
+    :param expected_run_name: ``run_name`` the arm's experiment must resolve to.
+    """
+    launch_config = load_launch_config(_LAUNCH_DIR / _SKETCH_440K_ARMS[arm][0])
+    task = _compose_task(launch_config)
+    assert isinstance(task.run, str)
+    _, entrypoint, train_args = task.run.partition("exec synth-setter-train")
+    assert entrypoint
+
+    train_entrypoint = Path(sys.executable).with_name("synth-setter-train")
+    result = subprocess.run(  # noqa: S603 - real packaged CLI with config-owned arguments
+        ["/bin/bash", "-c", f"exec {train_entrypoint} {train_args} --cfg job --resolve"],
+        cwd=_REPO_ROOT,
+        env={**os.environ, "DATASET_ROOT_URI": "", "EXPERIMENT": "", "HYDRA_FULL_ERROR": "1"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"run_name: {expected_run_name}" in result.stdout
+    # The sketch arm is the only one that resolves a populated sketch_controls block.
+    assert ("sketch_controls: null" in result.stdout) is (arm == "base")
+
+
+def test_sketch_440k_arms_share_every_operational_setting() -> None:
+    """The arms differ only in which experiment they select.
+
+    The operational scaffolding is duplicated across two files so each arm stays reproducible by
+    name; this pins the duplication so an image-tag, env-file, or tail change to one arm cannot
+    silently invalidate the matched comparison.
+    """
+    base, sketch = (
+        load_launch_config(_LAUNCH_DIR / _SKETCH_440K_ARMS[arm][0]) for arm in ("base", "sketch")
+    )
+
+    assert base.compute == sketch.compute
+    assert base.worker_image_tag == sketch.worker_image_tag
+    assert base.env_file == sketch.env_file
+    assert base.tail == sketch.tail
+    assert base.cmd is not None and sketch.cmd is not None
+    assert base.cmd.replace("surge/flow_sketch_440k_base", "surge/flow_sketch_440k") == sketch.cmd

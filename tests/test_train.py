@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
@@ -1168,6 +1169,72 @@ def test_train_fast_dev_run_sketch_tokens_lance(
     assert model.sketch_tokens is not None
     assert object_dict["datamodule"].sketch_controls is not None
     assert torch.isfinite(metric_dict["train/loss"])
+
+
+@pytest.mark.parametrize(
+    ("experiment", "expects_sketch"),
+    [("surge/flow_sketch_440k", True), ("surge/flow_sketch_440k_base", False)],
+    ids=["sketch", "base"],
+)
+def test_train_shipped_440k_ab_arms_drive_a_real_step(
+    experiment: str,
+    expects_sketch: bool,
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """Each shipped 440k A/B arm drives a real ``train(cfg)`` step.
+
+    Composition tests cannot catch an arm the entrypoint fails to consume: the loader shape,
+    anneal horizon, and conditioning only meet at runtime. The dataset pin is redirected at the
+    generated Lance root so the arm runs without its R2 source.
+
+    :param experiment: Shipped A/B arm composed through the training entrypoint.
+    :param expects_sketch: Whether the arm must wire sketch control tokens.
+    :param cfg_train_sketch_lance: Fixture providing real m2l+sketch Lance splits.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                f"experiment={experiment}",
+                "datamodule=surge_lance",
+                "synth=surge_4",
+                "conditioning=m2l",
+                "trainer=cpu",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = cfg_train_sketch_lance.paths.root_dir
+        cfg.paths.output_dir = cfg_train_sketch_lance.paths.output_dir
+        cfg.paths.log_dir = cfg_train_sketch_lance.paths.log_dir
+        cfg.logger = None
+        if "lr_monitor" in cfg.callbacks:
+            del cfg.callbacks.lr_monitor
+        cfg.training.val_audio_probe = False
+        cfg.datamodule.dataset_root = cfg_train_sketch_lance.datamodule.dataset_root
+        cfg.datamodule.download_dataset_root_uri = None
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.persistent_workers = False
+        cfg.datamodule.prefetch_factor = None
+        cfg.model.compile = False
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 32
+        cfg.model.vector_field.d_ff = 32
+        cfg.model.vector_field.projection.num_tokens = 8
+        cfg.trainer.fast_dev_run = True
+        cfg.trainer.precision = "32-true"
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metric_dict["train/loss"])
+    assert (object_dict["model"].sketch_tokens is not None) is expects_sketch
+    assert (object_dict["datamodule"].sketch_controls is not None) is expects_sketch
 
 
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
