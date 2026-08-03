@@ -1,6 +1,4 @@
-# Evaluate all canonical Simple 440k conditioning checkpoints and mode spellings
-# sequentially in one attached managed job. Terminal state releases the worker;
-# attached-mode cancellation is final cleanup and propagates the job result.
+# Attached-mode cancellation propagates the matrix result and releases its worker.
 compute: runpod/training
 tier: mid
 worker_image_tag: devcontainer-tools

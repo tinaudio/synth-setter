@@ -30,8 +30,7 @@ class _EvalCase(NamedTuple):
     conditioning: str | None
 
 
-# Cover every arm and every mode through the packaged CLI; the matrix test below
-# separately pins their complete Cartesian product without 16 heavyweight subprocesses.
+# Cover every arm and mode through the CLI; the matrix assertion avoids repeated subprocesses.
 _EVAL_CASES = (
     _EvalCase("mel", "test", "flow_simple_440k_100k", "model-flow_simple_440k_100k:v0", None),
     _EvalCase("mel", "validate", "flow_simple_440k_100k", "model-flow_simple_440k_100k:v0", None),
@@ -90,7 +89,7 @@ def test_eval_flow_simple_440k_launch_config_selects_one_mid_tier_job() -> None:
 
 
 def test_eval_flow_simple_440k_worker_dry_run_covers_complete_matrix() -> None:
-    """The unfiltered worker emits all sixteen checkpoint/mode cells."""
+    """The unfiltered worker emits every checkpoint/mode cell."""
     result = subprocess.run(  # noqa: S603 - checked-in script, dry-run by default
         [str(_WORKER_SCRIPT)],
         cwd=_REPO_ROOT,
@@ -120,15 +119,23 @@ def test_eval_flow_simple_440k_worker_dry_run_covers_complete_matrix() -> None:
     ]
 
 
-@pytest.mark.parametrize(("flag", "value"), [("--arm", "bogus"), ("--mode", "bogus")])
-def test_eval_flow_simple_440k_worker_unknown_filter_fails(flag: str, value: str) -> None:
-    """An unknown retry filter fails instead of producing a false-green empty run.
+@pytest.mark.parametrize(
+    ("argument", "message"),
+    [
+        ("--arm=bogus", "unsupported arm: bogus"),
+        ("--mode=bogus", "unsupported mode: bogus"),
+        ("--arm=", "unsupported arm:"),
+        ("--mode=", "unsupported mode:"),
+    ],
+)
+def test_eval_flow_simple_440k_worker_unknown_filter_fails(argument: str, message: str) -> None:
+    """An unknown arm or mode filter fails instead of producing an empty run.
 
-    :param flag: Worker filter option under test.
-    :param value: Unsupported filter value.
+    :param argument: Unsupported worker filter argument.
+    :param message: Expected error prefix.
     """
     result = subprocess.run(  # noqa: S603 - checked-in script, dry-run by default
-        [str(_WORKER_SCRIPT), flag, value],
+        [str(_WORKER_SCRIPT), argument],
         cwd=_REPO_ROOT,
         check=False,
         capture_output=True,
@@ -136,25 +143,7 @@ def test_eval_flow_simple_440k_worker_unknown_filter_fails(flag: str, value: str
     )
 
     assert result.returncode == 2
-    assert f"unsupported {flag.removeprefix('--')}: {value}" in result.stderr
-
-
-@pytest.mark.parametrize("flag", ["--arm", "--mode"])
-def test_eval_flow_simple_440k_worker_missing_filter_value_fails(flag: str) -> None:
-    """A filter without an operand exits with a usage error.
-
-    :param flag: Worker filter option missing its required operand.
-    """
-    result = subprocess.run(  # noqa: S603 - checked-in script, dry-run by default
-        [str(_WORKER_SCRIPT), flag],
-        cwd=_REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 2
-    assert f"{flag} requires a value" in result.stderr
+    assert message in result.stderr
 
 
 @pytest.mark.parametrize("case", _EVAL_CASES, ids=lambda case: f"{case.arm}-{case.mode}")
@@ -166,7 +155,7 @@ def test_eval_flow_simple_440k_worker_command_composes_checkpoint_mode(
     :param case: Checkpoint/mode case selected from the worker matrix.
     """
     dry_run = subprocess.run(  # noqa: S603 - checked-in script with fixed test arguments
-        [str(_WORKER_SCRIPT), "--arm", case.arm, "--mode", case.mode],
+        [str(_WORKER_SCRIPT), f"--arm={case.arm}", f"--mode={case.mode}"],
         cwd=_REPO_ROOT,
         check=False,
         capture_output=True,

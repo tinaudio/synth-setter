@@ -14,24 +14,10 @@ readonly R2_OUTPUT_ROOT='r2://experiments/eval/flow-simple-440k-100k'
 readonly WANDB_PROJECT='khaledtinubu-n-a/synth-setter'
 
 usage() {
-  cat >&2 <<'EOF'
-Usage: run-flow-simple-440k-all-modes.sh [options]
-
-  --arm NAME     Run only mel, clap, m2l, or same_s.
-  --mode NAME    Run only test, validate, val, or predict.
-  --execute      Execute evaluation. The default prints commands only.
-EOF
+  echo 'Usage: run-flow-simple-440k-all-modes.sh [--arm=NAME] [--mode=NAME] [--execute]' >&2
 }
 
-# Build and optionally run one checkpoint/mode cell.
-# Globals:
-#   DATASET_TXIDS, OUTPUT_ROOT, R2_OUTPUT_ROOT, WANDB_PROJECT, execute.
-# Arguments:
-#   Conditioning arm and evaluation mode.
-# Outputs:
-#   The cell label and shell-escaped command.
-# Returns:
-#   2 for an unsupported arm; otherwise the eval command status.
+# Build and optionally execute one checkpoint/mode evaluation.
 run_cell() {
   local arm="$1"
   local mode="$2"
@@ -98,13 +84,7 @@ run_cell() {
   fi
 }
 
-# Parse filters and run the requested matrix cells.
-# Globals:
-#   ARMS, MODES, execute.
-# Arguments:
-#   Command-line options.
-# Returns:
-#   2 for invalid options or filters; otherwise the first failed cell status.
+# Parse filters and run the selected evaluation cells.
 main() {
   local selected_arm=''
   local selected_mode=''
@@ -112,22 +92,10 @@ main() {
 
   while (( $# > 0 )); do
     case "$1" in
-      --arm)
-        if (( $# < 2 )) || [[ -z "$2" || "$2" == --* ]]; then
-          echo "--arm requires a value" >&2
-          return 2
-        fi
-        selected_arm="$2"
-        shift 2
-        ;;
-      --mode)
-        if (( $# < 2 )) || [[ -z "$2" || "$2" == --* ]]; then
-          echo "--mode requires a value" >&2
-          return 2
-        fi
-        selected_mode="$2"
-        shift 2
-        ;;
+      --arm=) echo 'unsupported arm:' >&2; return 2 ;;
+      --arm=*) selected_arm="${1#*=}"; shift ;;
+      --mode=) echo 'unsupported mode:' >&2; return 2 ;;
+      --mode=*) selected_mode="${1#*=}"; shift ;;
       --execute) execute=true; shift ;;
       -h|--help) usage; return 0 ;;
       *) echo "unknown argument: $1" >&2; usage; return 2 ;;
