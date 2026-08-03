@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import yaml
 from workflow_fixtures import load_workflow
 
 _UPLOAD_STEP_NAME = "Upload coverage to Codecov"
@@ -68,3 +69,9 @@ def test_dataset_reopen_job_uploads_production_path_coverage(project_root: Path)
         "uses": "./.github/actions/upload-coverage",
         "with": {"flags": "integration-r2-reopen", "token": "${{ secrets.CODECOV_TOKEN }}"},
     }
+    codecov_config = cast(
+        dict[str, object], yaml.safe_load((project_root / "codecov.yml").read_text())
+    )
+    flag_management = cast(dict[str, object], codecov_config["flag_management"])
+    flags = cast(list[dict[str, object]], flag_management["individual_flags"])
+    assert any(flag.get("name") == "integration-r2-reopen" for flag in flags)
