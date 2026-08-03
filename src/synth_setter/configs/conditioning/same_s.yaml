@@ -10,6 +10,7 @@ model:
   conditioning:
     column: same_s
     input_shape: [256, 44]
+    normalization: per_channel
   encoder:
     embed_dim: 256
     max_seq_len: 44
@@ -18,3 +19,4 @@ datamodule:
   conditioning:
     column: same_s
     input_shape: [256, 44]
+    normalization: per_channel
