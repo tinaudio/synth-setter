@@ -1264,6 +1264,7 @@ def test_flow_sketch_440k_experiments_differ_only_in_sketch_conditioning() -> No
         assert cfg.datamodule.param_spec_name == "surge_simple"
         assert cfg.datamodule.batch_size == 1024
         assert cfg.datamodule.num_workers == 24
+        assert cfg.datamodule.prefetch_factor == 4
         assert cfg.trainer.max_steps == 50000
         assert cfg.trainer.min_steps == 50000
         assert cfg.trainer.val_check_interval == 2000
