@@ -23,7 +23,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
 from synth_setter.pipeline.schemas.prefix import make_dataset_wandb_run_id, make_r2_prefix
 from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.pipeline.spec_io import load_spec_from_root, upload_spec
+from synth_setter.pipeline.spec_io import load_spec_from_root, load_spec_from_uri, upload_spec
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -180,7 +180,32 @@ def _purge_uri(r2_uri: str) -> None:
     r2_io.purge_prefix(bucket, key)
 
 
-# DOC502: the documented FileNotFoundError propagates from _require_source_complete.
+def _require_safe_destination(plan: ReopenPlan, source_spec: DatasetSpec) -> None:
+    """Refuse a destination holding a run unrelated to this reopen.
+
+    A partial reopen is resumable, so two run ids are legitimate here: mid-copy
+    the destination still carries the source's spec, and after the spec upload
+    it carries the grown one. Any other id means a colliding ``dest_run_id``,
+    whose leftover staged attempts would satisfy the skip-probe for shards this
+    run never rendered and put foreign rows in the finalized splits.
+
+    :param plan: Reopen plan naming the destination.
+    :param source_spec: Spec of the dataset being extended.
+    :raises ValueError: The destination holds a spec from an unrelated run.
+    """
+    spec_uri = plan.dest_spec.r2.input_spec_uri()
+    if r2_io.object_size(spec_uri) is None:
+        return
+    existing = load_spec_from_uri(spec_uri)
+    if existing.run_id not in (source_spec.run_id, plan.dest_spec.run_id):
+        raise ValueError(
+            f"destination {plan.dest_root_uri} already holds run {existing.run_id!r}; "
+            "reopen refuses to merge into an unrelated run"
+        )
+
+
+# DOC502: the documented errors propagate from _require_source_complete /
+# _require_safe_destination.
 def reopen_dataset(  # noqa: DOC502
     source_root_uri: str,
     new_sizes: Sequence[int],
@@ -201,6 +226,7 @@ def reopen_dataset(  # noqa: DOC502
     :param dry_run: When true, plan and return without writing anything.
     :returns: The reopen plan describing what was (or would be) done.
     :raises FileNotFoundError: The source is not finalized.
+    :raises ValueError: The destination already holds an unrelated run.
     """
     source_spec = load_spec_from_root(source_root_uri)
     _require_source_complete(source_spec)
@@ -218,6 +244,7 @@ def reopen_dataset(  # noqa: DOC502
         )
         return plan
 
+    _require_safe_destination(plan, source_spec)
     # Excluded from the copy, not deleted after it: a crash mid-reopen would
     # otherwise leave a destination that reads as finalized but holds the
     # source's spec, and hydration trusts that marker.
