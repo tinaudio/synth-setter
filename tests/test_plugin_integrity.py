@@ -20,6 +20,7 @@ from synth_setter.plugin_integrity import (
     ManagedBundleRecord,
     ManagedBundleStorage,
     PluginIntegrityError,
+    advisory_file_lease,
     bundle_entries,
     bundle_is_sealed,
     locked_package_digest,
@@ -60,6 +61,7 @@ def test_plugin_integrity_public_api_imports_from_focused_module() -> None:
     assert ManagedAliasRecord.__module__ == "synth_setter.plugin_runtime"
     assert ManagedBundleRecord.__module__ == "synth_setter.plugin_integrity"
     assert PluginIntegrityError.__module__ == "synth_setter.plugin_integrity"
+    assert advisory_file_lease.__module__ == "synth_setter.plugin_integrity"
     assert bundle_entries.__module__ == "synth_setter.plugin_integrity"
     assert bundle_is_sealed.__module__ == "synth_setter.plugin_integrity"
     assert managed_plugin_digest.__module__ == "synth_setter.plugin_runtime"

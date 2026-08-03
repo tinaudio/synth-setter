@@ -384,6 +384,12 @@ def _bundle_root(bundle: Path) -> Path:
 
 
 def _regular_file_entry(child: Path, relative: str) -> BundleEntry:
+    """Hash one regular bundle file into its sealed identity.
+
+    :param child: Regular file inside the resolved bundle root.
+    :param relative: POSIX path relative to the bundle root.
+    :returns: Content entry with size and SHA256 digest.
+    """
     size = child.stat(follow_symlinks=False).st_size
     with child.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -391,6 +397,14 @@ def _regular_file_entry(child: Path, relative: str) -> BundleEntry:
 
 
 def _symlink_entry(child: Path, root: Path, relative: str) -> BundleEntry:
+    """Record one bundle symlink only when its target stays inside the root.
+
+    :param child: Symlink inside the resolved bundle root.
+    :param root: Resolved bundle root constraining the target.
+    :param relative: POSIX path relative to the bundle root.
+    :returns: Symlink entry carrying its lexical target.
+    :raises ValueError: The resolved target escapes the bundle root.
+    """
     target = os.readlink(child)
     resolved_target = (child.parent / target).resolve(strict=True)
     if not resolved_target.is_relative_to(root):
@@ -906,7 +920,7 @@ def package_install_lock(
 ) -> AbstractContextManager[None]:
     """Acquire the installer lock and publish runtime-readable permissions.
 
-    Runtime consumers call :func:`advisory_file_lock` directly and never enter
+    Runtime consumers call :func:`advisory_file_lease` directly and never enter
     this permission-normalizing installer wrapper.
 
     :param package: Studiorack ``organization/package`` slug.
