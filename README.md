@@ -131,8 +131,8 @@ synth-setter-clap "frog croak"
 # Generate a SAME-S latent with Stable Audio Small and render it through Surge
 synth-setter-sao "warm analog synthesizer pad" --model small
 
-# Generate SAME-L with Stable Audio Medium
-synth-setter-sao "bright plucked synthesizer" --model medium
+# Generate SAME-L with Stable Audio Medium and upload all artifacts
+synth-setter-sao "bright plucked synthesizer" --model medium --upload
 
 # Run tests
 make test-fast
@@ -153,9 +153,11 @@ device, output, seed, and upload overrides.
 The SAO command pins immutable Stable Audio 3 snapshots and pairs `small` with a
 SAME-S inverse checkpoint and `medium` with SAME-L. Both profiles generate a
 four-second `(1, 256, 44)` latent, render it through Surge, and write
-`logs/stable-audio-renders/<run-id>.{wav,csv}` before uploading both files under
-`r2://experiments/stable-audio-renders/`. The Hugging Face models are gated, so
-accept their license and authenticate before the first download. Run
+`logs/stable-audio-renders/<run-id>.{wav,safetensors,csv}`. Local-only output is
+the default; `--upload` sends all three artifacts under
+`r2://experiments/stable-audio-renders/`. A matching safetensors artifact is
+reused after a downstream failure. The Hugging Face models are gated, so accept
+their license and authenticate before the first download. Run
 `synth-setter-sao --help` for model, checkpoint, device, output, seed, and upload
 overrides.
 

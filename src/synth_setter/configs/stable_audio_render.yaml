@@ -23,6 +23,10 @@ profiles:
     inverse_checkpoint: r2://intermediate-data/checkpoints/flow_simple_440k_1m_same_l/flow_simple_440k_1m_same_l-20260730T215551120Z-5f57c6d43c6e48fe90ef61f3399af684/last.ckpt
     inverse_checkpoint_sha256: 824ef5cd7577cc5ca7cf1235ca80fd3d0027b261e71e296b6b4272dbbba89cfb
 
+generation:
+  duration_seconds: 4.0
+  diffusion_steps: 8
+  cfg_scale: 1.0
 output_dir: logs/stable-audio-renders
 upload_prefix: r2://experiments/stable-audio-renders
 device: auto

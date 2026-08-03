@@ -13,6 +13,7 @@ import pytest
 import torch
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
+from safetensors.torch import load_file
 
 from synth_setter.cli import stable_audio_render
 from synth_setter.cli.stable_audio_render import (
@@ -21,6 +22,7 @@ from synth_setter.cli.stable_audio_render import (
     main,
     validate_same_latent,
 )
+from synth_setter.cli.surge_render import validate_rendered_audio
 from synth_setter.pipeline import r2_io
 from tests.helpers.run_if import RunIf
 
@@ -77,7 +79,12 @@ def test_generate_same_latent_uses_fixed_four_second_geometry() -> None:
     """Generation requests the aligned model sample budget without duration padding."""
     model = _LatentModel(torch.ones(1, 256, 44, dtype=torch.float16))
 
-    latent = generate_same_latent(model, "warm analog pad", seed=17)
+    latent = generate_same_latent(
+        model,
+        "warm analog pad",
+        seed=17,
+        generation=stable_audio_render.load_generation_settings(),
+    )
 
     assert latent.shape == (1, 256, 44)
     assert latent.dtype == torch.float32
@@ -130,6 +137,7 @@ def test_cli_local_small_writes_render_provenance_csv(
     inverse = tmp_path / "model.ckpt"
     inverse.write_bytes(b"checkpoint")
     output = tmp_path / "render.wav"
+    latent_path = output.with_suffix(".safetensors")
     latent = torch.ones(1, 256, 44)
     monkeypatch.setattr(stable_audio_render, "load_stable_audio_model", lambda *_: object())
     monkeypatch.setattr(stable_audio_render, "generate_same_latent", lambda *_args, **_kw: latent)
@@ -161,7 +169,6 @@ def test_cli_local_small_writes_render_provenance_csv(
             str(output),
             "--device",
             "cpu",
-            "--no-upload",
         ],
     )
 
@@ -174,8 +181,91 @@ def test_cli_local_small_writes_render_provenance_csv(
     assert row["conditioning"] == "same_s"
     assert row["latent_shape"] == "1x256x44"
     assert float(row["latent_norm"]) == pytest.approx(106.131996)
+    assert row["duration_seconds"] == "4.0"
+    assert row["diffusion_steps"] == "8"
+    assert row["cfg_scale"] == "1.0"
+    assert row["inverse_checkpoint_sha256"] == (
+        "47320987f9a49d5b00119b960f247a956773f57543982b8bfcb6da5bb3afd9ef"
+    )
     assert row["wav_r2_uri"] == ""
+    assert row["latent_r2_uri"] == ""
     assert row["csv_r2_uri"] == ""
+    assert load_file(latent_path)["latent"].equal(latent)
+
+
+def test_cli_existing_latent_resumes_without_source_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed post-generation run can reuse its validated latent artifact.
+
+    :param tmp_path: Temporary checkpoint and artifact directory.
+    :param monkeypatch: Heavyweight inverse and renderer boundary patches.
+    """
+    inverse = tmp_path / "model.ckpt"
+    inverse.write_bytes(b"checkpoint")
+    output = tmp_path / "render.wav"
+    stable_audio_render.write_latent_artifact(
+        output.with_suffix(".safetensors"),
+        torch.ones(1, 256, 44),
+        stable_audio_render.latent_identity("soft bell", load_profile("small"), seed=0),
+    )
+    monkeypatch.setattr(
+        stable_audio_render,
+        "load_stable_audio_model",
+        lambda *_: pytest.fail("source model should not load"),
+    )
+    monkeypatch.setattr(
+        stable_audio_render,
+        "resolve_inverse_checkpoint",
+        lambda *_args, **_kw: inverse,
+    )
+    monkeypatch.setattr(
+        stable_audio_render,
+        "predict_patch",
+        lambda *_args, **_kw: torch.zeros(1, 92),
+    )
+    monkeypatch.setattr(
+        stable_audio_render,
+        "render_wav",
+        lambda *_: np.zeros((2, 176400), dtype=np.float32),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "soft bell",
+            "--checkpoint",
+            str(inverse),
+            "--output",
+            str(output),
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Reusing SAME latent" in result.output
+
+
+def test_cli_non_wav_output_rejected_before_model_loading(tmp_path: Path) -> None:
+    """WAV and provenance artifacts cannot alias through a CSV output suffix.
+
+    :param tmp_path: Temporary invalid output path.
+    """
+    result = CliRunner().invoke(
+        main,
+        ["soft bell", "--output", str(tmp_path / "render.csv"), "--no-upload"],
+    )
+
+    assert result.exit_code != 0
+    assert "--output must end in .wav" in result.output
+
+
+def test_validate_rendered_audio_out_of_range_raises() -> None:
+    """A corrupted Surge render is rejected before WAV persistence."""
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        validate_rendered_audio(np.array([[0.0, 1.01], [0.0, 0.0]], dtype=np.float32))
 
 
 def test_console_script_is_installed_and_callable() -> None:
@@ -220,9 +310,13 @@ def test_cli_prompt_model_renders_nonsilent_surge_wav_and_uploads_to_r2(
     run_token = uuid4().hex
     output = _CHECKOUT_ROOT / "outputs" / "stable-audio" / f"e2e-{model_name}-{run_token}.wav"
     upload_uri = f"r2://experiments/stable-audio-renders/e2e/{run_token}/{model_name}-warm-pad.wav"
+    latent = output.with_suffix(".safetensors")
     metrics = output.with_suffix(".csv")
+    lock = output.with_suffix(".lock")
+    latent_uri = upload_uri.removesuffix(".wav") + ".safetensors"
     metrics_uri = upload_uri.removesuffix(".wav") + ".csv"
     downloaded = output.with_name(f"e2e-{model_name}-{run_token}-downloaded.wav")
+    downloaded_latent = output.with_name(f"e2e-{model_name}-{run_token}-downloaded.safetensors")
     downloaded_metrics = output.with_name(f"e2e-{model_name}-{run_token}-downloaded.csv")
     try:
         result = subprocess.run(  # noqa: S603 — fixed package entrypoint and test values.
@@ -235,6 +329,7 @@ def test_cli_prompt_model_renders_nonsilent_surge_wav_and_uploads_to_r2(
                 str(output),
                 "--upload-uri",
                 upload_uri,
+                "--upload",
             ],
             cwd=_CHECKOUT_ROOT,
             capture_output=True,
@@ -254,7 +349,14 @@ def test_cli_prompt_model_renders_nonsilent_surge_wav_and_uploads_to_r2(
             assert audio_file.num_channels == 2
         assert audio.shape == (2, 176400)
         assert np.isfinite(audio).all()
+        assert np.min(audio) >= -1.0
+        assert np.max(audio) <= 1.0
         assert np.max(np.abs(audio)) > 1e-4
+
+        r2_io.download_to_path(latent_uri, downloaded_latent)
+        consumed_latent = load_file(downloaded_latent)["latent"]
+        assert consumed_latent.shape == (1, 256, 44)
+        assert torch.isfinite(consumed_latent).all()
 
         r2_io.download_to_path(metrics_uri, downloaded_metrics)
         with downloaded_metrics.open(newline="", encoding="utf-8") as stream:
@@ -265,9 +367,13 @@ def test_cli_prompt_model_renders_nonsilent_surge_wav_and_uploads_to_r2(
         assert rows[0]["latent_shape"] == "1x256x44"
         assert float(rows[0]["latent_norm"]) > 0.0
         assert rows[0]["wav_r2_uri"] == upload_uri
+        assert rows[0]["latent_r2_uri"] == latent_uri
     finally:
         output.unlink(missing_ok=True)
+        latent.unlink(missing_ok=True)
         metrics.unlink(missing_ok=True)
+        lock.unlink(missing_ok=True)
         downloaded.unlink(missing_ok=True)
+        downloaded_latent.unlink(missing_ok=True)
         downloaded_metrics.unlink(missing_ok=True)
         r2_io.purge_prefix("experiments", f"stable-audio-renders/e2e/{run_token}/")
