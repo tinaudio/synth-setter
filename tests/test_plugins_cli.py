@@ -13,6 +13,7 @@ from synth_setter.plugin_manager import (
     ArtifactLock,
     PluginManifest,
     default_plugins_dir,
+    managed_plugin_digest,
     resolve_plugin_bundle,
 )
 from tests.plugin_manager_test_support import (
@@ -153,6 +154,59 @@ def test_manifest_invalid_vst3_version_rejected(tmp_path: Path, version: str) ->
         match="VST3 version must be an exact semantic or source-qualified version",
     ):
         PluginManifest.load(path)
+
+
+def test_plugins_cli_archive_source_qualified_renderer_version_creates_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exact source-qualified runtime version reaches the checkout alias.
+
+    :param tmp_path: Scratch root for managed state, checkout aliases, and installer.
+    :param monkeypatch: Supplies the managed output path to the installer process.
+    """
+    manifest_path = _manifest(
+        tmp_path / "studiorack.json",
+        package_version="1.1.0",
+        renderer_version="1.1.0.43d10b2",
+    )
+    plugin = PluginManifest.load(manifest_path).resolve("example/synth")
+    _artifact_lock(tmp_path / "studiorack.lock.json", package_version="1.1.0")
+    bundle = tmp_path / "managed/VST3/example/synth/1.1.0/Example Synth.vst3"
+    links_dir = tmp_path / "plugins"
+    executable = tmp_path / "studiorack"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "if sys.argv[1:3] == ['plugins', 'install']:\n"
+        "    bundle = pathlib.Path(os.environ['STUDIORACK_TEST_BUNDLE'])\n"
+        "    binary = bundle / os.environ['STUDIORACK_TEST_BINARY']\n"
+        "    binary.parent.mkdir(parents=True)\n"
+        "    binary.write_bytes(bytes.fromhex(os.environ['STUDIORACK_TEST_BINARY_MAGIC']) + b'archive')\n"
+        "    (bundle / 'Contents/moduleinfo.json').write_text(json.dumps({'Version': '1.1.0.43d10b2'}))\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("STUDIORACK_TEST_BUNDLE", str(bundle))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--manifest",
+            str(manifest_path),
+            "--plugins-dir",
+            str(tmp_path / "managed"),
+            "--links-dir",
+            str(links_dir),
+            "--studiorack-executable",
+            str(executable),
+            "install",
+        ],
+    )
+
+    alias = links_dir / plugin.bundle
+    assert result.exit_code == 0, result.output
+    assert alias.resolve(strict=True) == bundle.resolve(strict=True)
+    assert managed_plugin_digest(alias) is not None
 
 
 def test_plugins_cli_archive_renderer_version_mismatch_creates_no_alias(
