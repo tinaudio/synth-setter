@@ -55,6 +55,7 @@ from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     REAL_VST_VARIANTS,
     _render_smoke_train_subprocess,
+    assert_clap_preserves_resampler_output,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embedding,
     augment_lance_splits_with_embeddings,
@@ -607,6 +608,7 @@ def test_eval_torchsynth_clap_online_validates_real_offline_backbone(
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert_clap_preserves_resampler_output(encoder.backbone, cfg.model.encoder.backbone.checkpoint)
 
 
 @pytest.mark.slow
@@ -1825,6 +1827,47 @@ def test_train_eval_embedding_conditioning_real_e2e(
     _assert_conditioning_train_validate_finite(
         tmp_path, dataset_root, param_spec_name, conditioning
     )
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_eval_meanaudio_conditioning_real_lance_returns_bounded_metric(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train and validate the MeanAudio profile through the public eval path.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    validation_split = surge_xt_smoke_datasets / "val.lance"
+    shutil.rmtree(validation_split)
+    _render_smoke_train_subprocess(validation_split, param_spec_name, base_seed=1)
+    train_audio = lance.dataset(surge_xt_smoke_datasets / "train.lance").to_table(
+        columns=[AUDIO_FIELD]
+    )
+    validation_audio = lance.dataset(validation_split).to_table(columns=[AUDIO_FIELD])
+    train_rows = {
+        np.asarray(row.as_py(), dtype=np.float32).tobytes()
+        for row in train_audio.column(AUDIO_FIELD)
+    }
+    validation_rows = {
+        np.asarray(row.as_py(), dtype=np.float32).tobytes()
+        for row in validation_audio.column(AUDIO_FIELD)
+    }
+    assert train_rows.isdisjoint(validation_rows)
+    dataset_root = augment_lance_splits_with_embedding(surge_xt_smoke_datasets, "meanaudio_16k")
+
+    validation_mse = _assert_conditioning_train_validate_finite(
+        tmp_path,
+        dataset_root,
+        param_spec_name,
+        "meanaudio_16k",
+    )
+    assert validation_mse < 3.0
 
 
 @pytest.mark.requires_vst

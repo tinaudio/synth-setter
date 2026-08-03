@@ -52,6 +52,7 @@ on:
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/meanaudio.py"
       - "src/synth_setter/pipeline/data/ssondo.py"
       - "src/synth_setter/pipeline/data/t5gemma.py"
       # Cadence cross-field coverage the retired render-matrix gated — the
@@ -82,6 +83,7 @@ on:
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/meanaudio.py"
       - "src/synth_setter/pipeline/data/ssondo.py"
       - "src/synth_setter/pipeline/data/t5gemma.py"
       - "src/synth_setter/data/render_config.py"
@@ -222,6 +224,7 @@ jobs:
             -v /tmp/bench:/bench \
             -e BENCHMARK_OUTPUT_DIR=/bench \
             -e SURGE_PARITY_OUTPUT_DIR=/bench/surge-host-parity \
+            -e GITHUB_RUN_ID \
             -e GITHUB_SHA \
             -e "SYNTH_SETTER_BENCHMARK_IMAGE=${IMAGE}@${image_id}" \
             -e HYDRA_FULL_ERROR=1 \
@@ -242,6 +245,7 @@ jobs:
               read -ra targets <<< "${PYTEST_TARGETS}"
               if [ "${RUN_EMBEDDING_E2E}" = "true" ]; then
                 targets+=(tests/test_eval.py::test_evaluate_ssondo_conditioning_real_e2e)
+                targets+=(tests/test_eval.py::test_train_eval_meanaudio_conditioning_real_lance_returns_bounded_metric)
                 targets+=(tests/test_train.py::test_train_all_embedding_conditioning_and_eval_real_e2e)
               fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \
@@ -271,6 +275,7 @@ jobs:
         run: |
           files=(
             surge-host-parity-diverse-patches.json
+            surge-host-parity-random-patches.json
             surge-host-parity-repeated-patch.json
             vst-noise-floor-1-preset-n-renders.json
             vst-noise-floor-random-preset-replay.json
@@ -295,6 +300,7 @@ jobs:
           name: vst-benchmark-json
           path: |
             ${{ github.workspace }}/surge-host-parity-diverse-patches.json
+            ${{ github.workspace }}/surge-host-parity-random-patches.json
             ${{ github.workspace }}/surge-host-parity-repeated-patch.json
             ${{ github.workspace }}/vst-noise-floor-1-preset-n-renders.json
             ${{ github.workspace }}/vst-noise-floor-random-preset-replay.json
@@ -340,17 +346,17 @@ jobs:
           install-rclone: "true"
 
       - name: Upload comparison directory with checksums
-        env:
-          R2_DESTINATION: r2:experiments/surge-host-parity/${{ github.sha }}/${{ github.run_id }}
         run: |
           set -euo pipefail
-          rclone copy surge-host-parity "${R2_DESTINATION}" --checksum
-          rclone check surge-host-parity "${R2_DESTINATION}" --checksum --one-way
+          upload_datetime="$(date -u '+%Y-%m-%dT%H-%M-%SZ')"
+          r2_destination="r2:experiments/surge-host-parity/${upload_datetime}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rclone copy surge-host-parity "${r2_destination}" --checksum
+          rclone check surge-host-parity "${r2_destination}" --checksum --one-way
           printf '{"git_sha":"%s","run_id":"%s","run_attempt":"%s"}\n' \
             "${GITHUB_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" > benchmark.complete
-          rclone copyto benchmark.complete "${R2_DESTINATION}/benchmark.complete" --checksum
+          rclone copyto benchmark.complete "${r2_destination}/benchmark.complete" --checksum
           echo "### Surge host comparison" >> "${GITHUB_STEP_SUMMARY}"
-          echo "\`${R2_DESTINATION}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "\`${r2_destination}\`" >> "${GITHUB_STEP_SUMMARY}"
 
   publish_benchmarks:
     name: Publish VST benchmarks to gh-pages
@@ -426,6 +432,21 @@ jobs:
           name: Surge host parity (diverse patches)
           tool: customSmallerIsBetter
           output-file-path: surge-host-parity-diverse-patches.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish random-patch Surge host diagnostics
+        if: hashFiles('surge-host-parity-random-patches.json') != ''
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
+        with:
+          name: Surge host diagnostics (random patches)
+          tool: customSmallerIsBetter
+          output-file-path: surge-host-parity-random-patches.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           auto-push: true

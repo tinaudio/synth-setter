@@ -59,6 +59,7 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_clap_preserves_resampler_output,
     assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
@@ -227,6 +228,9 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
     assert encoder.backbone.out_dim == 8
     assert not encoder.backbone.clap.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
+    assert_clap_preserves_resampler_output(
+        encoder.backbone, cfg_torchsynth_clap_online_train.model.encoder.backbone.checkpoint
+    )
 
 
 @pytest.mark.slow
@@ -2173,6 +2177,7 @@ _ALL_EMBEDDING_CONDITIONING_PROFILES = (
     "ssondo",
     "t5gemma",
     "matpac_plus",
+    "meanaudio_16k",
 )
 
 
@@ -2399,7 +2404,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
     surge_xt_embedding_smoke_datasets: Path,
     param_spec_name: str,
 ) -> None:
-    """Train every profile and validate S-SONDO and T5Gemma checkpoints.
+    """Train every profile and validate their downstream conditioning paths.
 
     :param local_embedding_checkpoints: Preflighted real model directories.
     :param tmp_path: Per-profile training output parent.
@@ -2431,8 +2436,9 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
-        if conditioning == "ssondo":
+        if conditioning in {"ssondo", "meanaudio_16k"}:
             _assert_model_predictions_depend_on_conditioning(object_dict)
+        if conditioning == "ssondo":
             _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(

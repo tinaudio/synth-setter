@@ -510,7 +510,9 @@ def _managed_record_path(bundle: Path) -> Path:
 
 
 def write_atomic_record(path: Path, serialized: str) -> None:
-    """Replace a strict record only after its bytes are durable.
+    """Replace a strict record only after its bytes are durable and runtime-readable.
+
+    Records are mode 0644 because privileged installers hand them to unprivileged consumers.
 
     :param path: Final record path whose parent already exists.
     :param serialized: Complete UTF-8 record text.
@@ -523,6 +525,7 @@ def write_atomic_record(path: Path, serialized: str) -> None:
             temporary = Path(stream.name)
             stream.write(serialized)
             stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:

@@ -189,11 +189,19 @@ def test_make_audio_renderer_dawdreamer_unit_maps_reload_cadence(
     config = _render_config(
         renderer_backend="dawdreamer",
         plugin_reload_cadence=cadence,
+        synth={
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-simple.vstpreset",
+            "synth_version": "1.3.4",
+            "managed_plugin_digest": "a" * 64,
+        },
     )
 
     make_audio_renderer(config)
 
-    assert captured["expected_managed_digest"] is config.synth.managed_plugin_digest
+    assert captured["expected_managed_digest"] == "a" * 64
     assert captured["reload_plugin_each_render"] is reload_each_render
 
 

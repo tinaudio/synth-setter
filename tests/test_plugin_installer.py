@@ -928,6 +928,8 @@ def test_install_plugins_subprocess_timeout_retries_to_limit_without_sleep(
     """
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
     calls = 0
+    executable = tmp_path / "studiorack"
+    executable.touch(mode=0o755)
 
     def _timeout(*args: object, **kwargs: object) -> NoReturn:
         nonlocal calls
@@ -944,7 +946,7 @@ def test_install_plugins_subprocess_timeout_retries_to_limit_without_sleep(
             (plugin,),
             artifact_lock=_artifact_lock(tmp_path / "studiorack.lock.json"),
             plugins_dir=tmp_path / "managed",
-            studiorack_executable=Path("/bin/true"),
+            studiorack_executable=executable,
             system_dirs=(),
         )
 

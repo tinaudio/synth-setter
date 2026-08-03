@@ -14,7 +14,6 @@ import functools
 import hashlib
 import importlib.metadata
 import json
-import math
 import os
 import subprocess
 import sys
@@ -38,44 +37,50 @@ from synth_setter.data.vst.shapes import (
     CLAP_FIELD,
     DEFAULT_PESTO_CHECKPOINT,
     M2L_FIELD,
+    MATPAC_PLUS_FIELD,
+    MEANAUDIO_16K_FIELD,
+    NUM_SKETCH_CONTROLS,
     PARAM_ARRAY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SHIFT_FIELD,
-    NUM_SKETCH_CONTROLS,
     SKETCH_PITCH_BINS,
     SKETCH_STRUCT_FIELD,
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
-    MATPAC_PLUS_FIELD,
     PUPUJEPA_LARGE_FIELD,
     PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
-from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_CHECKPOINT,
-    PUPUJEPA_LARGE_EMBEDDING_DIM,
-    PUPUJEPA_TINY_EMBEDDING_DIM,
-    pupujepa_artifact_digest,
-)
-from synth_setter.same import (
-    DEFAULT_SAME_L_CHECKPOINT,
-    DEFAULT_SAME_S_CHECKPOINT,
-    SAME_EMBEDDING_DIM,
-    SAME_SAMPLE_RATE,
-    load_same_autoencoder,
-    resolve_same_checkpoint,
-    same_l_num_latent_frames,
-    same_s_num_latent_frames,
-)
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.matpac_plus import (
+    DEFAULT_MATPAC_PLUS_CHECKPOINT,
+    MATPAC_PLUS_FRONTEND,
+    encode_matpac_plus_column,
+    load_matpac_plus_audio_encoder,
+    matpac_plus_artifact_digest,
+)
+from synth_setter.pipeline.data.meanaudio import (
+    DEFAULT_MEANAUDIO_CHECKPOINT,
+    MEANAUDIO_EMBEDDING_DIM,
+    MEANAUDIO_INDEX_SUB_VECTORS,
+    encode_meanaudio_column,
+    load_meanaudio_audio_encoder,
+    meanaudio_artifact_digest,
+)
 from synth_setter.pipeline.data.pupujepa import (
     PupuJepaEncodeFn,
     encode_pupujepa_column,
     encode_pupujepa_large_column,
     load_pupujepa_audio_encoder,
+)
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_CHECKPOINT,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_EMBEDDING_DIM,
+    pupujepa_artifact_digest,
 )
 from synth_setter.pipeline.data.param_shift import (
     PARAM_SHIFT_INPUT_FIELDS,
@@ -94,12 +99,15 @@ from synth_setter.pipeline.data.ssondo import (
     load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
 )
-from synth_setter.pipeline.data.matpac_plus import (
-    DEFAULT_MATPAC_PLUS_CHECKPOINT,
-    MATPAC_PLUS_FRONTEND,
-    encode_matpac_plus_column,
-    load_matpac_plus_audio_encoder,
-    matpac_plus_artifact_digest,
+from synth_setter.same import (
+    DEFAULT_SAME_L_CHECKPOINT,
+    DEFAULT_SAME_S_CHECKPOINT,
+    SAME_EMBEDDING_DIM,
+    SAME_SAMPLE_RATE,
+    load_same_autoencoder,
+    resolve_same_checkpoint,
+    same_l_num_latent_frames,
+    same_s_num_latent_frames,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -376,6 +384,15 @@ def _matpac_plus_artifact_identity(checkpoint: str) -> str:
     return _versioned_artifact_identity("matpac_plus", matpac_plus_artifact_digest(checkpoint))
 
 
+def _meanaudio_artifact_identity(checkpoint: str) -> str:
+    """Return the MeanAudio package/checkpoint artifact identity.
+
+    :param checkpoint: Pinned Hugging Face repo or SHA-identical local checkpoint.
+    :returns: Versioned package and checkpoint identity.
+    """
+    return _versioned_artifact_identity("meanaudio_16k", meanaudio_artifact_digest(checkpoint))
+
+
 def _pupujepa_tiny_artifact_identity(checkpoint: str) -> str:
     """Return the pinned source and teacher-checkpoint identity.
 
@@ -628,6 +645,19 @@ def _load_matpac_plus_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig)
     :returns: Frozen TinyMU encoder.
     """
     return load_matpac_plus_audio_encoder(
+        checkpoint,
+        device=_resolve_torch_device(config.device),
+    )
+
+
+def _load_meanaudio_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load MeanAudio's encoder-only 16 kHz VAE.
+
+    :param checkpoint: Pinned Hugging Face repo or SHA-identical local artifact.
+    :param config: Run config supplying the device.
+    :returns: Frozen posterior-mean audio encoder.
+    """
+    return load_meanaudio_audio_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
     )
@@ -971,6 +1001,21 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_matpac_plus_spec_encoder,
         encode_column=encode_matpac_plus_column,
         resolve_artifact_identity=_matpac_plus_artifact_identity,
+    ),
+    "meanaudio_16k": EmbeddingSpec(
+        name="meanaudio_16k",
+        column=MEANAUDIO_16K_FIELD,
+        default_checkpoint=DEFAULT_MEANAUDIO_CHECKPOINT,
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            num_sub_vectors=MEANAUDIO_INDEX_SUB_VECTORS,
+            vector_column=f"{MEANAUDIO_16K_FIELD}_vec",
+            vector_dim=MEANAUDIO_EMBEDDING_DIM,
+        ),
+        load_encoder=_load_meanaudio_spec_encoder,
+        encode_column=cast("EncodeColumnFn", encode_meanaudio_column),
+        resolve_artifact_identity=_meanaudio_artifact_identity,
     ),
 }
 

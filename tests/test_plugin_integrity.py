@@ -1,6 +1,7 @@
 """Contract tests for the focused managed-plugin integrity boundary."""
 
 import json
+import stat
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -27,6 +28,7 @@ from synth_setter.plugin_integrity import (
     bundle_is_sealed,
     locked_package_digest,
     seal_plugin_bundle,
+    write_atomic_record,
 )
 from synth_setter.plugin_manager import (
     PluginManifest,
@@ -40,6 +42,7 @@ from synth_setter.plugin_runtime import (
     plugin_bundle_version,
     validate_plugin_bundle_for_runtime,
 )
+from tests.helpers.dummy_shards import stub_renderer
 from tests.plugin_manager_test_support import (
     _artifact_lock,
     _binary_path,
@@ -73,6 +76,18 @@ def test_plugin_integrity_public_api_imports_from_focused_module() -> None:
     assert plugin_bundle_version.__module__ == "synth_setter.plugin_runtime"
     assert seal_plugin_bundle.__module__ == "synth_setter.plugin_integrity"
     assert validate_plugin_bundle_for_runtime.__module__ == "synth_setter.plugin_runtime"
+
+
+def test_write_atomic_record_privileged_writer_remains_world_readable(tmp_path: Path) -> None:
+    """Runtime metadata written by another user remains readable.
+
+    :param tmp_path: Scratch root for one public integrity record.
+    """
+    record = tmp_path / "record.json"
+
+    write_atomic_record(record, "{}")
+
+    assert stat.S_IMODE(record.stat().st_mode) == 0o644
 
 
 def test_managed_bundle_storage_validates_and_discards_integrity_records(
@@ -282,14 +297,16 @@ def test_adopt_plugin_bundle_lock_rotation_changes_explicit_identity(tmp_path: P
 
 def test_remote_worker_linux_content_accepts_mac_launch_identity(
     tmp_path: Path,
+    fake_r2_remote: Path,
     dataset_spec_factory: Callable[..., DatasetSpec],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A Linux worker renders a spec pinned from the lock-equivalent macOS seal.
 
     :param tmp_path: Scratch root for cross-platform bundles and worker output.
+    :param fake_r2_remote: Local-typed R2 remote receiving the rendered shard.
     :param dataset_spec_factory: Builds the worker's canonical dataset spec.
-    :param monkeypatch: Selects an idle distributed worker rank.
+    :param monkeypatch: Selects the worker assigned the spec's shard.
     """
     artifact_lock = _cross_platform_lock()
     plugin = _example_plugin()
@@ -317,13 +334,26 @@ def test_remote_worker_linux_content_accepts_mac_launch_identity(
     worker_spec = base.model_copy(
         update={"render": base.render.model_copy(update={"synth": synth})}
     )
-    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
-    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setattr(
+        generate_dataset,
+        "_check_call_streamed",
+        stub_renderer(worker_spec),
+    )
 
-    generate_dataset.generate(worker_spec, tmp_path / "work", [])
+    work_dir = tmp_path / "work"
+    generate_dataset.generate(worker_spec, work_dir, [])
 
     assert managed_plugin_digest(linux_bundle) == launch_digest
-    assert list((tmp_path / "work").iterdir()) == []
+    assert (work_dir / worker_spec.shards[0].filename).is_dir()
+    markers = (
+        fake_r2_remote
+        / worker_spec.r2.bucket
+        / worker_spec.r2.prefix
+        / "metadata/workers/shards/shard-000000"
+    ).glob("*.valid")
+    assert list(markers)
 
 
 def test_artifact_lock_load_exact_manifest_coverage_returns_lock(tmp_path: Path) -> None:

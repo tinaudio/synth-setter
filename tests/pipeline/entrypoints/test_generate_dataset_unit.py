@@ -2690,6 +2690,7 @@ class TestMainDispatchBranches:
             f"synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             f"skypilot_launch.env_file={env_file}",
+            "~logger",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -2712,6 +2713,7 @@ class TestMainDispatchBranches:
         assert worker_cmd is not None
         assert "synth-setter-generate-dataset-from-spec-uri" in worker_cmd
         assert "WORKER_SPEC_URI" in worker_cmd
+        assert "--no-wandb" in worker_cmd
         assert all(override not in worker_cmd for override in argv[1:])
         fake_sky.jobs.launch.assert_called_once()
 

@@ -1059,19 +1059,25 @@ def _worker_python_bootstrap_cmd() -> str:
     )
 
 
-def _build_worker_cmd(*, worker_checkout_dir: str = _WORKER_REPO_ROOT) -> str:
+def _build_worker_cmd(
+    *,
+    worker_checkout_dir: str = _WORKER_REPO_ROOT,
+    runtime_args: tuple[str, ...] = (),
+) -> str:
     """Build the worker command around the launcher's uploaded canonical spec.
 
     :param worker_checkout_dir: Repository checkout directory inside the worker.
+    :param runtime_args: Worker-only CLI controls excluded from dataset identity.
     :returns: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
+    runtime_prefix = "".join(f"{shlex.quote(arg)} " for arg in runtime_args)
     parts = [
         f"cd {shlex.quote(worker_checkout_dir)}",
         _worker_python_bootstrap_cmd(),
         "bash scripts/sync_worker_checkout.sh --python-ready",
         'if [[ "${SYNTH_SETTER_WORKER_PYTHON_RECREATED:-0}" == "1" && '
         '-z "${WORKER_GIT_REF:-}" ]]; then uv pip install --group runtime -e .; fi',
-        "exec synth-setter-generate-dataset-from-spec-uri "
+        f"exec synth-setter-generate-dataset-from-spec-uri {runtime_prefix}"
         '"${WORKER_SPEC_URI:?WORKER_SPEC_URI is required}"',
     ]
     return " && ".join(parts)
@@ -1216,9 +1222,13 @@ def main(cfg: DictConfig) -> None:
     # Deferred import — SkyPilot pulls heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
+    runtime_args = ("--no-wandb",) if cfg.get("logger") is None else ()
     sky_cfg = sky_cfg.model_copy(
         update={
-            "cmd": _build_worker_cmd(worker_checkout_dir=sky_cfg.worker_checkout_dir),
+            "cmd": _build_worker_cmd(
+                worker_checkout_dir=sky_cfg.worker_checkout_dir,
+                runtime_args=runtime_args,
+            ),
             "job_name": sky_cfg.job_name or _smoke_job_name(spec),
             "extra_envs": {WORKER_SPEC_URI_ENV: spec_uri},
         }

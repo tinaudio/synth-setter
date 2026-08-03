@@ -24,6 +24,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.conditioning import NUM_SKETCH_TRACK_ROWS, SKETCH_PITCH_BINS
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
+from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -54,13 +55,46 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
-_EMBEDDING_KEYS = ("clap", "m2l", "same_s", "same_l", "ssondo", "t5gemma", "matpac_plus")
+_EMBEDDING_KEYS = (
+    "clap",
+    "m2l",
+    "same_s",
+    "same_l",
+    "ssondo",
+    "t5gemma",
+    "matpac_plus",
+    "meanaudio_16k",
+)
 _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
     "same_s": embedding_model_dir("same-s"),
     "t5gemma": embedding_model_dir("sa3-small-music"),
 }
+
+
+def assert_clap_preserves_resampler_output(encoder: ClapAudioEncoder, checkpoint: str) -> None:
+    """Assert that online CLAP matches the materialized preprocessing contract.
+
+    :param encoder: Entrypoint-instantiated online CLAP encoder.
+    :param checkpoint: Feature-extractor checkpoint used by the encoder.
+    """
+    import torchaudio.functional as audio_fn
+    from transformers import ClapFeatureExtractor
+
+    duration_seconds = encoder.max_samples / encoder.target_sample_rate
+    source_samples = round(duration_seconds * encoder.sample_rate)
+    samples = torch.arange(source_samples, dtype=torch.float32)
+    waveform = torch.sin(samples * 0.01).unsqueeze(0)
+    resampled = audio_fn.resample(waveform, encoder.sample_rate, encoder.target_sample_rate)
+    expected = ClapFeatureExtractor.from_pretrained(checkpoint)(
+        list(resampled.numpy()),
+        sampling_rate=encoder.target_sample_rate,
+        return_tensors="pt",
+    )["input_features"]
+
+    assert resampled.abs().max() > 1.0
+    assert torch.allclose(encoder.features(waveform), expected, atol=1e-5, rtol=0.0)
 
 
 def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
@@ -554,13 +588,13 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
         )
     _configure_online_conditioning_smoke(cfg, tmp_path)
     with open_dict(cfg):
-        cfg.datamodule.sample_rate = 48_000
-        cfg.datamodule.signal_length = 4_800
+        cfg.datamodule.sample_rate = 44_100
+        cfg.datamodule.signal_length = 4_410
         cfg.model.audio_loss.t_min = 0.0
         cfg.model.encoder.backbone._target_ = (
             "synth_setter.models.components.pretrained_encoder.ClapAudioEncoder.from_random_config"
         )
-        cfg.model.encoder.backbone.sample_rate = 48_000
+        cfg.model.encoder.backbone.sample_rate = 44_100
         cfg.model.encoder.backbone.checkpoint = str(checkpoint_dir)
         cfg.model.encoder.backbone.checkpoint_sha256 = None
         cfg.model.encoder.backbone.backbone_config = tiny_clap_config
@@ -1317,6 +1351,7 @@ def local_embedding_checkpoints() -> dict[str, str]:
     from huggingface_hub import snapshot_download
     from music2latent.inference import download_model, load_path_inference_default
 
+    from synth_setter.pipeline.data.meanaudio import resolve_meanaudio_checkpoint
     from synth_setter.pipeline.data.ssondo import resolve_ssondo_checkpoint
 
     download_model()
@@ -1356,6 +1391,7 @@ def local_embedding_checkpoints() -> dict[str, str]:
             pytest.fail(message)
         pytest.skip(message)
     checkpoints = {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
+    checkpoints["meanaudio_16k"] = str(resolve_meanaudio_checkpoint())
     checkpoints["ssondo"] = str(resolve_ssondo_checkpoint())
     return checkpoints
 
@@ -1852,6 +1888,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         CLAP_FIELD,
         M2L_FIELD,
         MATPAC_PLUS_FIELD,
+        MEANAUDIO_16K_FIELD,
         MEL_SPEC_FIELD,
         PARAM_ARRAY_FIELD,
         SAME_L_FIELD,
@@ -1877,6 +1914,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         SSONDO_FIELD,
         T5GEMMA_FIELD,
         MATPAC_PLUS_FIELD,
+        MEANAUDIO_16K_FIELD,
     } <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
@@ -1890,6 +1928,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
             SSONDO_FIELD,
             T5GEMMA_FIELD,
             MATPAC_PLUS_FIELD,
+            MEANAUDIO_16K_FIELD,
         ]
     )
     for column in table.columns:
@@ -1903,6 +1942,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
     t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
     matpac_plus = table.column(MATPAC_PLUS_FIELD).combine_chunks().to_numpy_ndarray()
+    meanaudio_16k = table.column(MEANAUDIO_16K_FIELD).combine_chunks().to_numpy_ndarray()
 
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
     assert not np.array_equal(audio[0], audio[1])
@@ -1913,6 +1953,7 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
         ("ssondo", ssondo, (_EMBEDDING_E2E_ROWS, 960)),
         ("matpac_plus", matpac_plus, (_EMBEDDING_E2E_ROWS, 3840, 25)),
+        ("meanaudio_16k", meanaudio_16k, (_EMBEDDING_E2E_ROWS, 20, 125)),
     ):
         assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
         assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"

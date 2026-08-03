@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -467,6 +468,47 @@ def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_pat
         ("correctness-review", "adopted-foreground-result"),
         ("code-health", "failed"),
     ]
+
+
+def test_supervisor_waits_for_delayed_foreground_report_without_duplicate_launch(
+    tmp_path: Path,
+) -> None:
+    """Adopt a report that finishes during the bounded ownership grace period.
+
+    :param tmp_path: Temporary review root and delayed foreground output.
+    """
+    launch_marker = tmp_path / "pi-launched"
+    pi = _fake_pi(tmp_path)
+    pi.write_text(
+        pi.read_text().replace("runtime =", f"Path({str(launch_marker)!r}).touch()\nruntime =")
+    )
+    foreground_output = tmp_path / "delayed.jsonl"
+    manifest = _manifest(tmp_path, output_path=foreground_output)
+    report = {
+        "skill": "correctness-review",
+        "target": "PR #2174",
+        "findings": [],
+        "what_looks_good": ["The delayed foreground report validates."],
+    }
+
+    def write_report() -> None:
+        time.sleep(0.5)
+        event = {"message": {"role": "assistant", "content": json.dumps(report)}}
+        foreground_output.write_text(json.dumps(event) + "\n")
+
+    writer = threading.Thread(target=write_report)
+    writer.start()
+    environment = _environment(tmp_path, mode="valid", foreground_stopped=False)
+    environment["PI_REVIEW_AFTERCARE_OWNERSHIP_WAIT_SECONDS"] = "1"
+    try:
+        completed = _run_supervisor(manifest, environment)
+    finally:
+        writer.join()
+
+    assert completed == 0
+    assert not launch_marker.exists()
+    statuses = [attempt.status for attempt in _read_result(manifest).attempts]
+    assert statuses == ["adopted-foreground-result"]
 
 
 def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) -> None:

@@ -21,9 +21,10 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
-from collections.abc import Iterable, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -123,12 +124,17 @@ class ManagedPlugin:
     .. attribute :: bundle
 
         VST3 bundle basename exposed to synth-setter.
+
+    .. attribute :: plugin_name
+
+        Factory class selected when the bundle exposes multiple plugins.
     """
 
     package: str
     version: str
     renderer_version: str
     bundle: str
+    plugin_name: str | None = None
 
     @property
     def reference(self) -> str:
@@ -209,22 +215,32 @@ class PluginManifest(pydantic.BaseModel):
         Pydantic validation settings.
 
     .. attribute :: name
+        :type: str
 
         Project name shown in Studiorack-compatible metadata.
 
     .. attribute :: type
+        :type: Literal["project"]
 
         Open Audio Stack package type; synth-setter manifests are projects.
 
     .. attribute :: plugins
+        :type: dict[str, str]
 
         Studiorack package slug to exact version.
 
     .. attribute :: vst3_bundles
+        :type: dict[str, str]
 
         Package slug to the VST3 bundle synth-setter loads.
 
+    .. attribute :: vst3_plugin_names
+        :type: dict[str, str]
+
+        Package slug to the selected factory class for multi-plugin bundles.
+
     .. attribute :: vst3_versions
+        :type: dict[str, str] | None
 
         Package slug to the exact version reported by the installed VST3, when declared.
     """
@@ -237,6 +253,10 @@ class PluginManifest(pydantic.BaseModel):
     type: Literal["project"]
     plugins: dict[str, str]
     vst3_bundles: dict[str, str] = pydantic.Field(alias="vst3Bundles")
+    vst3_plugin_names: dict[str, str] = pydantic.Field(
+        default_factory=dict,
+        alias="vst3PluginNames",
+    )
     vst3_versions: dict[str, str] | None = pydantic.Field(default=None, alias="vst3Versions")
 
     @pydantic.model_validator(mode="after")
@@ -252,6 +272,12 @@ class PluginManifest(pydantic.BaseModel):
         vst3_versions = self.vst3_versions
         if vst3_versions is not None and package_keys != vst3_versions.keys():
             raise ValueError("plugins and vst3Versions must contain the same package keys")
+        unknown_plugin_names = self.vst3_plugin_names.keys() - package_keys
+        if unknown_plugin_names:
+            raise ValueError("vst3PluginNames contains packages absent from plugins")
+        for plugin_name in self.vst3_plugin_names.values():
+            if not plugin_name or plugin_name.strip() != plugin_name:
+                raise ValueError("VST3 plugin names must be nonblank without boundary whitespace")
         for package, package_version in self.plugins.items():
             if _PACKAGE_SLUG.fullmatch(package) is None:
                 raise ValueError(f"invalid Studiorack package slug: {package!r}")
@@ -290,6 +316,7 @@ class PluginManifest(pydantic.BaseModel):
                     package_version if self.vst3_versions is None else self.vst3_versions[package]
                 ),
                 bundle=self.vst3_bundles[package],
+                plugin_name=self.vst3_plugin_names.get(package),
             )
         except KeyError:
             raise KeyError(package) from None
@@ -491,21 +518,58 @@ def _adoption_paths(
 
 
 def _managed_adoption_matches(managed: Path, source: Path) -> bool:
+    """Return whether a managed symlink still resolves to the adopted source.
+
+    :param managed: Expected managed alias path.
+    :param source: Resolved source bundle path.
+    :returns: Whether the live target equals the source; dangling targets do not match.
+    """
     target = runtime.managed_alias_target(managed)
-    return target is not None and target.resolve(strict=True) == source
+    if target is None:
+        return False
+    try:
+        return target.resolve(strict=True) == source
+    except FileNotFoundError:
+        return False
+
+
+def _bundle_snapshot(source: Path) -> AbstractContextManager[Path]:
+    """Copy one external bundle into private storage for inspection and sealing.
+
+    :param source: Installer- or caller-owned source bundle.
+    :returns: Context manager yielding a manager-owned immutable snapshot.
+    """
+
+    @contextmanager
+    def _snapshot() -> Iterator[Path]:
+        with tempfile.TemporaryDirectory(prefix="synth-setter-adopt-") as temporary:
+            snapshot = Path(temporary) / source.name
+            shutil.copytree(source, snapshot, symlinks=True)
+            yield snapshot
+
+    return _snapshot()
 
 
 def _reseal_adopted_bundle(
     plugin: ManagedPlugin,
-    source: Path,
+    snapshot: Path,
     managed: Path,
     *,
     locked_package: LockedPackage,
     source_kind: Literal["artifact-lock", "explicit"],
 ) -> Path:
+    """Replace invalid adoption records from one inspected source snapshot.
+
+    :param plugin: Exact package represented by the snapshot.
+    :param snapshot: Private copy inspected under the package lock.
+    :param managed: Existing managed source alias.
+    :param locked_package: Repository artifact identity.
+    :param source_kind: Registry-backed or explicit adoption provenance.
+    :returns: Resealed managed alias.
+    """
     runtime.record_managed_alias(managed, managed)
     seal_plugin_bundle(
-        source,
+        snapshot,
         plugin,
         locked_package=locked_package,
         record_for=managed,
@@ -517,13 +581,25 @@ def _reseal_adopted_bundle(
 def _create_adopted_bundle_alias(
     plugin: ManagedPlugin,
     source: Path,
+    snapshot: Path,
     managed: Path,
     *,
     locked_package: LockedPackage,
     source_kind: Literal["artifact-lock", "explicit"],
 ) -> Path:
+    """Publish an adopted source alias sealed from its private snapshot.
+
+    :param plugin: Exact package represented by the snapshot.
+    :param source: Installer- or caller-owned source bundle.
+    :param snapshot: Private copy inspected under the package lock.
+    :param managed: Managed alias to publish.
+    :param locked_package: Repository artifact identity.
+    :param source_kind: Registry-backed or explicit adoption provenance.
+    :returns: Published managed alias.
+    :raises OSError: Alias or ownership publication fails.
+    """
     seal_plugin_bundle(
-        source,
+        snapshot,
         plugin,
         locked_package=locked_package,
         record_for=managed,
@@ -566,7 +642,13 @@ def adopt_plugin_bundle(
 
 
 def _require_renderer_version(plugin: ManagedPlugin, bundle: Path) -> None:
-    actual_version = plugin_bundle_version(bundle)
+    """Require installed factory metadata to match the manifest pin.
+
+    :param plugin: Exact package and selected factory identity.
+    :param bundle: Installed VST3 bundle to inspect.
+    :raises ValueError: The reported renderer version differs from the pin.
+    """
+    actual_version = plugin_bundle_version(bundle, plugin_name=plugin.plugin_name)
     if actual_version != plugin.renderer_version:
         raise ValueError(
             f"expected {plugin.renderer_version} for {plugin.bundle}, found {actual_version}"
@@ -588,24 +670,26 @@ def _adopt_plugin_bundle(
     if (managed.exists() or managed.is_symlink()) and not is_same_source:
         raise FileExistsError(f"refusing to replace managed bundle {managed}")
 
-    _require_renderer_version(plugin, source)
-    resolved_dir = plugins_dir.expanduser().resolve()
-    _ensure_managed_version_dir(version_dir, resolved_dir)
-    if is_same_source:
-        return _reseal_adopted_bundle(
+    with _bundle_snapshot(source) as snapshot:
+        _require_renderer_version(plugin, snapshot)
+        resolved_dir = plugins_dir.expanduser().resolve()
+        _ensure_managed_version_dir(version_dir, resolved_dir)
+        if is_same_source:
+            return _reseal_adopted_bundle(
+                plugin,
+                snapshot,
+                managed,
+                locked_package=locked_package,
+                source_kind=source_kind,
+            )
+        return _create_adopted_bundle_alias(
             plugin,
             source,
+            snapshot,
             managed,
             locked_package=locked_package,
             source_kind=source_kind,
         )
-    return _create_adopted_bundle_alias(
-        plugin,
-        source,
-        managed,
-        locked_package=locked_package,
-        source_kind=source_kind,
-    )
 
 
 def _snapshot_bundle(bundle: Path) -> list[BundleEntry] | None:

@@ -22,6 +22,7 @@ from synth_setter.conditioning import NUM_SKETCH_CONTROLS
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
+from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
@@ -224,6 +225,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         pytest.param("same_l", (256, 44), id="same-l"),
         pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
         pytest.param("matpac_plus", (MATPAC_PLUS_FRONTEND.embedding_dim, 25), id="matpac_plus"),
+        pytest.param("meanaudio_16k", (MEANAUDIO_EMBEDDING_DIM, 125), id="meanaudio_16k"),
     ],
 )
 def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(

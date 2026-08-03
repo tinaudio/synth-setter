@@ -82,6 +82,25 @@ def _same_path_reinstall_worker(
         results.put(None)
 
 
+def _readopt_mutated_source_worker(
+    paths: tuple[Path, Path, Path],
+    result: Any,
+) -> None:
+    """Re-adopt a changed source already recorded as a managed alias.
+
+    :param paths: Manifest, managed storage, and native source paths.
+    :param result: Queue receiving the managed path or traceback.
+    """
+    manifest_path, managed_root, source = paths
+    try:
+        plugin = PluginManifest.load(manifest_path).resolve("example/synth")
+        managed = _adopt_bundle(plugin, plugins_dir=managed_root, bundle=source)
+    except BaseException:  # pragma: no cover - returned to the parent for assertion
+        result.put(traceback.format_exc())
+    else:
+        result.put(str(managed))
+
+
 def _removed_same_path_reinstall_worker(
     paths: tuple[Path, Path, Path],
     signals: tuple[Any, Any, Any],
@@ -522,7 +541,7 @@ def test_link_plugin_managed_bundle_creates_stable_checkout_alias(tmp_path: Path
 
 
 def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path: Path) -> None:
-    """Docker native fallback linking keeps the source when alias and managed resolve equally.
+    """Docker native fallback keeps its source but consumes a managed snapshot.
 
     :param tmp_path: Scratch root reproducing the ``/usr/lib/vst3`` fallback shape.
     """
@@ -548,7 +567,59 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert not alias.is_symlink()
     assert managed.is_symlink()
     assert managed.resolve() == alias.resolve()
-    assert plugin_manager.validate_plugin_bundle_for_runtime(alias) == alias.resolve(strict=True)
+    validated = plugin_manager.validate_plugin_bundle_for_runtime(alias)
+    assert validated != alias.resolve(strict=True)
+    assert plugin_integrity.bundle_entries(validated) == plugin_integrity.bundle_entries(alias)
+
+
+def test_replace_managed_alias_symlinked_ownership_rejected_before_target_read(
+    tmp_path: Path,
+) -> None:
+    """A symlinked ownership record is rejected without following its target.
+
+    :param tmp_path: Scratch root containing an unreadable record target.
+    """
+    alias = tmp_path / "plugins/Example Synth.vst3"
+    alias.parent.mkdir(parents=True)
+    ownership, _ = plugin_runtime.managed_alias_paths(alias)
+    sensitive = tmp_path / "sensitive.json"
+    sensitive.write_text('{"managed_bundle":"/outside/secret.vst3"}')
+    sensitive.chmod(0)
+    ownership.symlink_to(sensitive)
+
+    with pytest.raises(FileExistsError, match="not a regular file"):
+        plugin_runtime.replace_managed_alias(alias, tmp_path / "managed/Example Synth.vst3")
+
+
+def test_replace_managed_alias_racing_regular_file_is_not_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file racing temporary symlink creation survives failed publication.
+
+    :param tmp_path: Scratch root for alias publication.
+    :param monkeypatch: Injects a deterministic competing file creation.
+    """
+    alias = tmp_path / "plugins/Example Synth.vst3"
+    alias.parent.mkdir(parents=True)
+    racing_paths: list[Path] = []
+    real_symlink_to = Path.symlink_to
+
+    def _race_symlink(
+        path: Path,
+        target: Path,
+        target_is_directory: bool = False,
+    ) -> None:
+        if path.parent != alias.parent:
+            path.write_text("unrelated")
+            racing_paths.append(path)
+        real_symlink_to(path, target, target_is_directory=target_is_directory)
+
+    monkeypatch.setattr(Path, "symlink_to", _race_symlink)
+
+    with pytest.raises(FileExistsError):
+        plugin_runtime.replace_managed_alias(alias, tmp_path / "managed/Example Synth.vst3")
+
+    assert racing_paths[0].read_text() == "unrelated"
 
 
 def test_link_plugin_ownership_enospc_exposes_no_new_alias(
@@ -880,6 +951,64 @@ def test_adopt_plugin_bundle_repeated_call_is_idempotent(tmp_path: Path) -> None
     assert first == second
 
 
+def test_adopt_plugin_bundle_dangling_managed_target_uses_conflict_policy(
+    tmp_path: Path,
+) -> None:
+    """A stale managed symlink is a conflict rather than a leaked target-resolution error.
+
+    :param tmp_path: Scratch root for source and dangling managed state.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    replacement = _bundle(tmp_path / "replacement/Example Synth.vst3")
+    missing = tmp_path / "deleted/Example Synth.vst3"
+    managed = tmp_path / "managed/VST3/example/synth/1.2.3/Example Synth.vst3"
+    managed.parent.mkdir(parents=True)
+    managed.symlink_to(missing, target_is_directory=True)
+
+    with pytest.raises(FileExistsError, match="refusing to replace managed bundle"):
+        _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=replacement)
+
+
+def test_adopt_plugin_bundle_changed_source_recorded_as_alias_completes_without_deadlock(
+    tmp_path: Path,
+) -> None:
+    """Re-adoption does not reacquire its package lock through source ownership.
+
+    :param tmp_path: Scratch root shared with the isolated re-adoption process.
+    """
+    manifest_path = _manifest(tmp_path / "studiorack.json")
+    plugin = PluginManifest.load(manifest_path).resolve("example/synth")
+    source = _bundle(tmp_path / "system-vst3/Example Synth.vst3", payload=b"original")
+    managed_root = tmp_path / "managed"
+    _adopt_bundle(plugin, plugins_dir=managed_root, bundle=source)
+    link_plugin(
+        plugin,
+        artifact_lock=_example_lock(),
+        plugins_dir=managed_root,
+        links_dir=source.parent,
+    )
+    _binary_path(source).write_bytes(_test_binary_magic() + b"changed")
+
+    context = multiprocessing.get_context("spawn")
+    result = context.Queue()
+    process = context.Process(
+        target=_readopt_mutated_source_worker,
+        args=((manifest_path, managed_root, source), result),
+    )
+    process.start()
+    process.join(5)
+    timed_out = process.is_alive()
+    if timed_out:
+        process.terminate()
+        process.join(5)
+
+    assert not timed_out, "re-adoption deadlocked while reacquiring its package lock"
+    assert process.exitcode == 0
+    assert result.get(timeout=2) == str(
+        managed_root / "VST3/example/synth/1.2.3/Example Synth.vst3"
+    )
+
+
 def test_adopt_plugin_bundle_source_mutation_invalidates_managed_alias(tmp_path: Path) -> None:
     """The seal makes later mutation of adopted symlink content fail closed.
 
@@ -893,6 +1022,58 @@ def test_adopt_plugin_bundle_source_mutation_invalidates_managed_alias(tmp_path:
 
     with pytest.raises(FileNotFoundError, match="integrity"):
         resolve_plugin_bundle(plugin, managed, artifact_lock=_example_lock())
+
+
+def test_load_plugin_source_mutation_after_validation_fails_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A managed external source cannot change between validation and plugin opening.
+
+    :param tmp_path: Scratch root for source and managed state.
+    :param monkeypatch: Mutates the real source immediately after real validation.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "source/Example Synth.vst3", payload=b"original")
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    real_validate = plugin_integrity.ManagedBundleStorage.validate
+    opened: list[Path] = []
+
+    def _validate_then_mutate(
+        storage: plugin_integrity.ManagedBundleStorage,
+    ) -> tuple[Path, plugin_integrity.BundleSeal]:
+        validated = real_validate(storage)
+        _binary_path(source).write_bytes(_test_binary_magic() + b"changed")
+        return validated
+
+    monkeypatch.setattr(plugin_integrity.ManagedBundleStorage, "validate", _validate_then_mutate)
+    monkeypatch.setattr(vst_core, "VST3Plugin", lambda path: opened.append(Path(path)))
+
+    with pytest.raises(PluginIntegrityError, match="managed bundle integrity"):
+        load_plugin(str(managed))
+
+    assert opened == []
+
+
+def test_load_plugin_symlinked_snapshot_root_rejected_without_outside_write(
+    tmp_path: Path,
+) -> None:
+    """Runtime snapshot publication cannot escape the managed version directory.
+
+    :param tmp_path: Scratch root for source, managed state, and escape target.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "source/Example Synth.vst3")
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    snapshots = managed.parent / ".synth-setter-runtime-snapshots"
+    snapshots.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PluginIntegrityError, match="managed bundle integrity"):
+        load_plugin(str(managed))
+
+    assert list(outside.iterdir()) == []
 
 
 def test_managed_symlink_source_mutation_rejected_at_public_boundaries(tmp_path: Path) -> None:

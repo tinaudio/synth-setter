@@ -26,6 +26,18 @@ docs:
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
 
+  - doc: docs/design/conditioning-column-statistics.md
+    description: Measured cached-conditioning scales and normalization recommendations
+    sources:
+      - pattern: "scripts/dev/characterise_conditioning_columns.py"
+        covers: "Streaming Lance statistics and markdown report generation"
+      - pattern: "src/synth_setter/configs/conditioning/*.yaml"
+        covers: "Materialized conditioning-column names and channel-first shapes"
+      - pattern: "src/synth_setter/models/components/pretrained_encoder.py"
+        covers: "CLAP get_audio_features output path"
+      - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
+        covers: "T5Gemma float32 reproducibility rationale"
+
   - doc: docs/reference/matpac-plus-embeddings.md
     description: MATPAC encoder interface
     sources:
@@ -191,6 +203,10 @@ docs:
         covers: "Registry-driven Lance embedding augmentation with resumable artifact and index identity."
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
+      - pattern: "src/synth_setter/pipeline/data/meanaudio.py"
+        covers: "Checkpoint verification and deterministic 16 kHz latent encoding."
+      - pattern: "src/synth_setter/configs/conditioning/meanaudio_16k.yaml"
+        covers: "Four-second MeanAudio EmbeddingPool conditioning profile."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
       - pattern: "src/synth_setter/features/**"
@@ -741,7 +757,7 @@ docs:
     description: Workflow catalog, secrets table, concurrency gotchas
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "Catalog row (repo-owned /repo-review-full on every PR incl. drafts, posts inline comments), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
+        covers: "Pi review workflow"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
@@ -750,6 +766,6 @@ docs:
     description: Credential inventory + rotation/verification procedures
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row with its rotation/verification procedure"
+        covers: "Pi review credential rotation procedures"
       - pattern: ".github/workflows/claude.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

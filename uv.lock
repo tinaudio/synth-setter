@@ -19,6 +19,11 @@ conflicts = [[
 build-constraints = [{ name = "cmake", specifier = "<4" }]
 
 [[manifest.dependency-metadata]]
+name = "meanaudio"
+version = "1.0.0"
+requires-dist = ["einops>=0.6", "huggingface-hub>=0.26", "librosa>=0.8.1", "numpy>=1.21", "omegaconf", "torch>=2.5.1"]
+
+[[manifest.dependency-metadata]]
 name = "stable-audio-3"
 version = "0.1.0"
 requires-dist = ["einops>=0.8.2", "einops-exts>=0.0.4", "huggingface-hub>=1.7.1", "numpy>=2.2.6", "packaging>=26.0", "safetensors>=0.7.0", "soundfile>=0.13.1", "torch>=2.7", "torchaudio>=2.7", "tqdm>=4.67.3", "transformers>=5.8.0"]
@@ -2222,6 +2227,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
+]
+
+[[package]]
+name = "meanaudio"
+version = "1.0.0"
+source = { git = "https://github.com/xiquan-li/MeanAudio.git?rev=8740a3e8df4c891a8d9deee1f820d051584d2671#8740a3e8df4c891a8d9deee1f820d051584d2671" }
+dependencies = [
+    { name = "einops" },
+    { name = "huggingface-hub" },
+    { name = "librosa" },
+    { name = "numpy" },
+    { name = "omegaconf" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
 ]
 
 [[package]]
@@ -4709,6 +4729,7 @@ dev = [
     { name = "lightning" },
     { name = "loguru" },
     { name = "matplotlib" },
+    { name = "meanaudio" },
     { name = "mido" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
@@ -4800,6 +4821,7 @@ runtime = [
     { name = "lightning" },
     { name = "loguru" },
     { name = "matplotlib" },
+    { name = "meanaudio" },
     { name = "mido" },
     { name = "music2latent" },
     { name = "numpy" },
@@ -4843,6 +4865,7 @@ torch = [
     { name = "beartype" },
     { name = "jaxtyping" },
     { name = "lightning" },
+    { name = "meanaudio" },
     { name = "music2latent" },
     { name = "ssondo" },
     { name = "stable-audio-3" },
@@ -4943,6 +4966,7 @@ dev = [
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "loguru", specifier = "==0.7.3" },
     { name = "matplotlib" },
+    { name = "meanaudio", git = "https://github.com/xiquan-li/MeanAudio.git?rev=8740a3e8df4c891a8d9deee1f820d051584d2671" },
     { name = "mido" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
@@ -5028,6 +5052,7 @@ runtime = [
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "loguru", specifier = "==0.7.3" },
     { name = "matplotlib" },
+    { name = "meanaudio", git = "https://github.com/xiquan-li/MeanAudio.git?rev=8740a3e8df4c891a8d9deee1f820d051584d2671" },
     { name = "mido" },
     { name = "music2latent", specifier = ">=0.1.8" },
     { name = "numpy" },
@@ -5065,6 +5090,7 @@ torch = [
     { name = "beartype", specifier = ">=0.19" },
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "lightning", specifier = ">=2.6.0" },
+    { name = "meanaudio", git = "https://github.com/xiquan-li/MeanAudio.git?rev=8740a3e8df4c891a8d9deee1f820d051584d2671" },
     { name = "music2latent", specifier = ">=0.1.8" },
     { name = "ssondo", specifier = "==0.3.1" },
     { name = "stable-audio-3", git = "https://github.com/Stability-AI/stable-audio-3?rev=124e8a799f57a1f665495ecb72e547d0a62867f1" },
