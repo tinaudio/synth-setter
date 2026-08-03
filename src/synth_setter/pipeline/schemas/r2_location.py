@@ -188,6 +188,13 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(shard.filename)
 
+    def dataset_root_uri(self) -> str:
+        """R2 URI of the run root itself — the prefix every other helper hangs off.
+
+        :returns: ``r2://<bucket>/<prefix>`` URI string, trailing slash included.
+        """
+        return self._under_prefix("")
+
     def input_spec_uri(self) -> str:
         """R2 URI of the frozen ``input_spec.json`` (the materialized ``DatasetSpec``).
 

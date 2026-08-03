@@ -587,6 +587,34 @@ def upload(source: str | Path, destination_uri: str) -> None:
     upload_to_uri(Path(source), destination_uri)
 
 
+def copy_prefix(source_uri: str, dest_uri: str, exclude: str | None = None) -> None:
+    """Copy every object under one R2 prefix to another, server-side.
+
+    Both operands live on the same remote, so rclone issues server-side copies
+    rather than streaming bytes through this host. ``--checksum`` makes a re-run
+    idempotent, which is what lets an interrupted copy be resumed by repeating
+    the call.
+
+    :param source_uri: ``r2://`` prefix to read; contents land directly under ``dest_uri``.
+    :param dest_uri: ``r2://`` destination prefix, created implicitly by rclone.
+    :param exclude: Optional rclone ``--exclude`` glob, for keys the destination
+        must never receive even transiently.
+    """
+    operands = [f"--exclude={exclude}"] if exclude is not None else []
+    operands += [_to_rclone_path(source_uri), _to_rclone_path(dest_uri)]
+    args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
+    subprocess.check_call(args)  # noqa: S603 — args from validated URIs
+
+
+def delete_object(r2_uri: str) -> None:
+    """Delete one object, tolerating an already-absent key.
+
+    :param r2_uri: ``r2://`` URI of the object to remove.
+    """
+    args = _rclone_argv("deletefile", _to_rclone_path(r2_uri))
+    subprocess.run(args, check=False, capture_output=True)  # noqa: S603 — args from validated URI
+
+
 def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:
     """Build the canonical R2 URI for a shard object: ``r2://{bucket}/{prefix}{filename}``.
 
