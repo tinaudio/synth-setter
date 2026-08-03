@@ -143,8 +143,11 @@ def _scan_run_project(wandb_binary: Path) -> str | None:
     ds = wandb_datastore.DataStore()
     ds.open_for_scan(str(wandb_binary))
     try:
-        while data := ds.scan_data():
-            record = getattr(wandb_pb, "Record")()
+        while True:
+            data = ds.scan_data()
+            if data is None:
+                break
+            record = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
             record.ParseFromString(data)
             if record.WhichOneof("record_type") == "run":
                 return record.run.project or None

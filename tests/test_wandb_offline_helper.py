@@ -12,10 +12,34 @@ wall-clock wait is needed.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from tests.helpers import wandb_offline
+
+
+def test_read_run_project_empty_record_before_run_returns_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty record does not hide a later run record.
+
+    :param monkeypatch: Replaces the external datastore scanner with fixed records.
+    """
+    run_record = wandb_offline.wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
+    run_record.run.project = "synth-setter-citest"
+    payloads = iter([b"", run_record.SerializeToString(), None])
+
+    data_store = SimpleNamespace(
+        open_for_scan=lambda _path: None,
+        scan_data=lambda: next(payloads),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(wandb_offline.wandb_datastore, "DataStore", lambda: data_store)
+
+    project = wandb_offline.read_run_project(Path("ignored.wandb"), timeout_s=0)
+
+    assert project == "synth-setter-citest"
 
 
 def test_until_predicate_retries_until_rows_materialize(
