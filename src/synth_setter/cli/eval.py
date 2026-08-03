@@ -193,14 +193,13 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             f"evaluation.no_params must be a boolean, got {no_params!r}; a quoted "
             '"false" would otherwise select the no-params render path'
         )
-    if no_params and cfg.evaluation.rerender_target:
-        raise ValueError(
-            "evaluation.no_params=true means the predict split carries no ground-truth "
-            "patch, so evaluation.rerender_target must be false — the target audio can "
-            "only come from the dataset."
-        )
-
     if cfg.evaluation.render_vst:
+        if no_params and cfg.evaluation.rerender_target:
+            raise ValueError(
+                "evaluation.no_params=true means the predict split carries no ground-truth "
+                "patch, so evaluation.rerender_target must be false — the target audio can "
+                "only come from the dataset."
+            )
         if cfg.get("render") is None:
             raise ValueError(
                 "evaluation.render_vst=true requires a render config group "

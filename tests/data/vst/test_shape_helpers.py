@@ -7,7 +7,6 @@ helpers, so each test pins one shape against the ``dataset_field_shapes`` /
 validator silently drifting apart.
 """
 
-import librosa
 import numpy as np
 import pytest
 
@@ -186,7 +185,5 @@ def test_make_spectrogram_pins_the_training_front_end() -> None:
     assert spec.max() == pytest.approx(0.0)
     assert spec.min() == pytest.approx(-80.0)
     assert spec.min() >= -80.0
-    expected_bin = int(
-        np.argmin(np.abs(librosa.mel_frequencies(n_mels=MEL_N_MELS, fmax=sample_rate / 2) - 440.0))
-    )
-    assert abs(int(spec[0].mean(axis=1).argmax()) - expected_bin) <= 1
+    # Mel bin 440 Hz lands in for a 16 kHz, 128-bin front end.
+    assert abs(int(spec[0].mean(axis=1).argmax()) - 19) <= 1

@@ -1320,3 +1320,25 @@ def test_postprocessing_non_boolean_no_params_raises(
         _run_predict_postprocessing(cfg)
 
     assert captured_argv == []
+
+
+def test_postprocessing_no_params_without_rendering_skips_the_rerender_check(
+    predictions_tree: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``rerender_target`` defaults true, so a non-rendering run must not be rejected.
+
+    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
+    :param captured_argv: Captured argv list populated by the fixture.
+    """
+    cfg = _build_postprocess_cfg(
+        predictions_tree,
+        render_vst=False,
+        compute_metrics=False,
+        rerender_target=True,
+        no_params=True,
+        render=None,
+    )
+
+    assert _run_predict_postprocessing(cfg) == {}
+    assert captured_argv == []

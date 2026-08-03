@@ -631,15 +631,17 @@ def test_corpus_missing_the_configured_audio_column_raises(tmp_path: Path) -> No
         _datamodule(tmp_path / "corpus.lance").setup("predict")
 
 
-def test_negative_row_limit_raises(tmp_path: Path) -> None:
-    """A negative cap cannot become a negative dataset length.
+@pytest.mark.parametrize("limit", [-1, 0])
+def test_non_positive_row_limit_raises(tmp_path: Path, limit: int) -> None:
+    """A negative cap cannot become a negative length, and zero serves nothing.
 
     :param tmp_path: Isolated corpus fixture directory.
+    :param limit: Reachable cap that would produce no usable sweep.
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=23)])
 
     with pytest.raises(ValueError, match="row_limit"):
-        _datamodule(tmp_path / "corpus.lance", row_limit=-1)
+        _datamodule(tmp_path / "corpus.lance", row_limit=limit)
 
 
 @pytest.mark.parametrize("column", ["t5gemma", "param_shift"])

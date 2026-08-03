@@ -193,8 +193,11 @@ def _validate_conditioning_config(
         )
     if row_limit is not None and (not isinstance(row_limit, int) or isinstance(row_limit, bool)):
         raise ValueError(f"row_limit must be an integer, got {row_limit!r}")
-    if row_limit is not None and row_limit < 0:
-        raise ValueError(f"row_limit must be non-negative, got {row_limit}")
+    if row_limit is not None and row_limit < 1:
+        raise ValueError(
+            f"row_limit must be at least 1, got {row_limit}; an empty sweep writes no "
+            "predictions and fails downstream instead of here"
+        )
     if use_saved_mean_and_variance and mel_stats_uri is None and conditioning == "mel":
         raise ValueError(
             "mel conditioning with use_saved_mean_and_variance=true requires "
