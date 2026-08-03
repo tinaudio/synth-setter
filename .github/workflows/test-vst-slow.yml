@@ -275,6 +275,7 @@ jobs:
         run: |
           files=(
             surge-host-parity-diverse-patches.json
+            surge-host-parity-random-patches.json
             surge-host-parity-repeated-patch.json
             vst-noise-floor-1-preset-n-renders.json
             vst-noise-floor-random-preset-replay.json
@@ -299,6 +300,7 @@ jobs:
           name: vst-benchmark-json
           path: |
             ${{ github.workspace }}/surge-host-parity-diverse-patches.json
+            ${{ github.workspace }}/surge-host-parity-random-patches.json
             ${{ github.workspace }}/surge-host-parity-repeated-patch.json
             ${{ github.workspace }}/vst-noise-floor-1-preset-n-renders.json
             ${{ github.workspace }}/vst-noise-floor-random-preset-replay.json
@@ -430,6 +432,21 @@ jobs:
           name: Surge host parity (diverse patches)
           tool: customSmallerIsBetter
           output-file-path: surge-host-parity-diverse-patches.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish random-patch Surge host diagnostics
+        if: hashFiles('surge-host-parity-random-patches.json') != ''
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
+        with:
+          name: Surge host diagnostics (random patches)
+          tool: customSmallerIsBetter
+          output-file-path: surge-host-parity-random-patches.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           auto-push: true
