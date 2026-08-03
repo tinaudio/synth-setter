@@ -122,6 +122,7 @@ def _generate(run_id: str, train_size: int, output_dir: Path, stage: str) -> Non
     :param output_dir: Local Hydra output directory.
     :param stage: Human-readable stage label for failure output.
     """
+    output_dir.mkdir(parents=True, exist_ok=True)
     _run_cli(
         [
             _cli("synth-setter-generate-dataset"),
@@ -145,18 +146,19 @@ def _generate(run_id: str, train_size: int, output_dir: Path, stage: str) -> Non
     )
 
 
-def _finalize(run_id: str, output_dir: Path, stage: str) -> None:
-    """Run the production finalize CLI for one run identity.
+def _finalize(root_uri: str, output_dir: Path, stage: str) -> None:
+    """Run the production finalize CLI against one dataset root.
 
-    :param run_id: Run id owning the R2 prefix.
+    :param root_uri: ``r2://`` root of the dataset to finalize.
     :param output_dir: Local Hydra output directory.
     :param stage: Human-readable stage label for failure output.
     """
+    output_dir.mkdir(parents=True, exist_ok=True)
     _run_cli(
         [
             _cli("synth-setter-finalize-dataset"),
-            f"task_name={_TASK_NAME}",
-            f"run_id={run_id}",
+            f"dataset_root_uri={root_uri}",
+            "~logger",
             f"paths.output_dir={output_dir}",
             "hydra.job.chdir=false",
         ],
@@ -201,7 +203,11 @@ def _finalized_source(tmp_path: Path) -> Iterator[DatasetSpec]:
 
     run_id = _run_id("source")
     _generate(run_id, _SOURCE_SIZES[0], tmp_path / "generate-source", "source generation")
-    _finalize(run_id, tmp_path / "finalize-source", "source finalization")
+    _finalize(
+        f"r2://intermediate-data/data/{_TASK_NAME}/{run_id}/",
+        tmp_path / "finalize-source",
+        "source finalization",
+    )
     spec = load_spec_from_root(f"r2://intermediate-data/data/{_TASK_NAME}/{run_id}/")
     try:
         assert spec.train_val_test_sizes == _SOURCE_SIZES
@@ -268,7 +274,11 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
             for shard_id in plan.pending_shard_ids:
                 assert shard_has_complete_attempt(dest_spec, shard_id)
 
-            _finalize(dest_spec.run_id, tmp_path / "finalize-grown", "grown finalization")
+            _finalize(
+                dest_spec.r2.dataset_root_uri(),
+                tmp_path / "finalize-grown",
+                "grown finalization",
+            )
 
             grown_train_params = _split_params(dest_spec, "train")
             grown_val_params = _split_params(dest_spec, "val")

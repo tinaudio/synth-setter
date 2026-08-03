@@ -17,7 +17,9 @@ this file is the imperative rule sheet.
   data files into the split dataset `data/` directories (a fragment is only
   readable from the dataset whose `data/` dir physically holds its file —
   design doc §7.1). Finalize remains the only writer of Lance manifests,
-  transactions, `stats.npz`, and `dataset.{json,complete}`.
+  transactions, `stats.npz`, and `dataset.{json,complete}` — with one exception:
+  `dataset_reopen.py` *deletes* (never writes) `dataset.complete` on the
+  destination copy, so a stale marker cannot short-circuit finalize.
 - **Never write to `data/shards/` outside finalize.** Workers stage shards
   under `metadata/workers/<worker-id>/` and finalize moves them.
 - **Shard IDs are logical and deterministic.** `shard-000042` is computed
