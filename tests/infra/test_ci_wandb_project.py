@@ -20,6 +20,7 @@ def _on(workflow: Mapping[str, object]) -> Mapping[str, object]:
     :param workflow: Parsed GitHub Actions workflow.
     :returns: Workflow trigger mapping.
     """
+    # PyYAML 1.1 coerces the unquoted GitHub Actions `on` key to True.
     yaml_mapping = cast(Mapping[object, object], workflow)
     return cast(Mapping[str, object], yaml_mapping[True])
 
@@ -38,11 +39,40 @@ def _step(workflow: Mapping[str, object], job_name: str, step_name: str) -> Mapp
     return next(step for step in steps if step.get("name") == step_name)
 
 
+def _job_wandb_project_offenders(
+    workflow_name: str,
+    job_name: str,
+    job: Mapping[str, object],
+    workflow_env: Mapping[str, object],
+) -> list[str]:
+    """Find authenticated scopes in one CI job without a W&B project.
+
+    :param workflow_name: Workflow filename used in diagnostics.
+    :param job_name: Job key used in diagnostics.
+    :param job: Parsed job definition.
+    :param workflow_env: Environment inherited from the workflow.
+    :returns: Job or step scopes that can fall back to the production project.
+    """
+    job_env = cast(Mapping[str, object], job.get("env", {}))
+    inherited_api_key = "WANDB_API_KEY" in workflow_env or "WANDB_API_KEY" in job_env
+    inherited_project = "WANDB_PROJECT" in workflow_env or "WANDB_PROJECT" in job_env
+    if inherited_api_key and not inherited_project:
+        return [f"{workflow_name}:{job_name}"]
+
+    steps = cast(list[Mapping[str, object]], job.get("steps", []))
+    offenders: list[str] = []
+    for step in steps:
+        step_env = cast(Mapping[str, object], step.get("env", {}))
+        if "WANDB_API_KEY" in step_env and not (inherited_project or "WANDB_PROJECT" in step_env):
+            offenders.append(f"{workflow_name}:{job_name}:{step.get('name', '<unnamed>')}")
+    return offenders
+
+
 def _ci_steps_missing_wandb_project(project_root: Path) -> list[str]:
-    """Find authenticated CI steps without an explicit W&B project.
+    """Find authenticated CI scopes without an explicit W&B project.
 
     :param project_root: Repository root containing GitHub Actions workflows.
-    :returns: Workflow and step names that can fall back to the production project.
+    :returns: Workflow, job, or step scopes that can fall back to production.
     """
     offenders: list[str] = []
     workflows_dir = project_root / ".github" / "workflows"
@@ -50,17 +80,11 @@ def _ci_steps_missing_wandb_project(project_root: Path) -> list[str]:
         if path.name in _PRODUCTION_WANDB_WORKFLOWS:
             continue
         workflow = load_workflow(project_root, path.name)
+        workflow_env = cast(Mapping[str, object], workflow.get("env", {}))
         jobs = cast(Mapping[str, object], workflow["jobs"])
         for job_name, job_value in jobs.items():
             job = cast(Mapping[str, object], job_value)
-            job_env = cast(Mapping[str, object], job.get("env", {}))
-            steps = cast(list[Mapping[str, object]], job.get("steps", []))
-            for step in steps:
-                step_env = cast(Mapping[str, object], step.get("env", {}))
-                has_api_key = "WANDB_API_KEY" in step_env
-                has_project = "WANDB_PROJECT" in step_env or "WANDB_PROJECT" in job_env
-                if has_api_key and not has_project:
-                    offenders.append(f"{path.name}:{job_name}:{step.get('name', '<unnamed>')}")
+            offenders.extend(_job_wandb_project_offenders(path.name, job_name, job, workflow_env))
     return offenders
 
 
@@ -133,3 +157,12 @@ def test_authenticated_ci_steps_select_wandb_project(project_root: Path) -> None
     :param project_root: Repo root supplied by the infra test fixtures.
     """
     assert _ci_steps_missing_wandb_project(project_root) == []
+
+
+def test_job_level_wandb_key_without_project_is_reported() -> None:
+    """A job-level API key cannot bypass the CI project guard."""
+    job = {"env": {"WANDB_API_KEY": "secret"}, "steps": [{"name": "test"}]}
+
+    offenders = _job_wandb_project_offenders("test.yml", "run_tests", job, {})
+
+    assert offenders == ["test.yml:run_tests"]
