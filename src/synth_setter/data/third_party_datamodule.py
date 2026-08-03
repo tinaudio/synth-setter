@@ -185,6 +185,12 @@ def _validate_conditioning_config(
     :raises ValueError: Mel is standardized without a statistics source, or the row cap is
         negative.
     """
+    if not isinstance(use_saved_mean_and_variance, bool):
+        raise ValueError(
+            "use_saved_mean_and_variance must be a boolean, got "
+            f"{use_saved_mean_and_variance!r}; a quoted \"false\" would otherwise enable "
+            "normalization"
+        )
     if row_limit is not None and (not isinstance(row_limit, int) or isinstance(row_limit, bool)):
         raise ValueError(f"row_limit must be an integer, got {row_limit!r}")
     if row_limit is not None and row_limit < 0:
@@ -517,15 +523,22 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self._predict_dataset, self.dataset_version = self._open_corpus()
         if self.mel_stats_uri is not None and self._statistics is None:
             mean, std = load_mel_statistics(self._local_stats_file())
+            mean_f32 = torch.as_tensor(mean, dtype=torch.float32)
             std_f32 = torch.as_tensor(std, dtype=torch.float32)
-            # float64 positivity is not float32 positivity: a std like 1e-50 passes
-            # load_mel_statistics and then underflows to zero, yielding infinities.
+            # float64 validity is not float32 validity in either direction: a std of
+            # 1e-50 underflows to zero (infinities), and 1e39 overflows to infinity,
+            # which silently zeroes every feature while staying finite.
+            if not bool(torch.isfinite(mean_f32).all() and torch.isfinite(std_f32).all()):
+                raise ValueError(
+                    f"mel statistics from {self.mel_stats_uri} are not representable in "
+                    "float32"
+                )
             if not bool((std_f32 > 0).all()):
                 raise ValueError(
                     f"mel statistics from {self.mel_stats_uri} contain standard deviations "
                     "that underflow to zero in float32"
                 )
-            self._statistics = (torch.as_tensor(mean, dtype=torch.float32), std_f32)
+            self._statistics = (mean_f32, std_f32)
         self._live = self._load_encoders()
 
     def _load_encoders(self) -> dict[str, LiveEmbedding]:

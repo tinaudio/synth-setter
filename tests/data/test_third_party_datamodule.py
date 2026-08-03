@@ -900,3 +900,40 @@ def test_native_blob_v2_column_is_servable(tmp_path: Path) -> None:
     batch = _first_batch(_datamodule(tmp_path / "corpus.lance"))
 
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
+
+
+def test_statistics_overflowing_float32_are_rejected(tmp_path: Path) -> None:
+    """Statistics that become infinite in float32 would silently zero the features.
+
+    Dividing by an infinite ``std`` yields 0.0, which is finite — so the batch
+    check cannot catch it and the model would receive a blank mel.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=36)])
+    stats_file = tmp_path / "stats.npz"
+    np.savez(stats_file, mean=np.float64(0.0), std=np.float64(1e39))
+
+    with pytest.raises(ValueError, match="float32"):
+        _first_batch(
+            _datamodule(
+                tmp_path / "corpus.lance",
+                use_saved_mean_and_variance=True,
+                mel_stats_uri=str(stats_file),
+            )
+        )
+
+
+def test_non_boolean_use_saved_mean_and_variance_raises(tmp_path: Path) -> None:
+    """A quoted ``"false"`` must not silently enable normalization.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=37)])
+
+    with pytest.raises(ValueError, match="must be a boolean"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            use_saved_mean_and_variance="false",  # type: ignore[arg-type]
+            mel_stats_uri="stats.npz",
+        )
