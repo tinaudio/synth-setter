@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -21,14 +21,19 @@ import lance
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    DATASET_FIELD_NAMES,
+    MEL_SPEC_FIELD,
+    PARAM_ARRAY_FIELD,
+    dataset_field_dtypes,
+)
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.dataset_reopen import reopen_dataset
 from synth_setter.pipeline.data.lance_staging import (
     complete_attempt_names,
     shard_has_complete_attempt,
 )
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from synth_setter.pipeline.spec_io import load_spec_from_root
 
 pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
@@ -39,6 +44,7 @@ _SOURCE_SIZES = (2, 2, 2)
 _GROWN_TRAIN_SIZE = 4
 _GENERATE_TIMEOUT_SECONDS = 300
 _FINALIZE_TIMEOUT_SECONDS = 180
+_SPLITS: tuple[Split, ...] = ("train", "val", "test")
 
 
 def _run_id(label: str) -> str:
@@ -114,7 +120,7 @@ def _purge_r2_prefix(spec: DatasetSpec) -> None:
         )
 
 
-def _generate(run_id: str, train_size: int, output_dir: Path, stage: str) -> None:
+def _generate(run_id: str, train_size: int, output_dir: Path, *, stage: str) -> None:
     """Run the production generation CLI for one run identity.
 
     :param run_id: Run id owning the R2 prefix.
@@ -167,18 +173,77 @@ def _finalize(root_uri: str, output_dir: Path, stage: str) -> None:
     )
 
 
-def _split_params(spec: DatasetSpec, split: str) -> np.ndarray:
-    """Read one finalized split's parameter matrix from R2.
+def _split_arrays(spec: DatasetSpec, split: Split) -> dict[str, np.ndarray]:
+    """Read and validate every writer-emitted array from one finalized split.
 
     :param spec: Finalized dataset identity.
     :param split: Split name.
-    :returns: ``(rows, params)`` float array of stored parameters.
+    :returns: Core arrays keyed by writer field name.
     """
-    target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))  # type: ignore[arg-type]
-    table = lance.dataset(target, storage_options=storage_options).to_table(
-        columns=[PARAM_ARRAY_FIELD]
-    )
-    return table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
+    target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))
+    dataset = lance.dataset(target, storage_options=storage_options)
+    assert set(DATASET_FIELD_NAMES).issubset(dataset.schema.names)
+    table = dataset.to_table(columns=list(DATASET_FIELD_NAMES))
+    arrays = {
+        name: table.column(name).combine_chunks().to_numpy_ndarray()
+        for name in DATASET_FIELD_NAMES
+    }
+    expected_dtypes = dataset_field_dtypes(spec.render)
+    assert {name: array.dtype for name, array in arrays.items()} == expected_dtypes
+    return arrays
+
+
+def _assert_stats_match_train(spec: DatasetSpec, train_arrays: Mapping[str, np.ndarray]) -> None:
+    """Compare persisted normalization stats with direct grown-train recomputation.
+
+    :param spec: Finalized grown dataset identity.
+    :param train_arrays: Every core array read from its train split.
+    """
+    train_mel = train_arrays[MEL_SPEC_FIELD].astype(np.float64)
+    expected_mean = train_mel.mean(axis=0)
+    expected_std = train_mel.std(axis=0)
+    if spec.mask_degenerate_bins:
+        expected_std[expected_std == 0] = 1
+    with r2_io.downloaded_to_tempfile(spec.r2.stats_uri()) as stats_path:
+        with np.load(stats_path) as stats:
+            actual_mean = stats["mean"]
+            actual_std = stats["std"]
+    np.testing.assert_allclose(actual_mean, expected_mean, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(actual_std, expected_std, rtol=1e-6, atol=5e-6)
+
+
+def _assert_preserved_and_heldout_arrays_match(
+    source: Mapping[Split, Mapping[str, np.ndarray]],
+    grown: Mapping[Split, Mapping[str, np.ndarray]],
+) -> None:
+    """Compare copied train rows exactly and deterministic held-out rerenders numerically.
+
+    Faust rerenders can differ below storage precision while preserving the exact parameter row, so
+    held-out signal arrays use a bounded tolerance.
+
+    :param source: Core arrays from the finalized source splits.
+    :param grown: Core arrays from the finalized grown splits.
+    """
+    for field in DATASET_FIELD_NAMES:
+        np.testing.assert_array_equal(
+            grown["train"][field][: _SOURCE_SIZES[0]],
+            source["train"][field],
+            err_msg=f"preserved train {field} rows changed across the reopen",
+        )
+    for split in ("val", "test"):
+        np.testing.assert_array_equal(
+            grown[split][PARAM_ARRAY_FIELD],
+            source[split][PARAM_ARRAY_FIELD],
+            err_msg=f"renumbered {split} parameter rows changed",
+        )
+        for field in (AUDIO_FIELD, MEL_SPEC_FIELD):
+            np.testing.assert_allclose(
+                grown[split][field],
+                source[split][field],
+                rtol=1e-3,
+                atol=1e-3,
+                err_msg=f"renumbered {split} {field} rows changed",
+            )
 
 
 @contextmanager
@@ -202,7 +267,12 @@ def _finalized_source(tmp_path: Path) -> Iterator[DatasetSpec]:
     )
 
     run_id = _run_id("source")
-    _generate(run_id, _SOURCE_SIZES[0], tmp_path / "generate-source", "source generation")
+    _generate(
+        run_id,
+        _SOURCE_SIZES[0],
+        tmp_path / "generate-source",
+        stage="source generation",
+    )
     _finalize(
         f"r2://intermediate-data/data/{_TASK_NAME}/{run_id}/",
         tmp_path / "finalize-source",
@@ -225,19 +295,33 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
     :param tmp_path: Per-test directory for real CLI output.
     """
     with _finalized_source(tmp_path) as source_spec:
-        source_train_params = _split_params(source_spec, "train")
-        source_val_params = _split_params(source_spec, "val")
-
-        plan = reopen_dataset(
-            source_spec.r2.dataset_root_uri(),
-            (_GROWN_TRAIN_SIZE, 2, 2),
-            dest_run_id=_run_id("grown"),
+        source_arrays: dict[Split, dict[str, np.ndarray]] = {
+            split: _split_arrays(source_spec, split) for split in _SPLITS
+        }
+        dest_run_id = _run_id("grown")
+        dest_root_uri = f"r2://intermediate-data/data/{_TASK_NAME}/{dest_run_id}/"
+        _run_cli(
+            [
+                _cli("synth-setter-reopen-dataset"),
+                "--source",
+                source_spec.r2.dataset_root_uri(),
+                "--train-size",
+                str(_GROWN_TRAIN_SIZE),
+                "--dest-run-id",
+                dest_run_id,
+                "--apply",
+            ],
+            timeout=_FINALIZE_TIMEOUT_SECONDS,
+            stage="dataset reopen",
         )
-        dest_spec = plan.dest_spec
+        dest_spec = load_spec_from_root(dest_root_uri)
         try:
-            assert plan.preserved_shard_ids == range(0, 1)
-            assert plan.discarded_shard_ids == range(1, 3)
-            assert plan.pending_shard_ids == range(1, 4)
+            assert dest_spec.train_val_test_sizes == (_GROWN_TRAIN_SIZE, 2, 2)
+            assert dest_spec.split_shard_ranges == {
+                "train": (0, 2),
+                "val": (2, 3),
+                "test": (3, 4),
+            }
 
             # The preserved shard keeps its staged attempt; the renumbered
             # val/test ids must not, or the skip-probe would skip real train work.
@@ -257,7 +341,7 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
                 dest_spec.run_id,
                 _GROWN_TRAIN_SIZE,
                 tmp_path / "generate-grown",
-                "grown generation",
+                stage="grown generation",
             )
 
             preserved_attempts_after = complete_attempt_names(
@@ -271,7 +355,7 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
             assert preserved_attempts_after == preserved_attempts_before, (
                 "preserved shard 0 was re-rendered instead of skipped"
             )
-            for shard_id in plan.pending_shard_ids:
+            for shard_id in range(1, 4):
                 assert shard_has_complete_attempt(dest_spec, shard_id)
 
             _finalize(
@@ -280,16 +364,23 @@ def test_reopen_extends_a_finalized_dataset_without_re_rendering_preserved_shard
                 "grown finalization",
             )
 
-            grown_train_params = _split_params(dest_spec, "train")
-            grown_val_params = _split_params(dest_spec, "val")
+            grown_arrays: dict[Split, dict[str, np.ndarray]] = {
+                split: _split_arrays(dest_spec, split) for split in _SPLITS
+            }
+            assert grown_arrays["train"][PARAM_ARRAY_FIELD].shape[0] == _GROWN_TRAIN_SIZE
+            assert grown_arrays["val"][PARAM_ARRAY_FIELD].shape[0] == 2
+            assert grown_arrays["test"][PARAM_ARRAY_FIELD].shape[0] == 2
+            _assert_preserved_and_heldout_arrays_match(source_arrays, grown_arrays)
 
-            assert grown_train_params.shape[0] == _GROWN_TRAIN_SIZE
-            assert grown_val_params.shape[0] == 2
-            assert np.array_equal(
-                grown_train_params[: source_train_params.shape[0]], source_train_params
-            ), "preserved train rows changed across the reopen"
-            assert np.array_equal(grown_val_params, source_val_params), (
-                "renumbered val rows differ from the source's despite split-local offsets"
-            )
+            train_rows = {row.tobytes() for row in grown_arrays["train"][PARAM_ARRAY_FIELD]}
+            val_rows = {row.tobytes() for row in grown_arrays["val"][PARAM_ARRAY_FIELD]}
+            test_rows = {row.tobytes() for row in grown_arrays["test"][PARAM_ARRAY_FIELD]}
+            assert len(train_rows) == _GROWN_TRAIN_SIZE
+            assert len(val_rows) == 2
+            assert len(test_rows) == 2
+            assert train_rows.isdisjoint(val_rows)
+            assert train_rows.isdisjoint(test_rows)
+            assert val_rows.isdisjoint(test_rows)
+            _assert_stats_match_train(dest_spec, grown_arrays["train"])
         finally:
             _purge_r2_prefix(dest_spec)

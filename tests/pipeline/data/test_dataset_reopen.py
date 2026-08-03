@@ -4,27 +4,31 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import pytest
 
 from synth_setter.pipeline.data.dataset_reopen import (
-    main,
     ReopenPlan,
+    main,
     plan_reopen,
     reopen_dataset,
     validate_reopenable,
 )
+from synth_setter.pipeline.schemas.prefix import make_r2_prefix
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
-# Small enough that shard ranges are readable inline: train 4, val 2, test 2.
+# Keep shard ranges readable in assertions.
 _SAMPLES_PER_SHARD = 10
 _SOURCE_SIZES = (40, 20, 20)
 
 
 def _spec(
-    valid_dataset_spec_kwargs: dict[str, Any], overrides: dict[str, Any] | None = None
+    valid_dataset_spec_kwargs: Mapping[str, object],
+    overrides: Mapping[str, object] | None = None,
 ) -> DatasetSpec:
     """Build a split-seeded spec at the small shard scale these tests reason about.
 
@@ -32,16 +36,17 @@ def _spec(
     :param overrides: Top-level spec fields replacing the defaults.
     :returns: The constructed spec.
     """
-    kwargs = copy.deepcopy(valid_dataset_spec_kwargs)
+    kwargs = copy.deepcopy(dict(valid_dataset_spec_kwargs))
     kwargs["train_val_test_sizes"] = list(_SOURCE_SIZES)
     kwargs["train_val_test_seeds"] = [42, 43, 44]
-    kwargs["render"]["samples_per_shard"] = _SAMPLES_PER_SHARD
+    render = cast(dict[str, object], kwargs["render"])
+    render["samples_per_shard"] = _SAMPLES_PER_SHARD
     kwargs.update(overrides or {})
-    return DatasetSpec(**kwargs)
+    return DatasetSpec.model_validate(kwargs)
 
 
 @pytest.fixture()
-def source_spec(valid_dataset_spec_kwargs: dict[str, Any]) -> DatasetSpec:
+def source_spec(valid_dataset_spec_kwargs: Mapping[str, object]) -> DatasetSpec:
     """Build a finalized 8-shard source spec: train 0..3, val 4..5, test 6..7.
 
     :param valid_dataset_spec_kwargs: Shared spec kwargs from the pipeline conftest.
@@ -51,7 +56,7 @@ def source_spec(valid_dataset_spec_kwargs: dict[str, Any]) -> DatasetSpec:
 
 
 def test_validate_reopenable_legacy_base_seed_spec_raises(
-    valid_dataset_spec_kwargs: dict[str, Any],
+    valid_dataset_spec_kwargs: Mapping[str, object],
 ) -> None:
     """Reject a spec whose rows are seeded from base_seed plus the shard id.
 
@@ -180,7 +185,7 @@ def test_plan_reopen_dest_prefix_differs_from_source_prefix(source_spec: Dataset
 
 
 def test_plan_reopen_zero_size_val_and_test_discards_nothing(
-    valid_dataset_spec_kwargs: dict[str, Any],
+    valid_dataset_spec_kwargs: Mapping[str, object],
 ) -> None:
     """Discard no staging when the source has no held-out splits to renumber.
 
@@ -205,16 +210,39 @@ def _seed_finalized_root(remote: Path, spec: DatasetSpec) -> Path:
     (root / "metadata" / "workers").mkdir(parents=True, exist_ok=True)
     (root / "input_spec.json").write_text(spec.model_dump_json())
     (root / "dataset.complete").write_text("")
-    (root / "dataset.json").write_text(json.dumps({"schema_version": 1}))
+    selected_attempts = []
     (root / "stats.npz").write_bytes(b"stats-bytes")
+    (root / "config.yaml").write_text("stale: true\n")
     for shard in spec.shards:
         staged = root / "metadata" / "workers" / "shards" / f"shard-{shard.shard_id:06d}"
         staged.mkdir(parents=True, exist_ok=True)
-        (staged / "w0-a0.valid").write_text("")
+        for suffix in (".fragment.json", ".shard-stats.npz", ".valid"):
+            (staged / f"w0-a0{suffix}").write_text("")
+        selected_attempts.append(
+            {
+                "shard_id": shard.shard_id,
+                "attempt": "w0-a0",
+                "valid_key": f"{spec.r2.prefix}metadata/workers/shards/"
+                f"shard-{shard.shard_id:06d}/w0-a0.valid",
+            }
+        )
+    (root / "dataset.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": spec.run_id,
+                "finalized_at": "2026-08-03T00:00:00+00:00",
+                "selected_attempts": selected_attempts,
+            }
+        )
+    )
     for split in ("train", "val", "test"):
         versions = root / f"{split}.lance" / "_versions"
         versions.mkdir(parents=True, exist_ok=True)
         (versions / "1.manifest").write_text("manifest")
+        transactions = root / f"{split}.lance" / "_transactions"
+        transactions.mkdir(parents=True, exist_ok=True)
+        (transactions / "1.txn").write_text("transaction")
         data = root / f"{split}.lance" / "data"
         data.mkdir(parents=True, exist_ok=True)
         (data / "frag.lance").write_text("fragment")
@@ -273,6 +301,32 @@ def test_reopen_dataset_keeps_preserved_shard_staging(
     dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
     staged = dest / "metadata" / "workers" / "shards"
     assert (staged / "shard-000003" / "w0-a0.valid").exists()
+
+
+def test_reopen_dataset_copies_only_the_source_card_winner(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Preserve the finalized winner when a source shard has another valid attempt.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    source = _seed_finalized_root(fake_r2_remote, source_spec)
+    staged = source / "metadata" / "workers" / "shards" / "shard-000000"
+    for suffix in (".fragment.json", ".shard-stats.npz", ".valid"):
+        (staged / f"w1-a1{suffix}").write_text("")
+
+    plan = reopen_dataset(
+        source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+    )
+
+    dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
+    copied = dest / "metadata" / "workers" / "shards" / "shard-000000"
+    assert sorted(path.name for path in copied.iterdir()) == [
+        "w0-a0.fragment.json",
+        "w0-a0.shard-stats.npz",
+        "w0-a0.valid",
+    ]
 
 
 def test_reopen_dataset_discards_staging_at_or_above_the_old_train_boundary(
@@ -377,6 +431,156 @@ def test_reopen_dataset_incomplete_source_raises(
         reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
 
 
+def test_reopen_dataset_destination_state_without_identity_raises(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Reject copied destination state that has no verifiable reopen identity.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    _seed_finalized_root(fake_r2_remote, source_spec)
+    plan = plan_reopen(source_spec, (80, 20, 20), dest_run_id="grown-run")
+    dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
+    foreign_attempt = dest / "metadata" / "workers" / "shards" / "shard-000004" / "foreign.valid"
+    foreign_attempt.parent.mkdir(parents=True)
+    foreign_attempt.write_text("")
+
+    with pytest.raises(ValueError, match="reopen identity"):
+        reopen_dataset(
+            source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+        )
+
+    assert foreign_attempt.exists()
+
+
+def test_reopen_dataset_different_source_provenance_raises(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Reject a destination identity published for a different source spec.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    _seed_finalized_root(fake_r2_remote, source_spec)
+    reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
+    payload = source_spec.model_dump(mode="json")
+    payload["run_id"] = "other-source"
+    r2_payload = cast(dict[str, object], payload["r2"])
+    r2_payload["prefix"] = make_r2_prefix(
+        source_spec.task_name, "other-source", source_spec.r2.prefix_root
+    )
+    other_source = DatasetSpec.model_validate(payload)
+    _seed_finalized_root(fake_r2_remote, other_source)
+
+    with pytest.raises(ValueError, match="reopen identity does not match"):
+        reopen_dataset(
+            other_source.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+        )
+
+
+def test_reopen_dataset_different_destination_spec_raises(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Reject reuse of a destination identity for different grown sizes.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    _seed_finalized_root(fake_r2_remote, source_spec)
+    reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
+
+    with pytest.raises(ValueError, match="reopen identity does not match"):
+        reopen_dataset(
+            source_spec.r2.dataset_root_uri(), (100, 20, 20), dest_run_id="grown-run"
+        )
+
+
+def test_reopen_dataset_exact_partial_resume_restores_copied_state(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Resume copied state only when its source and destination identity match exactly.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    plan = plan_reopen(source_spec, (80, 20, 20), dest_run_id="grown-run")
+    _seed_finalized_root(fake_r2_remote, source_spec)
+    reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
+    dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
+    (dest / "input_spec.json").unlink()
+    restored = dest / "metadata" / "workers" / "shards" / "shard-000003" / "w0-a0.valid"
+    restored.unlink()
+
+    reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
+
+    assert restored.exists()
+    written = DatasetSpec.model_validate_json((dest / "input_spec.json").read_text())
+    assert written == plan.dest_spec
+
+
+def test_reopen_dataset_marker_deletion_failure_preserves_destination_state(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Abort before any mutation when the existing completion marker cannot be removed.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    _seed_finalized_root(fake_r2_remote, source_spec)
+    plan = reopen_dataset(
+        source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+    )
+    dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
+    (dest / "dataset.complete").write_text("")
+    (dest / "dataset.json").write_text("keep-card")
+    before = {path.relative_to(dest): path.read_bytes() for path in dest.rglob("*") if path.is_file()}
+
+    dest.chmod(0o555)
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            reopen_dataset(
+                source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+            )
+    finally:
+        dest.chmod(0o755)
+
+    after = {path.relative_to(dest): path.read_bytes() for path in dest.rglob("*") if path.is_file()}
+    assert after == before
+
+
+def test_reopen_dataset_required_cleanup_failure_aborts_before_spec_upload(
+    source_spec: DatasetSpec, fake_r2_remote: Path
+) -> None:
+    """Propagate strict cleanup failure and leave the grown spec unpublished.
+
+    :param source_spec: Finalized 8-shard source spec built by the module fixture.
+    :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
+    """
+    _seed_finalized_root(fake_r2_remote, source_spec)
+    plan = reopen_dataset(
+        source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+    )
+    dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
+    (dest / "input_spec.json").unlink()
+    blocked_prefix = dest / "val.lance"
+    blocked_prefix.mkdir()
+    blocked = blocked_prefix / "fragment.lance"
+    blocked.write_text("must-remain")
+
+    blocked_prefix.chmod(0o555)
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            reopen_dataset(
+                source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run"
+            )
+    finally:
+        blocked_prefix.chmod(0o755)
+
+    assert blocked.read_text() == "must-remain"
+    assert not (dest / "input_spec.json").exists()
+
+
 def test_main_without_apply_writes_nothing(
     source_spec: DatasetSpec, fake_r2_remote: Path
 ) -> None:
@@ -454,10 +658,10 @@ def test_main_carries_source_val_and_test_sizes_through(
     assert written.train_val_test_sizes[1:] == source_spec.train_val_test_sizes[1:]
 
 
-def test_reopen_dataset_drops_split_manifests_but_keeps_fragment_data(
+def test_reopen_dataset_copies_only_preserved_staging_and_train_fragment_data(
     source_spec: DatasetSpec, fake_r2_remote: Path
 ) -> None:
-    """Drop copied manifests so new fragments take the spec-derived schema, not the committed one.
+    """Copy no finalized manifests, held-out data, sidecars, claims, or stale config.
 
     :param source_spec: Finalized 8-shard source spec built by the module fixture.
     :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
@@ -467,8 +671,24 @@ def test_reopen_dataset_drops_split_manifests_but_keeps_fragment_data(
     plan = reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
 
     dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
-    assert not (dest / "train.lance" / "_versions").exists()
-    assert (dest / "train.lance" / "data" / "frag.lance").exists()
+    copied_files = {path.relative_to(dest).as_posix() for path in dest.rglob("*") if path.is_file()}
+    assert copied_files == {
+        "input_spec.json",
+        "metadata/reopen.json",
+        "metadata/workers/shards/shard-000000/w0-a0.fragment.json",
+        "metadata/workers/shards/shard-000000/w0-a0.shard-stats.npz",
+        "metadata/workers/shards/shard-000000/w0-a0.valid",
+        "metadata/workers/shards/shard-000001/w0-a0.fragment.json",
+        "metadata/workers/shards/shard-000001/w0-a0.shard-stats.npz",
+        "metadata/workers/shards/shard-000001/w0-a0.valid",
+        "metadata/workers/shards/shard-000002/w0-a0.fragment.json",
+        "metadata/workers/shards/shard-000002/w0-a0.shard-stats.npz",
+        "metadata/workers/shards/shard-000002/w0-a0.valid",
+        "metadata/workers/shards/shard-000003/w0-a0.fragment.json",
+        "metadata/workers/shards/shard-000003/w0-a0.shard-stats.npz",
+        "metadata/workers/shards/shard-000003/w0-a0.valid",
+        "train.lance/data/frag.lance",
+    }
 
 
 def test_reopen_plan_is_immutable(source_spec: DatasetSpec) -> None:

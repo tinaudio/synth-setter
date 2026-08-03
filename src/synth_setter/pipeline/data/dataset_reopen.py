@@ -2,9 +2,9 @@
 
 Growing ``train_val_test_sizes[0]`` regenerates every original shard position
 unchanged — ``sample_offset`` derives from the split-local shard index — so a
-grown spec *is* the extension. Reopen copies the finalized root, rewrites the
-spec, and clears the markers that would otherwise short-circuit generation;
-the existing resume skip-probe then renders only the missing shards. Design:
+grown spec *is* the extension. Reopen copies only preserved train staging and
+fragment data, then publishes the grown spec; the existing resume skip-probe
+renders only the missing shards. Design:
 ``docs/design/dataset-reopen.md``.
 
 Typical use is ``reopen_dataset(source_root_uri, new_sizes)`` followed by the
@@ -14,13 +14,18 @@ normal generate + finalize entrypoints against ``plan.dest_root_uri``.
 from __future__ import annotations
 
 import argparse
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
+from pydantic import BaseModel, ConfigDict
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
+from synth_setter.pipeline.data.lance_staging import COMPLETE_ATTEMPT_SUFFIXES
+from synth_setter.pipeline.schemas.lance_attempt import LanceDatasetCard, SelectedLanceAttempt
 from synth_setter.pipeline.schemas.prefix import make_dataset_wandb_run_id, make_r2_prefix
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
 from synth_setter.pipeline.spec_io import load_spec_from_root, load_spec_from_uri, upload_spec
@@ -30,8 +35,30 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-# Split datasets whose copied manifests reopen must drop before re-generation.
-SPLITS: tuple[Split, ...] = ("train", "val", "test")
+_SPLITS: tuple[Split, ...] = ("train", "val", "test")
+_REOPEN_IDENTITY_RELATIVE_PATH = "metadata/reopen.json"
+
+
+class _ReopenIdentity(BaseModel):
+    """Bind resumable destination state to its exact source and destination specs.
+
+    .. attribute :: model_config
+
+        Strict immutable Pydantic model configuration.
+
+    .. attribute :: source_spec
+
+        Exact finalized source identity.
+
+    .. attribute :: dest_spec
+
+        Exact grown destination identity.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    source_spec: DatasetSpec
+    dest_spec: DatasetSpec
 
 
 @dataclass(frozen=True)
@@ -174,41 +201,119 @@ def _require_source_complete(source_spec: DatasetSpec) -> None:
         )
 
 
-def _purge_uri(r2_uri: str) -> None:
-    """Recursively delete one ``r2://`` directory prefix.
+def _upload_reopen_identity(identity: _ReopenIdentity, uri: str) -> None:
+    """Publish a reopen identity before any source state is copied.
 
-    :param r2_uri: ``r2://bucket/key/`` prefix to wipe; must end in ``/``.
+    :param identity: Exact source/destination identity to publish.
+    :param uri: Destination metadata object URI.
     """
-    bucket, _, key = r2_uri.removeprefix("r2://").partition("/")
-    r2_io.purge_prefix(bucket, key)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as file:
+        file.write(identity.model_dump_json(indent=2))
+        file.flush()
+        r2_io.upload_to_uri(Path(file.name), uri)
 
 
-def _require_safe_destination(plan: ReopenPlan, source_spec: DatasetSpec) -> None:
-    """Refuse a destination holding a run unrelated to this reopen.
+def _load_reopen_identity(uri: str) -> _ReopenIdentity:
+    """Parse a strict reopen identity from object storage.
 
-    A partial reopen is resumable, so two run ids are legitimate here: mid-copy
-    the destination still carries the source's spec, and after the spec upload
-    it carries the grown one. Any other id means a colliding ``dest_run_id``,
-    whose leftover staged attempts would satisfy the skip-probe for shards this
-    run never rendered and put foreign rows in the finalized splits.
+    :param uri: Destination metadata object URI.
+    :returns: Strictly parsed reopen identity.
+    """
+    with r2_io.downloaded_to_tempfile(uri) as path:
+        return _ReopenIdentity.model_validate_json(path.read_text())
+
+
+def _prepare_destination_identity(plan: ReopenPlan, source_spec: DatasetSpec) -> None:
+    """Publish or verify the identity required for destination mutation.
 
     :param plan: Reopen plan naming the destination.
-    :param source_spec: Spec of the dataset being extended.
-    :raises ValueError: The destination holds a spec from an unrelated run.
+    :param source_spec: Exact source spec being extended.
+    :raises ValueError: Existing state has no identity or does not exactly match this source and
+        destination spec.
     """
-    spec_uri = plan.dest_spec.r2.input_spec_uri()
-    if r2_io.object_size(spec_uri) is None:
-        return
-    existing = load_spec_from_uri(spec_uri)
-    if existing.run_id not in (source_spec.run_id, plan.dest_spec.run_id):
+    expected = _ReopenIdentity(source_spec=source_spec, dest_spec=plan.dest_spec)
+    identity_uri = f"{plan.dest_root_uri}{_REOPEN_IDENTITY_RELATIVE_PATH}"
+    if r2_io.object_size(identity_uri) is None:
+        if r2_io.r2_directory_exists(plan.dest_root_uri):
+            raise ValueError(
+                f"destination {plan.dest_root_uri} has state but no verifiable reopen identity"
+            )
+        _upload_reopen_identity(expected, identity_uri)
+
+    existing_identity = _load_reopen_identity(identity_uri)
+    if existing_identity != expected:
         raise ValueError(
-            f"destination {plan.dest_root_uri} already holds run {existing.run_id!r}; "
-            "reopen refuses to merge into an unrelated run"
+            f"destination {plan.dest_root_uri} reopen identity does not match "
+            "the requested source and destination spec"
+        )
+
+    spec_uri = plan.dest_spec.r2.input_spec_uri()
+    if r2_io.object_size(spec_uri) is not None and load_spec_from_uri(spec_uri) != plan.dest_spec:
+        raise ValueError(
+            f"destination {plan.dest_root_uri} spec does not match its reopen identity"
         )
 
 
-# DOC502: the documented errors propagate from _require_source_complete /
-# _require_safe_destination.
+def _clear_destination_state(plan: ReopenPlan) -> None:
+    """Strictly remove destination state that generation and finalize rebuild.
+
+    :param plan: Reopen plan naming the exact destination layout.
+    """
+    location = plan.dest_spec.r2
+    r2_io.delete_prefix(f"{plan.dest_root_uri}metadata/workers/")
+    r2_io.delete_prefix(f"{location.shard_claims_uri()}/")
+    for split in _SPLITS:
+        r2_io.delete_prefix(f"{location.split_lance_uri(split)}/")
+    for uri in (
+        location.input_spec_uri(),
+        location.dataset_card_uri(),
+        location.stats_uri(),
+        location.config_yaml_uri(),
+    ):
+        r2_io.delete_object(uri)
+
+
+def _source_winners(source_spec: DatasetSpec) -> dict[int, SelectedLanceAttempt]:
+    """Load the finalized source's canonical attempt for every shard.
+
+    :param source_spec: Exact finalized source spec.
+    :returns: Selected attempt keyed by shard id.
+    :raises ValueError: The card belongs to another run or does not select exactly one attempt for
+        every source shard.
+    """
+    with r2_io.downloaded_to_tempfile(source_spec.r2.dataset_card_uri()) as card_path:
+        card = LanceDatasetCard.model_validate_json(card_path.read_bytes())
+    winners = {attempt.shard_id: attempt for attempt in card.selected_attempts}
+    expected_ids = {shard.shard_id for shard in source_spec.shards}
+    selected_ids = [attempt.shard_id for attempt in card.selected_attempts]
+    if card.run_id != source_spec.run_id or set(selected_ids) != expected_ids:
+        raise ValueError("source dataset card does not match the finalized source spec")
+    if len(selected_ids) != len(winners):
+        raise ValueError("source dataset card selects a shard more than once")
+    return winners
+
+
+def _copy_preserved_state(plan: ReopenPlan, source_spec: DatasetSpec) -> None:
+    """Copy only canonical source staging and train fragment data.
+
+    :param plan: Reopen plan naming source, destination, and preserved shards.
+    :param source_spec: Exact finalized source spec.
+    """
+    winners = _source_winners(source_spec)
+    if plan.preserved_shard_ids:
+        r2_io.copy_prefix(
+            f"{source_spec.r2.split_lance_uri('train')}/data/",
+            f"{plan.dest_spec.r2.split_lance_uri('train')}/data/",
+        )
+    for shard_id in plan.preserved_shard_ids:
+        attempt_name = winners[shard_id].attempt
+        source_dir = source_spec.r2.shard_staging_dir_uri(shard_id)
+        dest_dir = plan.dest_spec.r2.shard_staging_dir_uri(shard_id)
+        for suffix in COMPLETE_ATTEMPT_SUFFIXES:
+            r2_io.upload(f"{source_dir}{attempt_name}{suffix}", f"{dest_dir}{attempt_name}{suffix}")
+
+
+# DOC502: documented errors propagate from the strict storage helpers.
 def reopen_dataset(  # noqa: DOC502
     source_root_uri: str,
     new_sizes: Sequence[int],
@@ -216,11 +321,12 @@ def reopen_dataset(  # noqa: DOC502
     dest_run_id: str | None = None,
     dry_run: bool = False,
 ) -> ReopenPlan:
-    """Copy a finalized root and reopen the copy so generation can extend it.
+    """Copy preserved train state into an incomplete grown destination.
 
-    Writes, in order: the copied prefix, the grown spec, then the marker
-    deletions. The dataset card is dropped: finalize rejects a card whose
-    ``run_id`` is not its own.
+    A strict identity makes interrupted copies resumable without admitting
+    unrelated destination state. Any existing completion marker is removed
+    before destination cleanup; the grown spec is published only after every
+    required cleanup and copy succeeds.
 
     :param source_root_uri: ``r2://`` root of the finalized dataset to extend.
     :param new_sizes: Target ``(train, val, test)`` sizes.
@@ -229,7 +335,8 @@ def reopen_dataset(  # noqa: DOC502
     :param dry_run: When true, plan and return without writing anything.
     :returns: The reopen plan describing what was (or would be) done.
     :raises FileNotFoundError: The source is not finalized.
-    :raises ValueError: The destination already holds an unrelated run.
+    :raises ValueError: Existing destination state is not an exact resume.
+    :raises subprocess.CalledProcessError: A required R2 operation fails.
     """
     source_spec = load_spec_from_root(source_root_uri)
     _require_source_complete(source_spec)
@@ -247,29 +354,11 @@ def reopen_dataset(  # noqa: DOC502
         )
         return plan
 
-    _require_safe_destination(plan, source_spec)
-    # Excluded from the copy, not deleted after it: a crash mid-reopen would
-    # otherwise leave a destination that reads as finalized but holds the
-    # source's spec, and hydration trusts that marker.
-    r2_io.copy_prefix(
-        plan.source_root_uri, plan.dest_root_uri, exclude=DATASET_COMPLETE_FILENAME
-    )
-    # Drop the copied manifests, keeping each split's data/ files. A committed
-    # dataset makes worker fragments adopt its schema instead of the
-    # spec-derived one (#2084/#2109); finalize's Overwrite re-commits every
-    # winner, preserved and new, from the staged sidecars.
-    for split in SPLITS:
-        _purge_uri(f"{plan.dest_spec.r2.split_lance_uri(split)}/_versions/")
-    upload_spec(plan.dest_spec)
-    # Idempotency guard for a re-run over a destination a previous attempt finalized.
+    _prepare_destination_identity(plan, source_spec)
     r2_io.delete_object(plan.dest_spec.r2.dataset_complete_marker_uri())
-    # The card names its own run; finalize rejects one carrying the source's id.
-    # Dropping it costs only the per-shard winner pin, and reconciliation falls
-    # back to earliest-valid ordering, which is what a first finalize uses anyway.
-    r2_io.delete_object(plan.dest_spec.r2.dataset_card_uri())
-    for shard_id in plan.discarded_shard_ids:
-        _purge_uri(plan.dest_spec.r2.shard_staging_dir_uri(shard_id))
-    _purge_uri(f"{plan.dest_spec.r2.shard_claims_uri()}/")
+    _clear_destination_state(plan)
+    _copy_preserved_state(plan, source_spec)
+    upload_spec(plan.dest_spec)
     logger.info(
         "reopened_dataset",
         source_root=plan.source_root_uri,

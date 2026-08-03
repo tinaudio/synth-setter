@@ -30,9 +30,9 @@ So a grown spec *is* the extension. No new seeding field is required.
 
 ## Approach
 
-Copy the finalized root, reopen the copy as an incomplete dataset, and let the
-existing generation + finalize machinery fill in the missing shards. The
-resume skip-probe is already keyed on shard ID:
+Copy only preserved train fragment data and staging into a fresh incomplete
+root, then let the existing generation + finalize machinery fill in the
+missing shards. The resume skip-probe is already keyed on shard ID:
 
 ```python
 def shard_has_complete_attempt(spec: DatasetSpec, shard_id: int) -> bool:
@@ -70,23 +70,25 @@ orig test shard 184 -> (44, 0) | grown test shard 808 -> (44, 0)
 
 ## Operation
 
-1. Server-side copy `source_root` → `dest_root`.
-2. Rewrite the spec at `dest_root`: `train_val_test_sizes`, `run_id`, and
-   `r2.prefix`.
-3. Delete `dataset.complete` so finalize does not short-circuit.
-4. Delete staged metadata for `shard_id >= old_train_shard_count`.
-5. Delete `metadata/shard-claims.lance`; `populate` recreates it over the new
-   shard range, and already-staged shards short-circuit on the skip-probe.
-6. Run the normal generate + finalize pipeline against `dest_root`.
+1. Refuse any non-empty destination without `metadata/reopen.json`; an existing
+   identity must strictly match the full source and grown destination specs.
+2. Publish that identity before copying, making an interrupted copy resumable.
+3. Delete and verify absence of an existing `dataset.complete` marker before
+   any other destructive destination mutation.
+4. Strictly clear destination state that generate/finalize rebuild: split Lance
+   directories, worker staging, claims, spec, card, stats, and stale config.
+5. Copy only `train.lance/data/` and each preserved shard's card-selected
+   staging attempt. Manifests, transactions, val/test data, and finalized
+   root sidecars never enter the destination copy.
+6. Upload the grown spec only after every required cleanup and copy succeeds.
+7. Run the normal generate + finalize pipeline against `dest_root`.
 
-The dataset card (`dataset.json`) is **dropped**: it names its own run, and
-finalize rejects a card whose `run_id` is not its own. The only loss is the
-per-shard winner pin, after which reconciliation falls back to earliest-valid
-ordering — which is what a first finalize uses anyway.
-
-Step 2 is the load-bearing one: `r2.prefix` drives every staging URI, so a
-missed rewrite would make workers write into the **source** root — the one
-thing this design exists to protect. It is asserted, not assumed.
+The identity is the load-bearing resume guard: matching only `run_id` would
+admit attempts from a different source or target layout. Operators must serialize
+reopen commands that target the same destination; the identity is a resume guard,
+not a distributed lease. The grown spec still
+rewrites `r2.prefix`, which drives every staging URI and keeps workers away
+from the source root.
 
 ## API
 
@@ -116,7 +118,7 @@ def plan_reopen(source_spec, new_sizes, *, dest_run_id) -> ReopenPlan:
     """Partition the shard space and build the destination spec. No writes."""
 
 def reopen_dataset(source_root_uri, new_sizes, *, dest_run_id=None, dry_run=False) -> ReopenPlan:
-    """Copy, reopen, and return the plan; ``dry_run`` skips every write."""
+    """Copy preserved train state and return the plan; ``dry_run`` skips every write."""
 ```
 
 CLI — the copy is source-sized, so writing is opt-in behind `--apply`:
@@ -132,11 +134,6 @@ extended dataset carries its own normalization rather than inheriting the
 source's. The source root is untouched, so existing configs and checkpoints
 are unaffected; runs against the extended root are not numerically comparable
 to source-root checkpoints without retraining.
-
-Orphaned val/test fragment data files from the source remain under
-`<split>.lance/data/` after re-render. Finalize commits an `Overwrite`
-transaction, so they are absent from the manifest — dead bytes, not dead
-rows.
 
 ## Validation
 

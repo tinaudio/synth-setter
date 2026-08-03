@@ -189,9 +189,9 @@ class R2Location(BaseModel):
         return self._under_prefix(shard.filename)
 
     def dataset_root_uri(self) -> str:
-        """R2 URI of the run root itself — the prefix every other helper hangs off.
+        """Return the run-root R2 URI, including its trailing slash.
 
-        :returns: ``r2://<bucket>/<prefix>`` URI string, trailing slash included.
+        :returns: Run-root R2 URI with a trailing slash.
         """
         return self._under_prefix("")
 
