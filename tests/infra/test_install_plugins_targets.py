@@ -279,23 +279,20 @@ def test_macos_provisioners_install_surge_through_studiorack() -> None:
     assert "brew install --cask surge-xt" not in tart
 
 
-def _write_surge_setup_fakes(tmp_path: Path) -> Path:
-    """Write the npm, uv, and sudo fakes the setup script shells out to.
+def _write_install_fakes(fake_bin: Path) -> None:
+    """Write the npm and uv fakes standing in for the privileged Studiorack install.
 
-    The sudo fake maps the system managed root onto a scratch root and pins both the
-    chown target and its owner, so an action that chowns to the wrong user fails here.
+    The uv fake reproduces what the real install leaves behind: a lock and a runtime
+    snapshot under the managed root, with every path write-protected.
 
-    :param tmp_path: Scratch root holding the fake command directory.
-    :returns: Directory to prepend to ``PATH``.
+    :param fake_bin: Directory holding the fake commands.
     """
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    _write_executable(fake_bin / "npm", "#!/bin/bash\nexit 0\n")
+    _write_executable(fake_bin / "npm", "#!/bin/bash\nset -euo pipefail\nexit 0\n")
     _write_executable(
         fake_bin / "uv",
         """#!/bin/bash
 set -euo pipefail
-managed_root="${STUDIORACK_PLUGINS_DIR:?}"
+readonly managed_root="${STUDIORACK_PLUGINS_DIR:?}"
 lock="${managed_root}/.synth-setter-install-locks/surge-synthesizer/surge/1.3.4.lock"
 snapshot="${managed_root}/.synth-setter-runtime-snapshots/installed.snapshot"
 mkdir -p "$(dirname "${lock}")" "$(dirname "${snapshot}")"
@@ -304,12 +301,22 @@ mkdir -p "$(dirname "${lock}")" "$(dirname "${snapshot}")"
 chmod -R a-w "${managed_root}"
 """,
     )
+
+
+def _write_sudo_fake(fake_bin: Path) -> None:
+    """Write the sudo fake mapping the system managed root onto a scratch root.
+
+    Pins both the chown target and its owner: chowning to anyone but the invoking user
+    leaves the unprivileged smoke step unable to write, which is the bug under test.
+
+    :param fake_bin: Directory holding the fake commands.
+    """
     _write_executable(
         fake_bin / "sudo",
         """#!/bin/bash
 set -euo pipefail
-system_root="/Library/Application Support/synth-setter/studiorack"
-mapped_root="${FAKE_MANAGED_ROOT:?}"
+readonly system_root="/Library/Application Support/synth-setter/studiorack"
+readonly mapped_root="${FAKE_MANAGED_ROOT:?}"
 if [[ "${1:-}" == "-E" && "${2:-}" == "env" ]]; then
   shift 2
   translated=()
@@ -322,8 +329,6 @@ if [[ "${1:-}" == "-E" && "${2:-}" == "env" ]]; then
   exec env "${translated[@]}"
 fi
 if [[ "${1:-}" == "chown" && "${2:-}" == "-R" && "${4:-}" == "${system_root}" ]]; then
-  # Pin the owner too: chowning to anyone but the invoking user leaves the
-  # unprivileged smoke step unable to write, which is the bug under test.
   if [[ "${3:-}" != "$(id -u):$(id -g)" ]]; then
     echo "sudo chown: refusing owner ${3:-} (expected $(id -u):$(id -g))" >&2
     exit 65
@@ -334,6 +339,18 @@ fi
 exit 64
 """,
     )
+
+
+def _write_surge_setup_fakes(tmp_path: Path) -> Path:
+    """Write every command the setup script shells out to.
+
+    :param tmp_path: Scratch root holding the fake command directory.
+    :returns: Directory to prepend to ``PATH``.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_install_fakes(fake_bin)
+    _write_sudo_fake(fake_bin)
     return fake_bin
 
 
