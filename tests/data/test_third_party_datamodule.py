@@ -1,5 +1,7 @@
 """Tests for serving third-party audio corpora with live batch transforms."""
 
+from __future__ import annotations
+
 import io
 import pickle
 from collections.abc import Sequence
@@ -994,3 +996,23 @@ def test_empty_corpus_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="no rows"):
         _datamodule(tmp_path / "corpus.lance").setup("predict")
+
+
+def test_checkpoint_override_for_an_unused_column_raises(tmp_path: Path) -> None:
+    """A checkpoint override that no stream reads would be silently ignored.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=38)])
+
+    with pytest.raises(ValueError, match="embedding_checkpoints"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            conditioning=EmbeddingConditioningSpec(
+                column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+            ),
+            embedding_checkpoints={"clap": "some/checkpoint"},
+        )

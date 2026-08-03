@@ -388,7 +388,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param mel_stats_uri: ``.npz`` of the training run's mel statistics; local or ``r2://``.
         :param stats_cache_dir: Directory a fetched statistics object is cached in;
             ``None`` uses the working directory.
-        :raises ValueError: One encoder was injected for multiple conditioning streams.
+        :raises ValueError: One encoder was injected for multiple conditioning streams, or a
+            checkpoint override names a column this run does not condition on.
         """
         super().__init__()
         _validate_conditioning_config(
@@ -412,12 +413,19 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.mel_stats_uri = mel_stats_uri if use_saved_mean_and_variance else None
         self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._embedding_device = embedding_device
-        self._embedding_checkpoints = dict(embedding_checkpoints or {})
         self._embedding_encoder = embedding_encoder
+        self._embedding_checkpoints = dict(embedding_checkpoints or {})
         # Reject an unservable column at construction rather than mid-sweep.
         streams = [spec.column for spec in (self.embedding, self.sketch) if spec is not None]
         for column in streams:
             registry_spec(column)
+        unknown = sorted(set(self._embedding_checkpoints) - set(streams))
+        if unknown:
+            raise ValueError(
+                f"embedding_checkpoints names {', '.join(unknown)}, which this run does not "
+                f"condition on ({', '.join(streams) or 'no embedding streams'}); the override "
+                "would be silently ignored"
+            )
         if embedding_encoder is not None and len(streams) > 1:
             raise ValueError(
                 f"one encoder was injected for {len(streams)} conditioning streams "
