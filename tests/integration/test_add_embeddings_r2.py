@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
@@ -74,6 +74,7 @@ _INDEX_M2L_FRAMES = 2
 _INDEX_NUM_PARTITIONS = 4
 _INDEX_NUM_SUB_VECTORS = 16
 _INDEX_RANDOM_SEED = 0
+_INDEX_SUBPROCESS_TIMEOUT_SECONDS = 90
 _INDEX_TEST_TIMEOUT_SECONDS = 120
 
 # The add_embeddings CLI is the system under test; invoke it as the console
@@ -178,28 +179,6 @@ def _require_r2() -> None:
     r2_io.ensure_r2_env_loaded()
 
 
-def _upload_dataset(
-    prefix: str,
-    shard_uri: str,
-    build_local_dataset: Callable[[Path], Path],
-) -> Iterator[str]:
-    """Upload one locally built Lance dataset and purge its test prefix afterward.
-
-    :param prefix: Unique key prefix under the test bucket.
-    :param shard_uri: Destination URI for the Lance dataset directory.
-    :param build_local_dataset: Builder returning a dataset under its temporary directory.
-    :yields str: Uploaded ``r2://`` dataset URI.
-    """
-    try:
-        with tempfile.TemporaryDirectory() as raw_work_dir:
-            local_dataset = build_local_dataset(Path(raw_work_dir))
-            r2_io.upload_dir(local_dataset, shard_uri)
-        assert r2_io.r2_directory_exists(shard_uri), f"upload left nothing at {shard_uri}"
-        yield shard_uri
-    finally:
-        r2_io.purge_prefix(_R2_BUCKET, prefix)
-
-
 def _render_and_upload(rows: int) -> Iterator[str]:
     """Render a Lance shard of ``rows`` samples, upload it to a unique R2 prefix, yield its URI.
 
@@ -213,11 +192,15 @@ def _render_and_upload(rows: int) -> Iterator[str]:
     prefix = _unique_test_prefix()
     spec = _lance_embed_spec(prefix, rows)
     shard = spec.shards[0]
-
-    def build_local_dataset(work_dir: Path) -> Path:
-        return _render_shard_locally(spec, shard, work_dir)
-
-    yield from _upload_dataset(prefix, spec.r2.shard_uri(shard), build_local_dataset)
+    shard_uri = spec.r2.shard_uri(shard)
+    try:
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            local_shard = _render_shard_locally(spec, shard, Path(raw_work_dir))
+            r2_io.upload_dir(local_shard, shard_uri)
+        assert r2_io.r2_directory_exists(shard_uri), f"upload left nothing at {shard_uri}"
+        yield shard_uri
+    finally:
+        r2_io.purge_prefix(_R2_BUCKET, prefix)
 
 
 @pytest.fixture()
@@ -319,19 +302,32 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
 
 
-def _run_add_embeddings(r2_uri: str, overrides: tuple[str, ...]) -> None:
+def _run_add_embeddings(
+    r2_uri: str,
+    overrides: tuple[str, ...],
+    timeout_seconds: int = _EMBED_SUBPROCESS_TIMEOUT_SECONDS,
+) -> None:
     """Run the public CLI against R2 and report captured output on failure.
 
     :param r2_uri: Canonical ``r2://`` Lance dataset URI.
     :param overrides: Additional Hydra overrides for this scenario.
+    :param timeout_seconds: Maximum CLI runtime in seconds.
     """
-    result = subprocess.run(  # noqa: S603 — literal command and validated fixture URI
-        [_ADD_EMBEDDINGS_CMD, f"lance_uri={r2_uri}", *overrides],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=_EMBED_SUBPROCESS_TIMEOUT_SECONDS,
-    )
+    command = [_ADD_EMBEDDINGS_CMD, f"lance_uri={r2_uri}", *overrides]
+    try:
+        result = subprocess.run(  # noqa: S603 — literal command and validated fixture URI
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            f"{_ADD_EMBEDDINGS_CMD} exceeded {timeout_seconds}s\n"
+            f"stdout:\n{exc.stdout or ''}\nstderr:\n{exc.stderr or ''}",
+            pytrace=False,
+        )
     assert result.returncode == 0, (
         f"{_ADD_EMBEDDINGS_CMD} exited {result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -477,6 +473,7 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
             f"num_partitions={_INDEX_NUM_PARTITIONS}",
             f"num_sub_vectors={_INDEX_NUM_SUB_VECTORS}",
         ),
+        timeout_seconds=_INDEX_SUBPROCESS_TIMEOUT_SECONDS,
     )
 
     dataset = _open_remote_dataset(remote_indexed_lance_dataset_uri)
