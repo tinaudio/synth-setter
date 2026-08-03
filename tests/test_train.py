@@ -1190,6 +1190,26 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
         object_dict["datamodule"].test_dataloader()
 
 
+def test_train_wandb_config_resolves_scheduler_max_steps(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """A production training config records the scheduler's effective step count.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    """
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.trainer.fast_dev_run = False
+        cfg_train_lance.trainer.limit_train_batches = 1
+        cfg_train_lance.trainer.limit_val_batches = 1
+        cfg_train_lance.trainer.limit_test_batches = 1
+    HydraConfig().set_config(cfg_train_lance)
+    logger = _RecordingWandbLogger()
+    with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
+        train(cfg_train_lance)
+
+    assert logger.recorded_config["model"]["scheduler"]["T_max"] == 1
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
