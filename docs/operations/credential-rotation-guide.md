@@ -289,8 +289,8 @@ ______________________________________________________________________
 **What:** `PI_AUTH_JSON` contains the Pi credentials for the approved
 `openai-codex`, `kimi-coding`, and `openrouter` review pool. `GIT_PAT` gives the
 automatic review workflow read-only Contents access to private
-`tinaudio/skills`. The workflow loads either secret only when `ktinubu` both
-authored and triggered a same-repository PR event.
+`tinaudio/skills`. The workflow loads either secret only when `ktinubu` is the
+author, initial actor, and rerun actor for a same-repository PR event.
 
 **Where stored:**
 
@@ -307,9 +307,17 @@ authored and triggered a same-repository PR event.
 
 **Verification:**
 
-Push a commit to a trusted same-repository PR. Confirm `Pi Repo Review (Full)`
-checks out `tinaudio/skills`, posts a review for the current head, and completes
-after any deferred aftercare result is written.
+From a trusted same-repository PR branch, push the current commit and watch its
+checks:
+
+```bash
+git push origin HEAD
+PR=$(gh pr view --json number -q .number)
+gh pr checks "${PR}" --watch
+```
+
+Confirm `Pi Repo Review (Full)` checks out `tinaudio/skills`, posts a review for
+the current head, and completes after any deferred aftercare result is written.
 
 ### Anthropic (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`)
 

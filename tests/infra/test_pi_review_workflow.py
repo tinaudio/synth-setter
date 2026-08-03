@@ -76,7 +76,8 @@ def test_pi_review_workflow_secrets_are_restricted_to_allowlisted_same_repo_prs(
 
     assert job["if"] == (
         "${{ github.event.pull_request.head.repo.full_name == github.repository && "
-        "github.event.pull_request.user.login == 'ktinubu' && github.actor == 'ktinubu' }}"
+        "github.event.pull_request.user.login == 'ktinubu' && github.actor == 'ktinubu' && "
+        "github.triggering_actor == 'ktinubu' }}"
     )
     assert job["permissions"] == {
         "actions": "read",
