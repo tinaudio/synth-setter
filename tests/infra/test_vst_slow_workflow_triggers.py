@@ -7,10 +7,13 @@ other event ungated (#1354).
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 from typing import cast
 
 import pytest
+import sh
 from workflow_fixtures import load_workflow
 
 WORKFLOW_FILENAME = "test-vst-slow.yml"
@@ -123,11 +126,16 @@ def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None
 @pytest.mark.infra
 def test_vst_slow_surge_r2_upload_folder_starts_with_utc_datetime(
     project_root: Path,
+    tmp_path: Path,
 ) -> None:
     """Surge R2 upload folders sort chronologically by their leading UTC datetime.
 
     :param project_root: Repo root holding ``.github/workflows/``.
+    :param tmp_path: Temporary local filesystem backing the fake R2 remote.
     """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+
     workflow = _load_workflow(project_root)
     jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
     steps = cast(list[dict[str, object]], jobs["upload_surge_comparison"]["steps"])
@@ -136,11 +144,42 @@ def test_vst_slow_surge_r2_upload_folder_starts_with_utc_datetime(
     )
     script = cast(str, upload_step["run"])
 
-    assert "upload_datetime=\"$(date -u '+%Y-%m-%dT%H-%M-%SZ')\"" in script
-    assert (
-        'r2_destination="r2:experiments/surge-host-parity/'
-        '${upload_datetime}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"'
-    ) in script
+    comparison_dir = tmp_path / "surge-host-parity"
+    comparison_dir.mkdir()
+    (comparison_dir / "comparison.wav").write_bytes(b"comparison")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_date = bin_dir / "date"
+    fake_date.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = "-u"\n'
+        'test "$2" = "+%Y-%m-%dT%H-%M-%SZ"\n'
+        "printf '%s\\n' '2026-08-03T12-34-56Z'\n"
+    )
+    fake_date.chmod(0o755)
+
+    env = os.environ | {
+        "GITHUB_RUN_ATTEMPT": "2",
+        "GITHUB_RUN_ID": "123456",
+        "GITHUB_SHA": "0123456789abcdef",
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "RCLONE_CONFIG_R2_TYPE": "local",
+    }
+    bash_path = shutil.which("bash")
+    assert bash_path is not None, "bash is required to execute workflow run blocks"
+    sh.Command(bash_path)("-c", script, _cwd=tmp_path, _env=env)
+
+    uploaded_audio = (
+        tmp_path
+        / "experiments"
+        / "surge-host-parity"
+        / "2026-08-03T12-34-56Z-0123456789abcdef-123456-2"
+        / "comparison.wav"
+    )
+    assert uploaded_audio.read_bytes() == b"comparison"
 
 
 @pytest.mark.infra
