@@ -167,7 +167,7 @@ put a glob in a worker prompt and never repair assignment paths with
 `steer_subagent` after launch:
 
 ```bash
-assignment_dir="${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments"
+assignment_dir="${PI_REVIEW_FOLLOW_UP_MANIFEST%.json}.assignments"
 mkdir -p "$assignment_dir"
 "${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt \
   --skill <skill> --target <target> --repo <owner/name> \
@@ -199,10 +199,9 @@ pass. Prefer Codex: collect the Codex agents together with
 worker. If a Codex attempt fails but its free-pool peer has a valid report, that
 report satisfies the foreground floor, but its findings remain provisional and
 must not enter the foreground aggregation. Add a deferred row with
-`pass_name: "codex"` for that skill using its exact `verification_model`;
-aftercare performs a
-fresh independent Codex review because the foreground Codex pass did not
-complete. The provisional free-pool report itself is not treated as verified or
+`pass_name: "codex"` for that skill using its exact `verification_model`; the
+follow-up workflow performs a fresh independent Codex review because the
+foreground Codex pass did not complete. The provisional free-pool report itself is not treated as verified or
 silently promoted.
 
 As soon as every skill meets the floor, take exactly one non-blocking snapshot
@@ -216,7 +215,8 @@ leaves at least two minutes for deterministic aggregation and delivery.
 
 Do not launch another foreground verifier, wait for an unfinished second pass,
 or retry a second-pass candidate after the single snapshot; **defer the
-unfinished second pass to aftercare**. Deferral is an ownership transfer, and
+unfinished second pass to the follow-up workflow**. Deferral is an ownership
+transfer, and
 exactly one model call owns each pass. Record its audit status as `deferred`, not
 `unavailable`, then preserve the original worker's `Agent ID` as `agent_id` and
 `Output file` as `output_path` in that deferred row. Keep the foreground
@@ -233,18 +233,18 @@ cannot identify a foreground owner, but every newly generated row must preserve
 both handles.
 
 Before returning, write the strict manifest at
-`$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head, deferred
+`$PI_REVIEW_FOLLOW_UP_MANIFEST` with the reviewed PR/head, deferred
 skill/pass/model rows, and fingerprints for every foreground finding.
-The launcher validates it and starts detached aftercare. Use schema version 1
+The launcher validates it and starts the detached follow-up workflow. Use schema version 1
 with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
 `base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
 (`skill`, `pass_name`, `origin`, exact `model`, effective foreground
 `verification_model`, `thinking`, `agent_id`, and `output_path`), and
 `foreground_fingerprints`. Use `origin: primary` for independent provider
 coverage and `origin: codex-fallback` only after the free pool exhausted.
-Aftercare may post only **late Codex-verified findings** against the unchanged PR
-head, following `agent/skills/_shared/repo-review-aftercare.md`. Local-branch
-reviews cannot create aftercare manifests because they lack a stable remote
+Follow-up may post only **late Codex-verified findings** against the unchanged PR
+head, following `agent/skills/_shared/repo-review-follow-up.md`. Local-branch
+reviews cannot create follow-up manifests because they lack a stable remote
 PR/head delivery boundary.
 
 Give every worker the exact base SHA, head SHA, and changed paths. Require it to
@@ -386,7 +386,7 @@ checklist errors stop the affected pass immediately. The foreground fails closed
 only if a selected skill has no validated Codex or free-pool report by the
 foreground deadline. Never write a PASS sentinel after silently dropping an
 entire skill. If the free-pool pass is unavailable in the foreground, continue
-with its successful Codex peer, disclose `Free-pool review deferred to aftercare.` in `review_body`, and preserve the attempt chain in the audit.
+with its successful Codex peer, disclose `Free-pool review deferred to follow-up.` in `review_body`, and preserve the attempt chain in the audit.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
 changes this flow, run the live smoke against the PR from the worktree. The

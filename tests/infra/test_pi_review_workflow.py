@@ -155,17 +155,17 @@ def test_pi_review_workflow_restores_pi_auth_and_runs_canonical_launcher(
         "/.review-skills/codex/synth-setter-skills"
     )
     assert review_env["CI"] == "true"
-    assert review_env["PI_REVIEW_AFTERCARE_OWNERSHIP_WAIT_SECONDS"] == "900"
+    assert review_env["PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"] == "900"
     assert str(review_step["run"]).strip() == (
         'bash agent/_shared/run_pi_review.sh repo-review-full --target "${PR_NUMBER}"'
     )
 
 
 @pytest.mark.infra
-def test_pi_review_workflow_pins_runtime_and_uploads_aftercare_audit(
+def test_pi_review_workflow_pins_runtime_and_uploads_follow_up_audit(
     project_root: Path,
 ) -> None:
-    """The reproducible runtime retains foreground and synchronous-aftercare evidence.
+    """The reproducible runtime retains foreground and synchronous follow-up evidence.
 
     :param project_root: Repository root containing the workflow.
     """

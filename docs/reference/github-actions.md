@@ -62,7 +62,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `auto-approve`            | Auto-approves PRs once all CI checks pass, Copilot has reviewed, threads are resolved, and the author is allowlisted.                         | Deduplicates check-runs by name (re-runs share a name but have distinct IDs). See [Check-run deduplication](#check-run-deduplication). |
 | `claude`                  | Runs Claude Code on `@claude` mentions in issue/PR comments via `anthropics/claude-code-action`.                                              | Requires `CLAUDE_CODE_OAUTH_TOKEN`; the action exchanges OIDC for a Claude GitHub App installation token to post.                      |
-| `claude-repo-review-full` | Runs the Pi-native `/repo-review-full` pipeline when the PR author, initial actor, and rerun actor are `ktinubu` on a same-repository branch. | Other PRs skip before secrets load. CI waits for deferred aftercare; a newer head cancels the stale run.                               |
+| `claude-repo-review-full` | Runs the Pi-native `/repo-review-full` pipeline when the PR author, initial actor, and rerun actor are `ktinubu` on a same-repository branch. | Other PRs skip before secrets load. CI waits for deferred follow-up; a newer head cancels the stale run.                               |
 | `stale`                   | Labels issues/PRs inactive for 120 days as stale. Never auto-closes (`days-before-close: -1`).                                                |                                                                                                                                        |
 | `snooze-issue`            | Lets an issue comment snooze the issue for N days.                                                                                            |                                                                                                                                        |
 | `unsnooze-issues`         | Daily job that unsnoozes issues whose snooze window has elapsed.                                                                              |                                                                                                                                        |
@@ -149,10 +149,10 @@ Claude. It installs pinned Pi and Tintin releases, checks out an immutable
 `PI_AUTH_JSON`. Only same-repository PRs whose author, initial actor, and rerun
 actor are `ktinubu` reach those secrets; never convert this workflow to
 `pull_request_target`.
-GitHub Actions runs aftercare synchronously so the job cannot report success
+GitHub Actions runs follow-up synchronously so the job cannot report success
 while deferred passes remain. It waits up to 15 minutes for foreground-owned
 reports before failing closed rather than launching duplicate reviewers. Local
-launcher calls keep detached aftercare.
+launcher calls keep detached follow-up.
 The `.agent-reviews/` audit is retained as a repository-private artifact for
 seven days.
 
