@@ -12,6 +12,7 @@ funnel, per-rank fan-out, generic command composition, and YAML launch-config lo
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import shlex
@@ -2218,19 +2219,27 @@ class TestSkypilotLaunchCli:
         assert "B200: 1" in result.stdout
 
     def test_packaged_cli_execute_mode_dispatches_composed_command(self, tmp_path: Path) -> None:
-        """The real Hydra wrapper composes, wraps, and dispatches a worker command.
+        """The real Hydra wrapper resolves worker env and dispatches its command.
 
         :param tmp_path: Pytest directory containing the subprocess dispatch probe.
         """
         launcher = Path(sys.executable).with_name("synth-setter-skypilot-launch")
-        marker = tmp_path / "dispatched-command.txt"
+        marker = tmp_path / "dispatched-command.json"
         (tmp_path / "sitecustomize.py").write_text(
+            "import json\n"
             "import os\n"
             "from pathlib import Path\n"
             "import synth_setter.pipeline.skypilot_launch as launcher\n"
-            "def record_dispatch(sky_cfg: object) -> None:\n"
-            "    Path(os.environ['DISPATCH_MARKER']).write_text(sky_cfg.cmd, encoding='utf-8')\n"
-            "launcher.dispatch_via_skypilot = record_dispatch\n",
+            "def record_workers(*, worker_env_base, cmd, **_kwargs):\n"
+            "    payload = {'cmd': cmd, 'project': worker_env_base.get('WANDB_PROJECT')}\n"
+            "    Path(os.environ['DISPATCH_MARKER']).write_text(json.dumps(payload))\n"
+            "    return [0]\n"
+            "launcher._run_workers = record_workers\n"
+            "launcher._resolve_worker_git_ref = lambda _env: '0' * 40\n"
+            "launcher._ensure_ci_sky_config = lambda: None\n"
+            "launcher._configure_local_skypilot_client = lambda: None\n"
+            "launcher._run_cred_bootstrap = lambda **_kwargs: None\n"
+            "launcher._check_runpod_balance = lambda: None\n",
             encoding="utf-8",
         )
         env = {
@@ -2239,12 +2248,18 @@ class TestSkypilotLaunchCli:
             "PYTHONPATH": os.pathsep.join(
                 filter(None, (str(tmp_path), os.environ.get("PYTHONPATH")))
             ),
+            "SYNTH_SETTER_STORAGE_ACCESS_KEY_ID": "access-key",
+            "SYNTH_SETTER_STORAGE_ENDPOINT_URL": "https://example.invalid",
+            "SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY": "secret-key",
+            "WANDB_PROJECT": "synth-setter-citest",
         }
 
         result = subprocess.run(  # noqa: S603 - real packaged launcher CLI
             [
                 launcher,
                 "skypilot_launch/compute=runpod/smoke",
+                f"skypilot_launch.env_file={tmp_path / 'missing.env'}",
+                "skypilot_launch.local=true",
                 'skypilot_launch.cmd="echo hello"',
                 f"hydra.run.dir={tmp_path / 'hydra-run'}",
             ],
@@ -2255,11 +2270,14 @@ class TestSkypilotLaunchCli:
         )
 
         assert result.returncode == 0, result.stderr
-        assert marker.read_text(encoding="utf-8") == (
-            "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && (\n"
-            "echo hello\n"
-            ")"
-        )
+        assert json.loads(marker.read_text(encoding="utf-8")) == {
+            "cmd": (
+                "cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh && (\n"
+                "echo hello\n"
+                ")"
+            ),
+            "project": "synth-setter-citest",
+        }
 
     def test_packaged_cli_execute_mode_reaches_dispatch_validation(self, tmp_path: Path) -> None:
         """The real Hydra wrapper executes main and enters dispatch validation.

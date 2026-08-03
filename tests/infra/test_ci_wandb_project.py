@@ -70,7 +70,8 @@ def _job_wandb_project_offenders(
     for step in steps:
         step_env = cast(Mapping[str, object], step.get("env", {}))
         effective_project = step_env.get("WANDB_PROJECT", inherited_project)
-        if "WANDB_API_KEY" in step_env and (
+        step_is_authenticated = inherited_api_key or "WANDB_API_KEY" in step_env
+        if step_is_authenticated and (
             expected_project is None or effective_project != expected_project
         ):
             offenders.append(f"{job_scope}:{step.get('name', '<unnamed>')}")
@@ -176,6 +177,18 @@ def test_job_level_wandb_key_without_project_is_reported() -> None:
     offenders = _job_wandb_project_offenders("test.yml:run_tests", job, {})
 
     assert offenders == ["test.yml:run_tests"]
+
+
+def test_inherited_key_with_production_step_project_is_reported() -> None:
+    """A step cannot override an inherited authenticated project to production."""
+    job = {
+        "env": {"WANDB_API_KEY": "secret", "WANDB_PROJECT": _CITEST_PROJECT},
+        "steps": [{"name": "test", "env": {"WANDB_PROJECT": _PRODUCTION_PROJECT}}],
+    }
+
+    offenders = _job_wandb_project_offenders("test-gpu.yml:run_tests", job, {})
+
+    assert offenders == ["test-gpu.yml:run_tests:test"]
 
 
 def test_empty_wandb_project_is_reported() -> None:
