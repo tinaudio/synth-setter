@@ -891,6 +891,7 @@ def _posix_lease_directory_descriptor(directory: Path) -> int:
 
     :param directory: Existing or user-creatable synchronization directory.
     :returns: Read-only directory descriptor.
+    :raises FileNotFoundError: The directory is removed for ten seconds.
     :raises PermissionError: Permissions remain unpublished after ten seconds.
     """
     deadline = time.monotonic() + 10.0
@@ -899,6 +900,9 @@ def _posix_lease_directory_descriptor(directory: Path) -> int:
             return _posix_directory_descriptor(directory)
         except FileNotFoundError:
             directory.mkdir(parents=True, exist_ok=True)
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
         except PermissionError:
             if time.monotonic() >= deadline:
                 raise

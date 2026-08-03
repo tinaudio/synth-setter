@@ -549,7 +549,12 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert not alias.is_symlink()
     assert managed.is_symlink()
     assert managed.resolve() == alias.resolve()
+    for current, _, files in os.walk(source):
+        Path(current).chmod(0o700)
+        for name in files:
+            (Path(current) / name).chmod(0o600)
     initial_snapshot = plugin_manager.validate_plugin_bundle_for_runtime(alias)
+    assert stat.S_IMODE(_binary_path(initial_snapshot).stat().st_mode) == 0o644
     snapshots = managed.parent / ".synth-setter-runtime-snapshots"
     restricted_directories = [
         snapshots,
@@ -635,6 +640,7 @@ def _start_runtime_snapshot_consumer(
     managed: Path,
     results: list[Path],
     errors: list[BaseException],
+    *,
     completed: threading.Event | None = None,
 ) -> threading.Thread:
     """Start one managed-bundle validation consumer.

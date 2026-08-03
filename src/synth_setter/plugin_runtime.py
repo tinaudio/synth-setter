@@ -528,6 +528,29 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
         raise ValueError(f"runtime snapshot path is not runtime-readable: {path}")
 
 
+def _publish_runtime_tree_permissions(root: Path) -> None:
+    """Publish read and traversal permissions without following symlinks.
+
+    :param root: Existing snapshot tree owned by the current publisher.
+    :raises ValueError: A traversed path is not a real directory or regular file.
+    """
+    for current, directories, files in os.walk(root, followlinks=False):
+        _ensure_runtime_snapshot_directory(Path(current))
+        directories[:] = [
+            name
+            for name in directories
+            if not stat.S_ISLNK((Path(current) / name).lstat().st_mode)
+        ]
+        for name in files:
+            child = Path(current) / name
+            mode = child.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                continue
+            if not stat.S_ISREG(mode):
+                raise ValueError(f"runtime snapshot path is not a regular file: {child}")
+            child.chmod(mode | 0o044)
+
+
 def publish_runtime_snapshot_permissions(version_dir: Path) -> None:
     """Publish runtime-readable permissions for existing snapshot directories.
 
@@ -541,12 +564,7 @@ def publish_runtime_snapshot_permissions(version_dir: Path) -> None:
         return
     if not stat.S_ISDIR(mode):
         raise ValueError(f"runtime snapshot path is not a directory: {snapshots}")
-    for root, directories, _ in os.walk(snapshots, followlinks=False):
-        _ensure_runtime_snapshot_directory(Path(root))
-        for name in directories:
-            child = Path(root) / name
-            if stat.S_ISLNK(child.lstat().st_mode):
-                raise ValueError(f"runtime snapshot path is not a directory: {child}")
+    _publish_runtime_tree_permissions(snapshots)
 
 
 def _runtime_snapshot_matches(destination: Path, seal: BundleSeal) -> bool:
@@ -595,6 +613,7 @@ def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) ->
         with tempfile.TemporaryDirectory(dir=snapshots) as temporary:
             candidate = Path(temporary) / managed.name
             shutil.copytree(source, candidate, symlinks=True)
+            _publish_runtime_tree_permissions(candidate)
             if integrity.bundle_entries(candidate) != seal.entries:
                 raise ValueError("managed source changed while creating its runtime snapshot")
             os.replace(candidate, destination)

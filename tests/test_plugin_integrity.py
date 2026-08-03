@@ -147,14 +147,32 @@ def _assert_runtime_readable_lock_tree(lock_path: Path, directories: list[Path])
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX marker permissions")
-def test_advisory_file_lease_unreadable_marker_fails_closed(tmp_path: Path) -> None:
+def test_advisory_file_lease_unreadable_marker_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A consumer never bypasses an unreadable marker's writer lock.
 
     :param tmp_path: Scratch directory containing an unreadable marker.
+    :param monkeypatch: Makes the denied marker open independent of runner identity.
     """
     lock_path = tmp_path / "managed/package.lock"
     lock_path.parent.mkdir()
-    lock_path.touch(mode=0o000)
+    lock_path.touch()
+    real_open = os.open
+
+    def _deny_marker(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == lock_path.name:
+            raise PermissionError(errno.EACCES, "denied", path)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", _deny_marker)
 
     with pytest.raises(PermissionError):
         with plugin_integrity.advisory_file_lease(lock_path):
