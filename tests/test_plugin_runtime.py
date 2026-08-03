@@ -514,6 +514,14 @@ def test_link_plugin_managed_bundle_creates_stable_checkout_alias(tmp_path: Path
     assert alias.resolve() == bundle.resolve()
 
 
+def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Path) -> None:
+    """Installer migration accepts a package version without legacy snapshots.
+
+    :param tmp_path: Scratch package-version directory.
+    """
+    plugin_runtime.publish_runtime_snapshot_permissions(tmp_path / "version")
+
+
 def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path: Path) -> None:
     """Docker native fallback keeps its source but consumes a managed snapshot.
 
