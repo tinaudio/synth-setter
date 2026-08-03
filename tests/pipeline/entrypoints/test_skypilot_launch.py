@@ -413,6 +413,33 @@ class TestLoadWorkerEnv:
         assert load_worker_env(path) == {"FOO": "bar"}
 
 
+class TestResolveWorkerEnvWandbProject:
+    """W&B project selection follows the launcher's worker-env precedence."""
+
+    def test_process_project_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A CI-provided project reaches managed workers.
+
+        :param monkeypatch: Pytest fixture for process-environment mutation.
+        """
+        monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
+
+        assert resolve_worker_env(None)["WANDB_PROJECT"] == "synth-setter-citest"
+
+    def test_blank_env_file_project_falls_back_to_process(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blank local project cannot mask the CI-provided project.
+
+        :param tmp_path: Pytest fixture providing an isolated env file.
+        :param monkeypatch: Pytest fixture for process-environment mutation.
+        """
+        monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
+        env_file = tmp_path / ".env"
+        env_file.write_text("WANDB_PROJECT=\n")
+
+        assert resolve_worker_env(env_file)["WANDB_PROJECT"] == "synth-setter-citest"
+
+
 class TestResolveWorkerEnvGitRefValidation:
     """``WORKER_GIT_REF``, when set, must be a full 40-character git SHA.
 

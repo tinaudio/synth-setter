@@ -111,6 +111,7 @@ _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 _WORKER_ENV_KEYS: tuple[str, ...] = (
     *RCLONE_ENV_KEYS,
     "WANDB_API_KEY",
+    "WANDB_PROJECT",
     # Pod checks out this launcher-pinned ref before running worker code.
     "WORKER_GIT_REF",
 )
@@ -327,7 +328,7 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     except ValidationError:
         resolved = dict(_RCLONE_STRUCTURAL_CONSTANTS)
 
-    for key in ("WANDB_API_KEY", "WORKER_GIT_REF"):
+    for key in ("WANDB_API_KEY", "WANDB_PROJECT", "WORKER_GIT_REF"):
         # First non-blank wins, .env over process env; a blank candidate is
         # skipped (not preferred-then-dropped), so a quoted-whitespace `.env`
         # value can't mask a real process-env fallback.

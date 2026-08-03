@@ -81,6 +81,7 @@ jobs:
         env:
           HYDRA_FULL_ERROR: "1"
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT: synth-setter-citest
         run: |
           uv run pytest -vv -s -m mps \
             --cov=src --cov-branch --cov-report=xml --cov-report=term
