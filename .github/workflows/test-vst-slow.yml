@@ -346,17 +346,17 @@ jobs:
           install-rclone: "true"
 
       - name: Upload comparison directory with checksums
-        env:
-          R2_DESTINATION: r2:experiments/surge-host-parity/${{ github.sha }}/${{ github.run_id }}
         run: |
           set -euo pipefail
-          rclone copy surge-host-parity "${R2_DESTINATION}" --checksum
-          rclone check surge-host-parity "${R2_DESTINATION}" --checksum --one-way
+          upload_datetime="$(date -u '+%Y-%m-%dT%H-%M-%SZ')"
+          r2_destination="r2:experiments/surge-host-parity/${upload_datetime}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rclone copy surge-host-parity "${r2_destination}" --checksum
+          rclone check surge-host-parity "${r2_destination}" --checksum --one-way
           printf '{"git_sha":"%s","run_id":"%s","run_attempt":"%s"}\n' \
             "${GITHUB_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" > benchmark.complete
-          rclone copyto benchmark.complete "${R2_DESTINATION}/benchmark.complete" --checksum
+          rclone copyto benchmark.complete "${r2_destination}/benchmark.complete" --checksum
           echo "### Surge host comparison" >> "${GITHUB_STEP_SUMMARY}"
-          echo "\`${R2_DESTINATION}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "\`${r2_destination}\`" >> "${GITHUB_STEP_SUMMARY}"
 
   publish_benchmarks:
     name: Publish VST benchmarks to gh-pages

@@ -181,7 +181,9 @@ Metric name prefix: `surge-host-parity/<workload>/`.
 The workflow retains an evaluator-friendly `surge-host-parity-comparison`
 artifact for 14 days. Trusted main-branch runs copy the same directory with
 checksums to
-`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. Artifact schema v2 stores
+`r2:experiments/surge-host-parity/<UTC-datetime>-<git-sha>-<run-id>-<run-attempt>/`.
+The datetime uses the fixed-width `YYYY-MM-DDTHH-MM-SSZ` format, so R2's default
+lexicographic ordering is chronological. Artifact schema v2 stores
 one `audio/sample_NN/` directory per workload row with `pedalboard.wav`,
 `dawdreamer.wav`, and `surgepy.wav`. Each workload also includes same-backend
 persisted mel arrays and previews, exact normalized parameters, per-render onset and
