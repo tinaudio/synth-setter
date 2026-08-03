@@ -64,6 +64,22 @@ log = logging.getLogger(__name__)
 
 _PREDICT_STAGES = frozenset({"predict", None})
 _MEL_STATS_CACHE_DIR = ".mel-stats"
+_BLOB_EXTENSION_NAME = "lance.blob.v2"
+
+
+def _is_blob_encoded(field: pa.Field) -> bool:
+    """Return whether a column is readable through the blob API.
+
+    Blob v2 columns declare the ``lance.blob.v2`` extension type; datasets
+    written before it carry a ``lance-encoding:blob`` metadata marker instead,
+    and the published corpora use the extension form.
+
+    :param field: Schema field for the configured audio column.
+    :returns: True when either blob encoding is present.
+    """
+    if getattr(field.type, "extension_name", None) == _BLOB_EXTENSION_NAME:
+        return True
+    return (field.metadata or {}).get(b"lance-encoding:blob") == b"true"
 
 
 def _is_audio_sourced(spec: EmbeddingSpec) -> bool:
@@ -463,8 +479,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"corpus {self.dataset_uri} has no {self.audio_column!r} column; "
                 f"columns: {', '.join(dataset.schema.names)}"
             )
-        field = dataset.schema.field(self.audio_column)
-        if (field.metadata or {}).get(b"lance-encoding:blob") != b"true":
+        if not _is_blob_encoded(dataset.schema.field(self.audio_column)):
             raise ValueError(
                 f"column {self.audio_column!r} in {self.dataset_uri} is not blob-encoded, "
                 "so its source containers cannot be read through the blob API"

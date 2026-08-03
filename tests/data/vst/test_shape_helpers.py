@@ -182,7 +182,11 @@ def test_make_spectrogram_pins_the_training_front_end() -> None:
         mel_n_frames_from_samples(duration_samples, sample_rate),
     )
     assert np.isfinite(spec).all()
+    # librosa's default top_db=80 with ref=np.max fixes the dynamic range at
+    # [-80, 0]; a changed or disabled floor would shift every checkpoint's input.
     assert spec.max() == pytest.approx(0.0)
+    assert spec.min() == pytest.approx(-80.0)
+    assert spec.min() >= -80.0
     expected_bin = int(
         np.argmin(np.abs(librosa.mel_frequencies(n_mels=MEL_N_MELS, fmax=sample_rate / 2) - 440.0))
     )

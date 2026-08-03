@@ -825,3 +825,74 @@ def test_single_injected_encoder_with_two_streams_raises(tmp_path: Path) -> None
             sketch=SketchControlSpec(num_frames=_MEL_FRAMES, num_control_tokens=4),
             embedding_encoder=encode,
         )
+
+
+def test_non_finite_conditioning_is_rejected(tmp_path: Path) -> None:
+    """A correctly shaped but non-finite embedding must not reach the model.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=33)])
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        return np.full((len(source), SSONDO_EMBEDDING_DIM), np.nan, dtype=np.float32)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        conditioning=EmbeddingConditioningSpec(
+            column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+        ),
+        embedding_encoder=encode,
+    )
+
+    with pytest.raises(ValueError, match="non-finite"):
+        _first_batch(datamodule)
+
+
+def test_non_finite_sketch_controls_are_rejected(tmp_path: Path) -> None:
+    """Non-finite live sketch controls are rejected rather than tokenized.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=34)])
+    controls = np.zeros((1, NUM_SKETCH_CONTROLS, _MEL_FRAMES), dtype=np.float32)
+    controls[:, SKETCH_LOUDNESS_ROW] = np.nan
+
+    def encode(audio: np.ndarray, sample_rate: int, **_: object) -> np.ndarray:
+        del audio, sample_rate
+        return controls
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        sketch=SketchControlSpec(num_frames=_MEL_FRAMES, num_control_tokens=4),
+        embedding_encoder=encode,
+    )
+
+    with pytest.raises(ValueError, match="non-finite"):
+        _first_batch(datamodule)
+
+
+def test_native_blob_v2_column_is_servable(tmp_path: Path) -> None:
+    """A corpus written with Lance's native blob field carries no legacy marker.
+
+    The published corpora use the ``lance.blob.v2`` extension type rather than
+    ``lance-encoding:blob`` metadata, so accepting only the marker would reject
+    every real dataset.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    from lance.blob import blob_array, blob_field
+
+    clip = _tone(_DURATION_SECONDS, seed=35)
+    table = pa.table(
+        {AUDIO_FIELD: blob_array([_wav_bytes(clip, _SOURCE_SAMPLE_RATE)])},
+        schema=pa.schema([blob_field(AUDIO_FIELD)]),
+    )
+    lance.write_dataset(
+        table, tmp_path / "corpus.lance", mode="create", data_storage_version="2.2"
+    )
+
+    batch = _first_batch(_datamodule(tmp_path / "corpus.lance"))
+
+    assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
