@@ -185,5 +185,5 @@ def test_make_spectrogram_pins_the_training_front_end() -> None:
     assert spec.max() == pytest.approx(0.0)
     assert spec.min() == pytest.approx(-80.0)
     assert spec.min() >= -80.0
-    # Mel bin 440 Hz lands in for a 16 kHz, 128-bin front end.
+    # The bin the test tone lands in.
     assert abs(int(spec[0].mean(axis=1).argmax()) - 19) <= 1

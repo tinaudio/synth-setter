@@ -474,7 +474,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
 
         :returns: The predict dataset and the pinned Lance version.
         :raises KeyError: The corpus has no column named ``audio_column``.
-        :raises ValueError: The audio column is not blob-encoded.
+        :raises ValueError: The audio column is not blob-encoded, or the corpus is empty.
         """
         uri, storage_options = (
             r2_io.lance_target(self.dataset_uri)
@@ -493,6 +493,11 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 "so its source containers cannot be read through the blob API"
             )
         rows = dataset.count_rows()
+        if rows == 0:
+            raise ValueError(
+                f"corpus {self.dataset_uri} has no rows; an empty sweep writes no "
+                "predictions and fails downstream instead of here"
+            )
         # Workers reopen the URI; pinning setup's version keeps every reader on the
         # snapshot the row count came from, even if the corpus gains a commit mid-sweep.
         log.info(

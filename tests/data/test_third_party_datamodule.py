@@ -393,7 +393,9 @@ def test_embedding_conditioning_populates_the_model_batch_key(tmp_path: Path) ->
 
     def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
         del sample_rate
-        return np.full((len(source), SSONDO_EMBEDDING_DIM), 0.25, dtype=np.float64)
+        # Derived from the audio, so a datamodule that passed the wrong tensor fails.
+        level = float(np.abs(source).mean())
+        return np.full((len(source), SSONDO_EMBEDDING_DIM), level, dtype=np.float64)
 
     datamodule = _datamodule(
         tmp_path / "corpus.lance",
@@ -407,7 +409,10 @@ def test_embedding_conditioning_populates_the_model_batch_key(tmp_path: Path) ->
     assert conditioning.shape == (1, SSONDO_EMBEDDING_DIM)
     assert conditioning.dtype == torch.float32
     assert torch.isfinite(conditioning).all()
-    assert conditioning == pytest.approx(0.25)
+    assert float(conditioning[0, 0]) == pytest.approx(
+        float(np.abs(_first_batch(datamodule)["audio"].numpy()).mean()), abs=1e-6
+    )
+    assert float(conditioning[0, 0]) > 0.0
 
 
 def test_embedding_conditioning_shape_mismatch_raises(tmp_path: Path) -> None:
@@ -978,3 +983,14 @@ def test_decode_clip_truncates_long_audio_and_applies_gain() -> None:
 
     assert decoded.shape == (_TARGET_CHANNELS, _TARGET_SAMPLES)
     assert decoded.mean() == pytest.approx(0.2, abs=1e-3)
+
+
+def test_empty_corpus_raises(tmp_path: Path) -> None:
+    """A corpus with no rows fails at setup rather than producing an empty sweep.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [])
+
+    with pytest.raises(ValueError, match="no rows"):
+        _datamodule(tmp_path / "corpus.lance").setup("predict")
