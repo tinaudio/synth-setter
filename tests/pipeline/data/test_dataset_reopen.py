@@ -309,10 +309,10 @@ def test_reopen_dataset_drops_the_claims_table(
     assert not (dest / "metadata" / "shard-claims.lance").exists()
 
 
-def test_reopen_dataset_keeps_the_dataset_card(
+def test_reopen_dataset_drops_the_dataset_card(
     source_spec: DatasetSpec, fake_r2_remote: Path
 ) -> None:
-    """Keep the card that pins which attempt won for each preserved shard.
+    """Drop the card, since finalize rejects one carrying the source's run id.
 
     :param source_spec: Finalized 8-shard source spec built by the module fixture.
     :param fake_r2_remote: Fake R2 root that the real rclone binary resolves against.
@@ -322,7 +322,7 @@ def test_reopen_dataset_keeps_the_dataset_card(
     plan = reopen_dataset(source_spec.r2.dataset_root_uri(), (80, 20, 20), dest_run_id="grown-run")
 
     dest = fake_r2_remote / source_spec.r2.bucket / plan.dest_spec.r2.prefix.rstrip("/")
-    assert json.loads((dest / "dataset.json").read_text()) == {"schema_version": 1}
+    assert not (dest / "dataset.json").exists()
 
 
 def test_reopen_dataset_leaves_the_source_root_untouched(

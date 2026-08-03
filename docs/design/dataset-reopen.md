@@ -79,11 +79,10 @@ orig test shard 184 -> (44, 0) | grown test shard 808 -> (44, 0)
    shard range, and already-staged shards short-circuit on the skip-probe.
 6. Run the normal generate + finalize pipeline against `dest_root`.
 
-`dataset.json` is deliberately **kept**: its entries pin the original winning
-attempt per shard, preserving exactly which attempt became canonical for
-shards `0..175`. Stale entries for the discarded IDs are inert —
-`select_checked_winner` sorts by `attempt.name != preferred_name`, a stable
-sort that leaves ordering unchanged when nothing matches.
+The dataset card (`dataset.json`) is **dropped**: it names its own run, and
+finalize rejects a card whose `run_id` is not its own. The only loss is the
+per-shard winner pin, after which reconciliation falls back to earliest-valid
+ordering — which is what a first finalize uses anyway.
 
 Step 2 is the load-bearing one: `r2.prefix` drives every staging URI, so a
 missed rewrite would make workers write into the **source** root — the one

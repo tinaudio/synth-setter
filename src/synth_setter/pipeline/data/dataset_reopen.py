@@ -219,8 +219,8 @@ def reopen_dataset(  # noqa: DOC502
     """Copy a finalized root and reopen the copy so generation can extend it.
 
     Writes, in order: the copied prefix, the grown spec, then the marker
-    deletions. ``dataset.json`` is deliberately kept — its entries pin which
-    attempt won for each preserved shard.
+    deletions. The dataset card is dropped: finalize rejects a card whose
+    ``run_id`` is not its own.
 
     :param source_root_uri: ``r2://`` root of the finalized dataset to extend.
     :param new_sizes: Target ``(train, val, test)`` sizes.
@@ -263,6 +263,10 @@ def reopen_dataset(  # noqa: DOC502
     upload_spec(plan.dest_spec)
     # Idempotency guard for a re-run over a destination a previous attempt finalized.
     r2_io.delete_object(plan.dest_spec.r2.dataset_complete_marker_uri())
+    # The card names its own run; finalize rejects one carrying the source's id.
+    # Dropping it costs only the per-shard winner pin, and reconciliation falls
+    # back to earliest-valid ordering, which is what a first finalize uses anyway.
+    r2_io.delete_object(plan.dest_spec.r2.dataset_card_uri())
     for shard_id in plan.discarded_shard_ids:
         _purge_uri(plan.dest_spec.r2.shard_staging_dir_uri(shard_id))
     _purge_uri(f"{plan.dest_spec.r2.shard_claims_uri()}/")
