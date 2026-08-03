@@ -1,6 +1,7 @@
 """Tests for serving third-party audio corpora with live batch transforms."""
 
 import io
+import pickle
 from pathlib import Path
 
 import lance
@@ -21,6 +22,7 @@ from synth_setter.conditioning import (
 from synth_setter.data.third_party_datamodule import (
     LiveEmbedding,
     ThirdPartyAudioDataModule,
+    decode_clip,
 )
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, Encoder
@@ -432,3 +434,58 @@ def test_sketch_conditioning_emits_the_control_stack(tmp_path: Path) -> None:
     )
 
     assert batch[SKETCH_CTRL_FIELD].shape[:2] == (1, NUM_SKETCH_CONTROLS)
+
+
+def test_multichannel_source_disagreeing_with_contract_raises() -> None:
+    """A source that is neither mono nor contract-width is rejected, not silently sliced."""
+    stereo = np.stack([_tone(_DURATION_SECONDS), _tone(_DURATION_SECONDS, seed=1)])
+    buffer = io.BytesIO()
+    with AudioFile(
+        buffer, "w", format="wav", samplerate=_SOURCE_SAMPLE_RATE, num_channels=2
+    ) as handle:
+        handle.write(stereo)
+
+    with pytest.raises(ValueError, match="render contract wants 1"):
+        decode_clip(
+            buffer.getvalue(),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=1,
+            num_samples=_TARGET_SAMPLES,
+            amplitude_scale=1.0,
+        )
+
+
+def test_non_predict_stage_raises(tmp_path: Path) -> None:
+    """Only prediction is served, so a fit or test stage fails instead of half-building.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=16)])
+
+    with pytest.raises(ValueError, match="prediction only"):
+        _datamodule(tmp_path / "corpus.lance").setup("fit")
+
+
+def test_predict_dataloader_before_setup_raises(tmp_path: Path) -> None:
+    """Asking for the loader before setup fails loudly rather than serving zero rows.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=17)])
+
+    with pytest.raises(RuntimeError, match="setup"):
+        _datamodule(tmp_path / "corpus.lance").predict_dataloader()
+
+
+def test_worker_pickling_drops_the_open_dataset_handle(tmp_path: Path) -> None:
+    """Row decode survives dataloader workers, which cannot inherit a Lance handle.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=18)] * 2)
+    datamodule = _datamodule(tmp_path / "corpus.lance")
+    datamodule.setup("predict")
+
+    revived = pickle.loads(pickle.dumps(datamodule.predict_dataloader().dataset))
+
+    assert revived[0]["audio"].shape == (_TARGET_CHANNELS, _TARGET_SAMPLES)
