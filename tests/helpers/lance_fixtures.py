@@ -1,10 +1,13 @@
 """Shared writers and column builders for Lance shard test fixtures."""
 
+import io
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
+from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.audio_preview import (
     DEFAULT_MP3_BITRATE_KBPS,
@@ -192,10 +195,6 @@ def write_blob_audio_corpus(
     :param with_sample_rate_column: Whether to store the rate alongside, as NSynth does
         and ESC50 does not.
     """
-    import io
-
-    import lance
-    from pedalboard.io import AudioFile
 
     def _wav_bytes(clip: np.ndarray) -> bytes:
         buffer = io.BytesIO()

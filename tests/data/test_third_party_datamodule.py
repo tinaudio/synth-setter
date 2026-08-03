@@ -14,6 +14,9 @@ from pedalboard.io import AudioFile
 
 from synth_setter.conditioning import (
     NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_SLICE,
     SKETCH_CTRL_FIELD,
     Conditioning,
     EmbeddingConditioningSpec,
@@ -235,8 +238,8 @@ def test_predict_batch_mel_matches_training_front_end_shape(tmp_path: Path) -> N
     assert batch["mel"].shape == (1, _TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES)
     assert batch["mel"].dtype == torch.float32
     assert torch.isfinite(batch["mel"]).all()
-    # Values, not just the grid: a changed window, hop, or dB reference would keep
-    # the shape and silently hand inference incompatible features.
+    # Identity with the canonical front-end proves the datamodule routes through it;
+    # the front-end's own constants are pinned in tests/data/vst/test_shape_helpers.py.
     assert torch.allclose(batch["mel"][0], torch.from_numpy(expected), atol=1e-5)
 
 
@@ -690,3 +693,65 @@ def test_corpus_served_from_an_r2_uri(fake_r2_remote: Path) -> None:
     batch = _first_batch(_datamodule("r2://experiments/third_party/Tiny/test.lance"))
 
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
+
+
+@pytest.mark.parametrize("limit", [1.5, "4"])
+def test_non_integer_row_limit_raises(tmp_path: Path, limit: object) -> None:
+    """A non-integer cap cannot reach ``__len__``, which must return an int.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param limit: Reachable Hydra override that is not an integer.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=27)])
+
+    with pytest.raises(ValueError, match="row_limit"):
+        _datamodule(tmp_path / "corpus.lance", row_limit=limit)  # type: ignore[arg-type]
+
+
+def test_legacy_m2l_conditioning_is_rejected(tmp_path: Path) -> None:
+    """The legacy mode maps to a column no live encoder can produce, so it fails loudly.
+
+    ``conditioning="m2l"`` resolves to the stored ``music2latent`` column, which
+    predates the embedding registry; a corpus has no way to generate it.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=28)])
+
+    with pytest.raises(KeyError, match="music2latent"):
+        _datamodule(tmp_path / "corpus.lance", conditioning="m2l")
+
+
+def test_sketch_pitch_below_threshold_is_zero_binned(tmp_path: Path) -> None:
+    """Low-confidence pitch activations are zeroed and the control order is preserved.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=29)])
+    frames = _MEL_FRAMES
+    controls = np.zeros((1, NUM_SKETCH_CONTROLS, frames), dtype=np.float32)
+    controls[:, SKETCH_LOUDNESS_ROW] = -0.5
+    controls[:, SKETCH_CENTROID_ROW] = 0.25
+    controls[:, SKETCH_PITCH_SLICE.start] = 0.05
+    controls[:, SKETCH_PITCH_SLICE.start + 1] = 0.4
+
+    def encode(audio: np.ndarray, sample_rate: int, **_: object) -> np.ndarray:
+        del audio, sample_rate
+        return controls
+
+    batch = _first_batch(
+        _datamodule(
+            tmp_path / "corpus.lance",
+            sketch=SketchControlSpec(
+                num_frames=frames, num_control_tokens=4, pitch_zero_threshold=0.1
+            ),
+            embedding_encoder=encode,
+        )
+    )
+    served = batch[SKETCH_CTRL_FIELD]
+
+    assert served[0, SKETCH_LOUDNESS_ROW] == pytest.approx([-0.5] * frames)
+    assert served[0, SKETCH_CENTROID_ROW] == pytest.approx([0.25] * frames)
+    # Below the 0.1 threshold: zero-binned. Above it: passed through untouched.
+    assert served[0, SKETCH_PITCH_SLICE.start] == pytest.approx([0.0] * frames)
+    assert served[0, SKETCH_PITCH_SLICE.start + 1] == pytest.approx([0.4] * frames, abs=1e-6)

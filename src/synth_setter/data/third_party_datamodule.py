@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -58,6 +59,8 @@ from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsCon
 
 if TYPE_CHECKING:
     from synth_setter.pipeline.data.add_embeddings import Encoder
+
+log = logging.getLogger(__name__)
 
 _PREDICT_STAGES = frozenset({"predict", None})
 _MEL_STATS_CACHE_DIR = ".mel-stats"
@@ -167,8 +170,10 @@ def _validate_conditioning_config(
     :raises ValueError: Mel is standardized without a statistics source, or the row cap is
         negative.
     """
-    if row_limit is not None and (isinstance(row_limit, bool) or row_limit < 0):
-        raise ValueError(f"row_limit must be a non-negative integer, got {row_limit!r}")
+    if row_limit is not None and (not isinstance(row_limit, int) or isinstance(row_limit, bool)):
+        raise ValueError(f"row_limit must be an integer, got {row_limit!r}")
+    if row_limit is not None and row_limit < 0:
+        raise ValueError(f"row_limit must be non-negative, got {row_limit}")
     if use_saved_mean_and_variance and mel_stats_uri is None and conditioning == "mel":
         raise ValueError(
             "mel conditioning with use_saved_mean_and_variance=true requires "
@@ -225,7 +230,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         self,
         uri: str,
         *,
-        storage_options: dict[str, str] | None,
+        storage_options: Mapping[str, str] | None,
         version: int,
         audio_column: str,
         sample_rate: int,
@@ -249,7 +254,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :param rows: Number of rows served.
         """
         self.uri = uri
-        self.storage_options = storage_options
+        self.storage_options = dict(storage_options) if storage_options else None
         self.version = version
         self.audio_column = audio_column
         self.sample_rate = sample_rate
@@ -268,9 +273,9 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         return {**self.__dict__, "_dataset": None}
 
     def __len__(self) -> int:
-        """Return the number of served rows.
+        """Expose the configured served-row count.
 
-        :returns: Row count.
+        :returns: Rows this dataset serves.
         """
         return self.rows
 
@@ -390,6 +395,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         for spec in (self.embedding, self.sketch):
             if spec is not None:
                 registry_spec(spec.column)
+        # Resolved at setup; the scored snapshot, not the mutable URI.
+        self.dataset_version: int | None = None
         self._live: dict[str, LiveEmbedding] = {}
         self._statistics: tuple[torch.Tensor, torch.Tensor] | None = None
         self._predict_dataset: _BlobAudioDataset | None = None
@@ -464,11 +471,12 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         rows = dataset.count_rows()
         # Workers reopen the URI; pinning setup's version keeps every reader on the
         # snapshot the row count came from, even if the corpus gains a commit mid-sweep.
-        dataset_version = dataset.version
+        log.info(f"third-party corpus {self.dataset_uri} pinned at version {dataset.version}")
+        self.dataset_version = dataset.version
         self._predict_dataset = _BlobAudioDataset(
             uri,
             storage_options=storage_options,
-            version=dataset_version,
+            version=self.dataset_version,
             audio_column=self.audio_column,
             sample_rate=self.sample_rate,
             channels=self.channels,
