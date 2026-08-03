@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
+from synth_setter.conditioning import ConditioningConfig
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["DataModuleConfig"]
@@ -18,6 +19,10 @@ class DataModuleConfig(StrictAllowExtraModel):
     .. attribute :: target_
 
         Fully-qualified ``LightningDataModule`` class path.
+
+    .. attribute :: conditioning
+
+        Raw modality or cached embedding supplied to the model.
     """
 
     target_: NonBlankStr = Field(
@@ -26,4 +31,8 @@ class DataModuleConfig(StrictAllowExtraModel):
             "Fully-qualified ``LightningDataModule`` class path. Resolved by "
             "``hydra.utils.instantiate(cfg.datamodule)`` in ``cli/train.py``."
         ),
+    )
+    conditioning: ConditioningConfig | None = Field(
+        default=None,
+        description="Raw modality or cached embedding supplied to the model.",
     )

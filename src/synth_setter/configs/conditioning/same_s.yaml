@@ -15,6 +15,4 @@ model:
     max_seq_len: 44
 
 datamodule:
-  conditioning:
-    column: same_s
-    input_shape: [256, 44]
+  conditioning: ${model.conditioning}

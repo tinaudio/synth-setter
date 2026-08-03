@@ -20,9 +20,13 @@ import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, open_dict
 
-from synth_setter.conditioning import NUM_SKETCH_TRACK_ROWS, SKETCH_PITCH_BINS
+from synth_setter.conditioning import (
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_PITCH_BINS,
+    EmbeddingConditioningSpec,
+)
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
@@ -31,6 +35,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import configs_dir, vst_headless_wrapper
+from synth_setter.schemas.train_config import TrainConfig
 from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
@@ -90,60 +95,23 @@ def assert_clap_preserves_resampler_output(encoder: ClapAudioEncoder, checkpoint
 
 @dataclass(frozen=True)
 class CachedEmbeddingConditioningProfile:
-    """Connect one persisted conditioning profile to its embedding producer.
+    """Describe one validated cached Hydra conditioning profile.
 
     .. attribute :: profile
 
-        Hydra conditioning profile name.
+        Shared Hydra profile and embedding registry key.
 
-    .. attribute :: embedding
+    .. attribute :: conditioning
 
-        Embedding registry key.
-
-    .. attribute :: column
-
-        Persisted Lance column.
-
-    .. attribute :: input_shape
-
-        Per-row conditioning shape.
+        Canonical persisted conditioning contract.
     """
 
     profile: str
-    embedding: str
-    column: str
-    input_shape: tuple[int, ...]
-
-
-def _cached_conditioning_config(config_path: Path) -> tuple[str, tuple[int, ...]] | None:
-    """Read one persisted conditioning contract, excluding waveform profiles.
-
-    :param config_path: Hydra conditioning config path.
-    :returns: Persisted column and per-row shape, or ``None`` for waveform input.
-    :raises AssertionError: Model and datamodule conditioning columns disagree.
-    """
-    config = OmegaConf.load(config_path)
-    model = config.get("model")
-    conditioning = model.get("conditioning") if isinstance(model, DictConfig) else None
-    if not isinstance(conditioning, DictConfig):
-        return None
-
-    datamodule = config.get("datamodule")
-    datamodule_conditioning = (
-        datamodule.get("conditioning") if isinstance(datamodule, DictConfig) else None
-    )
-    column = str(conditioning.column)
-    if not isinstance(datamodule_conditioning, DictConfig):
-        raise AssertionError(
-            f"conditioning profile {config_path.stem!r} has no datamodule mapping"
-        )
-    if str(datamodule_conditioning.column) != column:
-        raise AssertionError(f"conditioning profile {config_path.stem!r} columns disagree")
-    return column, tuple(int(size) for size in conditioning.input_shape)
+    conditioning: EmbeddingConditioningSpec
 
 
 def cached_embedding_conditioning_profiles() -> tuple[CachedEmbeddingConditioningProfile, ...]:
-    """Match every persisted conditioning profile to its registry producer.
+    """Compose cached profiles and match them to their registry producers.
 
     :returns: Profiles ordered by their Hydra config name.
     :raises AssertionError: Config and registry conditioning inventories disagree.
@@ -151,30 +119,38 @@ def cached_embedding_conditioning_profiles() -> tuple[CachedEmbeddingConditionin
     from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
 
     profiles: list[CachedEmbeddingConditioningProfile] = []
-    for config_path in sorted((configs_dir() / "conditioning").glob("*.yaml")):
-        contract = _cached_conditioning_config(config_path)
-        if contract is None:
-            continue
-        column, input_shape = contract
-        matches = [
-            spec
-            for spec in EMBEDDING_REGISTRY.values()
-            if spec.conditioning_profile == config_path.stem
-        ]
-        if len(matches) != 1 or matches[0].column != column:
-            raise AssertionError(
-                f"conditioning profile {config_path.stem!r} does not match one registry producer"
+    config_paths = sorted((configs_dir() / "conditioning").glob("*.yaml"))
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        for config_path in config_paths:
+            profile = config_path.stem
+            cfg = compose(
+                config_name="eval.yaml",
+                overrides=[
+                    "experiment=surge/flow_simple",
+                    f"conditioning={profile}",
+                    "trainer=cpu",
+                ],
             )
-        profiles.append(
-            CachedEmbeddingConditioningProfile(
-                config_path.stem, matches[0].name, column, input_shape
-            )
-        )
+            parsed = TrainConfig.from_hydra_cfg(cfg)
+            if parsed.model is None:
+                raise AssertionError(f"conditioning profile {profile!r} has no model config")
+            conditioning = parsed.model.conditioning
+            if not isinstance(conditioning, EmbeddingConditioningSpec):
+                continue
+
+            producer = EMBEDDING_REGISTRY.get(profile)
+            if (
+                producer is None
+                or not producer.supports_cached_conditioning
+                or producer.column != conditioning.column
+            ):
+                raise AssertionError(
+                    f"conditioning profile {profile!r} does not match its registry producer"
+                )
+            profiles.append(CachedEmbeddingConditioningProfile(profile, conditioning))
 
     registered = {
-        spec.conditioning_profile
-        for spec in EMBEDDING_REGISTRY.values()
-        if spec.conditioning_profile is not None
+        name for name, spec in EMBEDDING_REGISTRY.items() if spec.supports_cached_conditioning
     }
     discovered = {profile.profile for profile in profiles}
     if registered != discovered:
@@ -1864,16 +1840,16 @@ def augment_lance_splits_with_all_embeddings(
     """
     train_uri = dataset_root / "train.lance"
     for case in cached_embedding_conditioning_profiles():
-        checkpoint = checkpoints.get(case.embedding)
+        checkpoint = checkpoints.get(case.profile)
         checkpoint_override = (
-            [] if checkpoint is None else [f"checkpoints.{case.embedding}={checkpoint}"]
+            [] if checkpoint is None else [f"checkpoints.{case.profile}={checkpoint}"]
         )
         command = [
             sys.executable,
             "-m",
             "synth_setter.pipeline.data.add_embeddings",
             f"lance_uri={train_uri}",
-            f"embeddings=[{case.embedding}]",
+            f"embeddings=[{case.profile}]",
             f"param_spec_name={param_spec_name}",
             "device=cpu",
             "build_index=false",
@@ -1986,12 +1962,14 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
         PARAM_ARRAY_FIELD,
-        *(case.column for case in profiles),
+        *(case.conditioning.column for case in profiles),
     }
     assert expected_columns <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
-    table = dataset.to_table(columns=[AUDIO_FIELD, *(case.column for case in profiles)])
+    table = dataset.to_table(
+        columns=[AUDIO_FIELD, *(case.conditioning.column for case in profiles)]
+    )
     for column in table.columns:
         assert column.null_count == 0
 
@@ -2000,12 +1978,12 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     assert not np.array_equal(audio[0], audio[1])
 
     for case in profiles:
-        column = table.column(case.column).combine_chunks()
+        column = table.column(case.conditioning.column).combine_chunks()
         if hasattr(column, "to_numpy_ndarray"):
             values = column.to_numpy_ndarray()
         else:
             values = np.stack(column.to_numpy(zero_copy_only=False))
-        expected_shape = (_EMBEDDING_E2E_ROWS, *case.input_shape)
+        expected_shape = (_EMBEDDING_E2E_ROWS, *case.conditioning.input_shape)
         assert values.shape == expected_shape, (
             f"{case.profile} shape is {values.shape}, expected {expected_shape}"
         )

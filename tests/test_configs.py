@@ -446,13 +446,9 @@ def test_ssondo_conditioning_profile_projects_960_vector() -> None:
 
 def test_cached_conditioning_profiles_match_embedding_registry_contract() -> None:
     """Persisted Hydra profiles and registry producers cover each other."""
-    discovered = {
-        (case.profile, case.embedding) for case in cached_embedding_conditioning_profiles()
-    }
+    discovered = {case.profile for case in cached_embedding_conditioning_profiles()}
     registered = {
-        (spec.conditioning_profile, name)
-        for name, spec in EMBEDDING_REGISTRY.items()
-        if spec.conditioning_profile is not None
+        name for name, spec in EMBEDDING_REGISTRY.items() if spec.supports_cached_conditioning
     }
 
     assert discovered == registered
@@ -471,6 +467,26 @@ def _conditioning_profile_names() -> list[str]:
 
 
 _CACHED_CONDITIONING_PROFILES = [case.profile for case in cached_embedding_conditioning_profiles()]
+
+
+@pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)
+def test_cached_conditioning_profile_has_one_consumer_contract(profile: str) -> None:
+    """A model-side override flows to the datamodule through Hydra interpolation.
+
+    :param profile: Cached conditioning profile under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "model=vst_flow",
+            f"conditioning={profile}",
+            "synth=surge_xt",
+            "model.conditioning.column=renamed",
+        ],
+    )
+
+    assert cfg.datamodule.conditioning.column == "renamed"
 
 
 @pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)

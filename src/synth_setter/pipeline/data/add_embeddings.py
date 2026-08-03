@@ -234,9 +234,9 @@ class EmbeddingSpec:
 
         Checkpoint source to immutable encoder-artifact identity resolver.
 
-    .. attribute :: conditioning_profile
+    .. attribute :: supports_cached_conditioning
 
-        Cached Hydra conditioning profile consuming this output, if any.
+        Whether the identically named Hydra profile consumes this output.
 
     .. attribute :: input_fields
 
@@ -256,7 +256,7 @@ class EmbeddingSpec:
     load_encoder: LoadEncoderFn
     encode_column: EncodeColumnFn
     resolve_artifact_identity: ResolveArtifactIdentityFn
-    conditioning_profile: str | None = None
+    supports_cached_conditioning: bool = False
     input_fields: tuple[str, ...] = (AUDIO_FIELD,)
     rerenders: bool = False
 
@@ -880,7 +880,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
         resolve_artifact_identity=_clap_artifact_identity,
-        conditioning_profile="clap",
+        supports_cached_conditioning=True,
     ),
     "m2l": EmbeddingSpec(
         name="m2l",
@@ -891,7 +891,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_m2l_spec_encoder,
         encode_column=_encode_m2l_column,
         resolve_artifact_identity=_m2l_artifact_identity,
-        conditioning_profile="m2l",
+        supports_cached_conditioning=True,
     ),
     "pupujepa_tiny": EmbeddingSpec(
         name="pupujepa_tiny",
@@ -906,7 +906,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_pupujepa_tiny_spec_encoder,
         encode_column=encode_pupujepa_column,
         resolve_artifact_identity=_pupujepa_tiny_artifact_identity,
-        conditioning_profile="pupujepa_tiny",
+        supports_cached_conditioning=True,
     ),
     "pupujepa_large": EmbeddingSpec(
         name="pupujepa_large",
@@ -921,7 +921,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_pupujepa_large_spec_encoder,
         encode_column=encode_pupujepa_large_column,
         resolve_artifact_identity=_pupujepa_large_artifact_identity,
-        conditioning_profile="pupujepa_large",
+        supports_cached_conditioning=True,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",
@@ -932,7 +932,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_s_column,
         resolve_artifact_identity=_same_artifact_identity,
-        conditioning_profile="same_s",
+        supports_cached_conditioning=True,
     ),
     "same_l": EmbeddingSpec(
         name="same_l",
@@ -943,7 +943,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_l_column,
         resolve_artifact_identity=_same_artifact_identity,
-        conditioning_profile="same_l",
+        supports_cached_conditioning=True,
     ),
     # PQ sub-vectors must divide the control-vector width. The companion vec
     # is a struct child written by the encoder, so pooling is "none" (#2707).
@@ -971,7 +971,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_ssondo_spec_encoder,
         encode_column=_encode_ssondo_column,
         resolve_artifact_identity=_ssondo_artifact_identity,
-        conditioning_profile="ssondo",
+        supports_cached_conditioning=True,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.
@@ -984,7 +984,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_t5gemma_spec_encoder,
         encode_column=_encode_t5gemma_column,
         resolve_artifact_identity=_t5gemma_artifact_identity,
-        conditioning_profile="t5gemma",
+        supports_cached_conditioning=True,
         input_fields=(PARAM_ARRAY_FIELD,),
     ),
     # Not an encoder: every row is re-rendered with one parameter redrawn, so the run's
@@ -1014,7 +1014,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_matpac_plus_spec_encoder,
         encode_column=encode_matpac_plus_column,
         resolve_artifact_identity=_matpac_plus_artifact_identity,
-        conditioning_profile="matpac_plus",
+        supports_cached_conditioning=True,
     ),
     "meanaudio_16k": EmbeddingSpec(
         name="meanaudio_16k",
@@ -1030,7 +1030,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_meanaudio_spec_encoder,
         encode_column=cast("EncodeColumnFn", encode_meanaudio_column),
         resolve_artifact_identity=_meanaudio_artifact_identity,
-        conditioning_profile="meanaudio_16k",
+        supports_cached_conditioning=True,
     ),
 }
 
