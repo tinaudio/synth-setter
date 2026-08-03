@@ -178,6 +178,7 @@ def write_blob_audio_corpus(
     *,
     sample_rate: int,
     audio_column: str = AUDIO_FIELD,
+    with_sample_rate_column: bool = False,
 ) -> None:
     """Write a third-party-style corpus storing WAV bytes in a blob column.
 
@@ -188,6 +189,8 @@ def write_blob_audio_corpus(
     :param clips: One mono float32 clip per row.
     :param sample_rate: Encoded sample rate for every clip.
     :param audio_column: Blob column name; published corpora differ.
+    :param with_sample_rate_column: Whether to store the rate alongside, as NSynth does
+        and ESC50 does not.
     """
     import io
 
@@ -202,18 +205,19 @@ def write_blob_audio_corpus(
             handle.write(clip.reshape(1, -1).astype(np.float32))
         return buffer.getvalue()
 
-    schema = pa.schema(
-        [
-            pa.field(
-                audio_column,
-                pa.large_binary(),
-                nullable=False,
-                metadata={b"lance-encoding:blob": b"true"},
-            )
-        ]
-    )
-    table = pa.table(
-        {audio_column: pa.array([_wav_bytes(clip) for clip in clips], pa.large_binary())},
-        schema=schema,
-    )
+    fields = [
+        pa.field(
+            audio_column,
+            pa.large_binary(),
+            nullable=False,
+            metadata={b"lance-encoding:blob": b"true"},
+        )
+    ]
+    columns: dict[str, pa.Array] = {
+        audio_column: pa.array([_wav_bytes(clip) for clip in clips], pa.large_binary())
+    }
+    if with_sample_rate_column:
+        fields.append(pa.field("sample_rate", pa.int64(), nullable=False))
+        columns["sample_rate"] = pa.array([sample_rate] * len(clips), pa.int64())
+    table = pa.table(columns, schema=pa.schema(fields))
     lance.write_dataset(table, path, mode="create", data_storage_version="2.1")

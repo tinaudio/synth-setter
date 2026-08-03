@@ -2051,3 +2051,71 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
     assert torch.isfinite(prediction).all()
     assert not (output_dir / "predictions" / "target-params-0.pt").exists()
     assert target_audio.shape[1:] == (2, 4 * 44_100)
+    # Rows are distinct constants held for one of the contract's four seconds, so a
+    # correct serve means content in stored order at a quarter of each row's level —
+    # zeros, a duplicated row, or an unpadded clip all miss.
+    served = [float(row.abs().mean()) for row in target_audio]
+    assert served == pytest.approx([0.0, 0.025], abs=1e-3)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Path) -> None:
+    """The ``no_params`` render branch scores predictions against the corpus's own audio.
+
+    Exercises the forwarding this PR adds end to end: with no target params on
+    disk, ``target.wav`` can only come from the staged dataset audio, so a
+    dropped or rejected ``--no-params`` fails here rather than silently.
+
+    :param tmp_path: Isolated corpus, checkpoint, and output directories.
+    """
+    corpus = tmp_path / "corpus.lance"
+    write_blob_audio_corpus(
+        corpus,
+        [np.full(_THIRD_PARTY_SOURCE_SAMPLE_RATE, 0.25, dtype=np.float32)],
+        sample_rate=_THIRD_PARTY_SOURCE_SAMPLE_RATE,
+    )
+    checkpoint = tmp_path / "flow_simple.ckpt"
+    _save_third_party_checkpoint(checkpoint)
+    output_dir = tmp_path / "output"
+
+    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
+    result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.eval",
+            "experiment=surge/flow_simple",
+            "datamodule=third_party/nsynth_test",
+            "render=vst",
+            f"datamodule.dataset_uri={corpus}",
+            "datamodule.use_saved_mean_and_variance=false",
+            "datamodule.batch_size=1",
+            "datamodule.num_workers=0",
+            "callbacks=eval_vst",
+            "mode=predict",
+            "trainer=cpu",
+            f"ckpt_path={checkpoint}",
+            "evaluation.no_params=true",
+            "evaluation.rerender_target=false",
+            "evaluation.render_vst=true",
+            *_THIRD_PARTY_MODEL_OVERRIDES,
+            f"paths.output_dir={output_dir}",
+            "hydra.job.chdir=false",
+            "+trainer.enable_progress_bar=false",
+            "+trainer.enable_model_summary=false",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        env=subprocess_env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    sample = output_dir / "audio" / "sample_0"
+    with AudioFile(str(sample / "target.wav")) as handle:
+        target = handle.read(handle.frames)
+    assert (sample / "pred.wav").is_file()
+    # The corpus row is a constant held for one of the render contract's four
+    # seconds: a re-render or a zeroed target would not reproduce that level.
+    assert float(np.abs(target).mean()) == pytest.approx(0.0625, abs=5e-3)

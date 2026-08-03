@@ -8,6 +8,14 @@ so an eval run is a function of the immutable corpus plus this code.
 Conditioning is computed through the very ``EMBEDDING_REGISTRY`` entries that
 write the stored columns, so a checkpoint trained on a stored column loads
 unmodified — the model batch key and per-row shape are identical.
+
+Typical usage selects a corpus and the checkpoint's conditioning through Hydra::
+
+    python -m synth_setter.cli.eval experiment=surge/flow_simple_440k \
+      datamodule=third_party/nsynth_test synth=surge_simple render=vst \
+      conditioning=clap mode=predict callbacks=eval_vst \
+      evaluation.no_params=true evaluation.rerender_target=false \
+      ckpt_path=<checkpoint>
 """
 
 from __future__ import annotations
@@ -15,7 +23,8 @@ from __future__ import annotations
 import hashlib
 import io
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, cast
 
 import lance
 import numpy as np
@@ -124,6 +133,27 @@ class LiveEmbedding:
         )
 
 
+def _validate_conditioning_config(
+    conditioning: Conditioning,
+    *,
+    use_saved_mean_and_variance: bool,
+    mel_stats_uri: str | None,
+) -> None:
+    """Reject a conditioning configuration that cannot be served correctly.
+
+    :param conditioning: Configured conditioning mode or embedding spec.
+    :param use_saved_mean_and_variance: Whether mel standardization is enabled.
+    :param mel_stats_uri: Configured statistics source, if any.
+    :raises ValueError: Mel is standardized without a statistics source.
+    """
+    if use_saved_mean_and_variance and mel_stats_uri is None and conditioning == "mel":
+        raise ValueError(
+            "mel conditioning with use_saved_mean_and_variance=true requires "
+            "mel_stats_uri — point it at the statistics the checkpoint trained "
+            "with, not at this corpus"
+        )
+
+
 def decode_clip(
     data: bytes,
     *,
@@ -143,7 +173,8 @@ def decode_clip(
     :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
     :param amplitude_scale: Gain applied after length-pinning.
     :returns: ``(channels, num_samples)`` float32 audio.
-    :raises ValueError: The source is multi-channel and disagrees with the target.
+    :raises ValueError: The source disagrees with the target channel count, or the
+        scaled samples leave the ``[-1, 1]`` storage range the model contract assumes.
     """
     with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
         audio = handle.read(handle.frames)
@@ -153,7 +184,15 @@ def decode_clip(
         raise ValueError(f"source has {audio.shape[0]} channels; render contract wants {channels}")
     if audio.shape[1] < num_samples:
         audio = np.pad(audio, [(0, 0), (0, num_samples - audio.shape[1])])
-    return np.ascontiguousarray(audio[:, :num_samples] * amplitude_scale, dtype=np.float32)
+    clip = np.ascontiguousarray(audio[:, :num_samples] * amplitude_scale, dtype=np.float32)
+    if not np.isfinite(clip).all():
+        raise ValueError("decoded audio contains non-finite samples")
+    if np.abs(clip).max(initial=0.0) > 1.0:
+        raise ValueError(
+            f"decoded audio leaves [-1, 1] after amplitude_scale={amplitude_scale}; "
+            "the mel front-end and model contract assume normalized audio"
+        )
+    return clip
 
 
 class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
@@ -289,15 +328,13 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param embedding_encoder: Pre-loaded encoder, bypassing registry loading.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
         :param mel_stats_uri: ``.npz`` of the training run's mel statistics; local or ``r2://``.
-        :raises ValueError: Statistics are enabled without ``mel_stats_uri``.
         """
         super().__init__()
-        if use_saved_mean_and_variance and mel_stats_uri is None and conditioning == "mel":
-            raise ValueError(
-                "mel conditioning with use_saved_mean_and_variance=true requires "
-                "mel_stats_uri — point it at the statistics the checkpoint trained "
-                "with, not at this corpus"
-            )
+        _validate_conditioning_config(
+            conditioning,
+            use_saved_mean_and_variance=use_saved_mean_and_variance,
+            mel_stats_uri=mel_stats_uri,
+        )
         self.dataset_uri = dataset_uri
         self.sample_rate = sample_rate
         self.channels = channels
@@ -363,6 +400,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
 
         :param stage: Lightning stage hint; only prediction is served.
         :raises ValueError: ``stage`` is not a prediction stage.
+        :raises KeyError: The corpus has no column named ``audio_column``.
         """
         if stage not in _PREDICT_STAGES:
             raise ValueError(f"{type(self).__name__} serves prediction only, got stage {stage!r}")
@@ -371,7 +409,13 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             if r2_io.is_r2_uri(self.dataset_uri)
             else (self.dataset_uri, None)
         )
-        rows = lance.dataset(uri, storage_options=storage_options).count_rows()
+        dataset = lance.dataset(uri, storage_options=storage_options)
+        if self.audio_column not in dataset.schema.names:
+            raise KeyError(
+                f"corpus {self.dataset_uri} has no {self.audio_column!r} column; "
+                f"columns: {', '.join(dataset.schema.names)}"
+            )
+        rows = dataset.count_rows()
         self._predict_dataset = _BlobAudioDataset(
             uri,
             storage_options=storage_options,
@@ -430,7 +474,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             num_workers=self.num_workers,
         )
 
-    def on_before_batch_transfer(self, batch: Any, dataloader_idx: int) -> dict[str, torch.Tensor]:
+    def on_before_batch_transfer(
+        self, batch: Mapping[str, torch.Tensor], dataloader_idx: int
+    ) -> dict[str, torch.Tensor]:
         """Add live conditioning and mel normalization to a decoded batch.
 
         Runs in the main process so one encoder — not one per dataloader worker —
@@ -441,7 +487,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :returns: The model batch a predict step consumes.
         """
         del dataloader_idx
-        model_batch = cast(dict[str, torch.Tensor], dict(batch))
+        model_batch = dict(batch)
         if self._statistics is not None and "mel" in model_batch:
             mean, std = self._statistics
             model_batch["mel"] = (model_batch["mel"] - mean) / std
@@ -478,6 +524,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param audio: ``(B, C, T)`` audio batch.
         :param sketch: Resolved sketch-control spec naming the column and zero-bin threshold.
         :returns: ``(B, NUM_SKETCH_CONTROLS, frames)`` controls with pitch zero-binned.
+        :raises ValueError: The live frame axis contradicts the checkpoint's ``num_frames``.
         """
         children = self._live[sketch.column](audio)
         prefix = f"{sketch.column}."
@@ -488,6 +535,12 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 children[f"{prefix}{SKETCH_PITCH_CHILD}"].numpy(),
             )
         ).to(torch.float32)
+        if controls.shape[-1] != sketch.num_frames:
+            raise ValueError(
+                f"live sketch controls span {controls.shape[-1]} frames, but the "
+                f"checkpoint's num_frames is {sketch.num_frames}; the corpus duration "
+                "or sample rate does not match the render contract it trained on"
+            )
         pitch = controls[:, SKETCH_PITCH_SLICE]
         controls[:, SKETCH_PITCH_SLICE] = pitch.where(pitch >= sketch.pitch_zero_threshold, 0.0)
         return controls

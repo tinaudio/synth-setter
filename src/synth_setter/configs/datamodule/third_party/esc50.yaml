@@ -2,6 +2,6 @@ defaults:
   - third_party/base@_here_
   - _self_
 
-# 2,000 environmental clips; a second corpus schema proving the reader is config-driven.
+# This corpus uses a non-default blob-column name.
 dataset_uri: r2://experiments/third_party/ESC50/all.lance
 audio_column: audio_wav

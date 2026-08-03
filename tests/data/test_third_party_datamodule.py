@@ -27,9 +27,9 @@ from synth_setter.data.third_party_datamodule import (
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, Encoder
 from synth_setter.pipeline.data.ssondo import SSONDO_EMBEDDING_DIM
+from tests.helpers.lance_fixtures import write_blob_audio_corpus
 
-# Tiny corpus geometry: a 4 kHz target keeps the mel front-end legal (hop 40,
-# n_fft 100) while every clip stays sub-second.
+# Keep the test corpus compact while retaining a legal mel front-end.
 _TARGET_SAMPLE_RATE = 4000
 _TARGET_CHANNELS = 2
 _DURATION_SECONDS = 0.5
@@ -67,18 +67,13 @@ def _write_corpus(
     :param audio_column: Blob column name, mirroring per-corpus schema drift.
     :param with_sample_rate_column: Whether to store the per-row sample rate.
     """
-    blob_field = pa.field(
-        audio_column, pa.large_binary(), nullable=False, metadata={b"lance-encoding:blob": b"true"}
+    write_blob_audio_corpus(
+        path,
+        clips,
+        sample_rate=sample_rate,
+        audio_column=audio_column,
+        with_sample_rate_column=with_sample_rate_column,
     )
-    columns: dict[str, pa.Array] = {
-        audio_column: pa.array([_wav_bytes(clip, sample_rate) for clip in clips], pa.large_binary())
-    }
-    fields = [blob_field]
-    if with_sample_rate_column:
-        columns["sample_rate"] = pa.array([sample_rate] * len(clips), pa.int64())
-        fields.append(pa.field("sample_rate", pa.int64(), nullable=False))
-    table = pa.table(columns, schema=pa.schema(fields))
-    lance.write_dataset(table, path, mode="create", data_storage_version="2.1")
 
 
 def _tone(seconds: float, sample_rate: int = _SOURCE_SAMPLE_RATE, seed: int = 0) -> np.ndarray:
@@ -211,6 +206,7 @@ def test_predict_batch_amplitude_scale_attenuates_samples(tmp_path: Path) -> Non
     scaled = _first_batch(_datamodule(tmp_path / "corpus.lance", amplitude_scale=0.5))["audio"]
 
     assert torch.allclose(scaled, unscaled * 0.5)
+    assert scaled.abs().max() <= 1.0
 
 
 def test_predict_batch_mel_matches_training_front_end_shape(tmp_path: Path) -> None:
@@ -300,20 +296,25 @@ def test_corpus_with_its_own_blob_column_name_is_servable(tmp_path: Path) -> Non
 
 
 def test_source_rate_above_target_is_resampled_not_truncated(tmp_path: Path) -> None:
-    """A corpus recorded above the render rate keeps its wall-clock duration.
+    """A corpus recorded above the render rate keeps its events at their original times.
+
+    The source is silent except for a burst in its final quarter: truncating the
+    leading ``num_samples`` would drop the burst entirely, so only a real
+    resample places it in the final quarter of the served clip.
 
     :param tmp_path: Isolated corpus fixture directory.
     """
-    _write_corpus(
-        tmp_path / "corpus.lance",
-        [_tone(_DURATION_SECONDS, sample_rate=_TARGET_SAMPLE_RATE * 4, seed=10)],
-        sample_rate=_TARGET_SAMPLE_RATE * 4,
-    )
+    source_rate = _TARGET_SAMPLE_RATE * 4
+    frames = int(_DURATION_SECONDS * source_rate)
+    late_burst = np.zeros(frames, dtype=np.float32)
+    late_burst[3 * frames // 4 :] = 0.5
+    _write_corpus(tmp_path / "corpus.lance", [late_burst], sample_rate=source_rate)
 
     audio = _first_batch(_datamodule(tmp_path / "corpus.lance"))["audio"]
 
     assert audio.shape[-1] == _TARGET_SAMPLES
-    assert torch.any(audio[0, :, -1] != 0)
+    assert torch.all(audio[0, :, : _TARGET_SAMPLES // 2].abs() < 0.1)
+    assert audio[0, :, 3 * _TARGET_SAMPLES // 4 :].abs().max() > 0.4
 
 
 def test_row_limit_caps_served_rows(tmp_path: Path) -> None:
@@ -433,7 +434,10 @@ def test_sketch_conditioning_emits_the_control_stack(tmp_path: Path) -> None:
         )
     )
 
-    assert batch[SKETCH_CTRL_FIELD].shape[:2] == (1, NUM_SKETCH_CONTROLS)
+    controls = batch[SKETCH_CTRL_FIELD]
+
+    assert controls.shape == (1, NUM_SKETCH_CONTROLS, 51)
+    assert controls.dtype == torch.float32
 
 
 def test_multichannel_source_disagreeing_with_contract_raises() -> None:
@@ -539,3 +543,52 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     )["mel"]
 
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
+
+
+def test_sketch_frames_disagreeing_with_the_checkpoint_spec_raise(tmp_path: Path) -> None:
+    """Live controls whose frame axis contradicts the checkpoint's spec are rejected.
+
+    A corpus duration or rate that yields a different control grid would otherwise hand the model
+    silently misaligned tokens.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    sketch_rate = 16_000
+    _write_corpus(
+        tmp_path / "corpus.lance",
+        [_tone(_DURATION_SECONDS, sample_rate=sketch_rate, seed=21)],
+        sample_rate=sketch_rate,
+    )
+
+    with pytest.raises(ValueError, match="num_frames"):
+        _first_batch(
+            _datamodule(
+                tmp_path / "corpus.lance",
+                sample_rate=sketch_rate,
+                sketch=SketchControlSpec(num_frames=50, num_control_tokens=4),
+            )
+        )
+
+
+def test_decode_rejects_audio_outside_the_storage_range(tmp_path: Path) -> None:
+    """Gain that drives a clip past full scale is rejected, not fed to the mel front-end.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [np.full(1000, 0.8, dtype=np.float32)])
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        _first_batch(_datamodule(tmp_path / "corpus.lance", amplitude_scale=2.0))
+
+
+def test_corpus_missing_the_configured_audio_column_raises(tmp_path: Path) -> None:
+    """A corpus whose schema lacks the configured blob column fails at setup.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(
+        tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=22)], audio_column="audio_wav"
+    )
+
+    with pytest.raises(KeyError, match="audio"):
+        _datamodule(tmp_path / "corpus.lance").setup("predict")
