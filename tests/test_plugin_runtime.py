@@ -178,6 +178,54 @@ def test_load_plugin_managed_host_value_error_propagates(
         load_plugin(str(plugin_bundle))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX system-install ownership semantics")
+def test_load_plugin_read_only_managed_root_uses_existing_install_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime consumers lock a system-managed bundle without writing its install tree.
+
+    :param tmp_path: Scratch root made non-writable after package installation.
+    :param monkeypatch: Replaces the native host with a bundle-content consumer.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    managed_root = tmp_path / "managed"
+    bundle = _bundle(
+        managed_root / "VST3/example/synth/1.2.3/Example Synth.vst3",
+        payload=b"system-install",
+    )
+    _seal_bundle(bundle, plugin, _example_lock())
+    alias = tmp_path / "plugins/Example Synth.vst3"
+    alias.parent.mkdir()
+    alias.symlink_to(bundle.absolute(), target_is_directory=True)
+    plugin_runtime.record_managed_alias(alias, bundle)
+
+    lock_path = plugin_integrity.package_install_lock_path(
+        plugin.package,
+        plugin.version,
+        managed_root,
+    )
+    lock_path.parent.mkdir(parents=True)
+    lock_path.touch()
+    lock_path.chmod(0o444)
+    managed_root.chmod(0o555)
+    loaded_payloads: list[bytes] = []
+
+    def _load(path: str, plugin_name: str | None = None) -> object:
+        del plugin_name
+        loaded_payloads.append(_binary_path(Path(path)).read_bytes())
+        return object()
+
+    monkeypatch.setattr(vst_core, "VST3Plugin", _load)
+    try:
+        load_plugin(str(alias))
+    finally:
+        managed_root.chmod(0o755)
+        lock_path.chmod(0o644)
+
+    assert loaded_payloads == [_test_binary_magic() + b"system-install"]
+
+
 def test_renderer_construction_before_rotation_consumes_validated_old_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

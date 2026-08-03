@@ -79,6 +79,38 @@ def test_write_atomic_record_privileged_writer_remains_world_readable(tmp_path: 
     assert stat.S_IMODE(record.stat().st_mode) == 0o644
 
 
+def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
+    tmp_path: Path,
+) -> None:
+    """Package locks remain accessible to consumers after a restrictive install.
+
+    :param tmp_path: Scratch root with privileged-install permission modes.
+    """
+    plugins_dir = tmp_path / "managed"
+    lock_path = plugin_integrity.package_install_lock_path(
+        "example/synth",
+        "1.2.3",
+        plugins_dir,
+    )
+    lock_path.parent.mkdir(parents=True)
+    plugins_dir.chmod(0o700)
+    (plugins_dir / ".synth-setter-install-locks").chmod(0o700)
+    (plugins_dir / ".synth-setter-install-locks/example").chmod(0o700)
+    lock_path.parent.chmod(0o700)
+    lock_path.touch(mode=0o600)
+
+    with plugin_integrity.package_install_lock("example/synth", "1.2.3", plugins_dir):
+        pass
+
+    assert stat.S_IMODE(plugins_dir.stat().st_mode) == 0o755
+    assert stat.S_IMODE((plugins_dir / ".synth-setter-install-locks").stat().st_mode) == 0o755
+    assert (
+        stat.S_IMODE((plugins_dir / ".synth-setter-install-locks/example").stat().st_mode) == 0o755
+    )
+    assert stat.S_IMODE(lock_path.parent.stat().st_mode) == 0o755
+    assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
+
+
 def test_managed_bundle_storage_validates_and_discards_integrity_records(
     tmp_path: Path,
 ) -> None:

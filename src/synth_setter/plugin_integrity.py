@@ -370,6 +370,12 @@ def locked_package_digest(package_reference: str, locked_package: LockedPackage)
 
 
 def _bundle_root(bundle: Path) -> Path:
+    """Resolve a bundle and require a real directory.
+
+    :param bundle: Path resolved without accepting a non-directory final target.
+    :returns: Strictly resolved bundle root.
+    :raises ValueError: The resolved path is not a directory.
+    """
     root = bundle.resolve(strict=True)
     if not stat.S_ISDIR(root.stat().st_mode):
         raise ValueError(f"bundle is not a directory: {bundle}")
@@ -787,7 +793,10 @@ def _windows_unlock(stream: BinaryIO) -> None:
 
 
 def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
-    """Build a cross-process exclusive lock for one durable path.
+    """Build a cross-process writer lock or read-only consumer lease.
+
+    POSIX writers take an exclusive lock; consumers without write access take a shared lock that
+    still excludes installers. Windows retains its exclusive lock.
 
     :param path: Lock file outside removable package-version state.
     :returns: Context manager holding the lock around its body.
@@ -796,18 +805,25 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
     @contextmanager
     def _locked() -> Iterator[None]:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a+b") as stream:
-            if os.name == "nt":
+        if os.name == "nt":
+            with path.open("a+b") as stream:
                 _windows_lock(stream)
                 try:
                     yield
                 finally:
                     _windows_unlock(stream)
-                return
+            return
 
-            import fcntl
+        import fcntl
 
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            stream = path.open("a+b")
+            lock_operation = fcntl.LOCK_EX
+        except PermissionError:
+            stream = path.open("rb")
+            lock_operation = fcntl.LOCK_SH
+        with stream:
+            fcntl.flock(stream.fileno(), lock_operation)
             try:
                 yield
             finally:
@@ -839,11 +855,27 @@ def package_install_lock(
     version: str,
     plugins_dir: Path,
 ) -> AbstractContextManager[None]:
-    """Serialize consumers and installers for one exact package version.
+    """Acquire the installer lock and publish runtime-readable permissions.
+
+    Runtime consumers call :func:`advisory_file_lock` directly and never enter
+    this permission-normalizing installer wrapper.
 
     :param package: Studiorack ``organization/package`` slug.
     :param version: Exact package version.
     :param plugins_dir: Resolved managed storage root.
     :returns: Context manager holding the package lock around its body.
     """
-    return advisory_file_lock(package_install_lock_path(package, version, plugins_dir))
+    path = package_install_lock_path(package, version, plugins_dir)
+
+    @contextmanager
+    def _locked() -> Iterator[None]:
+        with advisory_file_lock(path):
+            plugins_dir.chmod(plugins_dir.stat().st_mode | 0o055)
+            current = plugins_dir
+            for component in path.parent.relative_to(plugins_dir).parts:
+                current /= component
+                current.chmod(current.stat().st_mode | 0o055)
+            path.chmod(path.stat().st_mode | 0o044)
+            yield
+
+    return _locked()

@@ -70,7 +70,14 @@ from synth_setter.pipeline.schemas.render_metrics import (
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
-from synth_setter.plugin_manager import ArtifactLock, PluginManifest, adopt_plugin_bundle
+from synth_setter.plugin_integrity import package_install_lock_path
+from synth_setter.plugin_manager import (
+    ArtifactLock,
+    ManagedPlugin,
+    PluginManifest,
+    adopt_plugin_bundle,
+)
+from synth_setter.plugin_runtime import validate_plugin_bundle_for_runtime
 from tests._vst import (
     PLUGIN_PATH,
 )
@@ -96,11 +103,11 @@ _TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / 
 _TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
-def _managed_real_plugin(tmp_path: Path) -> Path:
+def _managed_real_plugin(tmp_path: Path) -> tuple[Path, ManagedPlugin]:
     """Adopt the configured real VST under repository artifact provenance.
 
     :param tmp_path: Scratch root for manager-owned package state.
-    :returns: Managed bundle path consumed by the renderer subprocess.
+    :returns: Managed bundle path and its manifest identity.
     """
     manifest_path = _REPO_ROOT / "studiorack.json"
     manifest = PluginManifest.load(manifest_path)
@@ -110,12 +117,13 @@ def _managed_real_plugin(tmp_path: Path) -> Path:
         if candidate.bundle == _REAL_PLUGIN_VST3.name
     )
     artifact_lock = ArtifactLock.load(_REPO_ROOT / "studiorack.lock.json", manifest)
-    return adopt_plugin_bundle(
+    managed_bundle = adopt_plugin_bundle(
         plugin,
         plugins_dir=tmp_path / "managed-plugins",
         bundle=_REAL_PLUGIN_VST3,
         locked_package=artifact_lock.package_for(plugin),
     )
+    return managed_bundle, plugin
 
 
 def _worker_shard_staging_path(root: Path, spec: DatasetSpec, shard_id: int) -> Path:
@@ -657,7 +665,9 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.use_shard_queue = True
-        cfg_dataset.synth.plugin_path = str(_managed_real_plugin(tmp_path))
+        managed_bundle, plugin = _managed_real_plugin(tmp_path)
+        validate_plugin_bundle_for_runtime(managed_bundle)
+        cfg_dataset.synth.plugin_path = str(managed_bundle)
         cfg_dataset.render.samples_per_render_batch = 1
         cfg_dataset.render.samples_per_shard = 1
         cfg_dataset.r2.prefix = "fake-r2/real-vst-claims/"
@@ -667,7 +677,15 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
     claims.populate(shard.shard_id for shard in spec.shards)
 
-    from_hydra(cfg_dataset)
+    managed_root = tmp_path / "managed-plugins"
+    lock_path = package_install_lock_path(plugin.package, plugin.version, managed_root)
+    lock_path.chmod(0o444)
+    managed_root.chmod(0o555)
+    try:
+        from_hydra(cfg_dataset)
+    finally:
+        managed_root.chmod(0o755)
+        lock_path.chmod(0o644)
 
     staging_root = (
         fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
