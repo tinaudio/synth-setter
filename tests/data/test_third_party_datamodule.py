@@ -936,3 +936,43 @@ def test_non_boolean_use_saved_mean_and_variance_raises(tmp_path: Path) -> None:
             use_saved_mean_and_variance="false",  # type: ignore[arg-type]
             mel_stats_uri="stats.npz",
         )
+
+
+def _wav(clip: np.ndarray, sample_rate: int = _SOURCE_SAMPLE_RATE) -> bytes:
+    """Encode one clip for the direct decode tests.
+
+    :param clip: ``(frames,)`` float32 samples.
+    :param sample_rate: Encoded sample rate in Hz.
+    :returns: WAV container bytes.
+    """
+    return _wav_bytes(clip, sample_rate)
+
+
+def test_decode_clip_pads_short_audio_and_upmixes() -> None:
+    """A short mono clip is duplicated across channels and zero-padded to length."""
+    decoded = decode_clip(
+        _wav(np.full(_SOURCE_SAMPLE_RATE // 4, 0.5, dtype=np.float32)),
+        sample_rate=_TARGET_SAMPLE_RATE,
+        channels=_TARGET_CHANNELS,
+        num_samples=_TARGET_SAMPLES,
+        amplitude_scale=1.0,
+    )
+
+    assert decoded.shape == (_TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert decoded.dtype == np.float32
+    assert np.array_equal(decoded[0], decoded[1])
+    assert np.all(decoded[:, -100:] == 0.0)
+
+
+def test_decode_clip_truncates_long_audio_and_applies_gain() -> None:
+    """A long clip is cut to length and the configured gain is applied to it."""
+    decoded = decode_clip(
+        _wav(np.full(_SOURCE_SAMPLE_RATE * 2, 0.4, dtype=np.float32)),
+        sample_rate=_TARGET_SAMPLE_RATE,
+        channels=_TARGET_CHANNELS,
+        num_samples=_TARGET_SAMPLES,
+        amplitude_scale=0.5,
+    )
+
+    assert decoded.shape == (_TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert decoded.mean() == pytest.approx(0.2, abs=1e-3)

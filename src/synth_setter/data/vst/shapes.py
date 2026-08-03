@@ -168,9 +168,11 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
     Canonical training front-end: every consumer that must match stored
     ``mel_spec`` values calls this rather than reimplementing the librosa call.
 
-    :param audio: Channel-leading waveform shaped ``(channels, samples)``.
+    :param audio: Channel-leading waveform shaped ``(channels, samples)``; a 1-D
+        ``(samples,)`` waveform is also accepted.
     :param sample_rate: Audio sample rate in Hz.
-    :returns: ``(channels, MEL_N_MELS, frames)`` decibel-scaled mel spectrogram.
+    :returns: Decibel-scaled mel spectrogram whose rank follows the input's —
+        ``(channels, MEL_N_MELS, frames)`` for 2-D audio, ``(MEL_N_MELS, frames)`` for 1-D.
     """
     spec = librosa.feature.melspectrogram(
         y=audio,
