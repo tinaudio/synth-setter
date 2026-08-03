@@ -18,6 +18,12 @@ _EXPECTED_CI_WANDB_PROJECTS = {
     "test-gpu.yml": _CITEST_PROJECT,
     "test-mps.yml": _CITEST_PROJECT,
 }
+_WANDB_REUSABLE_WORKFLOWS = frozenset(
+    {
+        "./.github/workflows/finalize-dataset.yaml",
+        "./.github/workflows/generate-dataset-shards.yaml",
+    }
+)
 _EXPECTED_REUSABLE_WANDB_PROJECTS = {
     ("generate-dataset-shards.yaml", "./.github/workflows/finalize-dataset.yaml"): (
         "${{ inputs.wandb_project }}"
@@ -106,9 +112,11 @@ def _reusable_wandb_project_offenders(job_scope: str, job: Mapping[str, object])
     reusable = job.get("uses")
     if not isinstance(reusable, str):
         return []
+    if reusable not in _WANDB_REUSABLE_WORKFLOWS:
+        return []
     expected_project = _EXPECTED_REUSABLE_WANDB_PROJECTS.get((workflow_name, reusable))
     if expected_project is None:
-        return []
+        return [job_scope]
     inputs = cast(Mapping[str, object], job.get("with", {}))
     if inputs.get("wandb_project") == expected_project:
         return []
@@ -254,6 +262,19 @@ def test_inherited_reusable_call_without_project_is_reported() -> None:
     )
 
     assert offenders == ["test-dataset-generation.yml:generate-launcher"]
+
+
+def test_unknown_inherited_wandb_reusable_call_is_reported() -> None:
+    """New callers of W&B reusables fail closed until their project is declared."""
+    job = {
+        "secrets": "inherit",
+        "uses": "./.github/workflows/generate-dataset-shards.yaml",
+        "with": {"wandb_project": _CITEST_PROJECT},
+    }
+
+    offenders = _reusable_wandb_project_offenders("future.yml:generate", job)
+
+    assert offenders == ["future.yml:generate"]
 
 
 def test_empty_wandb_project_is_reported() -> None:
