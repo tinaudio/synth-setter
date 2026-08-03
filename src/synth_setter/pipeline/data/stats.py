@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import subprocess
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -504,6 +505,7 @@ def get_conditioning_stats_lance(
     :param storage_options: Object-store options for a cloud dataset.
     :param batch_size: Lance scan batch size in rows.
     :returns: Local path or canonical R2 URI of the column-specific archive.
+    :raises subprocess.CalledProcessError: Immutable R2 publication fails without a winner.
     """
     mean, std = stream_conditioning_stats_lance(
         dataset_uri,
@@ -535,7 +537,14 @@ def get_conditioning_stats_lance(
             r2_io.download_to_path(destination, existing_file)
             _assert_conditioning_stats_match(existing_file, mean, std)
             return destination
-        r2_io.upload_to_uri_immutable(stats_file, destination)
+        try:
+            r2_io.upload_to_uri_immutable(stats_file, destination)
+        except subprocess.CalledProcessError:
+            if r2_io.object_size(destination) is None:
+                raise
+            existing_file = Path(temporary) / f"existing-{filename}"
+            r2_io.download_to_path(destination, existing_file)
+            _assert_conditioning_stats_match(existing_file, mean, std)
     logger.info("Saving conditioning statistics to %s", destination)
     return destination
 

@@ -1,6 +1,7 @@
 """Behavior tests for additive cached-conditioning statistics."""
 
 from pathlib import Path
+import subprocess
 
 import numpy as np
 import pyarrow as pa
@@ -11,6 +12,7 @@ from synth_setter.conditioning import EmbeddingConditioningSpec
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import conditioning_stats_filename
 from synth_setter.pipeline.data.lance_shard import tensor_array, write_lance_dataset
 from synth_setter.pipeline.data.stats import (
@@ -471,6 +473,71 @@ def test_conditioning_stats_conflicting_local_artifact_raises(tmp_path: Path) ->
             second,
             column="embedding",
             input_shape=(1,),
+            normalization="per_channel",
+        )
+
+
+def test_conditioning_stats_r2_publish_race_accepts_identical_winner(
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent identical immutable upload is an idempotent success.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone R2 boundary.
+    :param monkeypatch: Fixture simulating another publisher winning the race.
+    """
+    dataset = fake_r2_remote / "bucket" / "run" / "train.lance"
+    _write_conditioning_dataset(
+        dataset,
+        "embedding",
+        np.array([[1.0, 3.0], [3.0, 5.0]], dtype=np.float32),
+    )
+    original_upload = r2_io.upload_to_uri_immutable
+
+    def upload_after_winner(local_path: Path, destination: str) -> None:
+        original_upload(local_path, destination)
+        raise subprocess.CalledProcessError(1, ["rclone", "copyto", "--immutable"])
+
+    monkeypatch.setattr(r2_io, "upload_to_uri_immutable", upload_after_winner)
+
+    output = get_conditioning_stats_lance(
+        "r2://bucket/run/train.lance",
+        column="embedding",
+        input_shape=(2,),
+        normalization="per_channel",
+    )
+
+    assert output == "r2://bucket/run/conditioning_stats.embedding.npz"
+
+
+def test_conditioning_stats_r2_publish_race_rejects_different_winner(
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent conflicting immutable upload remains an error.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone R2 boundary.
+    :param monkeypatch: Fixture simulating another publisher winning the race.
+    """
+    dataset = fake_r2_remote / "bucket" / "run" / "train.lance"
+    _write_conditioning_dataset(
+        dataset,
+        "embedding",
+        np.array([[1.0, 3.0], [3.0, 5.0]], dtype=np.float32),
+    )
+
+    def upload_after_winner(_: Path, destination: str) -> None:
+        winner = fake_r2_remote / destination.removeprefix("r2://")
+        np.savez(winner, mean=np.array([99.0]), std=np.array([1.0]))
+        raise subprocess.CalledProcessError(1, ["rclone", "copyto", "--immutable"])
+
+    monkeypatch.setattr(r2_io, "upload_to_uri_immutable", upload_after_winner)
+
+    with pytest.raises(FileExistsError, match="conflict with existing"):
+        get_conditioning_stats_lance(
+            "r2://bucket/run/train.lance",
+            column="embedding",
+            input_shape=(2,),
             normalization="per_channel",
         )
 
