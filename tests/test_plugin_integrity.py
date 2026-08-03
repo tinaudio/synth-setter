@@ -139,6 +139,27 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
     assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
 
 
+def test_package_install_lock_symlinked_hierarchy_rejected_without_target_mutation(
+    tmp_path: Path,
+) -> None:
+    """Installer lock setup never follows a managed hierarchy symlink.
+
+    :param tmp_path: Scratch root containing a symlink to an external directory.
+    """
+    plugins_dir = tmp_path / "managed"
+    plugins_dir.mkdir()
+    external = tmp_path / "external"
+    external.mkdir(mode=0o700)
+    (plugins_dir / ".synth-setter-install-locks").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(FileExistsError, match="not a directory"):
+        with plugin_integrity.package_install_lock("example/synth", "1.2.3", plugins_dir):
+            pass
+
+    assert stat.S_IMODE(external.stat().st_mode) == 0o700
+    assert list(external.iterdir()) == []
+
+
 def test_managed_bundle_storage_validates_and_discards_integrity_records(
     tmp_path: Path,
 ) -> None:

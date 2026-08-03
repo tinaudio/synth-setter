@@ -913,6 +913,38 @@ def package_install_lock_path(package: str, version: str, plugins_dir: Path) -> 
     )
 
 
+def _ensure_runtime_readable_lock_directory(directory: Path) -> None:
+    """Create one real lock directory and publish traversal permissions.
+
+    :param directory: Managed lock-hierarchy component whose parent exists.
+    :raises FileExistsError: The component exists but is not a real directory.
+    :raises OSError: Creating, opening, or updating the directory fails.
+    """
+    try:
+        directory.mkdir()
+    except FileExistsError:
+        pass
+    mode = directory.lstat().st_mode
+    if not stat.S_ISDIR(mode):
+        raise FileExistsError(f"install lock hierarchy component is not a directory: {directory}")
+    if os.name == "nt":
+        directory.chmod(mode | 0o055)
+        return
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(directory, flags)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise FileExistsError(
+                f"install lock hierarchy component is not a directory: {directory}"
+            ) from exc
+        raise
+    try:
+        os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
+    finally:
+        os.close(descriptor)
+
+
 def package_install_lock(
     package: str,
     version: str,
@@ -932,12 +964,20 @@ def package_install_lock(
 
     @contextmanager
     def _locked() -> Iterator[None]:
+        plugins_dir.mkdir(parents=True, exist_ok=True)
+        current = plugins_dir
+        _ensure_runtime_readable_lock_directory(current)
+        for component in path.parent.relative_to(plugins_dir).parts:
+            current /= component
+            _ensure_runtime_readable_lock_directory(current)
+        try:
+            lock_mode = path.lstat().st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(lock_mode):
+                raise FileExistsError(f"install lock is not a regular file: {path}")
         with advisory_file_lock(path):
-            plugins_dir.chmod(plugins_dir.stat().st_mode | 0o055)
-            current = plugins_dir
-            for component in path.parent.relative_to(plugins_dir).parts:
-                current /= component
-                current.chmod(current.stat().st_mode | 0o055)
             path.chmod(path.stat().st_mode | 0o044)
             yield
 

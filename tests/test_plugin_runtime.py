@@ -569,10 +569,28 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
     publication_started = threading.Event()
     release_publication = threading.Event()
     second_completed = threading.Event()
+    both_leases_entered = threading.Event()
     published_destinations: list[Path] = []
     results: list[Path] = []
     errors: list[BaseException] = []
     real_replace = plugin_runtime.os.replace
+    real_lease = plugin_runtime.integrity.advisory_file_lease
+    active_leases = 0
+    lease_count_lock = threading.Lock()
+
+    @contextmanager
+    def _observe_lease(path: Path) -> Iterator[None]:
+        nonlocal active_leases
+        with real_lease(path):
+            with lease_count_lock:
+                active_leases += 1
+                if active_leases == 2:
+                    both_leases_entered.set()
+            try:
+                yield
+            finally:
+                with lease_count_lock:
+                    active_leases -= 1
 
     def _pause_publish(source_path: Path | str, destination: Path | str) -> None:
         destination_path = Path(destination)
@@ -593,11 +611,13 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
                 completed.set()
 
     monkeypatch.setattr(plugin_runtime.os, "replace", _pause_publish)
+    monkeypatch.setattr(plugin_runtime.integrity, "advisory_file_lease", _observe_lease)
     first = threading.Thread(target=_consume)
     first.start()
     assert publication_started.wait(10)
     second = threading.Thread(target=_consume, args=(second_completed,))
     second.start()
+    assert both_leases_entered.wait(10)
     assert not second_completed.wait(0.2)
     assert len(published_destinations) == 1
 
