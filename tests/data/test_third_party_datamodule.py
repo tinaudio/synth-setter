@@ -489,3 +489,26 @@ def test_worker_pickling_drops_the_open_dataset_handle(tmp_path: Path) -> None:
     revived = pickle.loads(pickle.dumps(datamodule.predict_dataloader().dataset))
 
     assert revived[0]["audio"].shape == (_TARGET_CHANNELS, _TARGET_SAMPLES)
+
+
+def test_distinct_stats_uris_sharing_a_basename_cache_separately(tmp_path: Path) -> None:
+    """Every training split names its statistics ``stats.npz``, so the cache keys on the URI.
+
+    Two checkpoints trained on different corpora would otherwise collide in one cache slot, and the
+    second eval would silently normalize with the first run's statistics.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=19)])
+    first = _datamodule(
+        tmp_path / "corpus.lance",
+        use_saved_mean_and_variance=True,
+        mel_stats_uri="r2://experiments/data/corpus-a/train.lance/stats.npz",
+    )
+    second = _datamodule(
+        tmp_path / "corpus.lance",
+        use_saved_mean_and_variance=True,
+        mel_stats_uri="r2://experiments/data/corpus-b/train.lance/stats.npz",
+    )
+
+    assert first.cached_stats_path() != second.cached_stats_path()

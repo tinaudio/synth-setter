@@ -12,6 +12,7 @@ unmodified — the model batch key and per-row shape are identical.
 
 from __future__ import annotations
 
+import hashlib
 import io
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -329,19 +330,32 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         """
         return self.conditioning == "mel"
 
-    def _local_stats_file(self) -> Path:
-        """Return a readable local path for the configured statistics object.
+    def cached_stats_path(self) -> Path:
+        """Return the local path the configured statistics object resolves to.
 
-        :returns: Local ``.npz`` path, downloaded once for an ``r2://`` URI.
+        Every training split names its statistics ``stats.npz``, so the cache
+        slot is keyed by a digest of the full URI: two checkpoints trained on
+        different corpora must not share one slot.
+
+        :returns: Local ``.npz`` path; unique per ``r2://`` URI.
         """
         uri = cast(str, self.mel_stats_uri)
         if not r2_io.is_r2_uri(uri):
             return Path(uri)
-        cache_dir = Path.cwd() / _MEL_STATS_CACHE_DIR
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        destination = cache_dir / Path(uri).name
+        digest = hashlib.sha256(uri.encode()).hexdigest()[:16]
+        return Path.cwd() / _MEL_STATS_CACHE_DIR / f"{digest}-{Path(uri).name}"
+
+    def _local_stats_file(self) -> Path:
+        """Return a readable local path for the configured statistics object.
+
+        :returns: Local ``.npz`` path, downloaded once per distinct ``r2://`` URI.
+        """
+        destination = self.cached_stats_path()
+        if not r2_io.is_r2_uri(cast(str, self.mel_stats_uri)):
+            return destination
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
-            r2_io.download_to_path(uri, destination)
+            r2_io.download_to_path(cast(str, self.mel_stats_uri), destination)
         return destination
 
     def setup(self, stage: str | None = None) -> None:
