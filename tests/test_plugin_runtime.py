@@ -515,7 +515,7 @@ def test_link_plugin_managed_bundle_creates_stable_checkout_alias(tmp_path: Path
 
 
 def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Path) -> None:
-    """Installer migration accepts a package version without legacy snapshots.
+    """Accept a package-version directory without a snapshot directory.
 
     :param tmp_path: Scratch package-version directory.
     """
@@ -551,13 +551,18 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert managed.resolve() == alias.resolve()
     initial_snapshot = plugin_manager.validate_plugin_bundle_for_runtime(alias)
     snapshots = managed.parent / ".synth-setter-runtime-snapshots"
-    snapshots.chmod(0o700)
-    initial_snapshot.parent.chmod(0o700)
+    restricted_directories = [
+        snapshots,
+        initial_snapshot.parent,
+        initial_snapshot,
+        initial_snapshot / "Contents",
+    ]
+    for directory in restricted_directories:
+        directory.chmod(0o700)
 
     with plugin_manager._package_install_lock(plugin, tmp_path / "managed"):
         pass
-    assert stat.S_IMODE(snapshots.stat().st_mode) == 0o755
-    assert stat.S_IMODE(initial_snapshot.parent.stat().st_mode) == 0o755
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o755 for path in restricted_directories)
 
     validated = plugin_manager.validate_plugin_bundle_for_runtime(alias)
 
@@ -626,6 +631,35 @@ def _pausing_snapshot_publisher(
     return _pause
 
 
+def _start_runtime_snapshot_consumer(
+    managed: Path,
+    results: list[Path],
+    errors: list[BaseException],
+    completed: threading.Event | None = None,
+) -> threading.Thread:
+    """Start one managed-bundle validation consumer.
+
+    :param managed: Managed alias consumed by the thread.
+    :param results: Collection receiving validated paths.
+    :param errors: Collection receiving thread failures.
+    :param completed: Optional completion event.
+    :returns: Started consumer thread.
+    """
+
+    def _consume() -> None:
+        try:
+            results.append(plugin_manager.validate_plugin_bundle_for_runtime(managed))
+        except BaseException as exc:  # pragma: no cover - asserted in the parent thread
+            errors.append(exc)
+        finally:
+            if completed is not None:
+                completed.set()
+
+    thread = threading.Thread(target=_consume)
+    thread.start()
+    return thread
+
+
 def test_concurrent_runtime_consumers_publish_one_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -656,22 +690,16 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
         destinations=published_destinations,
     )
 
-    def _consume(completed: threading.Event | None = None) -> None:
-        try:
-            results.append(plugin_manager.validate_plugin_bundle_for_runtime(managed))
-        except BaseException as exc:  # pragma: no cover - asserted in the parent thread
-            errors.append(exc)
-        finally:
-            if completed is not None:
-                completed.set()
-
     monkeypatch.setattr(plugin_runtime.os, "replace", paused_publisher)
     monkeypatch.setattr(plugin_runtime.integrity, "advisory_file_lease", observed_lease)
-    first = threading.Thread(target=_consume)
-    first.start()
+    first = _start_runtime_snapshot_consumer(managed, results, errors)
     assert publication_started.wait(10)
-    second = threading.Thread(target=_consume, args=(second_completed,))
-    second.start()
+    second = _start_runtime_snapshot_consumer(
+        managed,
+        results,
+        errors,
+        completed=second_completed,
+    )
     assert both_leases_entered.wait(10)
     assert not second_completed.wait(0.2)
     assert len(published_destinations) == 1

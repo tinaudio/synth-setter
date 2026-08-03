@@ -876,7 +876,8 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
                 try:
                     if not stat.S_ISREG(os.fstat(marker_descriptor).st_mode):
                         raise FileExistsError(f"lock is not a regular file: {path}")
-                    yield
+                    with _posix_advisory_descriptor_lock(marker_descriptor, fcntl.LOCK_EX):
+                        yield
                 finally:
                     os.close(marker_descriptor)
         finally:
@@ -888,8 +889,9 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
 def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
     """Build a shared POSIX consumer lease without writing managed storage.
 
-    POSIX consumers lock the marker's directory, which keeps legacy unreadable marker files usable.
-    Windows retains the exclusive writable file lock.
+    POSIX consumers lock the marker's directory, allowing access when the marker itself is
+    unreadable. Readable markers are also locked for rolling-upgrade compatibility. Windows retains
+    the exclusive writable file lock.
 
     :param path: Durable lock file shared with exclusive writers.
     :returns: Context manager holding the consumer lease around its body.
@@ -904,7 +906,6 @@ def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
 
         import fcntl
 
-        deadline = time.monotonic() + 1.0
         while True:
             try:
                 directory_descriptor = _posix_directory_descriptor(path.parent)
@@ -912,12 +913,22 @@ def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
             except FileNotFoundError:
                 path.parent.mkdir(parents=True, exist_ok=True)
             except PermissionError:
-                if time.monotonic() >= deadline:
-                    raise
                 time.sleep(0.05)
         try:
             with _posix_advisory_descriptor_lock(directory_descriptor, fcntl.LOCK_SH):
-                yield
+                flags = os.O_RDONLY | os.O_NOFOLLOW
+                try:
+                    marker_descriptor = os.open(path.name, flags, dir_fd=directory_descriptor)
+                except (FileNotFoundError, PermissionError):
+                    yield
+                else:
+                    try:
+                        if not stat.S_ISREG(os.fstat(marker_descriptor).st_mode):
+                            raise FileExistsError(f"lock is not a regular file: {path}")
+                        with _posix_advisory_descriptor_lock(marker_descriptor, fcntl.LOCK_SH):
+                            yield
+                    finally:
+                        os.close(marker_descriptor)
         finally:
             os.close(directory_descriptor)
 
@@ -1040,6 +1051,13 @@ def package_install_lock(
     def _locked() -> Iterator[None]:
         if os.name == "nt":
             lock_directories = _windows_lock_directories(plugins_dir, path.parent)
+            try:
+                marker_mode = path.lstat().st_mode
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISREG(marker_mode):
+                    raise FileExistsError(f"install lock is not a regular file: {path}")
             with advisory_file_lock(path):
                 path.chmod(path.stat().st_mode | 0o044)
                 for directory in reversed(lock_directories):
@@ -1059,7 +1077,8 @@ def package_install_lock(
                         raise FileExistsError(f"install lock is not a regular file: {path}")
                     os.fchmod(marker, marker_mode | 0o044)
                     _publish_posix_lock_hierarchy(descriptors)
-                    yield
+                    with _posix_advisory_descriptor_lock(marker, fcntl.LOCK_EX):
+                        yield
                 finally:
                     os.close(marker)
 

@@ -4,6 +4,7 @@ import errno
 import json
 import os
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -90,7 +91,7 @@ def test_advisory_file_lease_permission_publication_window_retries(
 ) -> None:
     """A consumer retries until the installer's lock directory is traversable.
 
-    :param tmp_path: Scratch root containing one legacy unreadable marker.
+    :param tmp_path: Scratch root containing one unreadable marker.
     :param monkeypatch: Simulates two permission failures during publication.
     """
     lock_path = tmp_path / "managed/package.lock"
@@ -143,6 +144,34 @@ def _assert_runtime_readable_lock_tree(lock_path: Path, directories: list[Path])
     """
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o755 for path in directories)
     assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX flock compatibility")
+def test_advisory_file_lease_waits_for_marker_only_writer(tmp_path: Path) -> None:
+    """A consumer waits for an installer that locks only the marker inode.
+
+    :param tmp_path: Scratch package marker shared across lock implementations.
+    """
+    import fcntl
+
+    lock_path = tmp_path / "managed/package.lock"
+    lock_path.parent.mkdir()
+    lock_path.touch()
+    acquired = threading.Event()
+
+    def _lease() -> None:
+        with plugin_integrity.advisory_file_lease(lock_path):
+            acquired.set()
+
+    with lock_path.open("rb") as marker:
+        fcntl.flock(marker.fileno(), fcntl.LOCK_EX)
+        consumer = threading.Thread(target=_lease)
+        consumer.start()
+        assert not acquired.wait(0.2)
+        fcntl.flock(marker.fileno(), fcntl.LOCK_UN)
+    consumer.join(10)
+
+    assert acquired.is_set()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode publication semantics")
@@ -237,6 +266,32 @@ def test_package_install_lock_symlinked_hierarchy_rejected_without_target_mutati
 
     assert stat.S_IMODE(external.stat().st_mode) == 0o700
     assert list(external.iterdir()) == []
+
+
+def test_package_install_lock_windows_symlinked_marker_rejected_without_target_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows rejects a marker symlink before opening or chmodding its target.
+
+    :param tmp_path: Scratch package-lock hierarchy and external target.
+    :param monkeypatch: Selects the Windows package-lock branch.
+    """
+    plugins_dir = tmp_path / "managed"
+    lock_path = plugin_integrity.package_install_lock_path("example/synth", "1.2.3", plugins_dir)
+    lock_path.parent.mkdir(parents=True)
+    external = tmp_path / "external.lock"
+    external.write_text("unchanged")
+    external.chmod(0o600)
+    lock_path.symlink_to(external)
+    monkeypatch.setattr(os, "name", "nt")
+
+    with pytest.raises(FileExistsError, match="not a regular file"):
+        with plugin_integrity.package_install_lock("example/synth", "1.2.3", plugins_dir):
+            pass
+
+    assert external.read_text() == "unchanged"
+    assert stat.S_IMODE(external.stat().st_mode) == 0o600
 
 
 def test_package_install_lock_racing_symlink_rejected_without_target_mutation(
