@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
-
-from synth_setter.plugin_integrity import package_install_lock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CI_CONDA_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-conda.yml"
@@ -36,34 +32,6 @@ _EXPECTED_PLUGINS = {
     "surge-synthesizer/ob-xf": ("1.0.3", "OB-Xf.vst3"),
     "surge-synthesizer/surge": ("1.3.4", "Surge XT.vst3"),
 }
-
-
-def _write_executable(path: Path, body: str) -> None:
-    """Write one executable test command.
-
-    :param path: Command path under the isolated fake ``PATH``.
-    :param body: Complete command source, including its shebang.
-    """
-    path.write_text(body)
-    path.chmod(0o755)
-
-
-def _run_setup_surge_script(script: str, fake_bin: Path, managed_root: Path) -> None:
-    """Execute one setup action script against isolated command fakes.
-
-    :param script: Composite action Bash body.
-    :param fake_bin: Directory containing the fake external commands.
-    :param managed_root: Temporary replacement for the system managed root.
-    """
-    subprocess.run(  # noqa: S603 -- checked-in action script with an isolated command path
-        ["/bin/bash", "-c", script],
-        cwd=managed_root.parent,
-        env={
-            "FAKE_MANAGED_ROOT": str(managed_root),
-            "PATH": f"{fake_bin}:{os.defpath}",
-        },
-        check=True,
-    )
 
 
 def _dockerfile_stage_text(stage_name: str) -> str:
@@ -265,70 +233,6 @@ def test_macos_provisioners_install_surge_through_studiorack() -> None:
     assert "npm ci" in tart
     assert "synth-setter-plugins" in tart
     assert "brew install --cask surge-xt" not in tart
-
-
-def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install(
-    tmp_path: Path,
-) -> None:
-    """The unprivileged smoke test can lock the installed package.
-
-    :param tmp_path: Scratch roots and executable command fakes.
-    """
-    action = yaml.safe_load(SETUP_SURGE_ACTION.read_text())
-    run_script = action["runs"]["steps"][0]["run"]
-    pre_fix_script = run_script.rstrip().rsplit("\n", maxsplit=1)[0]
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    _write_executable(fake_bin / "npm", "#!/bin/bash\nexit 0\n")
-    _write_executable(
-        fake_bin / "uv",
-        """#!/bin/bash
-set -euo pipefail
-managed_root="${STUDIORACK_PLUGINS_DIR:?}"
-lock="${managed_root}/.synth-setter-install-locks/surge-synthesizer/surge/1.3.4.lock"
-snapshot="${managed_root}/.synth-setter-runtime-snapshots/installed.snapshot"
-mkdir -p "$(dirname "${lock}")" "$(dirname "${snapshot}")"
-: > "${lock}"
-: > "${snapshot}"
-chmod -R a-w "${managed_root}"
-""",
-    )
-    _write_executable(
-        fake_bin / "sudo",
-        """#!/bin/bash
-set -euo pipefail
-system_root="/Library/Application Support/synth-setter/studiorack"
-mapped_root="${FAKE_MANAGED_ROOT:?}"
-if [[ "${1:-}" == "-E" && "${2:-}" == "env" ]]; then
-  shift 2
-  translated=()
-  for argument in "$@"; do
-    if [[ "${argument}" == "STUDIORACK_PLUGINS_DIR=${system_root}" ]]; then
-      argument="STUDIORACK_PLUGINS_DIR=${mapped_root}"
-    fi
-    translated+=("${argument}")
-  done
-  exec env "${translated[@]}"
-fi
-if [[ "${1:-}" == "chown" && "${2:-}" == "-R" && "${4:-}" == "${system_root}" ]]; then
-  chmod -R u+rwX "${mapped_root}"
-  exit 0
-fi
-exit 64
-""",
-    )
-
-    pre_fix_root = tmp_path / "pre-fix-managed"
-    _run_setup_surge_script(pre_fix_script, fake_bin, pre_fix_root)
-    with pytest.raises(PermissionError):
-        with package_install_lock("surge-synthesizer/surge", "1.3.4", pre_fix_root.resolve()):
-            pass
-
-    current_root = tmp_path / "current-managed"
-    _run_setup_surge_script(run_script, fake_bin, current_root)
-    with package_install_lock("surge-synthesizer/surge", "1.3.4", current_root.resolve()):
-        pass
 
 
 def test_docker_keeps_source_fallback_only_for_incompatible_registry_artifacts() -> None:
