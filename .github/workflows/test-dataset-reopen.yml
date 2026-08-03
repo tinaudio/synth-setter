@@ -78,4 +78,12 @@ jobs:
           set -euo pipefail
           uv run pytest tests/integration/test_dataset_reopen_e2e.py \
             -m "slow and r2 and integration_r2" \
+            --cov=src --cov-branch --cov-report=xml \
             -vv -s
+
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: ./.github/actions/upload-coverage
+        with:
+          flags: integration-r2-reopen
+          token: ${{ secrets.CODECOV_TOKEN }}
