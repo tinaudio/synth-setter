@@ -157,6 +157,52 @@ def test_write_summary_csv_persists_named_statistics(tmp_path: Path) -> None:
         assert list(csv.DictReader(stream)) == [{"count": "2", "mean": "0.25"}]
 
 
+def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Descending inverse output is projected onto the sampler's note-window contract.
+
+    :param tmp_path: Temporary WAV destination.
+    :param monkeypatch: Renderer-boundary replacement fixture.
+    """
+    render_config = clap_render._load_settings().render
+    spec = clap_render.param_specs[render_config.param_spec_name]
+    synth_params, _ = spec.sample(np.random.default_rng(0))
+    encoded = spec.encode(
+        synth_params,
+        {"pitch": 60, "note_start_and_end": (3.2, 0.8)},
+    )
+    prediction = torch.from_numpy(spec.encoded_to_model(encoded)).unsqueeze(0)
+
+    class StrictRenderer:
+        note_window: tuple[float, float] | None = None
+
+        def render(
+            self,
+            params: dict[str, float],
+            midi_note: int,
+            velocity: int,
+            note_start_and_end: tuple[float, float],
+        ) -> np.ndarray:
+            del params, midi_note, velocity
+            start, end = note_start_and_end
+            if not 0.0 <= start < end <= render_config.signal_duration_seconds:
+                raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
+            self.note_window = note_start_and_end
+            samples = int(render_config.sample_rate * render_config.signal_duration_seconds)
+            return np.zeros((render_config.channels, samples), dtype=np.float32)
+
+    renderer = StrictRenderer()
+    monkeypatch.setattr(clap_render, "make_audio_renderer", lambda _: renderer)
+
+    output = tmp_path / "descending-note.wav"
+    clap_render._render_wav(prediction, render_config, output)
+
+    assert renderer.note_window == pytest.approx((0.8, 3.2))
+    assert output.is_file()
+
+
 def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
