@@ -10,7 +10,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        managed_dir="/Library/Application Support/synth-setter/studiorack"
+        readonly managed_dir="/Library/Application Support/synth-setter/studiorack"
         npm ci
         sudo -E env "PATH=${PATH}" "CI=" \
           "STUDIORACK_PLUGINS_DIR=${managed_dir}" \

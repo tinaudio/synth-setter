@@ -257,10 +257,12 @@ def test_docker_fetched_plugins_have_no_manual_download_stage() -> None:
 def test_mps_workflow_runs_for_surge_setup_changes() -> None:
     """The real macOS lane validates changes to its plugin setup boundary."""
     workflow = yaml.safe_load(MPS_TEST_WORKFLOW.read_text())
-    paths = workflow[True]["pull_request"]["paths"]
 
-    assert ".github/actions/setup-surge-xt/**" in paths
-    assert "tests/infra/test_install_plugins_targets.py" in paths
+    # Both events: a push-only or PR-only filter leaves one lane blind to setup changes.
+    for event in ("push", "pull_request"):
+        paths = workflow[True][event]["paths"]
+        assert ".github/actions/setup-surge-xt/**" in paths, event
+        assert "tests/infra/test_install_plugins_targets.py" in paths, event
 
 
 def test_macos_provisioners_install_surge_through_studiorack() -> None:
@@ -344,7 +346,12 @@ def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install(
     """
     action = yaml.safe_load(SETUP_SURGE_ACTION.read_text())
     run_script = action["runs"]["steps"][0]["run"]
-    pre_fix_script = run_script.rstrip().rsplit("\n", maxsplit=1)[0]
+    # Select the ownership command explicitly; keying off the last line would silently
+    # stop removing it if any command were appended after it.
+    pre_fix_script = "\n".join(
+        line for line in run_script.splitlines() if not line.strip().startswith("sudo chown")
+    )
+    assert pre_fix_script != run_script
 
     fake_bin = _write_surge_setup_fakes(tmp_path)
 
