@@ -179,15 +179,11 @@ def test_load_plugin_managed_host_value_error_propagates(
         load_plugin(str(plugin_bundle))
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX system-install ownership semantics")
-def test_load_plugin_read_only_managed_root_uses_existing_install_lock(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Runtime consumers lock a system-managed bundle without writing its install tree.
+def _read_only_managed_alias(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Build a sealed alias with system-install permission modes.
 
-    :param tmp_path: Scratch root made non-writable after package installation.
-    :param monkeypatch: Replaces the native host with a bundle-content consumer.
+    :param tmp_path: Scratch root for managed content and its checkout alias.
+    :returns: Alias, managed root, and durable package lock paths.
     """
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
     managed_root = tmp_path / "managed"
@@ -200,16 +196,28 @@ def test_load_plugin_read_only_managed_root_uses_existing_install_lock(
     alias.parent.mkdir()
     alias.symlink_to(bundle.absolute(), target_is_directory=True)
     plugin_runtime.record_managed_alias(alias, bundle)
-
     lock_path = plugin_integrity.package_install_lock_path(
         plugin.package,
         plugin.version,
         managed_root,
     )
     lock_path.parent.mkdir(parents=True)
-    lock_path.touch()
-    lock_path.chmod(0o444)
+    lock_path.touch(mode=0o444)
     managed_root.chmod(0o555)
+    return alias, managed_root, lock_path
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX system-install ownership semantics")
+def test_load_plugin_read_only_managed_root_uses_existing_install_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime consumers lock a system-managed bundle without writing its install tree.
+
+    :param tmp_path: Scratch root made non-writable after package installation.
+    :param monkeypatch: Replaces the native host with a bundle-content consumer.
+    """
+    alias, managed_root, lock_path = _read_only_managed_alias(tmp_path)
     loaded_payloads: list[bytes] = []
 
     def _load(path: str, plugin_name: str | None = None) -> object:
@@ -533,12 +541,74 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert not alias.is_symlink()
     assert managed.is_symlink()
     assert managed.resolve() == alias.resolve()
-    validated = plugin_manager.validate_plugin_bundle_for_runtime(alias)
+    initial_snapshot = plugin_manager.validate_plugin_bundle_for_runtime(alias)
     snapshots = managed.parent / ".synth-setter-runtime-snapshots"
+    snapshots.chmod(0o700)
+    initial_snapshot.parent.chmod(0o700)
+
+    validated = plugin_manager.validate_plugin_bundle_for_runtime(alias)
+
     assert validated != alias.resolve(strict=True)
     assert stat.S_IMODE(snapshots.stat().st_mode) == 0o755
     assert stat.S_IMODE(validated.parent.stat().st_mode) == 0o755
     assert plugin_integrity.bundle_entries(validated) == plugin_integrity.bundle_entries(alias)
+
+
+def test_concurrent_runtime_consumers_publish_one_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared package leases serialize one adopted-snapshot publication.
+
+    :param tmp_path: Scratch root for one adopted source and managed alias.
+    :param monkeypatch: Pauses the real snapshot copy while another consumer enters.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "system/Example Synth.vst3")
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    publication_started = threading.Event()
+    release_publication = threading.Event()
+    second_completed = threading.Event()
+    published_destinations: list[Path] = []
+    results: list[Path] = []
+    errors: list[BaseException] = []
+    real_replace = plugin_runtime.os.replace
+
+    def _pause_publish(source_path: Path | str, destination: Path | str) -> None:
+        destination_path = Path(destination)
+        if destination_path.name == managed.name:
+            published_destinations.append(destination_path)
+            publication_started.set()
+            if not release_publication.wait(10):
+                raise RuntimeError("timed out waiting to publish runtime snapshot")
+        real_replace(source_path, destination)
+
+    def _consume(completed: threading.Event | None = None) -> None:
+        try:
+            results.append(plugin_manager.validate_plugin_bundle_for_runtime(managed))
+        except BaseException as exc:  # pragma: no cover - asserted in the parent thread
+            errors.append(exc)
+        finally:
+            if completed is not None:
+                completed.set()
+
+    monkeypatch.setattr(plugin_runtime.os, "replace", _pause_publish)
+    first = threading.Thread(target=_consume)
+    first.start()
+    assert publication_started.wait(10)
+    second = threading.Thread(target=_consume, args=(second_completed,))
+    second.start()
+    assert not second_completed.wait(0.2)
+    assert len(published_destinations) == 1
+
+    release_publication.set()
+    first.join(10)
+    second.join(10)
+
+    assert errors == []
+    assert len(published_destinations) == 1
+    assert len(results) == 2
+    assert results[0] == results[1]
 
 
 def test_replace_managed_alias_symlinked_ownership_rejected_before_target_read(

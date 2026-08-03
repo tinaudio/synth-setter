@@ -80,7 +80,7 @@ def test_write_atomic_record_privileged_writer_remains_world_readable(tmp_path: 
     assert stat.S_IMODE(record.stat().st_mode) == 0o644
 
 
-def test_advisory_file_lock_read_only_filesystem_uses_consumer_lease(
+def test_advisory_file_lease_read_only_filesystem_never_opens_for_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -101,7 +101,7 @@ def test_advisory_file_lock_read_only_filesystem_uses_consumer_lease(
 
     monkeypatch.setattr(Path, "open", _read_only_open)
 
-    with plugin_integrity.advisory_file_lock(lock_path):
+    with plugin_integrity.advisory_file_lease(lock_path):
         pass
 
 

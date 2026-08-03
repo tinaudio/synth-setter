@@ -513,11 +513,34 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
     """Create a runtime-readable snapshot directory and reject symlink substitution.
 
     :param path: Managed snapshot directory.
-    :raises ValueError: The resulting path is not a real directory.
+    :raises ValueError: The resulting path is not a real, runtime-readable directory.
     """
     path.mkdir(mode=0o755, parents=True, exist_ok=True)
-    if not stat.S_ISDIR(path.lstat().st_mode):
+    mode = path.lstat().st_mode
+    if not stat.S_ISDIR(mode):
         raise ValueError(f"runtime snapshot path is not a directory: {path}")
+    if stat.S_IMODE(mode) & 0o055 != 0o055:
+        try:
+            path.chmod(mode | 0o055)
+        except PermissionError:
+            pass
+    if stat.S_IMODE(path.lstat().st_mode) & 0o055 != 0o055:
+        raise ValueError(f"runtime snapshot path is not runtime-readable: {path}")
+
+
+def _runtime_snapshot_matches(destination: Path, seal: BundleSeal) -> bool:
+    """Return whether a published snapshot matches its managed seal.
+
+    :param destination: Candidate persistent runtime snapshot.
+    :param seal: Expected managed content identity.
+    :returns: Whether the destination is a real directory with matching entries.
+    """
+    try:
+        if not stat.S_ISDIR(destination.lstat().st_mode):
+            return False
+        return integrity.bundle_entries(destination) == seal.entries
+    except (FileNotFoundError, ValueError):
+        return False
 
 
 def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) -> Path:
@@ -540,23 +563,20 @@ def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) ->
     destination = snapshots / _snapshot_digest(seal) / managed.name
     _ensure_runtime_snapshot_directory(snapshots)
     _ensure_runtime_snapshot_directory(destination.parent)
-    try:
-        is_directory = stat.S_ISDIR(destination.lstat().st_mode)
-    except FileNotFoundError:
-        is_directory = False
-    try:
-        if is_directory and integrity.bundle_entries(destination) == seal.entries:
-            return destination
-    except ValueError:
-        pass
-    _remove_runtime_snapshot(destination)
+    if _runtime_snapshot_matches(destination, seal):
+        return destination
 
-    with tempfile.TemporaryDirectory(dir=snapshots) as temporary:
-        candidate = Path(temporary) / managed.name
-        shutil.copytree(source, candidate, symlinks=True)
-        if integrity.bundle_entries(candidate) != seal.entries:
-            raise ValueError("managed source changed while creating its runtime snapshot")
-        os.replace(candidate, destination)
+    publication_lock = destination.parent / ".synth-setter-publication.lock"
+    with integrity.advisory_file_lock(publication_lock):
+        if _runtime_snapshot_matches(destination, seal):
+            return destination
+        _remove_runtime_snapshot(destination)
+        with tempfile.TemporaryDirectory(dir=snapshots) as temporary:
+            candidate = Path(temporary) / managed.name
+            shutil.copytree(source, candidate, symlinks=True)
+            if integrity.bundle_entries(candidate) != seal.entries:
+                raise ValueError("managed source changed while creating its runtime snapshot")
+            os.replace(candidate, destination)
     return destination
 
 
@@ -644,7 +664,7 @@ def _validated_runtime_identity_lease(
 
         while True:
             _, lock_path = candidate
-            with integrity.advisory_file_lock(lock_path):
+            with integrity.advisory_file_lease(lock_path):
                 try:
                     locked_candidate, identity = _locked_runtime_identity(bundle, lock_path)
                 except (OSError, ValueError) as exc:

@@ -50,6 +50,7 @@ __all__ = [
     "ManagedBundleRecord",
     "ManagedBundleStorage",
     "PluginIntegrityError",
+    "advisory_file_lease",
     "advisory_file_lock",
     "bundle_entries",
     "bundle_identity_digest",
@@ -792,11 +793,32 @@ def _windows_unlock(stream: BinaryIO) -> None:
     windows_runtime.locking(stream.fileno(), windows_runtime.LK_UNLCK, 1)
 
 
-def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
-    """Build a cross-process writer lock or read-only consumer lease.
+def _posix_advisory_lock(
+    stream: BinaryIO,
+    operation: int,
+) -> AbstractContextManager[None]:
+    """Apply a POSIX advisory lock to an already-open stream.
 
-    POSIX writers take an exclusive lock; consumers without write access take a shared lock that
-    still excludes installers. Windows retains its exclusive lock.
+    :param stream: Lock-file stream opened with role-appropriate access.
+    :param operation: ``fcntl.LOCK_SH`` or ``fcntl.LOCK_EX``.
+    :returns: Context manager holding the requested lock around its body.
+    """
+
+    @contextmanager
+    def _locked() -> Iterator[None]:
+        import fcntl
+
+        fcntl.flock(stream.fileno(), operation)
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+    return _locked()
+
+
+def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
+    """Build a cross-process exclusive writer lock for one durable path.
 
     :param path: Lock file outside removable package-version state.
     :returns: Context manager holding the lock around its body.
@@ -805,33 +827,58 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
     @contextmanager
     def _locked() -> Iterator[None]:
         path.parent.mkdir(parents=True, exist_ok=True)
-        if os.name == "nt":
-            with path.open("a+b") as stream:
+        with path.open("a+b") as stream:
+            if os.name == "nt":
                 _windows_lock(stream)
                 try:
                     yield
                 finally:
                     _windows_unlock(stream)
+                return
+
+            import fcntl
+
+            with _posix_advisory_lock(stream, fcntl.LOCK_EX):
+                yield
+
+    return _locked()
+
+
+def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
+    """Build a shared POSIX consumer lease without writing an existing lock.
+
+    Missing user-managed locks are created. Windows retains the exclusive writable lock because its
+    byte-range API cannot initialize an empty read-only lock file.
+
+    :param path: Durable lock file shared with exclusive writers.
+    :returns: Context manager holding the consumer lease around its body.
+    """
+
+    @contextmanager
+    def _leased() -> Iterator[None]:
+        if os.name == "nt":
+            with advisory_file_lock(path):
+                yield
             return
+
+        try:
+            stream = path.open("rb")
+        except FileNotFoundError:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                stream = path.open("a+b")
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+                    raise
+                stream = path.open("rb")
 
         import fcntl
 
-        try:
-            stream = path.open("a+b")
-            lock_operation = fcntl.LOCK_EX
-        except OSError as exc:
-            if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
-                raise
-            stream = path.open("rb")
-            lock_operation = fcntl.LOCK_SH
         with stream:
-            fcntl.flock(stream.fileno(), lock_operation)
-            try:
+            with _posix_advisory_lock(stream, fcntl.LOCK_SH):
                 yield
-            finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
-    return _locked()
+    return _leased()
 
 
 def package_install_lock_path(package: str, version: str, plugins_dir: Path) -> Path:
