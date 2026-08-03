@@ -688,6 +688,10 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     # Reject extra_envs ↔ resolved-worker-env collisions before merge so a caller
     # can't bypass the .env/process-env resolution path for secrets.
+    extra_wandb_project = sky_cfg.extra_envs.get("WANDB_PROJECT")
+    if extra_wandb_project is not None and not _env_value_is_set(extra_wandb_project):
+        raise ValueError("extra_envs WANDB_PROJECT must be non-blank when set")
+
     protected_worker_env_keys = set(_WORKER_ENV_KEYS) - {"WANDB_PROJECT"}
     cred_overlap = sorted(set(sky_cfg.extra_envs) & protected_worker_env_keys)
     if cred_overlap:

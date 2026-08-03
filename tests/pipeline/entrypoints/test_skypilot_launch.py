@@ -1880,6 +1880,27 @@ class TestDispatchViaSkypilot:
         launched_env = mock_sky.jobs.launch.call_args.args[0].envs
         assert launched_env["WANDB_PROJECT"] == "command-project"
 
+    def test_extra_envs_blank_wandb_project_raises(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+    ) -> None:
+        """A blank command-specific project cannot erase the resolved project.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        """
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="blank-wandb-project",
+            extra_envs={"WANDB_PROJECT": " "},
+        )
+
+        with pytest.raises(ValueError, match="WANDB_PROJECT must be non-blank"):
+            dispatch_via_skypilot(sky_cfg)
+
     def test_extra_envs_collision_with_resolved_env_keys_raises(
         self,
         tmp_path: Path,

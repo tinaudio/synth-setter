@@ -12,6 +12,12 @@ from workflow_fixtures import load_workflow
 _CITEST_PROJECT = "synth-setter-citest"
 _PRODUCTION_PROJECT = "synth-setter"
 _PRODUCTION_WANDB_WORKFLOWS = frozenset({"eval.yml", "train.yml"})
+_EXPECTED_CI_WANDB_PROJECTS = {
+    "finalize-dataset.yaml": "${{ inputs.wandb_project }}",
+    "generate-dataset-shards.yaml": "${{ inputs.wandb_project }}",
+    "test-gpu.yml": _CITEST_PROJECT,
+    "test-mps.yml": _CITEST_PROJECT,
+}
 
 
 def _on(workflow: Mapping[str, object]) -> Mapping[str, object]:
@@ -51,17 +57,22 @@ def _job_wandb_project_offenders(
     :param workflow_env: Environment inherited from the workflow.
     :returns: Job or step scopes that can fall back to the production project.
     """
+    workflow_name = job_scope.partition(":")[0]
+    expected_project = _EXPECTED_CI_WANDB_PROJECTS.get(workflow_name)
     job_env = cast(Mapping[str, object], job.get("env", {}))
     inherited_api_key = "WANDB_API_KEY" in workflow_env or "WANDB_API_KEY" in job_env
-    inherited_project = "WANDB_PROJECT" in workflow_env or "WANDB_PROJECT" in job_env
-    if inherited_api_key and not inherited_project:
+    inherited_project = job_env.get("WANDB_PROJECT", workflow_env.get("WANDB_PROJECT"))
+    if inherited_api_key and (expected_project is None or inherited_project != expected_project):
         return [job_scope]
 
     steps = cast(list[Mapping[str, object]], job.get("steps", []))
     offenders: list[str] = []
     for step in steps:
         step_env = cast(Mapping[str, object], step.get("env", {}))
-        if "WANDB_API_KEY" in step_env and not (inherited_project or "WANDB_PROJECT" in step_env):
+        effective_project = step_env.get("WANDB_PROJECT", inherited_project)
+        if "WANDB_API_KEY" in step_env and (
+            expected_project is None or effective_project != expected_project
+        ):
             offenders.append(f"{job_scope}:{step.get('name', '<unnamed>')}")
     return offenders
 
@@ -165,3 +176,12 @@ def test_job_level_wandb_key_without_project_is_reported() -> None:
     offenders = _job_wandb_project_offenders("test.yml:run_tests", job, {})
 
     assert offenders == ["test.yml:run_tests"]
+
+
+def test_empty_wandb_project_is_reported() -> None:
+    """An empty project cannot satisfy the authenticated CI guard."""
+    job = {"steps": [{"name": "test", "env": {"WANDB_API_KEY": "secret", "WANDB_PROJECT": ""}}]}
+
+    offenders = _job_wandb_project_offenders("test-gpu.yml:run_tests", job, {})
+
+    assert offenders == ["test-gpu.yml:run_tests:test"]
