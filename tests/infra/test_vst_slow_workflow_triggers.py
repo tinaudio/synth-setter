@@ -133,10 +133,10 @@ def _install_fixed_utc_date(tmp_path: Path) -> Path:
     bin_dir.mkdir()
     fake_date = bin_dir / "date"
     fake_date.write_text(
-        "#!/usr/bin/env bash\n"
+        "#!/bin/bash\n"
         "set -euo pipefail\n"
-        'test "$1" = "-u"\n'
-        'test "$2" = "+%Y-%m-%dT%H-%M-%SZ"\n'
+        '[[ "${1}" == "-u" ]]\n'
+        '[[ "${2}" == "+%Y-%m-%dT%H-%M-%SZ" ]]\n'
         "printf '%s\\n' '2026-08-03T12-34-56Z'\n"
     )
     fake_date.chmod(0o755)
