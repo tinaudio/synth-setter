@@ -706,6 +706,36 @@ def _start_runtime_snapshot_consumer(
     return thread
 
 
+def _adopt_bundle_without_runtime_snapshot(tmp_path: Path) -> Path:
+    """Create one adopted bundle whose installer snapshot was removed.
+
+    :param tmp_path: Scratch root for the source and managed bundle.
+    :returns: Adopted managed bundle path.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "system/Example Synth.vst3")
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    shutil.rmtree(managed.parent / ".synth-setter-runtime-snapshots")
+    return managed
+
+
+def _assert_concurrent_snapshot_results(
+    published_destinations: list[Path],
+    results: list[Path],
+    errors: list[BaseException],
+) -> None:
+    """Assert both consumers received one identically published snapshot.
+
+    :param published_destinations: Snapshot destinations atomically published.
+    :param results: Snapshot paths returned to consumers.
+    :param errors: Consumer thread failures.
+    """
+    assert errors == []
+    assert len(published_destinations) == 1
+    assert len(results) == 2
+    assert results[0] == results[1]
+
+
 def test_concurrent_runtime_consumers_publish_one_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -715,10 +745,7 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
     :param tmp_path: Scratch root for one adopted source and managed alias.
     :param monkeypatch: Pauses the real snapshot copy while another consumer enters.
     """
-    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
-    source = _bundle(tmp_path / "system/Example Synth.vst3")
-    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
-    shutil.rmtree(managed.parent / ".synth-setter-runtime-snapshots")
+    managed = _adopt_bundle_without_runtime_snapshot(tmp_path)
     publication_started = threading.Event()
     release_publication = threading.Event()
     second_completed = threading.Event()
@@ -755,10 +782,7 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
     first.join(10)
     second.join(10)
 
-    assert errors == []
-    assert len(published_destinations) == 1
-    assert len(results) == 2
-    assert results[0] == results[1]
+    _assert_concurrent_snapshot_results(published_destinations, results, errors)
 
 
 def test_replace_managed_alias_symlinked_ownership_rejected_before_target_read(
