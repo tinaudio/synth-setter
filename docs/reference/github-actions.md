@@ -150,9 +150,9 @@ Claude. It installs pinned Pi and Tintin releases, checks out an immutable
 actor are `ktinubu` reach those secrets; never convert this workflow to
 `pull_request_target`.
 GitHub Actions runs aftercare synchronously so the job cannot report success
-while deferred passes remain. It waits up to 15 minutes for foreground-owned
-reports before failing closed rather than launching duplicate reviewers. Local
-launcher calls keep detached aftercare.
+while deferred passes remain. Once the foreground Pi host exits and Tintin has
+aborted its workers, aftercare adopts complete reports and safely relaunches
+unfinished passes. Local launcher calls keep detached aftercare.
 The `.agent-reviews/` audit is retained as a repository-private artifact for
 seven days.
 

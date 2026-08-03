@@ -398,14 +398,18 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent/_shared/run_pi_review.sh"
     marker = tmp_path / "aftercare-ran"
+    foreground_exit_marker = tmp_path / "foreground-exited"
     manifest_path_file = tmp_path / "manifest-path"
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/bin/bash\n"
         'if [[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]; then\n'
+        '  [[ "${SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED:-}" == 1 ]] || exit 8\n'
+        '  [[ -f "${FOREGROUND_EXIT_MARKER}" ]] || exit 9\n'
         '  touch "${AFTERCARE_MARKER}"\n'
         "  exit 0\n"
         "fi\n"
+        "trap 'touch \"${FOREGROUND_EXIT_MARKER}\"' EXIT\n"
         'printf \'%s\\n\' "${PI_REVIEW_AFTERCARE_MANIFEST}" > "${MANIFEST_PATH_FILE}"\n'
         "cat > \"${PI_REVIEW_AFTERCARE_MANIFEST}\" <<'JSON'\n"
         '{"version":1,"mode":"no-comments","repo":"tinaudio/synth-setter",'
@@ -431,6 +435,7 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
             **os.environ,
             "CI": "",
             "AFTERCARE_MARKER": str(marker),
+            "FOREGROUND_EXIT_MARKER": str(foreground_exit_marker),
             "MANIFEST_PATH_FILE": str(manifest_path_file),
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
         },
@@ -544,6 +549,8 @@ import os
 from pathlib import Path
 
 if os.environ.get("SYNTH_SETTER_PI_REVIEW_AFTERCARE") == "1":
+    if os.environ.get("SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED") != "1":
+        raise SystemExit(8)
     if os.environ.get("AFTERCARE_FAIL") == "1":
         raise SystemExit(9)
     runtime = Path(os.environ["PI_REVIEW_AFTERCARE_RUNTIME_MANIFEST"])
