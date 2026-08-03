@@ -22,42 +22,35 @@ _LAUNCH_CONFIG = (
 _WORKER_SCRIPT = _REPO_ROOT / "jobs/eval/run-flow-simple-440k-all-modes.sh"
 
 
-class _EvalCase(NamedTuple):
+class _ArmCase(NamedTuple):
     arm: str
-    mode: str
     train_config_id: str
     artifact_name: str
     conditioning: str | None
 
 
-# Cover every arm and mode through the CLI; the matrix assertion avoids repeated subprocesses.
-_EVAL_CASES = (
-    _EvalCase("mel", "test", "flow_simple_440k_100k", "model-flow_simple_440k_100k:v0", None),
-    _EvalCase("mel", "validate", "flow_simple_440k_100k", "model-flow_simple_440k_100k:v0", None),
-    _EvalCase("mel", "val", "flow_simple_440k_100k", "model-flow_simple_440k_100k:v0", None),
-    _EvalCase("mel", "predict", "flow_simple_440k_100k", "model-flow_simple_440k_100k:v0", None),
-    _EvalCase(
+_ARM_CASES = (
+    _ArmCase("mel", "flow_simple_440k_100k", "model-flow_simple_440k_100k:v0", None),
+    _ArmCase(
         "clap",
-        "test",
         "flow_simple_440k_clap_100k",
         "model-flow_simple_440k_clap_100k:v0",
         "clap",
     ),
-    _EvalCase(
+    _ArmCase(
         "m2l",
-        "test",
         "flow_simple_440k_m2l_100k",
         "model-flow_simple_440k_m2l_100k:v0",
         "m2l",
     ),
-    _EvalCase(
+    _ArmCase(
         "same_s",
-        "test",
         "flow_simple_440k_same_s_100k",
         "model-flow_simple_440k_same_s_100k:v0",
         "same_s",
     ),
 )
+_MODES = ("test", "validate", "val", "predict")
 
 
 def test_eval_flow_simple_440k_launch_config_selects_one_mid_tier_job() -> None:
@@ -159,16 +152,19 @@ def test_eval_flow_simple_440k_worker_unknown_filter_fails(argument: str, messag
     assert message in result.stderr
 
 
-@pytest.mark.parametrize("case", _EVAL_CASES, ids=lambda case: f"{case.arm}-{case.mode}")
+@pytest.mark.parametrize("mode", _MODES)
+@pytest.mark.parametrize("case", _ARM_CASES, ids=lambda case: case.arm)
 def test_eval_flow_simple_440k_worker_command_composes_checkpoint_mode(
-    case: _EvalCase,
+    case: _ArmCase,
+    mode: str,
 ) -> None:
-    """Each arm and mode composes through the packaged eval entrypoint.
+    """Each checkpoint/mode cell composes through the packaged eval entrypoint.
 
-    :param case: Checkpoint/mode case selected from the worker matrix.
+    :param case: Checkpoint arm selected from the worker matrix.
+    :param mode: Evaluation mode selected from the worker matrix.
     """
     dry_run = subprocess.run(  # noqa: S603 - checked-in script with fixed test arguments
-        [str(_WORKER_SCRIPT), f"--arm={case.arm}", f"--mode={case.mode}"],
+        [str(_WORKER_SCRIPT), f"--arm={case.arm}", f"--mode={mode}"],
         cwd=_REPO_ROOT,
         check=False,
         capture_output=True,
@@ -177,7 +173,7 @@ def test_eval_flow_simple_440k_worker_command_composes_checkpoint_mode(
 
     assert dry_run.returncode == 0, dry_run.stderr
     label, command_text = dry_run.stdout.rstrip().split("\t", maxsplit=1)
-    assert label == f"DRY RUN {case.arm}/{case.mode}"
+    assert label == f"DRY RUN {case.arm}/{mode}"
     worker_args = shlex.split(command_text)
     assert worker_args[0] == "synth-setter-eval"
 
@@ -192,7 +188,7 @@ def test_eval_flow_simple_440k_worker_command_composes_checkpoint_mode(
     )
 
     assert composed.returncode == 0, composed.stderr
-    assert f"mode: {case.mode}" in composed.stdout
+    assert f"mode: {mode}" in composed.stdout
     assert f"consumed_train_config_id: {case.train_config_id}" in composed.stdout
     expected_ref = "ckpt_path: ${wandb:khaledtinubu-n-a/synth-setter/" + case.artifact_name + "}"
     assert expected_ref in composed.stdout
@@ -200,7 +196,7 @@ def test_eval_flow_simple_440k_worker_command_composes_checkpoint_mode(
         assert "conditioning: mel" in composed.stdout
     else:
         assert f"column: {case.conditioning}" in composed.stdout
-    if case.mode == "predict":
+    if mode == "predict":
         assert "render_vst: true" in composed.stdout
         assert "compute_metrics: true" in composed.stdout
     else:
