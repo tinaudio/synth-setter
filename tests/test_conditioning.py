@@ -22,6 +22,19 @@ def test_embedding_conditioning_spec_accepts_fixed_shape() -> None:
 
     assert spec.column == "clap"
     assert spec.input_shape == (512,)
+    assert spec.normalization == "none"
+
+
+def test_embedding_conditioning_spec_rejects_unknown_normalization() -> None:
+    """Only measured normalization strategies cross the strict config boundary."""
+    with pytest.raises(ValidationError, match="normalization"):
+        EmbeddingConditioningSpec.model_validate(
+            {
+                "column": "embedding",
+                "input_shape": (2,),
+                "normalization": "layer_norm",
+            }
+        )
 
 
 def test_embedding_conditioning_spec_rejects_extra_fields() -> None:
