@@ -7,6 +7,7 @@ obvious mistakes (wrong types, blank ``task_name``, negative ``seed``) fail.
 from __future__ import annotations
 
 import pytest
+from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.conditioning import EmbeddingConditioningSpec
@@ -28,6 +29,15 @@ class TestTrainConfigAcceptsLiveCompose:
         cfg_dict = compose_train_cfg(return_hydra_config=True)
         parsed = TrainConfig.model_validate(cfg_dict)
         assert isinstance(parsed, TrainConfig)
+
+    def test_partial_hydra_composition_without_consumers_validates(self) -> None:
+        """A partial config may omit model and datamodule subtrees."""
+        cfg = OmegaConf.create({"task_name": "train"})
+
+        parsed = TrainConfig.from_hydra_cfg(cfg)
+
+        assert parsed.model is None
+        assert parsed.datamodule is None
 
     def test_typed_scalars_survive_round_trip(self) -> None:
         """Every typed scalar lands on the model with the right type / shape."""
@@ -54,7 +64,7 @@ class TestTrainConfigAcceptsLiveCompose:
             ]
         )
 
-        parsed = TrainConfig.model_validate(cfg_dict)
+        parsed = TrainConfig.from_hydra_cfg(OmegaConf.create(cfg_dict))
 
         assert parsed.model is not None
         assert parsed.datamodule is not None
