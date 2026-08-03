@@ -15,6 +15,9 @@
     "surge-synthesizer/ob-xf": "OB-Xf.vst3",
     "surge-synthesizer/surge": "Surge XT.vst3"
   },
+  "vst3PluginNames": {
+    "baconpaul/six-sines": "Six Sines"
+  },
   "vst3Versions": {
     "asb2m10/dexed": "1.0.0",
     "baconpaul/six-sines": "1.1.0",

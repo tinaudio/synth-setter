@@ -14,7 +14,7 @@ command differs by hardware, and how to keep the committed `uv.lock` honest.
 | Verify the lock is in sync           | `uv lock --check`                                              |
 | Regenerate the lock after a dep edit | `uv lock` (then commit the diff)                               |
 
-The standard runtime installs TinyMU's public MATPAC package from an immutable Git commit.
+The standard runtime installs TinyMU's MATPAC and MeanAudio's VAE packages from immutable Git commits.
 
 `--frozen` errors instead of silently re-resolving when the lock and
 `pyproject.toml` disagree. CI uses it for the main project install everywhere
@@ -121,13 +121,23 @@ hand-picked deps) plus an import smoke-guard. Full installs that cannot honor
 
 Only the `cpu`/`cu128` backend-routing extras remain in
 `[project.optional-dependencies]`, because `[tool.uv.sources]` keys on extras.
-The commit-pinned `stable-audio-3` and `tinymu` runtimes plus `ssondo==0.3.1`
-belong to the `torch` group, so normal heavy installs support SAME, S-SONDO,
-T5Gemma, and TinyMU encoders without feature extras. TinyMU exposes MATPAC
-through its public package API and declares its own third-party runtime
-dependencies. The Stable Audio 3 package-scoped uv metadata override relaxes
-upstream's torch and torchaudio pins while retaining the numpy floor and backend
-index routing.
+The commit-pinned `stable-audio-3`, `tinymu`, and `meanaudio` runtimes plus
+`ssondo==0.3.1` belong to the `torch` group, so normal heavy installs support
+SAME, S-SONDO, T5Gemma, TinyMU, and MeanAudio encoders without feature extras.
+TinyMU exposes MATPAC through its public package API and declares its own
+third-party runtime dependencies. The Stable Audio 3 package-scoped uv metadata
+override relaxes upstream's torch and torchaudio pins while retaining the numpy
+floor and backend index routing.
+
+MeanAudio is installed directly from commit
+`8740a3e8df4c891a8d9deee1f820d051584d2671`. Its upstream metadata describes the
+full generation app and requires `numpy<2.1` and `timm>=1.0.12`, which conflict
+with this runtime even though the VAE adapter imports no timm or generation app
+modules and needs no numpy upper bound. The
+package-scoped `[tool.uv.dependency-metadata]` entry replaces that metadata only
+for `meanaudio==1.0.0` with the measured mel/VAE import closure: torch, numpy,
+einops, librosa, OmegaConf, and Hugging Face Hub. This remains a direct upstream
+installation; no MeanAudio source is copied into synth-setter.
 
 ## Adding a new extra or dependency group
 

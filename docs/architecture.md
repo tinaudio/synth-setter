@@ -153,8 +153,10 @@ settings only and are paired with a `synth=<name>` selection. The `ParamSpec` ob
 storage, mel features, distributed workers, and models all read width and
 behavior from the resolved spec, never from a synth literal. Faust entries use
 an empty state path and resolve checked-in source by the same identity.
-`studiorack.json`, `plugin_manager.py`, and `synth-setter-plugins` manage exact
-VST3 packages beneath the stable `plugins/*.vst3` identity paths. Onboarding a
+`studiorack.json`, `studiorack.lock.json`, `plugin_manager.py`,
+`plugin_integrity.py`, `plugin_runtime.py`, and `synth-setter-plugins` manage exact VST3 packages,
+artifact identities, and content-sealed bundles beneath stable `plugins/*.vst3`
+identity paths. Onboarding a
 new VST3 synth is additive: install its package, scaffold and hand-tune a spec,
 then register it against the generic `render=vst` backend. See
 [Adding a new synth](guides/adding-a-new-synth.md).

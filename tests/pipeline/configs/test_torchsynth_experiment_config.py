@@ -18,6 +18,10 @@ from synth_setter.models.components.transformer import (
     AudioSpectrogramTransformer,
     LearntProjection,
 )
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
+    PUPUJEPA_CHECKPOINT_REVISION,
+)
 from synth_setter.same import (
     DEFAULT_SAME_L_CHECKPOINT,
     DEFAULT_SAME_L_CHECKPOINT_SHA256,
@@ -34,6 +38,36 @@ def test_torchsynth_datamodule_defaults_to_four_seconds_of_audio() -> None:
     assert cfg.datamodule.signal_length == 176_400
     assert cfg.datamodule.sample_rate == 44_100
     assert "emit_mel" not in cfg.datamodule
+
+
+def test_torchsynth_flow_finetune_persists_four_workers_by_default() -> None:
+    """Gradient-spectral finetuning reuses each render worker across epochs."""
+    cfg = _experiment_cfg("flow_finetune")
+
+    assert cfg.datamodule.num_workers == 4
+    assert cfg.datamodule.persistent_workers is True
+
+
+def test_torchsynth_flow_finetune_null_persists_four_workers_by_default() -> None:
+    """Null-control finetuning reuses each render worker across epochs."""
+    cfg = _experiment_cfg("flow_finetune_null")
+
+    assert cfg.datamodule.num_workers == 4
+    assert cfg.datamodule.persistent_workers is True
+
+
+def test_torchsynth_persistent_workers_cli_override_disables_persistence() -> None:
+    """The Hydra override can opt out of worker reuse for troubleshooting."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=torchsynth/flow_finetune_null",
+                "datamodule.persistent_workers=false",
+            ],
+        )
+
+    assert cfg.datamodule.persistent_workers is False
 
 
 def test_default_callbacks_monitor_parameter_mse() -> None:
@@ -414,6 +448,36 @@ def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
     )
     assert cfg.model.encoder.head.embed_dim == 256
     assert cfg.model.encoder.head.max_seq_len == 44
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+
+
+def test_pupujepa_online_conditioning_composes_frozen_teacher_and_temporal_pool() -> None:
+    """Online PupuJEPA pools the pinned waveform teacher into flow conditioning."""
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", "conditioning=pupujepa_tiny_online"],
+        )
+
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+    assert (
+        cfg.model.encoder._target_
+        == "synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder"
+    )
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.pupujepa_encoder.PupuJepaAudioEncoder.from_pretrained"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == cfg.datamodule.sample_rate
+    assert cfg.model.encoder.backbone.checkpoint == DEFAULT_PUPUJEPA_TINY_CHECKPOINT
+    assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
+    assert (
+        cfg.model.encoder.head._target_
+        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+    )
+    assert cfg.model.encoder.head.embed_dim == 1536
+    assert cfg.model.encoder.head.max_seq_len == 256
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
 
 

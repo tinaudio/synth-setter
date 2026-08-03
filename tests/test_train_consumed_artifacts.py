@@ -16,6 +16,7 @@ back out of wandb's own datastore binary. All kept out of the canonical
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -131,6 +132,35 @@ def test_train_calls_record_input_lineage_with_discovered_dataset_edge(
 
     spy.assert_called_once_with(
         logger_sentinel, [("data-diva-v1", "diva-v1-20260520T000000000Z")], []
+    )
+
+
+def test_train_calls_record_input_lineage_with_legacy_dataset_edge(tmp_path: Path) -> None:
+    """Training records lineage when unrelated frozen-spec fields cannot validate.
+
+    :param tmp_path: Pytest tmp dir containing the identity-bearing dataset spec.
+    """
+    logger_sentinel = MagicMock(name="loggers")
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
+    (tmp_path / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
+    cfg = _seam_cfg(tmp_path, dataset_root=tmp_path, train_flag=True, test_flag=False)
+
+    with _stub_train_collaborators(logger_sentinel) as spy:
+        train(cfg)
+
+    spy.assert_called_once_with(
+        logger_sentinel,
+        [
+            (
+                "data-surge-simple-lance-440k-20k-20k",
+                "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+            )
+        ],
+        [],
     )
 
 
@@ -331,13 +361,12 @@ def test_train_unresolvable_dataset_root_marks_the_wandb_run_incomplete(
 
 
 @pytest.mark.slow
-def test_train_resolvable_dataset_root_leaves_the_wandb_run_unmarked(
+def test_train_legacy_dataset_root_leaves_the_wandb_run_unmarked(
     cfg_train_lance: DictConfig,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
-    """A root with a readable frozen spec is never marked incomplete (#2424).
+    """An identity-bearing frozen spec creates lineage without an incomplete marker.
 
     Also pins that an offline run — where ``use_artifact`` is unavailable by
     design — is not reported as a lineage gap it could never close.
@@ -345,17 +374,14 @@ def test_train_resolvable_dataset_root_leaves_the_wandb_run_unmarked(
     :param cfg_train_lance: CPU-cheap Lance train cfg.
     :param tmp_path: Hosts the dataset, offline run dir, and outputs.
     :param monkeypatch: Pins a hermetic offline ``WANDB_*`` env.
-    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
     """
-    write_spec_to_path(
-        dataset_spec_factory(
-            task_name="diva-v1",
-            train_val_test_sizes=[4, 4, 0],
-            r2={"bucket": "intermediate-data"},
-            render={"samples_per_shard": 4},
-        ),
-        Path(cfg_train_lance.datamodule.dataset_root) / "input_spec.json",
-    )
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
+    spec_path = Path(cfg_train_lance.datamodule.dataset_root) / "input_spec.json"
+    spec_path.write_text(json.dumps(legacy_spec), encoding="utf-8")
 
     binary = _run_offline_train(cfg_train_lance, tmp_path, monkeypatch)
 

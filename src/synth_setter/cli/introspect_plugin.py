@@ -42,6 +42,7 @@ from synth_setter.data.vst.registration import (
 )
 from synth_setter.data.vst.verification import registered_artifacts, verify_registration
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.plugin_integrity import ArtifactLock
 from synth_setter.plugin_manager import (
     ManagedPlugin,
     PluginManifest,
@@ -262,12 +263,15 @@ def _run_introspection(options: _IntrospectionOptions) -> None:
         raise click.UsageError("--plugin-path and --studiorack-plugin are mutually exclusive.")
     if studiorack_plugin is not None and not register:
         raise click.UsageError("--studiorack-plugin requires --register.")
+    managed_lock: ArtifactLock | None = None
     managed_plugin: ManagedPlugin | None = None
     if studiorack_plugin is not None:
         root = _resolve_checkout_root(repo_root)
         manifest_path = studiorack_manifest or root / "studiorack.json"
         try:
-            managed_plugin = PluginManifest.load(manifest_path).resolve(studiorack_plugin)
+            manifest = PluginManifest.load(manifest_path)
+            managed_lock = ArtifactLock.load(manifest_path.with_suffix(".lock.json"), manifest)
+            managed_plugin = manifest.resolve(studiorack_plugin)
         except (OSError, ValueError, KeyError) as exc:
             raise click.UsageError(str(exc)) from exc
         plugin_path = str(root / "plugins" / managed_plugin.bundle)
@@ -300,10 +304,11 @@ def _run_introspection(options: _IntrospectionOptions) -> None:
         if dest.exists() and not force:
             raise click.UsageError(f"{dest} already exists; pass --force to overwrite")
 
-    if managed_plugin is not None:
+    if managed_plugin is not None and managed_lock is not None:
         try:
             link_plugin(
                 managed_plugin,
+                artifact_lock=managed_lock,
                 plugins_dir=studiorack_plugins_dir,
                 links_dir=Path(plugin_path).parent,
             )

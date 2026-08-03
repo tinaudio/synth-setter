@@ -508,6 +508,7 @@ class LanceVSTDataModule(VSTDataModule):
         batch_size: int = 1024,
         ot: bool = True,
         num_workers: int = 0,
+        val_num_workers: int = 0,
         fake: bool = False,
         repeat_first_batch: bool = False,
         predict_file: str | Path | None = None,
@@ -527,7 +528,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param use_saved_mean_and_variance: Whether to apply saved mel statistics.
         :param batch_size: Samples per model batch.
         :param ot: Whether training batches use optimal-transport matching.
-        :param num_workers: Worker processes per dataloader.
+        :param num_workers: Worker processes for training, test, and prediction loaders.
+        :param val_num_workers: Worker processes for the validation loader.
         :param fake: Whether to synthesize samples instead of reading Lance.
         :param repeat_first_batch: Whether non-predict loaders repeat their first batch.
         :param predict_file: Prediction split; defaults to ``test.lance``.
@@ -561,6 +563,7 @@ class LanceVSTDataModule(VSTDataModule):
             download_dataset_txids=download_dataset_txids,
             download_dataset_row_limit=download_dataset_row_limit,
         )
+        self.val_num_workers = val_num_workers
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
@@ -734,10 +737,11 @@ class LanceVSTDataModule(VSTDataModule):
         dataset = pieces.dataset
         if repeats_first_batch:
             dataset = _RepeatFirstBatchDataset(pieces.dataset, self.batch_size)
+        num_workers = self.val_num_workers if split == "val" else self.num_workers
         return map_dataloader_over(
             dataset,
             batch_size=self.batch_size,
-            num_workers=self.num_workers,
+            num_workers=num_workers,
             collate_fn=pieces.collate,
             pin_memory=self.pin_memory,
             shuffle=False if repeats_first_batch else shuffle,

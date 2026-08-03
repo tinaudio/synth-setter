@@ -21,14 +21,30 @@ from synth_setter.pipeline.data.matpac_plus import (
     DEFAULT_MATPAC_PLUS_CHECKPOINT,
     MATPAC_PLUS_CHECKPOINT_SHA256,
     MATPAC_PLUS_FRONTEND,
-    resolve_matpac_plus_checkpoint,
+    TINYMU_TIMM_VERSION,
+    matpac_plus_artifact_digest,
     matpac_plus_encoder_input,
     matpac_plus_num_latent_frames,
+    resolve_matpac_plus_checkpoint,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
 _SAMPLE_RATE = 16_000
 _AUDIO_SAMPLES = 16_000
+
+
+def test_matpac_plus_artifact_identity_includes_timm_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resume identity changes when TinyMU's numerical runtime changes.
+
+    :param monkeypatch: Fixture replacing checkpoint materialization.
+    """
+    monkeypatch.setattr(matpac_plus_module, "resolve_matpac_plus_checkpoint", lambda _path: None)
+
+    identity = matpac_plus_artifact_digest(DEFAULT_MATPAC_PLUS_CHECKPOINT)
+
+    assert f"timm:{TINYMU_TIMM_VERSION}" in identity
 
 
 def test_matpac_plus_registry_spec_pins_checkpoint_and_mean_pooling() -> None:
