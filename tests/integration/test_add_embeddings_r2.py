@@ -1,12 +1,10 @@
 """End-to-end add-embeddings-against-real-R2 test (no mocks).
 
-Drives the two production CLIs back to back: the real VST renderer
-(``generate_vst_dataset.py``) writes a tiny Lance shard that is uploaded to a
-unique R2 prefix, then ``synth-setter-add-embeddings`` runs the real
-music2latent, LAION-CLAP, and SA3 T5Gemma encoders against that remote URI. The
-augmented dataset is reopened from R2 and its embedding columns, indexability,
-and ``nearest=`` query path are asserted. The prefix is purged on teardown
-regardless of pass/fail.
+Exercises ``synth-setter-add-embeddings`` against real R2 Lance datasets. The
+encoder tests upload a tiny real-VST shard before running the real models; the
+index test uploads schema-compatible vectors and drives the production IVF-PQ
+resume path. Each dataset is reopened through Lance and consumed by a nearest
+query before its unique R2 prefix is purged.
 
 The encoder tests skip when the VST plugin is absent; all tests skip when R2
 credentials are missing or R2 is unreachable at runtime.
@@ -19,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
@@ -116,7 +114,7 @@ def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpe
         "base_seed": 42,
         # Constant mel bins over so few samples; mask so the spec stays valid.
         "mask_degenerate_bins": True,
-        "r2": {"bucket": "intermediate-data", "prefix": prefix},
+        "r2": {"bucket": _R2_BUCKET, "prefix": prefix},
         "render": {
             "synth": {
                 "name": TEST_PARAM_SPEC_NAME,
@@ -170,6 +168,32 @@ def _render_shard_locally(spec: DatasetSpec, shard: ShardSpec, work_dir: Path) -
     return shard_path
 
 
+def _upload_dataset(
+    prefix: str,
+    shard_uri: str,
+    build_local_dataset: Callable[[Path], Path],
+) -> Iterator[str]:
+    """Upload one locally built Lance dataset and purge its test prefix afterward.
+
+    :param prefix: Unique key prefix under the test bucket.
+    :param shard_uri: Destination URI for the Lance dataset directory.
+    :param build_local_dataset: Builder returning a dataset under its temporary directory.
+    :yields str: Uploaded ``r2://`` dataset URI.
+    """
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
+    r2_io.ensure_r2_env_loaded()
+
+    try:
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            local_dataset = build_local_dataset(Path(raw_work_dir))
+            r2_io.upload_dir(local_dataset, shard_uri)
+        assert r2_io.r2_directory_exists(shard_uri), f"upload left nothing at {shard_uri}"
+        yield shard_uri
+    finally:
+        r2_io.purge_prefix(_R2_BUCKET, prefix)
+
+
 def _render_and_upload(rows: int) -> Iterator[str]:
     """Render a Lance shard of ``rows`` samples, upload it to a unique R2 prefix, yield its URI.
 
@@ -180,23 +204,14 @@ def _render_and_upload(rows: int) -> Iterator[str]:
     :param rows: Samples in the single rendered shard.
     :yields str: ``r2://bucket/prefix/shard-000000.lance`` of the uploaded dataset.
     """
-    if not r2_io.is_r2_reachable():
-        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
-    r2_io.ensure_r2_env_loaded()
-
     prefix = _unique_test_prefix()
     spec = _lance_embed_spec(prefix, rows)
     shard = spec.shards[0]
-    shard_uri = spec.r2.shard_uri(shard)
-    try:
-        with tempfile.TemporaryDirectory() as raw_work_dir:
-            local_shard = _render_shard_locally(spec, shard, Path(raw_work_dir))
-            r2_io.upload_dir(local_shard, shard_uri)
-        assert r2_io.r2_directory_exists(shard_uri), f"upload left nothing at {shard_uri}"
-        yield shard_uri
-    finally:
-        # Best-effort teardown; a purge failure must not mask a test assertion.
-        r2_io.purge_prefix(spec.r2.bucket, prefix)
+
+    def build_local_dataset(work_dir: Path) -> Path:
+        return _render_shard_locally(spec, shard, work_dir)
+
+    yield from _upload_dataset(prefix, spec.r2.shard_uri(shard), build_local_dataset)
 
 
 @pytest.fixture()
@@ -206,6 +221,37 @@ def remote_lance_dataset_uri() -> Iterator[str]:
     :yields str: ``r2://`` URI of the uploaded dataset.
     """
     yield from _render_and_upload(_SAMPLES_PER_SHARD)
+
+
+def _index_embedding_schema(m2l_shape: tuple[int, ...]) -> pa.Schema:
+    """Build the schema and source metadata needed by the index-only CLI path.
+
+    :param m2l_shape: Inner shape of the sequence embedding column.
+    :returns: Schema for CLAP, M2L, and pooled M2L vectors.
+    """
+    metadata = ShardMetadata(
+        velocity=100,
+        signal_duration_seconds=_SIGNAL_DURATION_SECONDS,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=-55.0,
+    )
+    return pa.schema(
+        [
+            pa.field(
+                CLAP_FIELD,
+                pa.list_(pa.float32(), _INDEX_EMBEDDING_DIM),
+                nullable=False,
+            ),
+            pa.field(M2L_FIELD, pa.fixed_shape_tensor(pa.float32(), m2l_shape), nullable=False),
+            pa.field(
+                f"{M2L_FIELD}_vec",
+                pa.list_(pa.float32(), _INDEX_EMBEDDING_DIM),
+                nullable=False,
+            ),
+        ],
+        metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode()},
+    )
 
 
 def _indexable_embedding_table() -> pa.Table:
@@ -220,31 +266,7 @@ def _indexable_embedding_table() -> pa.Table:
         dtype=np.float32,
     )
     m2l_vectors = m2l.mean(axis=-1, dtype=np.float32)
-    metadata = ShardMetadata(
-        velocity=100,
-        signal_duration_seconds=_SIGNAL_DURATION_SECONDS,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        min_loudness=-55.0,
-    )
-    schema = pa.schema(
-        [
-            pa.field(
-                CLAP_FIELD,
-                pa.list_(pa.float32(), _INDEX_EMBEDDING_DIM),
-                nullable=False,
-            ),
-            pa.field(
-                M2L_FIELD, pa.fixed_shape_tensor(pa.float32(), m2l.shape[1:]), nullable=False
-            ),
-            pa.field(
-                f"{M2L_FIELD}_vec",
-                pa.list_(pa.float32(), _INDEX_EMBEDDING_DIM),
-                nullable=False,
-            ),
-        ],
-        metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode()},
-    )
+    schema = _index_embedding_schema(m2l.shape[1:])
     return pa.Table.from_arrays(
         [
             pa.FixedSizeListArray.from_arrays(pa.array(clap.reshape(-1)), _INDEX_EMBEDDING_DIM),
@@ -263,21 +285,15 @@ def remote_indexed_lance_dataset_uri() -> Iterator[str]:
 
     :yields str: ``r2://`` URI of the uploaded dataset.
     """
-    if not r2_io.is_r2_reachable():
-        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
-    r2_io.ensure_r2_env_loaded()
-
     prefix = _unique_test_prefix()
     shard_uri = r2_io.shard_uri(_R2_BUCKET, prefix, "shard-000000.lance")
-    try:
-        with tempfile.TemporaryDirectory() as raw_work_dir:
-            local_shard = Path(raw_work_dir) / "shard-000000.lance"
-            lance.write_dataset(_indexable_embedding_table(), local_shard)
-            r2_io.upload_dir(local_shard, shard_uri)
-        assert r2_io.r2_directory_exists(shard_uri), f"upload left nothing at {shard_uri}"
-        yield shard_uri
-    finally:
-        r2_io.purge_prefix(_R2_BUCKET, prefix)
+
+    def build_local_dataset(work_dir: Path) -> Path:
+        local_shard = work_dir / "shard-000000.lance"
+        lance.write_dataset(_indexable_embedding_table(), local_shard)
+        return local_shard
+
+    yield from _upload_dataset(prefix, shard_uri, build_local_dataset)
 
 
 def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
