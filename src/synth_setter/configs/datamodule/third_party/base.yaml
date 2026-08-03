@@ -20,7 +20,8 @@ conditioning: mel
 sketch: null
 # Null auto-selects; live encoders hold frozen weights in the main process.
 embedding_device: null
-embedding_checkpoint: null
+# Per stored column; each conditioning stream loads its own encoder.
+embedding_checkpoints: {}
 
 use_saved_mean_and_variance: true
 # Mel arms must pin the statistics their checkpoint trained with — a corpus of its

@@ -2117,6 +2117,53 @@ def _save_third_party_checkpoint(path: Path) -> None:
     trainer.save_checkpoint(path)
 
 
+def _run_third_party_eval(
+    *,
+    corpus: Path,
+    checkpoint: Path,
+    output_dir: Path,
+    extra_overrides: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
+    """Run the public eval CLI over a third-party corpus with no ground-truth patch.
+
+    :param corpus: Blob-audio Lance corpus to serve.
+    :param checkpoint: Checkpoint to load.
+    :param output_dir: Eval output root.
+    :param extra_overrides: Scenario-specific Hydra overrides.
+    :returns: The completed CLI process.
+    """
+    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
+    return subprocess.run(  # noqa: S603 — argv contains only test-owned paths
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.eval",
+            "experiment=surge/flow_simple",
+            "datamodule=third_party/nsynth_test",
+            "render=vst",
+            f"datamodule.dataset_uri={corpus}",
+            "datamodule.use_saved_mean_and_variance=false",
+            "datamodule.num_workers=0",
+            "callbacks=eval_vst",
+            "mode=predict",
+            "trainer=cpu",
+            f"ckpt_path={checkpoint}",
+            "evaluation.no_params=true",
+            "evaluation.rerender_target=false",
+            *_THIRD_PARTY_MODEL_OVERRIDES,
+            *extra_overrides,
+            f"paths.output_dir={output_dir}",
+            "hydra.job.chdir=false",
+            "+trainer.enable_progress_bar=false",
+            "+trainer.enable_model_summary=false",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        env=subprocess_env,
+    )
+
+
 @pytest.mark.slow
 def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) -> None:
     """The public eval CLI predicts a published corpus with no ground-truth patch.
@@ -2140,35 +2187,11 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
     _save_third_party_checkpoint(checkpoint)
     output_dir = tmp_path / "output"
 
-    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
-    result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
-        [
-            sys.executable,
-            "-m",
-            "synth_setter.cli.eval",
-            "experiment=surge/flow_simple",
-            "datamodule=third_party/nsynth_test",
-            "render=vst",
-            f"datamodule.dataset_uri={corpus}",
-            "datamodule.use_saved_mean_and_variance=false",
-            "datamodule.batch_size=2",
-            "datamodule.num_workers=0",
-            "callbacks=eval_vst",
-            "mode=predict",
-            "trainer=cpu",
-            f"ckpt_path={checkpoint}",
-            "evaluation.no_params=true",
-            "evaluation.rerender_target=false",
-            *_THIRD_PARTY_MODEL_OVERRIDES,
-            f"paths.output_dir={output_dir}",
-            "hydra.job.chdir=false",
-            "+trainer.enable_progress_bar=false",
-            "+trainer.enable_model_summary=false",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=600,
-        env=subprocess_env,
+    result = _run_third_party_eval(
+        corpus=corpus,
+        checkpoint=checkpoint,
+        output_dir=output_dir,
+        extra_overrides=("datamodule.batch_size=2",),
     )
 
     assert result.returncode == 0, result.stderr
@@ -2182,9 +2205,7 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
     assert torch.isfinite(prediction).all()
     assert not (output_dir / "predictions" / "target-params-0.pt").exists()
     assert target_audio.shape[1:] == (2, 4 * 44_100)
-    # Rows are distinct constants held for one of the contract's four seconds, so a
-    # correct serve means content in stored order at a quarter of each row's level —
-    # zeros, a duplicated row, or an unpadded clip all miss.
+    # Assert stored-order, one-second constant clips survive padding and up-mixing.
     served = [float(row.abs().mean()) for row in target_audio]
     assert served == pytest.approx([0.0, 0.025], abs=1e-3)
 
@@ -2210,36 +2231,11 @@ def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Pa
     _save_third_party_checkpoint(checkpoint)
     output_dir = tmp_path / "output"
 
-    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
-    result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
-        [
-            sys.executable,
-            "-m",
-            "synth_setter.cli.eval",
-            "experiment=surge/flow_simple",
-            "datamodule=third_party/nsynth_test",
-            "render=vst",
-            f"datamodule.dataset_uri={corpus}",
-            "datamodule.use_saved_mean_and_variance=false",
-            "datamodule.batch_size=1",
-            "datamodule.num_workers=0",
-            "callbacks=eval_vst",
-            "mode=predict",
-            "trainer=cpu",
-            f"ckpt_path={checkpoint}",
-            "evaluation.no_params=true",
-            "evaluation.rerender_target=false",
-            "evaluation.render_vst=true",
-            *_THIRD_PARTY_MODEL_OVERRIDES,
-            f"paths.output_dir={output_dir}",
-            "hydra.job.chdir=false",
-            "+trainer.enable_progress_bar=false",
-            "+trainer.enable_model_summary=false",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=900,
-        env=subprocess_env,
+    result = _run_third_party_eval(
+        corpus=corpus,
+        checkpoint=checkpoint,
+        output_dir=output_dir,
+        extra_overrides=("datamodule.batch_size=1", "evaluation.render_vst=true"),
     )
 
     assert result.returncode == 0, result.stderr

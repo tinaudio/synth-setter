@@ -23,8 +23,8 @@ from __future__ import annotations
 import hashlib
 import io
 import os
-from pathlib import Path
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import lance
@@ -167,8 +167,8 @@ def _validate_conditioning_config(
     :raises ValueError: Mel is standardized without a statistics source, or the row cap is
         negative.
     """
-    if row_limit is not None and row_limit < 0:
-        raise ValueError(f"row_limit must be non-negative, got {row_limit}")
+    if row_limit is not None and (isinstance(row_limit, bool) or row_limit < 0):
+        raise ValueError(f"row_limit must be a non-negative integer, got {row_limit!r}")
     if use_saved_mean_and_variance and mel_stats_uri is None and conditioning == "mel":
         raise ValueError(
             "mel conditioning with use_saved_mean_and_variance=true requires "
@@ -226,6 +226,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         uri: str,
         *,
         storage_options: dict[str, str] | None,
+        version: int,
         audio_column: str,
         sample_rate: int,
         channels: int,
@@ -238,6 +239,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
 
         :param uri: Lance dataset location.
         :param storage_options: Object-store options for a remote ``uri``.
+        :param version: Lance dataset version every reader pins to.
         :param audio_column: Blob column holding source container bytes.
         :param sample_rate: Target sample rate in Hz.
         :param channels: Target channel count.
@@ -248,6 +250,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         """
         self.uri = uri
         self.storage_options = storage_options
+        self.version = version
         self.audio_column = audio_column
         self.sample_rate = sample_rate
         self.channels = channels
@@ -277,7 +280,9 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :returns: Open Lance dataset.
         """
         if self._dataset is None:
-            self._dataset = lance.dataset(self.uri, storage_options=self.storage_options)
+            self._dataset = lance.dataset(
+                self.uri, version=self.version, storage_options=self.storage_options
+            )
         return self._dataset
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
@@ -328,7 +333,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         conditioning: Conditioning = "mel",
         sketch: SketchControls = None,
         embedding_device: str | None = None,
-        embedding_checkpoint: str | None = None,
+        embedding_checkpoints: Mapping[str, str] | None = None,
         embedding_encoder: Encoder | None = None,
         use_saved_mean_and_variance: bool = False,
         mel_stats_uri: str | None = None,
@@ -348,7 +353,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param conditioning: The checkpoint's conditioning mode or embedding spec.
         :param sketch: Sketch-control spec when the checkpoint takes control tokens.
         :param embedding_device: Torch device for live encoders; ``None`` auto-selects.
-        :param embedding_checkpoint: Encoder checkpoint override.
+        :param embedding_checkpoints: Per-column encoder checkpoint overrides; each
+            conditioning stream has its own encoder, so one shared override could load
+            an artifact belonging to a different one.
         :param embedding_encoder: Pre-loaded encoder, bypassing registry loading.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
         :param mel_stats_uri: ``.npz`` of the training run's mel statistics; local or ``r2://``.
@@ -377,7 +384,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.mel_stats_uri = mel_stats_uri if use_saved_mean_and_variance else None
         self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._embedding_device = embedding_device
-        self._embedding_checkpoint = embedding_checkpoint
+        self._embedding_checkpoints = dict(embedding_checkpoints or {})
         self._embedding_encoder = embedding_encoder
         # Reject an unservable column at construction rather than mid-sweep.
         for spec in (self.embedding, self.sketch):
@@ -431,7 +438,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         """Open the corpus and load the conditioning encoders for a predict run.
 
         :param stage: Lightning stage hint; only prediction is served.
-        :raises ValueError: ``stage`` is not a prediction stage.
+        :raises ValueError: ``stage`` is not a prediction stage, or the audio column is
+            not blob-encoded.
         :raises KeyError: The corpus has no column named ``audio_column``.
         """
         if stage not in _PREDICT_STAGES:
@@ -447,10 +455,20 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"corpus {self.dataset_uri} has no {self.audio_column!r} column; "
                 f"columns: {', '.join(dataset.schema.names)}"
             )
+        field = dataset.schema.field(self.audio_column)
+        if (field.metadata or {}).get(b"lance-encoding:blob") != b"true":
+            raise ValueError(
+                f"column {self.audio_column!r} in {self.dataset_uri} is not blob-encoded, "
+                "so its source containers cannot be read through the blob API"
+            )
         rows = dataset.count_rows()
+        # Workers reopen the URI; pinning setup's version keeps every reader on the
+        # snapshot the row count came from, even if the corpus gains a commit mid-sweep.
+        dataset_version = dataset.version
         self._predict_dataset = _BlobAudioDataset(
             uri,
             storage_options=storage_options,
+            version=dataset_version,
             audio_column=self.audio_column,
             sample_rate=self.sample_rate,
             channels=self.channels,
@@ -486,7 +504,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 sample_rate=self.sample_rate,
                 lance_uri=self.dataset_uri,
                 device=self._embedding_device,
-                checkpoint=self._embedding_checkpoint,
+                checkpoint=self._embedding_checkpoints.get(column),
             )
             for column in columns
         }

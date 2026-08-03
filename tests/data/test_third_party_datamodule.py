@@ -25,7 +25,7 @@ from synth_setter.data.third_party_datamodule import (
     ThirdPartyAudioDataModule,
     decode_clip,
 )
-from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS
+from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, Encoder
 from synth_setter.pipeline.data.ssondo import SSONDO_EMBEDDING_DIM
 from tests.helpers.lance_fixtures import write_blob_audio_corpus
@@ -230,8 +230,14 @@ def test_predict_batch_mel_matches_training_front_end_shape(tmp_path: Path) -> N
 
     batch = _first_batch(_datamodule(tmp_path / "corpus.lance"))
 
+    expected = make_spectrogram(batch["audio"][0].numpy(), _TARGET_SAMPLE_RATE)
+
     assert batch["mel"].shape == (1, _TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES)
     assert batch["mel"].dtype == torch.float32
+    assert torch.isfinite(batch["mel"]).all()
+    # Values, not just the grid: a changed window, hop, or dB reference would keep
+    # the shape and silently hand inference incompatible features.
+    assert torch.allclose(batch["mel"][0], torch.from_numpy(expected), atol=1e-5)
 
 
 def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
@@ -427,6 +433,7 @@ def test_unknown_conditioning_column_raises(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.slow
 def test_sketch_conditioning_emits_the_control_stack(tmp_path: Path) -> None:
     """Sketch controls are extracted live and reassembled into the model tensor.
 
@@ -562,6 +569,7 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
 
 
+@pytest.mark.slow
 def test_sketch_frames_disagreeing_with_the_checkpoint_spec_raise(tmp_path: Path) -> None:
     """Live controls whose frame axis contradicts the checkpoint's spec are rejected.
 
@@ -642,3 +650,26 @@ def test_conditioning_columns_not_derivable_from_audio_are_rejected(
             tmp_path / "corpus.lance",
             conditioning=EmbeddingConditioningSpec(column=column, input_shape=(4,)),
         )
+
+
+def test_boolean_row_limit_raises(tmp_path: Path) -> None:
+    """A YAML ``true`` is an int in Python; serving one row silently would be worse.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=25)])
+
+    with pytest.raises(ValueError, match="row_limit"):
+        _datamodule(tmp_path / "corpus.lance", row_limit=True)  # type: ignore[arg-type]
+
+
+def test_corpus_audio_column_without_blob_encoding_raises(tmp_path: Path) -> None:
+    """An ordinary binary column named ``audio`` cannot be served through the blob API.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    table = pa.table({AUDIO_FIELD: pa.array([b"not-a-blob"], pa.large_binary())})
+    lance.write_dataset(table, tmp_path / "corpus.lance", mode="create")
+
+    with pytest.raises(ValueError, match="blob"):
+        _datamodule(tmp_path / "corpus.lance").setup("predict")
