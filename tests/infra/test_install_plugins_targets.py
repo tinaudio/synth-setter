@@ -277,17 +277,15 @@ def test_macos_provisioners_install_surge_through_studiorack() -> None:
     assert "brew install --cask surge-xt" not in tart
 
 
-def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install(
-    tmp_path: Path,
-) -> None:
-    """The unprivileged smoke test can lock the installed package.
+def _write_surge_setup_fakes(tmp_path: Path) -> Path:
+    """Write the npm, uv, and sudo fakes the setup script shells out to.
 
-    :param tmp_path: Scratch roots and executable command fakes.
+    The sudo fake maps the system managed root onto a scratch root and pins both the
+    chown target and its owner, so an action that chowns to the wrong user fails here.
+
+    :param tmp_path: Scratch root holding the fake command directory.
+    :returns: Directory to prepend to ``PATH``.
     """
-    action = yaml.safe_load(SETUP_SURGE_ACTION.read_text())
-    run_script = action["runs"]["steps"][0]["run"]
-    pre_fix_script = run_script.rstrip().rsplit("\n", maxsplit=1)[0]
-
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(fake_bin / "npm", "#!/bin/bash\nexit 0\n")
@@ -322,12 +320,33 @@ if [[ "${1:-}" == "-E" && "${2:-}" == "env" ]]; then
   exec env "${translated[@]}"
 fi
 if [[ "${1:-}" == "chown" && "${2:-}" == "-R" && "${4:-}" == "${system_root}" ]]; then
+  # Pin the owner too: chowning to anyone but the invoking user leaves the
+  # unprivileged smoke step unable to write, which is the bug under test.
+  if [[ "${3:-}" != "$(id -u):$(id -g)" ]]; then
+    echo "sudo chown: refusing owner ${3:-} (expected $(id -u):$(id -g))" >&2
+    exit 65
+  fi
   chmod -R u+rwX "${mapped_root}"
   exit 0
 fi
 exit 64
 """,
     )
+    return fake_bin
+
+
+def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install(
+    tmp_path: Path,
+) -> None:
+    """The unprivileged smoke test can lock the installed package.
+
+    :param tmp_path: Scratch roots and executable command fakes.
+    """
+    action = yaml.safe_load(SETUP_SURGE_ACTION.read_text())
+    run_script = action["runs"]["steps"][0]["run"]
+    pre_fix_script = run_script.rstrip().rsplit("\n", maxsplit=1)[0]
+
+    fake_bin = _write_surge_setup_fakes(tmp_path)
 
     pre_fix_root = tmp_path / "pre-fix-managed"
     _run_setup_surge_script(pre_fix_script, fake_bin, pre_fix_root)
