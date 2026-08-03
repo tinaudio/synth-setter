@@ -76,6 +76,7 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.wandb_offline import read_history_rows, read_run_project
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -227,6 +228,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("WANDB_MODE", "offline")
     monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
@@ -244,12 +246,6 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
 
     render_shard = stub_renderer(spec)
-    metrics_rows: list[tuple[int | None, dict[str, object]]] = []
-    recording_logger = SimpleNamespace(
-        finalize=lambda _status: None,
-        log_hyperparams=lambda _payload: None,
-        log_metrics=lambda payload, step=None: metrics_rows.append((step, dict(payload))),
-    )
 
     def _render_with_rejections(args: list[str]) -> None:
         render_shard(args)
@@ -259,26 +255,27 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
                 RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
             )
 
-    with (
-        patch(
-            "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_render_with_rejections,
-        ),
-        patch(
-            "lightning.pytorch.loggers.wandb.WandbLogger",
-            return_value=recording_logger,
-        ) as wandb_logger,
-        patch("synth_setter.cli.generate_dataset.close_loggers"),
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_render_with_rejections,
     ):
         from_hydra(cfg_dataset)
 
-    assert wandb_logger.call_args.kwargs["project"] == "synth-setter-citest"
-    shard_rows = [payload for step, payload in metrics_rows if step is not None]
-    assert [row["shard/samples_rejected_clipped"] for row in shard_rows] == [2, 2, 2]
-    assert [row["shard/samples_rejected_silent"] for row in shard_rows] == [3, 3, 3]
-    summary = next(payload for step, payload in metrics_rows if step is None)
-    assert summary["generation/samples_rejected_clipped"] == 6
-    assert summary["generation/samples_rejected_silent"] == 9
+    wandb_binary = next(Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb"))
+    assert read_run_project(wandb_binary) == "synth-setter-citest"
+    rows = read_history_rows(
+        wandb_binary,
+        until=lambda scanned: (
+            sum("shard/samples_rejected_clipped" in row for row in scanned) == 3
+            and any("generation/samples_rejected_clipped" in row for row in scanned)
+        ),
+    )
+    shard_rows = [row for row in rows if "shard/samples_rejected_clipped" in row]
+    assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2, 2]
+    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3, 3]
+    summary = next(row for row in rows if "generation/samples_rejected_clipped" in row)
+    assert json.loads(summary["generation/samples_rejected_clipped"]) == 6
+    assert json.loads(summary["generation/samples_rejected_silent"]) == 9
 
     # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix

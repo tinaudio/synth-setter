@@ -430,6 +430,20 @@ class TestResolveWorkerEnvWandbProject:
 
         assert resolved["WANDB_PROJECT"] == "synth-setter-citest"
 
+    def test_env_file_project_overrides_process(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A local project selection takes precedence over process state.
+
+        :param tmp_path: Pytest fixture providing an isolated env file.
+        :param monkeypatch: Pytest fixture for process-environment mutation.
+        """
+        monkeypatch.setenv("WANDB_PROJECT", "from-process")
+        env_file = tmp_path / ".env"
+        env_file.write_text("WANDB_PROJECT=from-file\n")
+
+        assert resolve_worker_env(env_file)["WANDB_PROJECT"] == "from-file"
+
     def test_blank_env_file_project_falls_back_to_process(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1837,6 +1851,34 @@ class TestDispatchViaSkypilot:
         assert ranks_seen == ["0", "1"]
         for env in launched_envs:
             assert env[NUM_WORKERS_ENV_VAR] == "2"
+
+    def test_extra_envs_wandb_project_overrides_resolved_project(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A command-specific W&B project can override the ambient project.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param env_file: Fixture-provided worker env file path.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param monkeypatch: Pytest fixture for process-environment mutation.
+        """
+        monkeypatch.setenv("WANDB_PROJECT", "ambient-project")
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="wandb-project-override",
+            extra_envs={"WANDB_PROJECT": "command-project"},
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        launched_env = mock_sky.jobs.launch.call_args.args[0].envs
+        assert launched_env["WANDB_PROJECT"] == "command-project"
 
     def test_extra_envs_collision_with_resolved_env_keys_raises(
         self,

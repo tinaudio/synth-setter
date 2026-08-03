@@ -40,15 +40,13 @@ def _step(workflow: Mapping[str, object], job_name: str, step_name: str) -> Mapp
 
 
 def _job_wandb_project_offenders(
-    workflow_name: str,
-    job_name: str,
+    job_scope: str,
     job: Mapping[str, object],
     workflow_env: Mapping[str, object],
 ) -> list[str]:
     """Find authenticated scopes in one CI job without a W&B project.
 
-    :param workflow_name: Workflow filename used in diagnostics.
-    :param job_name: Job key used in diagnostics.
+    :param job_scope: Workflow filename and job key used in diagnostics.
     :param job: Parsed job definition.
     :param workflow_env: Environment inherited from the workflow.
     :returns: Job or step scopes that can fall back to the production project.
@@ -57,14 +55,14 @@ def _job_wandb_project_offenders(
     inherited_api_key = "WANDB_API_KEY" in workflow_env or "WANDB_API_KEY" in job_env
     inherited_project = "WANDB_PROJECT" in workflow_env or "WANDB_PROJECT" in job_env
     if inherited_api_key and not inherited_project:
-        return [f"{workflow_name}:{job_name}"]
+        return [job_scope]
 
     steps = cast(list[Mapping[str, object]], job.get("steps", []))
     offenders: list[str] = []
     for step in steps:
         step_env = cast(Mapping[str, object], step.get("env", {}))
         if "WANDB_API_KEY" in step_env and not (inherited_project or "WANDB_PROJECT" in step_env):
-            offenders.append(f"{workflow_name}:{job_name}:{step.get('name', '<unnamed>')}")
+            offenders.append(f"{job_scope}:{step.get('name', '<unnamed>')}")
     return offenders
 
 
@@ -84,7 +82,8 @@ def _ci_steps_missing_wandb_project(project_root: Path) -> list[str]:
         jobs = cast(Mapping[str, object], workflow["jobs"])
         for job_name, job_value in jobs.items():
             job = cast(Mapping[str, object], job_value)
-            offenders.extend(_job_wandb_project_offenders(path.name, job_name, job, workflow_env))
+            job_scope = f"{path.name}:{job_name}"
+            offenders.extend(_job_wandb_project_offenders(job_scope, job, workflow_env))
     return offenders
 
 
@@ -163,6 +162,6 @@ def test_job_level_wandb_key_without_project_is_reported() -> None:
     """A job-level API key cannot bypass the CI project guard."""
     job = {"env": {"WANDB_API_KEY": "secret"}, "steps": [{"name": "test"}]}
 
-    offenders = _job_wandb_project_offenders("test.yml", "run_tests", job, {})
+    offenders = _job_wandb_project_offenders("test.yml:run_tests", job, {})
 
     assert offenders == ["test.yml:run_tests"]

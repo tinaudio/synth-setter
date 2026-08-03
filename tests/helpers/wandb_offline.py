@@ -91,6 +91,24 @@ def read_run_binary(
     return _poll_until(wandb_binary.read_bytes, until, timeout_s)
 
 
+def read_run_project(
+    wandb_binary: Path,
+    *,
+    timeout_s: float = _FLUSH_TIMEOUT_S,
+) -> str | None:
+    """Decode the project from an offline run record.
+
+    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
+    :param timeout_s: Upper bound while waiting for the run record to flush.
+    :returns: Run project, or ``None`` when no run record appears before timeout.
+    """
+    return _poll_until(
+        lambda: _scan_run_project(wandb_binary),
+        lambda project: project is not None,
+        timeout_s,
+    )
+
+
 def read_history_rows(
     wandb_binary: Path,
     *,
@@ -114,6 +132,25 @@ def read_history_rows(
         (as the datastore stores them).
     """
     return _poll_until(lambda: _scan_history_rows(wandb_binary), until, timeout_s)
+
+
+def _scan_run_project(wandb_binary: Path) -> str | None:
+    """Read the project from the datastore's run record.
+
+    :param wandb_binary: Path to an offline ``run-*.wandb`` file.
+    :returns: Run project when present, otherwise ``None``.
+    """
+    ds = wandb_datastore.DataStore()
+    ds.open_for_scan(str(wandb_binary))
+    try:
+        while data := ds.scan_data():
+            record = getattr(wandb_pb, "Record")()
+            record.ParseFromString(data)
+            if record.WhichOneof("record_type") == "run":
+                return record.run.project or None
+    finally:
+        ds.close()
+    return None
 
 
 def _scan_history_rows(wandb_binary: Path) -> list[dict[str, str]]:
