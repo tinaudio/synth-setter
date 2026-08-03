@@ -416,14 +416,19 @@ class TestLoadWorkerEnv:
 class TestResolveWorkerEnvWandbProject:
     """W&B project selection follows the launcher's worker-env precedence."""
 
-    def test_process_project_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_process_project_is_forwarded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A CI-provided project reaches managed workers.
 
+        :param tmp_path: Pytest fixture providing an isolated missing env file.
         :param monkeypatch: Pytest fixture for process-environment mutation.
         """
         monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
 
-        assert resolve_worker_env(None)["WANDB_PROJECT"] == "synth-setter-citest"
+        resolved = resolve_worker_env(tmp_path / ".env")
+
+        assert resolved["WANDB_PROJECT"] == "synth-setter-citest"
 
     def test_blank_env_file_project_falls_back_to_process(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

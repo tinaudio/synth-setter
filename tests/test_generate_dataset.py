@@ -227,6 +227,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.synth.plugin_path = str(_TEST_PLUGIN_VST3)
@@ -237,8 +238,6 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         # from_hydra rebuilds internally derive the same shard URIs — an unpinned
         # created_at would fire its default factory twice and diverge the run_id.
         cfg_dataset.r2.prefix = "fake-r2/test-run/"
-        # Disable the default wandb logger: generate() would call wandb.init() and block.
-        cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
     # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
@@ -266,12 +265,14 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
             side_effect=_render_with_rejections,
         ),
         patch(
-            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
-            return_value=[recording_logger],
-        ),
+            "lightning.pytorch.loggers.wandb.WandbLogger",
+            return_value=recording_logger,
+        ) as wandb_logger,
+        patch("synth_setter.cli.generate_dataset.close_loggers"),
     ):
         from_hydra(cfg_dataset)
 
+    assert wandb_logger.call_args.kwargs["project"] == "synth-setter-citest"
     shard_rows = [payload for step, payload in metrics_rows if step is not None]
     assert [row["shard/samples_rejected_clipped"] for row in shard_rows] == [2, 2, 2]
     assert [row["shard/samples_rejected_silent"] for row in shard_rows] == [3, 3, 3]
@@ -306,6 +307,9 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         physical_schema = LanceFileReader(str(data_files[0])).metadata().schema
         assert physical_schema.field("audio").type.value_type == pa.float32()
         assert physical_schema.field("mel_spec").type.value_type == pa.float16()
+
+    with open_dict(cfg_dataset):
+        cfg_dataset.logger = None
 
     renderer_invocations = 0
 

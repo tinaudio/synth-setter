@@ -2,26 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import pytest
 from workflow_fixtures import load_workflow
 
 _CITEST_PROJECT = "synth-setter-citest"
 _PRODUCTION_PROJECT = "synth-setter"
+_PRODUCTION_WANDB_WORKFLOWS = frozenset({"eval.yml", "train.yml"})
 
 
-def _on(workflow: dict[Any, Any]) -> dict[str, Any]:
+def _on(workflow: Mapping[str, object]) -> Mapping[str, object]:
     """Return workflow triggers parsed by PyYAML's YAML 1.1 loader.
 
     :param workflow: Parsed GitHub Actions workflow.
     :returns: Workflow trigger mapping.
     """
-    return workflow[True]
+    yaml_mapping = cast(Mapping[object, object], workflow)
+    return cast(Mapping[str, object], yaml_mapping[True])
 
 
-def _step(workflow: dict[str, Any], job_name: str, step_name: str) -> dict[str, Any]:
+def _step(workflow: Mapping[str, object], job_name: str, step_name: str) -> Mapping[str, object]:
     """Return one named workflow step.
 
     :param workflow: Parsed GitHub Actions workflow.
@@ -29,9 +32,36 @@ def _step(workflow: dict[str, Any], job_name: str, step_name: str) -> dict[str, 
     :param step_name: Exact workflow step name.
     :returns: Matching step definition.
     """
-    return next(
-        step for step in workflow["jobs"][job_name]["steps"] if step.get("name") == step_name
-    )
+    jobs = cast(Mapping[str, object], workflow["jobs"])
+    job = cast(Mapping[str, object], jobs[job_name])
+    steps = cast(list[Mapping[str, object]], job["steps"])
+    return next(step for step in steps if step.get("name") == step_name)
+
+
+def _ci_steps_missing_wandb_project(project_root: Path) -> list[str]:
+    """Find authenticated CI steps without an explicit W&B project.
+
+    :param project_root: Repository root containing GitHub Actions workflows.
+    :returns: Workflow and step names that can fall back to the production project.
+    """
+    offenders: list[str] = []
+    workflows_dir = project_root / ".github" / "workflows"
+    for path in sorted(workflows_dir.glob("*.y*ml")):
+        if path.name in _PRODUCTION_WANDB_WORKFLOWS:
+            continue
+        workflow = load_workflow(project_root, path.name)
+        jobs = cast(Mapping[str, object], workflow["jobs"])
+        for job_name, job_value in jobs.items():
+            job = cast(Mapping[str, object], job_value)
+            job_env = cast(Mapping[str, object], job.get("env", {}))
+            steps = cast(list[Mapping[str, object]], job.get("steps", []))
+            for step in steps:
+                step_env = cast(Mapping[str, object], step.get("env", {}))
+                has_api_key = "WANDB_API_KEY" in step_env
+                has_project = "WANDB_PROJECT" in step_env or "WANDB_PROJECT" in job_env
+                if has_api_key and not has_project:
+                    offenders.append(f"{path.name}:{job_name}:{step.get('name', '<unnamed>')}")
+    return offenders
 
 
 @pytest.mark.infra
@@ -56,13 +86,14 @@ def test_reusable_dataset_workflows_preserve_production_default(project_root: Pa
     for filename in ("generate-dataset-shards.yaml", "finalize-dataset.yaml"):
         workflow = load_workflow(project_root, filename)
         triggers = _on(workflow)
-        assert (
-            triggers["workflow_call"]["inputs"]["wandb_project"]["default"] == _PRODUCTION_PROJECT
-        )
-        assert (
-            triggers["workflow_dispatch"]["inputs"]["wandb_project"]["default"]
-            == _PRODUCTION_PROJECT
-        )
+        workflow_call = cast(Mapping[str, object], triggers["workflow_call"])
+        workflow_dispatch = cast(Mapping[str, object], triggers["workflow_dispatch"])
+        call_inputs = cast(Mapping[str, object], workflow_call["inputs"])
+        dispatch_inputs = cast(Mapping[str, object], workflow_dispatch["inputs"])
+        call_project = cast(Mapping[str, object], call_inputs["wandb_project"])
+        dispatch_project = cast(Mapping[str, object], dispatch_inputs["wandb_project"])
+        assert call_project["default"] == _PRODUCTION_PROJECT
+        assert dispatch_project["default"] == _PRODUCTION_PROJECT
 
 
 @pytest.mark.infra
@@ -78,7 +109,7 @@ def test_generation_project_reaches_worker_and_finalization(project_root: Path) 
     )
 
     assert generate["env"]["WANDB_PROJECT"] == "${{ inputs.wandb_project }}"
-    assert "-e WANDB_PROJECT" in run_step["run"]
+    assert "-e WANDB_PROJECT" in cast(str, run_step["run"])
     assert workflow["jobs"]["finalize"]["with"]["wandb_project"] == "${{ inputs.wandb_project }}"
 
 
@@ -90,28 +121,15 @@ def test_finalize_project_reaches_cli(project_root: Path) -> None:
     """
     workflow = load_workflow(project_root, "finalize-dataset.yaml")
     run_step = _step(workflow, "finalize", "Run synth-setter-finalize-dataset")
+    step_env = cast(Mapping[str, object], run_step["env"])
 
-    assert run_step["env"]["WANDB_PROJECT"] == "${{ inputs.wandb_project }}"
+    assert step_env["WANDB_PROJECT"] == "${{ inputs.wandb_project }}"
 
 
 @pytest.mark.infra
-@pytest.mark.parametrize(
-    ("filename", "job_name", "step_name"),
-    [
-        ("test-gpu.yml", "run_tests", "Dispatch GPU tests via SkyPilot"),
-        ("test-mps.yml", "run_tests", "Run MPS tests"),
-    ],
-)
-def test_authenticated_compute_ci_selects_citest_project(
-    project_root: Path, filename: str, job_name: str, step_name: str
-) -> None:
-    """Authenticated GPU and MPS test runs cannot fall back to production.
+def test_authenticated_ci_steps_select_wandb_project(project_root: Path) -> None:
+    """Every authenticated CI step outside production workflows selects a project.
 
     :param project_root: Repo root supplied by the infra test fixtures.
-    :param filename: Workflow file under test.
-    :param job_name: Job that executes authenticated tests.
-    :param step_name: Step receiving W&B credentials.
     """
-    workflow = load_workflow(project_root, filename)
-
-    assert _step(workflow, job_name, step_name)["env"]["WANDB_PROJECT"] == _CITEST_PROJECT
+    assert _ci_steps_missing_wandb_project(project_root) == []
