@@ -9,7 +9,9 @@ runs:
     - name: Install Surge XT with Studiorack
       shell: bash
       run: |
+        managed_dir="/Library/Application Support/synth-setter/studiorack"
         npm ci
         sudo -E env "PATH=${PATH}" "CI=" \
-          "STUDIORACK_PLUGINS_DIR=/Library/Application Support/synth-setter/studiorack" \
+          "STUDIORACK_PLUGINS_DIR=${managed_dir}" \
           uv run synth-setter-plugins install --plugin surge-synthesizer/surge
+        sudo chown -R "$(id -u):$(id -g)" "${managed_dir}"

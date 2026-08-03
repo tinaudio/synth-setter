@@ -235,6 +235,13 @@ def test_macos_provisioners_install_surge_through_studiorack() -> None:
     assert "brew install --cask surge-xt" not in tart
 
 
+def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install() -> None:
+    """The unprivileged smoke test can lock and snapshot the installed bundle."""
+    action = SETUP_SURGE_ACTION.read_text()
+
+    assert 'sudo chown -R "$(id -u):$(id -g)" "${managed_dir}"' in action
+
+
 def test_docker_keeps_source_fallback_only_for_incompatible_registry_artifacts() -> None:
     """Source builds remain documented compatibility fallbacks, not package pins."""
     dockerfile = DOCKERFILE.read_text()
