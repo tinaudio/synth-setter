@@ -1,0 +1,33 @@
+# @package _global_
+
+# 440k sketch A/B, base arm (#2707): inherits the 440k dataset pin and cadence
+# from flow_simple_440k and adds the shape both arms must share; the sketch arm
+# composes this config and only flips `sketch=on`.
+
+defaults:
+  - /experiment/surge/flow_simple_440k
+  - _self_
+
+run_name: flow440k_base
+
+# Both A/B arms share this seed so the comparison isolates conditioning.
+seed: 3407
+
+datamodule:
+  # bs 1024 with 24 workers saturates an H100; bs 64-80 with 4 workers left the
+  # accelerator at 0% median utilization.
+  batch_size: 1024
+  num_workers: 24
+  prefetch_factor: 4
+
+training:
+  # A 5-sample probe's 95% CI spans roughly the whole metric range, so it cannot
+  # resolve a difference between the arms.
+  val_audio_probe_samples: 32
+  upload_checkpoints_during_training: true
+
+trainer:
+  # CosineAnnealingLR.T_max interpolates max_steps, so this doubles as the anneal
+  # horizon: a run shorter than max_steps holds the LR near its peak throughout.
+  max_steps: 50000
+  min_steps: 50000

@@ -127,8 +127,10 @@ def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint(
     [
         "train-runpod-smoke.yaml",
         "train-runpod-flow-simple-440k.yaml",
+        "train-runpod-sketch-440k-base.yaml",
+        "train-runpod-sketch-440k.yaml",
     ],
-    ids=["smoke", "flow-simple-440k"],
+    ids=["smoke", "flow-simple-440k", "sketch-440k-base", "sketch-440k"],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     launch_config_name: str,
@@ -169,3 +171,26 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     assert result.returncode == 0, result.stderr
     assert task.to_yaml_config()["run"] == task.run
     assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
+
+
+def test_sketch_440k_arms_share_one_pinned_accelerator() -> None:
+    """Both A/B arms request the same single GPU type.
+
+    An any-of accelerator pool can place the two arms on different GPUs, which confounds the
+    comparison the A/B exists to make.
+    """
+    arms = [
+        load_launch_config(_LAUNCH_DIR / "train-runpod-sketch-440k-base.yaml"),
+        load_launch_config(_LAUNCH_DIR / "train-runpod-sketch-440k.yaml"),
+    ]
+
+    accelerators = set()
+    for arm in arms:
+        task = _compose_task(arm)
+        task.validate()
+        resources = next(iter(task.resources))
+        assert resources.accelerators is not None
+        assert len(resources.accelerators) == 1, resources.accelerators
+        accelerators.add(tuple(sorted(resources.accelerators.items())))
+
+    assert len(accelerators) == 1, accelerators
