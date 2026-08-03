@@ -2,6 +2,7 @@
 
 import io
 import pickle
+from collections.abc import Sequence
 from pathlib import Path
 
 import lance
@@ -53,7 +54,7 @@ def _wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
 
 def _write_corpus(
     path: Path,
-    clips: list[np.ndarray],
+    clips: Sequence[np.ndarray],
     *,
     sample_rate: int = _SOURCE_SAMPLE_RATE,
     audio_column: str = AUDIO_FIELD,
@@ -95,6 +96,7 @@ def _datamodule(
     audio_column: str = AUDIO_FIELD,
     amplitude_scale: float = 1.0,
     row_limit: int | None = None,
+    num_workers: int = 0,
     conditioning: Conditioning = "mel",
     sketch: SketchControls = None,
     embedding_encoder: Encoder | None = None,
@@ -108,6 +110,7 @@ def _datamodule(
     :param audio_column: Blob column the corpus stores its audio in.
     :param amplitude_scale: Gain applied to decoded audio.
     :param row_limit: Cap on served rows, or ``None`` for the whole corpus.
+    :param num_workers: Dataloader worker processes.
     :param conditioning: Conditioning mode or embedding spec under test.
     :param sketch: Sketch-control spec, or ``None`` for no control tokens.
     :param embedding_encoder: Encoder standing in for downloaded frozen weights.
@@ -124,6 +127,7 @@ def _datamodule(
         audio_column=audio_column,
         amplitude_scale=amplitude_scale,
         row_limit=row_limit,
+        num_workers=num_workers,
         conditioning=conditioning,
         sketch=sketch,
         embedding_encoder=embedding_encoder,
@@ -184,15 +188,23 @@ def test_predict_batch_short_clip_pads_tail_with_silence(tmp_path: Path) -> None
 
 
 def test_predict_batch_long_clip_trims_to_render_duration(tmp_path: Path) -> None:
-    """A clip longer than the render duration is truncated, not resampled to fit.
+    """A clip longer than the render duration is truncated, not squeezed to fit.
+
+    The source holds one level for its first third and another after, so resampling the whole clip
+    into the target length would leak the later level into the served audio; truncation keeps only
+    the first.
 
     :param tmp_path: Isolated corpus fixture directory.
     """
-    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS * 3, seed=4)])
+    frames = int(_DURATION_SECONDS * 3 * _SOURCE_SAMPLE_RATE)
+    stepped = np.full(frames, 0.2, dtype=np.float32)
+    stepped[frames // 3 :] = 0.9
+    _write_corpus(tmp_path / "corpus.lance", [stepped])
 
     audio = _first_batch(_datamodule(tmp_path / "corpus.lance"))["audio"]
 
     assert audio.shape[-1] == _TARGET_SAMPLES
+    assert audio.abs().max() < 0.5
 
 
 def test_predict_batch_amplitude_scale_attenuates_samples(tmp_path: Path) -> None:
@@ -219,6 +231,7 @@ def test_predict_batch_mel_matches_training_front_end_shape(tmp_path: Path) -> N
     batch = _first_batch(_datamodule(tmp_path / "corpus.lance"))
 
     assert batch["mel"].shape == (1, _TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES)
+    assert batch["mel"].dtype == torch.float32
 
 
 def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
@@ -491,8 +504,12 @@ def test_worker_pickling_drops_the_open_dataset_handle(tmp_path: Path) -> None:
     datamodule.setup("predict")
 
     revived = pickle.loads(pickle.dumps(datamodule.predict_dataloader().dataset))
+    with_workers = _datamodule(tmp_path / "corpus.lance", num_workers=2)
+    with_workers.setup("predict")
+    served = [batch["audio"] for batch in with_workers.predict_dataloader()]
 
     assert revived[0]["audio"].shape == (_TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert sum(len(batch) for batch in served) == 2
 
 
 def test_distinct_stats_uris_sharing_a_basename_cache_separately(tmp_path: Path) -> None:
@@ -592,3 +609,36 @@ def test_corpus_missing_the_configured_audio_column_raises(tmp_path: Path) -> No
 
     with pytest.raises(KeyError, match="audio"):
         _datamodule(tmp_path / "corpus.lance").setup("predict")
+
+
+def test_negative_row_limit_raises(tmp_path: Path) -> None:
+    """A negative cap cannot become a negative dataset length.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=23)])
+
+    with pytest.raises(ValueError, match="row_limit"):
+        _datamodule(tmp_path / "corpus.lance", row_limit=-1)
+
+
+@pytest.mark.parametrize("column", ["t5gemma", "param_shift"])
+def test_conditioning_columns_not_derivable_from_audio_are_rejected(
+    tmp_path: Path, column: str
+) -> None:
+    """Registry membership alone does not make a column servable from a corpus.
+
+    ``t5gemma`` encodes stored parameters and ``param_shift`` re-renders them;
+    neither has a source in a third-party corpus, so both must fail at
+    construction rather than at the first batch.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param column: Registry column whose input is not audio.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=24)])
+
+    with pytest.raises(ValueError, match="audio"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            conditioning=EmbeddingConditioningSpec(column=column, input_shape=(4,)),
+        )

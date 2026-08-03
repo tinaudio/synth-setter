@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 from pathlib import Path
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
@@ -62,20 +63,37 @@ _PREDICT_STAGES = frozenset({"predict", None})
 _MEL_STATS_CACHE_DIR = ".mel-stats"
 
 
+def _is_audio_sourced(spec: EmbeddingSpec) -> bool:
+    """Return whether a policy can be computed from stored audio alone.
+
+    :param spec: Registry entry.
+    :returns: True when audio is its only input and it re-renders nothing.
+    """
+    return spec.input_fields == (AUDIO_FIELD,) and not spec.rerenders
+
+
 def registry_spec(column: str) -> EmbeddingSpec:
-    """Look up an embedding policy, naming the servable columns when absent.
+    """Look up an embedding policy servable from a corpus's audio.
 
     :param column: Stored column name, which doubles as the registry key.
     :returns: Registry entry for ``column``.
     :raises KeyError: ``column`` is not a registry key.
+    :raises ValueError: The policy needs inputs a third-party corpus cannot supply,
+        such as stored parameters or a re-render.
     """
     try:
-        return EMBEDDING_REGISTRY[column]
+        spec = EMBEDDING_REGISTRY[column]
     except KeyError:
-        servable = ", ".join(sorted(EMBEDDING_REGISTRY))
+        servable = ", ".join(sorted(name for name, entry in EMBEDDING_REGISTRY.items() if _is_audio_sourced(entry)))
         raise KeyError(
             f"{column!r} is not an embedding registry column; servable columns: {servable}"
         ) from None
+    if not _is_audio_sourced(spec):
+        raise ValueError(
+            f"{column!r} is derived from {', '.join(spec.input_fields)} rather than audio "
+            "alone, so a third-party corpus cannot supply its input"
+        )
+    return spec
 
 
 class LiveEmbedding:
@@ -138,14 +156,19 @@ def _validate_conditioning_config(
     *,
     use_saved_mean_and_variance: bool,
     mel_stats_uri: str | None,
+    row_limit: int | None,
 ) -> None:
-    """Reject a conditioning configuration that cannot be served correctly.
+    """Reject a configuration that cannot be served correctly.
 
     :param conditioning: Configured conditioning mode or embedding spec.
     :param use_saved_mean_and_variance: Whether mel standardization is enabled.
     :param mel_stats_uri: Configured statistics source, if any.
-    :raises ValueError: Mel is standardized without a statistics source.
+    :param row_limit: Configured row cap, if any.
+    :raises ValueError: Mel is standardized without a statistics source, or the row cap is
+        negative.
     """
+    if row_limit is not None and row_limit < 0:
+        raise ValueError(f"row_limit must be non-negative, got {row_limit}")
     if use_saved_mean_and_variance and mel_stats_uri is None and conditioning == "mel":
         raise ValueError(
             "mel conditioning with use_saved_mean_and_variance=true requires "
@@ -309,6 +332,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         embedding_encoder: Encoder | None = None,
         use_saved_mean_and_variance: bool = False,
         mel_stats_uri: str | None = None,
+        stats_cache_dir: str | None = None,
     ) -> None:
         """Configure the corpus, the render contract it maps onto, and conditioning.
 
@@ -328,12 +352,15 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param embedding_encoder: Pre-loaded encoder, bypassing registry loading.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
         :param mel_stats_uri: ``.npz`` of the training run's mel statistics; local or ``r2://``.
+        :param stats_cache_dir: Directory a fetched statistics object is cached in;
+            ``None`` uses the working directory.
         """
         super().__init__()
         _validate_conditioning_config(
             conditioning,
             use_saved_mean_and_variance=use_saved_mean_and_variance,
             mel_stats_uri=mel_stats_uri,
+            row_limit=row_limit,
         )
         self.dataset_uri = dataset_uri
         self.sample_rate = sample_rate
@@ -348,6 +375,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.embedding = resolve_embedding_conditioning(conditioning)
         self.sketch = resolve_sketch_controls(sketch)
         self.mel_stats_uri = mel_stats_uri if use_saved_mean_and_variance else None
+        self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._embedding_device = embedding_device
         self._embedding_checkpoint = embedding_checkpoint
         self._embedding_encoder = embedding_encoder
@@ -380,7 +408,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         if not r2_io.is_r2_uri(uri):
             return Path(uri)
         digest = hashlib.sha256(uri.encode()).hexdigest()[:16]
-        return Path.cwd() / _MEL_STATS_CACHE_DIR / f"{digest}-{Path(uri).name}"
+        return self.stats_cache_dir / f"{digest}-{Path(uri).name}"
 
     def _local_stats_file(self) -> Path:
         """Return a readable local path for the configured statistics object.
@@ -392,7 +420,11 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
-            r2_io.download_to_path(cast(str, self.mel_stats_uri), destination)
+            # Rename is atomic within the directory, so a concurrent eval either
+            # sees no file or the complete one — never a partial download.
+            staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+            r2_io.download_to_path(cast(str, self.mel_stats_uri), staged)
+            staged.replace(destination)
         return destination
 
     def setup(self, stage: str | None = None) -> None:
@@ -459,7 +491,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             for column in columns
         }
 
-    def predict_dataloader(self) -> DataLoader:
+    def predict_dataloader(self) -> DataLoader[dict[str, torch.Tensor]]:
         """Return the corpus loader in stored row order.
 
         :returns: Un-shuffled predict dataloader.
