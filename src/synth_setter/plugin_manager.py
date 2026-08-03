@@ -453,7 +453,14 @@ def _package_install_lock(
     organization, package = plugin.package.split("/")
     lock_parent = plugins_dir / _INSTALL_LOCK_DIR / organization / package
     _ensure_managed_version_dir(lock_parent, plugins_dir)
-    return integrity.package_install_lock(plugin.package, plugin.version, plugins_dir)
+
+    @contextmanager
+    def _locked() -> Iterator[None]:
+        with integrity.package_install_lock(plugin.package, plugin.version, plugins_dir):
+            runtime.publish_runtime_snapshot_permissions(_managed_version_dir(plugin, plugins_dir))
+            yield
+
+    return _locked()
 
 
 def _managed_version_dir(plugin: ManagedPlugin, plugins_dir: Path) -> Path:

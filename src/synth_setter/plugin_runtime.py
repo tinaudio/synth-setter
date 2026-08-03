@@ -528,6 +528,25 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
         raise ValueError(f"runtime snapshot path is not runtime-readable: {path}")
 
 
+def publish_runtime_snapshot_permissions(version_dir: Path) -> None:
+    """Repair legacy snapshot traversal while running with installer authority.
+
+    :param version_dir: Managed package-version directory containing snapshots.
+    :raises ValueError: Snapshot state contains a symlink or non-directory.
+    """
+    snapshots = version_dir / ".synth-setter-runtime-snapshots"
+    try:
+        mode = snapshots.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(mode):
+        raise ValueError(f"runtime snapshot path is not a directory: {snapshots}")
+    _ensure_runtime_snapshot_directory(snapshots)
+    for child in snapshots.iterdir():
+        if stat.S_ISDIR(child.lstat().st_mode):
+            _ensure_runtime_snapshot_directory(child)
+
+
 def _runtime_snapshot_matches(destination: Path, seal: BundleSeal) -> bool:
     """Return whether a published snapshot matches its managed seal.
 

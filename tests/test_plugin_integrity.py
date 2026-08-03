@@ -83,6 +83,7 @@ def test_write_atomic_record_privileged_writer_remains_world_readable(tmp_path: 
     assert stat.S_IMODE(record.stat().st_mode) == 0o644
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory lease semantics")
 def test_advisory_file_lease_permission_publication_window_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -144,6 +145,7 @@ def _assert_runtime_readable_lock_tree(lock_path: Path, directories: list[Path])
     assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode publication semantics")
 def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -546,6 +546,11 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     snapshots.chmod(0o700)
     initial_snapshot.parent.chmod(0o700)
 
+    with plugin_manager._package_install_lock(plugin, tmp_path / "managed"):
+        pass
+    assert stat.S_IMODE(snapshots.stat().st_mode) == 0o755
+    assert stat.S_IMODE(initial_snapshot.parent.stat().st_mode) == 0o755
+
     validated = plugin_manager.validate_plugin_bundle_for_runtime(alias)
 
     assert validated != alias.resolve(strict=True)
