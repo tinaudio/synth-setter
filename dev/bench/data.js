@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785782027243,
+  "lastUpdate": 1785782030361,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -23916,6 +23916,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.522527971400041,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c0b45d6bf1a9871940a6dbcefd9423b7b5156d03",
+          "message": "build: enforce Studiorack bundle integrity (#2725)\n\n* internal-fix(code-health): lock Studiorack plugin artifacts\n\n* internal-fix(code-health): enforce Studiorack bundle integrity\n\n* internal-fix(code-health): remediate Studiorack readiness failures\n\n* internal-fix(code-health): close Studiorack runtime races",
+          "timestamp": "2026-08-03T09:45:40-07:00",
+          "tree_id": "b7f27f90f3b1602b741f9345856616a62ff02a98",
+          "url": "https://github.com/tinaudio/synth-setter/commit/c0b45d6bf1a9871940a6dbcefd9423b7b5156d03"
+        },
+        "date": 1785782029925,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.178234100341797,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.23922381453216,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09667240083217621,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0027999281883239746,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2707159519195557,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.051172587899975,
             "unit": "seconds"
           }
         ]
