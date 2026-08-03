@@ -364,6 +364,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param mel_stats_uri: ``.npz`` of the training run's mel statistics; local or ``r2://``.
         :param stats_cache_dir: Directory a fetched statistics object is cached in;
             ``None`` uses the working directory.
+        :raises ValueError: One encoder was injected for multiple conditioning streams.
         """
         super().__init__()
         _validate_conditioning_config(
@@ -390,9 +391,14 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self._embedding_checkpoints = dict(embedding_checkpoints or {})
         self._embedding_encoder = embedding_encoder
         # Reject an unservable column at construction rather than mid-sweep.
-        for spec in (self.embedding, self.sketch):
-            if spec is not None:
-                registry_spec(spec.column)
+        streams = [spec.column for spec in (self.embedding, self.sketch) if spec is not None]
+        for column in streams:
+            registry_spec(column)
+        if embedding_encoder is not None and len(streams) > 1:
+            raise ValueError(
+                f"one encoder was injected for {len(streams)} conditioning streams "
+                f"({', '.join(streams)}); each registry policy needs its own"
+            )
         # Resolved at setup; the scored snapshot, not the mutable URI.
         self.dataset_version: int | None = None
         self._live: dict[str, LiveEmbedding] = {}
@@ -558,12 +564,19 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param batch: Decoded ``audio``, and ``mel`` when configured, for one batch.
         :param dataloader_idx: Unused; the datamodule serves one loader.
         :returns: The model batch a predict step consumes.
+        :raises ValueError: Mel normalization produced non-finite values.
         """
         del dataloader_idx
         model_batch = dict(batch)
         if self._statistics is not None and "mel" in model_batch:
             mean, std = self._statistics
-            model_batch["mel"] = (model_batch["mel"] - mean) / std
+            normalized = (model_batch["mel"] - mean) / std
+            if not bool(torch.isfinite(normalized).all()):
+                raise ValueError(
+                    f"mel normalization with statistics from {self.mel_stats_uri} produced "
+                    "non-finite values"
+                )
+            model_batch["mel"] = normalized
         if not self._live:
             return model_batch
         audio = model_batch["audio"].numpy()

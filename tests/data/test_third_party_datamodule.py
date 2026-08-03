@@ -781,3 +781,47 @@ def test_statistics_underflowing_float32_are_rejected(tmp_path: Path) -> None:
                 mel_stats_uri=str(stats_file),
             )
         )
+
+
+def test_statistics_producing_non_finite_mel_are_rejected(tmp_path: Path) -> None:
+    """Normalization that overflows to infinity is caught on the batch, not the statistics.
+
+    A subnormal ``std`` such as ``1e-45`` survives every positivity check yet
+    sends ordinary mel values to infinity when divided by it.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=31)])
+    stats_file = tmp_path / "stats.npz"
+    np.savez(stats_file, mean=np.float64(-30.0), std=np.float64(1e-45))
+
+    with pytest.raises(ValueError, match="non-finite"):
+        _first_batch(
+            _datamodule(
+                tmp_path / "corpus.lance",
+                use_saved_mean_and_variance=True,
+                mel_stats_uri=str(stats_file),
+            )
+        )
+
+
+def test_single_injected_encoder_with_two_streams_raises(tmp_path: Path) -> None:
+    """One injected encoder cannot serve two streams that need different weights.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=32)])
+
+    def encode(audio: np.ndarray, sample_rate: int, **_: object) -> np.ndarray:
+        del audio, sample_rate
+        return np.zeros((1, NUM_SKETCH_CONTROLS, _MEL_FRAMES), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="one encoder"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            conditioning=EmbeddingConditioningSpec(
+                column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+            ),
+            sketch=SketchControlSpec(num_frames=_MEL_FRAMES, num_control_tokens=4),
+            embedding_encoder=encode,
+        )
