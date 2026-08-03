@@ -679,7 +679,7 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
 
     managed_root = tmp_path / "managed-plugins"
     lock_path = package_install_lock_path(plugin.package, plugin.version, managed_root)
-    lock_path.chmod(0o444)
+    lock_path.chmod(0o000)
     managed_root.chmod(0o555)
     try:
         from_hydra(cfg_dataset)

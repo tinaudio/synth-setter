@@ -807,13 +807,13 @@ def _windows_unlock(stream: BinaryIO) -> None:
     windows_runtime.locking(stream.fileno(), windows_runtime.LK_UNLCK, 1)
 
 
-def _posix_advisory_lock(
-    stream: BinaryIO,
+def _posix_advisory_descriptor_lock(
+    descriptor: int,
     operation: int,
 ) -> AbstractContextManager[None]:
-    """Apply a POSIX advisory lock to an already-open stream.
+    """Apply a POSIX advisory lock to an open file or directory descriptor.
 
-    :param stream: Lock-file stream opened with role-appropriate access.
+    :param descriptor: Descriptor retained for the full lock lifetime.
     :param operation: ``fcntl.LOCK_SH`` or ``fcntl.LOCK_EX``.
     :returns: Context manager holding the requested lock around its body.
     """
@@ -822,13 +822,29 @@ def _posix_advisory_lock(
     def _locked() -> Iterator[None]:
         import fcntl
 
-        fcntl.flock(stream.fileno(), operation)
+        fcntl.flock(descriptor, operation)
         try:
             yield
         finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
 
     return _locked()
+
+
+def _posix_directory_descriptor(directory: Path) -> int:
+    """Open a real directory without following its final path component.
+
+    :param directory: Existing synchronization directory.
+    :returns: Read-only directory descriptor.
+    :raises FileExistsError: The path resolves to a symlink or non-directory.
+    :raises OSError: Opening the directory fails for another reason.
+    """
+    try:
+        return os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise FileExistsError(f"lock path is not a real directory: {directory}") from exc
+        raise
 
 
 def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
@@ -841,28 +857,39 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
     @contextmanager
     def _locked() -> Iterator[None]:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a+b") as stream:
-            if os.name == "nt":
+        if os.name == "nt":
+            with path.open("a+b") as stream:
                 _windows_lock(stream)
                 try:
                     yield
                 finally:
                     _windows_unlock(stream)
-                return
+            return
 
-            import fcntl
+        import fcntl
 
-            with _posix_advisory_lock(stream, fcntl.LOCK_EX):
-                yield
+        directory_descriptor = _posix_directory_descriptor(path.parent)
+        try:
+            with _posix_advisory_descriptor_lock(directory_descriptor, fcntl.LOCK_EX):
+                flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+                marker_descriptor = os.open(path.name, flags, 0o666, dir_fd=directory_descriptor)
+                try:
+                    if not stat.S_ISREG(os.fstat(marker_descriptor).st_mode):
+                        raise FileExistsError(f"lock is not a regular file: {path}")
+                    yield
+                finally:
+                    os.close(marker_descriptor)
+        finally:
+            os.close(directory_descriptor)
 
     return _locked()
 
 
 def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
-    """Build a shared POSIX consumer lease without writing an existing lock.
+    """Build a shared POSIX consumer lease without writing managed storage.
 
-    Missing user-managed locks are created. Windows retains the exclusive writable lock because its
-    byte-range API cannot initialize an empty read-only lock file.
+    POSIX consumers lock the marker's directory, which keeps legacy unreadable marker files usable.
+    Windows retains the exclusive writable file lock.
 
     :param path: Durable lock file shared with exclusive writers.
     :returns: Context manager holding the consumer lease around its body.
@@ -875,22 +902,24 @@ def advisory_file_lease(path: Path) -> AbstractContextManager[None]:
                 yield
             return
 
-        try:
-            stream = path.open("rb")
-        except FileNotFoundError:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                stream = path.open("a+b")
-            except OSError as exc:
-                if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
-                    raise
-                stream = path.open("rb")
-
         import fcntl
 
-        with stream:
-            with _posix_advisory_lock(stream, fcntl.LOCK_SH):
+        deadline = time.monotonic() + 1.0
+        while True:
+            try:
+                directory_descriptor = _posix_directory_descriptor(path.parent)
+                break
+            except FileNotFoundError:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+        try:
+            with _posix_advisory_descriptor_lock(directory_descriptor, fcntl.LOCK_SH):
                 yield
+        finally:
+            os.close(directory_descriptor)
 
     return _leased()
 
@@ -913,39 +942,75 @@ def package_install_lock_path(package: str, version: str, plugins_dir: Path) -> 
     )
 
 
-def _ensure_lock_directory(directory: Path, *, runtime_readable: bool) -> None:
-    """Create and validate one real lock-hierarchy directory.
+def _windows_lock_directories(plugins_dir: Path, lock_parent: Path) -> list[Path]:
+    """Create and validate the Windows package-lock hierarchy.
 
-    :param directory: Managed lock-hierarchy component whose parent exists.
-    :param runtime_readable: Whether to publish traversal permissions.
-    :raises FileExistsError: The component exists but is not a real directory.
-    :raises OSError: Creating, opening, or updating the directory fails.
+    :param plugins_dir: Managed storage root.
+    :param lock_parent: Parent directory of the package lock marker.
+    :returns: Hierarchy ordered from managed root to lock parent.
+    :raises FileExistsError: A component exists but is not a real directory.
     """
-    try:
-        directory.mkdir()
-    except FileExistsError:
-        pass
-    mode = directory.lstat().st_mode
-    if not stat.S_ISDIR(mode):
-        raise FileExistsError(f"install lock hierarchy component is not a directory: {directory}")
-    if os.name == "nt":
-        if runtime_readable:
-            directory.chmod(mode | 0o055)
-        return
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    try:
-        descriptor = os.open(directory, flags)
-    except OSError as exc:
-        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
-            raise FileExistsError(
-                f"install lock hierarchy component is not a directory: {directory}"
-            ) from exc
-        raise
-    try:
-        if runtime_readable:
-            os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
-    finally:
-        os.close(descriptor)
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    directories = [plugins_dir]
+    current = plugins_dir
+    for component in lock_parent.relative_to(plugins_dir).parts:
+        current /= component
+        try:
+            current.mkdir()
+        except FileExistsError:
+            pass
+        directories.append(current)
+    if not all(stat.S_ISDIR(directory.lstat().st_mode) for directory in directories):
+        raise FileExistsError("install lock hierarchy contains a non-directory")
+    return directories
+
+
+def _posix_lock_hierarchy(
+    plugins_dir: Path,
+    lock_parent: Path,
+) -> AbstractContextManager[list[int]]:
+    """Open a package-lock hierarchy through retained no-follow descriptors.
+
+    :param plugins_dir: Managed storage root.
+    :param lock_parent: Parent directory of the package lock marker.
+    :returns: Context manager yielding descriptors from managed root to lock parent.
+    """
+
+    @contextmanager
+    def _opened() -> Iterator[list[int]]:
+        plugins_dir.mkdir(parents=True, exist_ok=True)
+        descriptors = [_posix_directory_descriptor(plugins_dir)]
+        try:
+            for component in lock_parent.relative_to(plugins_dir).parts:
+                try:
+                    os.mkdir(component, dir_fd=descriptors[-1])
+                except FileExistsError:
+                    pass
+                flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                try:
+                    descriptor = os.open(component, flags, dir_fd=descriptors[-1])
+                except OSError as exc:
+                    if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                        raise FileExistsError(
+                            f"install lock hierarchy component is not a directory: {component}"
+                        ) from exc
+                    raise
+                descriptors.append(descriptor)
+            yield descriptors
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
+    return _opened()
+
+
+def _publish_posix_lock_hierarchy(descriptors: list[int]) -> None:
+    """Publish package-lock traversal from the deepest directory outward.
+
+    :param descriptors: Retained hierarchy descriptors ordered root-first.
+    """
+    for descriptor in reversed(descriptors):
+        os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
 
 
 def package_install_lock(
@@ -967,25 +1032,29 @@ def package_install_lock(
 
     @contextmanager
     def _locked() -> Iterator[None]:
-        plugins_dir.mkdir(parents=True, exist_ok=True)
-        current = plugins_dir
-        lock_directories = [current]
-        for component in path.parent.relative_to(plugins_dir).parts:
-            current /= component
-            lock_directories.append(current)
-        for directory in lock_directories:
-            _ensure_lock_directory(directory, runtime_readable=False)
-        try:
-            lock_mode = path.lstat().st_mode
-        except FileNotFoundError:
-            pass
-        else:
-            if not stat.S_ISREG(lock_mode):
-                raise FileExistsError(f"install lock is not a regular file: {path}")
-        with advisory_file_lock(path):
-            path.chmod(path.stat().st_mode | 0o044)
-            for directory in reversed(lock_directories):
-                _ensure_lock_directory(directory, runtime_readable=True)
-            yield
+        if os.name == "nt":
+            lock_directories = _windows_lock_directories(plugins_dir, path.parent)
+            with advisory_file_lock(path):
+                path.chmod(path.stat().st_mode | 0o044)
+                for directory in reversed(lock_directories):
+                    directory.chmod(directory.stat().st_mode | 0o055)
+                yield
+            return
+
+        import fcntl
+
+        with _posix_lock_hierarchy(plugins_dir, path.parent) as descriptors:
+            with _posix_advisory_descriptor_lock(descriptors[-1], fcntl.LOCK_EX):
+                flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+                marker = os.open(path.name, flags, 0o666, dir_fd=descriptors[-1])
+                try:
+                    marker_mode = os.fstat(marker).st_mode
+                    if not stat.S_ISREG(marker_mode):
+                        raise FileExistsError(f"install lock is not a regular file: {path}")
+                    os.fchmod(marker, marker_mode | 0o044)
+                    _publish_posix_lock_hierarchy(descriptors)
+                    yield
+                finally:
+                    os.close(marker)
 
     return _locked()

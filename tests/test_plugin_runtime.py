@@ -9,8 +9,8 @@ import os
 import stat
 import threading
 import traceback
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
@@ -202,7 +202,7 @@ def _read_only_managed_alias(tmp_path: Path) -> tuple[Path, Path, Path]:
         managed_root,
     )
     lock_path.parent.mkdir(parents=True)
-    lock_path.touch(mode=0o444)
+    lock_path.touch(mode=0o000)
     managed_root.chmod(0o555)
     return alias, managed_root, lock_path
 
@@ -554,6 +554,64 @@ def test_link_plugin_native_source_alias_preserves_existing_real_bundle(tmp_path
     assert plugin_integrity.bundle_entries(validated) == plugin_integrity.bundle_entries(alias)
 
 
+def _shared_lease_observer(
+    real_lease: Callable[[Path], AbstractContextManager[None]],
+    both_entered: threading.Event,
+) -> Callable[[Path], AbstractContextManager[None]]:
+    """Build a lease wrapper that signals simultaneous consumer entry.
+
+    :param real_lease: Shared lease implementation under test.
+    :param both_entered: Event set once two leases overlap.
+    :returns: Instrumented lease callable.
+    """
+    active_leases = 0
+    count_lock = threading.Lock()
+
+    @contextmanager
+    def _observe(path: Path) -> Iterator[None]:
+        nonlocal active_leases
+        with real_lease(path):
+            with count_lock:
+                active_leases += 1
+                if active_leases == 2:
+                    both_entered.set()
+            try:
+                yield
+            finally:
+                with count_lock:
+                    active_leases -= 1
+
+    return _observe
+
+
+def _pausing_snapshot_publisher(
+    managed: Path,
+    started: threading.Event,
+    release: threading.Event,
+    destinations: list[Path],
+) -> Callable[[Path | str, Path | str], None]:
+    """Build a publisher that pauses before replacing the managed snapshot.
+
+    :param managed: Managed alias naming the snapshot destination.
+    :param started: Event set when publication reaches replacement.
+    :param release: Event allowing replacement to continue.
+    :param destinations: Collection receiving attempted destination paths.
+    :returns: Instrumented ``os.replace`` callable.
+    """
+    real_replace = plugin_runtime.os.replace
+
+    def _pause(source: Path | str, destination: Path | str) -> None:
+        destination_path = Path(destination)
+        if destination_path.name == managed.name:
+            destinations.append(destination_path)
+            started.set()
+            if not release.wait(10):
+                raise RuntimeError("timed out waiting to publish runtime snapshot")
+        real_replace(source, destination)
+
+    return _pause
+
+
 def test_concurrent_runtime_consumers_publish_one_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -573,33 +631,16 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
     published_destinations: list[Path] = []
     results: list[Path] = []
     errors: list[BaseException] = []
-    real_replace = plugin_runtime.os.replace
-    real_lease = plugin_runtime.integrity.advisory_file_lease
-    active_leases = 0
-    lease_count_lock = threading.Lock()
-
-    @contextmanager
-    def _observe_lease(path: Path) -> Iterator[None]:
-        nonlocal active_leases
-        with real_lease(path):
-            with lease_count_lock:
-                active_leases += 1
-                if active_leases == 2:
-                    both_leases_entered.set()
-            try:
-                yield
-            finally:
-                with lease_count_lock:
-                    active_leases -= 1
-
-    def _pause_publish(source_path: Path | str, destination: Path | str) -> None:
-        destination_path = Path(destination)
-        if destination_path.name == managed.name:
-            published_destinations.append(destination_path)
-            publication_started.set()
-            if not release_publication.wait(10):
-                raise RuntimeError("timed out waiting to publish runtime snapshot")
-        real_replace(source_path, destination)
+    observed_lease = _shared_lease_observer(
+        plugin_runtime.integrity.advisory_file_lease,
+        both_leases_entered,
+    )
+    paused_publisher = _pausing_snapshot_publisher(
+        managed,
+        publication_started,
+        release_publication,
+        published_destinations,
+    )
 
     def _consume(completed: threading.Event | None = None) -> None:
         try:
@@ -610,8 +651,8 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
             if completed is not None:
                 completed.set()
 
-    monkeypatch.setattr(plugin_runtime.os, "replace", _pause_publish)
-    monkeypatch.setattr(plugin_runtime.integrity, "advisory_file_lease", _observe_lease)
+    monkeypatch.setattr(plugin_runtime.os, "replace", paused_publisher)
+    monkeypatch.setattr(plugin_runtime.integrity, "advisory_file_lease", observed_lease)
     first = threading.Thread(target=_consume)
     first.start()
     assert publication_started.wait(10)

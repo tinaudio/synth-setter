@@ -83,29 +83,65 @@ def test_write_atomic_record_privileged_writer_remains_world_readable(tmp_path: 
     assert stat.S_IMODE(record.stat().st_mode) == 0o644
 
 
-def test_advisory_file_lease_read_only_filesystem_never_opens_for_write(
+def test_advisory_file_lease_permission_publication_window_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An existing lock remains leasable when its filesystem rejects writes.
+    """A consumer retries until the installer's lock directory is traversable.
 
-    :param tmp_path: Scratch root containing one readable lock file.
-    :param monkeypatch: Simulates a read-only filesystem at write-open time.
+    :param tmp_path: Scratch root containing one legacy unreadable marker.
+    :param monkeypatch: Simulates two permission failures during publication.
     """
     lock_path = tmp_path / "managed/package.lock"
     lock_path.parent.mkdir()
-    lock_path.touch()
-    real_open = Path.open
+    lock_path.touch(mode=0o000)
+    real_open = plugin_integrity._posix_directory_descriptor
+    attempts = 0
 
-    def _read_only_open(path: Path, mode: str = "r") -> object:
-        if path == lock_path and mode == "a+b":
-            raise OSError(errno.EROFS, "read-only filesystem", path)
-        return real_open(path, mode)
+    def _publishing_open(directory: Path) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError(errno.EACCES, "permissions not published", directory)
+        return real_open(directory)
 
-    monkeypatch.setattr(Path, "open", _read_only_open)
+    monkeypatch.setattr(plugin_integrity, "_posix_directory_descriptor", _publishing_open)
 
     with plugin_integrity.advisory_file_lease(lock_path):
         pass
+
+    assert attempts == 3
+
+
+def _restricted_package_lock_tree(tmp_path: Path) -> tuple[Path, Path, list[Path]]:
+    """Build one package-lock tree with privileged-install modes.
+
+    :param tmp_path: Scratch root for the managed hierarchy.
+    :returns: Managed root, lock marker, and root-first directory list.
+    """
+    plugins_dir = tmp_path / "managed"
+    lock_path = plugin_integrity.package_install_lock_path("example/synth", "1.2.3", plugins_dir)
+    lock_path.parent.mkdir(parents=True)
+    directories = [
+        plugins_dir,
+        plugins_dir / ".synth-setter-install-locks",
+        plugins_dir / ".synth-setter-install-locks/example",
+        lock_path.parent,
+    ]
+    for directory in directories:
+        directory.chmod(0o700)
+    lock_path.touch(mode=0o600)
+    return plugins_dir, lock_path, directories
+
+
+def _assert_runtime_readable_lock_tree(lock_path: Path, directories: list[Path]) -> None:
+    """Assert runtime access across one published package-lock hierarchy.
+
+    :param lock_path: Package lock marker expected to be readable.
+    :param directories: Hierarchy expected to be traversable.
+    """
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o755 for path in directories)
+    assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
 
 
 def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
@@ -117,23 +153,7 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
     :param tmp_path: Scratch root with privileged-install permission modes.
     :param monkeypatch: Observes when the managed root becomes traversable.
     """
-    plugins_dir = tmp_path / "managed"
-    lock_path = plugin_integrity.package_install_lock_path(
-        "example/synth",
-        "1.2.3",
-        plugins_dir,
-    )
-    lock_path.parent.mkdir(parents=True)
-    plugins_dir.chmod(0o700)
-    (plugins_dir / ".synth-setter-install-locks").chmod(0o700)
-    (plugins_dir / ".synth-setter-install-locks/example").chmod(0o700)
-    lock_path.parent.chmod(0o700)
-    lock_path.touch(mode=0o600)
-    lock_directories = [
-        plugins_dir / ".synth-setter-install-locks",
-        plugins_dir / ".synth-setter-install-locks/example",
-        lock_path.parent,
-    ]
+    plugins_dir, lock_path, lock_directories = _restricted_package_lock_tree(tmp_path)
     root_published = False
     real_fchmod = os.fchmod
 
@@ -145,7 +165,7 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
         if (opened.st_dev, opened.st_ino) == (root.st_dev, root.st_ino):
             root_published = True
             assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
-            assert all(stat.S_IMODE(path.stat().st_mode) == 0o755 for path in lock_directories)
+            assert all(stat.S_IMODE(path.stat().st_mode) == 0o755 for path in lock_directories[1:])
 
     if os.name != "nt":
         monkeypatch.setattr(os, "fchmod", _observe_fchmod)
@@ -154,13 +174,7 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
         pass
 
     assert os.name == "nt" or root_published
-    assert stat.S_IMODE(plugins_dir.stat().st_mode) == 0o755
-    assert stat.S_IMODE((plugins_dir / ".synth-setter-install-locks").stat().st_mode) == 0o755
-    assert (
-        stat.S_IMODE((plugins_dir / ".synth-setter-install-locks/example").stat().st_mode) == 0o755
-    )
-    assert stat.S_IMODE(lock_path.parent.stat().st_mode) == 0o755
-    assert stat.S_IMODE(lock_path.stat().st_mode) == 0o644
+    _assert_runtime_readable_lock_tree(lock_path, lock_directories)
 
 
 def test_package_install_lock_symlinked_hierarchy_rejected_without_target_mutation(
@@ -184,31 +198,36 @@ def test_package_install_lock_symlinked_hierarchy_rejected_without_target_mutati
     assert list(external.iterdir()) == []
 
 
-def test_package_install_lock_hierarchy_swap_rejected_before_permission_change(
+def test_package_install_lock_racing_symlink_rejected_without_target_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A directory swapped during validation is rejected before chmod.
+    """A hierarchy component replaced after creation is never followed.
 
-    :param tmp_path: Scratch managed root for lock hierarchy creation.
-    :param monkeypatch: Simulates a component swap before descriptor open.
+    :param tmp_path: Scratch managed root and external symlink target.
+    :param monkeypatch: Replaces the first lock directory before descriptor open.
     """
     plugins_dir = tmp_path / "managed"
     plugins_dir.mkdir(mode=0o700)
-    real_open = os.open
+    external = tmp_path / "external"
+    external.mkdir(mode=0o700)
+    real_mkdir = os.mkdir
 
-    def _racing_open(path: Path, flags: int) -> int:
-        if Path(path).name == ".synth-setter-install-locks":
-            raise OSError(errno.ENOTDIR, "component was replaced", path)
-        return real_open(path, flags)
+    def _swap_after_mkdir(path: str, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        if path == ".synth-setter-install-locks":
+            created = plugins_dir / path
+            created.rename(plugins_dir / f"{path}.replaced")
+            created.symlink_to(external, target_is_directory=True)
 
-    monkeypatch.setattr(os, "open", _racing_open)
+    monkeypatch.setattr(os, "mkdir", _swap_after_mkdir)
 
     with pytest.raises(FileExistsError, match="not a directory"):
         with plugin_integrity.package_install_lock("example/synth", "1.2.3", plugins_dir):
             pass
 
-    assert stat.S_IMODE(plugins_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(external.stat().st_mode) == 0o700
+    assert list(external.iterdir()) == []
 
 
 def test_managed_bundle_storage_validates_and_discards_integrity_records(
