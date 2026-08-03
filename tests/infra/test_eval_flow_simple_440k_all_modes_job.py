@@ -61,7 +61,7 @@ _EVAL_CASES = (
 
 
 def test_eval_flow_simple_440k_launch_config_selects_one_mid_tier_job() -> None:
-    """The checked-in config runs one attached job on the medium RunPod pool."""
+    """The checked-in config uses attached execution on the medium RunPod pool."""
     cfg = load_launch_config(_LAUNCH_CONFIG)
 
     assert cfg.compute is not None
@@ -99,7 +99,8 @@ def test_eval_flow_simple_440k_worker_dry_run_covers_complete_matrix() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert [line.split("\t", maxsplit=1)[0] for line in result.stdout.splitlines()] == [
+    lines = [line.split("\t", maxsplit=1) for line in result.stdout.splitlines()]
+    assert [label for label, _command in lines] == [
         "DRY RUN mel/test",
         "DRY RUN mel/validate",
         "DRY RUN mel/val",
@@ -117,6 +118,16 @@ def test_eval_flow_simple_440k_worker_dry_run_covers_complete_matrix() -> None:
         "DRY RUN same_s/val",
         "DRY RUN same_s/predict",
     ]
+    commands = {label: set(shlex.split(command)) for label, command in lines}
+    predict_overrides = {
+        "evaluation.compute_metrics=true",
+        "evaluation.render_vst=true",
+        "evaluation.rerender_target=true",
+    }
+    assert predict_overrides <= commands["DRY RUN mel/predict"]
+    assert predict_overrides | {"conditioning=clap"} <= commands["DRY RUN clap/predict"]
+    assert predict_overrides | {"conditioning=m2l"} <= commands["DRY RUN m2l/predict"]
+    assert predict_overrides | {"conditioning=same_s"} <= commands["DRY RUN same_s/predict"]
 
 
 @pytest.mark.parametrize(
@@ -126,6 +137,8 @@ def test_eval_flow_simple_440k_worker_dry_run_covers_complete_matrix() -> None:
         ("--mode=bogus", "unsupported mode: bogus"),
         ("--arm=", "unsupported arm:"),
         ("--mode=", "unsupported mode:"),
+        ("--arm=mel clap", "unsupported arm: mel clap"),
+        ("--mode=test validate", "unsupported mode: test validate"),
     ],
 )
 def test_eval_flow_simple_440k_worker_unknown_filter_fails(argument: str, message: str) -> None:
