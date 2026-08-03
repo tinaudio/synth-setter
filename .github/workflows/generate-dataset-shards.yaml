@@ -472,6 +472,7 @@ jobs:
         timeout-minutes: 40
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           PYTHONPATH: ${{ github.workspace }}

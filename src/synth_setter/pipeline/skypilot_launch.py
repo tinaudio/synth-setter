@@ -655,8 +655,8 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     :param sky_cfg: Validated launcher config; see ``SkypilotLaunchConfig`` for
         per-field semantics.
     :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run_script``
-        pair, unresolved worker env vars, or ``extra_envs`` keys colliding with
-        ``_WORKER_ENV_KEYS``.
+        pair, unresolved worker env vars, blank ``WANDB_PROJECT`` overrides, or
+        ``extra_envs`` keys colliding with protected ``_WORKER_ENV_KEYS``.
     :raises click.ClickException: SkyPilot client auth is invalid or rejected.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
     """

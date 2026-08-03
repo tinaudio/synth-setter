@@ -18,6 +18,17 @@ _EXPECTED_CI_WANDB_PROJECTS = {
     "test-gpu.yml": _CITEST_PROJECT,
     "test-mps.yml": _CITEST_PROJECT,
 }
+_EXPECTED_REUSABLE_WANDB_PROJECTS = {
+    ("generate-dataset-shards.yaml", "./.github/workflows/finalize-dataset.yaml"): (
+        "${{ inputs.wandb_project }}"
+    ),
+    ("test-dataset-finalization.yml", "./.github/workflows/generate-dataset-shards.yaml"): (
+        _CITEST_PROJECT
+    ),
+    ("test-dataset-generation.yml", "./.github/workflows/generate-dataset-shards.yaml"): (
+        _CITEST_PROJECT
+    ),
+}
 
 
 def _on(workflow: Mapping[str, object]) -> Mapping[str, object]:
@@ -62,10 +73,14 @@ def _job_wandb_project_offenders(
     job_env = cast(Mapping[str, object], job.get("env", {}))
     inherited_api_key = "WANDB_API_KEY" in workflow_env or "WANDB_API_KEY" in job_env
     inherited_project = job_env.get("WANDB_PROJECT", workflow_env.get("WANDB_PROJECT"))
-    if inherited_api_key and (expected_project is None or inherited_project != expected_project):
+    steps = cast(list[Mapping[str, object]], job.get("steps", []))
+    if (
+        inherited_api_key
+        and not steps
+        and (expected_project is None or inherited_project != expected_project)
+    ):
         return [job_scope]
 
-    steps = cast(list[Mapping[str, object]], job.get("steps", []))
     offenders: list[str] = []
     for step in steps:
         step_env = cast(Mapping[str, object], step.get("env", {}))
@@ -76,6 +91,28 @@ def _job_wandb_project_offenders(
         ):
             offenders.append(f"{job_scope}:{step.get('name', '<unnamed>')}")
     return offenders
+
+
+def _reusable_wandb_project_offenders(job_scope: str, job: Mapping[str, object]) -> list[str]:
+    """Validate project routing for authenticated reusable workflow calls.
+
+    :param job_scope: Caller workflow filename and job key used in diagnostics.
+    :param job: Parsed reusable-workflow job definition.
+    :returns: Caller scope when inherited secrets could reach the wrong project.
+    """
+    if job.get("secrets") != "inherit":
+        return []
+    workflow_name = job_scope.partition(":")[0]
+    reusable = job.get("uses")
+    if not isinstance(reusable, str):
+        return []
+    expected_project = _EXPECTED_REUSABLE_WANDB_PROJECTS.get((workflow_name, reusable))
+    if expected_project is None:
+        return []
+    inputs = cast(Mapping[str, object], job.get("with", {}))
+    if inputs.get("wandb_project") == expected_project:
+        return []
+    return [job_scope]
 
 
 def _ci_steps_missing_wandb_project(project_root: Path) -> list[str]:
@@ -95,6 +132,7 @@ def _ci_steps_missing_wandb_project(project_root: Path) -> list[str]:
         for job_name, job_value in jobs.items():
             job = cast(Mapping[str, object], job_value)
             job_scope = f"{path.name}:{job_name}"
+            offenders.extend(_reusable_wandb_project_offenders(job_scope, job))
             offenders.extend(_job_wandb_project_offenders(job_scope, job, workflow_env))
     return offenders
 
@@ -176,7 +214,19 @@ def test_job_level_wandb_key_without_project_is_reported() -> None:
 
     offenders = _job_wandb_project_offenders("test.yml:run_tests", job, {})
 
-    assert offenders == ["test.yml:run_tests"]
+    assert offenders == ["test.yml:run_tests:test"]
+
+
+def test_job_level_key_with_citest_on_every_step_is_allowed() -> None:
+    """Per-step project selections can safely scope inherited authentication."""
+    job = {
+        "env": {"WANDB_API_KEY": "secret"},
+        "steps": [{"name": "test", "env": {"WANDB_PROJECT": _CITEST_PROJECT}}],
+    }
+
+    offenders = _job_wandb_project_offenders("test-gpu.yml:run_tests", job, {})
+
+    assert offenders == []
 
 
 def test_inherited_key_with_production_step_project_is_reported() -> None:
@@ -189,6 +239,21 @@ def test_inherited_key_with_production_step_project_is_reported() -> None:
     offenders = _job_wandb_project_offenders("test-gpu.yml:run_tests", job, {})
 
     assert offenders == ["test-gpu.yml:run_tests:test"]
+
+
+def test_inherited_reusable_call_without_project_is_reported() -> None:
+    """Inherited secrets require explicit project routing at reusable calls."""
+    job = {
+        "secrets": "inherit",
+        "uses": "./.github/workflows/generate-dataset-shards.yaml",
+        "with": {},
+    }
+
+    offenders = _reusable_wandb_project_offenders(
+        "test-dataset-generation.yml:generate-launcher", job
+    )
+
+    assert offenders == ["test-dataset-generation.yml:generate-launcher"]
 
 
 def test_empty_wandb_project_is_reported() -> None:
