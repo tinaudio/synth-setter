@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## Unreleased
+
+- Add optional dataset-level standardization for measured cached conditioning columns.
 
 ## v11.0.0 (2026-07-31)
 

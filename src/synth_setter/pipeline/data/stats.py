@@ -1,18 +1,27 @@
+"""Stream dataset-level mel and cached-conditioning normalization statistics."""
+
 import argparse
 import logging
+import os
+import subprocess
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
-from typing import NamedTuple, TypeAlias
+from typing import NamedTuple
 
 import numpy as np
+import pyarrow as pa
 
+from synth_setter.conditioning import EmbeddingNormalization
 from synth_setter.data.audio_datamodule import AudioFolderDataset
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.constants import conditioning_stats_filename
 
 logger = logging.getLogger(__name__)
 
-WelfordValue: TypeAlias = np.ndarray | int
-WelfordState: TypeAlias = tuple[int, WelfordValue, WelfordValue]
+type WelfordValue = np.ndarray | int
+type WelfordState = tuple[int, WelfordValue, WelfordValue]
 
 # Lance shards are dataset directories, not single files.
 _SHARD_GLOB = "shard-*.lance"
@@ -21,6 +30,7 @@ _SHARD_GLOB = "shard-*.lance"
 # degenerate dataset (e.g. count==1 on a 3-D mel spec, ~100k elements) doesn't
 # emit a megabyte-scale message. Remaining count is summarised as "+N more".
 _MAX_DEGENERATE_INDEX_PREVIEW = 20
+_CONDITIONING_DEGENERATE_STD = 1e-6
 
 
 class _DegenerateBinsFound(NamedTuple):
@@ -33,7 +43,9 @@ class _DegenerateBinsFound(NamedTuple):
     overflow_suffix: str
 
 
-def _locate_degenerate_bins(std: np.ndarray) -> _DegenerateBinsFound | None:
+def _locate_degenerate_bins(
+    std: np.ndarray, *, threshold: float = 0.0
+) -> _DegenerateBinsFound | None:
     """Find and format degenerate (``std==0``) positions for error/warning rendering.
 
     Internal helper shared between ``_check_degenerate_bins`` (which raises on the
@@ -46,6 +58,8 @@ def _locate_degenerate_bins(std: np.ndarray) -> _DegenerateBinsFound | None:
         so torch tensors (returned by datamodule ``__getitem__``) and other
         array-likes go through numpy's ``argwhere`` rather than their own
         framework's ``nonzero`` delegate.
+    :param threshold: Positive values below this standard deviation are degenerate;
+        zero preserves the legacy exact-zero rule.
 
     :returns: ``None`` if no bins are degenerate; otherwise a
         :class:`_DegenerateBinsFound` carrying the canonicalized array, boolean
@@ -61,7 +75,7 @@ def _locate_degenerate_bins(std: np.ndarray) -> _DegenerateBinsFound | None:
             "stats reduce to a scalar (likely a dataset with <=1 samples); "
             "cannot compute per-bin std. Need at least 2 samples."
         )
-    mask = std == 0
+    mask = std < threshold if threshold > 0 else std == 0
     n_degenerate = int(mask.sum())
     if n_degenerate == 0:
         return None
@@ -107,7 +121,7 @@ def _check_degenerate_bins(std: np.ndarray) -> None:
     )
 
 
-def _fix_degenerate_bins(std: np.ndarray) -> np.ndarray:
+def _fix_degenerate_bins(std: np.ndarray, *, threshold: float = 0.0) -> np.ndarray:
     """Substitute ``std=1.0`` at degenerate positions and return the patched array.
 
     Pairs with :func:`_check_degenerate_bins` for the ``--mask-degenerate-bins``
@@ -120,17 +134,19 @@ def _fix_degenerate_bins(std: np.ndarray) -> np.ndarray:
     since substituting a scalar makes no sense.
 
     :param std: Per-bin standard deviation array.
+    :param threshold: Positive values below this standard deviation are degenerate;
+        zero preserves the legacy exact-zero rule.
 
     :returns: A new array of the same dtype with degenerate positions set to
         ``1.0`` (in the input's dtype). Returns the canonicalized input
         unchanged when no bins are degenerate.
     :rtype: np.ndarray
     """
-    found = _locate_degenerate_bins(std)
+    found = _locate_degenerate_bins(std, threshold=threshold)
     if found is None:
         return np.asarray(std)
     logger.warning(
-        "Masking %d degenerate mel bin(s) with std=1.0 (std shape %s; indices %s%s).",
+        "Masking %d degenerate bin(s) with std=1.0 (std shape %s; indices %s%s).",
         found.n_degenerate,
         found.std.shape,
         found.preview,
@@ -144,7 +160,13 @@ def _fix_degenerate_bins(std: np.ndarray) -> np.ndarray:
     return out
 
 
-def update(existing, new):
+def update(existing: WelfordState, new: np.ndarray) -> WelfordState:
+    """Fold one observation into a Welford state.
+
+    :param existing: Current ``(count, mean, M2)`` state.
+    :param new: One array-shaped observation.
+    :returns: Updated Welford state.
+    """
     count, mean, M2 = existing
     count += 1
     delta = new - mean
@@ -177,18 +199,45 @@ def merge_welford(existing: WelfordState, other: WelfordState) -> WelfordState:
     return count, mean, m2
 
 
-def finalize(existing, mask_degenerate: bool = False):
+def finalize(
+    existing: WelfordState,
+    mask_degenerate: bool = False,
+    *,
+    degenerate_threshold: float = 0.0,
+    allow_single_observation: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert Welford state into population mean and standard deviation.
+
+    :param existing: Completed ``(count, mean, M2)`` state.
+    :param mask_degenerate: Whether to substitute unit std for constant bins.
+    :param degenerate_threshold: Positive standard deviations below this value are
+        degenerate when masking is enabled.
+    :param allow_single_observation: Preserve the mean array's shape with zero variance
+        when only one observation exists.
+    :returns: Population ``(mean, std)`` arrays.
+    """
     count, mean, M2 = existing
-    variance = M2 / count if count > 1 else 0
+    variance = (
+        M2 / count
+        if count > 1
+        else np.zeros_like(mean) if allow_single_observation else 0
+    )
     std = np.sqrt(variance)
     if mask_degenerate:
-        std = _fix_degenerate_bins(std)
+        std = _fix_degenerate_bins(std, threshold=degenerate_threshold)
     else:
         _check_degenerate_bins(std)
     return mean, std
 
 
-def get_stats_directory(directory, mask_degenerate: bool = False):
+def get_stats_directory(
+    directory: str | Path, mask_degenerate: bool = False
+) -> None:
+    """Write mel normalization statistics for an audio directory.
+
+    :param directory: Audio folder consumed by :class:`AudioFolderDataset`.
+    :param mask_degenerate: Whether to substitute unit std for constant bins.
+    """
     dataset = AudioFolderDataset(directory)
     out_file = AudioFolderDataset.get_stats_file_path(directory)
 
@@ -264,6 +313,242 @@ def stream_stats_lance(
     return finalize(existing, mask_degenerate=mask_degenerate)
 
 
+def _conditioning_observations(
+    values: np.ndarray,
+    *,
+    input_shape: tuple[int, ...],
+    normalization: EmbeddingNormalization,
+) -> np.ndarray:
+    """Arrange one Lance batch as observations for its configured affine.
+
+    :param values: Stored values shaped ``(rows, *input_shape)``.
+    :param input_shape: Fixed per-row conditioning shape.
+    :param normalization: Per-channel or shared-global strategy.
+    :returns: Float64 observations shaped ``(N, D)`` or ``(N, 1)``.
+    :raises ValueError: Values have the wrong shape, rank, or non-finite entries.
+    """
+    if values.shape[1:] != input_shape:
+        raise ValueError(
+            f"conditioning batch has shape {values.shape[1:]}, expected {input_shape}"
+        )
+    if not np.issubdtype(values.dtype, np.floating):
+        raise ValueError(f"conditioning values must be floating-point, got {values.dtype}")
+    if not np.isfinite(values).all():
+        raise ValueError("conditioning values contain non-finite entries")
+    if normalization == "global":
+        return values.reshape(-1, 1).astype(np.float64, copy=False)
+    if normalization != "per_channel":
+        raise ValueError(f"cannot compute conditioning statistics for {normalization!r}")
+    if len(input_shape) == 1:
+        observations = values
+    elif len(input_shape) == 2:
+        observations = values.transpose(0, 2, 1).reshape(-1, input_shape[0])
+    else:
+        raise ValueError(
+            "per-channel conditioning statistics require vector [D] or sequence [D, T] values"
+        )
+    return observations.astype(np.float64, copy=False)
+
+
+def _conditioning_array_to_numpy(
+    array: pa.Array, input_shape: tuple[int, ...]
+) -> np.ndarray:
+    """Decode fixed-shape-tensor or fixed-size-list conditioning rows.
+
+    :param array: Arrow batch column from Lance.
+    :param input_shape: Registered row shape.
+    :returns: Dense rows shaped ``(batch, *input_shape)``.
+    :raises ValueError: Values are null or use unsupported storage.
+    """
+    current = array.storage if isinstance(array, pa.ExtensionArray) else array
+    while pa.types.is_fixed_size_list(current.type):
+        if current.null_count:
+            raise ValueError("conditioning values contain null entries")
+        current = current.flatten()
+    if current.null_count:
+        raise ValueError("conditioning values contain null entries")
+
+    to_tensor = getattr(array, "to_numpy_ndarray", None)
+    if callable(to_tensor):
+        return np.asarray(to_tensor())
+    if not pa.types.is_fixed_size_list(array.type):
+        raise ValueError(f"unsupported conditioning Arrow type {array.type}")
+    values = current.to_numpy(zero_copy_only=False)
+    return np.asarray(values).reshape(len(array), *input_shape)
+
+
+def stream_conditioning_stats_lance(
+    dataset_uri: str | Path,
+    *,
+    column: str,
+    input_shape: tuple[int, ...],
+    normalization: EmbeddingNormalization,
+    storage_options: dict[str, str] | None = None,
+    batch_size: int = 16,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Stream cached-conditioning affine statistics from one Lance dataset.
+
+    Per-channel sequence statistics aggregate each ``[D]`` channel over rows
+    and time. Global statistics aggregate every stored scalar into one affine.
+
+    :param dataset_uri: Finalized Lance split containing the cached column.
+    :param column: Fixed-shape cached-conditioning column.
+    :param input_shape: Stored per-row shape, either ``[D]`` or ``[D, T]``.
+    :param normalization: ``per_channel`` or ``global``.
+    :param storage_options: Object-store options for a cloud dataset.
+    :param batch_size: Lance scan batch size in rows.
+    :returns: Float32 ``(mean, std)`` arrays; global arrays have shape ``(1,)``.
+    :raises ValueError: The dataset is empty or violates the numeric/shape contract.
+    """
+    import lance
+
+    dataset_target = str(dataset_uri)
+    dataset_storage_options = storage_options
+    if r2_io.is_r2_uri(dataset_target):
+        dataset_target, dataset_storage_options = r2_io.lance_target(dataset_target)
+    dataset = lance.dataset(dataset_target, storage_options=dataset_storage_options)
+    state: WelfordState = (0, 0, 0)
+    for batch in dataset.to_batches(columns=[column], batch_size=batch_size):
+        values = _conditioning_array_to_numpy(batch.column(0), input_shape)
+        observations = _conditioning_observations(
+            values,
+            input_shape=input_shape,
+            normalization=normalization,
+        )
+        batch_mean = observations.mean(axis=0)
+        centered = observations - batch_mean
+        batch_state: WelfordState = (
+            len(observations),
+            batch_mean,
+            np.sum(centered * centered, axis=0),
+        )
+        state = merge_welford(state, batch_state)
+    if state[0] == 0:
+        raise ValueError(f"conditioning column {column!r} contained no rows")
+    mean, std = finalize(
+        state,
+        mask_degenerate=True,
+        degenerate_threshold=_CONDITIONING_DEGENERATE_STD,
+        allow_single_observation=True,
+    )
+    return mean.astype(np.float32), std.astype(np.float32)
+
+
+def _assert_conditioning_stats_match(
+    stats_file: Path, mean: np.ndarray, std: np.ndarray
+) -> None:
+    """Reject an existing artifact whose affine differs from this computation.
+
+    :param stats_file: Existing column-specific archive.
+    :param mean: Newly computed mean.
+    :param std: Newly computed standard deviation.
+    :raises FileExistsError: Existing and new affine arrays differ.
+    """
+    with np.load(stats_file) as existing:
+        matches = (
+            set(existing.files) == {"mean", "std"}
+            and np.array_equal(existing["mean"], mean)
+            and np.array_equal(existing["std"], std)
+        )
+    if not matches:
+        raise FileExistsError(f"new conditioning statistics conflict with existing {stats_file}")
+
+
+def _write_conditioning_stats(  # noqa: DOC502
+    stats_file: Path, mean: np.ndarray, std: np.ndarray
+) -> None:
+    """Atomically publish one column's immutable statistics artifact.
+
+    :param stats_file: Column-specific archive beside finalized split datasets.
+    :param mean: Affine mean array.
+    :param std: Affine standard-deviation array.
+    :raises FileExistsError: An existing artifact contains a different affine.
+    """
+    stats_file.parent.mkdir(parents=True, exist_ok=True)
+    if stats_file.exists():
+        _assert_conditioning_stats_match(stats_file, mean, std)
+        return
+    with tempfile.NamedTemporaryFile(
+        dir=stats_file.parent,
+        prefix=f".{stats_file.name}.",
+        suffix=".npz",
+        delete=False,
+    ) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        np.savez(temporary_path, mean=mean, std=std)
+        try:
+            os.link(temporary_path, stats_file)
+        except FileExistsError:
+            _assert_conditioning_stats_match(stats_file, mean, std)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def get_conditioning_stats_lance(
+    dataset_uri: str | Path,
+    *,
+    column: str,
+    input_shape: tuple[int, ...],
+    normalization: EmbeddingNormalization,
+    output_directory: str | Path | None = None,
+    storage_options: dict[str, str] | None = None,
+    batch_size: int = 16,
+) -> Path | str:
+    """Write one column's streaming statistics to its immutable archive.
+
+    :param dataset_uri: Finalized Lance split containing the cached column.
+    :param column: Fixed-shape cached-conditioning column.
+    :param input_shape: Stored per-row shape.
+    :param normalization: ``per_channel`` or ``global``.
+    :param output_directory: Local archive directory; defaults beside local or R2 input.
+    :param storage_options: Object-store options for a cloud dataset.
+    :param batch_size: Lance scan batch size in rows.
+    :returns: Local path or canonical R2 URI of the column-specific archive.
+    :raises subprocess.CalledProcessError: Immutable R2 publication fails without a winner.
+    """
+    mean, std = stream_conditioning_stats_lance(
+        dataset_uri,
+        column=column,
+        input_shape=input_shape,
+        normalization=normalization,
+        storage_options=storage_options,
+        batch_size=batch_size,
+    )
+    filename = conditioning_stats_filename(column)
+    dataset_uri_string = str(dataset_uri)
+    if output_directory is not None:
+        stats_file = Path(output_directory) / filename
+        _write_conditioning_stats(stats_file, mean, std)
+        logger.info("Saving conditioning statistics to %s", stats_file)
+        return stats_file
+    if not r2_io.is_r2_uri(dataset_uri_string):
+        stats_file = Path(dataset_uri).parent / filename
+        _write_conditioning_stats(stats_file, mean, std)
+        logger.info("Saving conditioning statistics to %s", stats_file)
+        return stats_file
+
+    destination = f"{dataset_uri_string.rsplit('/', 1)[0]}/{filename}"
+    with tempfile.TemporaryDirectory(prefix="conditioning-stats-") as temporary:
+        stats_file = Path(temporary) / filename
+        _write_conditioning_stats(stats_file, mean, std)
+        if r2_io.object_size(destination) is not None:
+            existing_file = Path(temporary) / f"existing-{filename}"
+            r2_io.download_to_path(destination, existing_file)
+            _assert_conditioning_stats_match(existing_file, mean, std)
+            return destination
+        try:
+            r2_io.upload_to_uri_immutable(stats_file, destination)
+        except subprocess.CalledProcessError:
+            if r2_io.object_size(destination) is None:
+                raise
+            existing_file = Path(temporary) / f"existing-{filename}"
+            r2_io.download_to_path(destination, existing_file)
+            _assert_conditioning_stats_match(existing_file, mean, std)
+    logger.info("Saving conditioning statistics to %s", destination)
+    return destination
+
+
 def get_stats_lance(directory: str | Path, mask_degenerate: bool = False) -> None:
     """Compute mel-spec mean/std over ``shard-*.lance`` shards and write a sibling ``stats.npz``.
 
@@ -302,6 +587,27 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--conditioning-column",
+        help="Cached Lance column for column-specific conditioning statistics.",
+    )
+    parser.add_argument(
+        "--conditioning-shape",
+        nargs="+",
+        type=int,
+        help="Fixed conditioning row shape, e.g. --conditioning-shape 256 44.",
+    )
+    parser.add_argument(
+        "--conditioning-normalization",
+        choices=("per_channel", "global"),
+        help="Conditioning affine to compute.",
+    )
+    parser.add_argument(
+        "--conditioning-batch-size",
+        type=int,
+        default=16,
+        help="Lance rows scanned per conditioning-statistics batch.",
+    )
+    parser.add_argument(
         "--mask-degenerate-bins",
         action="store_true",
         help=(
@@ -326,6 +632,7 @@ def main(argv: list[str] | None = None) -> None:
         ``sys.argv[1:]`` — the standard CLI behavior.
     :returns: ``None``.
     :rtype: None
+    :raises ValueError: Conditioning-stat flags are incomplete.
     """
     args = _parse_args(argv)
 
@@ -337,6 +644,21 @@ def main(argv: list[str] | None = None) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if args.conditioning_column is not None:
+        if args.conditioning_shape is None or args.conditioning_normalization is None:
+            raise ValueError(
+                "--conditioning-column requires --conditioning-shape and "
+                "--conditioning-normalization"
+            )
+        get_conditioning_stats_lance(
+            args.input,
+            column=args.conditioning_column,
+            input_shape=tuple(args.conditioning_shape),
+            normalization=args.conditioning_normalization,
+            batch_size=args.conditioning_batch_size,
+        )
+        return
 
     input_path = Path(args.input)
     if input_path.is_dir() and any(input_path.glob(_SHARD_GLOB)):

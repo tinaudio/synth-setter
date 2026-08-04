@@ -6,6 +6,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 ConditioningMode = Literal["mel", "m2l", "audio"]
+EmbeddingNormalization = Literal["none", "per_channel", "global"]
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
 # Modes read straight from the model-batch entry of the same name. "audio" serves
 # online-render synths, which have no stored mel because their audio only exists
@@ -49,12 +50,17 @@ class EmbeddingConditioningSpec(BaseModel):
     .. attribute :: input_shape
 
         Fixed per-row tensor shape expected from the column.
+
+    .. attribute :: normalization
+
+        Dataset-statistics affine strategy; absent artifacts remain a no-op.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     column: str = Field(min_length=1)
     input_shape: tuple[PositiveInt, ...] = Field(min_length=1)
+    normalization: EmbeddingNormalization = "none"
 
 
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]
