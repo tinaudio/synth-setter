@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import io
-import re
 import pickle
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -1158,3 +1158,42 @@ def test_setup_pins_the_snapshot_against_later_corpus_commits(tmp_path: Path) ->
         amplitude_scale=1.0,
     )
     assert torch.equal(served, torch.from_numpy(expected).unsqueeze(0))
+
+
+def test_conditioning_overflowing_float32_raises(tmp_path: Path) -> None:
+    """A value finite in float64 but not float32 must not reach the model as inf.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=47)])
+
+    def overflowing(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        return np.full((len(source), SSONDO_EMBEDDING_DIM), 1e39, dtype=np.float64)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        conditioning=EmbeddingConditioningSpec(
+            column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+        ),
+        embedding_encoder=overflowing,
+    )
+
+    with pytest.raises(ValueError, match="non-finite values"):
+        _first_batch(datamodule)
+
+
+def test_non_numeric_duration_raises(tmp_path: Path) -> None:
+    """The sample-count product must not run before its operands are checked.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=48)])
+
+    with pytest.raises(ValueError, match="must be a number"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds="0.5",  # type: ignore[arg-type]
+        )

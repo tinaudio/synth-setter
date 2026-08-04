@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import hashlib
 import io
-import math
 import logging
+import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -414,7 +414,6 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.dataset_uri = dataset_uri
         self.sample_rate = sample_rate
         self.channels = channels
-        self.num_samples = int(sample_rate * signal_duration_seconds)
         # bool is an int subclass, so a YAML `true` would otherwise pass as a count of 1.
         for name, value in (
             ("sample_rate", sample_rate),
@@ -424,6 +423,10 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ValueError(f"{name}={value!r} must be an integer")
+        if isinstance(signal_duration_seconds, bool) or not isinstance(
+            signal_duration_seconds, (int, float)
+        ):
+            raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
         if batch_size <= 0:
             raise ValueError(f"batch_size={batch_size} must be positive")
         if sample_rate <= 0:
@@ -432,6 +435,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             raise ValueError(
                 f"signal_duration_seconds={signal_duration_seconds} must be positive and finite"
             )
+        self.num_samples = int(sample_rate * signal_duration_seconds)
         if num_workers < 0:
             raise ValueError(f"num_workers={num_workers} must not be negative")
         # A non-positive grid slices to an empty clip instead of failing the render contract.
