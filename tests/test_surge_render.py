@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import MagicMock
 
 import click
 import numpy as np
@@ -111,6 +112,48 @@ def test_validate_inverse_model_wrong_output_width_raises() -> None:
 
     with pytest.raises(ValueError, match="output width"):
         surge_render.validate_inverse_model(model, render, conditioning)
+
+
+def test_predict_patch_samples_once_with_seeded_conditioning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inverse sampling returns a detached CPU row through the public boundary.
+
+    :param tmp_path: Temporary trusted checkpoint path.
+    :param monkeypatch: Lightning checkpoint loader replacement fixture.
+    """
+    render = clap_render._load_settings().render
+    conditioning = EmbeddingConditioningSpec(column="clap", input_shape=(512,))
+    prediction = torch.ones(1, len(param_specs[render.param_spec_name]), requires_grad=True)
+    model = MagicMock(spec=VSTFlowMatchingModule)
+    model.hparams = {
+        "conditioning": conditioning,
+        "sketch_controls": None,
+        "num_params": prediction.shape[1],
+    }
+    model.to.return_value = model
+    model.eval.return_value = model
+    model.predict_step.return_value = (prediction, None)
+    monkeypatch.setattr(
+        VSTFlowMatchingModule,
+        "load_from_checkpoint",
+        lambda *_args, **_kwargs: model,
+    )
+
+    result = surge_render.predict_patch(
+        torch.ones(1, 512),
+        tmp_path / "inverse.ckpt",
+        render,
+        torch.device("cpu"),
+        seed=23,
+        expected_conditioning=conditioning,
+    )
+
+    assert result.shape == prediction.shape
+    assert result.device.type == "cpu"
+    assert not result.requires_grad
+    model.predict_step.assert_called_once()
 
 
 def test_workspace_render_config_relative_preset_becomes_absolute() -> None:

@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 from uuid import uuid4
 
+import httpx
 import numpy as np
 import pytest
 import torch
 from click.testing import CliRunner
+from huggingface_hub.errors import HfHubHTTPError
 from pedalboard.io import AudioFile
 from safetensors.torch import load_file, save_file
 
@@ -102,6 +106,128 @@ def test_checkpoint_target_key_accepts_upstream_segment_removal() -> None:
         == "model.weight"
     )
     assert stable_audio_render._checkpoint_target_key("missing.weight", {"model.weight"}) is None
+
+
+def test_download_stable_audio_snapshot_returns_materialized_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pinned Hugging Face hydration returns a concrete filesystem path.
+
+    :param tmp_path: Materialized snapshot stand-in.
+    :param monkeypatch: Hugging Face download boundary replacement fixture.
+    """
+    monkeypatch.setattr("huggingface_hub.snapshot_download", lambda **_kwargs: str(tmp_path))
+
+    assert stable_audio_render._download_stable_audio_snapshot("repo/model", "abc123") == tmp_path
+
+
+def test_download_stable_audio_snapshot_transient_http_raises_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retryable Hugging Face responses enter the shared external-I/O contract.
+
+    :param monkeypatch: Hugging Face failure replacement fixture.
+    """
+    response = httpx.Response(
+        503,
+        request=httpx.Request("GET", "https://huggingface.co/repo/model"),
+    )
+
+    failure = HfHubHTTPError("unavailable", response=response)
+    monkeypatch.setattr("huggingface_hub.snapshot_download", MagicMock(side_effect=failure))
+    undecorated_download = getattr(
+        stable_audio_render._download_stable_audio_snapshot, "__wrapped__"
+    )
+
+    with pytest.raises(ConnectionError, match="503"):
+        undecorated_download("repo/model", "abc123")
+
+
+@pytest.mark.parametrize(
+    ("device", "expected_half"),
+    [(torch.device("cpu"), False), (torch.device("cuda"), True)],
+)
+def test_load_stable_audio_model_selects_device_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    device: torch.device,
+    expected_half: bool,
+) -> None:
+    """Snapshot loading selects the bounded CUDA path only for CUDA devices.
+
+    :param tmp_path: Temporary pinned snapshot directory.
+    :param monkeypatch: Snapshot and upstream loader boundary replacements.
+    :param device: Explicit inference device under test.
+    :param expected_half: Whether the Stable Audio wrapper receives half mode.
+    """
+    import stable_audio_3
+    from stable_audio_3 import loading_utils
+
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "model_config.json").write_text(
+        json.dumps(
+            {
+                "model": {
+                    "conditioning": {
+                        "configs": [{"id": "prompt", "config": {"repo_id": "upstream"}}]
+                    }
+                }
+            }
+        )
+    )
+    (snapshot / "model.safetensors").touch()
+    cpu_diffusion = torch.nn.Linear(1, 1)
+    cuda_diffusion = torch.nn.Linear(1, 1)
+    constructed: dict[str, object] = {}
+    sentinel = object()
+    monkeypatch.setattr(
+        stable_audio_render,
+        "_download_stable_audio_snapshot",
+        lambda *_args: snapshot,
+    )
+    monkeypatch.setattr(
+        loading_utils,
+        "load_diffusion_cond",
+        lambda *_args, **_kwargs: cpu_diffusion,
+    )
+    monkeypatch.setattr(
+        stable_audio_render,
+        "_load_cuda_diffusion_streaming",
+        lambda *_args: cuda_diffusion,
+    )
+
+    def construct_model(
+        diffusion: torch.nn.Module,
+        model_config: dict[str, object],
+        selected_device: str,
+        use_half: bool,
+    ) -> object:
+        """Record the upstream wrapper inputs.
+
+        :param diffusion: Loaded diffusion module.
+        :param model_config: Localized source configuration.
+        :param selected_device: String form of the selected torch device.
+        :param use_half: CUDA half-precision selection.
+        :returns: Stable sentinel standing in for the upstream wrapper.
+        """
+        constructed.update(
+            diffusion=diffusion,
+            model_config=model_config,
+            device=selected_device,
+            use_half=use_half,
+        )
+        return sentinel
+
+    monkeypatch.setattr(stable_audio_3, "StableAudioModel", construct_model)
+
+    loaded = stable_audio_render.load_stable_audio_model(load_profile("small"), device)
+
+    assert loaded is sentinel
+    assert constructed["diffusion"] is (cuda_diffusion if expected_half else cpu_diffusion)
+    assert constructed["device"] == str(device)
+    assert constructed["use_half"] is expected_half
 
 
 def test_load_cuda_diffusion_streaming_loads_real_safetensors(
