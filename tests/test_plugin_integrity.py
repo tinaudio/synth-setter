@@ -1,11 +1,15 @@
 """Contract tests for the focused managed-plugin integrity boundary."""
 
+import ctypes
 import errno
 import json
 import os
 import stat
+import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -263,21 +267,95 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
     _assert_runtime_readable_lock_tree(lock_path, lock_directories)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="native Windows handle semantics")
-def test_windows_open_regular_lock_reparse_point_rejected(tmp_path: Path) -> None:
+class _FakeNativeFunction:
+    """Expose ctypes function metadata around a Python callback."""
+
+    def __init__(self, callback: Callable[..., int]) -> None:
+        """Store the native-call callback.
+
+        :param callback: Python implementation of the native call.
+        """
+        self.callback = callback
+        self.argtypes: list[object] = []
+        self.restype: object = None
+
+    def __call__(self, *args: object) -> int:
+        """Forward one fake native call.
+
+        :param *args: Native call arguments.
+        :returns: Callback result.
+        """
+        return self.callback(*args)
+
+
+def _fake_windows_file_api(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    attributes: int,
+    descriptor: int,
+) -> None:
+    """Install a deterministic Windows file API for cross-platform tests.
+
+    :param monkeypatch: Installs ctypes and msvcrt fakes.
+    :param attributes: Attributes returned for the retained marker handle.
+    :param descriptor: Descriptor transferred into the returned stream.
+    """
+
+    def _inspect(*args: ctypes.c_void_p) -> int:
+        info_pointer = args[2]
+        ctypes.cast(info_pointer, ctypes.POINTER(ctypes.c_ulong))[0] = attributes
+        return 1
+
+    kernel32 = SimpleNamespace(
+        CreateFileW=_FakeNativeFunction(lambda *_: 123),
+        GetFileInformationByHandleEx=_FakeNativeFunction(_inspect),
+        CloseHandle=_FakeNativeFunction(lambda *_: 1),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "msvcrt",
+        SimpleNamespace(open_osfhandle=lambda *_: descriptor),
+    )
+
+
+def test_windows_open_regular_lock_reparse_point_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The retained Windows marker handle never follows a reparse point.
 
-    :param tmp_path: Scratch marker and external target.
+    :param tmp_path: Scratch marker path.
+    :param monkeypatch: Installs a reparse-point native handle result.
     """
-    external = tmp_path / "external.lock"
-    external.write_text("unchanged")
     marker = tmp_path / "marker.lock"
-    marker.symlink_to(external)
+    descriptor = os.open(marker, os.O_RDWR | os.O_CREAT)
+    _fake_windows_file_api(monkeypatch, attributes=0x00000400, descriptor=descriptor)
 
     with pytest.raises(FileExistsError, match="reparse point"):
         plugin_integrity._windows_open_regular_lock(marker)
 
-    assert external.read_text() == "unchanged"
+    os.close(descriptor)
+
+
+def test_windows_open_regular_lock_valid_handle_returns_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained regular Windows handle becomes the lock stream.
+
+    :param tmp_path: Scratch marker path.
+    :param monkeypatch: Installs a regular native handle result.
+    """
+    marker = tmp_path / "marker.lock"
+    descriptor = os.open(marker, os.O_RDWR | os.O_CREAT)
+    _fake_windows_file_api(monkeypatch, attributes=0, descriptor=descriptor)
+
+    with plugin_integrity._windows_open_regular_lock(marker) as stream:
+        stream.write(b"lock")
+
+    assert marker.read_bytes() == b"lock"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows locking semantics")
