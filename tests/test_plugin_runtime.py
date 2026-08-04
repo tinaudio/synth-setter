@@ -535,6 +535,45 @@ def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Pa
     plugin_runtime.publish_runtime_snapshot_permissions(tmp_path / "version")
 
 
+def test_windows_runtime_parent_permissions_publish_real_hierarchy(tmp_path: Path) -> None:
+    """Windows publication makes each real managed parent traversable.
+
+    :param tmp_path: Scratch managed hierarchy.
+    """
+    plugins_dir = tmp_path / "managed"
+    version_dir = plugins_dir / "VST3/example/synth/1.2.3"
+    version_dir.mkdir(parents=True)
+    hierarchy = [plugins_dir]
+    for component in version_dir.relative_to(plugins_dir).parts:
+        hierarchy.append(hierarchy[-1] / component)
+    for path in hierarchy:
+        path.chmod(0o700)
+
+    plugin_runtime._publish_windows_runtime_parent_permissions(plugins_dir, version_dir)
+
+    assert all(path.stat().st_mode & 0o055 == 0o055 for path in hierarchy)
+
+
+def test_windows_runtime_parent_permissions_reject_symlinked_component(tmp_path: Path) -> None:
+    """Windows publication rejects a linked parent without mutating its target.
+
+    :param tmp_path: Scratch managed hierarchy and outside target.
+    """
+    plugins_dir = tmp_path / "managed"
+    plugins_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    (plugins_dir / "VST3").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(OSError, match="not a real directory"):
+        plugin_runtime._publish_windows_runtime_parent_permissions(
+            plugins_dir,
+            plugins_dir / "VST3/example/synth/1.2.3",
+        )
+
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o700
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX traversal mode regression")
 def test_adopt_plugin_bundle_restrictive_umask_publishes_managed_hierarchy(tmp_path: Path) -> None:
     """Privileged adoption publishes traversal through the package version.
