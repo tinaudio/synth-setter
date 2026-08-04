@@ -25,8 +25,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STUDIORACK = PROJECT_ROOT / "node_modules/.bin/studiorack"
 
 pytestmark = pytest.mark.skipif(
-    sys.platform != "linux",
-    reason="the patched Node CLI is installed in the Linux test workflow",
+    sys.platform != "linux" or not STUDIORACK.is_file(),
+    reason="requires Linux and the pinned Node CLI installed by `npm ci`",
 )
 
 
