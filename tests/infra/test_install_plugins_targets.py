@@ -195,11 +195,16 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
 
 
 def test_docker_plugin_stage_provisions_cardinal_at_configured_path() -> None:
-    """The image installs and links Cardinal into the checkout plugin namespace."""
+    """The image installs and links Cardinal through its required headless host."""
     stage = _dockerfile_stage_text("builder-install-studiorack-plugins")
+    headless_wrapper = "/artifacts/run-linux-vst-headless.sh"
+    cardinal_install = "--plugin distrho/cardinal"
 
     assert "studiorack-cardinal.json" in stage
-    assert "--plugin distrho/cardinal" in stage
+    assert headless_wrapper in stage
+    assert stage.index(headless_wrapper) < stage.index(cardinal_install)
+    normalized_stage = " ".join(stage.replace("\\", "").split())
+    assert f"{headless_wrapper} python -m synth_setter.cli.plugins" in normalized_stage
     assert '"CardinalSynth|"' in stage
 
 
