@@ -522,6 +522,9 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
+# Reuse the patched, lockfile-pinned Studiorack graph installed by the parent stage.
+RUN ln -s /artifacts/studiorack/node_modules node_modules
+
 # The in-image pytest runs the Pi hook suite, which needs a Node that strips
 # TypeScript inline (--experimental-strip-types, Node >= 22.6). npm/npx are not
 # needed here; the `devcontainer-tools` stage adds them for the Codex CLI.

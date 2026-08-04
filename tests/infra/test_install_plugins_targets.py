@@ -237,6 +237,15 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
     assert "studiorack.lock.json" in stage
 
 
+def test_docker_dev_base_exposes_pinned_studiorack_graph_to_pytest() -> None:
+    """The in-image suite receives the same patched graph used for plugin installs."""
+    stage = _dockerfile_stage_text("dev-base")
+    graph_link = "ln -s /artifacts/studiorack/node_modules node_modules"
+
+    assert graph_link in stage
+    assert stage.index(graph_link) < stage.index('pytest -k "not slow"')
+
+
 def test_docker_plugin_stage_provisions_cardinal_at_configured_path() -> None:
     """The image installs and links Cardinal into the checkout plugin namespace."""
     stage = _dockerfile_stage_text("builder-install-studiorack-plugins")
