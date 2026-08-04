@@ -181,6 +181,8 @@ def test_make_spectrogram_pins_the_training_front_end() -> None:
         mel_n_frames_from_samples(duration_samples, sample_rate),
     )
     assert np.isfinite(spec).all()
+    # float64 features would double stored dataset size and drift from the training contract.
+    assert spec.dtype == np.float32
     # A changed or disabled dB floor would shift every checkpoint's input.
     assert spec.max() == pytest.approx(0.0)
     assert spec.min() == pytest.approx(-80.0)
