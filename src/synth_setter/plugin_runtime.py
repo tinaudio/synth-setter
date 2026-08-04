@@ -582,11 +582,64 @@ def publish_runtime_snapshot_permissions(version_dir: Path) -> None:
     _publish_runtime_tree_permissions(snapshots)
 
 
-def prepare_managed_bundle_for_runtime(managed: Path) -> None:
+def _publish_posix_runtime_parent_permissions(plugins_dir: Path, version_dir: Path) -> None:
+    """Publish traversal permissions through a descriptor-relative managed hierarchy.
+
+    :param plugins_dir: Managed storage root.
+    :param version_dir: Descendant package-version directory.
+    """
+    relative = version_dir.relative_to(plugins_dir)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    try:
+        descriptor = os.open(plugins_dir, flags)
+        descriptors.append(descriptor)
+        os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
+        for component in relative.parts:
+            descriptor = os.open(component, flags, dir_fd=descriptor)
+            descriptors.append(descriptor)
+            os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _publish_windows_runtime_parent_permissions(plugins_dir: Path, version_dir: Path) -> None:
+    """Reject links and publish traversal through a Windows managed hierarchy.
+
+    :param plugins_dir: Managed storage root.
+    :param version_dir: Descendant package-version directory.
+    :raises OSError: A hierarchy component is not a real directory.
+    """
+    relative = version_dir.relative_to(plugins_dir)
+    current = plugins_dir
+    for component in (None, *relative.parts):
+        if component is not None:
+            current /= component
+        mode = current.lstat().st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            raise OSError(f"runtime hierarchy path is not a real directory: {current}")
+        current.chmod(mode | 0o055)
+
+
+def _publish_runtime_parent_permissions(plugins_dir: Path, version_dir: Path) -> None:
+    """Publish traversal from managed storage through one package version.
+
+    :param plugins_dir: Managed storage root.
+    :param version_dir: Descendant package-version directory.
+    """
+    if os.name == "nt":
+        _publish_windows_runtime_parent_permissions(plugins_dir, version_dir)
+    else:
+        _publish_posix_runtime_parent_permissions(plugins_dir, version_dir)
+
+
+def prepare_managed_bundle_for_runtime(managed: Path, plugins_dir: Path) -> None:
     """Publish a validated adopted snapshot while installer authority is held.
 
     :param managed: Managed bundle path produced by the installer transaction.
-    :raises ValueError: Managed integrity or snapshot publication fails.
+    :param plugins_dir: Managed storage root whose package hierarchy is published.
+    :raises ValueError: Managed bundle ownership disappears during preparation.
     """
     try:
         managed.lstat()
@@ -603,6 +656,7 @@ def prepare_managed_bundle_for_runtime(managed: Path) -> None:
     identity = _validated_runtime_bundle_identity(managed)
     if identity is None:
         raise ValueError(f"managed bundle ownership disappeared while preparing {managed}")
+    _publish_runtime_parent_permissions(plugins_dir, managed.parent)
     publish_runtime_snapshot_permissions(managed.parent)
 
 

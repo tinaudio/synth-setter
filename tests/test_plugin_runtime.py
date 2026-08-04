@@ -535,6 +535,28 @@ def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Pa
     plugin_runtime.publish_runtime_snapshot_permissions(tmp_path / "version")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX traversal mode regression")
+def test_adopt_plugin_bundle_restrictive_umask_publishes_managed_hierarchy(tmp_path: Path) -> None:
+    """Privileged adoption publishes traversal through the package version.
+
+    :param tmp_path: Scratch source and managed storage root.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "system/Example Synth.vst3")
+    plugins_dir = tmp_path / "managed"
+    prior_umask = os.umask(0o077)
+    try:
+        managed = _adopt_bundle(plugin, plugins_dir=plugins_dir, bundle=source)
+    finally:
+        os.umask(prior_umask)
+
+    relative_version = managed.parent.relative_to(plugins_dir)
+    hierarchy = [plugins_dir]
+    for component in relative_version.parts:
+        hierarchy.append(hierarchy[-1] / component)
+    assert all(path.stat().st_mode & 0o055 == 0o055 for path in hierarchy)
+
+
 def test_package_install_lock_replaces_invalid_snapshot_container(tmp_path: Path) -> None:
     """Installer preparation replaces invalid snapshot-container state.
 
