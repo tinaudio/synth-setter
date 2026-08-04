@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import librosa
 import numpy as np
 from loguru import logger
 from pydantic import Field
@@ -17,12 +16,7 @@ from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.seeding import seed_for_sample
-from synth_setter.data.vst.shapes import (
-    MEL_N_MELS,
-    MEL_WINDOW,
-    mel_hop_length,
-    mel_n_fft,
-)
+from synth_setter.data.vst.shapes import make_spectrogram as make_spectrogram
 from synth_setter.pipeline.schemas.render_metrics import render_metrics_path
 from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.schemas.spec import (
@@ -89,21 +83,6 @@ class VSTDataSample:
         )
         self.audio_uuid = audio_uuid(persisted_audio)
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
-
-
-def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Per-channel mel-spectrogram in dB; STFT params come from module-level constants."""
-    spec = librosa.feature.melspectrogram(
-        y=audio,
-        sr=sample_rate,
-        n_mels=MEL_N_MELS,
-        n_fft=mel_n_fft(sample_rate),
-        hop_length=mel_hop_length(sample_rate),
-        window=MEL_WINDOW,
-        center=True,
-    )
-    spec_db = librosa.power_to_db(spec, ref=np.max)
-    return spec_db
 
 
 class AudioAmplitudeError(ValueError):
