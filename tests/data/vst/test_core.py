@@ -131,10 +131,11 @@ class TestLoadPluginNoWarmup:
         fake_plugin.show_editor.assert_not_called()
 
     def test_load_plugin_forwards_plugin_name_to_host(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``plugin_name`` selects a class inside a multi-class VST3 bundle.
 
+        :param tmp_path: Isolates the path from plugins installed in the test image.
         :param monkeypatch: Patches the ``VST3Plugin`` constructor to record its kwargs.
         """
         seen: dict[str, object] = {}
@@ -146,9 +147,10 @@ class TestLoadPluginNoWarmup:
 
         monkeypatch.setattr(core, "VST3Plugin", _ctor)
 
-        load_plugin("plugins/Six Sines.vst3", plugin_name="Six Sines")
+        plugin_path = tmp_path / "Six Sines.vst3"
+        load_plugin(str(plugin_path), plugin_name="Six Sines")
 
-        assert seen == {"path": "plugins/Six Sines.vst3", "plugin_name": "Six Sines"}
+        assert seen == {"path": str(plugin_path), "plugin_name": "Six Sines"}
 
 
 class TestWarmupPlugin:
