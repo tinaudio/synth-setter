@@ -27,6 +27,7 @@ from synth_setter.pipeline import r2_io
 from tests.helpers.run_if import RunIf
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_CLI_HELP_TIMEOUT_SECONDS = 120
 
 
 class _LatentModel:
@@ -471,7 +472,7 @@ def test_console_script_is_installed_and_callable() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

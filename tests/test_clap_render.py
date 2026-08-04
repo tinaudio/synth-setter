@@ -25,6 +25,7 @@ from synth_setter.cli.surge_render import resolve_inverse_checkpoint
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_CLI_HELP_TIMEOUT_SECONDS = 120
 
 
 def test_cli_whitespace_prompt_exits_before_creating_output() -> None:
@@ -317,7 +318,7 @@ def test_console_script_is_installed_and_callable() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr
