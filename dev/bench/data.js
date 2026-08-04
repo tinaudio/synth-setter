@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785782030361,
+  "lastUpdate": 1785831933720,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -13938,6 +13938,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.030785799026489258,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "34b07f81abbcc1b193681b61f460136a4338f4c5",
+          "message": "internal-fix(ci-automation): restore Studiorack Docker validation (#2884)\n\n* internal-fix(ci-automation): restore Studiorack ownership\n\n* internal-fix(ci-automation): validate Surge setup on MPS\n\n* internal-fix(ci-automation): pin the chown owner in the Surge setup test\n\nThe fake sudo matched chown by flag and target but ignored the owner, so an\naction that chowned to root:root still passed while the real macOS runner left\nthe unprivileged smoke step unable to write. The fake now rejects any owner\nother than the invoking user, and the fake setup moves into a helper.\n\n* internal-fix(ci-automation): decouple Surge test from command order\n\nThe pre-fix script was derived by dropping the action's last line, so appending\nany command after the ownership restoration would have left chown in place and\nbroken the regression arm. It now selects the ownership command explicitly.\n\nAlso asserts the MPS trigger on both push and pull_request, since a filter\npresent on one event only leaves the other lane blind, and marks managed_dir\nreadonly per SH13.\n\n* internal-fix(ci-automation): split the Surge setup command fakes\n\nThe extracted helper had grown to two independently complex fake commands in\none body. Splits it per command, adds strict mode to the npm fake, and marks\nthe sudo fake's fixed roots readonly per SH1 and SH13.\n\n* internal-fix(code-health): pin Six Sines runtime identity\n\n* test(code-health): cover source-qualified plugin install\n\n* test(code-health): share archive install fixture\n\n* test(testing): isolate plugin path from Docker image\n\n* internal-fix(testing): expose Studiorack graph to Docker tests\n\n* internal-fix(ci-automation): host Cardinal probe headlessly\n\n* test(ci-automation): make ownership assertion root-safe",
+          "timestamp": "2026-08-04T00:15:50-07:00",
+          "tree_id": "457f8eb9778a3c4912286e6e6dc6112f9fd10d34",
+          "url": "https://github.com/tinaudio/synth-setter/commit/34b07f81abbcc1b193681b61f460136a4338f4c5"
+        },
+        "date": 1785831931208,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.81567120552063,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.2870329440198836,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02618781104683876,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.028965353965759277,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.6085312366485596,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.557317523249973,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.560980319976807,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.575589239988476,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02976198121905327,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.049635231494903564,
             "unit": "1-cos"
           },
           {
