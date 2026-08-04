@@ -555,6 +555,48 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
         raise ValueError(f"runtime snapshot path is not runtime-readable: {path}")
 
 
+def _publish_posix_runtime_directory(
+    parent_descriptor: int,
+    child_name: str,
+    child_path: Path,
+) -> None:
+    """Publish one child directory through a retained parent descriptor.
+
+    :param parent_descriptor: Retained parent directory descriptor.
+    :param child_name: Child directory name.
+    :param child_path: Diagnostic path for the child.
+    """
+    descriptor = os.open(
+        child_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        _publish_posix_runtime_tree_permissions(descriptor, child_path)
+    finally:
+        os.close(descriptor)
+
+
+def _publish_posix_runtime_file(parent_descriptor: int, child_name: str) -> None:
+    """Publish one regular file through a retained parent descriptor.
+
+    :param parent_descriptor: Retained parent directory descriptor.
+    :param child_name: Child regular-file name.
+    """
+    descriptor = os.open(
+        child_name,
+        os.O_RDONLY | os.O_NOFOLLOW,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        os.fchmod(
+            descriptor,
+            os.fstat(descriptor).st_mode | integrity.RUNTIME_FILE_READ_MASK,
+        )
+    finally:
+        os.close(descriptor)
+
+
 def _publish_posix_runtime_tree_permissions(descriptor: int, root: Path) -> None:
     """Publish one tree relative to retained no-follow directory descriptors.
 
@@ -573,29 +615,10 @@ def _publish_posix_runtime_tree_permissions(descriptor: int, root: Path) -> None
             if stat.S_ISLNK(mode):
                 continue
             if stat.S_ISDIR(mode):
-                child_descriptor = os.open(
-                    child.name,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=descriptor,
-                )
-                try:
-                    _publish_posix_runtime_tree_permissions(child_descriptor, child_path)
-                finally:
-                    os.close(child_descriptor)
+                _publish_posix_runtime_directory(descriptor, child.name, child_path)
                 continue
             if stat.S_ISREG(mode):
-                child_descriptor = os.open(
-                    child.name,
-                    os.O_RDONLY | os.O_NOFOLLOW,
-                    dir_fd=descriptor,
-                )
-                try:
-                    os.fchmod(
-                        child_descriptor,
-                        os.fstat(child_descriptor).st_mode | integrity.RUNTIME_FILE_READ_MASK,
-                    )
-                finally:
-                    os.close(child_descriptor)
+                _publish_posix_runtime_file(descriptor, child.name)
                 continue
             raise ValueError(f"runtime snapshot path is a special file: {child_path}")
 
@@ -619,6 +642,7 @@ def _publish_runtime_tree_permissions(root: Path) -> None:
             name
             for name in directories
             if not stat.S_ISLNK((Path(current) / name).lstat().st_mode)
+            and not os.path.isjunction(Path(current) / name)
         ]
         for name in files:
             child = Path(current) / name
@@ -916,6 +940,41 @@ def _copy_symlink_to_descriptor(
     return BundleEntry(path=relative, target=target, type="symlink")
 
 
+def _copy_bundle_child(
+    child: Path,
+    destination_descriptor: int,
+    relative: Path,
+) -> list[BundleEntry]:
+    """Dispatch one bundle child by its no-follow file type.
+
+    :param child: Source bundle child.
+    :param destination_descriptor: Retained destination directory descriptor.
+    :param relative: Bundle-relative child path.
+    :returns: Seal entries generated from the copied child.
+    :raises ValueError: The child is a special file.
+    """
+    mode = child.lstat().st_mode
+    if stat.S_ISDIR(mode):
+        return _copy_directory_to_descriptor(
+            child,
+            destination_descriptor,
+            relative=relative,
+            mode=mode,
+        )
+    if stat.S_ISREG(mode):
+        return [
+            _copy_regular_file_to_descriptor(
+                child,
+                destination_descriptor,
+                relative=relative.as_posix(),
+                mode=mode,
+            )
+        ]
+    if stat.S_ISLNK(mode):
+        return [_copy_symlink_to_descriptor(child, destination_descriptor, relative.as_posix())]
+    raise ValueError(f"bundle contains a special file: {relative.as_posix()}")
+
+
 def _copy_bundle_to_descriptor(
     source: Path,
     destination_descriptor: int,
@@ -927,39 +986,16 @@ def _copy_bundle_to_descriptor(
     :param destination_descriptor: Retained destination directory descriptor.
     :param relative_parent: Bundle-relative path for generated seal entries.
     :returns: Entries generated from the bytes and links actually copied.
-    :raises ValueError: The source contains a special file.
     """
     entries: list[BundleEntry] = []
     for child in sorted(source.iterdir(), key=lambda path: path.name):
-        mode = child.lstat().st_mode
-        relative = relative_parent / child.name
-        relative_text = relative.as_posix()
-        if stat.S_ISDIR(mode):
-            entries.extend(
-                _copy_directory_to_descriptor(
-                    child,
-                    destination_descriptor,
-                    relative=relative,
-                    mode=mode,
-                )
+        entries.extend(
+            _copy_bundle_child(
+                child,
+                destination_descriptor,
+                relative_parent / child.name,
             )
-            continue
-        if stat.S_ISREG(mode):
-            entries.append(
-                _copy_regular_file_to_descriptor(
-                    child,
-                    destination_descriptor,
-                    relative=relative_text,
-                    mode=mode,
-                )
-            )
-            continue
-        if stat.S_ISLNK(mode):
-            entries.append(
-                _copy_symlink_to_descriptor(child, destination_descriptor, relative_text)
-            )
-            continue
-        raise ValueError(f"bundle contains a special file: {relative_text}")
+        )
     return entries
 
 
@@ -1197,6 +1233,37 @@ def _locked_runtime_identity(
     return locked_candidate, identity
 
 
+def _runtime_integrity_file_lease(bundle: Path, lock_path: Path) -> AbstractContextManager[None]:
+    """Translate only package-lease entry and exit integrity failures.
+
+    :param bundle: Managed bundle named in public diagnostics.
+    :param lock_path: Durable package synchronization marker.
+    :returns: Context manager preserving exceptions raised by the consumer body.
+    """
+
+    @contextmanager
+    def _leased() -> Iterator[None]:
+        manager = integrity.advisory_file_lease(lock_path)
+        try:
+            manager.__enter__()
+        except (OSError, ValueError) as exc:
+            raise PluginIntegrityError(f"{bundle} failed managed bundle integrity") from exc
+        try:
+            yield
+        except BaseException as body_error:
+            try:
+                manager.__exit__(type(body_error), body_error, body_error.__traceback__)
+            except (OSError, ValueError) as exc:
+                raise PluginIntegrityError(f"{bundle} failed managed bundle integrity") from exc
+            raise
+        try:
+            manager.__exit__(None, None, None)
+        except (OSError, ValueError) as exc:
+            raise PluginIntegrityError(f"{bundle} failed managed bundle integrity") from exc
+
+    return _leased()
+
+
 def _validated_runtime_identity_lease(
     bundle: Path,
 ) -> AbstractContextManager[tuple[Path, BundleSeal] | None]:
@@ -1212,7 +1279,7 @@ def _validated_runtime_identity_lease(
 
         while True:
             _, lock_path = candidate
-            with integrity.advisory_file_lease(lock_path):
+            with _runtime_integrity_file_lease(bundle, lock_path):
                 try:
                     locked_candidate, identity = _locked_runtime_identity(bundle, lock_path)
                 except (OSError, ValueError) as exc:

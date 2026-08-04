@@ -8,12 +8,11 @@ import multiprocessing
 import os
 import shutil
 import stat
-import tempfile
 import threading
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from pathlib import Path
+from pathlib import Path, PosixPath
 from typing import Any, Literal, NoReturn, cast
 
 import pytest
@@ -191,6 +190,34 @@ def test_load_plugin_managed_host_value_error_propagates(
 
     with pytest.raises(ValueError, match="multiple plugin classes"):
         load_plugin(str(plugin_bundle))
+
+
+def test_validate_plugin_bundle_lease_exit_failure_translated_to_integrity_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public validation translates lock substitution detected during lease exit.
+
+    :param tmp_path: Scratch managed bundle and adopted ownership state.
+    :param monkeypatch: Simulates retained lock-directory replacement on exit.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    managed = _adopt_bundle(
+        plugin,
+        plugins_dir=tmp_path / "managed",
+        bundle=_bundle(tmp_path / "source/Example Synth.vst3"),
+    )
+
+    @contextmanager
+    def _replaced_lease(path: Path) -> Iterator[None]:
+        del path
+        yield
+        raise ValueError("lock directory was replaced")
+
+    monkeypatch.setattr(plugin_integrity, "advisory_file_lease", _replaced_lease)
+
+    with pytest.raises(PluginIntegrityError, match="managed bundle integrity"):
+        plugin_manager.validate_plugin_bundle_for_runtime(managed)
 
 
 def _read_only_managed_alias(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -526,6 +553,34 @@ def test_link_plugin_managed_bundle_creates_stable_checkout_alias(tmp_path: Path
     assert alias == tmp_path / "checkout/plugins/Example Synth.vst3"
     assert alias.is_symlink()
     assert alias.resolve() == bundle.resolve()
+
+
+def test_publish_runtime_tree_permissions_windows_junction_not_traversed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows permission publication does not mutate junction targets.
+
+    :param tmp_path: Scratch managed tree containing a simulated junction.
+    :param monkeypatch: Selects the Windows walker and identifies the junction.
+    """
+    root = tmp_path / "snapshot"
+    junction = root / "junction"
+    junction.mkdir(parents=True)
+    payload = junction / "external.bin"
+    payload.write_bytes(b"external")
+    payload.chmod(0o600)
+    monkeypatch.setattr(plugin_runtime.os, "name", "nt")
+    monkeypatch.setattr(plugin_runtime, "Path", PosixPath)
+    monkeypatch.setattr(
+        plugin_runtime.os.path,
+        "isjunction",
+        lambda path: PosixPath(path).name == junction.name,
+    )
+
+    plugin_runtime._publish_runtime_tree_permissions(root)
+
+    assert stat.S_IMODE(payload.stat().st_mode) == 0o600
 
 
 def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Path) -> None:
@@ -1403,10 +1458,10 @@ def test_load_plugin_source_mutation_after_validation_fails_before_open(
     assert opened == []
 
 
-def test_adopt_plugin_bundle_absolute_internal_symlink_rejected(tmp_path: Path) -> None:
-    """Snapshot publication rejects source-bound absolute symlink targets.
+def test_copy_bundle_absolute_internal_symlink_rejected(tmp_path: Path) -> None:
+    """Snapshot copy rejects source-bound absolute symlink targets.
 
-    :param tmp_path: Scratch adopted bundle containing an absolute internal link.
+    :param tmp_path: Scratch bundle and retained destination directory.
     """
     source = _bundle(tmp_path / "source/Example Synth.vst3")
     link = source / "absolute-link"
@@ -1419,6 +1474,25 @@ def test_adopt_plugin_bundle_absolute_internal_symlink_rejected(tmp_path: Path) 
             plugin_runtime._copy_symlink_to_descriptor(link, descriptor, link.name)
     finally:
         os.close(descriptor)
+
+
+def test_adopt_plugin_bundle_absolute_internal_symlink_rejected(tmp_path: Path) -> None:
+    """Public adoption rejects a bundle containing an absolute symlink.
+
+    :param tmp_path: Scratch adopted bundle and managed root.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "source/Example Synth.vst3")
+    (source / "absolute-link").symlink_to(_binary_path(source))
+
+    with pytest.raises(ValueError, match="bundle symlink"):
+        plugin_manager.adopt_plugin_bundle(
+            plugin,
+            plugins_dir=tmp_path / "managed",
+            bundle=source,
+            locked_package=_example_lock().package_for(plugin),
+        )
+    assert not (tmp_path / "managed/example/synth/1.2.3/Example Synth.vst3").exists()
 
 
 def test_runtime_snapshot_candidate_uses_destination_filesystem(
@@ -1434,21 +1508,34 @@ def test_runtime_snapshot_candidate_uses_destination_filesystem(
     source = _bundle(tmp_path / "source/Example Synth.vst3")
     managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
     shutil.rmtree(managed.parent / ".synth-setter-runtime-snapshots")
-    real_temporary_directory = tempfile.TemporaryDirectory
+    real_rename = os.rename
+    staged_on_destination = False
 
     def _require_destination_filesystem(
+        source_name: str,
+        destination_name: str,
         *,
-        dir: Path | None = None,
-    ) -> tempfile.TemporaryDirectory[str]:
-        if dir is None:
-            raise OSError(errno.EXDEV, "candidate uses another filesystem")
-        return real_temporary_directory(dir=dir)
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        nonlocal staged_on_destination
+        if source_name.startswith(".Example Synth.vst3.tmp-"):
+            assert src_dir_fd is not None
+            assert dst_dir_fd is not None
+            if os.fstat(src_dir_fd).st_dev != os.fstat(dst_dir_fd).st_dev:
+                raise OSError(errno.EXDEV, "candidate uses another filesystem")
+            staged_on_destination = True
+        real_rename(
+            source_name,
+            destination_name,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
 
-    monkeypatch.setattr(
-        plugin_runtime.tempfile, "TemporaryDirectory", _require_destination_filesystem
-    )
+    monkeypatch.setattr(plugin_runtime.os, "rename", _require_destination_filesystem)
 
     assert plugin_manager.validate_plugin_bundle_for_runtime(managed).is_dir()
+    assert staged_on_destination
 
 
 def test_runtime_snapshot_parent_substitution_publishes_through_retained_directory(
