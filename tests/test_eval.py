@@ -2206,8 +2206,7 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
     assert torch.isfinite(prediction).all()
     assert not (output_dir / "predictions" / "target-params-0.pt").exists()
     assert target_audio.shape[1:] == (2, 4 * 44_100)
-    # Each distinct constant occupies one quarter of its render, so mean amplitude
-    # pins content, order, padding, and up-mixing at once.
+    # Mean amplitude verifies content, order, padding, and up-mixing.
     served = [float(row.abs().mean()) for row in target_audio]
     assert served == pytest.approx([0.0, 0.025], abs=1e-3)
 
@@ -2244,6 +2243,5 @@ def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Pa
     with AudioFile(str(sample / "target.wav")) as handle:
         target = handle.read(handle.frames)
     assert (sample / "pred.wav").is_file()
-    # The corpus row is a constant held for one of the render contract's four
-    # seconds: a re-render or a zeroed target would not reproduce that level.
+    # Staged corpus audio must be preserved; a re-render or zeroed target changes its level.
     assert float(np.abs(target).mean()) == pytest.approx(0.0625, abs=5e-3)
