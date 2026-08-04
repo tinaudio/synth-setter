@@ -7,6 +7,7 @@ import os
 import stat
 import sys
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -118,6 +119,91 @@ def test_advisory_file_lease_permission_publication_window_retries(
         pass
 
     assert attempts == 3
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX no-follow hierarchy semantics")
+def test_posix_create_directory_descriptor_concurrent_creator_reopens_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent hierarchy creator does not make a consumer lease fail.
+
+    :param tmp_path: Scratch parent for the raced directory.
+    :param monkeypatch: Publishes the raced directory before reporting EEXIST.
+    """
+    directory = tmp_path / "raced"
+    real_mkdir = os.mkdir
+    raced = False
+
+    def _concurrent_mkdir(
+        path: str | bytes,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal raced
+        if path == directory.name and not raced:
+            raced = True
+            real_mkdir(path, mode, dir_fd=dir_fd)
+            raise FileExistsError(errno.EEXIST, "concurrent creator won", path)
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(plugin_integrity.os, "mkdir", _concurrent_mkdir)
+
+    descriptor = plugin_integrity._posix_create_directory_descriptor(directory)
+    try:
+        assert stat.S_ISDIR(os.fstat(descriptor).st_mode)
+    finally:
+        os.close(descriptor)
+    assert raced
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX marker lease semantics")
+def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumer reopens and waits on a concurrently published read-only marker.
+
+    :param tmp_path: Scratch synchronization directory and marker.
+    :param monkeypatch: Publishes a marker-only writer during the missing-marker race.
+    """
+    import fcntl
+
+    marker_path = tmp_path / "package.lock"
+    real_open = os.open
+    writer_released = threading.Event()
+    writer_thread: threading.Thread | None = None
+
+    def _concurrent_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal writer_thread
+        if path == marker_path.name and flags & os.O_EXCL and writer_thread is None:
+            writer = real_open(marker_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o444)
+            fcntl.flock(writer, fcntl.LOCK_EX)
+
+            def _release_writer() -> None:
+                time.sleep(0.1)
+                fcntl.flock(writer, fcntl.LOCK_UN)
+                os.close(writer)
+                writer_released.set()
+
+            writer_thread = threading.Thread(target=_release_writer)
+            writer_thread.start()
+            raise FileExistsError(errno.EEXIST, "marker-only writer won", path)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(plugin_integrity.os, "open", _concurrent_open)
+    with plugin_integrity.advisory_file_lease(marker_path):
+        assert writer_thread is not None
+        assert writer_released.is_set()
+    writer_thread.join(timeout=1)
+    assert not writer_thread.is_alive()
 
 
 def _restricted_package_lock_tree(tmp_path: Path) -> tuple[Path, Path, list[Path]]:

@@ -827,6 +827,7 @@ def _publish_runtime_snapshot(
 def _copy_directory_to_descriptor(
     child: Path,
     destination_descriptor: int,
+    *,
     relative: Path,
     mode: int,
 ) -> list[BundleEntry]:
@@ -855,6 +856,7 @@ def _copy_directory_to_descriptor(
 def _copy_regular_file_to_descriptor(
     child: Path,
     destination_descriptor: int,
+    *,
     relative: str,
     mode: int,
 ) -> BundleEntry:
@@ -934,7 +936,12 @@ def _copy_bundle_to_descriptor(
         relative_text = relative.as_posix()
         if stat.S_ISDIR(mode):
             entries.extend(
-                _copy_directory_to_descriptor(child, destination_descriptor, relative, mode)
+                _copy_directory_to_descriptor(
+                    child,
+                    destination_descriptor,
+                    relative=relative,
+                    mode=mode,
+                )
             )
             continue
         if stat.S_ISREG(mode):
@@ -942,8 +949,8 @@ def _copy_bundle_to_descriptor(
                 _copy_regular_file_to_descriptor(
                     child,
                     destination_descriptor,
-                    relative_text,
-                    mode,
+                    relative=relative_text,
+                    mode=mode,
                 )
             )
             continue
@@ -991,6 +998,7 @@ def _stage_posix_runtime_snapshot(
     source: Path,
     destination: Path,
     parent_descriptor: int,
+    *,
     seal: BundleSeal,
 ) -> str:
     """Stage and verify one snapshot candidate beside its destination.
@@ -1060,7 +1068,7 @@ def _publish_posix_runtime_snapshot(
         source,
         destination,
         parent_descriptor,
-        seal,
+        seal=seal,
     )
     try:
         os.rename(

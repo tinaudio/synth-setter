@@ -1052,7 +1052,10 @@ def _posix_create_directory_descriptor(directory: Path) -> int:
                     dir_fd=descriptor,
                 )
             except FileNotFoundError:
-                os.mkdir(component, dir_fd=descriptor)
+                try:
+                    os.mkdir(component, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
                 child = os.open(
                     component,
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -1224,8 +1227,11 @@ def _posix_consumer_marker_descriptor(path: Path, directory_descriptor: int) -> 
     try:
         marker = os.open(path.name, flags, dir_fd=directory_descriptor)
     except FileNotFoundError:
-        flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
-        marker = os.open(path.name, flags, 0o666, dir_fd=directory_descriptor)
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        try:
+            marker = os.open(path.name, flags, 0o666, dir_fd=directory_descriptor)
+        except FileExistsError:
+            marker = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_descriptor)
     if stat.S_ISREG(os.fstat(marker).st_mode):
         return marker
     os.close(marker)
