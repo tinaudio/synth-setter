@@ -102,7 +102,13 @@ def registry_spec(column: str) -> EmbeddingSpec:
     try:
         spec = EMBEDDING_REGISTRY[column]
     except KeyError:
-        servable = ", ".join(sorted(name for name, entry in EMBEDDING_REGISTRY.items() if _is_audio_sourced(entry)))
+        servable = ", ".join(
+            sorted(
+                name
+                for name, entry in EMBEDDING_REGISTRY.items()
+                if _is_audio_sourced(entry)
+            )
+        )
         raise KeyError(
             f"{column!r} is not an embedding registry column; servable columns: {servable}"
         ) from None
@@ -388,8 +394,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param mel_stats_uri: ``.npz`` of the training run's mel statistics; local or ``r2://``.
         :param stats_cache_dir: Directory a fetched statistics object is cached in;
             ``None`` uses the working directory.
-        :raises ValueError: One encoder was injected for multiple conditioning streams, or a
-            checkpoint override names a column this run does not condition on.
+        :raises ValueError: The render contract yields a non-positive sample count or channel
+            count, one encoder was injected for multiple conditioning streams, or a checkpoint
+            override names a column this run does not condition on.
         """
         super().__init__()
         _validate_conditioning_config(
@@ -402,6 +409,15 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.sample_rate = sample_rate
         self.channels = channels
         self.num_samples = int(sample_rate * signal_duration_seconds)
+        # A non-positive grid slices to an empty clip instead of failing the render contract.
+        if self.num_samples <= 0:
+            raise ValueError(
+                f"sample_rate={sample_rate} x signal_duration_seconds="
+                f"{signal_duration_seconds} yields {self.num_samples} samples per clip; "
+                "the render contract needs a positive sample count"
+            )
+        if channels <= 0:
+            raise ValueError(f"channels={channels} must be positive")
         self.audio_column = audio_column
         self.amplitude_scale = amplitude_scale
         self.batch_size = batch_size

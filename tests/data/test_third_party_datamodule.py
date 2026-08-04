@@ -34,7 +34,7 @@ from synth_setter.data.third_party_datamodule import (
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, Encoder
 from synth_setter.pipeline.data.ssondo import SSONDO_EMBEDDING_DIM
-from tests.helpers.lance_fixtures import write_blob_audio_corpus
+from tests.helpers.lance_fixtures import wav_bytes, write_blob_audio_corpus
 
 # Keep the test corpus compact while retaining a legal mel front-end.
 _TARGET_SAMPLE_RATE = 4000
@@ -43,19 +43,6 @@ _DURATION_SECONDS = 0.5
 _TARGET_SAMPLES = 2000
 _MEL_FRAMES = 51
 _SOURCE_SAMPLE_RATE = 8000
-
-
-def _wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
-    """Encode one mono clip as WAV bytes.
-
-    :param samples: ``(frames,)`` float32 samples.
-    :param sample_rate: Encoded sample rate in Hz.
-    :returns: WAV container bytes.
-    """
-    buffer = io.BytesIO()
-    with AudioFile(buffer, "w", format="wav", samplerate=sample_rate, num_channels=1) as handle:
-        handle.write(samples.reshape(1, -1).astype(np.float32))
-    return buffer.getvalue()
 
 
 def _write_corpus(
@@ -898,7 +885,7 @@ def test_native_blob_v2_column_is_servable(tmp_path: Path) -> None:
     """
     clip = _tone(_DURATION_SECONDS, seed=35)
     table = pa.table(
-        {AUDIO_FIELD: blob_array([_wav_bytes(clip, _SOURCE_SAMPLE_RATE)])},
+        {AUDIO_FIELD: blob_array([wav_bytes(clip, _SOURCE_SAMPLE_RATE)])},
         schema=pa.schema([blob_field(AUDIO_FIELD)]),
     )
     lance.write_dataset(
@@ -954,7 +941,7 @@ def _wav(clip: np.ndarray, sample_rate: int = _SOURCE_SAMPLE_RATE) -> bytes:
     :param sample_rate: Encoded sample rate in Hz.
     :returns: WAV container bytes.
     """
-    return _wav_bytes(clip, sample_rate)
+    return wav_bytes(clip, sample_rate)
 
 
 def test_decode_clip_pads_short_audio_and_upmixes() -> None:
@@ -1015,4 +1002,45 @@ def test_checkpoint_override_for_an_unused_column_raises(tmp_path: Path) -> None
                 column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
             ),
             embedding_checkpoints={"clap": "some/checkpoint"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("sample_rate", "duration", "channels"),
+    [(_TARGET_SAMPLE_RATE, -1.0, _TARGET_CHANNELS), (_TARGET_SAMPLE_RATE, 0.0, 1), (100, 0.001, 1)],
+)
+def test_render_contract_without_a_positive_sample_grid_raises(
+    tmp_path: Path, sample_rate: int, duration: float, channels: int
+) -> None:
+    """A non-positive grid would slice clips to empty rather than fail the contract.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param sample_rate: Render-contract sample rate in Hz.
+    :param duration: Render-contract clip duration in seconds.
+    :param channels: Render-contract channel count.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=39)])
+
+    with pytest.raises(ValueError, match="positive sample count"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=sample_rate,
+            channels=channels,
+            signal_duration_seconds=duration,
+        )
+
+
+def test_non_positive_channel_count_raises(tmp_path: Path) -> None:
+    """A zero-channel contract would build a degenerate audio tensor.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=40)])
+
+    with pytest.raises(ValueError, match="channels=0"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=0,
+            signal_duration_seconds=_DURATION_SECONDS,
         )

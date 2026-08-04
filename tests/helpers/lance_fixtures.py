@@ -175,6 +175,19 @@ def write_lance_shard_with_sketch(
     write_lance_dataset(path, extended.schema, [extended])
 
 
+def wav_bytes(clip: np.ndarray, sample_rate: int) -> bytes:
+    """Encode one mono clip as WAV container bytes.
+
+    :param clip: ``(frames,)`` float32 samples.
+    :param sample_rate: Encoded sample rate in Hz.
+    :returns: WAV container bytes.
+    """
+    buffer = io.BytesIO()
+    with AudioFile(buffer, "w", format="wav", samplerate=sample_rate, num_channels=1) as handle:
+        handle.write(clip.reshape(1, -1).astype(np.float32))
+    return buffer.getvalue()
+
+
 def write_blob_audio_corpus(
     path: Path,
     clips: Sequence[np.ndarray],
@@ -197,12 +210,7 @@ def write_blob_audio_corpus(
     """
 
     def _wav_bytes(clip: np.ndarray) -> bytes:
-        buffer = io.BytesIO()
-        with AudioFile(
-            buffer, "w", format="wav", samplerate=sample_rate, num_channels=1
-        ) as handle:
-            handle.write(clip.reshape(1, -1).astype(np.float32))
-        return buffer.getvalue()
+        return wav_bytes(clip, sample_rate)
 
     fields = [
         pa.field(
