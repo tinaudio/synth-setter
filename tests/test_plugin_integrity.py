@@ -102,7 +102,7 @@ def test_advisory_file_lease_permission_publication_window_retries(
     lock_path = tmp_path / "managed/package.lock"
     lock_path.parent.mkdir()
     lock_path.touch(mode=0o444)
-    real_open = plugin_integrity._posix_directory_descriptor
+    real_open = plugin_integrity._posix_create_directory_descriptor
     attempts = 0
 
     def _publishing_open(directory: Path) -> int:
@@ -112,7 +112,7 @@ def test_advisory_file_lease_permission_publication_window_retries(
             raise PermissionError(errno.EACCES, "permissions not published", directory)
         return real_open(directory)
 
-    monkeypatch.setattr(plugin_integrity, "_posix_directory_descriptor", _publishing_open)
+    monkeypatch.setattr(plugin_integrity, "_posix_create_directory_descriptor", _publishing_open)
 
     with plugin_integrity.advisory_file_lease(lock_path):
         pass
@@ -152,6 +152,28 @@ def _assert_runtime_readable_lock_tree(lock_path: Path, directories: list[Path])
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX marker permissions")
+@pytest.mark.skipif(os.name == "nt", reason="POSIX no-follow hierarchy semantics")
+def test_advisory_file_lease_symlinked_parent_rejected_without_outside_mutation(
+    tmp_path: Path,
+) -> None:
+    """Consumer lease rejects an intermediate symlink without creating children.
+
+    :param tmp_path: Scratch lock hierarchy and outside target.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    lock_root = tmp_path / "managed/.synth-setter-install-locks"
+    lock_root.parent.mkdir()
+    lock_root.symlink_to(outside, target_is_directory=True)
+    marker = lock_root / "example/synth/1.2.3.lock"
+
+    with pytest.raises(FileExistsError, match="not a real directory"):
+        with advisory_file_lease(marker):
+            pass
+
+    assert list(outside.iterdir()) == []
+
+
 def test_advisory_file_lease_unreadable_marker_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -200,7 +222,7 @@ def test_posix_lease_directory_permanent_permission_failure_is_bounded(
         raise PermissionError(errno.EACCES, "denied")
 
     monkeypatch.setattr(plugin_integrity.time, "monotonic", lambda: next(timestamps))
-    monkeypatch.setattr(plugin_integrity, "_posix_directory_descriptor", _deny)
+    monkeypatch.setattr(plugin_integrity, "_posix_create_directory_descriptor", _deny)
 
     with pytest.raises(PermissionError):
         plugin_integrity._posix_lease_directory_descriptor(tmp_path / "locks")
@@ -525,6 +547,8 @@ def test_package_install_lock_windows_symlinked_marker_rejected_without_target_m
     external.chmod(0o600)
     lock_path.symlink_to(external)
     monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(plugin_integrity, "_windows_open_directory_handle", lambda _path: 123)
+    monkeypatch.setattr(plugin_integrity, "_windows_close_handle", lambda _handle: None)
 
     with pytest.raises(FileExistsError, match="not a regular file"):
         with plugin_integrity.package_install_lock("example/synth", "1.2.3", plugins_dir):

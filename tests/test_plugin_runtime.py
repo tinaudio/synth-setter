@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import shutil
 import stat
+import tempfile
 import threading
 import traceback
 from collections.abc import Callable, Iterator
@@ -1385,6 +1386,36 @@ def test_load_plugin_source_mutation_after_validation_fails_before_open(
         load_plugin(str(managed))
 
     assert opened == []
+
+
+def test_runtime_snapshot_candidate_uses_destination_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot candidates are staged beneath the retained destination parent.
+
+    :param tmp_path: Scratch adopted source and managed state.
+    :param monkeypatch: Rejects use of the process-default temporary filesystem.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "source/Example Synth.vst3")
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    shutil.rmtree(managed.parent / ".synth-setter-runtime-snapshots")
+    real_temporary_directory = tempfile.TemporaryDirectory
+
+    def _require_destination_filesystem(
+        *,
+        dir: Path | None = None,
+    ) -> tempfile.TemporaryDirectory[str]:
+        if dir is None:
+            raise OSError(errno.EXDEV, "candidate uses another filesystem")
+        return real_temporary_directory(dir=dir)
+
+    monkeypatch.setattr(
+        plugin_runtime.tempfile, "TemporaryDirectory", _require_destination_filesystem
+    )
+
+    assert plugin_manager.validate_plugin_bundle_for_runtime(managed).is_dir()
 
 
 def test_runtime_snapshot_parent_substitution_publishes_through_retained_directory(

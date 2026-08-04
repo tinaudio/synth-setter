@@ -52,6 +52,7 @@ __all__ = [
     "PluginIntegrityError",
     "RUNTIME_DIRECTORY_ACCESS_MASK",
     "RUNTIME_FILE_READ_MASK",
+    "advisory_child_directory_lock",
     "advisory_directory_lock",
     "advisory_file_lease",
     "advisory_file_lock",
@@ -67,6 +68,8 @@ __all__ = [
 
 RUNTIME_FILE_READ_MASK = 0o044
 RUNTIME_DIRECTORY_ACCESS_MASK = 0o055
+_LOCK_RETRY_INTERVAL_SECONDS = 0.05
+_LEASE_DIRECTORY_TIMEOUT_SECONDS = 10.0
 _WINDOWS_GENERIC_READ_WRITE = 0xC0000000
 _WINDOWS_SHARE_READ_WRITE = 0x00000003
 _WINDOWS_OPEN_ALWAYS = 4
@@ -806,13 +809,24 @@ def _windows_lock(stream: BinaryIO) -> None:
         except OSError as exc:
             if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
                 raise
-            time.sleep(0.05)
+            time.sleep(_LOCK_RETRY_INTERVAL_SECONDS)
 
 
-def _windows_create_lock_handle(path: Path) -> int:
-    """Create or open one marker handle with reparse-point traversal disabled.
+def _windows_create_handle(
+    path: Path,
+    *,
+    access: int,
+    disposition: int,
+    flags: int,
+    kind: str,
+) -> int:
+    """Call the shared CreateFileW binding with explicit security flags.
 
-    :param path: Durable Windows lock marker.
+    :param path: Native path opened without implicit traversal policy.
+    :param access: Desired Windows access mask.
+    :param disposition: Windows creation disposition.
+    :param flags: Windows file or directory flags.
+    :param kind: Object kind used in diagnostics.
     :returns: Native Windows handle value.
     :raises OSError: Native handle creation fails.
     """
@@ -833,17 +847,32 @@ def _windows_create_lock_handle(path: Path) -> int:
     create_file.restype = wintypes.HANDLE
     handle = create_file(
         str(path),
-        _WINDOWS_GENERIC_READ_WRITE,
+        access,
         _WINDOWS_SHARE_READ_WRITE,
         None,
-        _WINDOWS_OPEN_ALWAYS,
-        _WINDOWS_NORMAL_OPEN_REPARSE_POINT,
+        disposition,
+        flags,
         None,
     )
     if handle == wintypes.HANDLE(-1).value:
         error_code = getattr(ctypes, "get_last_error")()
-        raise OSError(error_code, f"CreateFileW failed for lock marker: {path}")
+        raise OSError(error_code, f"CreateFileW failed for {kind}: {path}")
     return cast("int", handle)
+
+
+def _windows_create_lock_handle(path: Path) -> int:
+    """Create or open one marker without reparse-point traversal.
+
+    :param path: Durable Windows lock marker.
+    :returns: Native Windows handle value.
+    """
+    return _windows_create_handle(
+        path,
+        access=_WINDOWS_GENERIC_READ_WRITE,
+        disposition=_WINDOWS_OPEN_ALWAYS,
+        flags=_WINDOWS_NORMAL_OPEN_REPARSE_POINT,
+        kind="lock marker",
+    )
 
 
 def _windows_open_directory_handle(path: Path) -> int:
@@ -852,36 +881,14 @@ def _windows_open_directory_handle(path: Path) -> int:
     :param path: Existing Windows publication directory.
     :returns: Validated native directory handle.
     :raises FileExistsError: The opened directory is a reparse point.
-    :raises OSError: Native directory handle creation fails.
     """
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
-    create_file = kernel32.CreateFileW
-    create_file.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    ]
-    create_file.restype = wintypes.HANDLE
-    handle = create_file(
-        str(path),
-        0,
-        _WINDOWS_SHARE_READ_WRITE,
-        None,
-        _WINDOWS_OPEN_EXISTING,
-        _WINDOWS_DIRECTORY_OPEN_REPARSE_POINT,
-        None,
+    retained = _windows_create_handle(
+        path,
+        access=0,
+        disposition=_WINDOWS_OPEN_EXISTING,
+        flags=_WINDOWS_DIRECTORY_OPEN_REPARSE_POINT,
+        kind="publication directory",
     )
-    if handle == wintypes.HANDLE(-1).value:
-        error_code = getattr(ctypes, "get_last_error")()
-        raise OSError(error_code, f"CreateFileW failed for publication directory: {path}")
-    retained = cast("int", handle)
     if _windows_lock_handle_is_reparse_point(retained, path):
         _windows_close_handle(retained)
         raise FileExistsError(f"publication path is a reparse point: {path}")
@@ -996,19 +1003,65 @@ def _posix_advisory_descriptor_lock(
 
 
 def _posix_directory_descriptor(directory: Path) -> int:
-    """Open a real directory without following its final path component.
+    """Traverse an absolute directory hierarchy without following any symlink.
 
     :param directory: Existing synchronization directory.
-    :returns: Read-only directory descriptor.
-    :raises FileExistsError: The path resolves to a symlink or non-directory.
-    :raises OSError: Opening the directory fails for another reason.
+    :returns: Read-only descriptor for the final directory.
+    :raises FileExistsError: Any hierarchy component is a symlink or non-directory.
+    :raises OSError: Opening a hierarchy component fails for another reason.
     """
+    absolute = directory.absolute()
+    descriptor = os.open(absolute.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        return os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for component in absolute.parts[1:]:
+            child = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
     except OSError as exc:
+        os.close(descriptor)
         if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
             raise FileExistsError(f"lock path is not a real directory: {directory}") from exc
         raise
+    return descriptor
+
+
+def _posix_create_directory_descriptor(directory: Path) -> int:
+    """Create an absolute hierarchy relative to retained no-follow parents.
+
+    :param directory: Directory hierarchy to create or open.
+    :returns: Read-only descriptor for the final directory.
+    :raises FileExistsError: Any existing component is a symlink or non-directory.
+    :raises OSError: Creating or opening a hierarchy component fails.
+    """
+    absolute = directory.absolute()
+    descriptor = os.open(absolute.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in absolute.parts[1:]:
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                os.mkdir(component, dir_fd=descriptor)
+                child = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            os.close(descriptor)
+            descriptor = child
+    except OSError as exc:
+        os.close(descriptor)
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise FileExistsError(f"lock path is not a real directory: {directory}") from exc
+        raise
+    return descriptor
 
 
 def advisory_directory_lock(path: Path) -> AbstractContextManager[int | None]:
@@ -1046,6 +1099,54 @@ def advisory_directory_lock(path: Path) -> AbstractContextManager[int | None]:
                 yield descriptor
         finally:
             os.close(descriptor)
+
+    return _locked()
+
+
+def advisory_child_directory_lock(
+    parent: Path,
+    name: str,
+) -> AbstractContextManager[int | None]:
+    """Create and lock one child relative to a retained real parent.
+
+    :param parent: Existing trusted publication root.
+    :param name: Single child directory name.
+    :returns: Context manager yielding a POSIX child descriptor or ``None`` on Windows.
+    """
+
+    @contextmanager
+    def _locked() -> Iterator[int | None]:
+        if Path(name).name != name:
+            raise ValueError(f"publication child must be one path component: {name}")
+        if os.name == "nt":
+            with advisory_directory_lock(parent):
+                child = parent / name
+                child.mkdir(exist_ok=True)
+                with advisory_directory_lock(child):
+                    yield None
+            return
+
+        import fcntl
+
+        parent_descriptor = _posix_directory_descriptor(parent)
+        try:
+            with _posix_advisory_descriptor_lock(parent_descriptor, fcntl.LOCK_EX):
+                try:
+                    os.mkdir(name, dir_fd=parent_descriptor)
+                except FileExistsError:
+                    pass
+                child_descriptor = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent_descriptor,
+                )
+                try:
+                    with _posix_advisory_descriptor_lock(child_descriptor, fcntl.LOCK_EX):
+                        yield child_descriptor
+                finally:
+                    os.close(child_descriptor)
+        finally:
+            os.close(parent_descriptor)
 
     return _locked()
 
@@ -1092,24 +1193,19 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
 def _posix_lease_directory_descriptor(directory: Path) -> int:
     """Wait briefly for installer permission publication and open its directory.
 
-    :param directory: Existing or user-creatable synchronization directory.
+    :param directory: Existing synchronization directory published by the installer.
     :returns: Read-only directory descriptor.
     :raises FileNotFoundError: The directory is removed for ten seconds.
     :raises PermissionError: Permissions remain unpublished after ten seconds.
     """
-    deadline = time.monotonic() + 10.0
+    deadline = time.monotonic() + _LEASE_DIRECTORY_TIMEOUT_SECONDS
     while True:
         try:
-            return _posix_directory_descriptor(directory)
-        except FileNotFoundError:
-            directory.mkdir(parents=True, exist_ok=True)
+            return _posix_create_directory_descriptor(directory)
+        except (FileNotFoundError, PermissionError):
             if time.monotonic() >= deadline:
                 raise
-            time.sleep(0.05)
-        except PermissionError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.05)
+            time.sleep(_LOCK_RETRY_INTERVAL_SECONDS)
 
 
 def _posix_consumer_marker_descriptor(path: Path, directory_descriptor: int) -> int:
@@ -1224,6 +1320,39 @@ def _windows_lock_directories(plugins_dir: Path, lock_parent: Path) -> list[Path
     return directories
 
 
+def _windows_retained_lock_directories(
+    plugins_dir: Path,
+    lock_parent: Path,
+) -> AbstractContextManager[list[Path]]:
+    """Build a Windows hierarchy while handles prevent component replacement.
+
+    :param plugins_dir: Managed storage root.
+    :param lock_parent: Parent directory of the package lock marker.
+    :returns: Context manager yielding validated root-first directories.
+    """
+
+    @contextmanager
+    def _retained() -> Iterator[list[Path]]:
+        plugins_dir.mkdir(parents=True, exist_ok=True)
+        directories: list[Path] = []
+        handles: list[int] = []
+        current = plugins_dir
+        try:
+            for component in (None, *lock_parent.relative_to(plugins_dir).parts):
+                if component is not None:
+                    current /= component
+                    current.mkdir(exist_ok=True)
+                handle = _windows_open_directory_handle(current)
+                handles.append(handle)
+                directories.append(current)
+            yield directories
+        finally:
+            for handle in reversed(handles):
+                _windows_close_handle(handle)
+
+    return _retained()
+
+
 def _posix_lock_hierarchy(
     plugins_dir: Path,
     lock_parent: Path,
@@ -1288,16 +1417,16 @@ def _windows_package_install_lock(
 
     @contextmanager
     def _locked() -> Iterator[None]:
-        _windows_lock_directories(plugins_dir, path.parent)
-        try:
-            marker_mode = path.lstat().st_mode
-        except FileNotFoundError:
-            pass
-        else:
-            if not stat.S_ISREG(marker_mode):
-                raise FileExistsError(f"install lock is not a regular file: {path}")
-        with advisory_file_lock(path):
-            yield
+        with _windows_retained_lock_directories(plugins_dir, path.parent):
+            try:
+                marker_mode = path.lstat().st_mode
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISREG(marker_mode):
+                    raise FileExistsError(f"install lock is not a regular file: {path}")
+            with advisory_file_lock(path):
+                yield
 
     return _locked()
 

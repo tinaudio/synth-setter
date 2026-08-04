@@ -783,15 +783,20 @@ def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) ->
         return source
 
     snapshots = managed.parent / ".synth-setter-runtime-snapshots"
-    destination = snapshots / _snapshot_digest(seal) / managed.name
+    digest = _snapshot_digest(seal)
+    destination = snapshots / digest / managed.name
     _ensure_runtime_snapshot_directory(snapshots)
-    _ensure_runtime_snapshot_directory(destination.parent)
-    with integrity.advisory_directory_lock(destination.parent) as parent_descriptor:
+    with integrity.advisory_child_directory_lock(snapshots, digest) as parent_descriptor:
         if _locked_snapshot_matches(destination, seal, parent_descriptor):
             return destination
         if _snapshot_destination_exists(destination, parent_descriptor):
             raise ValueError(f"runtime snapshot destination is invalid: {destination}")
-        with tempfile.TemporaryDirectory() as temporary:
+        temporary_parent = (
+            destination.parent
+            if parent_descriptor is None
+            else Path("/dev/fd") / str(parent_descriptor)
+        )
+        with tempfile.TemporaryDirectory(dir=temporary_parent) as temporary:
             candidate = Path(temporary) / managed.name
             shutil.copytree(source, candidate, symlinks=True)
             _publish_runtime_tree_permissions(candidate)
