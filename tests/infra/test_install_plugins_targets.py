@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
+import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
+from synth_setter.plugin_manager import PluginManifest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CI_CONDA_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-conda.yml"
 CI_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test.yml"
+MPS_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-mps.yml"
 MAKEFILE = PROJECT_ROOT / "Makefile"
 DOCKERFILE = PROJECT_ROOT / "docker/ubuntu22_04/Dockerfile"
 ARTIFACT_LOCK = PROJECT_ROOT / "studiorack.lock.json"
@@ -32,6 +38,34 @@ _EXPECTED_PLUGINS = {
     "surge-synthesizer/ob-xf": ("1.0.3", "OB-Xf.vst3"),
     "surge-synthesizer/surge": ("1.3.4", "Surge XT.vst3"),
 }
+
+
+def _write_executable(path: Path, body: str) -> None:
+    """Write one executable test command.
+
+    :param path: Command path under the isolated fake ``PATH``.
+    :param body: Complete command source, including its shebang.
+    """
+    path.write_text(body)
+    path.chmod(0o755)
+
+
+def _run_setup_surge_script(script: str, fake_bin: Path, managed_root: Path) -> None:
+    """Execute one setup action script against isolated command fakes.
+
+    :param script: Composite action Bash body.
+    :param fake_bin: Directory containing the fake external commands.
+    :param managed_root: Temporary replacement for the system managed root.
+    """
+    subprocess.run(  # noqa: S603 -- checked-in action script with an isolated command path
+        ["/bin/bash", "-c", script],
+        cwd=managed_root.parent,
+        env={
+            "FAKE_MANAGED_ROOT": str(managed_root),
+            "PATH": f"{fake_bin}:{os.defpath}",
+        },
+        check=True,
+    )
 
 
 def _dockerfile_stage_text(stage_name: str) -> str:
@@ -60,8 +94,17 @@ def test_studiorack_manifest_pins_runtime_plugin_set() -> None:
     assert payload["vst3Versions"] == {
         **payload["plugins"],
         "asb2m10/dexed": "1.0.0",
+        "baconpaul/six-sines": "1.1.0.43d10b2",
     }
     assert payload["vst3PluginNames"] == {"baconpaul/six-sines": "Six Sines"}
+
+
+def test_six_sines_manifest_pins_source_qualified_runtime_version() -> None:
+    """Six Sines validates the exact runtime identity of its pinned release."""
+    plugin = PluginManifest.load(MANIFEST).resolve("baconpaul/six-sines")
+
+    assert plugin.version == "1.1.0"
+    assert plugin.renderer_version == "1.1.0.43d10b2"
 
 
 def test_cardinal_manifest_pins_optional_plugin() -> None:
@@ -194,12 +237,26 @@ def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:
     assert "studiorack.lock.json" in stage
 
 
+def test_docker_dev_base_exposes_pinned_studiorack_graph_to_pytest() -> None:
+    """The in-image suite receives the same patched graph used for plugin installs."""
+    stage = _dockerfile_stage_text("dev-base")
+    graph_link = "ln -s /artifacts/studiorack/node_modules node_modules"
+
+    assert graph_link in stage
+    assert stage.index(graph_link) < stage.index('pytest -k "not slow"')
+
+
 def test_docker_plugin_stage_provisions_cardinal_at_configured_path() -> None:
-    """The image installs and links Cardinal into the checkout plugin namespace."""
+    """The image installs and links Cardinal through its required headless host."""
     stage = _dockerfile_stage_text("builder-install-studiorack-plugins")
+    headless_wrapper = "/artifacts/run-linux-vst-headless.sh"
+    cardinal_install = "--plugin distrho/cardinal"
 
     assert "studiorack-cardinal.json" in stage
-    assert "--plugin distrho/cardinal" in stage
+    assert headless_wrapper in stage
+    assert stage.index(headless_wrapper) < stage.index(cardinal_install)
+    normalized_stage = " ".join(stage.replace("\\", "").split())
+    assert f"{headless_wrapper} python -m synth_setter.cli.plugins" in normalized_stage
     assert '"CardinalSynth|"' in stage
 
 
@@ -221,6 +278,17 @@ def test_docker_fetched_plugins_have_no_manual_download_stage() -> None:
     assert "SIX_SINES_SHA256" not in dockerfile
 
 
+def test_mps_workflow_runs_for_surge_setup_changes() -> None:
+    """The real macOS lane validates changes to its plugin setup boundary."""
+    workflow = yaml.safe_load(MPS_TEST_WORKFLOW.read_text())
+
+    # Both events: a push-only or PR-only filter leaves one lane blind to setup changes.
+    for event in ("push", "pull_request"):
+        paths = workflow[True][event]["paths"]
+        assert ".github/actions/setup-surge-xt/**" in paths, event
+        assert "tests/infra/test_install_plugins_targets.py" in paths, event
+
+
 def test_macos_provisioners_install_surge_through_studiorack() -> None:
     """CI and Tart use the manifest instead of Homebrew's rolling cask."""
     action = SETUP_SURGE_ACTION.read_text()
@@ -233,6 +301,108 @@ def test_macos_provisioners_install_surge_through_studiorack() -> None:
     assert "npm ci" in tart
     assert "synth-setter-plugins" in tart
     assert "brew install --cask surge-xt" not in tart
+
+
+def _write_install_fakes(fake_bin: Path) -> None:
+    """Write the npm and uv fakes standing in for the privileged Studiorack install.
+
+    The uv fake reproduces what the real install leaves behind: a lock and a runtime
+    snapshot under the managed root, with every path write-protected.
+
+    :param fake_bin: Directory holding the fake commands.
+    """
+    _write_executable(fake_bin / "npm", "#!/bin/bash\nset -euo pipefail\nexit 0\n")
+    _write_executable(
+        fake_bin / "uv",
+        """#!/bin/bash
+set -euo pipefail
+readonly managed_root="${STUDIORACK_PLUGINS_DIR:?}"
+lock="${managed_root}/.synth-setter-install-locks/surge-synthesizer/surge/1.3.4.lock"
+snapshot="${managed_root}/.synth-setter-runtime-snapshots/installed.snapshot"
+mkdir -p "$(dirname "${lock}")" "$(dirname "${snapshot}")"
+: > "${lock}"
+: > "${snapshot}"
+chmod -R a-w "${managed_root}"
+""",
+    )
+
+
+def _write_sudo_fake(fake_bin: Path) -> None:
+    """Write the sudo fake mapping the system managed root onto a scratch root.
+
+    Pins both the chown target and its owner: chowning to anyone but the invoking user
+    leaves the unprivileged smoke step unable to write, which is the bug under test.
+
+    :param fake_bin: Directory holding the fake commands.
+    """
+    _write_executable(
+        fake_bin / "sudo",
+        """#!/bin/bash
+set -euo pipefail
+readonly system_root="/Library/Application Support/synth-setter/studiorack"
+readonly mapped_root="${FAKE_MANAGED_ROOT:?}"
+if [[ "${1:-}" == "-E" && "${2:-}" == "env" ]]; then
+  shift 2
+  translated=()
+  for argument in "$@"; do
+    if [[ "${argument}" == "STUDIORACK_PLUGINS_DIR=${system_root}" ]]; then
+      argument="STUDIORACK_PLUGINS_DIR=${mapped_root}"
+    fi
+    translated+=("${argument}")
+  done
+  exec env "${translated[@]}"
+fi
+if [[ "${1:-}" == "chown" && "${2:-}" == "-R" && "${4:-}" == "${system_root}" ]]; then
+  if [[ "${3:-}" != "$(id -u):$(id -g)" ]]; then
+    echo "sudo chown: refusing owner ${3:-} (expected $(id -u):$(id -g))" >&2
+    exit 65
+  fi
+  chmod -R u+rwX "${mapped_root}"
+  exit 0
+fi
+exit 64
+""",
+    )
+
+
+def _write_surge_setup_fakes(tmp_path: Path) -> Path:
+    """Write every command the setup script shells out to.
+
+    :param tmp_path: Scratch root holding the fake command directory.
+    :returns: Directory to prepend to ``PATH``.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_install_fakes(fake_bin)
+    _write_sudo_fake(fake_bin)
+    return fake_bin
+
+
+def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install(
+    tmp_path: Path,
+) -> None:
+    """Privileged setup restores owner write permission before the smoke test.
+
+    :param tmp_path: Scratch roots and executable command fakes.
+    """
+    action = yaml.safe_load(SETUP_SURGE_ACTION.read_text())
+    run_script = action["runs"]["steps"][0]["run"]
+    # Select the ownership command explicitly; keying off the last line would silently
+    # stop removing it if any command were appended after it.
+    pre_fix_script = "\n".join(
+        line for line in run_script.splitlines() if not line.strip().startswith("sudo chown")
+    )
+    assert pre_fix_script != run_script
+
+    fake_bin = _write_surge_setup_fakes(tmp_path)
+
+    pre_fix_root = tmp_path / "pre-fix-managed"
+    _run_setup_surge_script(pre_fix_script, fake_bin, pre_fix_root)
+    assert not pre_fix_root.stat().st_mode & stat.S_IWUSR
+
+    current_root = tmp_path / "current-managed"
+    _run_setup_surge_script(run_script, fake_bin, current_root)
+    assert current_root.stat().st_mode & stat.S_IWUSR
 
 
 def test_docker_keeps_source_fallback_only_for_incompatible_registry_artifacts() -> None:
