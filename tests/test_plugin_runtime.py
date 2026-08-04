@@ -701,19 +701,23 @@ def test_adopt_plugin_bundle_prepares_snapshot_before_read_only_runtime(
         Path(current).chmod(0o555)
         for name in directories:
             (Path(current) / name).chmod(0o555)
-    real_mkdir = Path.mkdir
+    snapshot_bundles = list(snapshots.glob("*/Example Synth.vst3"))
+    assert len(snapshot_bundles) == 1
+    assert _binary_path(snapshot_bundles[0]).is_file()
 
-    def _deny_missing_snapshot(
-        path: Path,
+    real_mkdir = os.mkdir
+
+    def _deny_snapshot_creation(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
         mode: int = 0o777,
-        parents: bool = False,
-        exist_ok: bool = False,
+        *,
+        dir_fd: int | None = None,
     ) -> None:
-        if path.is_relative_to(snapshots) and not path.exists():
-            raise PermissionError(f"read-only managed storage: {path}")
-        real_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+        if str(path).startswith(".Example Synth.vst3.tmp-"):
+            raise PermissionError("read-only managed storage")
+        real_mkdir(path, mode, dir_fd=dir_fd)
 
-    monkeypatch.setattr(Path, "mkdir", _deny_missing_snapshot)
+    monkeypatch.setattr(plugin_runtime.os, "mkdir", _deny_snapshot_creation)
 
     assert snapshots.is_dir()
     assert plugin_manager.validate_plugin_bundle_for_runtime(managed).is_dir()

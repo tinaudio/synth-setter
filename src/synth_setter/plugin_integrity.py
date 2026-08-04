@@ -61,6 +61,7 @@ __all__ = [
     "bundle_is_sealed",
     "locked_bundle_is_sealed",
     "locked_package_digest",
+    "open_posix_nofollow_directory",
     "package_install_lock",
     "package_install_lock_path",
     "seal_plugin_bundle",
@@ -1007,13 +1008,43 @@ def _posix_advisory_descriptor_lock(
     return _locked()
 
 
-def _posix_directory_descriptor(directory: Path) -> int:
-    """Traverse an absolute directory hierarchy without following any symlink.
+def _posix_child_directory_descriptor(
+    parent_descriptor: int,
+    component: str,
+    access_flag: int,
+    *,
+    create_missing: bool,
+) -> int:
+    """Open one no-follow child, optionally tolerating a concurrent creator.
 
-    :param directory: Existing synchronization directory.
+    :param parent_descriptor: Retained parent directory descriptor.
+    :param component: Single child directory name.
+    :param access_flag: Search-only or read-only final access.
+    :param create_missing: Whether to create an absent component.
+    :returns: Retained child directory descriptor.
+    :raises FileNotFoundError: The child is absent and creation is disabled.
+    """
+    flags = access_flag | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        return os.open(component, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        if not create_missing:
+            raise
+    try:
+        os.mkdir(component, dir_fd=parent_descriptor)
+    except FileExistsError:
+        pass
+    return os.open(component, flags, dir_fd=parent_descriptor)
+
+
+def _posix_directory_hierarchy_descriptor(directory: Path, *, create_missing: bool) -> int:
+    """Traverse one absolute hierarchy under a shared no-follow policy.
+
+    :param directory: Directory hierarchy to open.
+    :param create_missing: Whether to create absent components.
     :returns: Read-only descriptor for the final directory.
     :raises FileExistsError: Any hierarchy component is a symlink or non-directory.
-    :raises OSError: Opening a hierarchy component fails for another reason.
+    :raises OSError: Opening or creating a hierarchy component fails.
     """
     absolute = directory.absolute()
     descriptor = os.open(absolute.anchor, os.O_RDONLY | os.O_DIRECTORY)
@@ -1023,10 +1054,11 @@ def _posix_directory_descriptor(directory: Path) -> int:
             access_flag = (
                 os.O_RDONLY if index == len(components) - 1 else _POSIX_SEARCH_ONLY_OPEN_FLAG
             )
-            child = os.open(
+            child = _posix_child_directory_descriptor(
+                descriptor,
                 component,
-                access_flag | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=descriptor,
+                access_flag,
+                create_missing=create_missing,
             )
             os.close(descriptor)
             descriptor = child
@@ -1036,6 +1068,15 @@ def _posix_directory_descriptor(directory: Path) -> int:
             raise FileExistsError(f"lock path is not a real directory: {directory}") from exc
         raise
     return descriptor
+
+
+def open_posix_nofollow_directory(directory: Path) -> int:
+    """Open an existing absolute directory hierarchy without following symlinks.
+
+    :param directory: Existing directory hierarchy.
+    :returns: Read-only descriptor for the final directory.
+    """
+    return _posix_directory_hierarchy_descriptor(directory, create_missing=False)
 
 
 def _posix_create_directory_descriptor(directory: Path) -> int:
@@ -1043,41 +1084,8 @@ def _posix_create_directory_descriptor(directory: Path) -> int:
 
     :param directory: Directory hierarchy to create or open.
     :returns: Read-only descriptor for the final directory.
-    :raises FileExistsError: Any existing component is a symlink or non-directory.
-    :raises OSError: Creating or opening a hierarchy component fails.
     """
-    absolute = directory.absolute()
-    descriptor = os.open(absolute.anchor, os.O_RDONLY | os.O_DIRECTORY)
-    components = absolute.parts[1:]
-    try:
-        for index, component in enumerate(components):
-            access_flag = (
-                os.O_RDONLY if index == len(components) - 1 else _POSIX_SEARCH_ONLY_OPEN_FLAG
-            )
-            try:
-                child = os.open(
-                    component,
-                    access_flag | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=descriptor,
-                )
-            except FileNotFoundError:
-                try:
-                    os.mkdir(component, dir_fd=descriptor)
-                except FileExistsError:
-                    pass
-                child = os.open(
-                    component,
-                    access_flag | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=descriptor,
-                )
-            os.close(descriptor)
-            descriptor = child
-    except OSError as exc:
-        os.close(descriptor)
-        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
-            raise FileExistsError(f"lock path is not a real directory: {directory}") from exc
-        raise
-    return descriptor
+    return _posix_directory_hierarchy_descriptor(directory, create_missing=True)
 
 
 def advisory_directory_lock(path: Path) -> AbstractContextManager[int | None]:
@@ -1109,7 +1117,7 @@ def advisory_directory_lock(path: Path) -> AbstractContextManager[int | None]:
 
         import fcntl
 
-        descriptor = _posix_directory_descriptor(path)
+        descriptor = open_posix_nofollow_directory(path)
         try:
             with _posix_advisory_descriptor_lock(descriptor, fcntl.LOCK_EX):
                 yield descriptor
@@ -1132,7 +1140,7 @@ def advisory_child_directory_lock(
 
     @contextmanager
     def _locked() -> Iterator[int | None]:
-        if Path(name).name != name:
+        if name in {"", ".", ".."} or Path(name).name != name:
             raise ValueError(f"publication child must be one path component: {name}")
         if os.name == "nt":
             with advisory_directory_lock(parent):
@@ -1144,7 +1152,7 @@ def advisory_child_directory_lock(
 
         import fcntl
 
-        parent_descriptor = _posix_directory_descriptor(parent)
+        parent_descriptor = open_posix_nofollow_directory(parent)
         try:
             with _posix_advisory_descriptor_lock(parent_descriptor, fcntl.LOCK_EX):
                 try:
@@ -1188,7 +1196,8 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
 
         import fcntl
 
-        directory_descriptor = _posix_directory_descriptor(path.parent.resolve(strict=True))
+        canonical_parent = path.parent.resolve(strict=True)
+        directory_descriptor = open_posix_nofollow_directory(canonical_parent)
         try:
             with _posix_advisory_descriptor_lock(directory_descriptor, fcntl.LOCK_EX):
                 flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
@@ -1197,7 +1206,9 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
                     if not stat.S_ISREG(os.fstat(marker_descriptor).st_mode):
                         raise FileExistsError(f"lock is not a regular file: {path}")
                     with _posix_advisory_descriptor_lock(marker_descriptor, fcntl.LOCK_EX):
+                        _require_posix_retained_directory(canonical_parent, directory_descriptor)
                         yield
+                        _require_posix_retained_directory(canonical_parent, directory_descriptor)
                 finally:
                     os.close(marker_descriptor)
         finally:
@@ -1231,6 +1242,7 @@ def _posix_consumer_marker_descriptor(path: Path, directory_descriptor: int) -> 
     :param directory_descriptor: Open synchronization directory.
     :returns: Descriptor suitable for a shared flock.
     :raises FileExistsError: The marker is not a regular file.
+    :raises OSError: Publishing a newly created marker's permissions fails.
     """
     flags = os.O_RDONLY | os.O_NOFOLLOW
     try:
@@ -1239,6 +1251,11 @@ def _posix_consumer_marker_descriptor(path: Path, directory_descriptor: int) -> 
         flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         try:
             marker = os.open(path.name, flags, 0o666, dir_fd=directory_descriptor)
+            try:
+                os.fchmod(marker, os.fstat(marker).st_mode | RUNTIME_FILE_READ_MASK)
+            except OSError:
+                os.close(marker)
+                raise
         except FileExistsError:
             marker = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_descriptor)
     if stat.S_ISREG(os.fstat(marker).st_mode):
@@ -1375,7 +1392,7 @@ def _posix_lock_hierarchy(
     @contextmanager
     def _opened() -> Iterator[list[int]]:
         plugins_dir.mkdir(parents=True, exist_ok=True)
-        descriptors = [_posix_directory_descriptor(plugins_dir)]
+        descriptors = [open_posix_nofollow_directory(plugins_dir)]
         try:
             for component in lock_parent.relative_to(plugins_dir).parts:
                 try:

@@ -623,35 +623,44 @@ def _publish_posix_runtime_tree_permissions(descriptor: int, root: Path) -> None
             raise ValueError(f"runtime snapshot path is a special file: {child_path}")
 
 
-def _publish_runtime_tree_permissions(root: Path) -> None:
-    """Publish read and traversal permissions without following symlinks.
+def _publish_windows_runtime_tree_permissions(root: Path) -> None:
+    """Publish a Windows tree without descending through reparse directories.
 
     :param root: Existing snapshot tree owned by the current publisher.
-    :raises ValueError: A traversed path is not a real directory or regular file.
+    :raises ValueError: A traversed child is not a regular file.
     """
-    if os.name != "nt":
-        descriptor = integrity._posix_directory_descriptor(root)
-        try:
-            _publish_posix_runtime_tree_permissions(descriptor, root)
-        finally:
-            os.close(descriptor)
-        return
     for current, directories, files in os.walk(root, followlinks=False):
-        _ensure_runtime_snapshot_directory(Path(current))
-        directories[:] = [
-            name
-            for name in directories
-            if not stat.S_ISLNK((Path(current) / name).lstat().st_mode)
-            and not os.path.isjunction(Path(current) / name)
-        ]
+        current_path = Path(current)
+        _ensure_runtime_snapshot_directory(current_path)
+        retained_directories: list[str] = []
+        for name in directories:
+            child = current_path / name
+            if not stat.S_ISLNK(child.lstat().st_mode) and not os.path.isjunction(child):
+                retained_directories.append(name)
+        directories[:] = retained_directories
         for name in files:
-            child = Path(current) / name
+            child = current_path / name
             mode = child.lstat().st_mode
             if stat.S_ISLNK(mode):
                 continue
             if not stat.S_ISREG(mode):
                 raise ValueError(f"runtime snapshot path is not a regular file: {child}")
             child.chmod(mode | integrity.RUNTIME_FILE_READ_MASK)
+
+
+def _publish_runtime_tree_permissions(root: Path) -> None:
+    """Publish read and traversal permissions without following symlinks.
+
+    :param root: Existing snapshot tree owned by the current publisher.
+    """
+    if os.name != "nt":
+        descriptor = integrity.open_posix_nofollow_directory(root)
+        try:
+            _publish_posix_runtime_tree_permissions(descriptor, root)
+        finally:
+            os.close(descriptor)
+        return
+    _publish_windows_runtime_tree_permissions(root)
 
 
 def _publish_runtime_snapshot_permissions(version_dir: Path) -> None:

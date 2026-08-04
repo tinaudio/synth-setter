@@ -279,6 +279,52 @@ def test_advisory_file_lease_replaced_lock_directory_rejected_before_return(
             lock_path.touch()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX marker permission semantics")
+def test_advisory_file_lease_created_marker_restrictive_umask_is_runtime_readable(
+    tmp_path: Path,
+) -> None:
+    """A consumer-created shared marker does not preserve a private umask mode.
+
+    :param tmp_path: Scratch synchronization directory and absent marker.
+    """
+    marker = tmp_path / "package.lock"
+    prior_umask = os.umask(0o077)
+    try:
+        with plugin_integrity.advisory_file_lease(marker):
+            pass
+    finally:
+        os.umask(prior_umask)
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o644
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX retained-directory writer semantics")
+def test_advisory_file_lock_replaced_directory_rejected_before_return(tmp_path: Path) -> None:
+    """A writer does not return successfully after lock-directory substitution.
+
+    :param tmp_path: Scratch original and replacement synchronization directories.
+    """
+    marker = tmp_path / "locks/package.lock"
+    marker.parent.mkdir()
+
+    with pytest.raises(ValueError, match="lock directory was replaced"):
+        with plugin_integrity.advisory_file_lock(marker):
+            marker.parent.rename(tmp_path / "displaced-locks")
+            marker.parent.mkdir()
+
+
+def test_advisory_child_directory_lock_parent_component_rejected(tmp_path: Path) -> None:
+    """Child publication cannot escape through the parent traversal component.
+
+    :param tmp_path: Scratch publication parent.
+    """
+    parent = tmp_path / "parent"
+    parent.mkdir()
+
+    with pytest.raises(ValueError, match="one path component"):
+        with plugin_integrity.advisory_child_directory_lock(parent, ".."):
+            pass
+
+
 def _restricted_package_lock_tree(tmp_path: Path) -> tuple[Path, Path, list[Path]]:
     """Build one package-lock tree with privileged-install modes.
 
@@ -333,6 +379,7 @@ def test_advisory_file_lease_symlinked_parent_rejected_without_outside_mutation(
     assert list(outside.iterdir()) == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX marker descriptor semantics")
 def test_advisory_file_lease_unreadable_marker_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
