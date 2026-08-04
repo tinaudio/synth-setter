@@ -533,7 +533,7 @@ def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Pa
 
     :param tmp_path: Scratch package-version directory.
     """
-    plugin_runtime.publish_runtime_snapshot_permissions(tmp_path / "version")
+    plugin_runtime._publish_runtime_snapshot_permissions(tmp_path / "version")
 
 
 def test_prepare_managed_bundle_publishes_direct_bundle_tree(
@@ -556,7 +556,7 @@ def test_prepare_managed_bundle_publishes_direct_bundle_tree(
 
     monkeypatch.setattr(Path, "chmod", _reject_path_chmod)
 
-    plugin_runtime.prepare_managed_bundle_for_runtime(managed, plugins_dir)
+    plugin_runtime._prepare_managed_bundle_for_runtime(managed, plugins_dir)
 
     for current, _, files in os.walk(managed):
         assert Path(current).stat().st_mode & 0o055 == 0o055

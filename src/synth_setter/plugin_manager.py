@@ -459,7 +459,7 @@ def _package_install_lock(
         with integrity.package_install_lock(plugin.package, plugin.version, plugins_dir):
             yield
             managed = _managed_version_dir(plugin, plugins_dir) / plugin.bundle
-            runtime.prepare_managed_bundle_for_runtime(managed, plugins_dir)
+            runtime._prepare_managed_bundle_for_runtime(managed, plugins_dir)
 
     return _locked()
 

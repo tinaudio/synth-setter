@@ -630,7 +630,7 @@ def _publish_runtime_tree_permissions(root: Path) -> None:
             child.chmod(mode | integrity.RUNTIME_FILE_READ_MASK)
 
 
-def publish_runtime_snapshot_permissions(version_dir: Path) -> None:
+def _publish_runtime_snapshot_permissions(version_dir: Path) -> None:
     """Publish runtime-readable permissions for existing snapshot directories.
 
     :param version_dir: Managed package-version directory containing snapshots.
@@ -704,7 +704,7 @@ def _publish_runtime_parent_permissions(plugins_dir: Path, version_dir: Path) ->
         _publish_posix_runtime_parent_permissions(plugins_dir, version_dir)
 
 
-def prepare_managed_bundle_for_runtime(managed: Path, plugins_dir: Path) -> None:
+def _prepare_managed_bundle_for_runtime(managed: Path, plugins_dir: Path) -> None:
     """Publish a validated adopted snapshot while installer authority is held.
 
     :param managed: Managed bundle path produced by the installer transaction.
@@ -729,7 +729,7 @@ def prepare_managed_bundle_for_runtime(managed: Path, plugins_dir: Path) -> None
     _publish_runtime_parent_permissions(plugins_dir, managed.parent)
     if not stat.S_ISLNK(managed.lstat().st_mode):
         _publish_runtime_tree_permissions(managed)
-    publish_runtime_snapshot_permissions(managed.parent)
+    _publish_runtime_snapshot_permissions(managed.parent)
 
 
 def _runtime_snapshot_matches(destination: Path, seal: BundleSeal) -> bool:

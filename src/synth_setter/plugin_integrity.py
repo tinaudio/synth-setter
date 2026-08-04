@@ -1247,6 +1247,22 @@ def _posix_consumer_marker_descriptor(path: Path, directory_descriptor: int) -> 
     raise FileExistsError(f"lock is not a regular file: {path}")
 
 
+def _require_posix_retained_directory(path: Path, descriptor: int) -> None:
+    """Require a lexical lock directory to still name its retained inode.
+
+    :param path: Lexical synchronization directory.
+    :param descriptor: Retained directory descriptor.
+    :raises ValueError: The directory is missing or was replaced.
+    """
+    retained = os.fstat(descriptor)
+    try:
+        lexical = path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"lock directory was replaced: {path}") from exc
+    if (retained.st_dev, retained.st_ino) != (lexical.st_dev, lexical.st_ino):
+        raise ValueError(f"lock directory was replaced: {path}")
+
+
 def _posix_advisory_lease(path: Path) -> AbstractContextManager[None]:
     """Acquire shared directory and marker locks for a POSIX consumer.
 
@@ -1265,7 +1281,9 @@ def _posix_advisory_lease(path: Path) -> AbstractContextManager[None]:
             marker = _posix_consumer_marker_descriptor(path, directory)
             resources.callback(os.close, marker)
             resources.enter_context(_posix_advisory_descriptor_lock(marker, fcntl.LOCK_SH))
+            _require_posix_retained_directory(path.parent, directory)
             yield
+            _require_posix_retained_directory(path.parent, directory)
 
     return _leased()
 

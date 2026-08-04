@@ -225,6 +225,60 @@ def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
     assert not writer_thread.is_alive()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX retained-directory lease semantics")
+def test_advisory_file_lease_replaced_lock_directory_rejected_before_yield(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lease rejects lock-directory substitution before exposing managed bytes.
+
+    :param tmp_path: Scratch original and replacement lock directories.
+    :param monkeypatch: Replaces the hierarchy after its marker is opened.
+    """
+    lock_path = tmp_path / "locks/package.lock"
+    lock_path.parent.mkdir()
+    lock_path.touch()
+    real_marker_open = plugin_integrity._posix_consumer_marker_descriptor
+
+    def _replace_after_marker_open(path: Path, directory_descriptor: int) -> int:
+        marker = real_marker_open(path, directory_descriptor)
+        path.parent.rename(tmp_path / "displaced-locks")
+        path.parent.mkdir()
+        path.touch()
+        return marker
+
+    monkeypatch.setattr(
+        plugin_integrity,
+        "_posix_consumer_marker_descriptor",
+        _replace_after_marker_open,
+    )
+
+    entered = False
+    with pytest.raises(ValueError, match="lock directory was replaced"):
+        with plugin_integrity.advisory_file_lease(lock_path):
+            entered = True
+    assert not entered
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX retained-directory lease semantics")
+def test_advisory_file_lease_replaced_lock_directory_rejected_before_return(
+    tmp_path: Path,
+) -> None:
+    """A lease does not return successfully after in-context substitution.
+
+    :param tmp_path: Scratch original and replacement lock directories.
+    """
+    lock_path = tmp_path / "locks/package.lock"
+    lock_path.parent.mkdir()
+    lock_path.touch()
+
+    with pytest.raises(ValueError, match="lock directory was replaced"):
+        with plugin_integrity.advisory_file_lease(lock_path):
+            lock_path.parent.rename(tmp_path / "displaced-locks")
+            lock_path.parent.mkdir()
+            lock_path.touch()
+
+
 def _restricted_package_lock_tree(tmp_path: Path) -> tuple[Path, Path, list[Path]]:
     """Build one package-lock tree with privileged-install modes.
 
