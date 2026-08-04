@@ -419,6 +419,7 @@ COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_ma
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_runtime.py /artifacts/studiorack-src/synth_setter/plugin_runtime.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/__init__.py /artifacts/studiorack-src/synth_setter/cli/__init__.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/plugins.py /artifacts/studiorack-src/synth_setter/cli/plugins.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
 WORKDIR /artifacts/studiorack
 RUN npm ci
 ENV STUDIORACK_PLUGINS_DIR=/opt/studiorack
@@ -434,7 +435,8 @@ RUN if [[ "${TARGETARCH:-}" == "amd64" ]]; then \
       PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
         --manifest /artifacts/studiorack/studiorack.json \
         --links-dir /usr/lib/vst3 install "${packages[@]}"; \
-      PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+      PYTHONPATH=/artifacts/studiorack-src /artifacts/run-linux-vst-headless.sh \
+        python -m synth_setter.cli.plugins \
         --manifest /artifacts/studiorack/studiorack-cardinal.json \
         --links-dir /usr/lib/vst3 install --plugin distrho/cardinal; \
     fi
@@ -456,7 +458,6 @@ RUN if [[ "${BUILD_MODE}" == "source" ]]; then \
       --plugin kayrockscreenprinting/ultramaster-kr106
 
 WORKDIR /artifacts
-COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 RUN ./run-linux-vst-headless.sh \
