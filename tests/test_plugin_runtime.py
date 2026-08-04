@@ -1486,6 +1486,36 @@ def test_load_plugin_source_mutation_after_validation_fails_before_open(
     assert opened == []
 
 
+def test_adopt_plugin_bundle_group_writable_source_publishes_immutable_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Adopted snapshots clear group and other write authority.
+
+    :param tmp_path: Scratch group-writable source and managed root.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "source/Example Synth.vst3")
+    for current, directories, files in os.walk(source):
+        Path(current).chmod(0o775)
+        for name in directories:
+            (Path(current) / name).chmod(0o775)
+        for name in files:
+            (Path(current) / name).chmod(0o664)
+
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    snapshot = plugin_manager.validate_plugin_bundle_for_runtime(managed)
+
+    for current, directories, files in os.walk(snapshot):
+        assert stat.S_IMODE(Path(current).stat().st_mode) & 0o022 == 0
+        assert all(
+            stat.S_IMODE((Path(current) / name).stat().st_mode) & 0o022 == 0
+            for name in directories
+        )
+        assert all(
+            stat.S_IMODE((Path(current) / name).stat().st_mode) & 0o022 == 0 for name in files
+        )
+
+
 def test_copy_bundle_absolute_internal_symlink_rejected(tmp_path: Path) -> None:
     """Snapshot copy rejects source-bound absolute symlink targets.
 
@@ -1564,6 +1594,40 @@ def test_runtime_snapshot_candidate_uses_destination_filesystem(
 
     assert plugin_manager.validate_plugin_bundle_for_runtime(managed).is_dir()
     assert staged_on_destination
+
+
+def test_locked_snapshot_match_replacement_after_hash_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot acceptance binds the content hash to the retained child inode.
+
+    :param tmp_path: Scratch managed state and published snapshot.
+    :param monkeypatch: Replaces the snapshot immediately after content hashing.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    managed = _adopt_bundle(
+        plugin,
+        plugins_dir=tmp_path / "managed",
+        bundle=_bundle(tmp_path / "source/Example Synth.vst3"),
+    )
+    snapshot = plugin_manager.validate_plugin_bundle_for_runtime(managed)
+    _, seal = plugin_integrity.ManagedBundleStorage(managed).validate()
+    real_match = plugin_runtime._runtime_snapshot_matches
+    displaced = snapshot.with_name(f"{snapshot.name}.displaced")
+
+    def _replace_after_hash(destination: Path, expected: plugin_integrity.BundleSeal) -> bool:
+        matched = real_match(destination, expected)
+        destination.rename(displaced)
+        destination.mkdir()
+        return matched
+
+    monkeypatch.setattr(plugin_runtime, "_runtime_snapshot_matches", _replace_after_hash)
+    parent_descriptor = os.open(snapshot.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert not plugin_runtime._locked_snapshot_matches(snapshot, seal, parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
 
 
 def test_runtime_snapshot_parent_substitution_publishes_through_retained_directory(

@@ -39,6 +39,9 @@ from synth_setter.plugin_integrity import (
 
 logger = logging.getLogger(__name__)
 
+_SNAPSHOT_COPY_BLOCK_SIZE_BYTES = 1024 * 1024
+_RUNTIME_SHARED_WRITE_MASK = stat.S_IWGRP | stat.S_IWOTH
+
 __all__ = [
     "ManagedAliasRecord",
     "discard_managed_bundle_records",
@@ -526,6 +529,26 @@ def _remove_runtime_snapshot(path: Path) -> None:
         path.unlink()
 
 
+def _runtime_directory_mode(mode: int) -> int:
+    """Return a traversable mode without shared mutation authority.
+
+    :param mode: Existing or requested directory mode.
+    :returns: Runtime directory mode.
+    """
+    return (
+        stat.S_IMODE(mode) | integrity.RUNTIME_DIRECTORY_ACCESS_MASK
+    ) & ~_RUNTIME_SHARED_WRITE_MASK
+
+
+def _runtime_file_mode(mode: int) -> int:
+    """Return a readable mode without shared mutation authority.
+
+    :param mode: Existing or requested regular-file mode.
+    :returns: Runtime regular-file mode.
+    """
+    return (stat.S_IMODE(mode) | integrity.RUNTIME_FILE_READ_MASK) & ~_RUNTIME_SHARED_WRITE_MASK
+
+
 def _ensure_runtime_snapshot_directory(path: Path) -> None:
     """Create a runtime-readable snapshot directory and reject symlink substitution.
 
@@ -541,7 +564,7 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
         != integrity.RUNTIME_DIRECTORY_ACCESS_MASK
     ):
         try:
-            path.chmod(mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK)
+            path.chmod(_runtime_directory_mode(mode))
         except PermissionError:
             logger.warning(
                 "Runtime snapshot directory permission publication was denied",
@@ -591,7 +614,7 @@ def _publish_posix_runtime_file(parent_descriptor: int, child_name: str) -> None
     try:
         os.fchmod(
             descriptor,
-            os.fstat(descriptor).st_mode | integrity.RUNTIME_FILE_READ_MASK,
+            _runtime_file_mode(os.fstat(descriptor).st_mode),
         )
     finally:
         os.close(descriptor)
@@ -604,10 +627,7 @@ def _publish_posix_runtime_tree_permissions(descriptor: int, root: Path) -> None
     :param root: Diagnostic path corresponding to the descriptor.
     :raises ValueError: A traversed child is not a directory, file, or symlink.
     """
-    os.fchmod(
-        descriptor,
-        os.fstat(descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
-    )
+    os.fchmod(descriptor, _runtime_directory_mode(os.fstat(descriptor).st_mode))
     with os.scandir(descriptor) as children:
         for child in children:
             mode = child.stat(follow_symlinks=False).st_mode
@@ -645,7 +665,7 @@ def _publish_windows_runtime_tree_permissions(root: Path) -> None:
                 continue
             if not stat.S_ISREG(mode):
                 raise ValueError(f"runtime snapshot path is not a regular file: {child}")
-            child.chmod(mode | integrity.RUNTIME_FILE_READ_MASK)
+            child.chmod(_runtime_file_mode(mode))
 
 
 def _publish_runtime_tree_permissions(root: Path) -> None:
@@ -691,17 +711,11 @@ def _publish_posix_runtime_parent_permissions(plugins_dir: Path, version_dir: Pa
     try:
         descriptor = os.open(plugins_dir, flags)
         descriptors.append(descriptor)
-        os.fchmod(
-            descriptor,
-            os.fstat(descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
-        )
+        os.fchmod(descriptor, _runtime_directory_mode(os.fstat(descriptor).st_mode))
         for component in relative.parts:
             descriptor = os.open(component, flags, dir_fd=descriptor)
             descriptors.append(descriptor)
-            os.fchmod(
-                descriptor,
-                os.fstat(descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
-            )
+            os.fchmod(descriptor, _runtime_directory_mode(os.fstat(descriptor).st_mode))
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
@@ -784,15 +798,25 @@ def _locked_snapshot_matches(
     :param parent_descriptor: Retained POSIX publication directory descriptor.
     :returns: Whether the lexical candidate is the child validated under the lock.
     """
-    if not _runtime_snapshot_matches(destination, seal):
-        return False
     if parent_descriptor is None:
-        return True
+        return _runtime_snapshot_matches(destination, seal)
     try:
-        retained = os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        snapshot_descriptor = os.open(
+            destination.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    try:
+        if not _runtime_snapshot_matches(destination, seal):
+            return False
+        retained = os.fstat(snapshot_descriptor)
         lexical = destination.lstat()
     except FileNotFoundError:
         return False
+    finally:
+        os.close(snapshot_descriptor)
     return (retained.st_dev, retained.st_ino) == (lexical.st_dev, lexical.st_ino)
 
 
@@ -864,7 +888,7 @@ def _copy_directory_to_descriptor(
     :param mode: Source directory mode.
     :returns: Entries copied below the child directory.
     """
-    published_mode = stat.S_IMODE(mode) | integrity.RUNTIME_DIRECTORY_ACCESS_MASK
+    published_mode = _runtime_directory_mode(mode)
     os.mkdir(child.name, published_mode, dir_fd=destination_descriptor)
     child_descriptor = os.open(
         child.name,
@@ -893,7 +917,7 @@ def _copy_regular_file_to_descriptor(
     :param mode: Source file mode.
     :returns: Entry generated from the copied bytes.
     """
-    published_mode = stat.S_IMODE(mode) | integrity.RUNTIME_FILE_READ_MASK
+    published_mode = _runtime_file_mode(mode)
     descriptor = os.open(
         child.name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -911,7 +935,7 @@ def _copy_regular_file_to_descriptor(
                 closefd=False,
             ) as destination_stream,
         ):
-            while block := source_stream.read(1024 * 1024):
+            while block := source_stream.read(_SNAPSHOT_COPY_BLOCK_SIZE_BYTES):
                 destination_stream.write(block)
                 digest.update(block)
                 size += len(block)
@@ -1060,7 +1084,7 @@ def _stage_posix_runtime_snapshot(
             entries = _copy_bundle_to_descriptor(source, candidate_descriptor)
             os.fchmod(
                 candidate_descriptor,
-                os.fstat(candidate_descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
+                _runtime_directory_mode(os.fstat(candidate_descriptor).st_mode),
             )
         finally:
             os.close(candidate_descriptor)

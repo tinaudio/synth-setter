@@ -7,7 +7,6 @@ import os
 import stat
 import sys
 import threading
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -191,8 +190,10 @@ def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
 
     marker_path = tmp_path / "package.lock"
     real_open = os.open
+    consumer_waiting = threading.Event()
     writer_unlocking = threading.Event()
     writer_thread: threading.Thread | None = None
+    real_descriptor_lock = plugin_integrity._posix_advisory_descriptor_lock
 
     def _concurrent_open(
         path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
@@ -207,7 +208,7 @@ def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
             fcntl.flock(writer, fcntl.LOCK_EX)
 
             def _release_writer() -> None:
-                time.sleep(0.1)
+                assert consumer_waiting.wait(timeout=1)
                 writer_unlocking.set()
                 fcntl.flock(writer, fcntl.LOCK_UN)
                 os.close(writer)
@@ -217,7 +218,22 @@ def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
             raise FileExistsError(errno.EEXIST, "marker-only writer won", path)
         return real_open(path, flags, mode, dir_fd=dir_fd)
 
+    @contextmanager
+    def _signal_consumer_wait(
+        descriptor: int,
+        operation: int,
+    ) -> Iterator[None]:
+        if operation == fcntl.LOCK_SH and stat.S_ISREG(os.fstat(descriptor).st_mode):
+            consumer_waiting.set()
+        with real_descriptor_lock(descriptor, operation):
+            yield
+
     monkeypatch.setattr(plugin_integrity.os, "open", _concurrent_open)
+    monkeypatch.setattr(
+        plugin_integrity,
+        "_posix_advisory_descriptor_lock",
+        _signal_consumer_wait,
+    )
     with plugin_integrity.advisory_file_lease(marker_path):
         assert writer_thread is not None
         assert writer_unlocking.is_set()
