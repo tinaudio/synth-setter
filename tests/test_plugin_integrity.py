@@ -343,6 +343,34 @@ def _fake_windows_file_api(
     )
 
 
+def test_windows_open_directory_handle_inspection_error_closes_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows closes a retained directory handle when inspection fails.
+
+    :param tmp_path: Scratch publication directory.
+    :param monkeypatch: Makes retained-handle inspection fail.
+    """
+    closed: list[int] = []
+    monkeypatch.setattr(plugin_integrity, "_windows_create_handle", lambda *_args, **_kwargs: 123)
+
+    def _fail_inspection(_handle: int, _path: Path) -> bool:
+        raise OSError("inspection failed")
+
+    monkeypatch.setattr(
+        plugin_integrity,
+        "_windows_lock_handle_is_reparse_point",
+        _fail_inspection,
+    )
+    monkeypatch.setattr(plugin_integrity, "_windows_close_handle", closed.append)
+
+    with pytest.raises(OSError, match="inspection failed"):
+        plugin_integrity._windows_open_directory_handle(tmp_path)
+
+    assert closed == [123]
+
+
 def test_windows_open_directory_handle_reparse_point_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -413,44 +441,60 @@ def test_package_install_lock_windows_fresh_marker_is_runtime_leasable(tmp_path:
         pass
 
 
-def test_windows_lock_directories_real_hierarchy_returns_root_first(tmp_path: Path) -> None:
-    """Windows fallback creates each package-lock directory without symlinks.
-
-    :param tmp_path: Scratch root for a new hierarchy.
-    """
-    plugins_dir = tmp_path / "managed"
-    lock_parent = plugins_dir / ".synth-setter-install-locks/example/synth"
-
-    directories = plugin_integrity._windows_lock_directories(plugins_dir, lock_parent)
-
-    assert directories == [
-        plugins_dir,
-        plugins_dir / ".synth-setter-install-locks",
-        plugins_dir / ".synth-setter-install-locks/example",
-        lock_parent,
-    ]
-    assert all(directory.is_dir() for directory in directories)
-
-
-def test_windows_lock_directories_junction_rejected_before_descent(
+def test_windows_retained_lock_directories_hold_root_first_handles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Windows hierarchy validation rejects every junction component.
+    """Windows hierarchy retains each parent before creating its child.
+
+    :param tmp_path: Scratch root for a new hierarchy.
+    :param monkeypatch: Records native directory-handle acquisition and release.
+    """
+    plugins_dir = tmp_path / "managed"
+    lock_parent = plugins_dir / ".synth-setter-install-locks/example/synth"
+    retained: list[Path] = []
+    released: list[int] = []
+    monkeypatch.setattr(
+        plugin_integrity,
+        "_windows_open_directory_handle",
+        lambda path: retained.append(path) or len(retained),
+    )
+    monkeypatch.setattr(plugin_integrity, "_windows_close_handle", released.append)
+
+    with plugin_integrity._windows_retained_lock_directories(plugins_dir, lock_parent) as paths:
+        assert paths == retained
+        assert all(directory.is_dir() for directory in paths)
+
+    assert released == [4, 3, 2, 1]
+
+
+def test_windows_retained_lock_directories_junction_rejected_before_descent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows hierarchy retains and rejects a junction before descending.
 
     :param tmp_path: Scratch real hierarchy reported as a junction.
-    :param monkeypatch: Marks the lock root as an NTFS junction.
+    :param monkeypatch: Makes retained-handle opening reject the junction.
     """
     plugins_dir = tmp_path / "managed"
     lock_root = plugins_dir / ".synth-setter-install-locks"
     lock_root.mkdir(parents=True)
-    monkeypatch.setattr(os.path, "isjunction", lambda path: Path(path) == lock_root)
 
-    with pytest.raises(FileExistsError, match="not a directory"):
-        plugin_integrity._windows_lock_directories(
+    def _retain(path: Path) -> int:
+        if path == lock_root:
+            raise FileExistsError("publication path is a reparse point")
+        return 1
+
+    monkeypatch.setattr(plugin_integrity, "_windows_open_directory_handle", _retain)
+    monkeypatch.setattr(plugin_integrity, "_windows_close_handle", lambda _handle: None)
+
+    with pytest.raises(FileExistsError, match="reparse point"):
+        with plugin_integrity._windows_retained_lock_directories(
             plugins_dir,
             lock_root / "example/synth",
-        )
+        ):
+            pass
 
     assert not (lock_root / "example").exists()
 
@@ -487,26 +531,6 @@ def test_windows_publication_parent_race_creates_no_external_marker(
             pass
 
     assert list(outside.iterdir()) == []
-
-
-def test_windows_lock_directories_symlink_rejected_before_target_mutation(tmp_path: Path) -> None:
-    """Windows fallback rejects each symlink before descending through it.
-
-    :param tmp_path: Scratch root containing one external directory target.
-    """
-    plugins_dir = tmp_path / "managed"
-    plugins_dir.mkdir()
-    external = tmp_path / "external"
-    external.mkdir()
-    (plugins_dir / ".synth-setter-install-locks").symlink_to(external, target_is_directory=True)
-
-    with pytest.raises(FileExistsError, match="not a directory"):
-        plugin_integrity._windows_lock_directories(
-            plugins_dir,
-            plugins_dir / ".synth-setter-install-locks/example/synth",
-        )
-
-    assert list(external.iterdir()) == []
 
 
 def test_package_install_lock_symlinked_hierarchy_rejected_without_target_mutation(

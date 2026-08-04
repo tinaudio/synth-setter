@@ -881,6 +881,7 @@ def _windows_open_directory_handle(path: Path) -> int:
     :param path: Existing Windows publication directory.
     :returns: Validated native directory handle.
     :raises FileExistsError: The opened directory is a reparse point.
+    :raises OSError: Retained-handle inspection fails.
     """
     retained = _windows_create_handle(
         path,
@@ -889,9 +890,12 @@ def _windows_open_directory_handle(path: Path) -> int:
         flags=_WINDOWS_DIRECTORY_OPEN_REPARSE_POINT,
         kind="publication directory",
     )
-    if _windows_lock_handle_is_reparse_point(retained, path):
+    try:
+        if _windows_lock_handle_is_reparse_point(retained, path):
+            raise FileExistsError(f"publication path is a reparse point: {path}")
+    except (FileExistsError, OSError):
         _windows_close_handle(retained)
-        raise FileExistsError(f"publication path is a reparse point: {path}")
+        raise
     return retained
 
 
@@ -1289,35 +1293,6 @@ def package_install_lock_path(package: str, version: str, plugins_dir: Path) -> 
         / package_name
         / f"{version}.lock"
     )
-
-
-def _windows_lock_directories(plugins_dir: Path, lock_parent: Path) -> list[Path]:
-    """Create and validate the Windows package-lock hierarchy.
-
-    :param plugins_dir: Managed storage root.
-    :param lock_parent: Parent directory of the package lock marker.
-    :returns: Hierarchy ordered from managed root to lock parent.
-    :raises FileExistsError: A component exists but is not a real directory.
-    """
-    plugins_dir.mkdir(parents=True, exist_ok=True)
-    directories = [plugins_dir]
-    if os.path.isjunction(plugins_dir) or not stat.S_ISDIR(plugins_dir.lstat().st_mode):
-        raise FileExistsError(
-            f"install lock hierarchy component is not a directory: {plugins_dir}"
-        )
-    current = plugins_dir
-    for component in lock_parent.relative_to(plugins_dir).parts:
-        current /= component
-        try:
-            current.mkdir()
-        except FileExistsError:
-            pass
-        if os.path.isjunction(current) or not stat.S_ISDIR(current.lstat().st_mode):
-            raise FileExistsError(
-                f"install lock hierarchy component is not a directory: {current}"
-            )
-        directories.append(current)
-    return directories
 
 
 def _windows_retained_lock_directories(

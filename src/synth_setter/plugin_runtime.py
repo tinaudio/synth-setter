@@ -20,6 +20,7 @@ import os
 import plistlib
 import shutil
 import stat
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -792,9 +793,9 @@ def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) ->
         if _snapshot_destination_exists(destination, parent_descriptor):
             raise ValueError(f"runtime snapshot destination is invalid: {destination}")
         temporary_parent = (
-            destination.parent
-            if parent_descriptor is None
-            else Path("/dev/fd") / str(parent_descriptor)
+            Path("/dev/fd") / str(parent_descriptor)
+            if parent_descriptor is not None and sys.platform.startswith("linux")
+            else destination.parent
         )
         with tempfile.TemporaryDirectory(dir=temporary_parent) as temporary:
             candidate = Path(temporary) / managed.name
