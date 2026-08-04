@@ -7,7 +7,8 @@ import os
 import stat
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -320,6 +321,23 @@ def _fake_windows_file_api(
     )
 
 
+def test_windows_open_directory_handle_reparse_point_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retained Windows directory handle rejects junction attributes.
+
+    :param tmp_path: Scratch publication directory.
+    :param monkeypatch: Installs a reparse-point native handle result.
+    """
+    publication = tmp_path / "publication"
+    publication.mkdir()
+    _fake_windows_file_api(monkeypatch, attributes=0x00000400, descriptor=-1)
+
+    with pytest.raises(FileExistsError, match="reparse point"):
+        plugin_integrity._windows_open_directory_handle(publication)
+
+
 def test_windows_open_regular_lock_reparse_point_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -390,6 +408,63 @@ def test_windows_lock_directories_real_hierarchy_returns_root_first(tmp_path: Pa
         lock_parent,
     ]
     assert all(directory.is_dir() for directory in directories)
+
+
+def test_windows_lock_directories_junction_rejected_before_descent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows hierarchy validation rejects every junction component.
+
+    :param tmp_path: Scratch real hierarchy reported as a junction.
+    :param monkeypatch: Marks the lock root as an NTFS junction.
+    """
+    plugins_dir = tmp_path / "managed"
+    lock_root = plugins_dir / ".synth-setter-install-locks"
+    lock_root.mkdir(parents=True)
+    monkeypatch.setattr(os.path, "isjunction", lambda path: Path(path) == lock_root)
+
+    with pytest.raises(FileExistsError, match="not a directory"):
+        plugin_integrity._windows_lock_directories(
+            plugins_dir,
+            lock_root / "example/synth",
+        )
+
+    assert not (lock_root / "example").exists()
+
+
+def test_windows_publication_parent_race_creates_no_external_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows locks outside the mutable snapshot hierarchy before validation.
+
+    :param tmp_path: Scratch publication and outside directories.
+    :param monkeypatch: Substitutes the publication parent after lock acquisition.
+    """
+    publication = tmp_path / "publication"
+    publication.mkdir()
+    retained = tmp_path / "retained"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    @contextmanager
+    def _substitute(marker: Path) -> Iterator[None]:
+        assert not marker.is_relative_to(publication)
+        publication.rename(retained)
+        publication.symlink_to(outside, target_is_directory=True)
+        yield
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(plugin_integrity, "_windows_open_directory_handle", lambda _path: 123)
+    monkeypatch.setattr(plugin_integrity, "_windows_close_handle", lambda _handle: None)
+    monkeypatch.setattr(plugin_integrity, "advisory_file_lock", _substitute)
+
+    with pytest.raises(FileExistsError, match="not a real directory"):
+        with plugin_integrity.advisory_directory_lock(publication):
+            pass
+
+    assert list(outside.iterdir()) == []
 
 
 def test_windows_lock_directories_symlink_rejected_before_target_mutation(tmp_path: Path) -> None:

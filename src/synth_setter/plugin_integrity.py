@@ -73,6 +73,8 @@ _WINDOWS_OPEN_ALWAYS = 4
 _WINDOWS_NORMAL_OPEN_REPARSE_POINT = 0x00200080
 _WINDOWS_FILE_ATTRIBUTE_TAG_INFO = 9
 _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+_WINDOWS_OPEN_EXISTING = 3
+_WINDOWS_DIRECTORY_OPEN_REPARSE_POINT = 0x02200000
 
 
 class PluginIntegrityError(FileNotFoundError):
@@ -844,6 +846,48 @@ def _windows_create_lock_handle(path: Path) -> int:
     return cast("int", handle)
 
 
+def _windows_open_directory_handle(path: Path) -> int:
+    """Retain a directory handle without following its final reparse point.
+
+    :param path: Existing Windows publication directory.
+    :returns: Validated native directory handle.
+    :raises FileExistsError: The opened directory is a reparse point.
+    :raises OSError: Native directory handle creation fails.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        0,
+        _WINDOWS_SHARE_READ_WRITE,
+        None,
+        _WINDOWS_OPEN_EXISTING,
+        _WINDOWS_DIRECTORY_OPEN_REPARSE_POINT,
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        error_code = getattr(ctypes, "get_last_error")()
+        raise OSError(error_code, f"CreateFileW failed for publication directory: {path}")
+    retained = cast("int", handle)
+    if _windows_lock_handle_is_reparse_point(retained, path):
+        _windows_close_handle(retained)
+        raise FileExistsError(f"publication path is a reparse point: {path}")
+    return retained
+
+
 def _windows_lock_handle_is_reparse_point(handle: int, path: Path) -> bool:
     """Inspect the opened marker handle rather than its mutable path.
 
@@ -977,11 +1021,21 @@ def advisory_directory_lock(path: Path) -> AbstractContextManager[int | None]:
     @contextmanager
     def _locked() -> Iterator[int | None]:
         if os.name == "nt":
-            marker = path / ".synth-setter-publication.lock"
-            with advisory_file_lock(marker):
-                if stat.S_ISLNK(path.lstat().st_mode):
-                    raise FileExistsError(f"publication path is not a real directory: {path}")
-                yield None
+            lock_digest = hashlib.sha256(str(path.absolute()).encode()).hexdigest()
+            marker = (
+                type(path)(tempfile.gettempdir())
+                / ".synth-setter-publication-locks"
+                / f"{lock_digest}.lock"
+            )
+            directory_handle = _windows_open_directory_handle(path)
+            try:
+                with advisory_file_lock(marker):
+                    mode = path.lstat().st_mode
+                    if os.path.isjunction(path) or stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                        raise FileExistsError(f"publication path is not a real directory: {path}")
+                    yield None
+            finally:
+                _windows_close_handle(directory_handle)
             return
 
         import fcntl
@@ -1151,7 +1205,7 @@ def _windows_lock_directories(plugins_dir: Path, lock_parent: Path) -> list[Path
     """
     plugins_dir.mkdir(parents=True, exist_ok=True)
     directories = [plugins_dir]
-    if not stat.S_ISDIR(plugins_dir.lstat().st_mode):
+    if os.path.isjunction(plugins_dir) or not stat.S_ISDIR(plugins_dir.lstat().st_mode):
         raise FileExistsError(
             f"install lock hierarchy component is not a directory: {plugins_dir}"
         )
@@ -1162,7 +1216,7 @@ def _windows_lock_directories(plugins_dir: Path, lock_parent: Path) -> list[Path
             current.mkdir()
         except FileExistsError:
             pass
-        if not stat.S_ISDIR(current.lstat().st_mode):
+        if os.path.isjunction(current) or not stat.S_ISDIR(current.lstat().st_mode):
             raise FileExistsError(
                 f"install lock hierarchy component is not a directory: {current}"
             )

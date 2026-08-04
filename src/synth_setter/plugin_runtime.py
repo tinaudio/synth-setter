@@ -629,7 +629,7 @@ def _publish_windows_runtime_parent_permissions(plugins_dir: Path, version_dir: 
         if component is not None:
             current /= component
         mode = current.lstat().st_mode
-        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        if os.path.isjunction(current) or stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
             raise OSError(f"runtime hierarchy path is not a real directory: {current}")
         current.chmod(mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK)
 
