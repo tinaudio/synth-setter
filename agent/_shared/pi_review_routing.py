@@ -661,7 +661,7 @@ def transcript_stats(transcript: Path) -> TranscriptStats:
 def finding_fingerprint(
     *, skill: str, severity: str, path: str, line: int, description: str
 ) -> str:
-    """Return a stable identity for foreground/aftercare finding deduplication.
+    """Return a stable identity for foreground/follow-up finding deduplication.
 
     :param skill: Checklist that produced the finding.
     :param severity: Finding severity.
