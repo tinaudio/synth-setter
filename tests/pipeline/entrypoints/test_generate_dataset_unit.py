@@ -10,7 +10,7 @@ The entrypoint's public surface:
 - ``generate(spec, work_dir, loggers)``: per-rank renderer. For each owned shard in
   ``spec.shards``, shells out to ``generate_vst_dataset.py`` writing into
   ``work_dir``, then uploads the shard to R2 at ``r2:{bucket}/{prefix}/``;
-  rendered shards are retained under ``work_dir`` for downstream consumption.
+  rendered shards are retained under ``work_dir`` by default.
   ``main()`` writes the canonical spec to R2 once on the launcher host.
 
 ``TestRun`` tests share a ``patched_subprocess`` fixture that pulls in
@@ -566,6 +566,35 @@ class TestRunFromSpecUri:
         work_dir = Path.cwd() / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
         assert (work_dir / spec.shards[0].filename).is_dir()
 
+    def test_explicit_false_deletes_local_shard_after_spec_uri_staging(
+        self,
+        patched_env_and_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        spec: DatasetSpec,
+        tmp_path: Path,
+    ) -> None:
+        """A frozen spec opt-out deletes its local shard after committed staging.
+
+        :param patched_env_and_subprocess: Render/rclone dispatcher seam.
+        :param fake_r2_remote: Local-typed remote receiving the committed attempt.
+        :param spec: Base spec copied with local retention disabled.
+        :param tmp_path: Directory holding the frozen spec JSON.
+        """
+        from synth_setter.cli.generate_dataset_from_spec_uri import run_from_spec_uri
+
+        cleanup_spec = spec.model_copy(
+            update={"render": spec.render.model_copy(update={"retain_local_shards": False})}
+        )
+        spec_path = tmp_path / INPUT_SPEC_FILENAME
+        spec_path.write_text(cleanup_spec.model_dump_json())
+
+        run_from_spec_uri(str(spec_path), enable_wandb=False)
+
+        shard = cleanup_spec.shards[0]
+        work_dir = Path.cwd() / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
+        assert shard_has_complete_attempt(cleanup_spec, shard.shard_id)
+        assert not (work_dir / shard.filename).exists()
+
     def test_wandb_enabled_passes_resume_loggers_to_generate(
         self,
         fake_r2_remote: Path,
@@ -722,19 +751,31 @@ class RenderSeamFixtures:
         )
 
     @pytest.fixture()
-    def patched_subprocess(self, fake_r2_remote: Path, spec: DatasetSpec) -> Iterator[MagicMock]:  # noqa: ARG002
-        """Patch ``_check_call_streamed`` with the ``stub_renderer`` dispatcher.
+    def patched_renderer_without_rclone(self, spec: DatasetSpec) -> Iterator[MagicMock]:
+        """Patch renderer and pre-render marker boundaries without requiring rclone.
 
-        Pulls in ``fake_r2_remote`` (consumed by the rclone staging passthrough)
-        so staging rclone copies land on the local-typed remote rooted at the
-        tmp dir instead of hitting real R2. Renderer calls write a
-        validation-shaped Lance shard for ``spec``. Yielding the mock lets tests
-        introspect ``call_args_list`` (typically via ``_renderer_argv_lists`` to
-        filter out interleaved rclone calls) and override ``side_effect``
-        per-test when a failure or no-write renderer is needed.
+        :param spec: Fixture-provided ``DatasetSpec`` whose render shape the
+            ``stub_renderer`` shard writer honours.
+        :yields MagicMock: Patched ``_check_call_streamed`` mock.
+        """
+        with (
+            patch(
+                "synth_setter.cli.generate_dataset._check_call_streamed",
+                side_effect=stub_renderer(spec),
+            ) as mock_check_call,
+            patch("synth_setter.cli.generate_dataset.write_rendering_marker"),
+        ):
+            yield mock_check_call
 
-        :param fake_r2_remote: Local-typed R2 remote root (fixture-activation
-            only — referenced via the ARG002 noqa).
+    @pytest.fixture()
+    def patched_subprocess(
+        self,
+        fake_r2_remote: Path,  # noqa: ARG002
+        spec: DatasetSpec,
+    ) -> Iterator[MagicMock]:
+        """Activate local rclone staging around the patched renderer.
+
+        :param fake_r2_remote: Local-typed R2 remote root used by staging.
         :param spec: Fixture-provided ``DatasetSpec`` whose render shape the
             ``stub_renderer`` shard writer honours.
         :yields MagicMock: Patched ``_check_call_streamed`` mock.
@@ -1004,32 +1045,183 @@ class TestRun(RenderSeamFixtures):
             "stage",
         ]
 
-    def test_shards_persist_after_upload(
+    def test_local_shards_default_retention_keeps_directories(
         self,
-        fake_r2_remote: Path,
+        patched_renderer_without_rclone: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """Every rendered shard remains at ``work_dir / shard.filename`` after staging.
+        """The default keeps every local shard after successful staging.
 
-        Pins the post-stage retention contract: ``finalize_dataset`` and
-        post-mortem consumers expect shards to outlive the render+stage step.
-
-        :param fake_r2_remote: Local-typed R2 remote — asserted to hold a
-            complete staged attempt per shard alongside the on-disk copies.
+        :param patched_renderer_without_rclone: Renderer seam that materializes valid shards.
+        :param monkeypatch: Replaces remote staging with a successful boundary spy.
         :param tmp_path: Caller-supplied work_dir for ``generate()``.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
+        stage = MagicMock()
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt",
+            stage,
+        )
+        patched_renderer_without_rclone.side_effect = stub_renderer(spec)
 
-        with patch(
-            "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=stub_renderer(spec),
-        ):
-            generate(spec, tmp_path, [])
+        generate(spec, tmp_path, [])
 
+        assert stage.call_count == len(spec.shards)
         for shard in spec.shards:
-            # Lance shards are directories; the rendered shard is retained on disk.
             assert (tmp_path / shard.filename).is_dir()
-            assert shard_has_complete_attempt(spec, shard.shard_id)
+
+    def test_staging_failure_with_retention_disabled_keeps_local_shard_and_propagates(
+        self,
+        patched_renderer_without_rclone: MagicMock,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A staging error propagates without deleting the rendered shard.
+
+        :param patched_renderer_without_rclone: Renderer seam that materializes a valid shard.
+        :param spec: Base spec copied with local retention disabled.
+        :param monkeypatch: Forces the staging boundary to fail.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        cleanup_spec = spec.model_copy(
+            update={"render": spec.render.model_copy(update={"retain_local_shards": False})}
+        )
+        patched_renderer_without_rclone.side_effect = stub_renderer(cleanup_spec)
+        staging_error = subprocess.CalledProcessError(1, ["rclone", "copy"])
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt",
+            MagicMock(side_effect=staging_error),
+        )
+
+        with pytest.raises(subprocess.CalledProcessError) as excinfo:
+            generate(cleanup_spec, tmp_path, [])
+
+        assert excinfo.value is staging_error
+        assert (tmp_path / cleanup_spec.shards[0].filename).is_dir()
+
+    def test_cleanup_runs_after_shard_metric_logging(
+        self,
+        patched_renderer_without_rclone: MagicMock,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Local deletion starts only after the staged shard metric is recorded.
+
+        :param patched_renderer_without_rclone: Renderer seam that materializes a valid shard.
+        :param spec: Base spec copied with local retention disabled.
+        :param monkeypatch: Observes metric state at the deletion boundary.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        from shutil import rmtree as delete_tree
+
+        cleanup_spec = spec.model_copy(
+            update={"render": spec.render.model_copy(update={"retain_local_shards": False})}
+        )
+        patched_renderer_without_rclone.side_effect = stub_renderer(cleanup_spec)
+        metric_logger = MagicMock()
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt",
+            MagicMock(),
+        )
+
+        def _delete_after_metric(shard_path: Path) -> None:
+            payloads = [call.args[0] for call in metric_logger.log_metrics.call_args_list]
+            assert any("shard/render_seconds" in payload for payload in payloads)
+            delete_tree(shard_path)
+
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.rmtree",
+            _delete_after_metric,
+        )
+
+        generate(cleanup_spec, tmp_path, [metric_logger])
+
+        assert not (tmp_path / cleanup_spec.shards[0].filename).exists()
+
+    @patch("synth_setter.cli.generate_dataset.logger")
+    def test_cleanup_oserror_warns_without_failing_committed_staging(
+        self,
+        mock_logger: MagicMock,
+        patched_renderer_without_rclone: MagicMock,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A local deletion error warns while the committed shard remains successful.
+
+        :param mock_logger: Existing operational logger used for structured cleanup context.
+        :param patched_renderer_without_rclone: Renderer seam that materializes a valid shard.
+        :param spec: Base spec copied with local retention disabled.
+        :param monkeypatch: Forces local directory deletion to raise ``OSError``.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        cleanup_spec = spec.model_copy(
+            update={"render": spec.render.model_copy(update={"retain_local_shards": False})}
+        )
+        patched_renderer_without_rclone.side_effect = stub_renderer(cleanup_spec)
+        stage = MagicMock()
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt",
+            stage,
+        )
+        cleanup_error = OSError("directory busy")
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.rmtree",
+            MagicMock(side_effect=cleanup_error),
+        )
+
+        generate(cleanup_spec, tmp_path, [])
+
+        shard = cleanup_spec.shards[0]
+        shard_path = tmp_path / shard.filename
+        stage.assert_called_once()
+        assert shard_path.is_dir()
+        mock_logger.bind.assert_called_once_with(
+            error="directory busy",
+            shard_id=shard.shard_id,
+            shard_path=str(shard_path),
+        )
+        mock_logger.bind.return_value.warning.assert_called_once_with(
+            "local_shard_cleanup_failed: shard_id={} shard_path={} error={}",
+            shard.shard_id,
+            str(shard_path),
+            cleanup_error,
+        )
+
+    def test_staged_skip_with_retention_disabled_preserves_local_shard(
+        self,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A skip leaves local state untouched because this invocation did not stage it.
+
+        :param spec: Base spec copied with local retention disabled.
+        :param monkeypatch: Makes the completion probe take the skip branch.
+        :param tmp_path: Work directory containing a prior local shard.
+        """
+        cleanup_spec = spec.model_copy(
+            update={"render": spec.render.model_copy(update={"retain_local_shards": False})}
+        )
+        shard_path = tmp_path / cleanup_spec.shards[0].filename
+        shard_path.mkdir()
+        renderer = MagicMock()
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._check_call_streamed",
+            renderer,
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+            lambda *_args, **_kwargs: True,
+        )
+
+        generate(cleanup_spec, tmp_path, [])
+
+        assert shard_path.is_dir()
+        renderer.assert_not_called()
 
     def test_subprocess_failure_in_second_shard_propagates_immediately(
         self,
@@ -2128,7 +2320,9 @@ class TestBuildGenerateArgs:
 
         option_keys: set[str] = {arg.lstrip("-") for arg in args if arg.startswith("--")}
 
-        assert option_keys == {*RenderConfig.model_fields.keys(), "shard_id"}
+        assert option_keys == {*RenderConfig.model_fields.keys(), "shard_id"} - {
+            "retain_local_shards"
+        }
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:
         """First arg is the Python executable, second is the generation script."""

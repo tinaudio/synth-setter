@@ -60,6 +60,7 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "sample_offset": 0,
             "attempts_per_sample": 100,
             "parallel": False,
+            "retain_local_shards": True,
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",
             "param_sample_cadence": "sample",
@@ -101,6 +102,13 @@ class TestValidateStructure:
         spec = _make_valid_spec()
         del spec["render"]["audio_dtype"]
         del spec["render"]["mel_spec_dtype"]
+
+        assert validate_structure(spec) == []
+
+    def test_defaulted_local_shard_retention_may_be_omitted(self) -> None:
+        """Legacy specs may omit the safe local-retention default."""
+        spec = _make_valid_spec()
+        del spec["render"]["retain_local_shards"]
 
         assert validate_structure(spec) == []
 
@@ -163,6 +171,7 @@ class TestValidateStructure:
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
             "mel_spec_dtype",
+            "retain_local_shards",
             # Checked shape-aware so the nested identity can be validated.
             "synth",
         }

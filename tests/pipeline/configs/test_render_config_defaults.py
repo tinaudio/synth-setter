@@ -21,6 +21,7 @@ _GENERIC_RENDER_FIELDS = {
     "param_sample_cadence",
     "plugin_reload_cadence",
     "renderer_backend",
+    "retain_local_shards",
     "sample_rate",
     "samples_per_render_batch",
     "samples_per_shard",
@@ -71,6 +72,15 @@ def test_vst_render_group_contains_only_generic_render_fields() -> None:
     cfg = _compose_render_group("vst")
 
     assert set(cfg) == _GENERIC_RENDER_FIELDS
+
+
+@pytest.mark.parametrize("group", ["faust", "torchsynth", "vst"])
+def test_render_group_local_shard_retention_defaults_true(group: str) -> None:
+    """Every base render group keeps local shards unless explicitly disabled.
+
+    :param group: Base render group defining the retention default.
+    """
+    assert _compose_render_group(group).retain_local_shards is True
 
 
 def test_vst_render_group_composes_with_root_synth_identity() -> None:
@@ -139,6 +149,15 @@ def test_base_render_config_accepts_plain_override_for_surfaced_default(
     """
     spec = _spec_from_dataset_overrides([f"render.{field}={override_value}"])
     assert getattr(spec.render, field) == override_value
+
+
+def test_retain_local_shards_hydra_json_round_trip_preserves_false() -> None:
+    """A plain Hydra opt-out remains disabled in the frozen JSON spec."""
+    spec = _spec_from_dataset_overrides(["render.retain_local_shards=false"])
+
+    restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+
+    assert restored.render.retain_local_shards is False
 
 
 def test_base_render_config_surfaced_defaults_compose_correctly() -> None:

@@ -314,6 +314,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "local disk scales with pool size."
         ),
     )
+    retain_local_shards: bool = Field(
+        default=True,
+        description=(
+            "Whether successfully staged Lance shard directories remain on local disk; "
+            "remote staged shards are always retained."
+        ),
+    )
     plugin_reload_cadence: _PluginReloadCadence = Field(
         default="once",
         description=(

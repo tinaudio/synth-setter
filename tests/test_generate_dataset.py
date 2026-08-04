@@ -96,6 +96,34 @@ _TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / 
 _TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def _run_from_spec_uri_cli(spec_path: Path, work_dir: Path) -> subprocess.CompletedProcess[str]:
+    """Run the production spec-URI CLI against a local spec.
+
+    :param spec_path: Frozen dataset spec consumed by the CLI.
+    :param work_dir: Process CWD containing the local rclone remote and run logs.
+    :returns: Completed CLI process with captured output.
+    """
+    env = {
+        **os.environ,
+        "PYTHONPATH": f"{_REPO_ROOT / 'src'}:{os.environ.get('PYTHONPATH', '')}",
+    }
+    return subprocess.run(  # noqa: S603 — fixed production module and local spec path
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.generate_dataset_from_spec_uri",
+            "--no-wandb",
+            str(spec_path),
+        ],
+        cwd=work_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
 def _managed_real_plugin(tmp_path: Path) -> Path:
     """Adopt the configured real VST under repository artifact provenance.
 
@@ -223,6 +251,38 @@ def test_cfg_dataset_faust_resolves_production_renderer_contract(
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.gui_toggle_cadence == "never"
     assert spec.num_params == 13
+
+
+@pytest.mark.slow
+def test_from_spec_uri_retention_opt_out_real_torchsynth_deletes_local_shard(
+    cfg_dataset_torchsynth: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real spec-URI CLI stages a TorchSynth shard before deleting it locally.
+
+    :param cfg_dataset_torchsynth: Composed production TorchSynth smoke config.
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Supplies canonical local-backend storage settings.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "local-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "local-secret-key")
+    with open_dict(cfg_dataset_torchsynth):
+        cfg_dataset_torchsynth.render.retain_local_shards = False
+        cfg_dataset_torchsynth.logger = []
+    spec = DatasetSpec.from_hydra_cfg(cfg_dataset_torchsynth)
+    spec_path = fake_r2_remote / "input_spec.json"
+    spec_path.write_text(spec.model_dump_json())
+
+    result = _run_from_spec_uri_cli(spec_path, fake_r2_remote)
+
+    assert result.returncode == 0, result.stderr
+    shard = spec.shards[0]
+    assert shard_has_complete_attempt(spec, shard.shard_id)
+    work_dir = fake_r2_remote / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id
+    assert not (work_dir / shard.filename).exists()
 
 
 def test_cfg_dataset_default_plugin_reload_cadence_is_once(
