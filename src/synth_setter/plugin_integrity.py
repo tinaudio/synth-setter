@@ -50,6 +50,9 @@ __all__ = [
     "ManagedBundleRecord",
     "ManagedBundleStorage",
     "PluginIntegrityError",
+    "RUNTIME_DIRECTORY_ACCESS_MASK",
+    "RUNTIME_FILE_READ_MASK",
+    "advisory_directory_lock",
     "advisory_file_lease",
     "advisory_file_lock",
     "bundle_entries",
@@ -61,6 +64,15 @@ __all__ = [
     "package_install_lock_path",
     "seal_plugin_bundle",
 ]
+
+RUNTIME_FILE_READ_MASK = 0o044
+RUNTIME_DIRECTORY_ACCESS_MASK = 0o055
+_WINDOWS_GENERIC_READ_WRITE = 0xC0000000
+_WINDOWS_SHARE_READ_WRITE = 0x00000003
+_WINDOWS_OPEN_ALWAYS = 4
+_WINDOWS_NORMAL_OPEN_REPARSE_POINT = 0x00200080
+_WINDOWS_FILE_ATTRIBUTE_TAG_INFO = 9
+_WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 
 
 class PluginIntegrityError(FileNotFoundError):
@@ -795,6 +807,114 @@ def _windows_lock(stream: BinaryIO) -> None:
             time.sleep(0.05)
 
 
+def _windows_create_lock_handle(path: Path) -> int:
+    """Create or open one marker handle with reparse-point traversal disabled.
+
+    :param path: Durable Windows lock marker.
+    :returns: Native Windows handle value.
+    :raises OSError: Native handle creation fails.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        _WINDOWS_GENERIC_READ_WRITE,
+        _WINDOWS_SHARE_READ_WRITE,
+        None,
+        _WINDOWS_OPEN_ALWAYS,
+        _WINDOWS_NORMAL_OPEN_REPARSE_POINT,
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        error_code = getattr(ctypes, "get_last_error")()
+        raise OSError(error_code, f"CreateFileW failed for lock marker: {path}")
+    return cast("int", handle)
+
+
+def _windows_lock_handle_is_reparse_point(handle: int, path: Path) -> bool:
+    """Inspect the opened marker handle rather than its mutable path.
+
+    :param handle: Retained native marker handle.
+    :param path: Marker path used in diagnostics.
+    :returns: Whether the opened object is a reparse point.
+    :raises OSError: Native handle inspection fails.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class _FileAttributeTagInfo(ctypes.Structure):
+        _fields_ = [("file_attributes", wintypes.DWORD), ("reparse_tag", wintypes.DWORD)]
+
+    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    get_file_information = kernel32.GetFileInformationByHandleEx
+    get_file_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_file_information.restype = wintypes.BOOL
+    info = _FileAttributeTagInfo()
+    if not get_file_information(
+        handle,
+        _WINDOWS_FILE_ATTRIBUTE_TAG_INFO,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ):
+        error_code = getattr(ctypes, "get_last_error")()
+        raise OSError(error_code, f"lock handle inspection failed: {path}")
+    return bool(info.file_attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _windows_close_handle(handle: int) -> None:
+    """Close one native Windows handle not transferred to a Python stream.
+
+    :param handle: Native Windows handle value.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    close_handle = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True).CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    close_handle(handle)
+
+
+def _windows_open_regular_lock(path: Path) -> BinaryIO:
+    """Open a Windows lock marker without following a reparse point.
+
+    :param path: Existing or newly created durable lock marker.
+    :returns: Binary stream owning the validated native handle.
+    :raises FileExistsError: The opened object is a reparse point.
+    :raises OSError: Native handle creation, inspection, or conversion fails.
+    """
+    import msvcrt
+
+    handle = _windows_create_lock_handle(path)
+    try:
+        if _windows_lock_handle_is_reparse_point(handle, path):
+            raise FileExistsError(f"lock is a reparse point: {path}")
+        open_osfhandle = getattr(msvcrt, "open_osfhandle")
+        descriptor = open_osfhandle(handle, os.O_RDWR | getattr(os, "O_BINARY", 0))
+    except (FileExistsError, OSError):
+        _windows_close_handle(handle)
+        raise
+    return os.fdopen(descriptor, "a+b")
+
+
 def _windows_unlock(stream: BinaryIO) -> None:
     """Release the byte held by ``_windows_lock``.
 
@@ -847,6 +967,35 @@ def _posix_directory_descriptor(directory: Path) -> int:
         raise
 
 
+def advisory_directory_lock(path: Path) -> AbstractContextManager[int | None]:
+    """Lock one retained real directory for descriptor-relative publication.
+
+    :param path: Existing publication directory.
+    :returns: Context manager yielding a POSIX descriptor or ``None`` on Windows.
+    """
+
+    @contextmanager
+    def _locked() -> Iterator[int | None]:
+        if os.name == "nt":
+            marker = path / ".synth-setter-publication.lock"
+            with advisory_file_lock(marker):
+                if stat.S_ISLNK(path.lstat().st_mode):
+                    raise FileExistsError(f"publication path is not a real directory: {path}")
+                yield None
+            return
+
+        import fcntl
+
+        descriptor = _posix_directory_descriptor(path)
+        try:
+            with _posix_advisory_descriptor_lock(descriptor, fcntl.LOCK_EX):
+                yield descriptor
+        finally:
+            os.close(descriptor)
+
+    return _locked()
+
+
 def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
     """Build a cross-process exclusive writer lock for one durable path.
 
@@ -858,7 +1007,7 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
     def _locked() -> Iterator[None]:
         path.parent.mkdir(parents=True, exist_ok=True)
         if os.name == "nt":
-            with path.open("a+b") as stream:
+            with _windows_open_regular_lock(path) as stream:
                 _windows_lock(stream)
                 try:
                     yield
@@ -1066,7 +1215,10 @@ def _publish_posix_lock_hierarchy(descriptors: list[int]) -> None:
     :param descriptors: Retained hierarchy descriptors ordered root-first.
     """
     for descriptor in reversed(descriptors):
-        os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
+        os.fchmod(
+            descriptor,
+            os.fstat(descriptor).st_mode | RUNTIME_DIRECTORY_ACCESS_MASK,
+        )
 
 
 def _windows_package_install_lock(
@@ -1082,7 +1234,7 @@ def _windows_package_install_lock(
 
     @contextmanager
     def _locked() -> Iterator[None]:
-        directories = _windows_lock_directories(plugins_dir, path.parent)
+        _windows_lock_directories(plugins_dir, path.parent)
         try:
             marker_mode = path.lstat().st_mode
         except FileNotFoundError:
@@ -1091,9 +1243,6 @@ def _windows_package_install_lock(
             if not stat.S_ISREG(marker_mode):
                 raise FileExistsError(f"install lock is not a regular file: {path}")
         with advisory_file_lock(path):
-            path.chmod(path.stat().st_mode | 0o044)
-            for directory in reversed(directories):
-                directory.chmod(directory.stat().st_mode | 0o055)
             yield
 
     return _locked()
@@ -1122,7 +1271,7 @@ def _posix_package_install_lock(
                     marker_mode = os.fstat(marker).st_mode
                     if not stat.S_ISREG(marker_mode):
                         raise FileExistsError(f"install lock is not a regular file: {path}")
-                    os.fchmod(marker, marker_mode | 0o044)
+                    os.fchmod(marker, marker_mode | RUNTIME_FILE_READ_MASK)
                     _publish_posix_lock_hierarchy(descriptors)
                     with _posix_advisory_descriptor_lock(marker, fcntl.LOCK_EX):
                         yield

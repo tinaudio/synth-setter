@@ -535,6 +535,24 @@ def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Pa
     plugin_runtime.publish_runtime_snapshot_permissions(tmp_path / "version")
 
 
+def test_prepare_managed_bundle_publishes_direct_bundle_tree(tmp_path: Path) -> None:
+    """Installer preparation makes direct managed bundle contents readable.
+
+    :param tmp_path: Scratch managed bundle hierarchy.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    plugins_dir = tmp_path / "managed"
+    managed = _bundle(plugins_dir / "VST3/example/synth/1.2.3/Example Synth.vst3")
+    _seal_bundle(managed, plugin, _example_lock())
+    _restrict_runtime_tree_permissions(managed)
+
+    plugin_runtime.prepare_managed_bundle_for_runtime(managed, plugins_dir)
+
+    for current, _, files in os.walk(managed):
+        assert Path(current).stat().st_mode & 0o055 == 0o055
+        assert all((Path(current) / name).stat().st_mode & 0o044 == 0o044 for name in files)
+
+
 def test_windows_runtime_parent_permissions_publish_real_hierarchy(tmp_path: Path) -> None:
     """Windows publication makes each real managed parent traversable.
 
@@ -594,6 +612,46 @@ def test_adopt_plugin_bundle_restrictive_umask_publishes_managed_hierarchy(tmp_p
     for component in relative_version.parts:
         hierarchy.append(hierarchy[-1] / component)
     assert all(path.stat().st_mode & 0o055 == 0o055 for path in hierarchy)
+
+
+def test_adopt_plugin_bundle_prepares_snapshot_before_read_only_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public adoption prepares runtime bytes before storage becomes read-only.
+
+    :param tmp_path: Scratch source and managed storage root.
+    :param monkeypatch: Rejects any runtime attempt to create a missing snapshot path.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "system/Example Synth.vst3")
+    managed = plugin_manager.adopt_plugin_bundle(
+        plugin,
+        plugins_dir=tmp_path / "managed",
+        bundle=source,
+        locked_package=_example_lock().package_for(plugin),
+    )
+    snapshots = managed.parent / ".synth-setter-runtime-snapshots"
+    for current, directories, _ in os.walk(tmp_path / "managed"):
+        Path(current).chmod(0o555)
+        for name in directories:
+            (Path(current) / name).chmod(0o555)
+    real_mkdir = Path.mkdir
+
+    def _deny_missing_snapshot(
+        path: Path,
+        mode: int = 0o777,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        if path.is_relative_to(snapshots) and not path.exists():
+            raise PermissionError(f"read-only managed storage: {path}")
+        real_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", _deny_missing_snapshot)
+
+    assert snapshots.is_dir()
+    assert plugin_manager.validate_plugin_bundle_for_runtime(managed).is_dir()
 
 
 def test_package_install_lock_replaces_invalid_snapshot_container(tmp_path: Path) -> None:
@@ -714,25 +772,24 @@ def _pausing_snapshot_publisher(
     started: threading.Event,
     release: threading.Event,
     destinations: list[Path],
-) -> Callable[[Path | str, Path | str], None]:
+) -> Callable[[Path, Path, int | None], None]:
     """Build a publisher that pauses before replacing the managed snapshot.
 
     :param managed: Managed alias naming the snapshot destination.
     :param started: Event set when publication reaches replacement.
     :param release: Event allowing replacement to continue.
     :param destinations: Collection receiving attempted destination paths.
-    :returns: Instrumented ``os.replace`` callable.
+    :returns: Instrumented runtime snapshot publisher.
     """
-    real_replace = plugin_runtime.os.replace
+    real_publish = plugin_runtime._publish_runtime_snapshot
 
-    def _pause(source: Path | str, destination: Path | str) -> None:
-        destination_path = Path(destination)
-        if destination_path.name == managed.name:
-            destinations.append(destination_path)
+    def _pause(source: Path, destination: Path, parent_descriptor: int | None) -> None:
+        if destination.name == managed.name:
+            destinations.append(destination)
             started.set()
             if not release.wait(10):
                 raise RuntimeError("timed out waiting to publish runtime snapshot")
-        real_replace(source, destination)
+        real_publish(source, destination, parent_descriptor)
 
     return _pause
 
@@ -825,7 +882,7 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
         destinations=published_destinations,
     )
 
-    monkeypatch.setattr(plugin_runtime.os, "replace", paused_publisher)
+    monkeypatch.setattr(plugin_runtime, "_publish_runtime_snapshot", paused_publisher)
     monkeypatch.setattr(plugin_runtime.integrity, "advisory_file_lease", observed_lease)
     first = _start_runtime_snapshot_consumer(managed, results, errors)
     assert publication_started.wait(10)
@@ -1328,6 +1385,45 @@ def test_load_plugin_source_mutation_after_validation_fails_before_open(
         load_plugin(str(managed))
 
     assert opened == []
+
+
+def test_runtime_snapshot_parent_substitution_publishes_through_retained_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot publication never mutates a substituted outside directory.
+
+    :param tmp_path: Scratch managed state and outside substitution target.
+    :param monkeypatch: Replaces the publication parent after its lock is acquired.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    source = _bundle(tmp_path / "source/Example Synth.vst3")
+    managed = _adopt_bundle(plugin, plugins_dir=tmp_path / "managed", bundle=source)
+    published = plugin_manager.validate_plugin_bundle_for_runtime(managed)
+    publication_parent = published.parent
+    shutil.rmtree(published)
+    retained_parent = publication_parent.with_name(f"{publication_parent.name}.retained")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    def _substitute_parent(
+        destination: Path,
+        seal: plugin_integrity.BundleSeal,
+        parent_descriptor: int | None,
+    ) -> bool:
+        del destination, seal, parent_descriptor
+        publication_parent.rename(retained_parent)
+        publication_parent.symlink_to(outside, target_is_directory=True)
+        return False
+
+    monkeypatch.setattr(plugin_runtime, "_locked_snapshot_matches", _substitute_parent)
+
+    with pytest.raises(PluginIntegrityError, match="failed managed bundle integrity") as exc_info:
+        plugin_manager.validate_plugin_bundle_for_runtime(managed)
+
+    assert "publication directory was replaced" in str(exc_info.value.__cause__)
+    assert list(outside.iterdir()) == []
+    assert (retained_parent / managed.name).is_dir()
 
 
 def test_load_plugin_symlinked_snapshot_root_rejected_without_outside_write(

@@ -530,16 +530,22 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
     mode = path.lstat().st_mode
     if not stat.S_ISDIR(mode):
         raise ValueError(f"runtime snapshot path is not a directory: {path}")
-    if stat.S_IMODE(mode) & 0o055 != 0o055:
+    if (
+        stat.S_IMODE(mode) & integrity.RUNTIME_DIRECTORY_ACCESS_MASK
+        != integrity.RUNTIME_DIRECTORY_ACCESS_MASK
+    ):
         try:
-            path.chmod(mode | 0o055)
+            path.chmod(mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK)
         except PermissionError:
             logger.warning(
                 "Runtime snapshot directory permission publication was denied",
                 extra={"snapshot_path": str(path)},
                 exc_info=True,
             )
-    if stat.S_IMODE(path.lstat().st_mode) & 0o055 != 0o055:
+    if (
+        stat.S_IMODE(path.lstat().st_mode) & integrity.RUNTIME_DIRECTORY_ACCESS_MASK
+        != integrity.RUNTIME_DIRECTORY_ACCESS_MASK
+    ):
         raise ValueError(f"runtime snapshot path is not runtime-readable: {path}")
 
 
@@ -563,7 +569,7 @@ def _publish_runtime_tree_permissions(root: Path) -> None:
                 continue
             if not stat.S_ISREG(mode):
                 raise ValueError(f"runtime snapshot path is not a regular file: {child}")
-            child.chmod(mode | 0o044)
+            child.chmod(mode | integrity.RUNTIME_FILE_READ_MASK)
 
 
 def publish_runtime_snapshot_permissions(version_dir: Path) -> None:
@@ -594,11 +600,17 @@ def _publish_posix_runtime_parent_permissions(plugins_dir: Path, version_dir: Pa
     try:
         descriptor = os.open(plugins_dir, flags)
         descriptors.append(descriptor)
-        os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
+        os.fchmod(
+            descriptor,
+            os.fstat(descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
+        )
         for component in relative.parts:
             descriptor = os.open(component, flags, dir_fd=descriptor)
             descriptors.append(descriptor)
-            os.fchmod(descriptor, os.fstat(descriptor).st_mode | 0o055)
+            os.fchmod(
+                descriptor,
+                os.fstat(descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
+            )
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
@@ -619,7 +631,7 @@ def _publish_windows_runtime_parent_permissions(plugins_dir: Path, version_dir: 
         mode = current.lstat().st_mode
         if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
             raise OSError(f"runtime hierarchy path is not a real directory: {current}")
-        current.chmod(mode | 0o055)
+        current.chmod(mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK)
 
 
 def _publish_runtime_parent_permissions(plugins_dir: Path, version_dir: Path) -> None:
@@ -657,6 +669,8 @@ def prepare_managed_bundle_for_runtime(managed: Path, plugins_dir: Path) -> None
     if identity is None:
         raise ValueError(f"managed bundle ownership disappeared while preparing {managed}")
     _publish_runtime_parent_permissions(plugins_dir, managed.parent)
+    if not stat.S_ISLNK(managed.lstat().st_mode):
+        _publish_runtime_tree_permissions(managed)
     publish_runtime_snapshot_permissions(managed.parent)
 
 
@@ -673,6 +687,83 @@ def _runtime_snapshot_matches(destination: Path, seal: BundleSeal) -> bool:
         return integrity.bundle_entries(destination) == seal.entries
     except (FileNotFoundError, ValueError):
         return False
+
+
+def _locked_snapshot_matches(
+    destination: Path,
+    seal: BundleSeal,
+    parent_descriptor: int | None,
+) -> bool:
+    """Match a snapshot to its seal and retained publication directory.
+
+    :param destination: Candidate persistent runtime snapshot.
+    :param seal: Expected managed content identity.
+    :param parent_descriptor: Retained POSIX publication directory descriptor.
+    :returns: Whether the lexical candidate is the child validated under the lock.
+    """
+    if not _runtime_snapshot_matches(destination, seal):
+        return False
+    if parent_descriptor is None:
+        return True
+    try:
+        retained = os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        lexical = destination.lstat()
+    except FileNotFoundError:
+        return False
+    return (retained.st_dev, retained.st_ino) == (lexical.st_dev, lexical.st_ino)
+
+
+def _snapshot_destination_exists(destination: Path, parent_descriptor: int | None) -> bool:
+    """Return whether the locked publication directory contains the destination.
+
+    :param destination: Candidate snapshot destination.
+    :param parent_descriptor: Retained POSIX publication directory descriptor.
+    :returns: Whether any object occupies the destination name.
+    """
+    try:
+        if parent_descriptor is None:
+            destination.lstat()
+        else:
+            os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _publish_runtime_snapshot(
+    candidate: Path,
+    destination: Path,
+    parent_descriptor: int | None,
+) -> None:
+    """Atomically publish a candidate under its retained destination directory.
+
+    :param candidate: Verified snapshot in private temporary storage.
+    :param destination: Final snapshot path.
+    :param parent_descriptor: Retained POSIX publication directory descriptor.
+    :raises ValueError: The publication directory is replaced before return.
+    """
+    if parent_descriptor is None:
+        os.replace(candidate, destination)
+        return
+    candidate_parent = os.open(
+        candidate.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        os.rename(
+            candidate.name,
+            destination.name,
+            src_dir_fd=candidate_parent,
+            dst_dir_fd=parent_descriptor,
+        )
+    finally:
+        os.close(candidate_parent)
+    retained = os.fstat(parent_descriptor)
+    lexical = destination.parent.lstat()
+    if (retained.st_dev, retained.st_ino) != (lexical.st_dev, lexical.st_ino):
+        raise ValueError(
+            f"runtime snapshot publication directory was replaced: {destination.parent}"
+        )
 
 
 def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) -> Path:
@@ -695,21 +786,18 @@ def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) ->
     destination = snapshots / _snapshot_digest(seal) / managed.name
     _ensure_runtime_snapshot_directory(snapshots)
     _ensure_runtime_snapshot_directory(destination.parent)
-    if _runtime_snapshot_matches(destination, seal):
-        return destination
-
-    publication_lock = destination.parent / ".synth-setter-publication.lock"
-    with integrity.advisory_file_lock(publication_lock):
-        if _runtime_snapshot_matches(destination, seal):
+    with integrity.advisory_directory_lock(destination.parent) as parent_descriptor:
+        if _locked_snapshot_matches(destination, seal, parent_descriptor):
             return destination
-        _remove_runtime_snapshot(destination)
-        with tempfile.TemporaryDirectory(dir=snapshots) as temporary:
+        if _snapshot_destination_exists(destination, parent_descriptor):
+            raise ValueError(f"runtime snapshot destination is invalid: {destination}")
+        with tempfile.TemporaryDirectory() as temporary:
             candidate = Path(temporary) / managed.name
             shutil.copytree(source, candidate, symlinks=True)
             _publish_runtime_tree_permissions(candidate)
             if integrity.bundle_entries(candidate) != seal.entries:
                 raise ValueError("managed source changed while creating its runtime snapshot")
-            os.replace(candidate, destination)
+            _publish_runtime_snapshot(candidate, destination, parent_descriptor)
     return destination
 
 

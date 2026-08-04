@@ -263,6 +263,23 @@ def test_package_install_lock_privileged_writer_keeps_runtime_path_readable(
     _assert_runtime_readable_lock_tree(lock_path, lock_directories)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="native Windows handle semantics")
+def test_windows_open_regular_lock_reparse_point_rejected(tmp_path: Path) -> None:
+    """The retained Windows marker handle never follows a reparse point.
+
+    :param tmp_path: Scratch marker and external target.
+    """
+    external = tmp_path / "external.lock"
+    external.write_text("unchanged")
+    marker = tmp_path / "marker.lock"
+    marker.symlink_to(external)
+
+    with pytest.raises(FileExistsError, match="reparse point"):
+        plugin_integrity._windows_open_regular_lock(marker)
+
+    assert external.read_text() == "unchanged"
+
+
 @pytest.mark.skipif(os.name != "nt", reason="native Windows locking semantics")
 def test_package_install_lock_windows_fresh_marker_is_runtime_leasable(tmp_path: Path) -> None:
     """A fresh Windows package marker supports a subsequent runtime lease.
