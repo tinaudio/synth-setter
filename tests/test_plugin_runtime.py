@@ -536,16 +536,25 @@ def test_publish_runtime_snapshot_permissions_absent_directory_noop(tmp_path: Pa
     plugin_runtime.publish_runtime_snapshot_permissions(tmp_path / "version")
 
 
-def test_prepare_managed_bundle_publishes_direct_bundle_tree(tmp_path: Path) -> None:
+def test_prepare_managed_bundle_publishes_direct_bundle_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Installer preparation makes direct managed bundle contents readable.
 
     :param tmp_path: Scratch managed bundle hierarchy.
+    :param monkeypatch: Rejects mutable-path chmod during POSIX publication.
     """
     plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
     plugins_dir = tmp_path / "managed"
     managed = _bundle(plugins_dir / "VST3/example/synth/1.2.3/Example Synth.vst3")
     _seal_bundle(managed, plugin, _example_lock())
     _restrict_runtime_tree_permissions(managed)
+
+    def _reject_path_chmod(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("path chmod followed")
+
+    monkeypatch.setattr(Path, "chmod", _reject_path_chmod)
 
     plugin_runtime.prepare_managed_bundle_for_runtime(managed, plugins_dir)
 
@@ -773,7 +782,7 @@ def _pausing_snapshot_publisher(
     started: threading.Event,
     release: threading.Event,
     destinations: list[Path],
-) -> Callable[[Path, Path, int | None], None]:
+) -> Callable[..., None]:
     """Build a publisher that pauses before replacing the managed snapshot.
 
     :param managed: Managed alias naming the snapshot destination.
@@ -782,15 +791,21 @@ def _pausing_snapshot_publisher(
     :param destinations: Collection receiving attempted destination paths.
     :returns: Instrumented runtime snapshot publisher.
     """
-    real_publish = plugin_runtime._publish_runtime_snapshot
+    real_publish = plugin_runtime._publish_posix_runtime_snapshot
 
-    def _pause(source: Path, destination: Path, parent_descriptor: int | None) -> None:
+    def _pause(
+        source: Path,
+        destination: Path,
+        parent_descriptor: int,
+        *,
+        seal: plugin_integrity.BundleSeal,
+    ) -> None:
         if destination.name == managed.name:
             destinations.append(destination)
             started.set()
             if not release.wait(10):
                 raise RuntimeError("timed out waiting to publish runtime snapshot")
-        real_publish(source, destination, parent_descriptor)
+        real_publish(source, destination, parent_descriptor, seal=seal)
 
     return _pause
 
@@ -883,7 +898,7 @@ def test_concurrent_runtime_consumers_publish_one_snapshot(
         destinations=published_destinations,
     )
 
-    monkeypatch.setattr(plugin_runtime, "_publish_runtime_snapshot", paused_publisher)
+    monkeypatch.setattr(plugin_runtime, "_publish_posix_runtime_snapshot", paused_publisher)
     monkeypatch.setattr(plugin_runtime.integrity, "advisory_file_lease", observed_lease)
     first = _start_runtime_snapshot_consumer(managed, results, errors)
     assert publication_started.wait(10)

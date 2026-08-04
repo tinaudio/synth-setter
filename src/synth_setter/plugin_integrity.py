@@ -1176,7 +1176,7 @@ def advisory_file_lock(path: Path) -> AbstractContextManager[None]:
 
         import fcntl
 
-        directory_descriptor = _posix_directory_descriptor(path.parent)
+        directory_descriptor = _posix_directory_descriptor(path.parent.resolve(strict=True))
         try:
             with _posix_advisory_descriptor_lock(directory_descriptor, fcntl.LOCK_EX):
                 flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW

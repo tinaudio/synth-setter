@@ -18,9 +18,9 @@ import json
 import logging
 import os
 import plistlib
+import secrets
 import shutil
 import stat
-import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -30,7 +30,12 @@ from typing import Literal
 import pydantic
 
 import synth_setter.plugin_integrity as integrity
-from synth_setter.plugin_integrity import BundleSeal, ManagedBundleRecord, PluginIntegrityError
+from synth_setter.plugin_integrity import (
+    BundleEntry,
+    BundleSeal,
+    ManagedBundleRecord,
+    PluginIntegrityError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -550,12 +555,64 @@ def _ensure_runtime_snapshot_directory(path: Path) -> None:
         raise ValueError(f"runtime snapshot path is not runtime-readable: {path}")
 
 
+def _publish_posix_runtime_tree_permissions(descriptor: int, root: Path) -> None:
+    """Publish one tree relative to retained no-follow directory descriptors.
+
+    :param descriptor: Retained descriptor for the current directory.
+    :param root: Diagnostic path corresponding to the descriptor.
+    :raises ValueError: A traversed child is not a directory, file, or symlink.
+    """
+    os.fchmod(
+        descriptor,
+        os.fstat(descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
+    )
+    with os.scandir(descriptor) as children:
+        for child in children:
+            mode = child.stat(follow_symlinks=False).st_mode
+            child_path = root / child.name
+            if stat.S_ISLNK(mode):
+                continue
+            if stat.S_ISDIR(mode):
+                child_descriptor = os.open(
+                    child.name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                try:
+                    _publish_posix_runtime_tree_permissions(child_descriptor, child_path)
+                finally:
+                    os.close(child_descriptor)
+                continue
+            if stat.S_ISREG(mode):
+                child_descriptor = os.open(
+                    child.name,
+                    os.O_RDONLY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                try:
+                    os.fchmod(
+                        child_descriptor,
+                        os.fstat(child_descriptor).st_mode | integrity.RUNTIME_FILE_READ_MASK,
+                    )
+                finally:
+                    os.close(child_descriptor)
+                continue
+            raise ValueError(f"runtime snapshot path is a special file: {child_path}")
+
+
 def _publish_runtime_tree_permissions(root: Path) -> None:
     """Publish read and traversal permissions without following symlinks.
 
     :param root: Existing snapshot tree owned by the current publisher.
     :raises ValueError: A traversed path is not a real directory or regular file.
     """
+    if os.name != "nt":
+        descriptor = integrity._posix_directory_descriptor(root)
+        try:
+            _publish_posix_runtime_tree_permissions(descriptor, root)
+        finally:
+            os.close(descriptor)
+        return
     for current, directories, files in os.walk(root, followlinks=False):
         _ensure_runtime_snapshot_directory(Path(current))
         directories[:] = [
@@ -767,6 +824,169 @@ def _publish_runtime_snapshot(
         )
 
 
+def _copy_bundle_to_descriptor(
+    source: Path,
+    destination_descriptor: int,
+    relative_parent: Path = Path(),
+) -> list[BundleEntry]:
+    """Copy and hash bundle children under a retained destination descriptor.
+
+    :param source: Validated source directory corresponding to the descriptor.
+    :param destination_descriptor: Retained destination directory descriptor.
+    :param relative_parent: Bundle-relative path for generated seal entries.
+    :returns: Entries generated from the bytes and links actually copied.
+    :raises ValueError: The source contains a special file.
+    """
+    entries: list[BundleEntry] = []
+    for child in sorted(source.iterdir(), key=lambda path: path.name):
+        mode = child.lstat().st_mode
+        relative = relative_parent / child.name
+        relative_text = relative.as_posix()
+        if stat.S_ISDIR(mode):
+            os.mkdir(
+                child.name,
+                stat.S_IMODE(mode) | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
+                dir_fd=destination_descriptor,
+            )
+            child_descriptor = os.open(
+                child.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=destination_descriptor,
+            )
+            try:
+                entries.extend(_copy_bundle_to_descriptor(child, child_descriptor, relative))
+            finally:
+                os.close(child_descriptor)
+            continue
+        if stat.S_ISREG(mode):
+            child_descriptor = os.open(
+                child.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                stat.S_IMODE(mode) | integrity.RUNTIME_FILE_READ_MASK,
+                dir_fd=destination_descriptor,
+            )
+            digest = hashlib.sha256()
+            size = 0
+            try:
+                with (
+                    child.open("rb") as source_stream,
+                    os.fdopen(
+                        child_descriptor,
+                        "wb",
+                        closefd=False,
+                    ) as destination_stream,
+                ):
+                    while block := source_stream.read(1024 * 1024):
+                        destination_stream.write(block)
+                        digest.update(block)
+                        size += len(block)
+                os.fchmod(
+                    child_descriptor,
+                    stat.S_IMODE(mode) | integrity.RUNTIME_FILE_READ_MASK,
+                )
+            finally:
+                os.close(child_descriptor)
+            entries.append(
+                BundleEntry(
+                    path=relative_text,
+                    sha256=digest.hexdigest(),
+                    size=size,
+                    type="file",
+                )
+            )
+            continue
+        if stat.S_ISLNK(mode):
+            target = os.readlink(child)
+            os.symlink(target, child.name, dir_fd=destination_descriptor)
+            entries.append(BundleEntry(path=relative_text, target=target, type="symlink"))
+            continue
+        raise ValueError(f"bundle contains a special file: {relative_text}")
+    return entries
+
+
+def _remove_descriptor_tree(parent_descriptor: int, name: str) -> None:
+    """Remove one child tree relative to a retained parent descriptor.
+
+    :param parent_descriptor: Retained parent directory descriptor.
+    :param name: Child name to remove.
+    """
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+    except (FileNotFoundError, NotADirectoryError):
+        try:
+            os.unlink(name, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+        return
+    try:
+        with os.scandir(descriptor) as children:
+            for child in children:
+                mode = child.stat(follow_symlinks=False).st_mode
+                if stat.S_ISDIR(mode):
+                    _remove_descriptor_tree(descriptor, child.name)
+                else:
+                    os.unlink(child.name, dir_fd=descriptor)
+    finally:
+        os.close(descriptor)
+    os.rmdir(name, dir_fd=parent_descriptor)
+
+
+def _publish_posix_runtime_snapshot(
+    source: Path,
+    destination: Path,
+    parent_descriptor: int,
+    *,
+    seal: BundleSeal,
+) -> None:
+    """Copy and atomically publish a snapshot within one retained filesystem.
+
+    :param source: Validated adopted source bundle.
+    :param destination: Final snapshot path.
+    :param parent_descriptor: Retained digest-directory descriptor.
+    :param seal: Expected copied content identity.
+    :raises ValueError: Copied content differs or the publication parent is replaced.
+    """
+    temporary_name = f".{destination.name}.tmp-{secrets.token_hex(8)}"
+    os.mkdir(temporary_name, 0o700, dir_fd=parent_descriptor)
+    try:
+        candidate_descriptor = os.open(
+            temporary_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            entries = _copy_bundle_to_descriptor(source, candidate_descriptor)
+            os.fchmod(
+                candidate_descriptor,
+                os.fstat(candidate_descriptor).st_mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
+            )
+        finally:
+            os.close(candidate_descriptor)
+        if sorted(entries, key=lambda entry: entry.path) != seal.entries:
+            raise ValueError("managed source changed while creating its runtime snapshot")
+        os.rename(
+            temporary_name,
+            destination.name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+    finally:
+        try:
+            _remove_descriptor_tree(parent_descriptor, temporary_name)
+        except FileNotFoundError:
+            pass
+    retained = os.fstat(parent_descriptor)
+    lexical = destination.parent.lstat()
+    if (retained.st_dev, retained.st_ino) != (lexical.st_dev, lexical.st_ino):
+        raise ValueError(
+            f"runtime snapshot publication directory was replaced: {destination.parent}"
+        )
+
+
 def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) -> Path:
     """Return manager-owned bytes matching an adopted source seal.
 
@@ -792,18 +1012,21 @@ def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) ->
             return destination
         if _snapshot_destination_exists(destination, parent_descriptor):
             raise ValueError(f"runtime snapshot destination is invalid: {destination}")
-        temporary_parent = (
-            Path("/dev/fd") / str(parent_descriptor)
-            if parent_descriptor is not None and sys.platform.startswith("linux")
-            else destination.parent
-        )
-        with tempfile.TemporaryDirectory(dir=temporary_parent) as temporary:
-            candidate = Path(temporary) / managed.name
-            shutil.copytree(source, candidate, symlinks=True)
-            _publish_runtime_tree_permissions(candidate)
-            if integrity.bundle_entries(candidate) != seal.entries:
-                raise ValueError("managed source changed while creating its runtime snapshot")
-            _publish_runtime_snapshot(candidate, destination, parent_descriptor)
+        if parent_descriptor is not None:
+            _publish_posix_runtime_snapshot(
+                source,
+                destination,
+                parent_descriptor,
+                seal=seal,
+            )
+        else:
+            with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
+                candidate = Path(temporary) / managed.name
+                shutil.copytree(source, candidate, symlinks=True)
+                _publish_runtime_tree_permissions(candidate)
+                if integrity.bundle_entries(candidate) != seal.entries:
+                    raise ValueError("managed source changed while creating its runtime snapshot")
+                _publish_runtime_snapshot(candidate, destination, parent_descriptor)
     return destination
 
 
