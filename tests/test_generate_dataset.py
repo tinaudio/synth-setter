@@ -78,6 +78,7 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.wandb_offline import read_history_rows, read_run_project
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -270,6 +271,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.synth.plugin_path = str(_TEST_PLUGIN_VST3)
@@ -280,20 +283,12 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         # from_hydra rebuilds internally derive the same shard URIs — an unpinned
         # created_at would fire its default factory twice and diverge the run_id.
         cfg_dataset.r2.prefix = "fake-r2/test-run/"
-        # Disable the default wandb logger: generate() would call wandb.init() and block.
-        cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
     # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
 
     render_shard = stub_renderer(spec)
-    metrics_rows: list[tuple[int | None, dict[str, object]]] = []
-    recording_logger = SimpleNamespace(
-        finalize=lambda _status: None,
-        log_hyperparams=lambda _payload: None,
-        log_metrics=lambda payload, step=None: metrics_rows.append((step, dict(payload))),
-    )
 
     def _render_with_rejections(args: list[str]) -> None:
         render_shard(args)
@@ -303,24 +298,31 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
                 RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
             )
 
-    with (
-        patch(
-            "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_render_with_rejections,
-        ),
-        patch(
-            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
-            return_value=[recording_logger],
-        ),
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_render_with_rejections,
     ):
         from_hydra(cfg_dataset)
 
-    shard_rows = [payload for step, payload in metrics_rows if step is not None]
-    assert [row["shard/samples_rejected_clipped"] for row in shard_rows] == [2, 2, 2]
-    assert [row["shard/samples_rejected_silent"] for row in shard_rows] == [3, 3, 3]
-    summary = next(payload for step, payload in metrics_rows if step is None)
-    assert summary["generation/samples_rejected_clipped"] == 6
-    assert summary["generation/samples_rejected_silent"] == 9
+    wandb_binaries = list(
+        Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
+    )
+    assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
+    wandb_binary = wandb_binaries[0]
+    assert read_run_project(wandb_binary) == "synth-setter-citest"
+    rows = read_history_rows(
+        wandb_binary,
+        until=lambda scanned: (
+            sum("shard/samples_rejected_clipped" in row for row in scanned) == 3
+            and any("generation/samples_rejected_clipped" in row for row in scanned)
+        ),
+    )
+    shard_rows = [row for row in rows if "shard/samples_rejected_clipped" in row]
+    assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2, 2]
+    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3, 3]
+    summary = next(row for row in rows if "generation/samples_rejected_clipped" in row)
+    assert json.loads(summary["generation/samples_rejected_clipped"]) == 6
+    assert json.loads(summary["generation/samples_rejected_silent"]) == 9
 
     # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
@@ -349,6 +351,9 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         physical_schema = LanceFileReader(str(data_files[0])).metadata().schema
         assert physical_schema.field("audio").type.value_type == pa.float32()
         assert physical_schema.field("mel_spec").type.value_type == pa.float16()
+
+    with open_dict(cfg_dataset):
+        cfg_dataset.logger = None
 
     renderer_invocations = 0
 
