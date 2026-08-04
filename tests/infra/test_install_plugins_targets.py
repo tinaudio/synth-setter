@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
-from synth_setter.plugin_integrity import package_install_lock
 from synth_setter.plugin_manager import PluginManifest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -381,7 +381,7 @@ def _write_surge_setup_fakes(tmp_path: Path) -> Path:
 def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install(
     tmp_path: Path,
 ) -> None:
-    """The unprivileged smoke test can lock the installed package.
+    """Privileged setup restores owner write permission before the smoke test.
 
     :param tmp_path: Scratch roots and executable command fakes.
     """
@@ -398,14 +398,11 @@ def test_macos_ci_plugin_storage_returns_to_runner_after_elevated_install(
 
     pre_fix_root = tmp_path / "pre-fix-managed"
     _run_setup_surge_script(pre_fix_script, fake_bin, pre_fix_root)
-    with pytest.raises(PermissionError):
-        with package_install_lock("surge-synthesizer/surge", "1.3.4", pre_fix_root.resolve()):
-            pass
+    assert not pre_fix_root.stat().st_mode & stat.S_IWUSR
 
     current_root = tmp_path / "current-managed"
     _run_setup_surge_script(run_script, fake_bin, current_root)
-    with package_install_lock("surge-synthesizer/surge", "1.3.4", current_root.resolve()):
-        pass
+    assert current_root.stat().st_mode & stat.S_IWUSR
 
 
 def test_docker_keeps_source_fallback_only_for_incompatible_registry_artifacts() -> None:
