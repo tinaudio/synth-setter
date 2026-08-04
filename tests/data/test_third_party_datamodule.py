@@ -17,6 +17,8 @@ from lance.blob import blob_array, blob_field
 from pedalboard.io import AudioFile
 
 from synth_setter.conditioning import (
+    EMBEDDING_BATCH_KEY,
+    LEGACY_M2L_INPUT_SHAPE,
     NUM_SKETCH_CONTROLS,
     SKETCH_CENTROID_ROW,
     SKETCH_LOUDNESS_ROW,
@@ -718,17 +720,24 @@ def test_non_integer_row_limit_raises(tmp_path: Path, limit: object) -> None:
         _datamodule(tmp_path / "corpus.lance", row_limit=limit)  # type: ignore[arg-type]
 
 
-def test_legacy_m2l_conditioning_is_accepted(tmp_path: Path) -> None:
-    """``conditioning="m2l"`` names ``music2latent``, which the registry keys as ``m2l``.
+def test_legacy_m2l_conditioning_serves_a_batch(tmp_path: Path) -> None:
+    """``conditioning="m2l"`` names ``music2latent`` while the encoder emits ``m2l``.
+
+    Constructing the datamodule is not enough: the stored-name/registry-name
+    split only surfaces when a batch is actually encoded.
 
     :param tmp_path: Isolated corpus fixture directory.
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=28)])
 
-    datamodule = _datamodule(tmp_path / "corpus.lance", conditioning="m2l")
+    def encode(source: np.ndarray) -> np.ndarray:
+        return np.ones((len(source), *LEGACY_M2L_INPUT_SHAPE), dtype=np.float32)
 
-    assert datamodule.embedding is not None
-    assert datamodule.embedding.column == "music2latent"
+    batch = _first_batch(
+        _datamodule(tmp_path / "corpus.lance", conditioning="m2l", embedding_encoder=encode)
+    )
+
+    assert batch[EMBEDDING_BATCH_KEY].shape == (1, *LEGACY_M2L_INPUT_SHAPE)
 
 
 def test_sketch_pitch_below_threshold_is_zero_binned(tmp_path: Path) -> None:
@@ -1196,4 +1205,22 @@ def test_non_numeric_duration_raises(tmp_path: Path) -> None:
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds="0.5",  # type: ignore[arg-type]
+        )
+
+
+def test_statistics_configured_with_normalization_off_raises(tmp_path: Path) -> None:
+    """Dropping configured statistics would feed the checkpoint raw mel.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=49)])
+
+    with pytest.raises(ValueError, match="would be dropped"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            use_saved_mean_and_variance=False,
+            mel_stats_uri="r2://intermediate-data/stats.json",
         )

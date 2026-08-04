@@ -171,7 +171,7 @@ class LiveEmbedding:
         """
         spec = registry_spec(column)
         config = AddEmbeddingsConfig(
-            lance_uri=lance_uri, embeddings=(column,), device=device, build_index=False
+            lance_uri=lance_uri, embeddings=(spec.name,), device=device, build_index=False
         )
         return cls(
             spec,
@@ -193,8 +193,8 @@ def _validate_conditioning_config(
     :param use_saved_mean_and_variance: Whether mel standardization is enabled.
     :param mel_stats_uri: Configured statistics source, if any.
     :param row_limit: Configured row cap, if any.
-    :raises ValueError: Mel is standardized without a statistics source, or the row cap is
-        negative.
+    :raises ValueError: Mel is standardized without a statistics source, statistics are configured
+        but standardization is off, or the row cap is negative.
     """
     if not isinstance(use_saved_mean_and_variance, bool):
         raise ValueError(
@@ -214,6 +214,11 @@ def _validate_conditioning_config(
             "mel conditioning with use_saved_mean_and_variance=true requires "
             "mel_stats_uri — point it at the statistics the checkpoint trained "
             "with, not at this corpus"
+        )
+    if not use_saved_mean_and_variance and mel_stats_uri is not None:
+        raise ValueError(
+            f"mel_stats_uri={mel_stats_uri!r} is set with use_saved_mean_and_variance=false, "
+            "so the statistics would be dropped and the checkpoint fed raw mel"
         )
 
 
@@ -455,7 +460,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.conditioning = conditioning
         self.embedding = resolve_embedding_conditioning(conditioning)
         self.sketch = resolve_sketch_controls(sketch)
-        self.mel_stats_uri = mel_stats_uri if use_saved_mean_and_variance else None
+        self.mel_stats_uri = mel_stats_uri
         self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._embedding_device = embedding_device
         self._embedding_encoder = embedding_encoder
@@ -687,7 +692,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :returns: ``(B, *input_shape)`` conditioning tensor.
         :raises ValueError: The live shape contradicts the checkpoint's spec.
         """
-        tensor = self._live[embedding.column](audio)[embedding.column]
+        live = self._live[embedding.column]
+        tensor = live(audio)[live.spec.column]
         if tuple(tensor.shape[1:]) != embedding.input_shape:
             raise ValueError(
                 f"live {embedding.column!r} rows are {tuple(tensor.shape[1:])}, but the "
