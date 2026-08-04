@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785831945811,
+  "lastUpdate": 1785831949757,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -24059,6 +24059,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 15.051172587899975,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "34b07f81abbcc1b193681b61f460136a4338f4c5",
+          "message": "internal-fix(ci-automation): restore Studiorack Docker validation (#2884)\n\n* internal-fix(ci-automation): restore Studiorack ownership\n\n* internal-fix(ci-automation): validate Surge setup on MPS\n\n* internal-fix(ci-automation): pin the chown owner in the Surge setup test\n\nThe fake sudo matched chown by flag and target but ignored the owner, so an\naction that chowned to root:root still passed while the real macOS runner left\nthe unprivileged smoke step unable to write. The fake now rejects any owner\nother than the invoking user, and the fake setup moves into a helper.\n\n* internal-fix(ci-automation): decouple Surge test from command order\n\nThe pre-fix script was derived by dropping the action's last line, so appending\nany command after the ownership restoration would have left chown in place and\nbroken the regression arm. It now selects the ownership command explicitly.\n\nAlso asserts the MPS trigger on both push and pull_request, since a filter\npresent on one event only leaves the other lane blind, and marks managed_dir\nreadonly per SH13.\n\n* internal-fix(ci-automation): split the Surge setup command fakes\n\nThe extracted helper had grown to two independently complex fake commands in\none body. Splits it per command, adds strict mode to the npm fake, and marks\nthe sudo fake's fixed roots readonly per SH1 and SH13.\n\n* internal-fix(code-health): pin Six Sines runtime identity\n\n* test(code-health): cover source-qualified plugin install\n\n* test(code-health): share archive install fixture\n\n* test(testing): isolate plugin path from Docker image\n\n* internal-fix(testing): expose Studiorack graph to Docker tests\n\n* internal-fix(ci-automation): host Cardinal probe headlessly\n\n* test(ci-automation): make ownership assertion root-safe",
+          "timestamp": "2026-08-04T00:15:50-07:00",
+          "tree_id": "457f8eb9778a3c4912286e6e6dc6112f9fd10d34",
+          "url": "https://github.com/tinaudio/synth-setter/commit/34b07f81abbcc1b193681b61f460136a4338f4c5"
+        },
+        "date": 1785831949001,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.008109092712402,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.746833611950278,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08632172644138336,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.00659489631652832,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.1816787719726562,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.639236337599959,
             "unit": "seconds"
           }
         ]
