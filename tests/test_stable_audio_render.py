@@ -543,6 +543,7 @@ def test_cli_upload_writes_wav_latent_and_provenance_to_r2(
         return np.zeros((2, 176400), dtype=np.float32)
 
     monkeypatch.setattr(stable_audio_render, "render_wav", render_to_path)
+    monkeypatch.setattr(stable_audio_render.r2_io, "ensure_r2_env_loaded", lambda: None)
 
     result = CliRunner().invoke(
         main,
