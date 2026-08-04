@@ -709,8 +709,10 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :returns: ``(B, NUM_SKETCH_CONTROLS, frames)`` controls with pitch zero-binned.
         :raises ValueError: The live frame axis contradicts the checkpoint's ``num_frames``.
         """
-        children = self._live[sketch.column](audio)
-        prefix = f"{sketch.column}."
+        live = self._live[sketch.column]
+        children = live(audio)
+        # Children are named by the registry column, which a legacy alias would not match.
+        prefix = f"{live.spec.column}."
         controls = torch.from_numpy(
             stack_sketch_children(
                 children[f"{prefix}{SKETCH_LOUDNESS_CHILD}"].numpy(),
