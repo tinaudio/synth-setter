@@ -76,7 +76,6 @@ jobs:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
           PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
-          PI_REVIEW_AFTERCARE_OWNERSHIP_WAIT_SECONDS: "900"
           PI_REVIEW_SKILLS_ROOT: ${{ github.workspace }}/.review-skills/codex/synth-setter-skills
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash agent/_shared/run_pi_review.sh repo-review-full --target "${PR_NUMBER}"

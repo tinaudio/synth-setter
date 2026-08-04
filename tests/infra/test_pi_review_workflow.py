@@ -155,7 +155,6 @@ def test_pi_review_workflow_restores_pi_auth_and_runs_canonical_launcher(
         "/.review-skills/codex/synth-setter-skills"
     )
     assert review_env["CI"] == "true"
-    assert review_env["PI_REVIEW_AFTERCARE_OWNERSHIP_WAIT_SECONDS"] == "900"
     assert str(review_step["run"]).strip() == (
         'bash agent/_shared/run_pi_review.sh repo-review-full --target "${PR_NUMBER}"'
     )
