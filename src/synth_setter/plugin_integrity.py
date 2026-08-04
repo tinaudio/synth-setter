@@ -22,7 +22,7 @@ import stat
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +65,7 @@ __all__ = [
     "package_install_lock",
     "package_install_lock_path",
     "seal_plugin_bundle",
+    "windows_retained_nofollow_directories",
 ]
 
 RUNTIME_FILE_READ_MASK = 0o044
@@ -1008,40 +1009,49 @@ def _posix_advisory_descriptor_lock(
     return _locked()
 
 
-def _posix_child_directory_descriptor(
+def _posix_existing_child_directory(
     parent_descriptor: int,
     component: str,
     access_flag: int,
-    *,
-    create_missing: bool,
 ) -> int:
-    """Open one no-follow child, optionally tolerating a concurrent creator.
+    """Open one existing no-follow child directory.
 
     :param parent_descriptor: Retained parent directory descriptor.
     :param component: Single child directory name.
     :param access_flag: Search-only or read-only final access.
-    :param create_missing: Whether to create an absent component.
     :returns: Retained child directory descriptor.
-    :raises FileNotFoundError: The child is absent and creation is disabled.
     """
     flags = access_flag | os.O_DIRECTORY | os.O_NOFOLLOW
-    try:
-        return os.open(component, flags, dir_fd=parent_descriptor)
-    except FileNotFoundError:
-        if not create_missing:
-            raise
+    return os.open(component, flags, dir_fd=parent_descriptor)
+
+
+def _posix_create_or_open_child_directory(
+    parent_descriptor: int,
+    component: str,
+    access_flag: int,
+) -> int:
+    """Create or reopen one no-follow child directory.
+
+    :param parent_descriptor: Retained parent directory descriptor.
+    :param component: Single child directory name.
+    :param access_flag: Search-only or read-only final access.
+    :returns: Retained child directory descriptor.
+    """
     try:
         os.mkdir(component, dir_fd=parent_descriptor)
     except FileExistsError:
         pass
-    return os.open(component, flags, dir_fd=parent_descriptor)
+    return _posix_existing_child_directory(parent_descriptor, component, access_flag)
 
 
-def _posix_directory_hierarchy_descriptor(directory: Path, *, create_missing: bool) -> int:
+def _posix_directory_hierarchy_descriptor(
+    directory: Path,
+    open_child: Callable[[int, str, int], int],
+) -> int:
     """Traverse one absolute hierarchy under a shared no-follow policy.
 
     :param directory: Directory hierarchy to open.
-    :param create_missing: Whether to create absent components.
+    :param open_child: Existing-only or create-and-open child operation.
     :returns: Read-only descriptor for the final directory.
     :raises FileExistsError: Any hierarchy component is a symlink or non-directory.
     :raises OSError: Opening or creating a hierarchy component fails.
@@ -1054,12 +1064,7 @@ def _posix_directory_hierarchy_descriptor(directory: Path, *, create_missing: bo
             access_flag = (
                 os.O_RDONLY if index == len(components) - 1 else _POSIX_SEARCH_ONLY_OPEN_FLAG
             )
-            child = _posix_child_directory_descriptor(
-                descriptor,
-                component,
-                access_flag,
-                create_missing=create_missing,
-            )
+            child = open_child(descriptor, component, access_flag)
             os.close(descriptor)
             descriptor = child
     except OSError as exc:
@@ -1076,7 +1081,7 @@ def open_posix_nofollow_directory(directory: Path) -> int:
     :param directory: Existing directory hierarchy.
     :returns: Read-only descriptor for the final directory.
     """
-    return _posix_directory_hierarchy_descriptor(directory, create_missing=False)
+    return _posix_directory_hierarchy_descriptor(directory, _posix_existing_child_directory)
 
 
 def _posix_create_directory_descriptor(directory: Path) -> int:
@@ -1085,7 +1090,10 @@ def _posix_create_directory_descriptor(directory: Path) -> int:
     :param directory: Directory hierarchy to create or open.
     :returns: Read-only descriptor for the final directory.
     """
-    return _posix_directory_hierarchy_descriptor(directory, create_missing=True)
+    return _posix_directory_hierarchy_descriptor(
+        directory,
+        _posix_create_or_open_child_directory,
+    )
 
 
 def advisory_directory_lock(path: Path) -> AbstractContextManager[int | None]:
@@ -1345,7 +1353,7 @@ def package_install_lock_path(package: str, version: str, plugins_dir: Path) -> 
     )
 
 
-def _windows_retained_lock_directories(
+def windows_retained_nofollow_directories(
     plugins_dir: Path,
     lock_parent: Path,
 ) -> AbstractContextManager[list[Path]]:
@@ -1429,6 +1437,24 @@ def _publish_posix_lock_hierarchy(descriptors: list[int]) -> None:
         )
 
 
+def _require_posix_lock_hierarchy(
+    plugins_dir: Path,
+    lock_parent: Path,
+    descriptors: list[int],
+) -> None:
+    """Require every retained install-lock directory to keep its lexical name.
+
+    :param plugins_dir: Managed storage root.
+    :param lock_parent: Deepest synchronization directory.
+    :param descriptors: Retained hierarchy descriptors ordered root-first.
+    """
+    paths = [plugins_dir]
+    for component in lock_parent.relative_to(plugins_dir).parts:
+        paths.append(paths[-1] / component)
+    for path, descriptor in zip(paths, descriptors, strict=True):
+        _require_posix_retained_directory(path, descriptor)
+
+
 def _windows_package_install_lock(
     path: Path,
     plugins_dir: Path,
@@ -1442,7 +1468,7 @@ def _windows_package_install_lock(
 
     @contextmanager
     def _locked() -> Iterator[None]:
-        with _windows_retained_lock_directories(plugins_dir, path.parent):
+        with windows_retained_nofollow_directories(plugins_dir, path.parent):
             try:
                 marker_mode = path.lstat().st_mode
             except FileNotFoundError:
@@ -1482,7 +1508,9 @@ def _posix_package_install_lock(
                     os.fchmod(marker, marker_mode | RUNTIME_FILE_READ_MASK)
                     _publish_posix_lock_hierarchy(descriptors)
                     with _posix_advisory_descriptor_lock(marker, fcntl.LOCK_EX):
+                        _require_posix_lock_hierarchy(plugins_dir, path.parent, descriptors)
                         yield
+                        _require_posix_lock_hierarchy(plugins_dir, path.parent, descriptors)
                 finally:
                     os.close(marker)
 

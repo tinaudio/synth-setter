@@ -712,17 +712,9 @@ def _publish_windows_runtime_parent_permissions(plugins_dir: Path, version_dir: 
 
     :param plugins_dir: Managed storage root.
     :param version_dir: Descendant package-version directory.
-    :raises OSError: A hierarchy component is not a real directory.
     """
-    relative = version_dir.relative_to(plugins_dir)
-    current = plugins_dir
-    for component in (None, *relative.parts):
-        if component is not None:
-            current /= component
-        mode = current.lstat().st_mode
-        if os.path.isjunction(current) or stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
-            raise OSError(f"runtime hierarchy path is not a real directory: {current}")
-        current.chmod(mode | integrity.RUNTIME_DIRECTORY_ACCESS_MASK)
+    with integrity.windows_retained_nofollow_directories(plugins_dir, version_dir):
+        pass
 
 
 def _publish_runtime_parent_permissions(plugins_dir: Path, version_dir: Path) -> None:

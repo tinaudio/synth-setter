@@ -618,11 +618,23 @@ def test_prepare_managed_bundle_publishes_direct_bundle_tree(
         assert all((Path(current) / name).stat().st_mode & 0o044 == 0o044 for name in files)
 
 
-def test_windows_runtime_parent_permissions_publish_real_hierarchy(tmp_path: Path) -> None:
+def test_windows_runtime_parent_permissions_publish_real_hierarchy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Windows publication makes each real managed parent traversable.
 
     :param tmp_path: Scratch managed hierarchy.
+    :param monkeypatch: Replaces native Windows handle acquisition.
     """
+    opened: list[Path] = []
+
+    def _retain(path: Path) -> int:
+        opened.append(path)
+        return id(path)
+
+    monkeypatch.setattr(plugin_integrity, "_windows_open_directory_handle", _retain)
+    monkeypatch.setattr(plugin_integrity, "_windows_close_handle", lambda handle: None)
     plugins_dir = tmp_path / "managed"
     version_dir = plugins_dir / "VST3/example/synth/1.2.3"
     version_dir.mkdir(parents=True)
@@ -634,14 +646,26 @@ def test_windows_runtime_parent_permissions_publish_real_hierarchy(tmp_path: Pat
 
     plugin_runtime._publish_windows_runtime_parent_permissions(plugins_dir, version_dir)
 
-    assert all(path.stat().st_mode & 0o055 == 0o055 for path in hierarchy)
+    assert opened == hierarchy
 
 
-def test_windows_runtime_parent_permissions_reject_symlinked_component(tmp_path: Path) -> None:
+def test_windows_runtime_parent_permissions_reject_symlinked_component(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Windows publication rejects a linked parent without mutating its target.
 
     :param tmp_path: Scratch managed hierarchy and outside target.
+    :param monkeypatch: Rejects linked directories through the native-handle boundary.
     """
+
+    def _reject_link(path: Path) -> int:
+        if path.is_symlink():
+            raise OSError(f"runtime hierarchy path is not a real directory: {path}")
+        return id(path)
+
+    monkeypatch.setattr(plugin_integrity, "_windows_open_directory_handle", _reject_link)
+    monkeypatch.setattr(plugin_integrity, "_windows_close_handle", lambda handle: None)
     plugins_dir = tmp_path / "managed"
     plugins_dir.mkdir()
     outside = tmp_path / "outside"

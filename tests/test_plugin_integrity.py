@@ -312,6 +312,20 @@ def test_advisory_file_lock_replaced_directory_rejected_before_return(tmp_path: 
             marker.parent.mkdir()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX retained install hierarchy semantics")
+def test_package_install_lock_replaced_managed_root_rejected_before_return(tmp_path: Path) -> None:
+    """An installer does not return after its retained managed root is replaced.
+
+    :param tmp_path: Scratch original and replacement managed roots.
+    """
+    plugins_dir = tmp_path / "managed"
+
+    with pytest.raises(ValueError, match="lock directory was replaced"):
+        with plugin_integrity.package_install_lock("example/synth", "1.2.3", plugins_dir):
+            plugins_dir.rename(tmp_path / "displaced-managed")
+            plugins_dir.mkdir()
+
+
 def test_advisory_child_directory_lock_parent_component_rejected(tmp_path: Path) -> None:
     """Child publication cannot escape through the parent traversal component.
 
@@ -667,7 +681,7 @@ def test_windows_retained_lock_directories_hold_root_first_handles(
     )
     monkeypatch.setattr(plugin_integrity, "_windows_close_handle", released.append)
 
-    with plugin_integrity._windows_retained_lock_directories(plugins_dir, lock_parent) as paths:
+    with plugin_integrity.windows_retained_nofollow_directories(plugins_dir, lock_parent) as paths:
         assert paths == retained
         assert all(directory.is_dir() for directory in paths)
 
@@ -696,7 +710,7 @@ def test_windows_retained_lock_directories_junction_rejected_before_descent(
     monkeypatch.setattr(plugin_integrity, "_windows_close_handle", lambda _handle: None)
 
     with pytest.raises(FileExistsError, match="reparse point"):
-        with plugin_integrity._windows_retained_lock_directories(
+        with plugin_integrity.windows_retained_nofollow_directories(
             plugins_dir,
             lock_root / "example/synth",
         ):
