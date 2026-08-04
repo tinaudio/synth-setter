@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import pickle
 from collections.abc import Sequence
 from pathlib import Path
@@ -27,6 +28,7 @@ from synth_setter.conditioning import (
     SketchControlSpec,
 )
 from synth_setter.data.third_party_datamodule import (
+    registry_spec,
     LiveEmbedding,
     ThirdPartyAudioDataModule,
     decode_clip,
@@ -52,6 +54,7 @@ def _write_corpus(
     sample_rate: int = _SOURCE_SAMPLE_RATE,
     audio_column: str = AUDIO_FIELD,
     with_sample_rate_column: bool = True,
+    mode: str = "create",
 ) -> None:
     """Write a blob-encoded audio corpus in the published third-party layout.
 
@@ -60,6 +63,7 @@ def _write_corpus(
     :param sample_rate: Encoded sample rate for every clip.
     :param audio_column: Blob column name, mirroring per-corpus schema drift.
     :param with_sample_rate_column: Whether to store the per-row sample rate.
+    :param mode: Lance write mode; ``append`` commits a further version.
     """
     write_blob_audio_corpus(
         path,
@@ -67,6 +71,7 @@ def _write_corpus(
         sample_rate=sample_rate,
         audio_column=audio_column,
         with_sample_rate_column=with_sample_rate_column,
+        mode=mode,
     )
 
 
@@ -713,18 +718,17 @@ def test_non_integer_row_limit_raises(tmp_path: Path, limit: object) -> None:
         _datamodule(tmp_path / "corpus.lance", row_limit=limit)  # type: ignore[arg-type]
 
 
-def test_legacy_m2l_conditioning_is_rejected(tmp_path: Path) -> None:
-    """The m2l mode maps to a column no live encoder can produce.
-
-    ``conditioning="m2l"`` resolves to ``music2latent``, which is not an
-    embedding-registry column and has no corpus source.
+def test_legacy_m2l_conditioning_is_accepted(tmp_path: Path) -> None:
+    """``conditioning="m2l"`` names ``music2latent``, which the registry keys as ``m2l``.
 
     :param tmp_path: Isolated corpus fixture directory.
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=28)])
 
-    with pytest.raises(KeyError, match="music2latent"):
-        _datamodule(tmp_path / "corpus.lance", conditioning="m2l")
+    datamodule = _datamodule(tmp_path / "corpus.lance", conditioning="m2l")
+
+    assert datamodule.embedding is not None
+    assert datamodule.embedding.column == "music2latent"
 
 
 def test_sketch_pitch_below_threshold_is_zero_binned(tmp_path: Path) -> None:
@@ -1006,11 +1010,15 @@ def test_checkpoint_override_for_an_unused_column_raises(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("sample_rate", "duration", "channels"),
-    [(_TARGET_SAMPLE_RATE, -1.0, _TARGET_CHANNELS), (_TARGET_SAMPLE_RATE, 0.0, 1), (100, 0.001, 1)],
+    ("sample_rate", "duration", "channels", "message"),
+    [
+        (_TARGET_SAMPLE_RATE, -1.0, _TARGET_CHANNELS, "signal_duration_seconds=-1.0"),
+        (_TARGET_SAMPLE_RATE, 0.0, 1, "signal_duration_seconds=0.0"),
+        (100, 0.001, 1, "positive sample count"),
+    ],
 )
 def test_render_contract_without_a_positive_sample_grid_raises(
-    tmp_path: Path, sample_rate: int, duration: float, channels: int
+    tmp_path: Path, sample_rate: int, duration: float, channels: int, message: str
 ) -> None:
     """A non-positive grid would slice clips to empty rather than fail the contract.
 
@@ -1018,10 +1026,11 @@ def test_render_contract_without_a_positive_sample_grid_raises(
     :param sample_rate: Render-contract sample rate in Hz.
     :param duration: Render-contract clip duration in seconds.
     :param channels: Render-contract channel count.
+    :param message: Substring the raised error must name.
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=39)])
 
-    with pytest.raises(ValueError, match="positive sample count"):
+    with pytest.raises(ValueError, match=re.escape(message)):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=sample_rate,
@@ -1081,3 +1090,71 @@ def test_non_positive_batch_size_raises(tmp_path: Path) -> None:
             signal_duration_seconds=_DURATION_SECONDS,
             batch_size=0,
         )
+
+
+def test_negative_rate_and_duration_cancelling_into_a_positive_grid_raises(
+    tmp_path: Path,
+) -> None:
+    """Two negatives multiply to a plausible sample count but no valid contract.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=43)])
+
+    with pytest.raises(ValueError, match="sample_rate=-4000"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=-4000,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=-0.5,
+        )
+
+
+def test_injected_encoder_without_an_embedding_stream_raises(tmp_path: Path) -> None:
+    """An encoder that nothing would call means the run is misconfigured.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=44)])
+
+    with pytest.raises(ValueError, match="conditions on no embedding stream"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            conditioning="mel",
+            embedding_encoder=lambda batch: batch,
+        )
+
+
+def test_legacy_music2latent_column_resolves_to_the_m2l_policy() -> None:
+    """The bare ``conditioning=m2l`` literal names a column the registry keys as ``m2l``."""
+    assert registry_spec("music2latent") is EMBEDDING_REGISTRY["m2l"]
+
+
+def test_setup_pins_the_snapshot_against_later_corpus_commits(tmp_path: Path) -> None:
+    """A commit landing mid-evaluation must not change what the run scores.
+
+    Overwriting rather than appending is what distinguishes a pinned snapshot:
+    an unpinned read would serve the replacement clip under the same row index.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    original = _tone(_DURATION_SECONDS, seed=45)
+    _write_corpus(corpus, [original])
+    datamodule = _datamodule(corpus)
+    datamodule.setup("predict")
+
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=46)], mode="overwrite")
+
+    served = torch.cat([batch[AUDIO_FIELD] for batch in datamodule.predict_dataloader()])
+    expected = decode_clip(
+        wav_bytes(original, _SOURCE_SAMPLE_RATE),
+        sample_rate=_TARGET_SAMPLE_RATE,
+        channels=_TARGET_CHANNELS,
+        num_samples=_TARGET_SAMPLES,
+        amplitude_scale=1.0,
+    )
+    assert torch.equal(served, torch.from_numpy(expected).unsqueeze(0))

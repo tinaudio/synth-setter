@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import logging
 import os
 from collections.abc import Mapping
@@ -90,6 +91,10 @@ def _is_audio_sourced(spec: EmbeddingSpec) -> bool:
     return spec.input_fields == (AUDIO_FIELD,) and not spec.rerenders
 
 
+# The bare `conditioning=m2l` literal names a stored column the registry keys as `m2l`.
+_LEGACY_COLUMN_KEYS = {"music2latent": "m2l"}
+
+
 def registry_spec(column: str) -> EmbeddingSpec:
     """Look up an embedding policy servable from a corpus's audio.
 
@@ -100,7 +105,7 @@ def registry_spec(column: str) -> EmbeddingSpec:
         such as stored parameters or a re-render.
     """
     try:
-        spec = EMBEDDING_REGISTRY[column]
+        spec = EMBEDDING_REGISTRY[_LEGACY_COLUMN_KEYS.get(column, column)]
     except KeyError:
         servable = ", ".join(
             sorted(
@@ -395,7 +400,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param stats_cache_dir: Directory a fetched statistics object is cached in;
             ``None`` uses the working directory.
         :raises ValueError: A count argument is not a positive integer, the render contract
-            yields a non-positive sample count or channel count, one encoder was injected for multiple conditioning streams, or a checkpoint
+            yields a non-positive sample count or channel count, an encoder was injected for
+            a run that conditions on no embedding stream, one encoder was injected for multiple conditioning streams, or a checkpoint
             override names a column this run does not condition on.
         """
         super().__init__()
@@ -420,6 +426,12 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 raise ValueError(f"{name}={value!r} must be an integer")
         if batch_size <= 0:
             raise ValueError(f"batch_size={batch_size} must be positive")
+        if sample_rate <= 0:
+            raise ValueError(f"sample_rate={sample_rate} must be positive")
+        if not math.isfinite(signal_duration_seconds) or signal_duration_seconds <= 0:
+            raise ValueError(
+                f"signal_duration_seconds={signal_duration_seconds} must be positive and finite"
+            )
         if num_workers < 0:
             raise ValueError(f"num_workers={num_workers} must not be negative")
         # A non-positive grid slices to an empty clip instead of failing the render contract.
@@ -454,6 +466,11 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"embedding_checkpoints names {', '.join(unknown)}, which this run does not "
                 f"condition on ({', '.join(streams) or 'no embedding streams'}); the override "
                 "would be silently ignored"
+            )
+        if embedding_encoder is not None and not streams:
+            raise ValueError(
+                "an embedding_encoder was injected but this run conditions on no embedding "
+                "stream, so the encoder would never be called"
             )
         if embedding_encoder is not None and len(streams) > 1:
             raise ValueError(

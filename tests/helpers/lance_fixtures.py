@@ -195,6 +195,7 @@ def write_blob_audio_corpus(
     sample_rate: int,
     audio_column: str = AUDIO_FIELD,
     with_sample_rate_column: bool = False,
+    mode: str = "create",
 ) -> None:
     """Write a third-party-style corpus storing WAV bytes in a blob column.
 
@@ -207,6 +208,7 @@ def write_blob_audio_corpus(
     :param audio_column: Blob column name; published corpora differ.
     :param with_sample_rate_column: Whether to store the rate alongside, as NSynth does
         and ESC50 does not.
+    :param mode: Lance write mode; ``append`` commits a further version.
     """
 
     def _wav_bytes(clip: np.ndarray) -> bytes:
@@ -227,4 +229,4 @@ def write_blob_audio_corpus(
         fields.append(pa.field("sample_rate", pa.int64(), nullable=False))
         columns["sample_rate"] = pa.array([sample_rate] * len(clips), pa.int64())
     table = pa.table(columns, schema=pa.schema(fields))
-    lance.write_dataset(table, path, mode="create", data_storage_version="2.1")
+    lance.write_dataset(table, path, mode=mode, data_storage_version="2.1")
