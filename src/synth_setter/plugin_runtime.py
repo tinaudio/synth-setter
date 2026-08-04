@@ -824,6 +824,96 @@ def _publish_runtime_snapshot(
         )
 
 
+def _copy_directory_to_descriptor(
+    child: Path,
+    destination_descriptor: int,
+    relative: Path,
+    mode: int,
+) -> list[BundleEntry]:
+    """Create and recursively copy one bundle directory.
+
+    :param child: Source directory.
+    :param destination_descriptor: Retained destination-parent descriptor.
+    :param relative: Bundle-relative child path.
+    :param mode: Source directory mode.
+    :returns: Entries copied below the child directory.
+    """
+    published_mode = stat.S_IMODE(mode) | integrity.RUNTIME_DIRECTORY_ACCESS_MASK
+    os.mkdir(child.name, published_mode, dir_fd=destination_descriptor)
+    child_descriptor = os.open(
+        child.name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=destination_descriptor,
+    )
+    try:
+        os.fchmod(child_descriptor, published_mode)
+        return _copy_bundle_to_descriptor(child, child_descriptor, relative)
+    finally:
+        os.close(child_descriptor)
+
+
+def _copy_regular_file_to_descriptor(
+    child: Path,
+    destination_descriptor: int,
+    relative: str,
+    mode: int,
+) -> BundleEntry:
+    """Copy and hash one regular bundle file.
+
+    :param child: Source regular file.
+    :param destination_descriptor: Retained destination-parent descriptor.
+    :param relative: Bundle-relative file path.
+    :param mode: Source file mode.
+    :returns: Entry generated from the copied bytes.
+    """
+    published_mode = stat.S_IMODE(mode) | integrity.RUNTIME_FILE_READ_MASK
+    descriptor = os.open(
+        child.name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        published_mode,
+        dir_fd=destination_descriptor,
+    )
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with (
+            child.open("rb") as source_stream,
+            os.fdopen(
+                descriptor,
+                "wb",
+                closefd=False,
+            ) as destination_stream,
+        ):
+            while block := source_stream.read(1024 * 1024):
+                destination_stream.write(block)
+                digest.update(block)
+                size += len(block)
+        os.fchmod(descriptor, published_mode)
+    finally:
+        os.close(descriptor)
+    return BundleEntry(path=relative, sha256=digest.hexdigest(), size=size, type="file")
+
+
+def _copy_symlink_to_descriptor(
+    child: Path,
+    destination_descriptor: int,
+    relative: str,
+) -> BundleEntry:
+    """Copy one relative bundle symlink without preserving external references.
+
+    :param child: Source symlink.
+    :param destination_descriptor: Retained destination-parent descriptor.
+    :param relative: Bundle-relative symlink path.
+    :returns: Entry generated from the copied lexical target.
+    :raises ValueError: The source uses an absolute symlink target.
+    """
+    target = os.readlink(child)
+    if Path(target).is_absolute():
+        raise ValueError(f"runtime snapshot rejects absolute bundle symlink: {relative}")
+    os.symlink(target, child.name, dir_fd=destination_descriptor)
+    return BundleEntry(path=relative, target=target, type="symlink")
+
+
 def _copy_bundle_to_descriptor(
     source: Path,
     destination_descriptor: int,
@@ -843,62 +933,24 @@ def _copy_bundle_to_descriptor(
         relative = relative_parent / child.name
         relative_text = relative.as_posix()
         if stat.S_ISDIR(mode):
-            os.mkdir(
-                child.name,
-                stat.S_IMODE(mode) | integrity.RUNTIME_DIRECTORY_ACCESS_MASK,
-                dir_fd=destination_descriptor,
+            entries.extend(
+                _copy_directory_to_descriptor(child, destination_descriptor, relative, mode)
             )
-            child_descriptor = os.open(
-                child.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=destination_descriptor,
-            )
-            try:
-                entries.extend(_copy_bundle_to_descriptor(child, child_descriptor, relative))
-            finally:
-                os.close(child_descriptor)
             continue
         if stat.S_ISREG(mode):
-            child_descriptor = os.open(
-                child.name,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                stat.S_IMODE(mode) | integrity.RUNTIME_FILE_READ_MASK,
-                dir_fd=destination_descriptor,
-            )
-            digest = hashlib.sha256()
-            size = 0
-            try:
-                with (
-                    child.open("rb") as source_stream,
-                    os.fdopen(
-                        child_descriptor,
-                        "wb",
-                        closefd=False,
-                    ) as destination_stream,
-                ):
-                    while block := source_stream.read(1024 * 1024):
-                        destination_stream.write(block)
-                        digest.update(block)
-                        size += len(block)
-                os.fchmod(
-                    child_descriptor,
-                    stat.S_IMODE(mode) | integrity.RUNTIME_FILE_READ_MASK,
-                )
-            finally:
-                os.close(child_descriptor)
             entries.append(
-                BundleEntry(
-                    path=relative_text,
-                    sha256=digest.hexdigest(),
-                    size=size,
-                    type="file",
+                _copy_regular_file_to_descriptor(
+                    child,
+                    destination_descriptor,
+                    relative_text,
+                    mode,
                 )
             )
             continue
         if stat.S_ISLNK(mode):
-            target = os.readlink(child)
-            os.symlink(target, child.name, dir_fd=destination_descriptor)
-            entries.append(BundleEntry(path=relative_text, target=target, type="symlink"))
+            entries.append(
+                _copy_symlink_to_descriptor(child, destination_descriptor, relative_text)
+            )
             continue
         raise ValueError(f"bundle contains a special file: {relative_text}")
     return entries
@@ -935,20 +987,21 @@ def _remove_descriptor_tree(parent_descriptor: int, name: str) -> None:
     os.rmdir(name, dir_fd=parent_descriptor)
 
 
-def _publish_posix_runtime_snapshot(
+def _stage_posix_runtime_snapshot(
     source: Path,
     destination: Path,
     parent_descriptor: int,
-    *,
     seal: BundleSeal,
-) -> None:
-    """Copy and atomically publish a snapshot within one retained filesystem.
+) -> str:
+    """Stage and verify one snapshot candidate beside its destination.
 
     :param source: Validated adopted source bundle.
-    :param destination: Final snapshot path.
+    :param destination: Final snapshot path naming the candidate.
     :param parent_descriptor: Retained digest-directory descriptor.
     :param seal: Expected copied content identity.
-    :raises ValueError: Copied content differs or the publication parent is replaced.
+    :returns: Temporary child name containing verified copied bytes.
+    :raises OSError: Descriptor-relative staging fails.
+    :raises ValueError: Copied content differs from the managed seal.
     """
     temporary_name = f".{destination.name}.tmp-{secrets.token_hex(8)}"
     os.mkdir(temporary_name, 0o700, dir_fd=parent_descriptor)
@@ -968,6 +1021,48 @@ def _publish_posix_runtime_snapshot(
             os.close(candidate_descriptor)
         if sorted(entries, key=lambda entry: entry.path) != seal.entries:
             raise ValueError("managed source changed while creating its runtime snapshot")
+    except (OSError, ValueError):
+        _remove_descriptor_tree(parent_descriptor, temporary_name)
+        raise
+    return temporary_name
+
+
+def _require_retained_publication_parent(destination: Path, parent_descriptor: int) -> None:
+    """Require the lexical publication parent to remain the retained directory.
+
+    :param destination: Final snapshot path.
+    :param parent_descriptor: Retained digest-directory descriptor.
+    :raises ValueError: The lexical parent was replaced.
+    """
+    retained = os.fstat(parent_descriptor)
+    lexical = destination.parent.lstat()
+    if (retained.st_dev, retained.st_ino) != (lexical.st_dev, lexical.st_ino):
+        raise ValueError(
+            f"runtime snapshot publication directory was replaced: {destination.parent}"
+        )
+
+
+def _publish_posix_runtime_snapshot(
+    source: Path,
+    destination: Path,
+    parent_descriptor: int,
+    *,
+    seal: BundleSeal,
+) -> None:
+    """Copy and atomically publish a snapshot within one retained filesystem.
+
+    :param source: Validated adopted source bundle.
+    :param destination: Final snapshot path.
+    :param parent_descriptor: Retained digest-directory descriptor.
+    :param seal: Expected copied content identity.
+    """
+    temporary_name = _stage_posix_runtime_snapshot(
+        source,
+        destination,
+        parent_descriptor,
+        seal,
+    )
+    try:
         os.rename(
             temporary_name,
             destination.name,
@@ -979,12 +1074,7 @@ def _publish_posix_runtime_snapshot(
             _remove_descriptor_tree(parent_descriptor, temporary_name)
         except FileNotFoundError:
             pass
-    retained = os.fstat(parent_descriptor)
-    lexical = destination.parent.lstat()
-    if (retained.st_dev, retained.st_ino) != (lexical.st_dev, lexical.st_ino):
-        raise ValueError(
-            f"runtime snapshot publication directory was replaced: {destination.parent}"
-        )
+    _require_retained_publication_parent(destination, parent_descriptor)
 
 
 def _verified_runtime_snapshot(managed: Path, source: Path, seal: BundleSeal) -> Path:

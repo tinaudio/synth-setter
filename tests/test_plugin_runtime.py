@@ -1403,6 +1403,24 @@ def test_load_plugin_source_mutation_after_validation_fails_before_open(
     assert opened == []
 
 
+def test_adopt_plugin_bundle_absolute_internal_symlink_rejected(tmp_path: Path) -> None:
+    """Snapshot publication rejects source-bound absolute symlink targets.
+
+    :param tmp_path: Scratch adopted bundle containing an absolute internal link.
+    """
+    source = _bundle(tmp_path / "source/Example Synth.vst3")
+    link = source / "absolute-link"
+    link.symlink_to(_binary_path(source))
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    descriptor = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ValueError, match="absolute bundle symlink"):
+            plugin_runtime._copy_symlink_to_descriptor(link, descriptor, link.name)
+    finally:
+        os.close(descriptor)
+
+
 def test_runtime_snapshot_candidate_uses_destination_filesystem(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
