@@ -70,6 +70,7 @@ RUNTIME_FILE_READ_MASK = 0o044
 RUNTIME_DIRECTORY_ACCESS_MASK = 0o055
 _LOCK_RETRY_INTERVAL_SECONDS = 0.05
 _LEASE_DIRECTORY_TIMEOUT_SECONDS = 10.0
+_POSIX_SEARCH_ONLY_OPEN_FLAG = getattr(os, "O_PATH", getattr(os, "O_SEARCH", os.O_RDONLY))
 _WINDOWS_GENERIC_READ_WRITE = 0xC0000000
 _WINDOWS_SHARE_READ_WRITE = 0x00000003
 _WINDOWS_OPEN_ALWAYS = 4
@@ -1016,11 +1017,15 @@ def _posix_directory_descriptor(directory: Path) -> int:
     """
     absolute = directory.absolute()
     descriptor = os.open(absolute.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    components = absolute.parts[1:]
     try:
-        for component in absolute.parts[1:]:
+        for index, component in enumerate(components):
+            access_flag = (
+                os.O_RDONLY if index == len(components) - 1 else _POSIX_SEARCH_ONLY_OPEN_FLAG
+            )
             child = os.open(
                 component,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                access_flag | os.O_DIRECTORY | os.O_NOFOLLOW,
                 dir_fd=descriptor,
             )
             os.close(descriptor)
@@ -1043,12 +1048,16 @@ def _posix_create_directory_descriptor(directory: Path) -> int:
     """
     absolute = directory.absolute()
     descriptor = os.open(absolute.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    components = absolute.parts[1:]
     try:
-        for component in absolute.parts[1:]:
+        for index, component in enumerate(components):
+            access_flag = (
+                os.O_RDONLY if index == len(components) - 1 else _POSIX_SEARCH_ONLY_OPEN_FLAG
+            )
             try:
                 child = os.open(
                     component,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    access_flag | os.O_DIRECTORY | os.O_NOFOLLOW,
                     dir_fd=descriptor,
                 )
             except FileNotFoundError:
@@ -1058,7 +1067,7 @@ def _posix_create_directory_descriptor(directory: Path) -> int:
                     pass
                 child = os.open(
                     component,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    access_flag | os.O_DIRECTORY | os.O_NOFOLLOW,
                     dir_fd=descriptor,
                 )
             os.close(descriptor)

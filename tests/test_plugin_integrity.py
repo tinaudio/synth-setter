@@ -121,6 +121,25 @@ def test_advisory_file_lease_permission_publication_window_retries(
     assert attempts == 3
 
 
+@pytest.mark.skipif(not hasattr(os, "O_PATH"), reason="POSIX search-only descriptor semantics")
+def test_posix_create_directory_descriptor_execute_only_ancestor_succeeds(
+    tmp_path: Path,
+) -> None:
+    """Hierarchy traversal needs search permission but not ancestor read access.
+
+    :param tmp_path: Scratch execute-only ancestor and lock hierarchy.
+    """
+    ancestor = tmp_path / "execute-only"
+    directory = ancestor / "managed/locks"
+    directory.mkdir(parents=True)
+    ancestor.chmod(0o111)
+    try:
+        descriptor = plugin_integrity._posix_create_directory_descriptor(directory)
+        os.close(descriptor)
+    finally:
+        ancestor.chmod(0o700)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX no-follow hierarchy semantics")
 def test_posix_create_directory_descriptor_concurrent_creator_reopens_winner(
     tmp_path: Path,
@@ -172,7 +191,7 @@ def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
 
     marker_path = tmp_path / "package.lock"
     real_open = os.open
-    writer_released = threading.Event()
+    writer_unlocking = threading.Event()
     writer_thread: threading.Thread | None = None
 
     def _concurrent_open(
@@ -189,9 +208,9 @@ def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
 
             def _release_writer() -> None:
                 time.sleep(0.1)
+                writer_unlocking.set()
                 fcntl.flock(writer, fcntl.LOCK_UN)
                 os.close(writer)
-                writer_released.set()
 
             writer_thread = threading.Thread(target=_release_writer)
             writer_thread.start()
@@ -201,7 +220,7 @@ def test_advisory_file_lease_concurrent_read_only_marker_creator_waits(
     monkeypatch.setattr(plugin_integrity.os, "open", _concurrent_open)
     with plugin_integrity.advisory_file_lease(marker_path):
         assert writer_thread is not None
-        assert writer_released.is_set()
+        assert writer_unlocking.is_set()
     writer_thread.join(timeout=1)
     assert not writer_thread.is_alive()
 
