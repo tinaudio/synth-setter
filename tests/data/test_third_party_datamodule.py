@@ -1044,3 +1044,40 @@ def test_non_positive_channel_count_raises(tmp_path: Path) -> None:
             channels=0,
             signal_duration_seconds=_DURATION_SECONDS,
         )
+
+
+@pytest.mark.parametrize("field", ["sample_rate", "channels", "batch_size", "num_workers"])
+def test_boolean_count_argument_raises(tmp_path: Path, field: str) -> None:
+    """``bool`` subclasses ``int``, so a YAML ``true`` would silently mean one.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param field: Count argument supplied as a boolean.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=41)])
+    kwargs: dict[str, object] = {
+        "dataset_uri": str(tmp_path / "corpus.lance"),
+        "sample_rate": _TARGET_SAMPLE_RATE,
+        "channels": _TARGET_CHANNELS,
+        "signal_duration_seconds": _DURATION_SECONDS,
+        field: True,
+    }
+
+    with pytest.raises(ValueError, match=f"{field}=True"):
+        ThirdPartyAudioDataModule(**kwargs)  # type: ignore[arg-type]
+
+
+def test_non_positive_batch_size_raises(tmp_path: Path) -> None:
+    """A zero batch size would build a loader that yields nothing.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=42)])
+
+    with pytest.raises(ValueError, match="batch_size=0"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            batch_size=0,
+        )

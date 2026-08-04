@@ -394,8 +394,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param mel_stats_uri: ``.npz`` of the training run's mel statistics; local or ``r2://``.
         :param stats_cache_dir: Directory a fetched statistics object is cached in;
             ``None`` uses the working directory.
-        :raises ValueError: The render contract yields a non-positive sample count or channel
-            count, one encoder was injected for multiple conditioning streams, or a checkpoint
+        :raises ValueError: A count argument is not a positive integer, the render contract
+            yields a non-positive sample count or channel count, one encoder was injected for multiple conditioning streams, or a checkpoint
             override names a column this run does not condition on.
         """
         super().__init__()
@@ -409,6 +409,19 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.sample_rate = sample_rate
         self.channels = channels
         self.num_samples = int(sample_rate * signal_duration_seconds)
+        # bool is an int subclass, so a YAML `true` would otherwise pass as a count of 1.
+        for name, value in (
+            ("sample_rate", sample_rate),
+            ("channels", channels),
+            ("batch_size", batch_size),
+            ("num_workers", num_workers),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{name}={value!r} must be an integer")
+        if batch_size <= 0:
+            raise ValueError(f"batch_size={batch_size} must be positive")
+        if num_workers < 0:
+            raise ValueError(f"num_workers={num_workers} must not be negative")
         # A non-positive grid slices to an empty clip instead of failing the render contract.
         if self.num_samples <= 0:
             raise ValueError(
