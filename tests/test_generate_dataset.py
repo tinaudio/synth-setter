@@ -81,6 +81,7 @@ from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
 from tests.helpers.wandb_offline import read_history_rows, read_run_project
+from tests.helpers.xvfb import install_failing_xvfb
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -1046,6 +1047,34 @@ def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
         / f"shard-{shard.shard_id:06d}"
     )
     assert list(staging.glob("*.valid")), f"shard missing in fake R2: {shard.filename}"
+
+
+def test_from_hydra_torchsynth_experiment_bypasses_xvfb_and_uploads_shard(
+    cfg_dataset_torchsynth: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The TorchSynth worker renders and stages a shard when Xvfb cannot start.
+
+    :param cfg_dataset_torchsynth: Hydra cfg composed from the TorchSynth smoke experiment.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract and installs failing Xvfb.
+    :param tmp_path: Scratch root for the Xvfb marker and rendered shard.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    xvfb_marker = install_failing_xvfb(tmp_path, monkeypatch)
+    with open_dict(cfg_dataset_torchsynth):
+        cfg_dataset_torchsynth.r2.prefix = "fake-r2/torchsynth-run/"
+        cfg_dataset_torchsynth.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_torchsynth)
+    from_hydra(cfg_dataset_torchsynth)
+
+    assert not xvfb_marker.exists()
+    assert lance.dataset(str(tmp_path / spec.shards[0].filename)).count_rows() == 1
+    assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
 
 def test_from_hydra_applies_extras_writing_tags_and_config_tree(
