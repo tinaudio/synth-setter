@@ -1,6 +1,7 @@
 """Flow-VAE components: encoder/decoder CNNs, RealNVP flows, and the FlowVAE module."""
 
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -20,6 +21,8 @@ from synth_setter.data.vst.param_spec import (
     DiscreteLiteralParameter,
     Parameter,
 )
+
+_PARAM_LOSS_ENCODED_SLICES_ENV = "SYNTH_SETTER_PARAM_LOSS_ENCODED_SLICES"
 
 
 class CustomRealNVP(CompositeTransform):
@@ -356,10 +359,22 @@ def compute_individual_parameter_loss(
 
 
 def param_loss(x_hat: torch.Tensor, x: torch.Tensor, param_spec: str) -> torch.Tensor:
-    param_spec = param_specs[param_spec]
+    spec = param_specs[param_spec]
 
-    synth_params = [(p, len(p)) for p in param_spec.synth_params]
-    note_params = [(p, len(p)) for p in param_spec.note_params]
+    encoded_slices_enabled = os.environ.get(
+        _PARAM_LOSS_ENCODED_SLICES_ENV, ""
+    ).strip().lower() in {"1", "on", "true", "yes"}
+    if encoded_slices_enabled:
+        assert spec.encoded_width == x.shape[1]
+        spans = list(spec.encoded_slices())
+        loss = sum(
+            compute_individual_parameter_loss(x_hat[:, span], x[:, span], param)
+            for param, span in spans
+        )
+        return loss / len(spans)
+
+    synth_params = [(p, len(p)) for p in spec.synth_params]
+    note_params = [(p, len(p)) for p in spec.note_params]
 
     pointer = 0
 
