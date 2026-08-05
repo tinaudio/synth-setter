@@ -317,11 +317,11 @@ class _FusedLogMelEncoder(nn.Module):
 
 @jaxtyped(typechecker=beartype)
 def __getattr__(name: str) -> object:
-    """Resolve the pre-#2755 encoder name so old checkpoints unpickle.
+    """Resolve ``LogMelEncoder`` for checkpoint deserialization.
 
     :param name: Requested module attribute.
-    :returns: Compatibility target for the renamed class.
-    :raises AttributeError: If ``name`` is not the renamed class.
+    :returns: Compatibility target backing the fused encoder name.
+    :raises AttributeError: If ``name`` is not ``LogMelEncoder``.
     """
     if name == "LogMelEncoder":
         return _FusedLogMelEncoder
