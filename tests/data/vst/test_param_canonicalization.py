@@ -2,6 +2,7 @@
 
 import itertools
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -249,6 +250,25 @@ class TestDataModuleWiring:
         expected = make_shard_columns(8, num_params=92, seed=1)["param_array"][:4] * 2 - 1
         assert np.allclose(batch["params"].numpy(), expected, atol=1e-6)
 
+    @pytest.mark.parametrize("value", ["typo", 1, None])
+    def test_non_bool_flag_is_rejected_at_construction(self, value: object) -> None:
+        """A non-bool override fails loudly instead of silently enabling the transform.
+
+        Hydra composes ``datamodule.canonicalize_symmetric_blocks=typo`` as the
+        truthy string ``"typo"``, which would otherwise rewrite every training
+        target rather than failing the run.
+
+        :param value: Non-bool override reaching the datamodule.
+        """
+        from synth_setter.data.lance_datamodule import LanceVSTDataModule
+
+        with pytest.raises(TypeError, match="canonicalize_symmetric_blocks"):
+            LanceVSTDataModule(
+                Path("unused"),
+                param_spec_name=ParamSpecName("surge_simple"),
+                canonicalize_symmetric_blocks=value,  # type: ignore[arg-type]
+            )
+
     def _fake_train_batch(self, *, canonicalize: bool, seed: int) -> np.ndarray:
         """Draw one fake train batch under a pinned global RNG.
 
@@ -463,56 +483,72 @@ def _block_permutations(row: np.ndarray, indices: np.ndarray) -> Iterator[np.nda
         yield candidate
 
 
-def _audible_rows(
-    render: Callable[[np.ndarray], np.ndarray],
-    spec: ParamSpec,
-    rng: np.random.Generator,
-    *,
-    count: int,
-    min_loudness: float,
-) -> list[np.ndarray]:
+@dataclass(frozen=True)
+class _RenderProbe:
+    """Renders encoded rows and draws fresh ones for one spec under test.
+
+    .. attribute :: render
+
+        Renders one encoded row to ``(channels, samples)`` audio.
+
+    .. attribute :: spec
+
+        Spec whose encoded width fresh rows are drawn at.
+
+    .. attribute :: rng
+
+        Draw source for fresh rows.
+    """
+
+    render: Callable[[np.ndarray], np.ndarray]
+    spec: ParamSpec
+    rng: np.random.Generator
+
+    def draw(self) -> np.ndarray:
+        """Draw one fresh encoded row.
+
+        :returns: Encoded ``[0, 1]`` row at the spec's width.
+        """
+        return self.rng.random(len(self.spec))
+
+
+def _audible_rows(probe: _RenderProbe, *, count: int, min_loudness: float) -> list[np.ndarray]:
     """Draw encoded rows that render above the generator's loudness gate.
 
-    :param render: Renders one encoded row to audio.
-    :param spec: Spec whose encoded width the rows are drawn at.
-    :param rng: Draw source.
+    :param probe: Render context for the spec under test.
     :param count: Rows required.
     :param min_loudness: dBFS gate, matching the dataset generator's own.
     :returns: Exactly ``count`` audible rows.
     """
     floor = 10 ** (min_loudness / 20)
-    candidates = (rng.random(len(spec)) for _ in range(80))
+    candidates = (probe.draw() for _ in range(80))
     rows = list(
-        itertools.islice((c for c in candidates if np.sqrt((render(c) ** 2).mean()) > floor), count)
+        itertools.islice(
+            (c for c in candidates if np.sqrt((probe.render(c) ** 2).mean()) > floor), count
+        )
     )
     assert len(rows) == count, "fixture drew too few audible rows to test"
     return rows
 
 
 def _permutation_scores(
-    render: Callable[[np.ndarray], np.ndarray],
-    spec: ParamSpec,
-    rng: np.random.Generator,
-    row: np.ndarray,
-    indices: np.ndarray,
+    probe: _RenderProbe, row: np.ndarray, indices: np.ndarray
 ) -> tuple[float, float, float]:
     """Score one row's block permutations against two reference populations.
 
     Scored with MSS, not sample-wise: the Surge render randomizes phase, so a
     waveform metric saturates on repeat renders of one row and resolves nothing.
 
-    :param render: Renders one encoded row to audio.
-    :param spec: Spec whose encoded width unrelated rows are drawn at.
-    :param rng: Draw source for the unrelated rows.
+    :param probe: Render context for the spec under test.
     :param row: Encoded row whose blocks are permuted.
     :param indices: ``(blocks, width)`` encoded-dim layout to permute.
     :returns: Worst permutation score, the closer of two unrelated rows, and the
         larger of two repeat renders of ``row``.
     """
-    base = render(row)
-    unrelated = min(compute_mss(base, render(rng.random(len(spec)))) for _ in range(2))
-    repeat = max(compute_mss(base, render(row)) for _ in range(2))
-    worst = max(compute_mss(base, render(c)) for c in _block_permutations(row, indices))
+    base = probe.render(row)
+    unrelated = min(compute_mss(base, probe.render(probe.draw())) for _ in range(2))
+    repeat = max(compute_mss(base, probe.render(row)) for _ in range(2))
+    worst = max(compute_mss(base, probe.render(c)) for c in _block_permutations(row, indices))
     return worst, unrelated, repeat
 
 
@@ -540,13 +576,13 @@ def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
         start, end = sorted(note["note_start_and_end"])
         return renderer.render(synth_params, int(note["pitch"]), config.velocity, (start, end))
 
-    rng = np.random.default_rng(11)
+    probe = _RenderProbe(render=render, spec=spec, rng=np.random.default_rng(11))
     # Several rows: oscillator identity could matter only under a routing or
     # mode combination one row never selects.
-    rows = _audible_rows(render, spec, rng, count=3, min_loudness=config.min_loudness)
+    rows = _audible_rows(probe, count=3, min_loudness=config.min_loudness)
 
     for index, row in enumerate(rows):
-        worst, unrelated, repeat = _permutation_scores(render, spec, rng, row, indices)
+        worst, unrelated, repeat = _permutation_scores(probe, row, indices)
         assert worst < max(0.1 * unrelated, 2 * repeat), (
             f"{param_spec_name} blocks are not interchangeable on row {index}: worst "
             f"permutation scores MSS {worst:.3f}, against {unrelated:.3f} for the closer "

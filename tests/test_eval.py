@@ -1604,9 +1604,7 @@ def test_evaluate_validate_mode_canonicalizes_surge_simple(
     """
     from tests.helpers.lance_fixtures import make_shard_columns, write_lance_shard
 
-    # Own the stored rows rather than reusing the smoke fixture: its splits are
-    # re-rendered per run, so whether any row is non-canonical is luck, and an
-    # already-canonical row makes the served-order assertion below vacuous.
+    # Use fresh rows so the served-order assertion exercises non-canonical storage.
     root = tmp_path / "canonicalization-root"
     blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
     sort_keys = [block[blocks.key_offset] for block in blocks.indices]
@@ -1639,8 +1637,11 @@ def test_evaluate_validate_mode_canonicalizes_surge_simple(
     datamodule = object_dict["datamodule"]
     assert datamodule.canonicalize_symmetric_blocks is True
     datamodule.setup("validate")
-    served = next(iter(datamodule.val_dataloader()))["params"][:, sort_keys]
-    assert (np.diff(served.numpy(), axis=1) <= 0).all()
+    served = np.concatenate(
+        [batch["params"][:, sort_keys].numpy() for batch in datamodule.val_dataloader()]
+    )
+    assert len(served) == len(stored), "assertion must cover every stored row"
+    assert (np.diff(served, axis=1) <= 0).all()
     assert metric_dict["val/param_mse"].item() == 0.0
 
 

@@ -63,13 +63,13 @@ def block_indices_by_prefix(
 
     suffix_orders = []
     for prefix in prefixes:
-        matched = [n for n in offsets if n.startswith(prefix)]
+        matched = [name for name in offsets if name.startswith(prefix)]
         if not matched:
             raise ValueError(f"prefix {prefix!r} matches no synth params in the spec")
-        wide = [n for n in matched if widths[n] != 1]
+        wide = [name for name in matched if widths[name] != 1]
         if wide:
             raise ValueError(f"non-scalar params cannot form canonical blocks: {wide}")
-        suffix_orders.append([n.removeprefix(prefix) for n in matched])
+        suffix_orders.append([name.removeprefix(prefix) for name in matched])
     first = suffix_orders[0]
     if any(order != first for order in suffix_orders[1:]):
         raise ValueError(f"blocks {prefixes!r} have mismatched param suffix sequences")

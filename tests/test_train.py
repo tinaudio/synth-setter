@@ -21,6 +21,7 @@ from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
 import hydra
+import lance
 import numpy as np
 import pandas as pd
 import pytest
@@ -914,8 +915,18 @@ def test_train_canonicalize_symmetric_blocks_reaches_datamodule(
     assert datamodule.canonicalize_symmetric_blocks is True
     blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
     sort_keys = [block[blocks.key_offset] for block in blocks.indices]
-    # Every train row, not the first batch: this fixture re-renders per run, so
-    # any single row may come out canonical as stored and prove nothing.
+    # This fixture re-renders per run, so prove the stored rows are not already
+    # canonical before asserting the served ones are.
+    stored = (
+        lance.dataset(str(datamodule.dataset_root / "train.lance"))
+        .to_table(columns=["param_array"])["param_array"]
+        .to_numpy(zero_copy_only=False)
+    )
+    stored_keys = np.stack([row[sort_keys] for row in stored])
+    assert not (np.diff(stored_keys, axis=1) <= 0).all(), (
+        "stored rows are already canonical, so the assertion below would be vacuous"
+    )
+
     datamodule.setup("fit")
     served = np.concatenate(
         [batch["params"][:, sort_keys].numpy() for batch in datamodule.train_dataloader()]

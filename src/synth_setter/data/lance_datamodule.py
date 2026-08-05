@@ -567,6 +567,7 @@ class LanceVSTDataModule(VSTDataModule):
             source snapshots.
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
+        :raises TypeError: If ``canonicalize_symmetric_blocks`` is not a bool.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -586,6 +587,14 @@ class LanceVSTDataModule(VSTDataModule):
             download_dataset_row_limit=download_dataset_row_limit,
         )
         self.val_num_workers = val_num_workers
+        if not isinstance(canonicalize_symmetric_blocks, bool):
+            # Hydra composes `=typo` as a truthy str, which would silently
+            # rewrite every training target instead of failing the run.
+            raise TypeError(
+                "canonicalize_symmetric_blocks must be a bool, got "
+                f"{type(canonicalize_symmetric_blocks).__name__}: "
+                f"{canonicalize_symmetric_blocks!r}"
+            )
         self.canonicalize_symmetric_blocks = canonicalize_symmetric_blocks
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
