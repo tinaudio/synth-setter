@@ -64,13 +64,20 @@ _PreSplitLogMelEncoder.__qualname__ = "LogMelEncoder"
 
 @pytest.fixture
 def legacy_parts() -> tuple[LogMelFrontend, MelCNN]:
-    """Build the front end and backbone the legacy encoder fused together.
+    """Build the front end and backbone the fused encoder holds.
+
+    Batch-norm running statistics are moved off their defaults so an eval-mode comparison
+    distinguishes restored buffers from freshly initialized ones.
 
     :returns: Seeded front end and backbone sharing one waveform contract.
     """
     torch.manual_seed(0)
     frontend = LogMelFrontend(_IN_DIM, sample_rate=_SAMPLE_RATE, n_mels=16)
     backbone = MelCNN(4, _OUT_DIM, input_channels=1, num_blocks=2)
+    for module in backbone.modules():
+        if isinstance(module, nn.BatchNorm2d):
+            module.running_mean = torch.randn(module.num_features)
+            module.running_var = torch.rand(module.num_features) + 0.5
     return frontend, backbone
 
 
@@ -80,11 +87,11 @@ def legacy_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
-    """Write a real checkpoint whose encoder is pickled under the pre-split name.
+    """Write a real checkpoint whose encoder is pickled as ``LogMelEncoder``.
 
     :param legacy_parts: Front end and backbone fused into the pickled encoder.
     :param tmp_path: Per-test directory receiving the checkpoint.
-    :param monkeypatch: Makes the pre-split name resolvable while pickling.
+    :param monkeypatch: Makes the fused-class name resolvable while pickling.
     :returns: Path to the saved Lightning checkpoint.
     """
     frontend, backbone = legacy_parts
@@ -135,29 +142,33 @@ def legacy_checkpoint(
 def test_load_from_checkpoint_pre_split_encoder_reproduces_its_encoding(
     legacy_checkpoint: Path, legacy_parts: tuple[LogMelFrontend, MelCNN]
 ) -> None:
-    """A pre-rename checkpoint loads and its encoder still encodes as it did.
+    """A checkpoint naming ``LogMelEncoder`` loads and produces the same encoding.
 
-    :param legacy_checkpoint: Checkpoint pickling the encoder under the old name.
+    Runs in eval mode so batch norm reads the checkpoint's running statistics
+    rather than the batch's: restoring the weights but not the buffers would
+    pass in train mode and still encode wrongly at inference.
+
+    :param legacy_checkpoint: Checkpoint pickling the encoder as ``LogMelEncoder``.
     :param legacy_parts: The front end and backbone whose weights it carries.
     """
     frontend, backbone = legacy_parts
     waveform = torch.zeros(2, _IN_DIM)
     waveform[:, ::64] = 0.5
-    expected = backbone(frontend(waveform))
+    expected = backbone.eval()(frontend.eval()(waveform))
 
     model = VSTFlowMatchingModule.load_from_checkpoint(
         legacy_checkpoint, map_location="cpu", weights_only=False
     )
 
-    torch.testing.assert_close(model.encoder(waveform), expected)
+    torch.testing.assert_close(model.encoder.eval()(waveform), expected)
 
 
 def test_torch_load_pre_split_checkpoint_resolves_the_renamed_encoder(
     legacy_checkpoint: Path,
 ) -> None:
-    """The raw ``torch.load`` path named in #2766 also unpickles the old class.
+    """The raw ``torch.load`` path resolves the checkpoint's ``LogMelEncoder``.
 
-    :param legacy_checkpoint: Checkpoint pickling the encoder under the old name.
+    :param legacy_checkpoint: Checkpoint pickling the encoder as ``LogMelEncoder``.
     """
     checkpoint = torch.load(legacy_checkpoint, map_location="cpu", weights_only=False)
 
@@ -165,6 +176,6 @@ def test_torch_load_pre_split_checkpoint_resolves_the_renamed_encoder(
 
 
 def test_unknown_cnn_module_attribute_still_raises_attribute_error() -> None:
-    """Compatibility resolution stays scoped to the renamed class."""
+    """Compatibility resolution stays scoped to ``LogMelEncoder``."""
     with pytest.raises(AttributeError):
         cnn.NotAnEncoder  # noqa: B018
