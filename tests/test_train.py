@@ -34,6 +34,7 @@ from omegaconf.errors import InterpolationKeyError
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.data.vst.param_canonicalization import resolve_canonical_blocks
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
@@ -44,6 +45,7 @@ from synth_setter.models.components.pretrained_encoder import (
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
@@ -906,7 +908,17 @@ def test_train_canonicalize_symmetric_blocks_reaches_datamodule(
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = train(cfg)
 
-    assert object_dict["datamodule"].canonicalize_symmetric_blocks is True
+    # The flag reaching the datamodule is not the contract — the batches it
+    # serves must actually come out canonical.
+    datamodule = object_dict["datamodule"]
+    assert datamodule.canonicalize_symmetric_blocks is True
+    blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
+    sort_keys = [block[blocks.key_offset] for block in blocks.indices]
+    # The train split, not val: this fixture's single val row happens to be
+    # canonical already, so asserting on it would pass without the transform.
+    datamodule.setup("fit")
+    served = next(iter(datamodule.train_dataloader()))["params"][:, sort_keys]
+    assert (np.diff(served.numpy(), axis=1) <= 0).all()
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
 

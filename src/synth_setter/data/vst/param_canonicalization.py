@@ -7,9 +7,9 @@ the Surge render randomizes phase, so a waveform metric saturates on repeat rend
 
 from __future__ import annotations
 
-from collections.abc import Sized
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from types import MappingProxyType
 
 import numpy as np
 
@@ -17,10 +17,11 @@ from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
 
+# Read-only: a mutated entry would silently change every later run's target layout.
 # LFO blocks are routed differently and are not render-invariant under permutation — see #1886.
-SYMMETRIC_BLOCK_REGISTRY: dict[ParamSpecName, tuple[tuple[str, ...], str]] = {
-    ParamSpecName("surge_simple"): (("a_osc_1_", "a_osc_2_", "a_osc_3_"), "volume"),
-}
+SYMMETRIC_BLOCK_REGISTRY: Mapping[ParamSpecName, tuple[tuple[str, ...], str]] = MappingProxyType(
+    {ParamSpecName("surge_simple"): (("a_osc_1_", "a_osc_2_", "a_osc_3_"), "volume")}
+)
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class CanonicalBlocks:
 
 
 def block_indices_by_prefix(
-    spec: ParamSpec, prefixes: tuple[str, ...], key_suffix: str
+    spec: ParamSpec, prefixes: Sequence[str], key_suffix: str
 ) -> CanonicalBlocks:
     """Derive aligned encoded-dim blocks for ``prefixes`` from ``spec``.
 
@@ -54,16 +55,11 @@ def block_indices_by_prefix(
     :raises ValueError: If a prefix matches no params, the per-prefix suffix
         sequences differ, or ``key_suffix`` is not among them.
     """
-    offsets: dict[str, int] = {}
-    widths: dict[str, int] = {}
-    pointer = 0
-    for param in spec.synth_params:
-        # Parameter subclasses all define __len__ (encoded width); the base
-        # class carries no Sized annotation, so go through cast for pyright.
-        width = len(cast(Sized, param))
-        offsets[param.name] = pointer
-        widths[param.name] = width
-        pointer += width
+    # Read spans off the spec rather than re-deriving widths, so a parameter
+    # type that owns several columns can never be mistaken for a scalar here.
+    spans = list(spec.encoded_slices())[: len(spec.synth_params)]
+    offsets = {param.name: span.start for param, span in spans}
+    widths = {param.name: span.stop - span.start for param, span in spans}
 
     suffix_orders = []
     for prefix in prefixes:

@@ -441,10 +441,12 @@ def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
     )
     base = render(row)
 
-    # An unrelated row sets the scale a genuinely different sound scores at;
-    # repeat renders of the unchanged row set the floor the plugin can resolve.
-    unrelated = compute_mss(base, render(rng.random(len(spec))))
-    repeat = max(compute_mss(base, render(row)) for _ in range(2))
+    # Unrelated rows set the scale a genuinely different sound scores at; the
+    # tightest of three guards against one draw landing spectrally close.
+    unrelated = min(compute_mss(base, render(rng.random(len(spec)))) for _ in range(3))
+    # Repeat renders of the unchanged row set the floor the plugin can resolve,
+    # so phase randomization alone can never fail the assertion below.
+    repeat = max(compute_mss(base, render(row)) for _ in range(3))
 
     worst = 0.0
     for order in itertools.permutations(range(len(indices))):
@@ -452,8 +454,8 @@ def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
         candidate[indices.reshape(-1)] = row[indices[list(order)].reshape(-1)]
         worst = max(worst, compute_mss(base, render(candidate)))
 
-    assert worst < 0.1 * unrelated, (
+    assert worst < max(0.1 * unrelated, 2 * repeat), (
         f"{param_spec_name} blocks are not interchangeable: worst permutation scores "
-        f"MSS {worst:.3f}, against {unrelated:.3f} for an unrelated row and "
-        f"{repeat:.3f} for a repeat render of the same row"
+        f"MSS {worst:.3f}, against {unrelated:.3f} for the closest of three unrelated "
+        f"rows and {repeat:.3f} for a repeat render of the same row"
     )

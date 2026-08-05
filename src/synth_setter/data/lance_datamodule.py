@@ -386,9 +386,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
             sketch = None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
         if self._canonical_blocks is not None:
-            # Sorting commutes with the [0, 1] -> [-1, 1] map, so canonicalizing
-            # these already-rescaled draws yields the same block order as the
-            # real path, which canonicalizes before rescaling.
+            # Canonicalizing after rescaling preserves the real path's block order.
             params = torch.from_numpy(
                 canonicalize_blocks(params.numpy(), self._canonical_blocks)
             )
