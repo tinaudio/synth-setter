@@ -177,8 +177,9 @@ class TestValidateStructure:
         }
 
     def test_required_synth_fields_match_synth_spec_model(self) -> None:
-        """Structural validation derives synth identity fields from the schema."""
-        assert set(_REQUIRED_SYNTH_FIELDS) == set(SynthSpec.model_fields)
+        """Structural validation derives required synth identity fields from the schema."""
+        expected = {name for name, field in SynthSpec.model_fields.items() if field.is_required()}
+        assert set(_REQUIRED_SYNTH_FIELDS) == expected
 
     def test_other_defaulted_render_field_remains_required(self) -> None:
         """Platform-dependent defaults must be materialized in persisted specs."""
@@ -224,7 +225,14 @@ class TestValidateTestValues:
 class TestSynthIdentityShape:
     """Synth identity must use the canonical nested shape."""
 
-    @pytest.mark.parametrize("field", sorted(SynthSpec.model_fields))
+    @pytest.mark.parametrize(
+        "field",
+        sorted(
+            name
+            for name, model_field in SynthSpec.model_fields.items()
+            if model_field.is_required()
+        ),
+    )
     def test_a_spec_missing_a_required_synth_field_is_rejected(self, field: str) -> None:
         """Every schema-required identity field is enforced structurally.
 
@@ -236,6 +244,13 @@ class TestSynthIdentityShape:
         errors = validate_structure(spec)
 
         assert any("missing required synth fields" in error and field in error for error in errors)
+
+    def test_a_spec_missing_optional_managed_digest_is_accepted(self) -> None:
+        """Legacy and unmanaged specs may omit the managed plugin digest."""
+        spec = _make_valid_spec()
+
+        assert "managed_plugin_digest" not in spec["render"]["synth"]
+        assert validate_structure(spec) == []
 
     def test_a_spec_with_no_nested_identity_is_rejected(self) -> None:
         """A missing nested synth mapping is a structural error."""

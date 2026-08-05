@@ -20,6 +20,7 @@ from synth_setter.data.vst.core import (
     render_params,
     warmup_plugin,
 )
+from synth_setter.plugin_integrity import PluginIntegrityError
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 
 if TYPE_CHECKING:
@@ -397,13 +398,39 @@ class TestRenderParamsPreloadedPlugin:
             sample_rate=44100,
             channels=2,
             plugin_state_path="presets/surge-base.vstpreset",
+            expected_managed_digest="a" * 64,
             plugin=cast("VST3Plugin", preloaded),
+            preloaded_managed_digest="a" * 64,
         )
 
         assert load_calls == []
         assert preset_calls == []
         # Non-silent audio proves the pre-loaded plugin ran the note-on render.
         assert np.any(output)
+
+    @pytest.mark.parametrize("preloaded_digest", [None, "b" * 64])
+    def test_preloaded_plugin_without_matching_identity_rejected(
+        self,
+        preloaded_digest: str | None,
+    ) -> None:
+        """A configured managed identity requires matching preloaded-plugin proof.
+
+        :param preloaded_digest: Missing or mismatched identity carried with the plugin.
+        """
+        with pytest.raises(PluginIntegrityError, match="preloaded plugin managed identity"):
+            render_params(
+                "plugins/Surge XT.vst3",
+                params={},
+                midi_note=60,
+                velocity=100,
+                note_start_and_end=(0.0, 1.0),
+                signal_duration_seconds=1.0,
+                sample_rate=44100,
+                channels=2,
+                expected_managed_digest="a" * 64,
+                plugin=cast("VST3Plugin", self._fake_plugin()),
+                preloaded_managed_digest=preloaded_digest,
+            )
 
     def test_no_plugin_kwarg_reloads_per_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without ``plugin``, ``render_params`` still loads the plugin and preset per call.

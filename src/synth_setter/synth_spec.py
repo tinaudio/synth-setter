@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NewType
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
 from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
@@ -54,6 +54,10 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     .. attribute :: synth_version
 
         Version of the plugin, package, or runtime artifact implementing the synth.
+
+    .. attribute :: managed_plugin_digest
+
+        Validated managed VST seal identity, or ``None`` for unmanaged and in-process synths.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -63,6 +67,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     plugin_path: str
     plugin_state_path: str
     synth_version: str
+    managed_plugin_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _version_must_not_be_blank(self) -> SynthSpec:

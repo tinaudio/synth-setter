@@ -133,7 +133,7 @@ Source: `src/synth_setter/utils/utils.py:137-148`, called from `src/synth_setter
 `log_wandb_provenance()` (`src/synth_setter/utils/logging_utils.py:64-98`) is called on all three
 entrypoints: `src/synth_setter/cli/train.py` and `src/synth_setter/cli/eval.py` after
 `log_hyperparameters()`, and `src/synth_setter/cli/generate_dataset.py` inside `generate()` right
-after `_log_hyperparams()` (covering both the local `main` and worker `from_hydra` paths).
+after `_log_hyperparams()` (covering local Hydra runs and spec-URI workers when W&B is enabled).
 
 | Key          | Source               | Example                                                 |
 | ------------ | -------------------- | ------------------------------------------------------- |

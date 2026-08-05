@@ -129,6 +129,20 @@ def test_lance_schema_exposes_native_json_debug_column() -> None:
     assert schema.field(DEBUG_FIELD) == pa.field(DEBUG_FIELD, pa.json_(), nullable=False)
 
 
+def test_lance_schema_omits_unmanaged_digest_but_persists_managed_identity() -> None:
+    """Optional digest preserves legacy schemas while managed shards carry identity."""
+    unmanaged = lance_schema(_FIELD_SHAPES, _METADATA)
+    unmanaged_payload = json.loads(
+        unmanaged.metadata[lance_shard.SHARD_METADATA_SCHEMA_KEY]
+    )
+    managed_metadata = _METADATA.model_copy(update={"managed_plugin_digest": "a" * 64})
+    managed = lance_schema(_FIELD_SHAPES, managed_metadata)
+    managed_payload = json.loads(managed.metadata[lance_shard.SHARD_METADATA_SCHEMA_KEY])
+
+    assert "managed_plugin_digest" not in unmanaged_payload
+    assert managed_payload["managed_plugin_digest"] == "a" * 64
+
+
 def test_seed_debug_array_serializes_seed_and_derivation_inputs() -> None:
     """Seed debug documents retain dynamic JSON typing and accepted attempts."""
     debug = seed_debug_array(42, [9], [2], [2728252728602953181], shard_id=7)

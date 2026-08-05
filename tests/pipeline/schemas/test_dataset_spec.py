@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1387,7 +1388,39 @@ class TestLegacyFlatR2Compat:
 
 
 class TestFromHydraCfg:
-    """``DatasetSpec.from_hydra_cfg`` masks non-spec groups before resolving."""
+    """``DatasetSpec.from_hydra_cfg`` masks and parses config without runtime I/O."""
+
+    @pytest.mark.usefixtures("patch_runtime_io")
+    def test_schema_parse_does_not_hash_plugin_content(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Hydra-to-schema parsing remains pure even for a managed-looking synth node.
+
+        :param monkeypatch: Makes any plugin digest probe fail the test.
+        """
+        from omegaconf import OmegaConf
+
+        import synth_setter.plugin_runtime as plugin_runtime
+        from synth_setter.data.vst import core as vst_core
+
+        raw = _valid_spec_kwargs()
+        raw["synth"] = raw["render"].pop("synth")
+        cfg = OmegaConf.create(raw)
+
+        def _unexpected_plugin_io(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("plugin I/O during schema parse")
+
+        monkeypatch.setattr(Path, "exists", _unexpected_plugin_io)
+        monkeypatch.setattr(Path, "read_bytes", _unexpected_plugin_io)
+        monkeypatch.setattr(Path, "read_text", _unexpected_plugin_io)
+        monkeypatch.setattr(Path, "resolve", _unexpected_plugin_io)
+        monkeypatch.setattr(plugin_runtime, "managed_plugin_digest", _unexpected_plugin_io)
+        monkeypatch.setattr(vst_core, "extract_renderer_version", _unexpected_plugin_io)
+        monkeypatch.setattr(vst_core, "load_plugin", _unexpected_plugin_io)
+
+        spec = DatasetSpec.from_hydra_cfg(cfg)
+
+        assert spec.render.synth.managed_plugin_digest is None
 
     @pytest.mark.usefixtures("patch_runtime_io")
     def test_masks_unresolvable_non_spec_group_before_resolve(self) -> None:

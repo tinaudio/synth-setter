@@ -32,7 +32,7 @@ def test_synth_group_files_mirror_registry_identity() -> None:
     """Each group file carries exactly the registry row's five fields."""
     for name, spec in SYNTHS.items():
         content = yaml.safe_load((_SYNTH_CONFIG_DIR / f"{name}.yaml").read_text())
-        assert content == spec.model_dump(), name
+        assert content == spec.model_dump(exclude_none=True), name
 
 
 def test_train_root_selects_synth_group_by_name() -> None:

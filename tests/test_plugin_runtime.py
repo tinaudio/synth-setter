@@ -226,12 +226,95 @@ def test_renderer_construction_before_rotation_consumes_validated_old_bytes(
     installer = threading.Thread(target=_rotate)
     installer.start()
 
-    load_plugin(str(bundle))
+    load_plugin(str(bundle), expected_managed_digest=expected_digest)
     installer.join(10)
 
     assert not installer.is_alive()
     assert consumed == [_test_binary_magic() + b"artifact-a"]
     assert managed_plugin_digest(bundle) != expected_digest
+
+
+def test_renderer_construction_waiting_for_rotation_rejects_unpinned_new_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A renderer waiting behind rotation revalidates before opening new bytes.
+
+    :param tmp_path: Scratch root shared by the runtime and installer threads.
+    :param monkeypatch: Synchronizes the runtime's pre-lock identity resolution.
+    """
+    plugin = PluginManifest.load(_manifest(tmp_path / "studiorack.json")).resolve("example/synth")
+    artifact_lock = _example_lock()
+    rotated_lock = _rotated_package(artifact_lock, plugin)
+    managed_root = tmp_path / "managed"
+    bundle = _bundle(
+        managed_root / "VST3/example/synth/1.2.3/Example Synth.vst3",
+        payload=b"artifact-a",
+    )
+    _seal_bundle(bundle, plugin, artifact_lock)
+    expected_digest = managed_plugin_digest(bundle)
+    assert expected_digest is not None
+
+    replacement_sealed = threading.Event()
+    renderer_resolved = threading.Event()
+    release_installer = threading.Event()
+    installer_errors: list[BaseException] = []
+
+    def _rotate() -> None:
+        try:
+            with plugin_integrity.package_install_lock(
+                plugin.package,
+                plugin.version,
+                managed_root.resolve(),
+            ):
+                _replace_managed_bundle(bundle, plugin, rotated_lock)
+                replacement_sealed.set()
+                if not release_installer.wait(10):
+                    raise RuntimeError("timed out waiting to publish rotation")
+        except BaseException as exc:  # pragma: no cover - asserted in the parent thread
+            installer_errors.append(exc)
+
+    real_identity_and_lock = plugin_runtime._runtime_identity_and_lock
+
+    def _signal_resolved(path: Path) -> tuple[Path, Path] | None:
+        identity = real_identity_and_lock(path)
+        if threading.current_thread().name == "renderer":
+            renderer_resolved.set()
+        return identity
+
+    constructed: list[str] = []
+    monkeypatch.setattr(plugin_runtime, "_runtime_identity_and_lock", _signal_resolved)
+    monkeypatch.setattr(
+        vst_core,
+        "VST3Plugin",
+        lambda path, plugin_name=None: constructed.append(path) or object(),
+    )
+    installer = threading.Thread(target=_rotate, name="installer")
+    installer.start()
+    assert replacement_sealed.wait(10)
+
+    renderer_errors: list[BaseException] = []
+
+    def _construct_renderer() -> None:
+        try:
+            load_plugin(str(bundle), expected_managed_digest=expected_digest)
+        except BaseException as exc:  # pragma: no cover - asserted in the parent thread
+            renderer_errors.append(exc)
+
+    renderer = threading.Thread(target=_construct_renderer, name="renderer")
+    renderer.start()
+    assert renderer_resolved.wait(10)
+    release_installer.set()
+    renderer.join(10)
+    installer.join(10)
+
+    assert not renderer.is_alive()
+    assert not installer.is_alive()
+    assert installer_errors == []
+    assert len(renderer_errors) == 1
+    assert isinstance(renderer_errors[0], PluginIntegrityError)
+    assert "digest mismatch" in str(renderer_errors[0])
+    assert constructed == []
 
 
 @pytest.mark.parametrize("consumer", ["load", "version"])

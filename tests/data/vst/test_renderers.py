@@ -29,6 +29,9 @@ from synth_setter.data.vst.renderers import (
     PedalboardRenderer,
 )
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.plugin_integrity import PluginIntegrityError
+from synth_setter.plugin_runtime import record_managed_alias
+from tests.plugin_manager_test_support import _bundle, _seal_bundle
 
 
 def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthParamMap:
@@ -56,6 +59,23 @@ def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthPara
             for key, (index, name) in params.items()
         },
     )
+
+
+def _managed_alias(tmp_path: Path) -> Path:
+    """Create a sealed bundle and its stable runtime alias.
+
+    :param tmp_path: Scratch root for managed and consumer-facing paths.
+    :returns: Stable alias carrying a managed ownership record.
+    """
+    bundle = _bundle(
+        tmp_path / "managed/VST3/example/synth/1.2.3/Example Synth.vst3"
+    )
+    _seal_bundle(bundle)
+    alias = tmp_path / "plugins/Example Synth.vst3"
+    alias.parent.mkdir()
+    alias.symlink_to(bundle.absolute(), target_is_directory=True)
+    record_managed_alias(alias, bundle)
+    return alias
 
 
 def test_audio_renderer_is_an_abstract_dataclass() -> None:
@@ -160,6 +180,7 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
         channels=2,
         signal_duration_seconds=1.0,
         plugin_state_path="preset.vstpreset",
+        expected_managed_digest="a" * 64,
     )
 
     result = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
@@ -177,11 +198,91 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
             2,
         ),
         "kwargs": {
+            "expected_managed_digest": "a" * 64,
             "plugin_state_path": "preset.vstpreset",
             "plugin": None,
+            "preloaded_managed_digest": None,
             "warmup": False,
         },
     }
+
+
+def test_pedalboard_renderer_non_none_managed_digest_mismatch_rejected_before_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pedalboard refuses a sealed alias whose managed identity differs.
+
+    :param tmp_path: Scratch root for a sealed managed alias.
+    :param monkeypatch: Replaces the native host to prove it is never reached.
+    """
+    opened: list[str] = []
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.VST3Plugin",
+        lambda path: opened.append(path) or object(),
+    )
+    renderer = PedalboardRenderer(
+        plugin_path=str(_managed_alias(tmp_path)),
+        sample_rate=32,
+        channels=2,
+        signal_duration_seconds=1.0,
+        expected_managed_digest="f" * 64,
+    )
+
+    with pytest.raises(PluginIntegrityError, match="managed plugin digest mismatch"):
+        renderer.render({}, 60, 100, (0.0, 0.25))
+
+    assert opened == []
+
+
+def test_dawdreamer_renderer_non_none_managed_digest_mismatch_rejected_before_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DawDreamer refuses a sealed alias whose managed identity differs.
+
+    :param tmp_path: Scratch root for a sealed managed alias.
+    :param monkeypatch: Replaces the native host to prove it is never reached.
+    """
+    opened: list[str] = []
+
+    class FakeEngine:
+        """Record any native plugin construction attempt."""
+
+        def __init__(self, _sample_rate: float, _block_size: int) -> None:
+            """Create a host-free engine.
+
+            :param _sample_rate: Ignored sample rate.
+            :param _block_size: Ignored processing block size.
+            """
+
+        def make_plugin_processor(self, _name: str, path: str) -> object:
+            """Record an unexpected plugin open.
+
+            :param _name: Ignored graph processor name.
+            :param path: Candidate VST3 bundle path.
+            :returns: Placeholder processor.
+            """
+            opened.append(path)
+            return object()
+
+    fake_daw = types.SimpleNamespace(RenderEngine=FakeEngine)
+    monkeypatch.setattr(
+        "synth_setter.data.vst.renderers.import_module",
+        lambda _name: fake_daw,
+    )
+
+    with pytest.raises(PluginIntegrityError, match="managed plugin digest mismatch"):
+        DawDreamerRenderer(
+            plugin_path=str(_managed_alias(tmp_path)),
+            sample_rate=32,
+            channels=2,
+            signal_duration_seconds=1.0,
+            expected_managed_digest="f" * 64,
+            parameter_map=_test_param_map({}, 0),
+        )
+
+    assert opened == []
 
 
 def test_pedalboard_renderer_rejects_nonfinite_audio(

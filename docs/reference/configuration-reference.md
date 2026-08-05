@@ -161,7 +161,7 @@ synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smok
       → SkyPilot provisions compute (RunPod, Vast.ai, or local Kubernetes via `sky local up`)
         → pod runs: cd /home/build/synth-setter
                     && bash scripts/sync_worker_checkout.sh
-                    && exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>
+                    && exec synth-setter-generate-dataset-from-spec-uri "$WORKER_SPEC_URI"
 ```
 
 - `dispatch_via_skypilot` takes a single `SkypilotLaunchConfig` argument and
@@ -170,15 +170,13 @@ synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smok
   envs after `resolve_worker_env`.
 - Hydra composition lives in the entrypoint itself; the launcher module is
   not on this path beyond `dispatch_via_skypilot`.
-- `_build_worker_cmd` (in `synth_setter.cli.generate_dataset`) pins the same
-  Hydra overrides the operator composed with, and the `from_hydra` entrypoint
-  on the worker rebuilds the spec from those — so worker re-execution is
-  deterministic regardless of operator argv.
+- `_build_worker_cmd` (in `synth_setter.cli.generate_dataset`) invokes the
+  spec-URI entrypoint, so workers consume the exact spec the launcher uploaded
+  instead of recomputing runtime fields or managed plugin identity.
 - The canonical `WORKER_SPEC_URI` is merged into each rank's env with
-  `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`, primarily
-  for downstream validate-time consumers (validate-spec /
-  validate-shard CI jobs read it off the workflow output). The worker itself
-  doesn't fetch the JSON. `task.update_file_mounts` is avoided because
+  `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`. The worker
+  fetches this JSON before rendering; validate-spec and validate-shard CI jobs
+  consume the same URI from the workflow output. `task.update_file_mounts` is avoided because
   SkyPilot's RunPod backend rejects programmatic file_mounts with a
   pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
 
@@ -242,7 +240,8 @@ resources:
 ```
 
 The option declares no run block — the launcher's `_build_worker_cmd`
-constructs the cd + sync_worker_checkout.sh + `exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>` one-liner
+constructs the cd + sync_worker_checkout.sh +
+`exec synth-setter-generate-dataset-from-spec-uri "$WORKER_SPEC_URI"` one-liner,
 and `build_task_doc` sets it as the task's `run`. An option carrying a
 `run_script:` (debug canaries) rejects an injected cmd instead of silently
 dropping it.
@@ -251,10 +250,9 @@ The canonical spec is uploaded to R2 by `cli/generate_dataset.py`'s `main()`
 (via `spec_io.upload_spec`) before dispatch; `task.update_file_mounts(...)`
 is avoided per [#749](https://github.com/tinaudio/synth-setter/issues/749).
 The canonical URI (`spec.r2.input_spec_uri()`) is forwarded to the worker
-pod as the `WORKER_SPEC_URI` env var (consumed by the CI validate-spec /
-validate-shard jobs, which read it via the workflow output rather than off
-the pod); the worker process itself re-builds the spec via Hydra compose on
-the injected overrides rather than fetching the JSON at boot.
+pod as the `WORKER_SPEC_URI` env var. The worker fetches that exact JSON before
+rendering; the CI validate-spec and validate-shard jobs read the same URI from
+the workflow output.
 
 **Vast.ai** (`skypilot_launch/compute/vast/smoke.yaml`) — landed; an
 earlier plan sketched a raw Vast API shape that was never used:
