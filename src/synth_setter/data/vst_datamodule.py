@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import NotRequired, Self, TypedDict
 
 import numpy as np
@@ -30,11 +31,13 @@ _SEED_BOUND = torch.iinfo(torch.int64).max
 _MATERIALIZE_SPLITS = ("train", "val", "test")
 # Splits each Lightning stage reads. Prediction is resolved per instance because
 # the split serving predict_file is configurable, so it is absent here.
-_STAGE_MATERIALIZE_SPLITS = {
-    TrainerFn.FITTING: ("train", "val"),
-    TrainerFn.VALIDATING: ("val",),
-    TrainerFn.TESTING: ("test",),
-}
+_STAGE_MATERIALIZE_SPLITS = MappingProxyType(
+    {
+        TrainerFn.FITTING: ("train", "val"),
+        TrainerFn.VALIDATING: ("val",),
+        TrainerFn.TESTING: ("test",),
+    }
+)
 
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
@@ -485,8 +488,9 @@ class VSTDataModule(LightningDataModule):
     def _staged_projection(self) -> dict[str, list[str]]:
         """Narrow the projection to the splits the running Lightning stage reads.
 
-        Lightning re-runs this hook for every stage, so a later stage hydrates
-        what it needs when it starts. Per-split columns stay exactly as
+        Lightning runs this hook once per ``Trainer`` entrypoint call, so a
+        later ``trainer.test()`` hydrates what testing needs even though the
+        preceding ``fit`` staged neither. Per-split columns stay exactly as
         :attr:`projection` derived them: the subset digest addresses the whole
         read set, so narrowing columns here would re-hydrate shared splits under
         a new digest and clash with the manifest an earlier stage wrote.

@@ -907,3 +907,89 @@ class TestStageScopedHydration:
 
         for split in ("train", "val", "test"):
             assert (module.dataset_root / f"{split}.lance").is_dir()
+
+    def test_validate_stage_hydrates_only_the_val_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A standalone validate run stages the val split alone.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+
+        _stage_probe_trainer(tmp_path).validate(_StageProbeModule(), datamodule=module)
+
+        assert not (module.dataset_root / "train.lance").exists()
+        assert not (module.dataset_root / "test.lance").exists()
+        assert lance.dataset(str(module.dataset_root / "val.lance")).count_rows() == 6
+
+    def test_predict_stage_follows_a_predict_file_naming_another_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prediction served by the train split stages that split, carrying audio.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        destination = tmp_path / "local"
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=destination / "train.lance",
+            batch_size=2,
+            ot=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        _stage_probe_trainer(tmp_path).predict(_StageProbeModule(), datamodule=module)
+
+        assert not (module.dataset_root / "test.lance").exists()
+        train_split = lance.dataset(str(module.dataset_root / "train.lance"))
+        assert train_split.schema.names == ["param_array", "mel_spec", "audio"]
+
+    def test_predict_stage_with_an_external_predict_file_stages_no_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prediction served from outside the root needs no split, only the sidecars.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        external_predict = tmp_path / "elsewhere" / "predict.lance"
+        shutil.copytree(source_root / "test.lance", external_predict)
+        # Mel stats are read beside the predict file, not from the hydrated root.
+        shutil.copy(source_root / "stats.npz", external_predict.parent / "stats.npz")
+        module = LanceVSTDataModule(
+            dataset_root=tmp_path / "local",
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=external_predict,
+            batch_size=2,
+            ot=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        _stage_probe_trainer(tmp_path).predict(_StageProbeModule(), datamodule=module)
+
+        for split in ("train", "val", "test"):
+            assert not (module.dataset_root / f"{split}.lance").exists()
+        assert (module.dataset_root / "stats.npz").is_file()
