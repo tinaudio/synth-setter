@@ -11,6 +11,7 @@ from typing import cast
 import lance
 import numpy as np
 import pyarrow as pa
+from pydantic import BaseModel, ConfigDict
 import torch
 from torch.utils.data import DataLoader
 
@@ -323,6 +324,23 @@ class PrepareBatchCollate:
         )
 
 
+class _CanonicalizationConfig(BaseModel):
+    """Strict canonicalization settings parsed at the Hydra boundary.
+
+    .. attribute :: model_config
+
+        Strict frozen-model configuration.
+
+    .. attribute :: canonicalize_symmetric_blocks
+
+        Whether every split canonicalizes the spec's registered symmetric blocks.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True)
+
+    canonicalize_symmetric_blocks: bool
+
+
 class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
     """Sample-indexed synthetic dataset retaining the historical fake batch contract."""
 
@@ -518,7 +536,8 @@ class LanceVSTDataModule(VSTDataModule):
         "predict": ("predict",),
     }
 
-    def __init__(
+    # DOC502: the documented ValidationError propagates from _CanonicalizationConfig.
+    def __init__(  # noqa: DOC502
         self,
         dataset_root: str | Path,
         *,
@@ -567,7 +586,8 @@ class LanceVSTDataModule(VSTDataModule):
             source snapshots.
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
-        :raises TypeError: If ``canonicalize_symmetric_blocks`` is not a bool.
+        :raises ValidationError: If ``canonicalize_symmetric_blocks`` is not a bool —
+            fail at construction, never silently rewrite every training target.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -587,15 +607,11 @@ class LanceVSTDataModule(VSTDataModule):
             download_dataset_row_limit=download_dataset_row_limit,
         )
         self.val_num_workers = val_num_workers
-        if not isinstance(canonicalize_symmetric_blocks, bool):
-            # Hydra composes `=typo` as a truthy str, which would silently
-            # rewrite every training target instead of failing the run.
-            raise TypeError(
-                "canonicalize_symmetric_blocks must be a bool, got "
-                f"{type(canonicalize_symmetric_blocks).__name__}: "
-                f"{canonicalize_symmetric_blocks!r}"
-            )
-        self.canonicalize_symmetric_blocks = canonicalize_symmetric_blocks
+        # Hydra composes `=typo` as a truthy str, which would silently rewrite
+        # every training target instead of failing the run.
+        self.canonicalize_symmetric_blocks = _CanonicalizationConfig(
+            canonicalize_symmetric_blocks=canonicalize_symmetric_blocks
+        ).canonicalize_symmetric_blocks
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}

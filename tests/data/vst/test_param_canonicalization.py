@@ -8,6 +8,7 @@ from typing import cast
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 import torch
 
 from synth_setter.data.vst.param_canonicalization import (
@@ -267,7 +268,7 @@ class TestDataModuleWiring:
         """
         from synth_setter.data.lance_datamodule import LanceVSTDataModule
 
-        with pytest.raises(TypeError, match="canonicalize_symmetric_blocks"):
+        with pytest.raises(ValidationError, match="canonicalize_symmetric_blocks"):
             LanceVSTDataModule(
                 Path("unused"),
                 param_spec_name=ParamSpecName("surge_simple"),
