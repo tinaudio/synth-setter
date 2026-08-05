@@ -1587,6 +1587,39 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     assert metric_dict["per_param_mse/a_amp_eg_attack"].item() == 0.0
 
 
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_evaluate_validate_mode_canonicalizes_surge_simple(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Run canonicalized Surge Simple validation through the eval entrypoint.
+
+    :param tmp_path: Pinned as Hydra output and log directories.
+    :param fake_surge_smoke_datasets: Tiny loadable Surge Simple Lance splits.
+    :param param_spec_name: Indirect fixture value selecting ``surge_simple``.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name=param_spec_name,
+        datamodule="surge_lance",
+    )
+    with open_dict(cfg):
+        cfg.datamodule.canonicalize_symmetric_blocks = True
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["datamodule"].canonicalize_symmetric_blocks is True
+    assert metric_dict["val/param_mse"].item() == 0.0
+
+
 def test_evaluate_test_mode_partial_lance_root_returns_metric(
     cfg_train_lance: DictConfig,
 ) -> None:

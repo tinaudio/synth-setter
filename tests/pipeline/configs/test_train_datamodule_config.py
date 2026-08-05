@@ -68,6 +68,17 @@ def test_train_datamodule_persistent_workers_default_remains_enabled() -> None:
     assert _instantiate_train_datamodule().persistent_workers is True
 
 
+def test_train_datamodule_canonicalization_defaults_off() -> None:
+    """Without an override the datamodule preserves stored parameter order."""
+    assert _instantiate_train_datamodule().canonicalize_symmetric_blocks is False
+
+
+def test_train_override_canonicalization_true_composes() -> None:
+    """The symmetric-block override reaches the instantiated datamodule."""
+    module = _instantiate_train_datamodule("datamodule.canonicalize_symmetric_blocks=true")
+    assert module.canonicalize_symmetric_blocks is True
+
+
 def test_train_datamodule_prefetch_factor_defaults_to_none() -> None:
     """Without an override the datamodule inherits PyTorch's prefetch default."""
     assert _instantiate_train_datamodule().prefetch_factor is None

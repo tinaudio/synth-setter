@@ -880,6 +880,38 @@ def test_train_runpod_experiment_default_datamodule_advances(
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_train_canonicalize_symmetric_blocks_reaches_datamodule(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+) -> None:
+    """Train one canonicalized Surge Simple step through the train entrypoint.
+
+    :param tmp_path: Hydra output and log directory.
+    :param fake_surge_smoke_datasets: Tiny loadable Lance train/validation/test splits.
+    """
+    cfg = _build_surge_xt_smoke_cfg(
+        accelerator="cpu",
+        param_spec_name="surge_simple",
+        experiment="surge/ffn_simple",
+        datamodule_group=None,
+        callbacks_override=None,
+    )
+    with open_dict(cfg):
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.datamodule.dataset_root = str(fake_surge_smoke_datasets)
+        cfg.datamodule.canonicalize_symmetric_blocks = True
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["datamodule"].canonicalize_symmetric_blocks is True
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+
+
+@pytest.mark.slow
 def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
     """Train one real flow step through the offline pretrained-AST config.
 
