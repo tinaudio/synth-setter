@@ -1,5 +1,6 @@
 """Tests for symmetric-block canonicalization of encoded param rows."""
 
+import itertools
 from pathlib import Path
 from typing import cast
 
@@ -8,15 +9,25 @@ import pytest
 import torch
 
 from synth_setter.data.vst.param_canonicalization import (
+    SYMMETRIC_BLOCK_REGISTRY,
     CanonicalBlocks,
     block_indices_by_prefix,
     canonicalize_blocks,
     resolve_canonical_blocks,
 )
-from synth_setter.data.vst.param_spec import ContinuousParameter, ParamSpec
+from synth_setter.data.vst.param_spec import (
+    ContinuousParameter,
+    ParamSpec,
+    decode_model_output,
+)
+from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 from synth_setter.data.vst.surge_xt_param_spec import SURGE_SIMPLE_PARAM_SPEC
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
+from synth_setter.evaluation.compute_audio_metrics import compute_mss
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import make_audio_renderer
+from tests._vst import PLUGIN_PATH, _composed_synth_version
 
 
 def _spec(names: list[str]) -> ParamSpec:
@@ -28,8 +39,7 @@ def _spec(names: list[str]) -> ParamSpec:
     return ParamSpec([ContinuousParameter(name=n, min=0.0, max=1.0) for n in names], [])
 
 
-# Three two-dim blocks keyed on the second dim, and two two-dim blocks keyed
-# on the first — small layouts the sorting tests assert against by hand.
+# Hand-checkable layouts exercising second- and first-offset sort keys.
 THREE_BLOCKS = CanonicalBlocks(indices=((0, 1), (2, 3), (4, 5)), key_offset=1)
 TWO_BLOCKS = CanonicalBlocks(indices=((0, 1), (2, 3)), key_offset=0)
 
@@ -152,6 +162,18 @@ class TestCanonicalizeBlocks:
         canonicalize_blocks(row, THREE_BLOCKS)
         assert np.array_equal(row, original)
 
+    def test_stored_float32_dtype_survives_canonicalization(self) -> None:
+        """Sorting keeps the stored width — a float64 result would double batch memory."""
+        rows = np.array([[0.9, 0.1, 0.8, 0.5, 0.7, 0.3]], dtype=np.float32)
+        assert canonicalize_blocks(rows, THREE_BLOCKS).dtype == np.float32
+
+    def test_empty_batch_returns_empty_array_of_same_shape(self) -> None:
+        """A zero-row batch canonicalizes to an empty array, not a reshape error."""
+        rows = np.zeros((0, 6), dtype=np.float32)
+        out = canonicalize_blocks(rows, THREE_BLOCKS)
+        assert out.shape == (0, 6)
+        assert out.dtype == np.float32
+
 
 class TestResolveCanonicalBlocks:
     """Registry resolution for specs with symmetric blocks."""
@@ -226,6 +248,39 @@ class TestDataModuleWiring:
         expected = make_shard_columns(8, num_params=92, seed=1)["param_array"][:4] * 2 - 1
         assert np.allclose(batch["params"].numpy(), expected, atol=1e-6)
 
+    def test_fake_mode_honors_the_flag(self) -> None:
+        """Fake splits canonicalize too, so smoke runs cannot silently drop the flag."""
+        from synth_setter.data.lance_datamodule import LanceVSTDataModule
+
+        module = LanceVSTDataModule(
+            Path("unused"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            batch_size=4,
+            ot=False,
+            fake=True,
+            use_saved_mean_and_variance=False,
+            canonicalize_symmetric_blocks=True,
+        )
+        module.setup("fit")
+        volumes = next(iter(module.train_dataloader()))["params"][:, list(OSC_VOLUME_DIMS)]
+        assert (np.diff(volumes.numpy(), axis=1) <= 0).all()
+
+    def test_fake_mode_flag_off_leaves_drawn_order(self) -> None:
+        """Fake splits without the flag keep the drawn block order (not always sorted)."""
+        from synth_setter.data.lance_datamodule import LanceVSTDataModule
+
+        module = LanceVSTDataModule(
+            Path("unused"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            batch_size=64,
+            ot=False,
+            fake=True,
+            use_saved_mean_and_variance=False,
+        )
+        module.setup("fit")
+        volumes = next(iter(module.train_dataloader()))["params"][:, list(OSC_VOLUME_DIMS)]
+        assert not (np.diff(volumes.numpy(), axis=1) <= 0).all()
+
 
 class TestPrepareBatchCanonicalization:
     """canonical_blocks plumbing through prepare_batch."""
@@ -264,6 +319,52 @@ class TestPrepareBatchCanonicalization:
         expected = np.array([[0.6, 0.1, 0.2, 0.9]], dtype=np.float32) * 2 - 1
         assert np.allclose(params.numpy(), expected)
 
+    def test_ot_matching_preserves_canonical_blocks_and_row_alignment(self) -> None:
+        """Under OT the emitted blocks stay canonical and keep their mel companion.
+
+        Shipped training runs with ``ot=true``; a regression where
+        ``_hungarian_match`` reordered params independently of the other
+        modalities would train canonical targets against the wrong conditioning.
+        """
+        param_array = np.array(
+            [[0.2, 0.9, 0.6, 0.1], [0.7, 0.3, 0.4, 0.8], [0.1, 0.2, 0.5, 0.6]],
+            dtype=np.float32,
+        )
+        # Each row's mel is a constant plane carrying that row's index, so the
+        # pairing survives any row permutation OT applies.
+        mel = np.stack(
+            [np.full((1, 2, 2), float(i), dtype=np.float32) for i in range(len(param_array))]
+        )
+        raw = cast(
+            RawBatch,
+            {
+                "param_array": param_array,
+                "audio": None,
+                "mel_spec": mel,
+                "music2latent": None,
+            },
+        )
+        batch = prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=True,
+            generator=torch.Generator().manual_seed(0),
+            canonical_blocks=TWO_BLOCKS,
+        )
+        params, out_mel = batch["params"], batch["mel"]
+        assert params is not None
+        assert out_mel is not None
+
+        keys = params.numpy()[:, [TWO_BLOCKS.indices[0][0], TWO_BLOCKS.indices[1][0]]]
+        assert (np.diff(keys, axis=1) <= 0).all()
+
+        canonical = canonicalize_blocks(param_array, TWO_BLOCKS) * 2 - 1
+        for row, plane in zip(params.numpy(), out_mel.numpy(), strict=True):
+            source = int(plane.flat[0])
+            assert np.allclose(row, canonical[source])
+
     def test_canonical_blocks_none_leaves_params_unchanged(self) -> None:
         """Without canonical_blocks the params pass through as stored."""
         raw = self._raw(np.array([[0.2, 0.9, 0.6, 0.1]], dtype=np.float32))
@@ -280,3 +381,79 @@ class TestPrepareBatchCanonicalization:
         assert params is not None
         expected = np.array([[0.2, 0.9, 0.6, 0.1]], dtype=np.float32) * 2 - 1
         assert np.allclose(params.numpy(), expected)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("param_spec_name", sorted(SYMMETRIC_BLOCK_REGISTRY))
+def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
+    """Every registered block group is interchangeable at render level.
+
+    The registry claims its blocks can be swapped without changing the audio.
+    Nothing else checks that: a group naming a routed parameter would silently
+    rewrite training targets while the conditioning kept describing the original
+    row. Scored with the repo's MSS, because the Surge render randomizes phase —
+    a sample-wise metric saturates on repeat renders of the *same* row and can
+    resolve nothing.
+
+    :param param_spec_name: Registry key whose block group is under test.
+    """
+    spec = param_specs[param_spec_name]
+    blocks = resolve_canonical_blocks(ParamSpecName(param_spec_name))
+    indices = np.array(blocks.indices)
+    values: dict[str, object] = {
+        "synth": {
+            "name": param_spec_name,
+            "param_spec_name": param_spec_name,
+            "plugin_path": PLUGIN_PATH,
+            "plugin_state_path": plugin_state_paths[param_spec_name],
+            "synth_version": _composed_synth_version(param_spec_name),
+        },
+        "sample_rate": 44100,
+        "channels": 2,
+        "velocity": 100,
+        "signal_duration_seconds": 4.0,
+        "min_loudness": -55.0,
+        "samples_per_render_batch": 2,
+        "samples_per_shard": 4,
+        "gui_toggle_cadence": "never",
+        "plugin_reload_cadence": "once",
+    }
+    config = RenderConfig(**values)  # type: ignore[arg-type]
+    renderer = make_audio_renderer(config)
+
+    def render(encoded: np.ndarray) -> np.ndarray:
+        """Render one encoded row through the real plugin.
+
+        :param encoded: Encoded ``[0, 1]`` row for the spec under test.
+        :returns: ``(channels, samples)`` audio.
+        """
+        synth_params, note = decode_model_output(encoded * 2 - 1, spec)
+        start, end = sorted(note["note_start_and_end"])
+        return renderer.render(synth_params, int(note["pitch"]), config.velocity, (start, end))
+
+    rng = np.random.default_rng(11)
+    audible = 10 ** (config.min_loudness / 20)
+    row = next(
+        candidate
+        for candidate in (rng.random(len(spec)) for _ in range(40))
+        if np.sqrt((render(candidate) ** 2).mean()) > audible
+    )
+    base = render(row)
+
+    # An unrelated row sets the scale a genuinely different sound scores at;
+    # repeat renders of the unchanged row set the floor the plugin can resolve.
+    unrelated = compute_mss(base, render(rng.random(len(spec))))
+    repeat = max(compute_mss(base, render(row)) for _ in range(2))
+
+    worst = 0.0
+    for order in itertools.permutations(range(len(indices))):
+        candidate = row.copy()
+        candidate[indices.reshape(-1)] = row[indices[list(order)].reshape(-1)]
+        worst = max(worst, compute_mss(base, render(candidate)))
+
+    assert worst < 0.1 * unrelated, (
+        f"{param_spec_name} blocks are not interchangeable: worst permutation scores "
+        f"MSS {worst:.3f}, against {unrelated:.3f} for an unrelated row and "
+        f"{repeat:.3f} for a repeat render of the same row"
+    )

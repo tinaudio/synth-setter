@@ -1,7 +1,8 @@
 """Pick identifiable point-regression targets from permutation-symmetric blocks.
 
-Registered groups are interchangeable to within the renderer's own repeat-render spread, which is
-the tightest bound this stochastic renderer supports — see #1886.
+Registered groups are interchangeable at render level, guarded by a real-render MSS contract in
+``tests/data/vst/test_param_canonicalization.py``. Score permutations spectrally, not sample-wise:
+the Surge render randomizes phase, so a waveform metric saturates on repeat renders of one row.
 """
 
 from __future__ import annotations
@@ -103,7 +104,10 @@ def canonicalize_blocks(params: np.ndarray, blocks: CanonicalBlocks) -> np.ndarr
     sort_keys = tuple(-gathered[:, :, offset] for offset in reversed(priority_offsets))
     order = np.lexsort(sort_keys, axis=1)
     sorted_blocks = np.take_along_axis(gathered, order[:, :, None], axis=1)
-    out[:, block_index_matrix.reshape(-1)] = sorted_blocks.reshape(len(params), -1)
+    # Explicit width, not -1: an empty batch cannot infer a free dimension.
+    out[:, block_index_matrix.reshape(-1)] = sorted_blocks.reshape(
+        len(params), block_index_matrix.size
+    )
     return out
 
 

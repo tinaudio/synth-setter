@@ -37,6 +37,7 @@ from synth_setter.data.lance_torch import (
 )
 from synth_setter.data.vst.param_canonicalization import (
     CanonicalBlocks,
+    canonicalize_blocks,
     resolve_canonical_blocks,
 )
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
@@ -333,6 +334,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         read_audio: bool,
         conditioning: Conditioning,
         sketch: SketchControlSpec | None = None,
+        canonical_blocks: CanonicalBlocks | None = None,
     ) -> None:
         """Configure synthetic sample shapes and epoch length.
 
@@ -341,6 +343,8 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         :param read_audio: Whether generated samples include prediction audio.
         :param conditioning: Synthetic conditioning modality to populate.
         :param sketch: Optional sketch spec adding synthetic control matrices.
+        :param canonical_blocks: Symmetric block layout used to canonicalize drawn
+            parameters, or ``None`` to keep the drawn order.
         """
         self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
         self._num_params = num_params
@@ -351,6 +355,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         )
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
         self._sketch = sketch
+        self._canonical_blocks = canonical_blocks
 
     def __len__(self) -> int:
         """Return the sample count corresponding to 10,000 full batches.
@@ -380,6 +385,13 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         else:
             sketch = None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
+        if self._canonical_blocks is not None:
+            # Sorting commutes with the [0, 1] -> [-1, 1] map, so canonicalizing
+            # these already-rescaled draws yields the same block order as the
+            # real path, which canonicalizes before rescaling.
+            params = torch.from_numpy(
+                canonicalize_blocks(params.numpy(), self._canonical_blocks)
+            )
         noise = torch.randn_like(params)
         return {
             "mel": mel,
@@ -661,11 +673,31 @@ class LanceVSTDataModule(VSTDataModule):
             ),
         )
 
-    def _build_fake_split(self, *, num_params: int, read_audio: bool) -> _MapSplit:
+    def _canonical_blocks(self) -> CanonicalBlocks | None:
+        """Resolve the symmetric block layout the flag selects, if any.
+
+        :returns: Registered layout for the selected spec, or ``None`` when the
+            flag is off. Raises ``KeyError`` through
+            :func:`resolve_canonical_blocks` if the flag is on for a spec with
+            no registered blocks.
+        """
+        if not self.canonicalize_symmetric_blocks:
+            return None
+        return resolve_canonical_blocks(self.param_spec_name)
+
+    def _build_fake_split(
+        self,
+        *,
+        num_params: int,
+        read_audio: bool,
+        canonical_blocks: CanonicalBlocks | None,
+    ) -> _MapSplit:
         """Build one sample-indexed in-memory split.
 
         :param num_params: Selected parameter-spec width.
         :param read_audio: Whether prediction audio is generated.
+        :param canonical_blocks: Symmetric block layout used to canonicalize drawn
+            parameters, or ``None`` to keep the drawn order.
         :returns: Synthetic dataset and pass-through collate.
         """
         return _MapSplit(
@@ -675,6 +707,7 @@ class LanceVSTDataModule(VSTDataModule):
                 read_audio=read_audio,
                 conditioning=self.conditioning,
                 sketch=self.sketch_controls,
+                canonical_blocks=canonical_blocks,
             ),
             collate=_model_batch_passthrough,
         )
@@ -697,11 +730,7 @@ class LanceVSTDataModule(VSTDataModule):
                     and self.predict_file.parent == self.dataset_root
                     else load_dataset_statistics(self.predict_file)
                 )
-        canonical_blocks = (
-            resolve_canonical_blocks(self.param_spec_name)
-            if self.canonicalize_symmetric_blocks
-            else None
-        )
+        canonical_blocks = self._canonical_blocks()
         shard_paths = {
             "train": train_shard,
             "val": self.dataset_root / f"val{self.shard_suffix}",
@@ -731,9 +760,12 @@ class LanceVSTDataModule(VSTDataModule):
         )
         num_params = resolve_param_spec(self.param_spec_name).encoded_width
         if self.fake:
+            canonical_blocks = self._canonical_blocks()
             self._splits = {
                 name: self._build_fake_split(
-                    num_params=num_params, read_audio=name == "predict"
+                    num_params=num_params,
+                    read_audio=name == "predict",
+                    canonical_blocks=canonical_blocks,
                 )
                 for name in split_names
             }

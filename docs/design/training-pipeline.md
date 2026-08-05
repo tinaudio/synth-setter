@@ -308,9 +308,10 @@ dataset_root: ${paths.output_dir}/data # shipped default (per-run Hydra dir)
 ```
 
 Point regressors can opt into `datamodule.canonicalize_symmetric_blocks=true` for specs
-registered in `data/vst/param_canonicalization.py`. The shared batch transform selects a
-deterministic representative before parameter rescaling and OT matching; the default preserves
-stored parameter order.
+registered in `src/synth_setter/data/vst/param_canonicalization.py`. The shared batch transform
+sorts the registered blocks by descending sort key before parameter rescaling and OT matching, so
+every permutation of one row maps to the same representative; the default preserves stored
+parameter order.
 
 Behavior:
 
