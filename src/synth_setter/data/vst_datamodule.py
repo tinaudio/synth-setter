@@ -495,6 +495,10 @@ class VSTDataModule(LightningDataModule):
         read set, so narrowing columns here would re-hydrate shared splits under
         a new digest and clash with the manifest an earlier stage wrote.
 
+        Staging a split later also stages it from a later source snapshot unless
+        ``download_dataset_txids`` pins one, since each split versions
+        independently; pin the txids for any run that must read one snapshot.
+
         :returns: Columns to materialize, keyed by the splits this stage reads.
         """
         stage = self.trainer.state.fn if self.trainer is not None else None
