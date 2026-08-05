@@ -294,9 +294,7 @@ class TestDataModuleWiring:
             canonicalize_symmetric_blocks=canonicalize,
         )
         module.setup("fit")
-        # fork_rng, not a bare manual_seed: the fake dataset draws from the
-        # global generator, and leaking this seed would make later tests
-        # order-dependent.
+        # Use fork_rng so fake-dataset seeding does not leak to subsequent tests.
         with torch.random.fork_rng():
             torch.manual_seed(seed)
             return next(iter(module.train_dataloader()))["params"].numpy()

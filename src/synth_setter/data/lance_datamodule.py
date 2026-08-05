@@ -327,6 +327,9 @@ class PrepareBatchCollate:
 class _CanonicalizationConfig(BaseModel):
     """Strict canonicalization settings parsed at the Hydra boundary.
 
+    Rejects a non-bool at construction: Hydra composes ``=typo`` as a truthy
+    ``str``, which would silently rewrite every training target.
+
     .. attribute :: model_config
 
         Strict frozen-model configuration.
@@ -537,7 +540,7 @@ class LanceVSTDataModule(VSTDataModule):
     }
 
     # DOC502: the documented ValidationError propagates from _CanonicalizationConfig.
-    def __init__(  # noqa: DOC502
+    def __init__(
         self,
         dataset_root: str | Path,
         *,
@@ -586,8 +589,6 @@ class LanceVSTDataModule(VSTDataModule):
             source snapshots.
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
-        :raises ValidationError: If ``canonicalize_symmetric_blocks`` is not a bool —
-            fail at construction, never silently rewrite every training target.
         """
         super().__init__(
             dataset_root=dataset_root,
