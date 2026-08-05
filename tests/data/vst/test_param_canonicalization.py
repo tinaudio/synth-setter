@@ -1,6 +1,7 @@
 """Tests for symmetric-block canonicalization of encoded param rows."""
 
 import itertools
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -248,39 +249,76 @@ class TestDataModuleWiring:
         expected = make_shard_columns(8, num_params=92, seed=1)["param_array"][:4] * 2 - 1
         assert np.allclose(batch["params"].numpy(), expected, atol=1e-6)
 
-    def test_fake_mode_honors_the_flag(self) -> None:
-        """Fake splits canonicalize too, so smoke runs cannot silently drop the flag."""
+    def _fake_train_batch(self, *, canonicalize: bool, seed: int) -> np.ndarray:
+        """Draw one fake train batch under a pinned global RNG.
+
+        :param canonicalize: Whether the datamodule canonicalizes its draws.
+        :param seed: Global torch seed the fake dataset draws from.
+        :returns: The batch's ``params`` rows.
+        """
         from synth_setter.data.lance_datamodule import LanceVSTDataModule
 
         module = LanceVSTDataModule(
             Path("unused"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            batch_size=16,
+            ot=False,
+            fake=True,
+            use_saved_mean_and_variance=False,
+            canonicalize_symmetric_blocks=canonicalize,
+        )
+        module.setup("fit")
+        torch.manual_seed(seed)
+        return next(iter(module.train_dataloader()))["params"].numpy()
+
+    @pytest.mark.parametrize(
+        ("stage", "loader"),
+        [("fit", "train"), ("fit", "val"), ("test", "test"), ("predict", "predict")],
+    )
+    def test_flag_canonicalizes_every_served_split(
+        self, tmp_path: Path, stage: str, loader: str
+    ) -> None:
+        """Every stage's loader serves canonical blocks, not just the fit splits.
+
+        :param tmp_path: Pytest per-test directory the splits are written under.
+        :param stage: Lightning stage passed to ``setup``.
+        :param loader: Dataloader the stage exposes.
+        """
+        from synth_setter.data.lance_datamodule import LanceVSTDataModule
+
+        self._write_dataset(tmp_path)
+        blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
+        sort_keys = [block[blocks.key_offset] for block in blocks.indices]
+        module = LanceVSTDataModule(
+            tmp_path,
             param_spec_name=ParamSpecName("surge_simple"),
             batch_size=4,
             ot=False,
-            fake=True,
             use_saved_mean_and_variance=False,
             canonicalize_symmetric_blocks=True,
+            predict_file=tmp_path / "test.lance",
         )
-        module.setup("fit")
-        volumes = next(iter(module.train_dataloader()))["params"][:, list(OSC_VOLUME_DIMS)]
-        assert (np.diff(volumes.numpy(), axis=1) <= 0).all()
+        module.setup(stage)
+        batch = next(iter(getattr(module, f"{loader}_dataloader")()))
+        assert (np.diff(batch["params"][:, sort_keys].numpy(), axis=1) <= 0).all()
+
+    def test_fake_mode_canonicalizes_exactly_the_drawn_rows(self) -> None:
+        """Fake splits canonicalize too, so smoke runs cannot silently drop the flag.
+
+        Pinning the global seed makes both datamodules draw identical rows, so the flag-on batch
+        must be exactly the flag-off batch with its blocks sorted — stronger than asserting that
+        some row came out ordered.
+        """
+        blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
+        drawn = self._fake_train_batch(canonicalize=False, seed=1234)
+        canonicalized = self._fake_train_batch(canonicalize=True, seed=1234)
+        assert np.array_equal(canonicalized, canonicalize_blocks(drawn, blocks))
 
     def test_fake_mode_flag_off_leaves_drawn_order(self) -> None:
-        """Fake splits without the flag keep the drawn block order (not always sorted)."""
-        from synth_setter.data.lance_datamodule import LanceVSTDataModule
-
-        module = LanceVSTDataModule(
-            Path("unused"),
-            param_spec_name=ParamSpecName("surge_simple"),
-            batch_size=64,
-            ot=False,
-            fake=True,
-            use_saved_mean_and_variance=False,
-        )
-        module.setup("fit")
-        volumes = next(iter(module.train_dataloader()))["params"][:, list(OSC_VOLUME_DIMS)]
-        assert not (np.diff(volumes.numpy(), axis=1) <= 0).all()
-
+        """Without the flag the drawn block order survives, so the pair is not vacuous."""
+        blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
+        drawn = self._fake_train_batch(canonicalize=False, seed=1234)
+        assert not np.array_equal(drawn, canonicalize_blocks(drawn, blocks))
 
 class TestPrepareBatchCanonicalization:
     """canonical_blocks plumbing through prepare_batch."""
@@ -383,24 +421,12 @@ class TestPrepareBatchCanonicalization:
         assert np.allclose(params.numpy(), expected)
 
 
-@pytest.mark.requires_vst
-@pytest.mark.slow
-@pytest.mark.parametrize("param_spec_name", sorted(SYMMETRIC_BLOCK_REGISTRY))
-def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
-    """Every registered block group is interchangeable at render level.
+def _real_render_config(param_spec_name: str) -> RenderConfig:
+    """Build the real-plugin render config for one registered spec.
 
-    The registry claims its blocks can be swapped without changing the audio.
-    Nothing else checks that: a group naming a routed parameter would silently
-    rewrite training targets while the conditioning kept describing the original
-    row. Scored with the repo's MSS, because the Surge render randomizes phase —
-    a sample-wise metric saturates on repeat renders of the *same* row and can
-    resolve nothing.
-
-    :param param_spec_name: Registry key whose block group is under test.
+    :param param_spec_name: Registry key naming the spec and its preset.
+    :returns: Validated headless render configuration.
     """
-    spec = param_specs[param_spec_name]
-    blocks = resolve_canonical_blocks(ParamSpecName(param_spec_name))
-    indices = np.array(blocks.indices)
     values: dict[str, object] = {
         "synth": {
             "name": param_spec_name,
@@ -419,7 +445,45 @@ def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
         "gui_toggle_cadence": "never",
         "plugin_reload_cadence": "once",
     }
-    config = RenderConfig(**values)  # type: ignore[arg-type]
+    return RenderConfig(**values)  # type: ignore[arg-type]
+
+
+def _block_permutations(row: np.ndarray, indices: np.ndarray) -> Iterator[np.ndarray]:
+    """Yield every block permutation of one encoded row.
+
+    :param row: Encoded row to permute.
+    :param indices: ``(blocks, width)`` encoded-dim layout to permute.
+    :yields: One row per block ordering, including the identity.
+    :ytype: np.ndarray
+    """
+    for order in itertools.permutations(range(len(indices))):
+        candidate = row.copy()
+        candidate[indices.reshape(-1)] = row[indices[list(order)].reshape(-1)]
+        yield candidate
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("param_spec_name", sorted(SYMMETRIC_BLOCK_REGISTRY))
+def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
+    """Every registered block group is interchangeable at render level.
+
+    The registry claims its blocks can be swapped without changing the audio.
+    Nothing else checks that: a group naming a routed parameter would silently
+    rewrite training targets while the conditioning kept describing the original
+    row. Scored with the repo's MSS, because the Surge render randomizes phase —
+    a sample-wise metric saturates on repeat renders of the *same* row and can
+    resolve nothing.
+
+    Several rows, because oscillator identity could matter only under some
+    routing or mode combination a single row never selects.
+
+    :param param_spec_name: Registry key whose block group is under test.
+    """
+    spec = param_specs[param_spec_name]
+    blocks = resolve_canonical_blocks(ParamSpecName(param_spec_name))
+    indices = np.array(blocks.indices)
+    config = _real_render_config(param_spec_name)
     renderer = make_audio_renderer(config)
 
     def render(encoded: np.ndarray) -> np.ndarray:
@@ -434,28 +498,24 @@ def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
 
     rng = np.random.default_rng(11)
     audible = 10 ** (config.min_loudness / 20)
-    row = next(
-        candidate
-        for candidate in (rng.random(len(spec)) for _ in range(40))
-        if np.sqrt((render(candidate) ** 2).mean()) > audible
+    candidates = (rng.random(len(spec)) for _ in range(80))
+    rows = list(
+        itertools.islice((c for c in candidates if np.sqrt((render(c) ** 2).mean()) > audible), 3)
     )
-    base = render(row)
+    assert len(rows) == 3, "fixture drew too few audible rows to test"
 
-    # Unrelated rows set the scale a genuinely different sound scores at; the
-    # tightest of three guards against one draw landing spectrally close.
-    unrelated = min(compute_mss(base, render(rng.random(len(spec)))) for _ in range(3))
-    # Repeat renders of the unchanged row set the floor the plugin can resolve,
-    # so phase randomization alone can never fail the assertion below.
-    repeat = max(compute_mss(base, render(row)) for _ in range(3))
+    for index, row in enumerate(rows):
+        base = render(row)
+        # Unrelated rows set the scale a genuinely different sound scores at;
+        # the closest of two guards against one draw landing spectrally near.
+        unrelated = min(compute_mss(base, render(rng.random(len(spec)))) for _ in range(2))
+        # Repeat renders of the unchanged row set the floor the plugin can
+        # resolve, so phase randomization alone can never fail the assertion.
+        repeat = max(compute_mss(base, render(row)) for _ in range(2))
+        worst = max(compute_mss(base, render(c)) for c in _block_permutations(row, indices))
 
-    worst = 0.0
-    for order in itertools.permutations(range(len(indices))):
-        candidate = row.copy()
-        candidate[indices.reshape(-1)] = row[indices[list(order)].reshape(-1)]
-        worst = max(worst, compute_mss(base, render(candidate)))
-
-    assert worst < max(0.1 * unrelated, 2 * repeat), (
-        f"{param_spec_name} blocks are not interchangeable: worst permutation scores "
-        f"MSS {worst:.3f}, against {unrelated:.3f} for the closest of three unrelated "
-        f"rows and {repeat:.3f} for a repeat render of the same row"
-    )
+        assert worst < max(0.1 * unrelated, 2 * repeat), (
+            f"{param_spec_name} blocks are not interchangeable on row {index}: worst "
+            f"permutation scores MSS {worst:.3f}, against {unrelated:.3f} for the closer "
+            f"of two unrelated rows and {repeat:.3f} for a repeat render of the same row"
+        )
