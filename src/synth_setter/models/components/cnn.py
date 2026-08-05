@@ -14,8 +14,11 @@ from beartype import beartype
 from jaxtyping import Float, jaxtyped
 from torch import Tensor
 
+from synth_setter.models.components.spec_encoder import LogMelFrontend
+
 _BATCH_GRID_SHAPE: Final = "batch channels mels frames"
 _BATCH_EMBEDDING_SHAPE: Final = "batch embedding"
+_BATCH_AUDIO_SHAPE: Final = "batch samples"
 
 
 @jaxtyped(typechecker=beartype)
@@ -287,3 +290,37 @@ class MelCNN(nn.Module):
         :returns: Embeddings shaped ``(batch, out_dim)``.
         """
         return self.projection(self.pool(self.conv_net(x)).flatten(1))
+
+
+class _FusedLogMelEncoder(nn.Module):
+    """Deserialize flat-layout ``LogMelEncoder`` checkpoints (#2766).
+
+    The state is the flattened union of
+    :class:`~synth_setter.models.components.spec_encoder.LogMelFrontend` and
+    :class:`MelCNN`, so both halves run against ``self``; keeping the layout
+    flat is what lets such a ``state_dict`` load with its original keys.
+    """
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[Tensor, _BATCH_AUDIO_SHAPE]
+    ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
+        """Encode a mono waveform batch into fixed-width embeddings.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Embeddings shaped ``(batch, out_dim)``.
+        """
+        return MelCNN.forward(self, LogMelFrontend.forward(self, x))
+
+
+@jaxtyped(typechecker=beartype)
+def __getattr__(name: str) -> object:
+    """Resolve ``LogMelEncoder`` for checkpoint deserialization.
+
+    :param name: Requested module attribute.
+    :returns: Compatibility target backing the fused encoder name.
+    :raises AttributeError: If ``name`` is not ``LogMelEncoder``.
+    """
+    if name == "LogMelEncoder":
+        return _FusedLogMelEncoder
+    raise AttributeError(name)
