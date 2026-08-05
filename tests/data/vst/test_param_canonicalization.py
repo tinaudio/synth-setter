@@ -41,17 +41,16 @@ def _spec(names: list[str]) -> ParamSpec:
     return ParamSpec([ContinuousParameter(name=n, min=0.0, max=1.0) for n in names], [])
 
 
-# Hand-checkable layouts exercising second- and first-offset sort keys.
+# Hand-checkable layouts covering leading and non-leading sort keys.
 THREE_BLOCKS = CanonicalBlocks(indices=((0, 1), (2, 3), (4, 5)), key_offset=1)
 TWO_BLOCKS = CanonicalBlocks(indices=((0, 1), (2, 3)), key_offset=0)
 
-# surge_simple's per-osc volume dims (block offset 4 in each osc index run).
 OSC_VOLUME_DIMS = (20, 27, 34)
 
 
 class TestBlockIndicesByPrefix:
     def test_surge_simple_osc_blocks_are_aligned_and_volume_keyed(self) -> None:
-        """surge_simple's three osc blocks resolve to aligned index runs keyed on volume."""
+        """surge_simple oscillator blocks resolve to aligned index runs keyed on volume."""
         blocks = block_indices_by_prefix(
             SURGE_SIMPLE_PARAM_SPEC,
             prefixes=("a_osc_1_", "a_osc_2_", "a_osc_3_"),
@@ -202,9 +201,9 @@ class TestResolveCanonicalBlocks:
 
 class TestDataModuleWiring:
     def _write_dataset(self, root: Path) -> None:
-        """Write tiny surge_simple-width train/val/test Lance splits.
+        """Write tiny Lance splits for each standard partition.
 
-        :param root: Dataset root receiving the three ``*.lance`` splits.
+        :param root: Dataset root receiving the requested splits.
         """
         from tests.helpers.lance_fixtures import make_shard_columns, write_lance_shard
 
@@ -552,8 +551,8 @@ def _permutation_scores(
     :param probe: Render context for the spec under test.
     :param row: Encoded row whose blocks are permuted.
     :param indices: ``(blocks, width)`` encoded-dim layout to permute.
-    :returns: Worst non-identity permutation score, the closer of two unrelated
-        rows, and the largest of three repeat renders of ``row``.
+    :returns: Worst non-identity permutation score, closest unrelated-render
+        score, and largest repeat-render score.
     """
     base = probe.render(row)
     unrelated = min(compute_mss(base, probe.render(probe.draw())) for _ in range(2))
