@@ -62,6 +62,32 @@ _PreSplitLogMelEncoder.__module__ = "synth_setter.models.components.cnn"
 _PreSplitLogMelEncoder.__qualname__ = "LogMelEncoder"
 
 
+def _tiny_vector_field() -> ApproxEquivTransformer:
+    """Build the smallest vector field the module accepts.
+
+    :returns: One-layer transformer sized to the encoder's embedding width.
+    """
+    return ApproxEquivTransformer(
+        projection=LearntProjection(
+            d_model=_OUT_DIM,
+            d_token=_OUT_DIM,
+            num_params=_PRED_WIDTH,
+            num_tokens=8,
+            initial_ffn=True,
+            final_ffn=False,
+        ),
+        num_layers=1,
+        d_model=_OUT_DIM,
+        conditioning_dim=_OUT_DIM,
+        num_heads=2,
+        d_ff=_OUT_DIM,
+        num_tokens=8,
+        learn_projection=True,
+        time_encoding="sinusoidal",
+        zero_init=False,
+    )
+
+
 @pytest.fixture
 def legacy_parts() -> tuple[LogMelFrontend, MelCNN]:
     """Build the front end and backbone the fused encoder holds.
@@ -96,28 +122,9 @@ def legacy_checkpoint(
     """
     frontend, backbone = legacy_parts
     encoder = _PreSplitLogMelEncoder(frontend, backbone)
-    vector_field = ApproxEquivTransformer(
-        projection=LearntProjection(
-            d_model=_OUT_DIM,
-            d_token=_OUT_DIM,
-            num_params=_PRED_WIDTH,
-            num_tokens=8,
-            initial_ffn=True,
-            final_ffn=False,
-        ),
-        num_layers=1,
-        d_model=_OUT_DIM,
-        conditioning_dim=_OUT_DIM,
-        num_heads=2,
-        d_ff=_OUT_DIM,
-        num_tokens=8,
-        learn_projection=True,
-        time_encoding="sinusoidal",
-        zero_init=False,
-    )
     model = VSTFlowMatchingModule(
         encoder=encoder,
-        vector_field=vector_field,
+        vector_field=_tiny_vector_field(),
         # The modules take Hydra _partial_ optimizer factories despite the annotation.
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
@@ -179,3 +186,24 @@ def test_unknown_cnn_module_attribute_still_raises_attribute_error() -> None:
     """Compatibility resolution stays scoped to ``LogMelEncoder``."""
     with pytest.raises(AttributeError):
         cnn.NotAnEncoder  # noqa: B018
+
+
+def test_fixture_layout_matches_what_pre_split_checkpoints_carry(
+    legacy_parts: tuple[LogMelFrontend, MelCNN],
+) -> None:
+    """Freeze the attribute set the compatibility target must keep working against.
+
+    The fixture composes its layout from today's front end and backbone, so an attribute added to
+    either would silently appear in the "legacy" state and the load tests would keep passing while
+    real checkpoints — which lack it — broke. These literals are the shipped checkpoint contract,
+    not repo config, so pinning them is what makes that drift fail here instead of in production.
+
+    :param legacy_parts: The front end and backbone the fixture fuses.
+    """
+    frontend, backbone = legacy_parts
+
+    encoder = _PreSplitLogMelEncoder(frontend, backbone)
+
+    assert set(encoder._modules) == {"mel", "conv_net", "pool", "projection"}
+    assert {name for name, _ in encoder.named_buffers(recurse=False)} == set()
+    assert {"in_dim", "amin", "db_multiplier", "top_db"} <= set(vars(encoder))
