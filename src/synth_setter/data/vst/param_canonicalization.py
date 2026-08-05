@@ -1,6 +1,7 @@
 """Pick identifiable point-regression targets from permutation-symmetric blocks.
 
-See #1886 for render-invariance evidence behind the registered block groups.
+Registered groups are interchangeable to within the renderer's own repeat-render spread, which is
+the tightest bound this stochastic renderer supports — see #1886.
 """
 
 from __future__ import annotations
