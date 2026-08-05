@@ -111,13 +111,11 @@ def legacy_parts() -> tuple[LogMelFrontend, MelCNN]:
 def legacy_checkpoint(
     legacy_parts: tuple[LogMelFrontend, MelCNN],
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
     """Write a real checkpoint whose encoder is pickled as ``LogMelEncoder``.
 
     :param legacy_parts: Front end and backbone fused into the pickled encoder.
     :param tmp_path: Per-test directory receiving the checkpoint.
-    :param monkeypatch: Makes the fused-class name resolvable while pickling.
     :returns: Path to the saved Lightning checkpoint.
     """
     frontend, backbone = legacy_parts
@@ -140,9 +138,15 @@ def legacy_checkpoint(
     )
     trainer.strategy.connect(model)
     path = tmp_path / "pre_split_encoder.ckpt"
-    monkeypatch.setattr(cnn, "LogMelEncoder", _PreSplitLogMelEncoder, raising=False)
-    trainer.save_checkpoint(path)
-    monkeypatch.undo()
+    # Not monkeypatch: its undo would restore the name resolved through
+    # __getattr__ as a concrete attribute, so loading would never reach the
+    # module fallback this suite exists to cover.
+    cnn.LogMelEncoder = _PreSplitLogMelEncoder  # type: ignore[attr-defined]
+    try:
+        trainer.save_checkpoint(path)
+    finally:
+        delattr(cnn, "LogMelEncoder")
+    assert "LogMelEncoder" not in vars(cnn)
     return path
 
 
@@ -194,9 +198,8 @@ def test_fixture_layout_matches_what_pre_split_checkpoints_carry(
     """Freeze the attribute set the compatibility target must keep working against.
 
     The fixture composes its layout from today's front end and backbone, so an attribute added to
-    either would silently appear in the "legacy" state and the load tests would keep passing while
-    real checkpoints — which lack it — broke. These literals are the shipped checkpoint contract,
-    not repo config, so pinning them is what makes that drift fail here instead of in production.
+    either would drift into the "legacy" state unnoticed (#2766). These literals are the shipped
+    checkpoint contract, not repo config.
 
     :param legacy_parts: The front end and backbone the fixture fuses.
     """

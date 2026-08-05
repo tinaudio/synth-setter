@@ -293,13 +293,11 @@ class MelCNN(nn.Module):
 
 
 class _FusedLogMelEncoder(nn.Module):
-    """Unpickle fused log-mel encoders carrying the flat pre-split state layout.
+    """Deserialize flat-layout ``LogMelEncoder`` checkpoints (#2766).
 
-    ``VSTFlowMatchingModule`` pickles the encoder instance into
-    ``hyper_parameters``, so this name must resolve for those checkpoints to
-    load at all. The state is the flattened union of
+    The state is the flattened union of
     :class:`~synth_setter.models.components.spec_encoder.LogMelFrontend` and
-    :class:`MelCNN`, so both halves run against ``self``: keeping the layout
+    :class:`MelCNN`, so both halves run against ``self``; keeping the layout
     flat is what lets such a ``state_dict`` load with its original keys.
     """
 
