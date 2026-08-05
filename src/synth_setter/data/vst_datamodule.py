@@ -489,15 +489,13 @@ class VSTDataModule(LightningDataModule):
         """Narrow the projection to the splits the running Lightning stage reads.
 
         Lightning runs this hook once per ``Trainer`` entrypoint call, so a
-        later ``trainer.test()`` hydrates what testing needs even though the
-        preceding ``fit`` staged neither. Per-split columns stay exactly as
-        :attr:`projection` derived them: the subset digest addresses the whole
-        read set, so narrowing columns here would re-hydrate shared splits under
-        a new digest and clash with the manifest an earlier stage wrote.
+        later ``trainer.test()`` still stages the test split. Columns stay as
+        :attr:`projection` derived them: the subset digest covers the whole read
+        set, so narrowing them here would re-hydrate shared splits under a new
+        digest and clash with an earlier stage's manifest.
 
-        Staging a split later also stages it from a later source snapshot unless
-        ``download_dataset_txids`` pins one, since each split versions
-        independently; pin the txids for any run that must read one snapshot.
+        A split staged later resolves a later source snapshot unless
+        ``download_dataset_txids`` pins one (#2923).
 
         :returns: Columns to materialize, keyed by the splits this stage reads.
         """
