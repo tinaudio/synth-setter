@@ -97,8 +97,10 @@ def canonicalize_blocks(params: np.ndarray, blocks: CanonicalBlocks) -> np.ndarr
         offset for offset in range(gathered.shape[2]) if offset != blocks.key_offset
     ]
     priority_offsets = [blocks.key_offset, *tie_break_offsets]
-    sort_keys = tuple(-gathered[:, :, offset] for offset in reversed(priority_offsets))
-    order = np.lexsort(sort_keys, axis=1)
+    # Reverse an ascending sort rather than negating: negation wraps on
+    # unsigned stored dtypes and would order those blocks backwards.
+    sort_keys = tuple(gathered[:, :, offset] for offset in reversed(priority_offsets))
+    order = np.lexsort(sort_keys, axis=1)[:, ::-1]
     sorted_blocks = np.take_along_axis(gathered, order[:, :, None], axis=1)
     # Empty batches cannot infer a reshape dimension.
     out[:, block_index_matrix.reshape(-1)] = sorted_blocks.reshape(

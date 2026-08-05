@@ -165,6 +165,20 @@ class TestCanonicalizeBlocks:
         rows = np.array([[0.9, 0.1, 0.8, 0.5, 0.7, 0.3]], dtype=np.float32)
         assert canonicalize_blocks(rows, THREE_BLOCKS).dtype == np.float32
 
+    @pytest.mark.parametrize("dtype", [np.uint8, np.int16, np.float32, np.float64])
+    def test_descending_order_holds_for_every_stored_dtype(self, dtype: type) -> None:
+        """Sorting is descending regardless of stored dtype.
+
+        A negation-based descending sort wraps on unsigned storage, ordering those blocks
+        backwards.
+
+        :param dtype: Stored parameter dtype under test.
+        """
+        rows = np.array([[0, 9, 1, 8]], dtype=dtype)
+        assert np.array_equal(
+            canonicalize_blocks(rows, TWO_BLOCKS), np.array([[1, 8, 0, 9]], dtype=dtype)
+        )
+
     def test_empty_batch_returns_empty_array_of_same_shape(self) -> None:
         """A zero-row batch canonicalizes to an empty array, not a reshape error."""
         rows = np.zeros((0, 6), dtype=np.float32)
@@ -334,8 +348,6 @@ class TestDataModuleWiring:
 
 
 class TestPrepareBatchCanonicalization:
-    """canonical_blocks plumbing through prepare_batch."""
-
     def _raw(self, param_array: np.ndarray) -> RawBatch:
         """Wrap one param array as a params-only RawBatch.
 
