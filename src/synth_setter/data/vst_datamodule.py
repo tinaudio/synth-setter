@@ -7,6 +7,7 @@ from typing import NotRequired, Self, TypedDict
 import numpy as np
 import torch
 from lightning import LightningDataModule
+from lightning.pytorch.trainer.states import TrainerFn
 from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
@@ -27,6 +28,13 @@ from synth_setter.pipeline.data.lance_materialize import materialize_splits, sub
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 _MATERIALIZE_SPLITS = ("train", "val", "test")
+# Splits each Lightning stage reads. Prediction is resolved per instance because
+# the split serving predict_file is configurable, so it is absent here.
+_STAGE_MATERIALIZE_SPLITS = {
+    TrainerFn.FITTING: ("train", "val"),
+    TrainerFn.VALIDATING: ("val",),
+    TrainerFn.TESTING: ("test",),
+}
 
 
 # DOC601/DOC603: pydoclint can't read sphinx ``:ivar:`` docs, so TypedDict keys
@@ -378,10 +386,10 @@ class VSTDataModule(LightningDataModule):
         self.param_spec_name = param_spec_name
         self.download_dataset_txids = materialize_config.download_dataset_txids
         self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
-        predict_split = self._predict_split(predict_file, configured_root)
-        self.projection = self._derive_projection(predict_split)
+        self.predict_split = self._predict_split(predict_file, configured_root)
+        self.projection = self._derive_projection(self.predict_split)
         self.dataset_root = self._resolve_dataset_root(configured_root, self.projection)
-        self.predict_file = self._resolve_predict_file(predict_file, predict_split)
+        self.predict_file = self._resolve_predict_file(predict_file, self.predict_split)
 
     def _conditioning_column(self) -> str:
         """Return the stored column backing the configured conditioning.
@@ -474,8 +482,31 @@ class VSTDataModule(LightningDataModule):
             columns.append("audio")
         return columns
 
+    def _staged_projection(self) -> dict[str, list[str]]:
+        """Narrow the projection to the splits the running Lightning stage reads.
+
+        Lightning re-runs this hook for every stage, so a later stage hydrates
+        what it needs when it starts. Per-split columns stay exactly as
+        :attr:`projection` derived them: the subset digest addresses the whole
+        read set, so narrowing columns here would re-hydrate shared splits under
+        a new digest and clash with the manifest an earlier stage wrote.
+
+        :returns: Columns to materialize, keyed by the splits this stage reads.
+        """
+        stage = self.trainer.state.fn if self.trainer is not None else None
+        if stage is None:
+            return self.projection
+        if stage is TrainerFn.PREDICTING:
+            splits: Sequence[str] = () if self.predict_split is None else (self.predict_split,)
+        else:
+            splits = _STAGE_MATERIALIZE_SPLITS.get(stage, _MATERIALIZE_SPLITS)
+        return {split: self.projection[split] for split in splits}
+
     def prepare_data(self) -> None:
-        """Rematerialize the projected splits under ``dataset_root`` when a source is configured."""
+        """Rematerialize the running stage's projected splits under ``dataset_root``.
+
+        Skipped entirely when no hydration source is configured.
+        """
         if not self.download_dataset_root_uri:
             return
         if r2_io.is_r2_uri(self.download_dataset_root_uri):
@@ -484,7 +515,7 @@ class VSTDataModule(LightningDataModule):
             self.download_dataset_root_uri,
             self.dataset_root,
             txids=self.download_dataset_txids,
-            projection=self.projection,
+            projection=self._staged_projection(),
             row_limit=self.download_dataset_row_limit,
             shard_suffix=self.shard_suffix,
         )
