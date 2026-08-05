@@ -626,6 +626,59 @@ def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
 
 
 @pytest.mark.slow
+def test_train_without_test_stage_never_hydrates_the_test_split(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """A ``test: false`` run pays for train and val only (#2872).
+
+    The test split is the one projected with the ``audio`` column, so staging it
+    for a run that never reads it dominates the pre-training download.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.test = False
+
+    HydraConfig().set_config(cfg_train_lance)
+    _, object_dict = train(cfg_train_lance)
+
+    hydrated_root = object_dict["datamodule"].dataset_root
+    assert object_dict["trainer"].global_step > 0
+    assert not (hydrated_root / "test.lance").exists()
+    assert (hydrated_root / "train.lance").is_dir()
+    assert (hydrated_root / "val.lance").is_dir()
+
+
+@pytest.mark.slow
+def test_train_with_test_stage_hydrates_the_test_split_before_testing(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """A ``test: true`` run still reaches a hydrated test split, staged after fit.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.test = True
+
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
+
+    hydrated_root = object_dict["datamodule"].dataset_root
+    assert (hydrated_root / "test.lance").is_dir()
+    assert torch.isfinite(metric_dict["test/param_mse"])
+
+
+@pytest.mark.slow
 def test_train_file_uri_without_completion_marker_raises_before_hydration(
     cfg_train_lance: DictConfig, tmp_path: Path
 ) -> None:

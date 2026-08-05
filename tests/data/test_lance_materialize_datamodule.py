@@ -14,7 +14,9 @@ from typing import cast
 
 import hydra
 import lance
+import lightning.pytorch as pl
 import pytest
+import torch
 from omegaconf import OmegaConf
 
 from synth_setter.conditioning import ConditioningMode
@@ -704,3 +706,311 @@ class TestMaterializePrepareData:
 
         train_split = lance.dataset(str(module.dataset_root / "train.lance"))
         assert train_split.schema.names == ["param_array", "music2latent"]
+
+
+class _StageProbeModule(pl.LightningModule):
+    """Minimal real module used only to drive Lightning stages over the splits."""
+
+    def __init__(self) -> None:
+        """Hold one trainable scalar so the optimizer has a parameter."""
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.zeros(1))
+
+    def training_step(self, batch: object, batch_idx: int) -> torch.Tensor:
+        """Return a differentiable constant; hydration, not fitting, is under test.
+
+        :param batch: Batch served by the hydrated train split.
+        :param batch_idx: Index within the epoch.
+        :returns: Loss carrying a gradient path to ``scale``.
+        """
+        del batch, batch_idx
+        return self.scale.sum()
+
+    def validation_step(self, batch: object, batch_idx: int) -> None:
+        """Consume one validation batch without asserting on it.
+
+        :param batch: Batch served by the hydrated val split.
+        :param batch_idx: Index within the epoch.
+        """
+        del batch, batch_idx
+
+    def test_step(self, batch: object, batch_idx: int) -> None:
+        """Consume one test batch without asserting on it.
+
+        :param batch: Batch served by the hydrated test split.
+        :param batch_idx: Index within the epoch.
+        """
+        del batch, batch_idx
+
+    def predict_step(self, batch: object, batch_idx: int) -> None:
+        """Consume one prediction batch without asserting on it.
+
+        :param batch: Batch served by the hydrated prediction split.
+        :param batch_idx: Index within the epoch.
+        """
+        del batch, batch_idx
+
+    def configure_optimizers(self) -> torch.optim.Optimizer:
+        """Return a no-op optimizer so ``fit`` can run a step.
+
+        :returns: SGD at zero learning rate.
+        """
+        return torch.optim.SGD(self.parameters(), lr=0.0)
+
+
+def _stage_probe_trainer(tmp_path: Path) -> pl.Trainer:
+    """Build a one-batch CPU trainer with logging and checkpointing off.
+
+    :param tmp_path: Directory the trainer may write its run state under.
+    :returns: Trainer running a single batch of whichever stage is invoked.
+    """
+    return pl.Trainer(
+        accelerator="cpu",
+        fast_dev_run=True,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        default_root_dir=tmp_path,
+    )
+
+
+def _hydrating_module(source_root: Path, destination: Path) -> LanceVSTDataModule:
+    """Build a datamodule hydrating every split from a local source root.
+
+    :param source_root: Hydration source holding ``train/val/test.lance``.
+    :param destination: Configured local dataset root.
+    :returns: Datamodule whose loaders read the hydrated subset directory.
+    """
+    return LanceVSTDataModule(
+        dataset_root=destination,
+        download_dataset_root_uri=source_root.as_uri(),
+        batch_size=2,
+        ot=False,
+        num_workers=0,
+        pin_memory=False,
+        param_spec_name=_PARAM_SPEC,
+    )
+
+
+class TestStageScopedHydration:
+    """``prepare_data()`` stages only the splits the running stage reads (#2872)."""
+
+    def test_fit_stage_leaves_the_test_split_unhydrated(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fit run never pays for ``test.lance`` — the only split carrying audio.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+
+        _stage_probe_trainer(tmp_path).fit(_StageProbeModule(), datamodule=module)
+
+        assert not (module.dataset_root / "test.lance").exists()
+        assert lance.dataset(str(module.dataset_root / "train.lance")).count_rows() == 8
+        assert lance.dataset(str(module.dataset_root / "val.lance")).count_rows() == 6
+
+    def test_test_stage_hydrates_only_the_test_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A standalone test run stages the test split alone, keeping its audio column.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+
+        _stage_probe_trainer(tmp_path).test(_StageProbeModule(), datamodule=module)
+
+        assert not (module.dataset_root / "train.lance").exists()
+        test_split = lance.dataset(str(module.dataset_root / "test.lance"))
+        assert test_split.schema.names == ["param_array", "mel_spec", "audio"]
+
+    def test_predict_stage_hydrates_only_the_prediction_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prediction stages the split serving ``predict_file`` and nothing else.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+
+        _stage_probe_trainer(tmp_path).predict(_StageProbeModule(), datamodule=module)
+
+        assert not (module.dataset_root / "train.lance").exists()
+        assert not (module.dataset_root / "val.lance").exists()
+        test_split = lance.dataset(str(module.dataset_root / "test.lance"))
+        assert test_split.schema.names == ["param_array", "mel_spec", "audio"]
+
+    def test_later_test_run_extends_the_subset_directory_the_fit_run_hydrated(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stage scoping is additive: the test split lands beside the fit run's splits.
+
+        Pins that scoping the staged splits does not perturb the subset digest —
+        a fit run and a later test run of the same configuration share one
+        directory instead of each hydrating its own copy.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        destination = tmp_path / "local"
+        fit_module = _hydrating_module(source_root, destination)
+        _stage_probe_trainer(tmp_path).fit(_StageProbeModule(), datamodule=fit_module)
+
+        test_module = _hydrating_module(source_root, destination)
+        _stage_probe_trainer(tmp_path).test(_StageProbeModule(), datamodule=test_module)
+
+        assert test_module.dataset_root == fit_module.dataset_root
+        assert lance.dataset(str(fit_module.dataset_root / "train.lance")).count_rows() == 8
+        assert lance.dataset(str(fit_module.dataset_root / "test.lance")).count_rows() == 6
+
+    def test_prepare_data_outside_a_trainer_hydrates_every_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A direct call has no stage to scope to, so it stages the whole read set.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+
+        module.prepare_data()
+
+        for split in ("train", "val", "test"):
+            assert (module.dataset_root / f"{split}.lance").is_dir()
+
+    def test_validate_stage_hydrates_only_the_val_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A standalone validate run stages the val split alone.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+
+        _stage_probe_trainer(tmp_path).validate(_StageProbeModule(), datamodule=module)
+
+        assert not (module.dataset_root / "train.lance").exists()
+        assert not (module.dataset_root / "test.lance").exists()
+        assert lance.dataset(str(module.dataset_root / "val.lance")).count_rows() == 6
+
+    def test_predict_stage_follows_a_predict_file_naming_another_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prediction served by the train split stages that split, carrying audio.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        destination = tmp_path / "local"
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=destination / "train.lance",
+            batch_size=2,
+            ot=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        _stage_probe_trainer(tmp_path).predict(_StageProbeModule(), datamodule=module)
+
+        assert not (module.dataset_root / "test.lance").exists()
+        train_split = lance.dataset(str(module.dataset_root / "train.lance"))
+        assert train_split.schema.names == ["param_array", "mel_spec", "audio"]
+
+    def test_predict_stage_with_an_external_predict_file_stages_no_split(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prediction served from outside the root needs no split, only the sidecars.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        external_predict = tmp_path / "elsewhere" / "predict.lance"
+        shutil.copytree(source_root / "test.lance", external_predict)
+        # Mel stats are read beside the predict file, not from the hydrated root.
+        shutil.copy(source_root / "stats.npz", external_predict.parent / "stats.npz")
+        module = LanceVSTDataModule(
+            dataset_root=tmp_path / "local",
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=external_predict,
+            batch_size=2,
+            ot=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        _stage_probe_trainer(tmp_path).predict(_StageProbeModule(), datamodule=module)
+
+        for split in ("train", "val", "test"):
+            assert not (module.dataset_root / f"{split}.lance").exists()
+        assert (module.dataset_root / "stats.npz").is_file()
+
+    def test_prepare_data_after_a_finished_fit_hydrates_the_remaining_splits(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finished trainer stays attached, so a direct call must not stay fit-scoped.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+        _stage_probe_trainer(tmp_path).fit(_StageProbeModule(), datamodule=module)
+        assert not (module.dataset_root / "test.lance").exists()
+
+        module.prepare_data()
+
+        assert lance.dataset(str(module.dataset_root / "test.lance")).count_rows() == 6
