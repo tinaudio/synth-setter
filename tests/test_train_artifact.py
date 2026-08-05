@@ -37,12 +37,14 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from synth_setter.cli.train import (
     _checkpoint_metadata,
     _derive_checkpoint_uri,
+    _fingerprint_guard_allows_overwrite,
     _log_model_artifact,
     _upload_best_checkpoint,
     build_model_artifact,
     train,
 )
 from synth_setter.pipeline import r2_io
+from synth_setter.utils.checkpoint_fingerprint import fingerprint_from_cfg
 from tests.helpers.wandb_offline import read_run_binary
 
 _CKPT_URI = "r2://models/model-flow-simple/best.ckpt"
@@ -309,6 +311,385 @@ def test_upload_best_checkpoint_upload_failure_returns_none(
 
     monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
     assert _upload_best_checkpoint(_cfg(task_name="flow-simple"), "/x/epoch=3.ckpt") is None
+
+
+_SLOT = ("intermediate-data", "checkpoints", "flow-simple")
+_ENCODER_A = "synth_setter.models.components.embedding_pool.EmbeddingPool"
+_ENCODER_B = "synth_setter.models.components.fourier_number.FourierEncoder"
+
+
+def _guarded_cfg(encoder_target: str, force: bool = False) -> DictConfig:
+    """Build a train cfg whose fingerprint is driven by ``encoder_target``.
+
+    :param encoder_target: ``model.encoder._target_``, the fingerprint field the
+        guard tests vary between "arms".
+    :param force: ``training.force_checkpoint_overwrite`` — the mismatch escape hatch.
+    :returns: A minimal cfg for ``_upload_best_checkpoint`` guard scenarios.
+    """
+    cfg = _cfg(task_name="flow-simple")
+    with open_dict(cfg):
+        cfg.model = {"encoder": {"_target_": encoder_target}}
+        cfg.training.force_checkpoint_overwrite = force
+    return cfg
+
+
+def _fake_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point rclone's ``r2:`` remote at the local fs and return the slot directory.
+
+    :param tmp_path: Backs the fake ``r2:`` remote root.
+    :param monkeypatch: Sets the rclone backend env var and cwd.
+    :returns: The local directory backing ``r2://intermediate-data/checkpoints/flow-simple``.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone binary not available on PATH")
+    monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    slot = tmp_path.joinpath(*_SLOT)
+    slot.mkdir(parents=True)
+    return slot
+
+
+def _new_ckpt(tmp_path: Path) -> Path:
+    """Write and return the local best checkpoint the upload sends.
+
+    :param tmp_path: Directory the checkpoint file is created in.
+    :returns: Path to a checkpoint file containing ``b"new-weights"``.
+    """
+    ckpt = tmp_path / "epoch=3.ckpt"
+    ckpt.write_bytes(b"new-weights")
+    return ckpt
+
+
+def test_upload_best_checkpoint_writes_fingerprint_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful upload also lands a fingerprint sidecar next to model.ckpt.
+
+    :param tmp_path: Backs the fake ``r2:`` remote.
+    :param monkeypatch: Points rclone at the local fs.
+    """
+    slot = _fake_remote(tmp_path, monkeypatch)
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
+
+    assert uri is not None
+    sidecar = json.loads((slot / "model.ckpt.fingerprint.json").read_text())
+    assert sidecar["encoder_target"] == _ENCODER_A
+
+
+def test_upload_best_checkpoint_mismatched_fingerprint_refuses_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slot fingerprinted by another architecture is not overwritten (#2588).
+
+    :param tmp_path: Backs the fake ``r2:`` remote.
+    :param monkeypatch: Points rclone at the local fs.
+    """
+    slot = _fake_remote(tmp_path, monkeypatch)
+    (slot / "model.ckpt").write_bytes(b"good-weights")
+    (slot / "model.ckpt.fingerprint.json").write_text(json.dumps({"encoder_target": _ENCODER_A}))
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_B), str(_new_ckpt(tmp_path)))
+
+    assert uri is None
+    assert (slot / "model.ckpt").read_bytes() == b"good-weights"
+
+
+def test_upload_best_checkpoint_matching_fingerprint_overwrites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slot fingerprinted by the same architecture is overwritten normally.
+
+    :param tmp_path: Backs the fake ``r2:`` remote.
+    :param monkeypatch: Points rclone at the local fs.
+    """
+    slot = _fake_remote(tmp_path, monkeypatch)
+    (slot / "model.ckpt").write_bytes(b"old-weights")
+    (slot / "model.ckpt.fingerprint.json").write_text(json.dumps({"encoder_target": _ENCODER_A}))
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
+
+    assert uri is not None
+    assert (slot / "model.ckpt").read_bytes() == b"new-weights"
+
+
+def test_upload_best_checkpoint_sidecarless_slot_warns_and_overwrites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A pre-guard slot (no sidecar) is overwritten with a warning, then armed.
+
+    :param tmp_path: Backs the fake ``r2:`` remote.
+    :param monkeypatch: Points rclone at the local fs.
+    :param caplog: Captures the loud sidecar-less overwrite warning.
+    """
+    slot = _fake_remote(tmp_path, monkeypatch)
+    (slot / "model.ckpt").write_bytes(b"old-weights")
+
+    with caplog.at_level("WARNING", logger="synth_setter.cli.train"):
+        uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_B), str(_new_ckpt(tmp_path)))
+
+    assert uri is not None
+    assert (slot / "model.ckpt").read_bytes() == b"new-weights"
+    assert (slot / "model.ckpt.fingerprint.json").is_file()
+    assert any("no fingerprint sidecar" in message for message in caplog.messages)
+
+
+def test_upload_best_checkpoint_force_flag_overwrites_despite_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``training.force_checkpoint_overwrite=true`` bypasses the mismatch refusal.
+
+    :param tmp_path: Backs the fake ``r2:`` remote.
+    :param monkeypatch: Points rclone at the local fs.
+    """
+    slot = _fake_remote(tmp_path, monkeypatch)
+    (slot / "model.ckpt").write_bytes(b"old-weights")
+    (slot / "model.ckpt.fingerprint.json").write_text(json.dumps({"encoder_target": _ENCODER_A}))
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_B, force=True), str(_new_ckpt(tmp_path)))
+
+    assert uri is not None
+    assert (slot / "model.ckpt").read_bytes() == b"new-weights"
+    sidecar = json.loads((slot / "model.ckpt.fingerprint.json").read_text())
+    assert sidecar["encoder_target"] == _ENCODER_B
+
+
+def test_upload_best_checkpoint_unparsable_sidecar_refuses_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupt sidecar fails closed: the slot is preserved until forced.
+
+    :param tmp_path: Backs the fake ``r2:`` remote.
+    :param monkeypatch: Points rclone at the local fs.
+    """
+    slot = _fake_remote(tmp_path, monkeypatch)
+    (slot / "model.ckpt").write_bytes(b"good-weights")
+    (slot / "model.ckpt.fingerprint.json").write_text("not json {")
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_B), str(_new_ckpt(tmp_path)))
+
+    assert uri is None
+    assert (slot / "model.ckpt").read_bytes() == b"good-weights"
+
+
+def test_upload_best_checkpoint_guard_probe_failure_proceeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An environmental guard-probe failure degrades to the pre-guard behavior.
+
+    :param tmp_path: Backs the fake ``r2:`` remote.
+    :param monkeypatch: Points rclone at the local fs and breaks the size probe.
+    """
+    _fake_remote(tmp_path, monkeypatch)
+
+    def _probe_boom(*_args: object, **_kwargs: object) -> NoReturn:
+        raise RuntimeError("rclone lsf returned unparsable size")
+
+    monkeypatch.setattr(r2_io, "object_size", _probe_boom)
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
+
+    assert uri == "r2://intermediate-data/checkpoints/flow-simple/model.ckpt"
+
+
+_CKPT_SLOT_URI = "r2://intermediate-data/checkpoints/flow-simple/model.ckpt"
+_SIDECAR_SLOT_URI = f"{_CKPT_SLOT_URI}.fingerprint.json"
+
+
+def _in_memory_r2(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
+    """Back the ``r2_io`` boundary with an in-memory object store (no rclone).
+
+    Coverage CI lacks the rclone binary, which skips the local-remote tests
+    above; this fake keeps every guard branch exercised there.
+
+    :param monkeypatch: Replaces the four ``r2_io`` calls the upload path makes.
+    :returns: The live ``{uri: bytes}`` store backing the fake remote.
+    """
+    store: dict[str, bytes] = {}
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(
+        r2_io, "object_size", lambda uri: len(store[uri]) if uri in store else None
+    )
+
+    def _download(uri: str, dest: Path) -> None:
+        Path(dest).write_bytes(store[uri])
+
+    monkeypatch.setattr(r2_io, "download_to_path", _download)
+
+    def _upload(path: Path, uri: str) -> None:
+        store[uri] = Path(path).read_bytes()
+
+    monkeypatch.setattr(r2_io, "upload_to_uri", _upload)
+    return store
+
+
+def _run_fingerprint(encoder_target: str) -> Any:
+    """Return the fingerprint a run with ``encoder_target`` would carry.
+
+    :param encoder_target: ``model.encoder._target_`` driving the fingerprint.
+    :returns: The extracted :class:`CheckpointFingerprint`.
+    """
+    return fingerprint_from_cfg(_guarded_cfg(encoder_target))
+
+
+def test_guard_empty_slot_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty canonical slot is writable without any sidecar checks.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    _in_memory_r2(monkeypatch)
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_A), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_A)
+    )
+
+
+def test_guard_sidecarless_slot_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-guard slot (checkpoint, no sidecar) stays writable.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_mismatched_sidecar_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stored fingerprint from another architecture blocks the overwrite.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    assert not _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_matching_sidecar_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stored fingerprint matching the run's permits the overwrite.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_A), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_A)
+    )
+
+
+def test_guard_corrupt_sidecar_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unparsable sidecar fails closed until forced.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = b"not json {"
+
+    assert not _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_force_flag_bypasses_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``training.force_checkpoint_overwrite=true`` skips the sidecar probes entirely.
+
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"old-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_B, force=True), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_B)
+    )
+
+
+def test_guard_probe_error_allows_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An environmental probe failure degrades to the pre-guard (allow) behavior.
+
+    :param monkeypatch: Installs the fake remote, then breaks its size probe.
+    """
+    _in_memory_r2(monkeypatch)
+
+    def _probe_boom(*_args: object) -> NoReturn:
+        raise RuntimeError("rclone lsf returned unparsable size")
+
+    monkeypatch.setattr(r2_io, "object_size", _probe_boom)
+
+    assert _fingerprint_guard_allows_overwrite(
+        _guarded_cfg(_ENCODER_A), _CKPT_SLOT_URI, _run_fingerprint(_ENCODER_A)
+    )
+
+
+def test_upload_best_checkpoint_sidecar_upload_failure_keeps_ckpt_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed sidecar write is best-effort: the checkpoint URI is still returned.
+
+    :param tmp_path: Holds the local best-checkpoint file.
+    :param monkeypatch: Installs the fake remote, failing only the sidecar write.
+    """
+    store = _in_memory_r2(monkeypatch)
+
+    def _upload(path: Path, uri: str) -> None:
+        if uri.endswith(".fingerprint.json"):
+            raise OSError("sidecar boom")
+        store[uri] = Path(path).read_bytes()
+
+    monkeypatch.setattr(r2_io, "upload_to_uri", _upload)
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
+
+    assert uri == _CKPT_SLOT_URI
+    assert store[_CKPT_SLOT_URI] == b"new-weights"
+    assert _SIDECAR_SLOT_URI not in store
+
+
+def test_upload_best_checkpoint_fake_remote_lands_ckpt_and_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full upload path (guard, checkpoint, sidecar) works on the fake remote.
+
+    :param tmp_path: Holds the local best-checkpoint file.
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_A), str(_new_ckpt(tmp_path)))
+
+    assert uri == _CKPT_SLOT_URI
+    assert store[_CKPT_SLOT_URI] == b"new-weights"
+    assert json.loads(store[_SIDECAR_SLOT_URI])["encoder_target"] == _ENCODER_A
+
+
+def test_upload_best_checkpoint_fake_remote_refusal_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A guard refusal degrades the upload to lineage-only on the fake remote.
+
+    :param tmp_path: Holds the local best-checkpoint file.
+    :param monkeypatch: Installs the in-memory fake remote.
+    """
+    store = _in_memory_r2(monkeypatch)
+    store[_CKPT_SLOT_URI] = b"good-weights"
+    store[_SIDECAR_SLOT_URI] = _run_fingerprint(_ENCODER_A).model_dump_json().encode()
+
+    uri = _upload_best_checkpoint(_guarded_cfg(_ENCODER_B), str(_new_ckpt(tmp_path)))
+
+    assert uri is None
+    assert store[_CKPT_SLOT_URI] == b"good-weights"
 
 
 def test_log_model_artifact_logs_to_wandb_logger() -> None:
