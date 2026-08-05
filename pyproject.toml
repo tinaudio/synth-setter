@@ -61,6 +61,7 @@ synth-setter-generate-dataset-from-spec-uri = "synth_setter.cli.generate_dataset
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
 synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
+synth-setter-reopen-dataset = "synth_setter.pipeline.data.dataset_reopen:main"
 synth-setter-clap = "synth_setter.cli.clap_render:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-migrate-checkpoint = "synth_setter.cli.migrate_checkpoint:main"
