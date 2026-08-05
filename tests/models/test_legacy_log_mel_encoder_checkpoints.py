@@ -1,11 +1,10 @@
-"""Load checkpoints whose encoder was pickled before #2755 split ``LogMelEncoder``.
+"""Exercise load compatibility for checkpoints pickling a fused log-mel encoder.
 
 ``VSTFlowMatchingModule`` pickles the encoder *instance* into
-``hyper_parameters``, so the class named there has to resolve at unpickle time.
-The fixture below writes a real Lightning checkpoint whose pickled encoder
-records the pre-split name and the flat attribute layout that class had — the
-union of what ``LogMelFrontend`` and ``MelCNN`` now hold — so the tests drive the
-same load paths a checkpoint written before the rename does.
+``hyper_parameters``, so the class named there must resolve at unpickle time.
+The fixture writes a real Lightning checkpoint naming the fused class and
+carrying its flat attribute layout — the union of what ``LogMelFrontend`` and
+``MelCNN`` hold — so the tests drive the real load paths.
 """
 
 from __future__ import annotations
@@ -34,10 +33,10 @@ _OUT_DIM = 32
 
 
 class _PreSplitLogMelEncoder(nn.Module):
-    """Stand-in carrying the fused encoder's pre-#2755 attribute layout.
+    """Provide the flat fused-encoder layout the compatibility fixture pickles.
 
-    Its submodules come from the real front end and backbone, so the pickled state matches what the
-    deleted class wrote rather than a hand-built guess.
+    Submodules come from the real front end and backbone, so the pickled state is the shipped one
+    rather than a hand-built guess.
     """
 
     def __init__(self, frontend: LogMelFrontend, backbone: MelCNN) -> None:
@@ -57,8 +56,8 @@ class _PreSplitLogMelEncoder(nn.Module):
         self.projection = backbone.projection
 
 
-# Pickle records the class by module and qualname, so the saved bytes must name
-# the pre-split class rather than this test's stand-in.
+# Pickle records a class by module and qualname, so the saved bytes must name
+# the fused class rather than this stand-in.
 _PreSplitLogMelEncoder.__module__ = "synth_setter.models.components.cnn"
 _PreSplitLogMelEncoder.__qualname__ = "LogMelEncoder"
 
