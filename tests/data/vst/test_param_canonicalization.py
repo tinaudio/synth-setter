@@ -583,6 +583,15 @@ def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
 
     for index, row in enumerate(rows):
         worst, unrelated, repeat = _permutation_scores(probe, row, indices)
+        # Calibration: the repeat floor is only a meaningful tolerance while
+        # repeat renders sit far below unrelated rows. Without this, a plugin
+        # that rendered nondeterministically enough would widen the threshold
+        # until any permutation passed.
+        assert repeat < 0.1 * unrelated, (
+            f"{param_spec_name} render is too nondeterministic to test on row {index}: "
+            f"repeat render scores MSS {repeat:.3f} against {unrelated:.3f} for an "
+            "unrelated row, so the tolerance below would not discriminate"
+        )
         assert worst < max(0.1 * unrelated, 2 * repeat), (
             f"{param_spec_name} blocks are not interchangeable on row {index}: worst "
             f"permutation scores MSS {worst:.3f}, against {unrelated:.3f} for the closer "
