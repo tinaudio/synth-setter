@@ -914,11 +914,13 @@ def test_train_canonicalize_symmetric_blocks_reaches_datamodule(
     assert datamodule.canonicalize_symmetric_blocks is True
     blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
     sort_keys = [block[blocks.key_offset] for block in blocks.indices]
-    # The train split, not val: this fixture's single val row happens to be
-    # canonical already, so asserting on it would pass without the transform.
+    # Every train row, not the first batch: this fixture re-renders per run, so
+    # any single row may come out canonical as stored and prove nothing.
     datamodule.setup("fit")
-    served = next(iter(datamodule.train_dataloader()))["params"][:, sort_keys]
-    assert (np.diff(served.numpy(), axis=1) <= 0).all()
+    served = np.concatenate(
+        [batch["params"][:, sort_keys].numpy() for batch in datamodule.train_dataloader()]
+    )
+    assert (np.diff(served, axis=1) <= 0).all()
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
 

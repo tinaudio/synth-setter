@@ -1,7 +1,7 @@
 """Tests for symmetric-block canonicalization of encoded param rows."""
 
 import itertools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
 
@@ -320,6 +320,7 @@ class TestDataModuleWiring:
         drawn = self._fake_train_batch(canonicalize=False, seed=1234)
         assert not np.array_equal(drawn, canonicalize_blocks(drawn, blocks))
 
+
 class TestPrepareBatchCanonicalization:
     """canonical_blocks plumbing through prepare_batch."""
 
@@ -462,21 +463,64 @@ def _block_permutations(row: np.ndarray, indices: np.ndarray) -> Iterator[np.nda
         yield candidate
 
 
+def _audible_rows(
+    render: Callable[[np.ndarray], np.ndarray],
+    spec: ParamSpec,
+    rng: np.random.Generator,
+    *,
+    count: int,
+    min_loudness: float,
+) -> list[np.ndarray]:
+    """Draw encoded rows that render above the generator's loudness gate.
+
+    :param render: Renders one encoded row to audio.
+    :param spec: Spec whose encoded width the rows are drawn at.
+    :param rng: Draw source.
+    :param count: Rows required.
+    :param min_loudness: dBFS gate, matching the dataset generator's own.
+    :returns: Exactly ``count`` audible rows.
+    """
+    floor = 10 ** (min_loudness / 20)
+    candidates = (rng.random(len(spec)) for _ in range(80))
+    rows = list(
+        itertools.islice((c for c in candidates if np.sqrt((render(c) ** 2).mean()) > floor), count)
+    )
+    assert len(rows) == count, "fixture drew too few audible rows to test"
+    return rows
+
+
+def _permutation_scores(
+    render: Callable[[np.ndarray], np.ndarray],
+    spec: ParamSpec,
+    rng: np.random.Generator,
+    row: np.ndarray,
+    indices: np.ndarray,
+) -> tuple[float, float, float]:
+    """Score one row's block permutations against two reference populations.
+
+    Scored with MSS, not sample-wise: the Surge render randomizes phase, so a
+    waveform metric saturates on repeat renders of one row and resolves nothing.
+
+    :param render: Renders one encoded row to audio.
+    :param spec: Spec whose encoded width unrelated rows are drawn at.
+    :param rng: Draw source for the unrelated rows.
+    :param row: Encoded row whose blocks are permuted.
+    :param indices: ``(blocks, width)`` encoded-dim layout to permute.
+    :returns: Worst permutation score, the closer of two unrelated rows, and the
+        larger of two repeat renders of ``row``.
+    """
+    base = render(row)
+    unrelated = min(compute_mss(base, render(rng.random(len(spec)))) for _ in range(2))
+    repeat = max(compute_mss(base, render(row)) for _ in range(2))
+    worst = max(compute_mss(base, render(c)) for c in _block_permutations(row, indices))
+    return worst, unrelated, repeat
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("param_spec_name", sorted(SYMMETRIC_BLOCK_REGISTRY))
 def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
-    """Every registered block group is interchangeable at render level.
-
-    The registry claims its blocks can be swapped without changing the audio.
-    Nothing else checks that: a group naming a routed parameter would silently
-    rewrite training targets while the conditioning kept describing the original
-    row. Scored with the repo's MSS, because the Surge render randomizes phase —
-    a sample-wise metric saturates on repeat renders of the *same* row and can
-    resolve nothing.
-
-    Several rows, because oscillator identity could matter only under some
-    routing or mode combination a single row never selects.
+    """Verify registered block permutations render within the repeat-render MSS floor (#1886).
 
     :param param_spec_name: Registry key whose block group is under test.
     """
@@ -497,23 +541,12 @@ def test_registered_blocks_render_interchangeably(param_spec_name: str) -> None:
         return renderer.render(synth_params, int(note["pitch"]), config.velocity, (start, end))
 
     rng = np.random.default_rng(11)
-    audible = 10 ** (config.min_loudness / 20)
-    candidates = (rng.random(len(spec)) for _ in range(80))
-    rows = list(
-        itertools.islice((c for c in candidates if np.sqrt((render(c) ** 2).mean()) > audible), 3)
-    )
-    assert len(rows) == 3, "fixture drew too few audible rows to test"
+    # Several rows: oscillator identity could matter only under a routing or
+    # mode combination one row never selects.
+    rows = _audible_rows(render, spec, rng, count=3, min_loudness=config.min_loudness)
 
     for index, row in enumerate(rows):
-        base = render(row)
-        # Unrelated rows set the scale a genuinely different sound scores at;
-        # the closest of two guards against one draw landing spectrally near.
-        unrelated = min(compute_mss(base, render(rng.random(len(spec)))) for _ in range(2))
-        # Repeat renders of the unchanged row set the floor the plugin can
-        # resolve, so phase randomization alone can never fail the assertion.
-        repeat = max(compute_mss(base, render(row)) for _ in range(2))
-        worst = max(compute_mss(base, render(c)) for c in _block_permutations(row, indices))
-
+        worst, unrelated, repeat = _permutation_scores(render, spec, rng, row, indices)
         assert worst < max(0.1 * unrelated, 2 * repeat), (
             f"{param_spec_name} blocks are not interchangeable on row {index}: worst "
             f"permutation scores MSS {worst:.3f}, against {unrelated:.3f} for the closer "

@@ -39,6 +39,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.vst import plugin_state_paths
+from synth_setter.data.vst.param_canonicalization import resolve_canonical_blocks
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
@@ -47,6 +48,7 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -1600,15 +1602,31 @@ def test_evaluate_validate_mode_canonicalizes_surge_simple(
     :param fake_surge_smoke_datasets: Tiny loadable Surge Simple Lance splits.
     :param param_spec_name: Indirect fixture value selecting ``surge_simple``.
     """
+    from tests.helpers.lance_fixtures import make_shard_columns, write_lance_shard
+
+    # Own the stored rows rather than reusing the smoke fixture: its splits are
+    # re-rendered per run, so whether any row is non-canonical is luck, and an
+    # already-canonical row makes the served-order assertion below vacuous.
+    root = tmp_path / "canonicalization-root"
+    blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
+    sort_keys = [block[blocks.key_offset] for block in blocks.indices]
+    for split, seed in (("train", 0), ("val", 1), ("test", 2)):
+        write_lance_shard(root / f"{split}.lance", make_shard_columns(8, num_params=92, seed=seed))
+    stored = make_shard_columns(8, num_params=92, seed=1)["param_array"]
+    assert not (np.diff(stored[:, sort_keys], axis=1) <= 0).all(), (
+        "fixture rows are already canonical, so the assertion below would be vacuous"
+    )
+
     cfg = _compose_fake_oracle_eval_cfg(
         tmp_path,
-        fake_surge_smoke_datasets,
+        root,
         mode="validate",
         param_spec_name=param_spec_name,
         datamodule="surge_lance",
     )
     with open_dict(cfg):
         cfg.datamodule.canonicalize_symmetric_blocks = True
+        cfg.datamodule.use_saved_mean_and_variance = False
 
     HydraConfig().set_config(cfg)
     try:
@@ -1616,7 +1634,13 @@ def test_evaluate_validate_mode_canonicalizes_surge_simple(
     finally:
         GlobalHydra.instance().clear()
 
-    assert object_dict["datamodule"].canonicalize_symmetric_blocks is True
+    # The oracle echoes its input, so a zero MSE says nothing about ordering —
+    # the served validation rows themselves have to come out canonical.
+    datamodule = object_dict["datamodule"]
+    assert datamodule.canonicalize_symmetric_blocks is True
+    datamodule.setup("validate")
+    served = next(iter(datamodule.val_dataloader()))["params"][:, sort_keys]
+    assert (np.diff(served.numpy(), axis=1) <= 0).all()
     assert metric_dict["val/param_mse"].item() == 0.0
 
 
