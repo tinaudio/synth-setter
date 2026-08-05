@@ -993,3 +993,24 @@ class TestStageScopedHydration:
         for split in ("train", "val", "test"):
             assert not (module.dataset_root / f"{split}.lance").exists()
         assert (module.dataset_root / "stats.npz").is_file()
+
+    def test_prepare_data_after_a_finished_fit_hydrates_the_remaining_splits(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finished trainer stays attached, so a direct call must not stay fit-scoped.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+        _stage_probe_trainer(tmp_path).fit(_StageProbeModule(), datamodule=module)
+        assert not (module.dataset_root / "test.lance").exists()
+
+        module.prepare_data()
+
+        assert lance.dataset(str(module.dataset_root / "test.lance")).count_rows() == 6

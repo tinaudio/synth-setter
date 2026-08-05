@@ -8,7 +8,7 @@ from typing import NotRequired, Self, TypedDict
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from lightning.pytorch.trainer.states import TrainerFn
+from lightning.pytorch.trainer.states import TrainerFn, TrainerStatus
 from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
@@ -499,7 +499,10 @@ class VSTDataModule(LightningDataModule):
 
         :returns: Columns to materialize, keyed by the splits this stage reads.
         """
-        stage = self.trainer.state.fn if self.trainer is not None else None
+        # A finished Trainer keeps its last state.fn, so scope to the stage only
+        # while one is actually running.
+        state = self.trainer.state if self.trainer is not None else None
+        stage = state.fn if state is not None and state.status == TrainerStatus.RUNNING else None
         if stage is None:
             return self.projection
         if stage is TrainerFn.PREDICTING:
