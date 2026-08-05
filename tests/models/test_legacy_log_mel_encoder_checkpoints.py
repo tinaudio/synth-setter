@@ -1,0 +1,171 @@
+"""Load checkpoints whose encoder was pickled before #2755 split ``LogMelEncoder``.
+
+``VSTFlowMatchingModule`` pickles the encoder *instance* into
+``hyper_parameters``, so the class named there has to resolve at unpickle time.
+The fixture below writes a real Lightning checkpoint whose pickled encoder
+records the pre-split name and the flat attribute layout that class had — the
+union of what ``LogMelFrontend`` and ``MelCNN`` now hold — so the tests drive the
+same load paths a checkpoint written before the rename does.
+"""
+
+from __future__ import annotations
+
+from functools import partial
+from pathlib import Path
+
+import pytest
+import torch
+from lightning import Trainer
+from torch import nn
+
+from synth_setter.models.components import cnn
+from synth_setter.models.components.cnn import MelCNN
+from synth_setter.models.components.spec_encoder import LogMelFrontend
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    LearntProjection,
+)
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+
+_PRED_WIDTH = 300
+_SAMPLE_RATE = 16_000
+_IN_DIM = 16_384
+_OUT_DIM = 32
+
+
+class _PreSplitLogMelEncoder(nn.Module):
+    """Stand-in carrying the fused encoder's pre-#2755 attribute layout.
+
+    Its submodules come from the real front end and backbone, so the pickled state matches what the
+    deleted class wrote rather than a hand-built guess.
+    """
+
+    def __init__(self, frontend: LogMelFrontend, backbone: MelCNN) -> None:
+        """Flatten a front end and a backbone into one fused module.
+
+        :param frontend: Source of the mel transform and decibel scaling.
+        :param backbone: Source of the convolutional stack and projection.
+        """
+        super().__init__()
+        self.in_dim = frontend.in_dim
+        self.mel = frontend.mel
+        self.amin = frontend.amin
+        self.db_multiplier = frontend.db_multiplier
+        self.top_db = frontend.top_db
+        self.conv_net = backbone.conv_net
+        self.pool = backbone.pool
+        self.projection = backbone.projection
+
+
+# Pickle records the class by module and qualname, so the saved bytes must name
+# the pre-split class rather than this test's stand-in.
+_PreSplitLogMelEncoder.__module__ = "synth_setter.models.components.cnn"
+_PreSplitLogMelEncoder.__qualname__ = "LogMelEncoder"
+
+
+@pytest.fixture
+def legacy_parts() -> tuple[LogMelFrontend, MelCNN]:
+    """Build the front end and backbone the legacy encoder fused together.
+
+    :returns: Seeded front end and backbone sharing one waveform contract.
+    """
+    torch.manual_seed(0)
+    frontend = LogMelFrontend(_IN_DIM, sample_rate=_SAMPLE_RATE, n_mels=16)
+    backbone = MelCNN(4, _OUT_DIM, input_channels=1, num_blocks=2)
+    return frontend, backbone
+
+
+@pytest.fixture
+def legacy_checkpoint(
+    legacy_parts: tuple[LogMelFrontend, MelCNN],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """Write a real checkpoint whose encoder is pickled under the pre-split name.
+
+    :param legacy_parts: Front end and backbone fused into the pickled encoder.
+    :param tmp_path: Per-test directory receiving the checkpoint.
+    :param monkeypatch: Makes the pre-split name resolvable while pickling.
+    :returns: Path to the saved Lightning checkpoint.
+    """
+    frontend, backbone = legacy_parts
+    encoder = _PreSplitLogMelEncoder(frontend, backbone)
+    vector_field = ApproxEquivTransformer(
+        projection=LearntProjection(
+            d_model=_OUT_DIM,
+            d_token=_OUT_DIM,
+            num_params=_PRED_WIDTH,
+            num_tokens=8,
+            initial_ffn=True,
+            final_ffn=False,
+        ),
+        num_layers=1,
+        d_model=_OUT_DIM,
+        conditioning_dim=_OUT_DIM,
+        num_heads=2,
+        d_ff=_OUT_DIM,
+        num_tokens=8,
+        learn_projection=True,
+        time_encoding="sinusoidal",
+        zero_init=False,
+    )
+    model = VSTFlowMatchingModule(
+        encoder=encoder,
+        vector_field=vector_field,
+        # The modules take Hydra _partial_ optimizer factories despite the annotation.
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        num_params=_PRED_WIDTH,
+    )
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.strategy.connect(model)
+    path = tmp_path / "pre_split_encoder.ckpt"
+    monkeypatch.setattr(cnn, "LogMelEncoder", _PreSplitLogMelEncoder, raising=False)
+    trainer.save_checkpoint(path)
+    monkeypatch.undo()
+    return path
+
+
+def test_load_from_checkpoint_pre_split_encoder_reproduces_its_encoding(
+    legacy_checkpoint: Path, legacy_parts: tuple[LogMelFrontend, MelCNN]
+) -> None:
+    """A pre-rename checkpoint loads and its encoder still encodes as it did.
+
+    :param legacy_checkpoint: Checkpoint pickling the encoder under the old name.
+    :param legacy_parts: The front end and backbone whose weights it carries.
+    """
+    frontend, backbone = legacy_parts
+    waveform = torch.zeros(2, _IN_DIM)
+    waveform[:, ::64] = 0.5
+    expected = backbone(frontend(waveform))
+
+    model = VSTFlowMatchingModule.load_from_checkpoint(
+        legacy_checkpoint, map_location="cpu", weights_only=False
+    )
+
+    torch.testing.assert_close(model.encoder(waveform), expected)
+
+
+def test_torch_load_pre_split_checkpoint_resolves_the_renamed_encoder(
+    legacy_checkpoint: Path,
+) -> None:
+    """The raw ``torch.load`` path named in #2766 also unpickles the old class.
+
+    :param legacy_checkpoint: Checkpoint pickling the encoder under the old name.
+    """
+    checkpoint = torch.load(legacy_checkpoint, map_location="cpu", weights_only=False)
+
+    assert isinstance(checkpoint["hyper_parameters"]["encoder"], nn.Module)
+
+
+def test_unknown_cnn_module_attribute_still_raises_attribute_error() -> None:
+    """Compatibility resolution stays scoped to the renamed class."""
+    with pytest.raises(AttributeError):
+        cnn.NotAnEncoder  # noqa: B018

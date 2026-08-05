@@ -14,8 +14,11 @@ from beartype import beartype
 from jaxtyping import Float, jaxtyped
 from torch import Tensor
 
+from synth_setter.models.components.spec_encoder import LogMelFrontend
+
 _BATCH_GRID_SHAPE: Final = "batch channels mels frames"
 _BATCH_EMBEDDING_SHAPE: Final = "batch embedding"
+_BATCH_AUDIO_SHAPE: Final = "batch samples"
 
 
 @jaxtyped(typechecker=beartype)
@@ -287,3 +290,39 @@ class MelCNN(nn.Module):
         :returns: Embeddings shaped ``(batch, out_dim)``.
         """
         return self.projection(self.pool(self.conv_net(x)).flatten(1))
+
+
+class _FusedLogMelEncoder(nn.Module):
+    """Restore encoders pickled before #2755 split the fused log-mel encoder.
+
+    ``VSTFlowMatchingModule`` pickles the encoder instance into
+    ``hyper_parameters``, so checkpoints written before the split still name the
+    fused class and cannot load without it. Its state is the flattened union of
+    :class:`~synth_setter.models.components.spec_encoder.LogMelFrontend` and
+    :class:`MelCNN`, which is why the halves run against ``self`` here: keeping
+    the flat layout is what lets a legacy ``state_dict`` load unchanged.
+    """
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[Tensor, _BATCH_AUDIO_SHAPE]
+    ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
+        """Encode a mono waveform batch into fixed-width embeddings.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Embeddings shaped ``(batch, out_dim)``.
+        """
+        return MelCNN.forward(self, LogMelFrontend.forward(self, x))
+
+
+@jaxtyped(typechecker=beartype)
+def __getattr__(name: str) -> object:
+    """Resolve the pre-#2755 encoder name so old checkpoints unpickle.
+
+    :param name: Requested module attribute.
+    :returns: Compatibility target for the renamed class.
+    :raises AttributeError: If ``name`` is not the renamed class.
+    """
+    if name == "LogMelEncoder":
+        return _FusedLogMelEncoder
+    raise AttributeError(name)
