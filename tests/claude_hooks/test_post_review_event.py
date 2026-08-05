@@ -228,6 +228,151 @@ def test_submit_review_self_approve_422_falls_back_to_comment(
     assert retried["body"].startswith("✅ No findings")
 
 
+def test_submit_review_actions_approve_422_falls_back_to_comment(
+    helper: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zero-finding APPROVE refused for the Actions token retries as COMMENT.
+
+    GitHub Actions refusal lacks self-review wording, so it must also retry as COMMENT (#2922).
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
+    err_422 = SimpleNamespace(
+        returncode=1,
+        stdout="",
+        stderr="HTTP 422: GitHub Actions is not permitted to approve pull requests.",
+    )
+    ok = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"html_url": "https://example/r/9"}),
+        stderr="",
+    )
+    fake_run, calls = _fake_run_factory([err_422, ok])
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    monkeypatch.setattr(helper, "gh_executable", lambda: "/usr/bin/gh")
+
+    payload = {"body": "Clean review.", "event": "APPROVE"}
+    response = helper.submit_review("o/r", 7, payload, fallback_banner="✅ No findings")
+
+    assert response["html_url"] == "https://example/r/9"
+    assert len(calls) == 2
+    retried = json.loads(calls[1])
+    assert retried["event"] == "COMMENT"
+    assert retried["body"].startswith("✅ No findings")
+
+
+def test_submit_review_reworded_refusal_still_falls_back_to_comment(
+    helper: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An equivalent refusal wording still retries as COMMENT.
+
+    GitHub's prose is not a stable contract, so "cannot approve" must be recognised
+    alongside "can not approve" and "is not permitted to approve".
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
+    err_422 = SimpleNamespace(
+        returncode=1,
+        stdout="",
+        stderr="HTTP 422: GitHub Actions cannot approve pull requests.",
+    )
+    ok = SimpleNamespace(
+        returncode=0, stdout=json.dumps({"html_url": "https://example/r/8"}), stderr=""
+    )
+    fake_run, calls = _fake_run_factory([err_422, ok])
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    monkeypatch.setattr(helper, "gh_executable", lambda: "/usr/bin/gh")
+
+    payload = {"body": "Clean review.", "event": "APPROVE"}
+    response = helper.submit_review("o/r", 7, payload, fallback_banner="✅ No findings")
+
+    assert response["html_url"] == "https://example/r/8"
+    assert json.loads(calls[1])["event"] == "COMMENT"
+
+
+def test_submit_review_unrelated_422_exits_without_downgrading(
+    helper: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 422 that is not an event refusal fails loudly instead of retrying.
+
+    A bad inline-comment anchor also answers 422; downgrading it would drop the finding.
+
+    :param helper: The loaded ``post_review`` module.
+    :param monkeypatch: Pytest fixture for patching ``subprocess.run``.
+    """
+    err_422 = SimpleNamespace(
+        returncode=1,
+        stdout=json.dumps(
+            {"message": "Validation Failed", "errors": ["line must be part of the diff"]}
+        ),
+        stderr="HTTP 422: Validation Failed",
+    )
+    fake_run, calls = _fake_run_factory([err_422])
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    monkeypatch.setattr(helper, "gh_executable", lambda: "/usr/bin/gh")
+
+    payload = {"body": "b", "event": "REQUEST_CHANGES", "comments": []}
+    with pytest.raises(SystemExit):
+        helper.submit_review("o/r", 7, payload, fallback_banner="x")
+    assert len(calls) == 1
+
+
+def _write_stub_gh(tmp_path: Path, calls_dir: Path) -> Path:
+    """Write a stub ``gh`` that refuses the first POST and accepts the retry.
+
+    Counts prior payload files rather than lines: BSD ``wc`` pads its output, which
+    would corrupt the filename on macOS runners.
+
+    :param tmp_path: Directory the stub executable is written into.
+    :param calls_dir: Directory the stub records each request payload into.
+    :returns: Path to the executable stub.
+    """
+    stub = tmp_path / "gh"
+    stub.write_text(
+        "#!/bin/bash\n"
+        f'dir="{calls_dir}"\n'
+        'count=$(find "$dir" -name "payload.*" | wc -l | tr -d "[:space:]")\n'
+        'cat > "$dir/payload.$count"\n'
+        'if [ "$count" -eq 0 ]; then\n'
+        '  echo "HTTP 422: GitHub Actions is not permitted to approve pull requests." >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'echo \'{"html_url": "https://example/r/real"}\'\n'
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def test_submit_review_retries_through_the_real_gh_command_boundary(
+    helper: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The APPROVE downgrade works through a real subprocess, not a mocked ``subprocess.run``.
+
+    Every other fallback test patches ``subprocess.run``, so none of them exercise argv
+    construction, stdin piping, or stdout parsing. This drives a stub ``gh`` executable that
+    refuses the first POST exactly as GitHub does and accepts the COMMENT retry.
+
+    :param helper: The loaded ``post_review`` module.
+    :param tmp_path: Scratch root for the stub executable and its call log.
+    :param monkeypatch: Points ``gh_executable`` at the stub; ``subprocess`` stays real.
+    """
+    calls_dir = tmp_path / "calls"
+    calls_dir.mkdir()
+    monkeypatch.setattr(helper, "gh_executable", lambda: str(_write_stub_gh(tmp_path, calls_dir)))
+
+    payload = {"body": "Clean review.", "event": "APPROVE"}
+    response = helper.submit_review("o/r", 7, payload, fallback_banner="✅ No findings")
+
+    assert response["html_url"] == "https://example/r/real"
+    assert len(list(calls_dir.glob("payload.*"))) == 2
+    assert json.loads((calls_dir / "payload.0").read_text())["event"] == "APPROVE"
+    retried = json.loads((calls_dir / "payload.1").read_text())
+    assert retried["event"] == "COMMENT"
+    assert retried["body"].startswith("✅ No findings")
+
+
 def test_submit_review_success_does_not_retry(
     helper: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
