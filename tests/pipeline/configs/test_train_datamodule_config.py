@@ -74,7 +74,7 @@ def test_train_datamodule_canonicalization_defaults_off() -> None:
 
 
 def test_train_override_canonicalization_true_composes() -> None:
-    """The symmetric-block override reaches the instantiated datamodule."""
+    """Assert Hydra preserves an explicit opt-in configuration value."""
     module = _instantiate_train_datamodule("datamodule.canonicalize_symmetric_blocks=true")
     assert module.canonicalize_symmetric_blocks is True
 

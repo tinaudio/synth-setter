@@ -94,6 +94,10 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
   `file://` root into a request-addressed child of `dataset_root`. The source must
   contain `dataset.complete`; optional per-split transaction pins select snapshots,
   and `download_dataset_row_limit` must be positive when set
+- `datamodule.canonicalize_symmetric_blocks` defaults to `false`. True sorts the
+  spec's registered permutation-symmetric blocks (currently `surge_simple`'s
+  oscillators) into one orbit representative before rescaling and OT matching, so
+  point-regression targets are identifiable; a spec with no registered blocks raises
 - `render:` defaults to `null`; a render group (e.g. `render=vst`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one
@@ -311,12 +315,11 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.3 Data Portability
 
-| Input                                      | Type           | What's Needed                                                                                                                                                                           | Reference                                                 |
-| ------------------------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `datamodule.dataset_root`                  | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                                                                                  | training-pipeline.md §6.1                                 |
-| `datamodule.download_dataset_root_uri`     | string \| null | Optional finalized `r2://` or absolute `file://` root; `prepare_data()` projects its loader columns into a request-addressed child of `dataset_root` after verifying `dataset.complete` | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
-| `datamodule.canonicalize_symmetric_blocks` | bool           | Opt-in registered-block sorting that makes permutation-symmetric point-regression targets identifiable                                                                                  | `src/synth_setter/data/vst/param_canonicalization.py`     |
-| `datamodule.stats_file`                    | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                                                                           | `nsynth.yaml` / `fsd.yaml`                                |
+| Input                                  | Type           | What's Needed                                                                                                                                                                           | Reference                                                 |
+| -------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                                                                                  | training-pipeline.md §6.1                                 |
+| `datamodule.download_dataset_root_uri` | string \| null | Optional finalized `r2://` or absolute `file://` root; `prepare_data()` projects its loader columns into a request-addressed child of `dataset_root` after verifying `dataset.complete` | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
+| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                                                                           | `nsynth.yaml` / `fsd.yaml`                                |
 
 ### 5.4 Hardware & Compute
 

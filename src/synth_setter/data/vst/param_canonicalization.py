@@ -1,8 +1,7 @@
-"""Pick identifiable point-regression targets from permutation-symmetric blocks.
+"""Canonicalize registered permutation-symmetric parameter blocks for point regression.
 
-Registered groups are interchangeable at render level, guarded by a real-render MSS contract in
-``tests/data/vst/test_param_canonicalization.py``. Score permutations spectrally, not sample-wise:
-the Surge render randomizes phase, so a waveform metric saturates on repeat renders of one row.
+Score any render comparison of these blocks spectrally, not sample-wise: Surge randomizes phase per
+render, so a waveform metric saturates (#1886).
 """
 
 from __future__ import annotations
