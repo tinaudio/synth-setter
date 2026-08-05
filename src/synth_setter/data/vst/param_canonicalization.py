@@ -1,10 +1,6 @@
-"""Canonicalize permutation-symmetric parameter blocks in encoded param rows.
+"""Pick identifiable point-regression targets from permutation-symmetric blocks.
 
-Some specs contain interchangeable module blocks (e.g. ``surge_simple``'s three
-oscillators) whose permutation leaves the rendered audio unchanged, which makes
-point regression on raw rows ill-posed (#1886). Sorting the blocks into a
-deterministic order picks one orbit representative so targets become
-identifiable. Applied per batch by :func:`~synth_setter.data.vst_datamodule.prepare_batch`.
+See #1886 for render-invariance evidence behind the registered block groups.
 """
 
 from __future__ import annotations
@@ -19,10 +15,7 @@ from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
 
-# Registered symmetric block groups: prefixes naming the interchangeable
-# blocks, plus the within-block param suffix to sort by. surge_simple's LFO
-# blocks are deliberately absent — they are routed differently and are not
-# render-invariant under permutation (measured on #1886).
+# LFO blocks are routed differently and are not render-invariant under permutation — see #1886.
 SYMMETRIC_BLOCK_REGISTRY: dict[ParamSpecName, tuple[tuple[str, ...], str]] = {
     ParamSpecName("surge_simple"): (("a_osc_1_", "a_osc_2_", "a_osc_3_"), "volume"),
 }

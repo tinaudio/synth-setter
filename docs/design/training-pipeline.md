@@ -307,6 +307,11 @@ dataset_root: ${paths.output_dir}/data # shipped default (per-run Hydra dir)
 # download_dataset_root_uri: r2://intermediate-data/data/{dataset_config_id}/{dataset_wandb_run_id}/
 ```
 
+Point regressors can opt into `datamodule.canonicalize_symmetric_blocks=true` for specs
+registered in `data/vst/param_canonicalization.py`. The shared batch transform selects a
+deterministic representative before parameter rescaling and OT matching; the default preserves
+stored parameter order.
+
 Behavior:
 
 - Local-only by default; no hidden default R2 fetch
