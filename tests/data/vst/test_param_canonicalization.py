@@ -50,8 +50,6 @@ OSC_VOLUME_DIMS = (20, 27, 34)
 
 
 class TestBlockIndicesByPrefix:
-    """block_indices_by_prefix derivation and validation."""
-
     def test_surge_simple_osc_blocks_are_aligned_and_volume_keyed(self) -> None:
         """surge_simple's three osc blocks resolve to aligned index runs keyed on volume."""
         blocks = block_indices_by_prefix(
@@ -100,8 +98,6 @@ class TestBlockIndicesByPrefix:
 
 
 class TestCanonicalizeBlocks:
-    """canonicalize_blocks row-wise sorting semantics."""
-
     def test_blocks_sorted_by_descending_key(self) -> None:
         """Blocks come back ordered by descending key value."""
         row = np.array([[0.9, 0.1, 0.8, 0.5, 0.7, 0.3]], dtype=np.float32)
@@ -178,8 +174,6 @@ class TestCanonicalizeBlocks:
 
 
 class TestResolveCanonicalBlocks:
-    """Registry resolution for specs with symmetric blocks."""
-
     def test_surge_simple_resolves_osc_blocks(self) -> None:
         """surge_simple resolves to its osc blocks keyed on volume."""
         blocks = resolve_canonical_blocks(ParamSpecName("surge_simple"))
@@ -193,8 +187,6 @@ class TestResolveCanonicalBlocks:
 
 
 class TestDataModuleWiring:
-    """canonicalize_symmetric_blocks flag through LanceVSTDataModule."""
-
     def _write_dataset(self, root: Path) -> None:
         """Write tiny surge_simple-width train/val/test Lance splits.
 
@@ -470,14 +462,20 @@ def _real_render_config(param_spec_name: str) -> RenderConfig:
 
 
 def _block_permutations(row: np.ndarray, indices: np.ndarray) -> Iterator[np.ndarray]:
-    """Yield every block permutation of one encoded row.
+    """Yield each non-identity block permutation of one encoded row.
+
+    The identity is excluded: rendering it measures the plugin's own phase
+    variance, which the calibration already samples, not block interchange.
 
     :param row: Encoded row to permute.
     :param indices: ``(blocks, width)`` encoded-dim layout to permute.
-    :yields: One row per block ordering, including the identity.
+    :yields: One row per non-identity block ordering.
     :ytype: np.ndarray
     """
-    for order in itertools.permutations(range(len(indices))):
+    identity = tuple(range(len(indices)))
+    for order in itertools.permutations(identity):
+        if order == identity:
+            continue
         candidate = row.copy()
         candidate[indices.reshape(-1)] = row[indices[list(order)].reshape(-1)]
         yield candidate
@@ -542,12 +540,12 @@ def _permutation_scores(
     :param probe: Render context for the spec under test.
     :param row: Encoded row whose blocks are permuted.
     :param indices: ``(blocks, width)`` encoded-dim layout to permute.
-    :returns: Worst permutation score, the closer of two unrelated rows, and the
-        larger of two repeat renders of ``row``.
+    :returns: Worst non-identity permutation score, the closer of two unrelated
+        rows, and the largest of three repeat renders of ``row``.
     """
     base = probe.render(row)
     unrelated = min(compute_mss(base, probe.render(probe.draw())) for _ in range(2))
-    repeat = max(compute_mss(base, probe.render(row)) for _ in range(2))
+    repeat = max(compute_mss(base, probe.render(row)) for _ in range(3))
     worst = max(compute_mss(base, probe.render(c)) for c in _block_permutations(row, indices))
     return worst, unrelated, repeat
 
