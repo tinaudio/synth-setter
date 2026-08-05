@@ -98,6 +98,7 @@ src/synth_setter/configs/skypilot_launch/compute/
 │   ├── smoke.yaml            # RunPod GPU (primary smoke target; wide cheap-GPU pool)
 │   ├── training.yaml         # RunPod GPU (750 GB disk full-dataset pool)
 │   ├── training-hclass.yaml  # H100-SXM / H200-SXM / B200 training pool with 750 GB local disk
+│   ├── training-h100.yaml    # Single H100-SXM pin; an any-of pool can place A/B arms on different GPUs
 │   └── debug/                # 8 canary variants inheriting the smoke pool, each with its own run script
 ├── vast/smoke.yaml           # Vast.ai GPU (marketplace on-demand alternative; use_spot: false)
 ├── local/kind.yaml           # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)

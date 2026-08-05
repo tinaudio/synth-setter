@@ -1,0 +1,12 @@
+# @package _global_
+
+# 440k sketch A/B, sketch arm (#2707): identical to the base arm except for the
+# nested sketch-control conditioning.
+
+defaults:
+  - /experiment/surge/flow_sketch_440k_base
+  # Quoted: bare `on` is YAML boolean True, not the config-group name.
+  - override /sketch: "on"
+  - _self_
+
+run_name: flow440k_sketch
