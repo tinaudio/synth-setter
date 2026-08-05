@@ -100,7 +100,7 @@ def canonicalize_blocks(params: np.ndarray, blocks: CanonicalBlocks) -> np.ndarr
     sort_keys = tuple(-gathered[:, :, offset] for offset in reversed(priority_offsets))
     order = np.lexsort(sort_keys, axis=1)
     sorted_blocks = np.take_along_axis(gathered, order[:, :, None], axis=1)
-    # Explicit width, not -1: an empty batch cannot infer a free dimension.
+    # Empty batches cannot infer a reshape dimension.
     out[:, block_index_matrix.reshape(-1)] = sorted_blocks.reshape(
         len(params), block_index_matrix.size
     )
