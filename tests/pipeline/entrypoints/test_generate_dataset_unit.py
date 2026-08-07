@@ -33,6 +33,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,7 @@ from synth_setter.cli.generate_dataset import (
     _RENDERER_SCRIPT,
     _dispatch_shards,
     _dispatch_shards_from_claims,
+    _dispatch_shards_from_claims_parallel,
     _dispatch_shards_parallel,
     _load_render_rejections,
     _render_one_owned_shard,
@@ -2213,45 +2215,90 @@ class TestRunWithShardClaims(RenderSeamFixtures):
 
         assert claims.status_counts() == {"claimed": 1}
 
-    def test_generate_claims_mode_ignores_render_parallel_with_warning(
+    def test_generate_claims_mode_parallel_bounds_claims_and_completes_all(
         self,
         patched_subprocess: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """``render.parallel=true`` + claims mode warns and never enters the thread pool.
+        """Blocked renders hold one claim per local worker before slots refill.
 
-        :param patched_subprocess: Renderer stub; renders succeed.
-        :param monkeypatch: Guards the parallel dispatcher against being called.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param patched_subprocess: Renderer boundary held until claim state is inspected.
+        :param monkeypatch: Pins two local render workers.
+        :param tmp_path: Caller-supplied work directory.
         """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
+        base = _claims_spec(tmp_path, n=4)
+        spec = base.model_copy(
+            update={"render": base.render.model_copy(update={"parallel": True})}
+        )
+        claims = self._populate(spec, [0, 1, 2, 3])
+        two_renders_started = threading.Event()
+        release_renders = threading.Event()
+        active_renders = 0
+        lock = threading.Lock()
+
+        def _blocked_renderer(args: list[str]) -> None:
+            nonlocal active_renders
+            with lock:
+                active_renders += 1
+                if active_renders == 2:
+                    two_renders_started.set()
+            if not release_renders.wait(timeout=5.0):
+                raise AssertionError("test did not release blocked renders")
+            _render_valid_shard(args, spec)
+
+        patched_subprocess.side_effect = _blocked_renderer
+
+        with ThreadPoolExecutor(max_workers=1) as test_pool:
+            dispatch = test_pool.submit(generate, spec, tmp_path, [])
+            try:
+                assert two_renders_started.wait(timeout=5.0)
+                assert claims.status_counts() == {"available": 2, "claimed": 2}
+            finally:
+                release_renders.set()
+            dispatch.result(timeout=10.0)
+
+        assert claims.status_counts() == {"done": 4}
+
+    def test_generate_claims_mode_parallel_failure_completes_successful_peer(
+        self,
+        patched_subprocess: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A failed claim stays held while its successful in-flight peer completes.
+
+        :param patched_subprocess: Renderer boundary failing one synchronized call.
+        :param monkeypatch: Pins two local render workers.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
         base = _claims_spec(tmp_path, n=2)
         spec = base.model_copy(
             update={"render": base.render.model_copy(update={"parallel": True})}
         )
         claims = self._populate(spec, [0, 1])
-        patched_subprocess.side_effect = stub_renderer(spec)
+        render_barrier = threading.Barrier(2, timeout=5.0)
+        call_count = 0
+        lock = threading.Lock()
 
-        def _parallel_must_not_fire(*_args: object, **_kwargs: object) -> tuple[int, int]:
-            raise AssertionError("_dispatch_shards_parallel must not run in claims mode")
+        def _one_failure(args: list[str]) -> None:
+            nonlocal call_count
+            with lock:
+                call_count += 1
+                should_fail = call_count == 1
+            render_barrier.wait()
+            if should_fail:
+                raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
+            _render_valid_shard(args, spec)
 
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset._dispatch_shards_parallel",
-            _parallel_must_not_fire,
-        )
-        from loguru import logger as loguru_logger
+        patched_subprocess.side_effect = _one_failure
 
-        warnings: list[str] = []
-        sink_id = loguru_logger.add(lambda m: warnings.append(str(m)), level="WARNING")
-        try:
+        with pytest.raises(subprocess.CalledProcessError):
             generate(spec, tmp_path, [])
-        finally:
-            loguru_logger.remove(sink_id)
 
-        assert any("render.parallel=true is ignored" in w for w in warnings)
-        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
-        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
-        assert claims.status_counts() == {"done": 2}
+        assert claims.status_counts() == {"claimed": 1, "done": 1}
 
     def test_generate_shard_already_in_r2_completes_without_render(
         self,
@@ -3927,12 +3974,75 @@ def test_worker_id_sanitizes_hostname_for_object_key_use(
     assert generate_dataset._worker_id() == "pod-host-1-x"
 
 
+def test_parallel_claims_failure_completes_fast_peer_before_slow_peer_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A successful peer completes while a slower peer still drains.
+
+    :param monkeypatch: Pins three workers and replaces the renderer boundary.
+    :param tmp_path: Builds the claims spec and receives dispatcher work.
+    """
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 6)
+    spec = _claims_spec(tmp_path, n=3)
+    claims = MagicMock()
+    claims.claim.side_effect = [
+        SimpleNamespace(shard_id=0, claim_gen=1),
+        SimpleNamespace(shard_id=1, claim_gen=1),
+        SimpleNamespace(shard_id=2, claim_gen=1),
+        None,
+    ]
+    all_started = threading.Barrier(3, timeout=5.0)
+    release_slow_peer = threading.Event()
+    fast_peer_completed = threading.Event()
+
+    def _render(
+        _spec: DatasetSpec, shard_id: int, *_args: object
+    ) -> tuple[bool, bool, RenderRejectionMetrics]:
+        all_started.wait()
+        if shard_id == 0:
+            raise subprocess.CalledProcessError(1, "renderer")
+        if shard_id == 2 and not release_slow_peer.wait(timeout=5.0):
+            raise AssertionError("test did not release slow peer")
+        return True, False, RenderRejectionMetrics()
+
+    def _complete(claimed: SimpleNamespace) -> None:
+        if claimed.shard_id == 1:
+            fast_peer_completed.set()
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset._render_one_owned_shard", _render)
+    claims.complete.side_effect = _complete
+
+    with ThreadPoolExecutor(max_workers=1) as test_pool:
+        dispatch = test_pool.submit(
+            _dispatch_shards_from_claims_parallel,
+            claims,
+            spec,
+            work_dir=tmp_path,
+            loggers=[],
+        )
+        try:
+            assert fast_peer_completed.wait(timeout=5.0)
+        finally:
+            release_slow_peer.set()
+        with pytest.raises(subprocess.CalledProcessError):
+            dispatch.result(timeout=5.0)
+
+    assert sorted(call.args[0].shard_id for call in claims.complete.call_args_list) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "dispatch",
+    [_dispatch_shards_from_claims, _dispatch_shards_from_claims_parallel],
+)
 def test_claims_dispatch_aggregates_rejections_without_rclone(
+    dispatch: Callable[..., tuple[int, int, RenderRejectionMetrics]],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """Claims dispatch returns exact totals from completed claim reports.
 
+    :param dispatch: Serial or parallel claims dispatcher under test.
     :param monkeypatch: Replaces the renderer boundary.
     :param tmp_path: Builds the claims spec and receives the dispatcher work path.
     """
@@ -3952,7 +4062,7 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
         lambda _spec, shard_id, _work_dir, _loggers: outcomes[shard_id],
     )
 
-    rendered, skipped, rejections = _dispatch_shards_from_claims(
+    rendered, skipped, rejections = dispatch(
         claims,
         spec,
         work_dir=tmp_path,
