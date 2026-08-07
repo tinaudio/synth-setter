@@ -10,9 +10,21 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 from pedalboard.io import AudioFile
 
-from synth_setter.cli.clap import DEFAULT_CHECKPOINT_URI
+from synth_setter.cli.clap import (
+    _CACHE_NAMESPACE,
+    _CHECKPOINT_SHA256,
+    _STATS_SHA256,
+    DEFAULT_CHECKPOINT_URI,
+    DEFAULT_STATS_URI,
+    _load_model,
+    _predict_patch,
+    _validate_stats,
+    prepare_audio_inputs,
+)
+from synth_setter.model_cache import cache_r2_file
 from synth_setter.pipeline import r2_io
 
 pytestmark = [
@@ -26,12 +38,17 @@ _CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
 _EXPECTED_SAMPLES = 176400
 
 
-def _write_inputs(root: Path) -> tuple[Path, Path]:
+def _write_inputs(
+    root: Path, guide_frequency: float = 220.0, reference_frequency: float = 330.0
+) -> tuple[Path, Path]:
     sample_rate = 48000
     time = np.arange(4 * sample_rate, dtype=np.float32) / sample_rate
-    guide = (0.5 * np.sin(2 * np.pi * 220.0 * time))[None]
+    guide = (0.5 * np.sin(2 * np.pi * guide_frequency * time))[None]
     reference = np.stack(
-        [0.4 * np.sin(2 * np.pi * 330.0 * time), 0.2 * np.sin(2 * np.pi * 330.0 * time)]
+        [
+            0.4 * np.sin(2 * np.pi * reference_frequency * time),
+            0.2 * np.sin(2 * np.pi * reference_frequency * time),
+        ]
     ).astype(np.float32)
     guide_path = root / "guide.wav"
     ref_path = root / "reference.wav"
@@ -46,6 +63,39 @@ def _read_wav(path: Path) -> np.ndarray:
     with AudioFile(str(path), "r") as audio_file:
         assert audio_file.samplerate == 44100
         return audio_file.read(audio_file.frames)
+
+
+def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: Path) -> None:
+    """The pinned model prediction depends on both conditioning audio inputs.
+
+    :param tmp_path: Holds three controlled guide/reference input pairs.
+    """
+    checkpoint_path = cache_r2_file(DEFAULT_CHECKPOINT_URI, _CACHE_NAMESPACE, _CHECKPOINT_SHA256)
+    stats_path = cache_r2_file(DEFAULT_STATS_URI, _CACHE_NAMESPACE, _STATS_SHA256)
+    _validate_stats(stats_path)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = _load_model(checkpoint_path, device)
+
+    base_root = tmp_path / "base"
+    guide_root = tmp_path / "guide-change"
+    reference_root = tmp_path / "reference-change"
+    base_root.mkdir()
+    guide_root.mkdir()
+    reference_root.mkdir()
+    base = prepare_audio_inputs(*_write_inputs(base_root), stats_path)
+    guide_changed = prepare_audio_inputs(
+        *_write_inputs(guide_root, guide_frequency=440.0), stats_path
+    )
+    reference_changed = prepare_audio_inputs(
+        *_write_inputs(reference_root, reference_frequency=660.0), stats_path
+    )
+
+    base_params, _ = _predict_patch(base, model)
+    guide_params, _ = _predict_patch(guide_changed, model)
+    reference_params, _ = _predict_patch(reference_changed, model)
+
+    assert guide_params != base_params
+    assert reference_params != base_params
 
 
 def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(

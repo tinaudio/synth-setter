@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -20,6 +21,7 @@ from synth_setter.cli.clap import (
     _predict_patch,
     _render_patch,
     _run_request,
+    _run_under_headless_wrapper,
     _validate_stats,
     main,
     prepare_audio_inputs,
@@ -130,6 +132,30 @@ def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_pat
     assert torch.isfinite(prepared.sketch_controls).all()
     nonzero_pitch = prepared.sketch_controls[SKETCH_PITCH_SLICE]
     assert torch.all(nonzero_pitch[nonzero_pitch > 0] >= 0.1)
+
+
+def test_write_output_artifacts_wrong_render_shape_raises(tmp_path: Path) -> None:
+    """Reject a finite render that does not match the published duration.
+
+    :param tmp_path: Holds the rejected output directory.
+    """
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.zeros(2, 176400),
+        ref_audio=torch.zeros(2, 176400),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+
+    with pytest.raises(ValueError, match=r"shape.*\(2, 176400\)"):
+        write_output_artifacts(
+            tmp_path / "output",
+            prepared,
+            RenderedPatch(
+                audio=np.zeros((2, 88200), dtype=np.float32),
+                synth_params={"filter_1_cutoff": 0.5},
+                note_params={"pitch": 60, "note_start_and_end": (0.05, 1.95)},
+            ),
+        )
 
 
 @pytest.mark.parametrize("invalid_sample", [float("nan"), float("inf"), 1.01, -1.01])
@@ -361,7 +387,27 @@ def test_render_patch_descending_note_interval_reaches_renderer_ordered(
     )
 
     assert patch.audio.shape == (2, 176400)
+    assert patch.note_params["note_start_and_end"] == (0.8, 3.2)
     assert renderer.render.call_args.args[3] == (0.8, 3.2)
+
+
+def test_headless_wrapper_nonexecutable_script_runs_through_shell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A package-extracted wrapper does not need executable mode bits.
+
+    :param monkeypatch: Routes package-resource lookup to the fixture script.
+    :param tmp_path: Holds the non-executable wrapper and audio path fixtures.
+    """
+    wrapper = tmp_path / "wrapper.sh"
+    wrapper.write_text("#!/usr/bin/env bash\nexit 0\n")
+    wrapper.chmod(0o644)
+    monkeypatch.setattr("synth_setter.cli.clap.vst_headless_wrapper", lambda: wrapper)
+    monkeypatch.setattr("synth_setter.cli.clap.as_file", nullcontext)
+    guide = tmp_path / "guide.wav"
+    reference = tmp_path / "reference.wav"
+
+    _run_under_headless_wrapper(guide, reference)
 
 
 def test_packaged_surge_simple_preset_is_nonempty() -> None:
@@ -405,6 +451,10 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     checkpoint_path = tmp_path / "model.ckpt"
     checkpoint_path.write_bytes(b"checkpoint boundary fixture")
 
+    output_root = tmp_path / "retained"
+    upload_root = "r2://intermediate-data/custom-sketch-renders"
+    monkeypatch.setenv("SYNTH_SETTER_SKETCH_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setenv("SYNTH_SETTER_SKETCH_UPLOAD_PREFIX", upload_root)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("synth_setter.cli.clap.r2_io.ensure_r2_env_loaded", lambda: None)
     monkeypatch.setattr(
@@ -433,8 +483,9 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
 
     output_dir, destination = _run_request(guide_path, ref_path)
 
+    assert output_dir.parent == output_root
     assert output_dir.is_dir()
-    assert destination.startswith("r2://intermediate-data/eval/synth-setter-clap/")
+    assert destination.startswith(f"{upload_root}/")
     remote = fake_r2_remote / destination.removeprefix("r2://")
     with AudioFile(str(remote / "pred.wav"), "r") as audio_file:
         rendered = audio_file.read(audio_file.frames)

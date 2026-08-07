@@ -124,6 +124,32 @@ def test_cache_r2_file_replaces_corrupt_cached_bytes_via_real_rclone(
     assert repaired.read_bytes() == payload
 
 
+def test_cache_r2_file_valid_cached_bytes_survive_missing_remote(
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A verified cache hit returns without contacting the remote source.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Isolates the XDG cache root.
+    :param tmp_path: Holds the source object and cache.
+    """
+    source = fake_r2_remote / "bucket" / "models" / "weights.ckpt"
+    source.parent.mkdir(parents=True)
+    payload = b"complete checkpoint bytes"
+    source.write_bytes(payload)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    expected_sha256 = hashlib.sha256(payload).hexdigest()
+
+    cached = cache_r2_file("r2://bucket/models/weights.ckpt", "surge-sketch", expected_sha256)
+    source.unlink()
+    reused = cache_r2_file("r2://bucket/models/weights.ckpt", "surge-sketch", expected_sha256)
+
+    assert reused == cached
+    assert reused.read_bytes() == payload
+
+
 def test_cache_r2_file_digest_mismatch_never_publishes_final_file(
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,

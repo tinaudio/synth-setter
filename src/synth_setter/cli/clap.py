@@ -49,9 +49,12 @@ _CACHE_NAMESPACE = "surge-sketch-cli"
 _HEADLESS_ENV = "SYNTH_SETTER_CLAP_HEADLESS"
 _OUTPUT_ROOT = Path("outputs/synth-setter-clap")
 _R2_OUTPUT_ROOT = "r2://intermediate-data/eval/synth-setter-clap"
+_OUTPUT_ROOT_ENV = "SYNTH_SETTER_SKETCH_OUTPUT_ROOT"
+_R2_OUTPUT_ROOT_ENV = "SYNTH_SETTER_SKETCH_UPLOAD_PREFIX"
 _SAMPLE_RATE = 44100
 _CHANNELS = 2
 _DURATION_SECONDS = 4.0
+_EXPECTED_AUDIO_SHAPE = (_CHANNELS, int(_SAMPLE_RATE * _DURATION_SECONDS))
 _SERVING_SEED = 0
 _HEADLESS_TIMEOUT_SECONDS = 1200
 _SURGE_PARAM_SPEC_NAME = "surge_simple"
@@ -134,7 +137,7 @@ def _fit_audio_to_model_grid(audio: np.ndarray) -> torch.Tensor:
         audio = np.repeat(audio, _CHANNELS, axis=0)
     elif audio.shape[0] != _CHANNELS:
         raise ValueError(f"audio must have one or two channels, found {audio.shape[0]}")
-    target_samples = int(_SAMPLE_RATE * _DURATION_SECONDS)
+    target_samples = _EXPECTED_AUDIO_SHAPE[1]
     if audio.shape[1] < target_samples:
         audio = np.pad(audio, ((0, 0), (0, target_samples - audio.shape[1])))
     fitted_audio = audio[:, :target_samples]
@@ -200,6 +203,8 @@ def _write_wav(path: Path, audio: np.ndarray | torch.Tensor) -> None:
     :raises ValueError: The waveform is non-finite or outside ``[-1, 1]``.
     """
     values = audio.detach().cpu().numpy() if isinstance(audio, torch.Tensor) else audio
+    if values.shape != _EXPECTED_AUDIO_SHAPE:
+        raise ValueError(f"output audio shape must be {_EXPECTED_AUDIO_SHAPE}, got {values.shape}")
     if not np.isfinite(values).all() or np.any(np.abs(values) > 1.0):
         raise ValueError("output audio must be finite and within [-1, 1]")
     with AudioFile(str(path), "w", _SAMPLE_RATE, _CHANNELS) as audio_file:
@@ -432,14 +437,29 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
         )
         renderer = make_audio_renderer(render_config)
         note_start, note_end = sorted(note_params["note_start_and_end"])
+        ordered_note_params = note_params.copy()
+        ordered_note_params["note_start_and_end"] = (note_start, note_end)
         audio = renderer.render(
             synth_params,
-            int(note_params["pitch"]),
+            int(ordered_note_params["pitch"]),
             render_config.velocity,
-            (note_start, note_end),
+            ordered_note_params["note_start_and_end"],
             warmup=True,
         )
-    return RenderedPatch(audio=audio, synth_params=synth_params, note_params=note_params)
+    return RenderedPatch(audio=audio, synth_params=synth_params, note_params=ordered_note_params)
+
+
+def _artifact_roots() -> tuple[Path, str]:
+    """Resolve operator-overridable local and R2 artifact roots.
+
+    :returns: Local output root and validated R2 upload prefix.
+    :raises ValueError: The configured upload prefix is not an R2 URI.
+    """
+    output_root = Path(os.environ.get(_OUTPUT_ROOT_ENV, str(_OUTPUT_ROOT))).expanduser()
+    upload_root = os.environ.get(_R2_OUTPUT_ROOT_ENV, _R2_OUTPUT_ROOT).rstrip("/")
+    if not r2_io.is_r2_uri(upload_root):
+        raise ValueError(f"{_R2_OUTPUT_ROOT_ENV} must use r2://")
+    return output_root, upload_root
 
 
 def _run_request(guide_audio: Path, ref_audio: Path) -> tuple[Path, str]:
@@ -461,8 +481,9 @@ def _run_request(guide_audio: Path, ref_audio: Path) -> tuple[Path, str]:
     patch = _render_patch(synth_params, note_params)
 
     run_id = f"{make_wandb_run_id('synth-setter-clap')}-{uuid4().hex[:8]}"
-    output_dir = _OUTPUT_ROOT / run_id
-    destination_uri = f"{_R2_OUTPUT_ROOT}/{run_id}"
+    output_root, upload_root = _artifact_roots()
+    output_dir = output_root / run_id
+    destination_uri = f"{upload_root}/{run_id}"
     write_output_artifacts(output_dir, prepared, patch)
     write_run_manifest(output_dir, destination_uri)
     resolved_output = output_dir.resolve()
@@ -480,6 +501,7 @@ def _run_under_headless_wrapper(guide_audio: Path, ref_audio: Path) -> None:
     with as_file(vst_headless_wrapper()) as wrapper:
         subprocess.run(  # noqa: S603 — fixed package entrypoint and validated paths
             [
+                "/bin/bash",
                 str(wrapper),
                 sys.executable,
                 "-m",

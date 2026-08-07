@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -45,7 +46,7 @@ def synth_setter_cache_dir() -> Path:
     return root / "synth-setter"
 
 
-def _file_sha256(path: Path) -> str:
+def file_sha256(path: Path) -> str:
     """Hash one artifact without loading it into memory.
 
     :param path: File whose content identity is required.
@@ -96,6 +97,7 @@ def _cache_destination(r2_uri: str, namespace: str, expected_sha256: str) -> Pat
     )
 
 
+@retry_external_io(retry_exceptions=(subprocess.CalledProcessError,))
 def _download_verified(r2_uri: str, destination: Path, expected_sha256: str) -> None:
     """Publish downloaded bytes only after digest verification.
 
@@ -111,7 +113,7 @@ def _download_verified(r2_uri: str, destination: Path, expected_sha256: str) -> 
     temporary_path = Path(temporary_name)
     try:
         r2_io.download_to_path(r2_uri, temporary_path)
-        actual_sha256 = _file_sha256(temporary_path)
+        actual_sha256 = file_sha256(temporary_path)
         if actual_sha256 != expected_sha256:
             raise ValueError(
                 f"downloaded artifact SHA-256 is {actual_sha256}, "
@@ -135,7 +137,7 @@ def cache_r2_file(r2_uri: str, namespace: str, expected_sha256: str) -> Path:
     lock_path = destination.with_name(f".{destination.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(lock_path):
-        if destination.is_file() and _file_sha256(destination) == expected_sha256:
+        if destination.is_file() and file_sha256(destination) == expected_sha256:
             return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
         _download_verified(r2_uri, destination, expected_sha256)

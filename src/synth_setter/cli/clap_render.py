@@ -29,7 +29,7 @@ from synth_setter.conditioning import resolve_embedding_conditioning
 from synth_setter.data.vst.core import write_wav
 from synth_setter.data.vst.param_spec import decode_model_output
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.model_cache import synth_setter_cache_dir
+from synth_setter.model_cache import file_sha256, synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -41,7 +41,6 @@ _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 _EXPECTED_CONDITIONING_COLUMN = "clap"
 _EXPECTED_CONDITIONING_SHAPE = (512,)
 _DEFAULT_CONFIG_NAME = "clap_render"
-_HASH_CHUNK_BYTES = 1024 * 1024
 _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
     "prompt",
     "wav_r2_uri",
@@ -291,19 +290,6 @@ def _checkpoint_lock(path: Path) -> Iterator[None]:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def _file_sha256(path: Path) -> str:
-    """Hash a checkpoint without loading it into memory.
-
-    :param path: Checkpoint file.
-    :returns: Lowercase SHA-256 digest.
-    """
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(_HASH_CHUNK_BYTES), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _checkpoint_matches(path: Path, expected_sha256: str | None) -> bool:
     """Check file presence, non-empty content, and an optional digest.
 
@@ -314,7 +300,7 @@ def _checkpoint_matches(path: Path, expected_sha256: str | None) -> bool:
     return (
         path.is_file()
         and path.stat().st_size > 0
-        and (expected_sha256 is None or _file_sha256(path) == expected_sha256)
+        and (expected_sha256 is None or file_sha256(path) == expected_sha256)
     )
 
 
