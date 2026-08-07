@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Add optional dataset-level standardization for measured cached conditioning columns.
+- Add opt-in per-field-layer conditioning slots to `EmbeddingPool` and `VectorProjection`,
+  matching the slot count AST encoders already emit.
 
 ## v11.0.0 (2026-07-31)
 
