@@ -1,5 +1,6 @@
 """Behavior tests for the Surge sketch-render CLI."""
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -13,11 +14,13 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.clap import (
     PreparedAudioInputs,
     RenderedPatch,
+    _load_model_audio,
     main,
     prepare_audio_inputs,
     upload_output_artifacts,
     validate_checkpoint_compatibility,
     write_output_artifacts,
+    write_run_manifest,
 )
 from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS, SKETCH_PITCH_SLICE
@@ -46,6 +49,29 @@ def test_installed_console_script_exposes_public_help() -> None:
     assert result.returncode == 0, result.stderr
     assert "--guide_audio FILE" in result.stdout
     assert "--ref_audio FILE" in result.stdout
+
+
+@pytest.mark.parametrize(("duration_seconds", "expected_last_sample"), [(2, 0.0), (5, 0.25)])
+def test_load_model_audio_short_and_long_inputs_fit_four_second_grid(
+    duration_seconds: int, expected_last_sample: float, tmp_path: Path
+) -> None:
+    """Pad short clips and trim long clips without shifting their onset.
+
+    :param duration_seconds: Source duration exercising one grid boundary.
+    :param expected_last_sample: Value after padding or truncation.
+    :param tmp_path: Holds the source WAV.
+    """
+    sample_rate = 44100
+    source = np.full((1, duration_seconds * sample_rate), 0.25, dtype=np.float32)
+    source_path = tmp_path / "source.wav"
+    with AudioFile(str(source_path), "w", sample_rate, 1) as audio_file:
+        audio_file.write(source)
+
+    prepared = _load_model_audio(source_path)
+
+    assert prepared.shape == (2, 176400)
+    assert torch.all(prepared[:, 0] > 0.2)
+    assert prepared[0, -1].item() == pytest.approx(expected_last_sample, abs=1e-5)
 
 
 def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_path: Path) -> None:
@@ -85,6 +111,36 @@ def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_pat
     assert torch.all(nonzero_pitch[nonzero_pitch > 0] >= 0.1)
 
 
+@pytest.mark.parametrize("invalid_sample", [float("nan"), float("inf"), 1.01, -1.01])
+def test_write_output_artifacts_invalid_rendered_audio_raises(
+    invalid_sample: float, tmp_path: Path
+) -> None:
+    """Reject non-finite or out-of-range renders before WAV serialization.
+
+    :param invalid_sample: Value outside the publishable waveform contract.
+    :param tmp_path: Holds the rejected output directory.
+    """
+    rendered = np.zeros((2, 176400), dtype=np.float32)
+    rendered[0, 0] = invalid_sample
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.zeros(2, 176400),
+        ref_audio=torch.zeros(2, 176400),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+
+    with pytest.raises(ValueError, match=r"finite.*\[-1, 1\]"):
+        write_output_artifacts(
+            tmp_path / "output",
+            prepared,
+            RenderedPatch(
+                audio=rendered,
+                synth_params={"filter_1_cutoff": 0.5},
+                note_params={"pitch": 60, "note_start_and_end": (0.05, 3.95)},
+            ),
+        )
+
+
 def test_output_artifacts_round_trip_through_real_rclone(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
@@ -112,10 +168,12 @@ def test_output_artifacts_round_trip_through_real_rclone(
         ),
     )
     destination = "r2://intermediate-data/eval/synth-setter-clap/test-run"
+    write_run_manifest(output_dir, destination)
     upload_output_artifacts(output_dir, destination)
 
     assert sorted(path.name for path in output_dir.iterdir()) == [
         "guide.wav",
+        "manifest.json",
         "params.csv",
         "pred.wav",
         "ref.wav",
@@ -123,6 +181,7 @@ def test_output_artifacts_round_trip_through_real_rclone(
     remote = fake_r2_remote / "intermediate-data" / "eval" / "synth-setter-clap" / "test-run"
     assert sorted(path.name for path in remote.iterdir()) == [
         "guide.wav",
+        "manifest.json",
         "params.csv",
         "pred.wav",
         "ref.wav",
@@ -133,6 +192,11 @@ def test_output_artifacts_round_trip_through_real_rclone(
     assert np.isfinite(round_tripped).all()
     assert np.abs(round_tripped).max() > 0.05
     assert "filter_1_cutoff" in (remote / "params.csv").read_text()
+    manifest = json.loads((remote / "manifest.json").read_text())
+    assert manifest["run_id"] == "local-output"
+    assert manifest["r2_uri"] == destination
+    assert manifest["checkpoint"]["sha256"]
+    assert manifest["stats"]["sha256"]
 
 
 def _compatible_checkpoint() -> dict[str, object]:
@@ -160,7 +224,7 @@ def _compatible_checkpoint() -> dict[str, object]:
 
 
 def test_validate_checkpoint_compatibility_accepts_pinned_legacy_sketch_metadata() -> None:
-    """The immutable checkpoint's old token-count key normalizes for current loading."""
+    """Accept ``num_ctrl_tokens`` when validating sketch metadata."""
     sketch_config = validate_checkpoint_compatibility(_compatible_checkpoint())
 
     assert sketch_config == {

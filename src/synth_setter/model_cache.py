@@ -36,14 +36,13 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def cache_r2_file(r2_uri: str, namespace: str, expected_sha256: str) -> Path:
-    """Download and atomically cache one digest-pinned R2 object.
+def _validate_cache_request(r2_uri: str, namespace: str, expected_sha256: str) -> None:
+    """Reject malformed cache identities before filesystem access.
 
     :param r2_uri: Source object URI.
     :param namespace: Stable cache namespace without path separators.
     :param expected_sha256: Required lowercase SHA-256 content identity.
-    :returns: Digest-verified local artifact path.
-    :raises ValueError: An argument is malformed or downloaded bytes have the wrong digest.
+    :raises ValueError: An argument is malformed.
     """
     if namespace in {"", ".", ".."} or Path(namespace).name != namespace:
         raise ValueError(f"cache namespace must be one path component, got {namespace!r}")
@@ -54,8 +53,16 @@ def cache_r2_file(r2_uri: str, namespace: str, expected_sha256: str) -> Path:
     if not r2_io.is_r2_uri(r2_uri):
         raise ValueError(f"not an r2:// URI: {r2_uri!r}")
 
+
+def _cache_destination(r2_uri: str, namespace: str) -> Path:
+    """Derive a collision-resistant local path for one R2 object.
+
+    :param r2_uri: Validated source object URI.
+    :param namespace: Validated cache namespace.
+    :returns: Destination retaining the source basename.
+    """
     source_key = hashlib.sha256(r2_uri.encode()).hexdigest()[:16]
-    destination = (
+    return (
         synth_setter_cache_dir()
         / "models"
         / "artifacts"
@@ -63,29 +70,51 @@ def cache_r2_file(r2_uri: str, namespace: str, expected_sha256: str) -> Path:
         / source_key
         / Path(r2_uri).name
     )
+
+
+def _download_verified(r2_uri: str, destination: Path, expected_sha256: str) -> None:
+    """Publish downloaded bytes only after digest verification.
+
+    :param r2_uri: Source object URI.
+    :param destination: Final local cache path.
+    :param expected_sha256: Required content identity.
+    :raises ValueError: Downloaded bytes have the wrong digest.
+    """
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.partial-", dir=destination.parent
+    )
+    os.close(file_descriptor)
+    temporary_path = Path(temporary_name)
+    try:
+        r2_io.download_to_path(r2_uri, temporary_path)
+        actual_sha256 = _file_sha256(temporary_path)
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"downloaded artifact SHA-256 is {actual_sha256}, "
+                f"expected {expected_sha256}: {r2_uri}"
+            )
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def cache_r2_file(r2_uri: str, namespace: str, expected_sha256: str) -> Path:
+    """Download and atomically cache one digest-pinned R2 object.
+
+    :param r2_uri: Source object URI.
+    :param namespace: Stable cache namespace without path separators.
+    :param expected_sha256: Required lowercase SHA-256 content identity.
+    :returns: Digest-verified local artifact path.
+    """
+    _validate_cache_request(r2_uri, namespace, expected_sha256)
+    destination = _cache_destination(r2_uri, namespace)
     lock_path = destination.with_name(f".{destination.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(lock_path):
         if destination.is_file() and _file_sha256(destination) == expected_sha256:
             return destination
-
         destination.parent.mkdir(parents=True, exist_ok=True)
-        file_descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{destination.name}.partial-", dir=destination.parent
-        )
-        os.close(file_descriptor)
-        temporary_path = Path(temporary_name)
-        try:
-            r2_io.download_to_path(r2_uri, temporary_path)
-            actual_sha256 = _file_sha256(temporary_path)
-            if actual_sha256 != expected_sha256:
-                raise ValueError(
-                    f"downloaded artifact SHA-256 is {actual_sha256}, "
-                    f"expected {expected_sha256}: {r2_uri}"
-                )
-            os.replace(temporary_path, destination)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+        _download_verified(r2_uri, destination, expected_sha256)
         return destination
 
 

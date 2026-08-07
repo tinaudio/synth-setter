@@ -1,10 +1,15 @@
-"""Render a Surge patch from reference timbre and guide sketch controls."""
+"""Render a Surge patch from reference timbre and guide sketch controls.
 
+Run ``synth-setter-clap --guide_audio guide.wav --ref_audio reference.wav``.
+"""
+
+import json
 import os
 import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from uuid import uuid4
 
@@ -46,6 +51,7 @@ _SAMPLE_RATE = 44100
 _CHANNELS = 2
 _DURATION_SECONDS = 4.0
 _SERVING_SEED = 0
+_HEADLESS_TIMEOUT_SECONDS = 1200
 _SURGE_PARAM_SPEC_NAME = "surge_simple"
 _EXPECTED_PARAM_WIDTH = param_specs[_SURGE_PARAM_SPEC_NAME].encoded_width
 _PITCH_ZERO_THRESHOLD = 0.1
@@ -114,23 +120,32 @@ class RenderedPatch:
     note_params: NoteParams
 
 
-def _load_model_audio(path: Path) -> torch.Tensor:
-    """Load an unshifted clip onto the checkpoint's stereo sample grid.
+def _fit_audio_to_model_grid(audio: np.ndarray) -> torch.Tensor:
+    """Fit channel-first audio to the checkpoint's stereo sample grid.
 
-    :param path: Source audio accepted by Pedalboard.
+    :param audio: Resampled channel-first waveform.
     :returns: Float32 waveform shaped ``(2, 176400)``.
     :raises ValueError: The source has more than two channels.
     """
-    target_samples = int(_SAMPLE_RATE * _DURATION_SECONDS)
-    with AudioFile(str(path), "r").resampled_to(_SAMPLE_RATE) as audio_file:
-        audio = audio_file.read(target_samples)
     if audio.shape[0] == 1:
         audio = np.repeat(audio, _CHANNELS, axis=0)
     elif audio.shape[0] != _CHANNELS:
         raise ValueError(f"audio must have one or two channels, found {audio.shape[0]}")
+    target_samples = int(_SAMPLE_RATE * _DURATION_SECONDS)
     if audio.shape[1] < target_samples:
         audio = np.pad(audio, ((0, 0), (0, target_samples - audio.shape[1])))
     return torch.from_numpy(audio[:, :target_samples]).to(dtype=torch.float32)
+
+
+def _load_model_audio(path: Path) -> torch.Tensor:
+    """Load an unshifted clip onto the checkpoint's sample grid.
+
+    :param path: Source audio accepted by Pedalboard.
+    :returns: Float32 waveform shaped ``(2, 176400)``.
+    """
+    target_samples = int(_SAMPLE_RATE * _DURATION_SECONDS)
+    with AudioFile(str(path), "r").resampled_to(_SAMPLE_RATE) as audio_file:
+        return _fit_audio_to_model_grid(audio_file.read(target_samples))
 
 
 def _normalize_reference_mel(ref_audio: torch.Tensor, stats_file: Path) -> torch.Tensor:
@@ -172,12 +187,15 @@ def prepare_audio_inputs(
 
 
 def _write_wav(path: Path, audio: np.ndarray | torch.Tensor) -> None:
-    """Write normalized channel-first audio at the model sample rate.
+    """Write finite normalized channel-first audio at the model sample rate.
 
     :param path: Destination WAV path.
-    :param audio: Waveform shaped ``(2, 176400)``.
+    :param audio: Waveform shaped ``(2, 176400)`` with values in ``[-1, 1]``.
+    :raises ValueError: The waveform is non-finite or outside ``[-1, 1]``.
     """
     values = audio.detach().cpu().numpy() if isinstance(audio, torch.Tensor) else audio
+    if not np.isfinite(values).all() or np.any(np.abs(values) > 1.0):
+        raise ValueError("output audio must be finite and within [-1, 1]")
     with AudioFile(str(path), "w", _SAMPLE_RATE, _CHANNELS) as audio_file:
         audio_file.write(values)
 
@@ -203,6 +221,34 @@ def write_output_artifacts(
         str(output_dir / "params.csv"),
         param_specs[_SURGE_PARAM_SPEC_NAME],
     )
+
+
+def write_run_manifest(output_dir: Path, destination_uri: str) -> None:
+    """Record immutable model, feature, render, and destination provenance.
+
+    :param output_dir: Retained local output directory.
+    :param destination_uri: R2 prefix receiving the run artifacts.
+    """
+    synth_identity = SYNTHS[SynthName(_SURGE_PARAM_SPEC_NAME)]
+    manifest = {
+        "schema_version": 1,
+        "run_id": output_dir.name,
+        "r2_uri": destination_uri,
+        "code_version": version("synth-setter"),
+        "checkpoint": {"uri": DEFAULT_CHECKPOINT_URI, "sha256": _CHECKPOINT_SHA256},
+        "stats": {"uri": DEFAULT_STATS_URI, "sha256": _STATS_SHA256},
+        "render": {
+            "param_spec": _SURGE_PARAM_SPEC_NAME,
+            "synth_version": synth_identity.synth_version,
+            "sample_rate": _SAMPLE_RATE,
+            "channels": _CHANNELS,
+            "duration_seconds": _DURATION_SECONDS,
+            "seed": _SERVING_SEED,
+        },
+    }
+    temporary_path = output_dir / ".manifest.json.tmp"
+    temporary_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary_path, output_dir / "manifest.json")
 
 
 def upload_output_artifacts(output_dir: Path, destination_uri: str) -> None:
@@ -403,8 +449,11 @@ def _run_request(guide_audio: Path, ref_audio: Path) -> tuple[Path, str]:
     output_dir = _OUTPUT_ROOT / run_id
     destination_uri = f"{_R2_OUTPUT_ROOT}/{run_id}"
     write_output_artifacts(output_dir, prepared, patch)
+    write_run_manifest(output_dir, destination_uri)
+    resolved_output = output_dir.resolve()
+    click.echo(f"Local output: {resolved_output}", err=True)
     upload_output_artifacts(output_dir, destination_uri)
-    return output_dir.resolve(), destination_uri
+    return resolved_output, destination_uri
 
 
 def _run_under_headless_wrapper(guide_audio: Path, ref_audio: Path) -> None:
@@ -427,6 +476,7 @@ def _run_under_headless_wrapper(guide_audio: Path, ref_audio: Path) -> None:
             ],
             check=True,
             env={**os.environ, _HEADLESS_ENV: "1"},
+            timeout=_HEADLESS_TIMEOUT_SECONDS,
         )
 
 
@@ -453,8 +503,7 @@ def main(guide_audio: Path, ref_audio: Path) -> None:
         _run_under_headless_wrapper(guide_audio, ref_audio)
         return
 
-    output_dir, destination_uri = _run_request(guide_audio, ref_audio)
-    click.echo(f"Local output: {output_dir}", err=True)
+    _, destination_uri = _run_request(guide_audio, ref_audio)
     click.echo(destination_uri)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -91,6 +92,7 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
         r2_io.download_dir_no_overwrite(output_uri, downloaded)
         assert sorted(path.name for path in downloaded.iterdir()) == [
             "guide.wav",
+            "manifest.json",
             "params.csv",
             "pred.wav",
             "ref.wav",
@@ -111,3 +113,4 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
     finally:
         prefix = output_uri.removeprefix("r2://intermediate-data/") + "/"
         r2_io.purge_prefix("intermediate-data", prefix)
+        shutil.rmtree(local_output, ignore_errors=True)

@@ -24,8 +24,9 @@ retains these files locally:
 - `pred.wav`: four-second stereo Surge render;
 - `guide.wav`: normalized guide input;
 - `ref.wav`: normalized reference input;
-- `params.csv`: decoded Surge and note parameters.
+- `params.csv`: decoded Surge and note parameters;
+- `manifest.json`: checkpoint, statistics, render, and destination provenance.
 
-The same four files upload to a unique prefix under
+The same artifacts upload to a unique prefix under
 `r2://intermediate-data/eval/synth-setter-clap/`. The command prints the local path to
 stderr and the final R2 URI as the last stdout line.
