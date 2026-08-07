@@ -24,7 +24,13 @@ from __future__ import annotations
 from importlib.abc import Traversable
 from importlib.resources import as_file, files
 
-__all__ = ["as_file", "configs_dir", "param_map", "vst_headless_wrapper"]
+__all__ = [
+    "as_file",
+    "configs_dir",
+    "param_map",
+    "surge_simple_preset",
+    "vst_headless_wrapper",
+]
 
 
 def configs_dir() -> Traversable:
@@ -51,6 +57,14 @@ def param_map(param_spec_name: str) -> Traversable:
     if not ref.is_file():
         raise FileNotFoundError(f"no packaged parameter map for spec {param_spec_name!r}")
     return ref
+
+
+def surge_simple_preset() -> Traversable:
+    """Return the packaged baseline preset for the Surge Simple contract.
+
+    :returns: Traversable pointing at ``surge-simple.vstpreset``.
+    """
+    return files("synth_setter") / "data" / "vst" / "surge-simple.vstpreset"
 
 
 def vst_headless_wrapper() -> Traversable:

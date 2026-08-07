@@ -584,6 +584,16 @@ docs:
         covers: "Packer provisioning for the developer environment"
         scope: "tart"
 
+  - doc: docs/guides/surge-sketch-render.md
+    description: Surge sketch-match CLI usage and artifact contract
+    sources:
+      - pattern: "src/synth_setter/cli/clap.py"
+        covers: "Sketch-conditioned Surge render lifecycle"
+      - pattern: "src/synth_setter/model_cache.py"
+        covers: "Digest-verified atomic R2 file caching"
+      - pattern: "pyproject.toml"
+        covers: "Installed synth-setter-clap entrypoint"
+
   - doc: docs/guides/vst-interactive.md
     description: Interactive VST prediction audition and patch-recording guide
     sources:
