@@ -467,6 +467,12 @@ class VSTFlowMatchingModule(LightningModule):
             configured spec), and the keep masks that produced both.
         """
         conditioning = self.encoder(self._get_conditioning_from_batch(batch))
+        if (
+            conditioning.ndim == 3
+            and conditioning.shape[1] > 1
+            and self._is_trainer_logging_step()
+        ):
+            self._log_slot_cosine(conditioning.detach())
         if self.sketch_tokens is None:
             # Legacy path: apply_dropout draws its own mask, keeping the no-sketch
             # RNG stream identical to runs from before sketch support.
@@ -500,7 +506,7 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
     @jaxtyped(typechecker=beartype)
-    def _should_probe_gradient_balance(self) -> bool:
+    def _is_trainer_logging_step(self) -> bool:
         """Whether this step pays for the probe's extra backward through the renderer.
 
         :returns: True on Lightning's own logging cadence; False when detached from a trainer.
@@ -511,6 +517,22 @@ class VSTFlowMatchingModule(LightningModule):
             return False
         every = self.trainer.log_every_n_steps
         return every > 0 and self.trainer.global_step % every == 0
+
+    @jaxtyped(typechecker=beartype)
+    def _log_slot_cosine(self, conditioning: Float[torch.Tensor, "batch slots dim"]) -> None:
+        """Log how far apart the per-layer conditioning slots sit before dropout.
+
+        A value approaching one means nominally separate slots have converged to the same read, so
+        the extra slots carry nothing the field's layers can distinguish.
+
+        :param conditioning: Detached layerwise conditioning.
+        """
+        slots = torch.nn.functional.normalize(conditioning, dim=-1)
+        gram = slots @ slots.transpose(-2, -1)
+        count = gram.shape[-1]
+        off_diagonal = gram.sum(dim=(-2, -1)) - gram.diagonal(dim1=-2, dim2=-1).sum(-1)
+        mean = (off_diagonal / (count * (count - 1))).mean()
+        self.log("train/slot_cosine", mean, on_step=True, on_epoch=False)
 
     @jaxtyped(typechecker=beartype)
     def _log_gradient_time_profile(
@@ -575,7 +597,7 @@ class VSTFlowMatchingModule(LightningModule):
                 batch["audio"],
                 keep=conditioning_keep.identity_keep,
             )
-            if self._should_probe_gradient_balance():
+            if self._is_trainer_logging_step():
                 from synth_setter.models.components.audio_feedback import gradient_balance
 
                 grad_balance = gradient_balance(
