@@ -83,7 +83,7 @@ Fetch metadata once:
 
 ```bash
 gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
-  --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+  --json number,headRefOid,baseRefOid,files,title,headRefName,author,mergeable,mergeStateStatus,statusCheckRollup
 ```
 
 If no PR exists for the current branch, stop and tell the user to push and open a PR first.
@@ -169,12 +169,39 @@ put a glob in a worker prompt and never repair assignment paths with
 ```bash
 assignment_dir="${PI_REVIEW_FOLLOW_UP_MANIFEST%.json}.assignments"
 mkdir -p "$assignment_dir"
+review_history="$assignment_dir/pr-review-history.md"
+review_comments="$assignment_dir/pr-review-comments.json"
+pr_author=<PR-author-login-from-Step-1>
+set -o pipefail
+history_fetched=false
+for attempt in 1 2 3; do
+  if gh api --paginate "repos/${repo}/pulls/${pr_number}/comments?per_page=100" \
+    --jq '.[]' | jq -s '.' > "$review_comments"; then
+    history_fetched=true
+    break
+  fi
+  sleep "$((attempt * 2))"
+done
+if [[ $history_fetched != true ]]; then
+  printf 'Failed to fetch complete PR review history after 3 attempts.\n' >&2
+  exit 1
+fi
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py review-history \
+  --input "$review_comments" --author "$pr_author" --output "$review_history"
 "${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt \
   --skill <skill> --target <target> --repo <owner/name> \
   --base-sha <base> --head-sha <head> \
   --changed-path <path> [--changed-path <path> ...] \
+  --review-history "$review_history" \
   --output "$assignment_dir/<skill>.txt"
 ```
+
+Fetch all review-comment pages once in PR mode and reuse the rendered history
+for every foreground assignment. The parser retains machine-tagged findings and
+the PR author's replies while dropping unrelated discussion. In local-branch
+mode, which has no PR history, omit the fetch and `--review-history` argument.
+A history-fetch or parse failure is a terminal assignment-generation error;
+never silently fall back to a history-blind PR review.
 
 Assignment generation validates the exact checklist file and embeds its absolute
 path. Repo-local checklists resolve from
@@ -247,9 +274,14 @@ head, following `agent/skills/_shared/repo-review-follow-up.md`. Local-branch
 reviews cannot create follow-up manifests because they lack a stable remote
 PR/head delivery boundary.
 
-Give every worker the exact base SHA, head SHA, and changed paths. Require it to
-inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
-paths. It must never recursively discover files or checklists, search above the
+Give every worker the exact base SHA, head SHA, changed paths, and rendered PR
+history path. Require it to inspect only `git diff <base>..<head> -- <changed-paths>`
+and the explicit checklist and history paths. Before returning findings, it must
+omit semantically equivalent prior findings regardless of skill, severity,
+wording, or moved line anchor. It may resurface a concern only when new diff
+evidence invalidates the author's prior disposition, and then must state that
+delta. An existing finding without an author reply already has an actionable
+thread and is not posted again. It must never recursively discover files or checklists, search above the
 current worktree, or inspect `.venv`, caches, dependencies, or sibling worktrees. An explicitly
 assigned `tdd-refactor` pass may search tracked files with `git grep` and
 `git ls-files`, as its exhaustive-reference contract requires. Every Bash tool call has a 60-second timeout. A command timeout or hard-aborted
