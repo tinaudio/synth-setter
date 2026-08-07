@@ -11,7 +11,8 @@ def make_sin_pos_enc(max_len: int, d_enc: int) -> torch.Tensor:
     """Build a sinusoidal positional-encoding tensor.
 
     :param max_len: Maximum sequence length the encoding should cover.
-    :param d_enc: Dimensionality of the encoding (must be even).
+    :param d_enc: Dimensionality of the encoding; an odd width leaves the top band's
+        sine without a cosine partner.
     :returns: A tensor of shape ``(1, max_len, d_enc)`` containing sin/cos positional
         encodings interleaved across the feature dimension. The leading singleton
         dimension allows broadcasting across a batch.
@@ -23,7 +24,8 @@ def make_sin_pos_enc(max_len: int, d_enc: int) -> torch.Tensor:
         torch.arange(0, d_enc, 2, dtype=torch.float32) * (-math.log(10000.0) / d_enc)
     )
     pe[:, 0::2] = torch.sin(position * div_term)
-    pe[:, 1::2] = torch.cos(position * div_term)
+    # An odd width has one fewer cosine column than sine, so the top band is sine-only.
+    pe[:, 1::2] = torch.cos(position * div_term[: d_enc // 2])
 
     # Add an extra dimension for batch size compatibility.
     pe = pe.unsqueeze(0)  # Shape: (1, max_len, d_model)
