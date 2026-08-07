@@ -379,6 +379,23 @@ class TestLeaseExpiryAndFencing:
 
         assert successor.claim() == ClaimedShard(shard_id=0, claim_gen=2)
 
+    def test_zero_length_lease_at_persisted_cutoff_is_reclaimed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lease is reclaimable at its persisted epoch-second cutoff.
+
+        :param tmp_path: Hosts the per-test claims table.
+        :param monkeypatch: Pins both claim attempts to the same epoch second.
+        """
+        monkeypatch.setattr("synth_setter.pipeline.shard_claims.time.time", lambda: 1_000.0)
+        first_worker = _claims(tmp_path, owner="worker-a", lease=timedelta(0))
+        first_worker.populate(range(1))
+        assert first_worker.claim() == ClaimedShard(shard_id=0, claim_gen=1)
+
+        second_worker = _claims(tmp_path, owner="worker-b")
+
+        assert second_worker.claim() == ClaimedShard(shard_id=0, claim_gen=2)
+
     def test_stale_owner_complete_after_takeover_is_fenced_out(self, tmp_path: Path) -> None:
         """A stale owner's complete matches nothing after a takeover.
 
