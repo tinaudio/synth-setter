@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import subprocess
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -13,6 +12,9 @@ from filelock import FileLock
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from synth_setter.pipeline import r2_io
+
+_FILE_HASH_CHUNK_BYTES = 1024 * 1024
+_SOURCE_KEY_HEX_DIGITS = 16
 
 
 def retry_external_io[**P, R](
@@ -54,7 +56,7 @@ def file_sha256(path: Path) -> str:
     """
     digest = hashlib.sha256()
     with path.open("rb") as artifact:
-        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+        for chunk in iter(lambda: artifact.read(_FILE_HASH_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -85,7 +87,7 @@ def _cache_destination(r2_uri: str, namespace: str, expected_sha256: str) -> Pat
     :param expected_sha256: Required content identity.
     :returns: Destination retaining the source basename.
     """
-    source_key = hashlib.sha256(r2_uri.encode()).hexdigest()[:16]
+    source_key = hashlib.sha256(r2_uri.encode()).hexdigest()[:_SOURCE_KEY_HEX_DIGITS]
     return (
         synth_setter_cache_dir()
         / "models"
@@ -97,7 +99,6 @@ def _cache_destination(r2_uri: str, namespace: str, expected_sha256: str) -> Pat
     )
 
 
-@retry_external_io(retry_exceptions=(subprocess.CalledProcessError,))
 def _download_verified(r2_uri: str, destination: Path, expected_sha256: str) -> None:
     """Publish downloaded bytes only after digest verification.
 

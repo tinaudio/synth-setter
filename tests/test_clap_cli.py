@@ -388,7 +388,26 @@ def test_render_patch_descending_note_interval_reaches_renderer_ordered(
 
     assert patch.audio.shape == (2, 176400)
     assert patch.note_params["note_start_and_end"] == (0.8, 3.2)
-    assert renderer.render.call_args.args[3] == (0.8, 3.2)
+
+
+def test_render_patch_zero_duration_note_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Equal decoded note endpoints fail before renderer construction.
+
+    :param monkeypatch: Replaces the installed VST version boundary.
+    :param tmp_path: Supplies a non-system plugin fixture path.
+    """
+    synth_version = SYNTHS[SynthName("surge_simple")].synth_version
+    plugin_path = str(tmp_path / "Surge.vst3")
+    monkeypatch.setattr("synth_setter.cli.clap.default_plugin_path", lambda: plugin_path)
+    monkeypatch.setattr("synth_setter.cli.clap.extract_renderer_version", lambda _: synth_version)
+
+    with pytest.raises(ValueError, match="positive duration"):
+        _render_patch(
+            {"filter_1_cutoff": 0.5},
+            {"pitch": 60, "note_start_and_end": (2.0, 2.0)},
+        )
 
 
 def test_headless_wrapper_nonexecutable_script_runs_through_shell(

@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
+from types import MappingProxyType
 from uuid import uuid4
 
 import click
@@ -61,20 +62,24 @@ _SURGE_PARAM_SPEC_NAME = "surge_simple"
 _EXPECTED_PARAM_WIDTH = param_specs[_SURGE_PARAM_SPEC_NAME].encoded_width
 _PITCH_ZERO_THRESHOLD = 0.1
 _MIN_LOUDNESS_DB = -55.0
-_EXPECTED_STATE_SHAPES = {
-    "encoder.patch_embed.projection.weight": (512, 2, 16, 16),
-    "sketch_tokens.positional_encoding": (1, 32, 512),
-    "sketch_tokens.projections.centroid.weight": (512, 1),
-    "sketch_tokens.projections.loudness.weight": (512, 1),
-    "sketch_tokens.projections.pitch.weight": (512, 384),
-    "vector_field.projection._assignment": (128, _EXPECTED_PARAM_WIDTH),
-}
-_EXPECTED_SKETCH_CONFIG = {
-    "column": "sketch",
-    "num_frames": 401,
-    "num_control_tokens": 32,
-    "pitch_zero_threshold": _PITCH_ZERO_THRESHOLD,
-}
+_EXPECTED_STATE_SHAPES = MappingProxyType(
+    {
+        "encoder.patch_embed.projection.weight": (512, 2, 16, 16),
+        "sketch_tokens.positional_encoding": (1, 32, 512),
+        "sketch_tokens.projections.centroid.weight": (512, 1),
+        "sketch_tokens.projections.loudness.weight": (512, 1),
+        "sketch_tokens.projections.pitch.weight": (512, 384),
+        "vector_field.projection._assignment": (128, _EXPECTED_PARAM_WIDTH),
+    }
+)
+_EXPECTED_SKETCH_CONFIG = MappingProxyType(
+    {
+        "column": "sketch",
+        "num_frames": 401,
+        "num_control_tokens": 32,
+        "pitch_zero_threshold": _PITCH_ZERO_THRESHOLD,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -272,6 +277,52 @@ def upload_output_artifacts(output_dir: Path, destination_uri: str) -> None:
     r2_io.upload_dir(output_dir, destination_uri)
 
 
+def _normalize_sketch_config(hyper_parameters: Mapping[str, object]) -> dict[str, object]:
+    """Normalize legacy sketch metadata and enforce the serving contract.
+
+    :param hyper_parameters: Checkpoint hyperparameter mapping.
+    :returns: Current-form sketch configuration.
+    :raises ValueError: Sketch controls are absent, ambiguous, or incompatible.
+    """
+    sketch = hyper_parameters.get("sketch_controls")
+    if not isinstance(sketch, Mapping):
+        raise ValueError("checkpoint must enable sketch controls")
+    normalized_sketch = dict(sketch)
+    legacy_token_count = normalized_sketch.pop("num_ctrl_tokens", None)
+    current_token_count = normalized_sketch.get("num_control_tokens")
+    if (
+        legacy_token_count is not None
+        and current_token_count is not None
+        and legacy_token_count != current_token_count
+    ):
+        raise ValueError("checkpoint sketch token-count fields conflict")
+    if current_token_count is None:
+        normalized_sketch["num_control_tokens"] = legacy_token_count
+    if normalized_sketch != _EXPECTED_SKETCH_CONFIG:
+        raise ValueError(
+            f"checkpoint sketch config must be {_EXPECTED_SKETCH_CONFIG}, got {normalized_sketch}"
+        )
+    return normalized_sketch
+
+
+def _validate_state_shapes(checkpoint: Mapping[str, object]) -> None:
+    """Require state tensors that pin the serving architecture.
+
+    :param checkpoint: Deserialized Lightning checkpoint mapping.
+    :raises ValueError: The state mapping or a required tensor shape differs.
+    """
+    state_dict = checkpoint.get("state_dict")
+    if not isinstance(state_dict, Mapping):
+        raise ValueError("checkpoint has no state_dict mapping")
+    for name, expected_shape in _EXPECTED_STATE_SHAPES.items():
+        tensor = state_dict.get(name)
+        actual_shape = tuple(tensor.shape) if isinstance(tensor, torch.Tensor) else None
+        if actual_shape != expected_shape:
+            raise ValueError(
+                f"checkpoint {name} shape must be {expected_shape}, got {actual_shape}"
+            )
+
+
 def validate_checkpoint_compatibility(checkpoint: Mapping[str, object]) -> dict[str, object]:
     """Validate the immutable Surge sketch checkpoint before model construction.
 
@@ -295,35 +346,8 @@ def validate_checkpoint_compatibility(checkpoint: Mapping[str, object]) -> dict[
     if hyper_parameters.get("conditioning") != "mel":
         raise ValueError("checkpoint conditioning must be 'mel'")
 
-    sketch = hyper_parameters.get("sketch_controls")
-    if not isinstance(sketch, Mapping):
-        raise ValueError("checkpoint must enable sketch controls")
-    normalized_sketch = dict(sketch)
-    legacy_token_count = normalized_sketch.pop("num_ctrl_tokens", None)
-    current_token_count = normalized_sketch.get("num_control_tokens")
-    if (
-        legacy_token_count is not None
-        and current_token_count is not None
-        and legacy_token_count != current_token_count
-    ):
-        raise ValueError("checkpoint sketch token-count fields conflict")
-    if current_token_count is None:
-        normalized_sketch["num_control_tokens"] = legacy_token_count
-    if normalized_sketch != _EXPECTED_SKETCH_CONFIG:
-        raise ValueError(
-            f"checkpoint sketch config must be {_EXPECTED_SKETCH_CONFIG}, got {normalized_sketch}"
-        )
-
-    state_dict = checkpoint.get("state_dict")
-    if not isinstance(state_dict, Mapping):
-        raise ValueError("checkpoint has no state_dict mapping")
-    for name, expected_shape in _EXPECTED_STATE_SHAPES.items():
-        tensor = state_dict.get(name)
-        actual_shape = tuple(tensor.shape) if isinstance(tensor, torch.Tensor) else None
-        if actual_shape != expected_shape:
-            raise ValueError(
-                f"checkpoint {name} shape must be {expected_shape}, got {actual_shape}"
-            )
+    normalized_sketch = _normalize_sketch_config(hyper_parameters)
+    _validate_state_shapes(checkpoint)
     return normalized_sketch
 
 
@@ -407,6 +431,12 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
     :returns: Rendered stereo patch and its parameters.
     :raises ValueError: The installed Surge version differs from the pinned contract.
     """
+    note_start, note_end = sorted(note_params["note_start_and_end"])
+    if note_start >= note_end:
+        raise ValueError("decoded note interval must have positive duration")
+    ordered_note_params = note_params.copy()
+    ordered_note_params["note_start_and_end"] = (note_start, note_end)
+
     plugin_path = str(Path(default_plugin_path()).expanduser().resolve())
     synth_identity = SYNTHS[SynthName(_SURGE_PARAM_SPEC_NAME)]
     actual_version = extract_renderer_version(Path(plugin_path))
@@ -436,9 +466,6 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
             gui_toggle_cadence="once",
         )
         renderer = make_audio_renderer(render_config)
-        note_start, note_end = sorted(note_params["note_start_and_end"])
-        ordered_note_params = note_params.copy()
-        ordered_note_params["note_start_and_end"] = (note_start, note_end)
         audio = renderer.render(
             synth_params,
             int(ordered_note_params["pitch"]),
