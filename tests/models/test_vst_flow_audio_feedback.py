@@ -230,12 +230,12 @@ def test_train_step_with_audio_loss_backprops_a_finite_nonzero_audio_term() -> N
 def _train_step_under_probe(probe: bool) -> tuple[TrainStepOutputs, torch.Tensor, torch.Tensor]:
     """Run one train step with the gradient probe forced on or off.
 
-    :param probe: Whether ``_should_probe_gradient_balance`` reports True.
+    :param probe: Whether ``_is_trainer_logging_step`` reports True.
     :returns: The step outputs, the RNG state left behind, and the flow's input-layer grad.
     """
     torch.manual_seed(0)
     module = _module(audio_loss=_audio_loss())
-    module._should_probe_gradient_balance = lambda: probe  # pyright: ignore[reportAttributeAccessIssue]
+    module._is_trainer_logging_step = lambda: probe  # pyright: ignore[reportAttributeAccessIssue]
     batch = _synthetic_batch()
     # Warm the cached renderer first: building its voice draws from the global RNG, which
     # would otherwise read as a probe-induced difference whenever the cache starts cold.

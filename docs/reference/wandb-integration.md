@@ -70,6 +70,7 @@ Logged via `self.log()` in each LightningModule:
 |                         | `train/audio_loss` (when `model/audio_loss` is set) | yes  | yes   |
 |                         | `train/audio_grad_ratio` (audio/flow gradient norm) | yes  | —     |
 |                         | `train/audio_grad_cosine` (gradient alignment)      | yes  | —     |
+|                         | `train/slot_cosine` (layerwise conditioning only)   | yes  | —     |
 |                         | `train/penalty`                                     | yes  | yes   |
 |                         | `val/param_mse`                                     | —    | yes   |
 |                         | `test/param_mse`                                    | —    | yes   |
@@ -90,7 +91,10 @@ Logged via `self.log()` in each LightningModule:
 |                         | `val/param_mse`, `test/param_mse`                   | —    | yes   |
 
 The two audio-gradient diagnostics are emitted only when audio feedback is enabled, once per
-`trainer.log_every_n_steps` cadence. They are step-only metrics and have no epoch aggregate.
+`trainer.log_every_n_steps` cadence. `train/slot_cosine` rides the same cadence but is emitted only
+when the encoder returns more than one conditioning slot; it is the mean off-diagonal cosine
+similarity between those slots, so a value approaching one means they have collapsed to one read.
+All three are step-only metrics and have no epoch aggregate.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
