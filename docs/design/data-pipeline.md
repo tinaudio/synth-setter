@@ -1128,17 +1128,19 @@ endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 invocation augments one finalized Lance dataset without modifying finalize-owned
 dataset cards or completion markers. It writes global vector columns for `clap`
 (LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
-dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, and `matpac_plus`)
-stored as fixed-shape tensors. All are derived from the audio column and
-selectable via `embeddings=` (the selectable set is
+dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, `matpac_plus`,
+`meanaudio_16k`, `pupujepa_tiny`, and `pupujepa_large`) stored as fixed-shape
+tensors. All are derived from the audio column and selectable via `embeddings=`
+(the selectable set is
 `EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
 are each loaded and written in their own sequential pass). SAME-S and SAME-L
 use Stable Audio 3's autoencoder factory with strict safetensors state loading;
 local directories, R2 mirrors, and HuggingFace repo IDs retain the same
 checkpoint-resolution behavior. Each sequence embedding also writes a mean-pooled
-`FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`, or
-`matpac_plus_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`, and the
-selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
+`FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`,
+`matpac_plus_vec`, `meanaudio_16k_vec`, `pupujepa_tiny_vec`, or
+`pupujepa_large_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`,
+and the selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
 resampled to 32 kHz, and right-padded to its 10-second input window; longer
 clips fail instead of silently losing a partial tail. Its PyPI runtime is pinned
 to `ssondo==0.3.1`, and the MIT checkpoint is pinned by Hugging Face revision
@@ -1173,6 +1175,34 @@ incompatible model state, malformed audio, shape drift, and non-finite output.
 The measured preprocessing, sequence shape, cache identity, package boundary,
 and `conditioning=matpac_plus` profile are documented in
 [MATPAC++ audio embeddings](../reference/matpac-plus-embeddings.md).
+
+`meanaudio_16k` installs MeanAudio directly from immutable upstream commit
+`8740a3e8df4c891a8d9deee1f820d051584d2671` and uses only
+`get_mel_converter("16k")` plus `get_my_vae("16k")`; it does not construct
+`AutoEncoderModule`, a vocoder, or a flow model. The default
+`AndreasXi/MeanAudio` `v1-16.pth` checkpoint is fixed at revision
+`6e072062d4f9af21c647e2bae5aafc1da2c84014` and SHA-256
+`15ad082c714ccf3771898a771fc6eebdc1d9c8d5c6154726906a97f43603d62c`;
+only that source or a hash-identical local file is accepted, and the default
+uses Hugging Face Hub's standard cache. State loads strictly before the decoder
+is discarded, then weight normalization is removed
+and the remaining encoder is frozen in evaluation mode. One- or two-channel
+audio is downmixed by channel mean, resampled to 16 kHz, and passed through the
+canonical MeanAudio mel frontend. Stored values are deterministic
+`vae.encode(mel).mode()` posterior means with shape `(20, 125)` for four seconds
+at 44.1 kHz; `conditioning=meanaudio_16k` consumes that fixed shape through the
+existing `EmbeddingPool`. The 20-wide mean-pooled companion uses four PQ
+sub-vectors. MeanAudio's repository and Hugging Face card declare MIT licensing,
+while its imported EDM2 VAE utility carries CC BY-NC-SA 4.0; synth-setter accepts
+this integration for research/non-commercial use under those upstream terms.
+
+`pupujepa_tiny` and `pupujepa_large` use one shared Torch implementation for
+offline augmentation and online waveform conditioning. Each loads only its
+pinned patch embed and frozen teacher, producing a 1,536- or 8,192-wide 25 Hz
+sequence in a solo bounded-batch pass. The Hugging Face revision,
+variant-specific digests, frontend, output geometry, and cached/online
+conditioning profiles are documented in
+[PupuJEPA audio embeddings](../reference/pupujepa-embeddings.md).
 
 `t5gemma` is the one embedding that conditions on parameters rather than audio.
 Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,

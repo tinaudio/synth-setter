@@ -5,11 +5,33 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from filelock import FileLock
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from synth_setter.pipeline import r2_io
+
+
+def retry_external_io[**P, R](
+    *, retry_exceptions: tuple[type[BaseException], ...]
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Build the shared bounded retry policy for transient external I/O.
+
+    :param retry_exceptions: Transient exception types safe to retry.
+    :returns: Decorator applying three attempts with bounded exponential backoff.
+    """
+
+    def decorate(operation: Callable[P, R]) -> Callable[P, R]:
+        return retry(
+            reraise=True,
+            retry=retry_if_exception_type(retry_exceptions),
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=1, max=4),
+        )(operation)
+
+    return decorate
 
 
 def synth_setter_cache_dir() -> Path:
@@ -129,24 +151,25 @@ def embedding_model_dir(model_name: str) -> Path:
     return synth_setter_cache_dir() / "models" / "embeddings" / model_name
 
 
-def checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
-    """Hash checkpoint file paths and contents in deterministic order.
+def checkpoint_files_sha256(checkpoint_dir: Path, files: Iterable[Path]) -> str:
+    """Hash selected checkpoint paths and contents in deterministic order.
 
-    :param checkpoint_dir: Materialized checkpoint directory.
-    :returns: SHA-256 identity for the complete checkpoint tree.
-    :raises ValueError: The checkpoint directory contains no files.
+    :param checkpoint_dir: Root used to frame snapshot-relative paths.
+    :param files: Materialized files owned by one checkpoint identity.
+    :returns: SHA-256 identity for the selected files.
+    :raises ValueError: No files are selected or a selected path is invalid.
     """
+    selected = sorted(files)
+    if not selected:
+        raise ValueError(f"checkpoint selection has no files: {checkpoint_dir}")
     digest = hashlib.sha256()
-    files = sorted(
-        path
-        for path in checkpoint_dir.rglob("*")
-        if path.is_file()
-        and not path.relative_to(checkpoint_dir).parts[:2] == (".cache", "huggingface")
-    )
-    if not files:
-        raise ValueError(f"checkpoint directory has no files: {checkpoint_dir}")
-    for path in files:
-        relative_path = path.relative_to(checkpoint_dir).as_posix().encode()
+    for path in selected:
+        try:
+            relative_path = path.relative_to(checkpoint_dir).as_posix().encode()
+        except ValueError as exc:
+            raise ValueError(f"checkpoint file lies outside {checkpoint_dir}: {path}") from exc
+        if not path.is_file():
+            raise ValueError(f"checkpoint file is absent: {path}")
         digest.update(len(relative_path).to_bytes(8, "big"))
         digest.update(relative_path)
         digest.update(path.stat().st_size.to_bytes(8, "big"))
@@ -154,3 +177,18 @@ def checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
     return digest.hexdigest()
+
+
+def checkpoint_tree_sha256(checkpoint_dir: Path) -> str:
+    """Hash checkpoint file paths and contents in deterministic order.
+
+    :param checkpoint_dir: Materialized checkpoint directory.
+    :returns: SHA-256 identity for the complete checkpoint tree.
+    """
+    files = (
+        path
+        for path in checkpoint_dir.rglob("*")
+        if path.is_file()
+        and not path.relative_to(checkpoint_dir).parts[:2] == (".cache", "huggingface")
+    )
+    return checkpoint_files_sha256(checkpoint_dir, files)

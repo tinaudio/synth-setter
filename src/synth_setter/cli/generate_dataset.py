@@ -28,6 +28,7 @@ from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
+from shutil import rmtree
 from typing import Any, cast
 from uuid import uuid4
 
@@ -250,9 +251,8 @@ def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for ``generate_vst_dataset.py`` from a spec and shard.
 
-    The flag set is derived from ``RenderConfig.model_fields`` so every renderer
-    config field surfaces as a ``--<field>`` option automatically; adding a
-    field on the model auto-extends the CLI invocation.
+    The flag set is derived from ``RenderConfig`` except for parent-only local
+    retention policy, which runs after staging and never reaches the renderer.
 
     :param spec: Validated dataset specification supplying renderer options.
     :param shard: Shard whose filename and seed select this render invocation.
@@ -269,7 +269,7 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
         str(_RENDERER_SCRIPT),
         str(output_path),
     ]
-    render_args = spec.render_for_shard(shard).model_dump()
+    render_args = spec.render_for_shard(shard).model_dump(exclude={"retain_local_shards"})
     for key, value in render_args.items():
         # Non-scalars (``synth``) reach the worker's CliSettingsSource via json.loads;
         # str() would emit a single-quoted Python repr it rejects. bool is an int
@@ -306,7 +306,7 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
         across worker pods, and ``spec.render.synth.synth_version`` is cross-checked
         against the loaded plugin.
     :param work_dir: Hydra per-run output dir supplied by the caller; created
-        if missing. Shards are written here before the rclone upload.
+        if missing. Shards are staged from here and optionally deleted afterward.
     :param loggers: Lightning loggers instantiated by ``instantiate_loggers`` —
         typically a single ``WandbLogger`` whose ``id`` was pinned to
         ``spec.run_id`` by the caller. May be empty (logger group disabled).
@@ -451,8 +451,7 @@ def _log_shard_metrics(
 
     :param loggers: Lightning loggers — empty list is a no-op.
     :param shard_id: Passed as ``step`` so wandb's x-axis aligns with shard order.
-    :param byte_size: Local shard file size in bytes; stable because shards are
-        retained at ``work_dir``.
+    :param byte_size: Local shard size measured before optional post-stage deletion.
     :param render_seconds: Wall-clock seconds from subprocess invoke through
         upload-end; ``0.0`` on the R2-skip branch.
     :param rejections: Silent and clipped sampled draws rejected by the renderer.
@@ -752,6 +751,27 @@ def _dispatch_shards_from_claims(
     return rendered, skipped, rejections
 
 
+def _cleanup_local_shard(shard_path: Path, *, shard_id: int) -> None:
+    """Delete a staged local shard without invalidating remote success.
+
+    :param shard_path: Rendered Lance directory to remove recursively.
+    :param shard_id: Stable shard identifier included in failure diagnostics.
+    """
+    try:
+        rmtree(shard_path)
+    except OSError as exc:
+        logger.bind(
+            error=str(exc),
+            shard_id=shard_id,
+            shard_path=str(shard_path),
+        ).warning(
+            "local_shard_cleanup_failed: shard_id={} shard_path={} error={}",
+            shard_id,
+            str(shard_path),
+            exc,
+        )
+
+
 def _render_one_owned_shard(
     spec: DatasetSpec,
     shard_id: int,
@@ -764,7 +784,8 @@ def _render_one_owned_shard(
     so the serial and parallel dispatch arms share one callable. Emits one
     ``shard/bytes`` + ``shard/render_seconds`` history row per call —
     ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
-    invoke through upload-end on the render branch.
+    invoke through upload-end on the render branch. Optional local cleanup runs
+    only after that metric is recorded.
 
     :param spec: Validated dataset spec; ``spec.shards[shard_id]`` is fetched.
     :param shard_id: Index into ``spec.shards``; also the ``step`` for the row.
@@ -776,6 +797,7 @@ def _render_one_owned_shard(
     # A Lance shard is staged iff a complete attempt set (sidecar + stats +
     # .valid) exists; orphaned fragment data from a crash must not skip (#1776).
     if shard_has_complete_attempt(spec, shard.shard_id):
+        # Cleanup is single-shot after this invocation's stage call, never on a skip probe.
         logger.info("skipping shard {} — already staged: {}", shard.shard_id, shard.filename)
         # Staged fragment size isn't probed on the skip path; the metrics row
         # deliberately logs 0 bytes for an already-staged lance shard.
@@ -802,6 +824,8 @@ def _render_one_owned_shard(
         render_seconds=time.monotonic() - t0,
         rejections=rejections,
     )
+    if not spec.render.retain_local_shards:
+        _cleanup_local_shard(work_dir / shard.filename, shard_id=shard.shard_id)
     return True, False, rejections
 
 
@@ -850,12 +874,9 @@ def _render_and_upload_shard(
     *,
     loggers: list[Logger],
 ) -> tuple[int, RenderRejectionMetrics]:
-    """Render a single shard and stage it to R2; shards are retained at ``work_dir``.
+    """Render a single shard and stage it to R2.
 
-    Rendered shards stay on disk under ``work_dir`` for post-mortem inspection
-    (``finalize_dataset`` re-downloads from R2 — launcher and worker pods do not
-    share a filesystem). Peak local disk per rank scales with the number of owned
-    shards. The renderer subprocess is wrapped in a retry loop bounded by
+    The renderer subprocess is wrapped in a retry loop bounded by
     ``spec.render.max_retries`` (default 0 = strict fail-fast); staging is outside
     the loop because its rclone transport already retries via ``--retries=3``.
 

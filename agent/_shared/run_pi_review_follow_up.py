@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,10 +34,13 @@ else:
         parse_worker_report,
     )
 
-_AFTERCARE_MODEL = "gpt-5.6-terra"
-_AFTERCARE_PROVIDER = "openai-codex"
-_AFTERCARE_THINKING = "medium"
-_RUNTIME_MANIFEST_ENV = "PI_REVIEW_AFTERCARE_RUNTIME_MANIFEST"
+_FOLLOW_UP_MODEL = "gpt-5.6-terra"
+_FOLLOW_UP_PROVIDER = "openai-codex"
+_FOLLOW_UP_THINKING = "medium"
+_RUNTIME_MANIFEST_ENV = "PI_REVIEW_FOLLOW_UP_RUNTIME_MANIFEST"
+_OWNERSHIP_WAIT_ENV = "PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"
+_MAX_OWNERSHIP_WAIT_SECONDS = 3600
+_OWNERSHIP_POLL_SECONDS = 0.25
 _MAX_LOG_BYTES = 64 * 1024
 _LOG_TAIL_CHARS = 16 * 1024
 _CAPACITY_MARKERS = (
@@ -66,7 +70,7 @@ type DiagnosticCategory = Literal[
 
 
 class DeferredPass(BaseModel, strict=True, extra="forbid"):
-    """One model pass transferred from foreground review to aftercare.
+    """One model pass transferred from foreground review to follow-up.
 
     .. attribute :: skill
 
@@ -134,7 +138,7 @@ class DeferredPass(BaseModel, strict=True, extra="forbid"):
         return self
 
 
-class AftercareManifest(BaseModel, strict=True, extra="forbid"):
+class FollowUpManifest(BaseModel, strict=True, extra="forbid"):
     """Durable handoff from foreground review to deferred review work.
 
     .. attribute :: version
@@ -185,8 +189,8 @@ class AftercareManifest(BaseModel, strict=True, extra="forbid"):
     foreground_fingerprints: tuple[str, ...]
 
 
-class AftercareAttempt(BaseModel, strict=True, extra="forbid"):
-    """One auditable foreground-ownership or aftercare attempt row.
+class FollowUpAttempt(BaseModel, strict=True, extra="forbid"):
+    """One auditable foreground-ownership or follow-up attempt row.
 
     .. attribute :: skill
 
@@ -226,7 +230,7 @@ class AftercareAttempt(BaseModel, strict=True, extra="forbid"):
     detail: str = Field(min_length=1)
 
 
-class AftercareDiagnostic(BaseModel, strict=True, extra="forbid"):
+class FollowUpDiagnostic(BaseModel, strict=True, extra="forbid"):
     """One supervisor or provider diagnostic.
 
     .. attribute :: category
@@ -242,16 +246,16 @@ class AftercareDiagnostic(BaseModel, strict=True, extra="forbid"):
     message: str = Field(min_length=1)
 
 
-class AftercareResult(BaseModel, strict=True, extra="forbid"):
-    """Strict result atomically published by the aftercare supervisor.
+class FollowUpResult(BaseModel, strict=True, extra="forbid"):
+    """Strict result atomically published by the follow-up supervisor.
 
     .. attribute :: status
 
-        Overall aftercare outcome.
+        Overall follow-up outcome.
 
     .. attribute :: attempts
 
-        Foreground ownership and aftercare audit rows.
+        Foreground ownership and follow-up audit rows.
 
     .. attribute :: diagnostics
 
@@ -259,7 +263,7 @@ class AftercareResult(BaseModel, strict=True, extra="forbid"):
 
     .. attribute :: late_findings
 
-        Validated late findings retained by aftercare.
+        Validated late findings retained by follow-up.
 
     .. attribute :: posted_review_url
 
@@ -279,8 +283,8 @@ class AftercareResult(BaseModel, strict=True, extra="forbid"):
     """
 
     status: Literal["complete", "stale", "failed"]
-    attempts: tuple[AftercareAttempt, ...]
-    diagnostics: tuple[AftercareDiagnostic, ...]
+    attempts: tuple[FollowUpAttempt, ...]
+    diagnostics: tuple[FollowUpDiagnostic, ...]
     late_findings: tuple[WorkerFinding, ...]
     posted_review_url: str | None
     child_exit_code: int | None
@@ -288,10 +292,10 @@ class AftercareResult(BaseModel, strict=True, extra="forbid"):
     completed_at: datetime
 
     @model_validator(mode="after")
-    def _require_failure_diagnostic(self) -> AftercareResult:
+    def _require_failure_diagnostic(self) -> FollowUpResult:
         """Reject failed results without actionable diagnostics.
 
-        :returns: Validated aftercare result.
+        :returns: Validated follow-up result.
         :raises ValueError: If a failed result omits diagnostics.
         """
         if self.status == "failed" and not self.diagnostics:
@@ -326,7 +330,7 @@ class _OwnershipPlan:
 
     deferred_passes: tuple[DeferredPass, ...]
     adopted_passes: tuple[DeferredPass, ...]
-    attempts: tuple[AftercareAttempt, ...]
+    attempts: tuple[FollowUpAttempt, ...]
     adopted_reports: tuple[WorkerReport, ...]
     blocked: bool
 
@@ -368,7 +372,7 @@ def _sidecar_path(manifest_path: Path, suffix: str) -> Path:
     return Path(f"{manifest_path}{suffix}")
 
 
-def load_manifest(path: Path) -> AftercareManifest:
+def load_manifest(path: Path) -> FollowUpManifest:
     """Load a strict manifest confined to the current worktree review directory.
 
     :param path: Manifest path under the current worktree's ``.agent-reviews``.
@@ -378,8 +382,8 @@ def load_manifest(path: Path) -> AftercareManifest:
     resolved = path.resolve()
     review_dir = (Path.cwd() / ".agent-reviews").resolve()
     if not resolved.is_relative_to(review_dir):
-        raise ValueError("Aftercare manifest must be under .agent-reviews")
-    return AftercareManifest.model_validate_json(resolved.read_text())
+        raise ValueError("Follow-up manifest must be under .agent-reviews")
+    return FollowUpManifest.model_validate_json(resolved.read_text())
 
 
 def build_command(manifest_path: Path, adopted_passes: tuple[DeferredPass, ...] = ()) -> list[str]:
@@ -387,7 +391,7 @@ def build_command(manifest_path: Path, adopted_passes: tuple[DeferredPass, ...] 
 
     :param manifest_path: Validated runtime manifest path.
     :param adopted_passes: Rows whose valid foreground reports must not be relaunched.
-    :returns: Argument vector for Pi's headless aftercare session.
+    :returns: Argument vector for Pi's headless follow-up session.
     :raises RuntimeError: If Pi is unavailable.
     """
     pi = shutil.which("pi")
@@ -402,7 +406,7 @@ def build_command(manifest_path: Path, adopted_passes: tuple[DeferredPass, ...] 
         )
     prompt = (
         "Execute the deferred PR-review procedure in "
-        "agent/skills/_shared/repo-review-aftercare.md using manifest "
+        "agent/skills/_shared/repo-review-follow-up.md using manifest "
         f"{manifest_path}. Process only its deferred passes, then exit."
         f"{ownership_instruction}"
     )
@@ -411,11 +415,11 @@ def build_command(manifest_path: Path, adopted_passes: tuple[DeferredPass, ...] 
         "-p",
         "--approve",
         "--provider",
-        _AFTERCARE_PROVIDER,
+        _FOLLOW_UP_PROVIDER,
         "--model",
-        _AFTERCARE_MODEL,
+        _FOLLOW_UP_MODEL,
         "--thinking",
-        _AFTERCARE_THINKING,
+        _FOLLOW_UP_THINKING,
         "--no-session",
         prompt,
     ]
@@ -447,17 +451,17 @@ def _atomic_write(path: Path, content: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _atomic_write_result(path: Path, result: AftercareResult) -> None:
+def _atomic_write_result(path: Path, result: FollowUpResult) -> None:
     """Validate and atomically publish the canonical result.
 
     :param path: Canonical result path.
     :param result: Result constructed or validated by the supervisor.
     """
-    validated = AftercareResult.model_validate_json(result.model_dump_json())
+    validated = FollowUpResult.model_validate_json(result.model_dump_json())
     _atomic_write(path, f"{validated.model_dump_json(indent=2)}\n")
 
 
-def _attempt(deferred: DeferredPass, status: AttemptStatus, detail: str) -> AftercareAttempt:
+def _attempt(deferred: DeferredPass, status: AttemptStatus, detail: str) -> FollowUpAttempt:
     """Build one ownership audit row from a deferred pass.
 
     :param deferred: Pass supplying assignment identity.
@@ -465,7 +469,7 @@ def _attempt(deferred: DeferredPass, status: AttemptStatus, detail: str) -> Afte
     :param detail: Exact evidence supporting the outcome.
     :returns: Strict attempt row.
     """
-    return AftercareAttempt(
+    return FollowUpAttempt(
         skill=deferred.skill,
         pass_name=deferred.pass_name,
         model=deferred.model,
@@ -495,7 +499,7 @@ def _adopt_report(deferred: DeferredPass, target: str) -> WorkerReport | None:
         return None
 
 
-def _plan_ownership(manifest: AftercareManifest) -> _OwnershipPlan:
+def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
     """Adopt reports and fail closed when a foreground owner may remain live.
 
     :param manifest: Validated foreground ownership handoff.
@@ -503,7 +507,7 @@ def _plan_ownership(manifest: AftercareManifest) -> _OwnershipPlan:
     """
     remaining: list[DeferredPass] = []
     adopted_passes: list[DeferredPass] = []
-    attempts: list[AftercareAttempt] = []
+    attempts: list[FollowUpAttempt] = []
     adopted: list[WorkerReport] = []
     blocked = False
     for deferred in manifest.deferred_passes:
@@ -539,10 +543,40 @@ def _plan_ownership(manifest: AftercareManifest) -> _OwnershipPlan:
     )
 
 
+def _ownership_wait_seconds() -> int:
+    """Return the bounded grace period for foreground reports to finish.
+
+    :returns: Configured grace period in seconds.
+    :raises ValueError: If the setting is not an integer from zero through one hour.
+    """
+    raw_value = os.environ.get(_OWNERSHIP_WAIT_ENV, "0")
+    if not raw_value.isdigit():
+        raise ValueError(f"{_OWNERSHIP_WAIT_ENV} must be an integer")
+    wait_seconds = int(raw_value)
+    if wait_seconds > _MAX_OWNERSHIP_WAIT_SECONDS:
+        raise ValueError(f"{_OWNERSHIP_WAIT_ENV} must not exceed {_MAX_OWNERSHIP_WAIT_SECONDS}")
+    return wait_seconds
+
+
+def _wait_for_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
+    """Wait for foreground reports without ever launching a duplicate owner.
+
+    :param manifest: Validated foreground ownership handoff.
+    :returns: Adoption and relaunch plan after completion or grace-period expiry.
+    """
+    deadline = time.monotonic() + _ownership_wait_seconds()
+    while True:
+        ownership = _plan_ownership(manifest)
+        remaining_seconds = deadline - time.monotonic()
+        if not ownership.blocked or remaining_seconds <= 0:
+            return ownership
+        time.sleep(min(_OWNERSHIP_POLL_SECONDS, remaining_seconds))
+
+
 def _bounded_log_tail(log_path: Path) -> str:
     """Decode the configured character tail from persisted child output.
 
-    :param log_path: Bounded aftercare log path.
+    :param log_path: Bounded follow-up log path.
     :returns: Latest decoded child-output characters.
     """
     if not log_path.exists():
@@ -554,7 +588,7 @@ def _run_child(command: list[str], environment: dict[str, str], log_path: Path) 
     """Run Pi while persisting only the newest bounded output bytes.
 
     :param command: Trusted Pi argument vector.
-    :param environment: Child environment with aftercare ownership metadata.
+    :param environment: Child environment with follow-up ownership metadata.
     :param log_path: Bounded stdout and stderr destination.
     :returns: Pi child exit code, including negative signal numbers.
     :raises RuntimeError: If the child output pipe is unavailable.
@@ -583,7 +617,7 @@ def _run_child(command: list[str], environment: dict[str, str], log_path: Path) 
 
 def _diagnostics_for_failure(
     *, exit_code: int | None, result_problem: DiagnosticCategory, log_tail: str
-) -> tuple[AftercareDiagnostic, ...]:
+) -> tuple[FollowUpDiagnostic, ...]:
     """Build diagnostics with a distinct provider-capacity row.
 
     :param exit_code: Observed Pi exit code when available.
@@ -592,24 +626,24 @@ def _diagnostics_for_failure(
     :returns: Primary diagnostic followed by optional capacity evidence.
     """
     diagnostics = [
-        AftercareDiagnostic(
+        FollowUpDiagnostic(
             category=result_problem,
             message={
-                "child-exit": f"Pi aftercare child exited with code {exit_code}",
-                "invalid-result": "Pi aftercare child wrote a result that failed strict validation",
-                "missing-result": "Pi aftercare child did not write its runtime result",
+                "child-exit": f"Pi follow-up child exited with code {exit_code}",
+                "invalid-result": "Pi follow-up child wrote a result that failed strict validation",
+                "missing-result": "Pi follow-up child did not write its runtime result",
                 "ownership": "A foreground owner could not be proven stopped; duplicate launch refused",
-                "supervisor-error": "Pi aftercare supervisor raised before obtaining a valid result",
-                "capacity": "Pi aftercare child exhausted provider or worker capacity",
+                "supervisor-error": "Pi follow-up supervisor raised before obtaining a valid result",
+                "capacity": "Pi follow-up child exhausted provider or worker capacity",
             }[result_problem],
         )
     ]
     lowered = log_tail.lower()
     if any(marker in lowered for marker in _CAPACITY_MARKERS):
         diagnostics.append(
-            AftercareDiagnostic(
+            FollowUpDiagnostic(
                 category="capacity",
-                message="Pi aftercare child exhausted provider or worker capacity",
+                message="Pi follow-up child exhausted provider or worker capacity",
             )
         )
     return tuple(diagnostics)
@@ -617,12 +651,12 @@ def _diagnostics_for_failure(
 
 def _failed_result(
     *,
-    manifest: AftercareManifest | None,
-    attempts: tuple[AftercareAttempt, ...],
-    diagnostics: tuple[AftercareDiagnostic, ...],
+    manifest: FollowUpManifest | None,
+    attempts: tuple[FollowUpAttempt, ...],
+    diagnostics: tuple[FollowUpDiagnostic, ...],
     exit_code: int | None,
     log_tail: str,
-) -> AftercareResult:
+) -> FollowUpResult:
     """Build a strict failure with a row for every recoverable pass.
 
     :param manifest: Handoff supplying recoverable pass identity.
@@ -639,7 +673,7 @@ def _failed_result(
             pass_key = (deferred.skill, deferred.pass_name)
             if pass_key not in attempted_passes:
                 failed_attempts.append(_attempt(deferred, "failed", diagnostics[0].message))
-    return AftercareResult(
+    return FollowUpResult(
         status="failed",
         attempts=tuple(failed_attempts),
         diagnostics=diagnostics,
@@ -652,12 +686,12 @@ def _failed_result(
 
 
 def _merge_child_result(
-    child_result: AftercareResult,
-    ownership_attempts: tuple[AftercareAttempt, ...],
+    child_result: FollowUpResult,
+    ownership_attempts: tuple[FollowUpAttempt, ...],
     *,
     exit_code: int,
     log_tail: str,
-) -> AftercareResult:
+) -> FollowUpResult:
     """Attach supervisor lifecycle evidence to a valid model result.
 
     :param child_result: Strict model-written result.
@@ -673,16 +707,16 @@ def _merge_child_result(
             "log_tail": log_tail,
         }
     )
-    return AftercareResult.model_validate(merged.model_dump())
+    return FollowUpResult.model_validate(merged.model_dump())
 
 
-def _load_child_result(path: Path) -> AftercareResult:
+def _load_child_result(path: Path) -> FollowUpResult:
     """Validate model output with the canonical result model.
 
     :param path: Model-written runtime result path.
-    :returns: Strict aftercare result.
+    :returns: Strict follow-up result.
     """
-    return AftercareResult.model_validate_json(path.read_text())
+    return FollowUpResult.model_validate_json(path.read_text())
 
 
 def _supervisor_paths(manifest_path: Path) -> _SupervisorPaths:
@@ -694,15 +728,15 @@ def _supervisor_paths(manifest_path: Path) -> _SupervisorPaths:
     runtime_manifest = _sidecar_path(manifest_path, ".supervised.json")
     return _SupervisorPaths(
         canonical_result=_sidecar_path(manifest_path, ".result.json"),
-        log=_sidecar_path(manifest_path, ".aftercare.log"),
+        log=_sidecar_path(manifest_path, ".follow-up.log"),
         runtime_manifest=runtime_manifest,
         runtime_result=_sidecar_path(runtime_manifest, ".result.json"),
     )
 
 
 def _prelaunch_result(
-    manifest: AftercareManifest, ownership: _OwnershipPlan
-) -> AftercareResult | None:
+    manifest: FollowUpManifest, ownership: _OwnershipPlan
+) -> FollowUpResult | None:
     """Resolve ownership outcomes before child launch.
 
     :param manifest: Validated foreground handoff.
@@ -725,7 +759,7 @@ def _prelaunch_result(
     adopted_findings = any(report.findings for report in ownership.adopted_reports)
     if ownership.deferred_passes or adopted_findings:
         return None
-    return AftercareResult(
+    return FollowUpResult(
         status="complete",
         attempts=ownership.attempts,
         diagnostics=(),
@@ -738,10 +772,10 @@ def _prelaunch_result(
 
 
 def _supervise_child(
-    manifest: AftercareManifest,
+    manifest: FollowUpManifest,
     ownership: _OwnershipPlan,
     paths: _SupervisorPaths,
-) -> AftercareResult:
+) -> FollowUpResult:
     """Convert every remaining child outcome into a strict result.
 
     :param manifest: Validated foreground handoff.
@@ -755,7 +789,7 @@ def _supervise_child(
     _atomic_write(paths.runtime_manifest, f"{runtime_manifest.model_dump_json(indent=2)}\n")
     environment = os.environ.copy()
     environment.pop("SYNTH_SETTER_PI_REVIEW", None)
-    environment["SYNTH_SETTER_PI_REVIEW_AFTERCARE"] = "1"
+    environment["SYNTH_SETTER_PI_REVIEW_FOLLOW_UP"] = "1"
     environment[_RUNTIME_MANIFEST_ENV] = str(paths.runtime_manifest)
     command = build_command(paths.runtime_manifest, ownership.adopted_passes)
     exit_code = _run_child(command, environment, paths.log)
@@ -793,19 +827,19 @@ def _supervise_child(
     )
 
 
-def supervise_aftercare(manifest_path: Path) -> int:
+def supervise_follow_up(manifest_path: Path) -> int:
     """Run one Pi child and atomically guarantee the canonical result sidecar.
 
     :param manifest_path: Original foreground handoff manifest.
-    :returns: Zero for complete or stale aftercare, otherwise one.
+    :returns: Zero for complete or stale follow-up, otherwise one.
     """
     paths = _supervisor_paths(manifest_path)
-    manifest: AftercareManifest | None = None
-    attempts: tuple[AftercareAttempt, ...] = ()
-    result: AftercareResult | None = None
+    manifest: FollowUpManifest | None = None
+    attempts: tuple[FollowUpAttempt, ...] = ()
+    result: FollowUpResult | None = None
     try:
         manifest = load_manifest(manifest_path)
-        ownership = _plan_ownership(manifest)
+        ownership = _wait_for_ownership(manifest)
         attempts = ownership.attempts
         result = _prelaunch_result(manifest, ownership)
         if result is None:
@@ -816,7 +850,7 @@ def supervise_aftercare(manifest_path: Path) -> int:
             manifest=manifest,
             attempts=attempts,
             diagnostics=(
-                AftercareDiagnostic(
+                FollowUpDiagnostic(
                     category="supervisor-error",
                     message=str(error) or type(error).__name__,
                 ),
@@ -830,7 +864,7 @@ def supervise_aftercare(manifest_path: Path) -> int:
                 manifest=manifest,
                 attempts=attempts,
                 diagnostics=(
-                    AftercareDiagnostic(
+                    FollowUpDiagnostic(
                         category="supervisor-error",
                         message="Supervisor exited without constructing a result",
                     ),
@@ -844,15 +878,15 @@ def supervise_aftercare(manifest_path: Path) -> int:
     return 1 if result.status == "failed" else 0
 
 
-def launch_aftercare(manifest_path: Path) -> int:
+def launch_follow_up(manifest_path: Path) -> int:
     """Start a detached Python supervisor and return its PID.
 
-    :param manifest_path: Absolute path to a valid aftercare manifest.
+    :param manifest_path: Absolute path to a valid follow-up manifest.
     :returns: Detached supervisor process identifier.
     """
     load_manifest(manifest_path)
     environment = os.environ.copy()
-    log_path = _sidecar_path(manifest_path, ".aftercare.log")
+    log_path = _sidecar_path(manifest_path, ".follow-up.log")
     with log_path.open("ab") as log_file:
         process = subprocess.Popen(  # noqa: S603
             build_supervisor_command(manifest_path),
@@ -886,12 +920,12 @@ def main() -> int:
     args = _build_parser().parse_args()
     manifest_path = args.manifest.resolve()
     if args.supervise:
-        return supervise_aftercare(manifest_path)
+        return supervise_follow_up(manifest_path)
     if args.dry_run:
         load_manifest(manifest_path)
         sys.stdout.write(f"{json.dumps(build_supervisor_command(manifest_path))}\n")
         return 0
-    sys.stdout.write(f"{launch_aftercare(manifest_path)}\n")
+    sys.stdout.write(f"{launch_follow_up(manifest_path)}\n")
     return 0
 
 

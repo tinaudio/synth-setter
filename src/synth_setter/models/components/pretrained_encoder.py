@@ -150,21 +150,6 @@ def _plain_config_value(value: object) -> object:
 
 
 @jaxtyped(typechecker=beartype)
-def _straight_through_clamp_finite(
-    audio: Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE],
-) -> Float[Tensor, _BATCH_AUDIO_INPUT_SHAPE]:
-    """Clamp finite waveform values while preserving gradients and non-finite values.
-
-    :param audio: Waveform tensor.
-    :returns: Tensor with finite forward values in ``[-1, 1]`` and identity backward.
-    """
-    finite = torch.isfinite(audio)
-    bounded = torch.where(finite, audio.clamp(-1.0, 1.0), audio)
-    straight_through = audio + (bounded - audio).detach()
-    return torch.where(finite, straight_through, audio)
-
-
-@jaxtyped(typechecker=beartype)
 def _verified_checkpoint_dir(checkpoint: str | None, expected_sha256: str | None) -> str:
     """Resolve and verify a checkpoint without mutating its shared cache.
 
@@ -363,26 +348,32 @@ class ClapAudioEncoder(nn.Module):
         single log-mel is taken — the ``np.random`` crops fire only past that window, so
         this path has no randomness to reproduce.
 
-        :param audio: Mono waveform batch at ``sample_rate``.
+        :param audio: Mono or multichannel waveform batch at ``sample_rate``; channels are
+            downmixed by their mean.
         :returns: Log-mel in dB shaped ``(batch, 1, frames, mels)``.
-        :raises ValueError: Audio is empty, on MPS, or exceeds the extractor's
-            deterministic short-audio window.
+        :raises ValueError: Audio is empty, non-finite, outside ``[-1, 1]``, on MPS,
+            or exceeds the extractor's deterministic short-audio window.
         """
-        if audio.ndim == 3:
-            audio = audio.mean(dim=1)
-        elif audio.ndim != 2:
+        if audio.ndim not in (2, 3):
             raise ValueError(
                 f"audio must have shape (batch, [channels,] samples), got {audio.shape}"
             )
+        if audio.ndim == 3 and audio.shape[1] == 0:
+            raise ValueError("audio waveform must have at least one channel")
         if audio.device.type == "mps":
             raise ValueError("CLAP online features do not support MPS float64 FFT")
         if audio.shape[-1] == 0:
             raise ValueError("audio waveform cannot be empty")
+        if not torch.isfinite(audio).all():
+            raise ValueError("audio waveform must contain only finite values")
+        if (audio.abs() > 1.0).any():
+            raise ValueError("audio waveform values must be in [-1, 1]")
+        if audio.ndim == 3:
+            audio = audio.mean(dim=1)
 
-        audio = _straight_through_clamp_finite(audio)
         if self.sample_rate != self.target_sample_rate:
             audio = audio_fn.resample(audio, self.sample_rate, self.target_sample_rate)
-        audio = _straight_through_clamp_finite(audio)
+        # Stored add_embeddings CLAP features preserve finite resampler overshoot.
         length = audio.shape[-1]
         if length > self.max_samples:
             raise ValueError(
@@ -425,7 +416,8 @@ class ClapAudioEncoder(nn.Module):
     ) -> Float[Tensor, _BATCH_EMBEDDING_SHAPE]:
         """Embed a waveform batch with gradient intact all the way to the input.
 
-        :param audio: Mono waveform batch at ``sample_rate``.
+        :param audio: Mono or multichannel waveform batch at ``sample_rate``; channels are
+            downmixed by their mean.
         :returns: Pooled CLAP audio embedding shaped ``(batch, out_dim)``.
         :raises RuntimeError: The Transformers audio branch returns no pooled embedding.
         """

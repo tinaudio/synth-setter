@@ -1,4 +1,4 @@
-"""Real-process behavior tests for detached Pi review aftercare."""
+"""Real-process behavior tests for detached Pi review follow-up."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -14,13 +15,13 @@ from typing import Any, cast
 import pytest
 import sh
 
-from agent._shared.run_pi_review_aftercare import (
+from agent._shared.run_pi_review_follow_up import (
     _MAX_LOG_BYTES,
-    AftercareResult,
+    FollowUpResult,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py"
+SCRIPT = REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py"
 
 
 def _manifest(tmp_path: Path, *, output_path: Path | None = None) -> Path:
@@ -36,7 +37,7 @@ def _manifest(tmp_path: Path, *, output_path: Path | None = None) -> Path:
     }
     if output_path is not None:
         deferred_pass.update(agent_id="agent-foreground", output_path=str(output_path))
-    manifest = review_dir / "aftercare.json"
+    manifest = review_dir / "follow-up.json"
     manifest.write_text(
         json.dumps(
             {
@@ -60,7 +61,7 @@ def _result_path(manifest: Path) -> Path:
 
 
 def _log_path(manifest: Path) -> Path:
-    return Path(f"{manifest}.aftercare.log")
+    return Path(f"{manifest}.follow-up.log")
 
 
 def _valid_result(*, status: str = "complete") -> str:
@@ -73,8 +74,8 @@ def _valid_result(*, status: str = "complete") -> str:
                     "pass_name": "free-pool",
                     "model": "kimi-coding/k3",
                     "status": "success",
-                    "agent_id": "agent-aftercare",
-                    "output_path": ".pi/output/agent-aftercare.jsonl",
+                    "agent_id": "agent-follow-up",
+                    "output_path": ".pi/output/agent-follow-up.jsonl",
                     "detail": "validated report",
                 }
             ],
@@ -94,7 +95,7 @@ def _fake_pi(tmp_path: Path) -> Path:
         "#!/usr/bin/env python3\n"
         "import os, signal, sys, time\n"
         "from pathlib import Path\n"
-        "runtime = Path(os.environ['PI_REVIEW_AFTERCARE_RUNTIME_MANIFEST'])\n"
+        "runtime = Path(os.environ['PI_REVIEW_FOLLOW_UP_RUNTIME_MANIFEST'])\n"
         "result = Path(f'{runtime}.result.json')\n"
         "mode = os.environ['FAKE_PI_MODE']\n"
         "expected = os.environ.get('FAKE_PI_EXPECT_ADOPTED')\n"
@@ -153,8 +154,8 @@ def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
     return 0
 
 
-def _read_result(manifest: Path) -> AftercareResult:
-    return AftercareResult.model_validate_json(_result_path(manifest).read_text())
+def _read_result(manifest: Path) -> FollowUpResult:
+    return FollowUpResult.model_validate_json(_result_path(manifest).read_text())
 
 
 def _wait_for_path(path: Path, *, timeout: float = 5) -> None:
@@ -393,7 +394,7 @@ def test_supervisor_adopts_valid_foreground_output_without_duplicate_launch(
 def test_supervisor_adopted_findings_reach_child_with_no_relaunch_instruction(
     tmp_path: Path,
 ) -> None:
-    """Pass adopted findings to aftercare with an explicit no-relaunch contract.
+    """Pass adopted findings to follow-up with an explicit no-relaunch contract.
 
     :param tmp_path: Temporary review root and fake Pi executable.
     """
@@ -429,7 +430,7 @@ def test_supervisor_adopted_findings_reach_child_with_no_relaunch_instruction(
 
 
 def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_path: Path) -> None:
-    """Keep adopted passes successful when another foreground owner blocks aftercare.
+    """Keep adopted passes successful when another foreground owner blocks follow-up.
 
     :param tmp_path: Temporary review root.
     """
@@ -467,6 +468,47 @@ def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_pat
         ("correctness-review", "adopted-foreground-result"),
         ("code-health", "failed"),
     ]
+
+
+def test_supervisor_waits_for_delayed_foreground_report_without_duplicate_launch(
+    tmp_path: Path,
+) -> None:
+    """Adopt a report that finishes during the bounded ownership grace period.
+
+    :param tmp_path: Temporary review root and delayed foreground output.
+    """
+    launch_marker = tmp_path / "pi-launched"
+    pi = _fake_pi(tmp_path)
+    pi.write_text(
+        pi.read_text().replace("runtime =", f"Path({str(launch_marker)!r}).touch()\nruntime =")
+    )
+    foreground_output = tmp_path / "delayed.jsonl"
+    manifest = _manifest(tmp_path, output_path=foreground_output)
+    report = {
+        "skill": "correctness-review",
+        "target": "PR #2174",
+        "findings": [],
+        "what_looks_good": ["The delayed foreground report validates."],
+    }
+
+    def write_report() -> None:
+        time.sleep(0.5)
+        event = {"message": {"role": "assistant", "content": json.dumps(report)}}
+        foreground_output.write_text(json.dumps(event) + "\n")
+
+    writer = threading.Thread(target=write_report)
+    writer.start()
+    environment = _environment(tmp_path, mode="valid", foreground_stopped=False)
+    environment["PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"] = "1"
+    try:
+        completed = _run_supervisor(manifest, environment)
+    finally:
+        writer.join()
+
+    assert completed == 0
+    assert not launch_marker.exists()
+    statuses = [attempt.status for attempt in _read_result(manifest).attempts]
+    assert statuses == ["adopted-foreground-result"]
 
 
 def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) -> None:
@@ -514,18 +556,18 @@ def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path
     assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
 
 
-def test_aftercare_result_failed_status_requires_diagnostic() -> None:
+def test_follow_up_result_failed_status_requires_diagnostic() -> None:
     """Reject a failed model result without actionable evidence."""
     payload = json.loads(_valid_result(status="failed"))
 
     with pytest.raises(ValueError, match="failed result requires a diagnostic"):
-        AftercareResult.model_validate_json(json.dumps(payload))
+        FollowUpResult.model_validate_json(json.dumps(payload))
 
 
-def test_aftercare_result_rejects_model_written_extra_fields() -> None:
+def test_follow_up_result_rejects_model_written_extra_fields() -> None:
     """Apply the same strict result model to model-written JSON."""
     payload = json.loads(_valid_result())
     payload["unexpected"] = True
 
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
-        AftercareResult.model_validate_json(json.dumps(payload))
+        FollowUpResult.model_validate_json(json.dumps(payload))

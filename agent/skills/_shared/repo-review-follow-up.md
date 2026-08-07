@@ -1,4 +1,4 @@
-# Deferred Pi review aftercare
+# Deferred Pi review follow-up
 
 Process only the deferred passes in the runtime manifest named by the launch
 prompt. The Python supervisor, not this model, owns the canonical
@@ -11,7 +11,7 @@ not present in the runtime manifest.
 1. Validate the runtime manifest before using it:
 
    ```bash
-   ./.venv/bin/python agent/_shared/run_pi_review_aftercare.py <manifest> --dry-run
+   ./.venv/bin/python agent/_shared/run_pi_review_follow_up.py <manifest> --dry-run
    ```
 
 2. Fetch the PR's current `headRefOid` and state. If the PR is not open or its
@@ -44,14 +44,14 @@ not present in the runtime manifest.
    drift, record `stale` and post nothing. For `mode: "no-comments"`, retain the
    late findings in the runtime result without GitHub writes. For `mode: "full"`,
    submit one `COMMENT` review through `agent/skills/_shared/post_review.py`.
-   Its body must identify late Codex-verified aftercare findings and include the
+   Its body must identify late Codex-verified follow-up findings and include the
    originating skill/model audit rows. Never approve or request changes from
-   aftercare; each BLOCK and WARN remains an unresolved inline thread. Late NITs
+   follow-up; each BLOCK and WARN remains an unresolved inline thread. Late NITs
    go under a `## Nits` body section, never inline — the same advisory contract
    the foreground uses.
 
 8. Write exactly one strict JSON object atomically to `<manifest>.result.json`.
-   The supervisor validates it with `AftercareResult`, merges its ownership
+   The supervisor validates it with `FollowUpResult`, merges its ownership
    audit, captures the Pi exit code and bounded log tail, and atomically publishes
    the canonical result. Use this shape with no additional fields:
 
@@ -95,4 +95,4 @@ not present in the runtime manifest.
 
 Do not modify the foreground manifest, source checkout, or unrelated GitHub
 metadata. The supervisor always persists child stdout and stderr in the bounded
-`<foreground-manifest>.aftercare.log`; no aftercare output is discarded.
+`<foreground-manifest>.follow-up.log`; no follow-up output is discarded.

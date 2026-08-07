@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from synth_setter.model_cache import cache_r2_file, embedding_model_dir, synth_setter_cache_dir
+from synth_setter.model_cache import (
+    cache_r2_file,
+    checkpoint_files_sha256,
+    embedding_model_dir,
+    synth_setter_cache_dir,
+)
 
 
 def test_synth_setter_cache_dir_without_xdg_uses_home_cache(
@@ -37,6 +42,24 @@ def test_synth_setter_cache_dir_with_xdg_uses_override(
     monkeypatch.setenv("XDG_CACHE_HOME", str(xdg_cache))
 
     assert synth_setter_cache_dir() == xdg_cache / "synth-setter"
+
+
+def test_checkpoint_files_sha256_ignores_unselected_sibling_artifacts(tmp_path: Path) -> None:
+    """A shared snapshot hashes only files owned by the selected model variant.
+
+    :param tmp_path: Snapshot root containing two model variants.
+    """
+    selected = tmp_path / "tiny" / "args.json"
+    selected.parent.mkdir()
+    selected.write_text("tiny")
+    sibling = tmp_path / "large" / "args.json"
+    sibling.parent.mkdir()
+    sibling.write_text("large-v1")
+
+    expected = checkpoint_files_sha256(tmp_path, [selected])
+    sibling.write_text("large-v2")
+
+    assert checkpoint_files_sha256(tmp_path, [selected]) == expected
 
 
 def test_embedding_model_dir_places_model_under_shared_embedding_cache(

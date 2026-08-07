@@ -70,16 +70,16 @@ main() {
   prompt="Execute ${skill} using its Pi-native execution path. ${target_instruction} \
 The launcher set SYNTH_SETTER_PI_REVIEW=1; execute the skill in this session \
 and do not invoke run_pi_review.sh again. Follow the skill exactly, use the \
-absolute PI_REVIEW_AFTERCARE_MANIFEST path for any deferred-pass handoff, and \
+absolute PI_REVIEW_FOLLOW_UP_MANIFEST path for any deferred-pass handoff, and \
 return only the specified foreground deliverable."
 
   export SYNTH_SETTER_PI_REVIEW=1
-  local aftercare_manifest review_root run_id transcript
+  local follow_up_manifest review_root run_id transcript
   review_root="$(pwd)/.agent-reviews"
   run_id="$(date -u +%Y%m%dT%H%M%SZ).$$"
   transcript="${review_root}/pi-review-host.${run_id}.jsonl"
-  aftercare_manifest="${review_root}/pi-review-aftercare.${run_id}.json"
-  export PI_REVIEW_AFTERCARE_MANIFEST="${aftercare_manifest}"
+  follow_up_manifest="${review_root}/pi-review-follow-up.${run_id}.json"
+  export PI_REVIEW_FOLLOW_UP_MANIFEST="${follow_up_manifest}"
   umask 077
   mkdir -p "${review_root}"
   echo "Live Pi transcript: ${transcript}" >&2
@@ -103,19 +103,32 @@ return only the specified foreground deliverable."
     echo "Pi review host failed; inspect live transcript: ${transcript}" >&2
     return 1
   fi
-  if [[ -s "${PI_REVIEW_AFTERCARE_MANIFEST}" ]]; then
-    local aftercare_pid
-    if aftercare_pid="$(
-      "${review_python}" agent/_shared/run_pi_review_aftercare.py \
-        "${PI_REVIEW_AFTERCARE_MANIFEST}"
-    )"; then
+  if [[ -s "${PI_REVIEW_FOLLOW_UP_MANIFEST}" ]]; then
+    if [[ "${CI:-}" == "true" ]]; then
+      if ! "${review_python}" agent/_shared/run_pi_review_follow_up.py \
+        --supervise "${PI_REVIEW_FOLLOW_UP_MANIFEST}"; then
+        echo \
+          "Synchronous Pi review follow-up failed: ${PI_REVIEW_FOLLOW_UP_MANIFEST}" \
+          >&2
+        return 1
+      fi
       echo \
-        "Deferred Pi review aftercare: ${PI_REVIEW_AFTERCARE_MANIFEST} (PID ${aftercare_pid})" \
+        "Synchronous Pi review follow-up completed: ${PI_REVIEW_FOLLOW_UP_MANIFEST}" \
         >&2
     else
-      echo \
-        "Deferred Pi review aftercare failed to launch: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
-        >&2
+      local follow_up_pid
+      if follow_up_pid="$(
+        "${review_python}" agent/_shared/run_pi_review_follow_up.py \
+          "${PI_REVIEW_FOLLOW_UP_MANIFEST}"
+      )"; then
+        echo \
+          "Deferred Pi review follow-up: ${PI_REVIEW_FOLLOW_UP_MANIFEST} (PID ${follow_up_pid})" \
+          >&2
+      else
+        echo \
+          "Deferred Pi review follow-up failed to launch: ${PI_REVIEW_FOLLOW_UP_MANIFEST}" \
+          >&2
+      fi
     fi
   fi
   printf '%s\n' "${final_output}"

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
+from synth_setter.clap import DEFAULT_CLAP_TRAINING_CHECKPOINT, resolve_clap_checkpoint
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
 from synth_setter.pipeline.data.add_embeddings import load_clap_audio_encoder
 
@@ -33,7 +33,7 @@ def test_pinned_clap_online_matches_add_embeddings(
     samples = np.arange(_SAMPLE_RATE, dtype=np.float32)
     waveform = np.sin(samples * 0.01, dtype=np.float32)[None, :]
 
-    checkpoint_dir = resolve_clap_checkpoint(DEFAULT_CLAP_CHECKPOINT)
+    checkpoint_dir = resolve_clap_checkpoint(DEFAULT_CLAP_TRAINING_CHECKPOINT)
     add_embeddings_encoder = load_clap_audio_encoder(checkpoint_dir, "cpu")
     expected = add_embeddings_encoder(waveform, _SAMPLE_RATE)
     del add_embeddings_encoder

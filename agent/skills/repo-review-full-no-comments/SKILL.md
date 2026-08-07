@@ -17,7 +17,7 @@ Same analysis as `/repo-review-full`, with two differences:
    orchestrator reviews the local branch vs. the default branch.
 
 The foreground dry run posts nothing. On an existing PR, deferred second passes
-may later post only new Codex-verified findings through detached aftercare; this
+may later post only new Codex-verified findings through detached follow-up; this
 preserves the sub-ten-minute response without dropping slow independent review.
 
 The review implementation is Pi-native. Claude Code and Codex invoke the same
@@ -163,7 +163,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 > Do NOT invoke `post_review.py`. Do NOT call any `gh api .../reviews` or
 > `gh pr review` command. The foreground step has zero GitHub side effects;
-> `repo-review-aftercare.md` owns the narrowly scoped late-finding exception.
+> `repo-review-follow-up.md` owns the narrowly scoped late-finding exception.
 >
 > Transform the JSON payload at the exact printed findings path into a Markdown
 > report. The
@@ -279,7 +279,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 ## Notes
 
 - This skill's foreground result is side-effect-free on GitHub. For an existing
-  PR, detached aftercare may post one review containing only new Codex-verified
+  PR, detached follow-up may post one review containing only new Codex-verified
   findings from passes deferred at the response deadline. It rechecks the exact
   head immediately before posting. Local-branch mode remains fully side-effect-free.
 - A non-PASS report starts a remediation loop, not a license to retry the same

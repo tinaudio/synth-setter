@@ -1,52 +1,92 @@
-name: Claude Repo Review (Full)
+name: Pi Repo Review (Full)
 
-on:
+"on":
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
-# One full review per PR; a new push supersedes the in-flight review of the stale diff.
 concurrency:
-  group: claude-repo-review-full-${{ github.event.pull_request.number }}
+  group: pi-repo-review-full-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   repo-review-full:
+    if: >-
+      ${{ github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'ktinubu' &&
+      github.actor == 'ktinubu' &&
+      github.triggering_actor == 'ktinubu' }}
     runs-on: ubuntu-latest
-    # repo-review-full fans out one agent per applicable checklist, so it needs
-    # generous headroom.
     timeout-minutes: 55
     permissions:
+      actions: read
+      checks: read
       contents: read
       pull-requests: write
-      issues: write
-      id-token: write
 
     steps:
-      # fetch-depth: 0 — one fan-out agent reads git blame/history for context.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      # The /repo-review-full skill is repo-local (.claude/skills -> agent/skills),
-      # so no plugin_marketplaces is needed; the action discovers it as a project skill.
-      - name: Run Claude repo-review-full
-        id: repo-review-full
-        uses: anthropics/claude-code-action@12531344451323133b0493233c759991ac61da12 # v1
+      - name: Checkout review skills
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          additional_permissions: |
-            actions: read
-          # /repo-review-full posts inline comments by default; no extra flag needed.
-          prompt: >-
-            /repo-review-full ${{ github.event.pull_request.number }}
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          repository: tinaudio/skills
+          ref: 893eb09fd364093ede46cda4892aa80e0be43a63
+          token: ${{ secrets.GIT_PAT }}
+          path: .review-skills
+          persist-credentials: false
 
-      - name: Upload Claude failure result
-        id: upload-claude-failure
-        if: ${{ failure() && steps.repo-review-full.outputs.execution_file != '' }}
-        uses: ./.github/actions/upload-claude-failure
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          execution-file: ${{ steps.repo-review-full.outputs.execution_file }}
-          artifact-name: claude-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          node-version: 24.15.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: 0.11.28
+          enable-cache: false
+
+      - name: Configure Pi authentication
+        env:
+          PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+        run: |
+          set -euo pipefail
+          install -d -m 700 "${PI_CODING_AGENT_DIR}"
+          install -m 600 /dev/null "${PI_CODING_AGENT_DIR}/auth.json"
+          printf '%s' "${PI_AUTH_JSON}" > "${PI_CODING_AGENT_DIR}/auth.json"
+
+      - name: Install Pi review runtime
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+        run: |
+          set -euo pipefail
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.83.0
+          pi install npm:@tintinweb/pi-subagents@0.14.1
+          uv python install 3.12.13
+          uv venv --python 3.12.13
+          uv pip install --python .venv/bin/python pydantic==2.13.4 sh==2.2.2
+
+      - name: Run Pi repo-review-full
+        env:
+          CI: "true"
+          GH_TOKEN: ${{ github.token }}
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+          PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS: "900"
+          PI_REVIEW_SKILLS_ROOT: ${{ github.workspace }}/.review-skills/codex/synth-setter-skills
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash agent/_shared/run_pi_review.sh repo-review-full --target "${PR_NUMBER}"
+
+      - name: Upload Pi review audit
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pi-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .agent-reviews/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

@@ -16,7 +16,7 @@ docs:
     description: uv sync command surface, relock cadence, Linux resync flip
     sources:
       - pattern: "pyproject.toml"
-        covers: "MATPAC++ runtime dependency."
+        covers: "Pinned embedding-model runtime dependencies."
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
@@ -25,6 +25,18 @@ docs:
         covers: "uv-lock hook (astral-sh/uv-pre-commit) relocking uv.lock on every commit; the local lock-sync gate that complements uv-lock-check.yml"
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
+
+  - doc: docs/design/conditioning-column-statistics.md
+    description: Measured cached-conditioning scales and normalization recommendations
+    sources:
+      - pattern: "scripts/dev/characterise_conditioning_columns.py"
+        covers: "Streaming Lance statistics and markdown report generation"
+      - pattern: "src/synth_setter/configs/conditioning/*.yaml"
+        covers: "Materialized conditioning-column names and channel-first shapes"
+      - pattern: "src/synth_setter/models/components/pretrained_encoder.py"
+        covers: "CLAP get_audio_features output path"
+      - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
+        covers: "T5Gemma float32 reproducibility rationale"
 
   - doc: docs/reference/matpac-plus-embeddings.md
     description: MATPAC encoder interface
@@ -35,6 +47,20 @@ docs:
         covers: "Four-second MATPAC++ generic conditioning profile"
       - pattern: "pyproject.toml"
         covers: "The commit-pinned `tinymu` runtime dependency"
+
+  - doc: docs/reference/pupujepa-embeddings.md
+    description: PupuJEPA Tiny and Large encoder interface
+    sources:
+      - pattern: "src/synth_setter/pupujepa.py"
+        covers: "Pinned artifact identity and frame geometry"
+      - pattern: "src/synth_setter/models/components/pupujepa_encoder.py"
+        covers: "Shared Torch frontend and frozen teacher"
+      - pattern: "src/synth_setter/pipeline/data/pupujepa.py"
+        covers: "Bounded offline Lance adapter"
+      - pattern: "src/synth_setter/configs/conditioning/pupujepa_*.yaml"
+        covers: "PupuJEPA conditioning profiles"
+      - pattern: "pyproject.toml"
+        covers: "Exact timm runtime pin"
 
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference
@@ -58,8 +84,16 @@ docs:
         covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools + devcontainer-tools-dev-user publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission"
       - pattern: "studiorack.json"
         covers: "Exact image VST3 package versions and bundle names"
+      - pattern: "studiorack.lock.json"
+        covers: "Trusted image VST3 artifact identities"
       - pattern: "package*.json"
         covers: "Locked Studiorack CLI and core dependency graph"
+      - pattern: "src/synth_setter/plugin_integrity.py"
+        covers: "Managed bundle content seals"
+      - pattern: "src/synth_setter/plugin_runtime.py"
+        covers: "Managed alias ownership records"
+      - pattern: "src/synth_setter/plugin_runtime.py"
+        covers: "Managed bundle runtime leases and package identity"
       - pattern: "src/synth_setter/plugin_manager.py"
         covers: "Managed bundle resolution and stable alias creation"
       - pattern: "src/synth_setter/cli/plugins.py"
@@ -169,6 +203,10 @@ docs:
         covers: "Registry-driven Lance embedding augmentation with resumable artifact and index identity."
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
+      - pattern: "src/synth_setter/pipeline/data/meanaudio.py"
+        covers: "Checkpoint verification and deterministic 16 kHz latent encoding."
+      - pattern: "src/synth_setter/configs/conditioning/meanaudio_16k.yaml"
+        covers: "Four-second MeanAudio EmbeddingPool conditioning profile."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
       - pattern: "src/synth_setter/features/**"
@@ -392,6 +430,9 @@ docs:
         scope: "local-dev"
       - pattern: "studiorack.json"
         covers: "Local VST3 package and bundle pins"
+        scope: "local-dev"
+      - pattern: "studiorack.lock.json"
+        covers: "Local VST3 artifact identities"
         scope: "local-dev"
       - pattern: "package*.json"
         covers: "Pinned Studiorack CLI installation"
@@ -619,6 +660,14 @@ docs:
         covers: "Managed and explicit-path plugin registration"
       - pattern: "studiorack.json"
         covers: "Package identity used by managed registration"
+      - pattern: "studiorack.lock.json"
+        covers: "Artifact identity required by managed installation"
+      - pattern: "src/synth_setter/plugin_integrity.py"
+        covers: "Managed artifact-lock validation"
+      - pattern: "src/synth_setter/plugin_integrity.py"
+        covers: "Managed bundle content seals"
+      - pattern: "src/synth_setter/plugin_runtime.py"
+        covers: "Managed bundle runtime leases and package identity"
       - pattern: "src/synth_setter/plugin_manager.py"
         covers: "Managed package resolution and checkout alias creation"
       - pattern: "src/synth_setter/data/vst/introspect.py"
@@ -718,7 +767,7 @@ docs:
     description: Workflow catalog, secrets table, concurrency gotchas
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "Catalog row (repo-owned /repo-review-full on every PR incl. drafts, posts inline comments), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
+        covers: "Pi review workflow"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
@@ -727,6 +776,6 @@ docs:
     description: Credential inventory + rotation/verification procedures
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row with its rotation/verification procedure"
+        covers: "Pi review credential rotation procedures"
       - pattern: ".github/workflows/claude.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

@@ -21,7 +21,7 @@ from unittest import mock
 import pytest
 import yaml
 
-from agent._shared.run_pi_review_aftercare import AftercareManifest
+from agent._shared.run_pi_review_follow_up import FollowUpManifest
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -283,14 +283,14 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     # Tintin's Agent tool rejects a call without `description`; omitting it here
     # cost every worker launch one rejected round-trip (#2683).
     assert re.search(r"`description: [^`]+`", text)
-    assert "${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments" in text
+    assert "${PI_REVIEW_FOLLOW_UP_MANIFEST%.json}.assignments" in text
     assert re.search(r"never\s+put a glob in a worker prompt", text)
     assert re.search(r"never repair assignment paths\s+with", text)
     assert "480-second foreground deadline" in text
     assert "one validated report per selected skill" in text
     assert "resume the same worker once" in text
     assert "Do not repeat the review" in text
-    assert "unfinished second pass to aftercare" in text
+    assert "unfinished second pass to the follow-up workflow" in text
     assert re.search(r"late Codex-verified\s+findings", text)
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
@@ -300,7 +300,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "at most 6 turns per" in text
     assert "parallel Codex verification wave" in text
     assert "Record its audit status as `deferred`" in text
-    assert "ownership transfer" in text
+    assert re.search(r"ownership\s+transfer", text)
     assert "exactly one model call owns each pass" in text
     assert "agent_id" in text
     assert "output_path" in text
@@ -390,24 +390,24 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -> None:
+def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -> None:
     """Drive foreground completion through the real detached-handoff path.
 
-    :param tmp_path: Temporary fake Pi executable and aftercare marker.
+    :param tmp_path: Temporary fake Pi executable and follow-up marker.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent/_shared/run_pi_review.sh"
-    marker = tmp_path / "aftercare-ran"
+    marker = tmp_path / "follow-up-ran"
     manifest_path_file = tmp_path / "manifest-path"
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/bin/bash\n"
-        'if [[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]; then\n'
-        '  touch "${AFTERCARE_MARKER}"\n'
+        'if [[ "${SYNTH_SETTER_PI_REVIEW_FOLLOW_UP:-}" == 1 ]]; then\n'
+        '  touch "${FOLLOW_UP_MARKER}"\n'
         "  exit 0\n"
         "fi\n"
-        'printf \'%s\\n\' "${PI_REVIEW_AFTERCARE_MANIFEST}" > "${MANIFEST_PATH_FILE}"\n'
-        "cat > \"${PI_REVIEW_AFTERCARE_MANIFEST}\" <<'JSON'\n"
+        'printf \'%s\\n\' "${PI_REVIEW_FOLLOW_UP_MANIFEST}" > "${MANIFEST_PATH_FILE}"\n'
+        "cat > \"${PI_REVIEW_FOLLOW_UP_MANIFEST}\" <<'JSON'\n"
         '{"version":1,"mode":"no-comments","repo":"tinaudio/synth-setter",'
         '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
@@ -429,7 +429,8 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
         _cwd=REPO_ROOT,
         _env={
             **os.environ,
-            "AFTERCARE_MARKER": str(marker),
+            "CI": "",
+            "FOLLOW_UP_MARKER": str(marker),
             "MANIFEST_PATH_FILE": str(manifest_path_file),
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
         },
@@ -447,9 +448,184 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
         assert marker.exists()
     finally:
         manifest.unlink(missing_ok=True)
-        Path(f"{manifest}.aftercare.log").unlink(missing_ok=True)
+        Path(f"{manifest}.follow-up.log").unlink(missing_ok=True)
         Path(f"{manifest}.result.json").unlink(missing_ok=True)
         transcript.unlink(missing_ok=True)
+
+
+def _write_ci_follow_up_repo(tmp_path: Path) -> Path:
+    """Create a minimal launcher checkout with the real follow-up consumer.
+
+    :param tmp_path: Temporary root for the checkout and fake executable.
+    :returns: Minimal repository root.
+    """
+    repo_root = tmp_path / "repo"
+    shared = repo_root / "agent" / "_shared"
+    shared.mkdir(parents=True)
+    launcher = shared / "run_pi_review.sh"
+    launcher.write_text((REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text())
+    launcher.chmod(0o755)
+    for filename in ("pi_review_routing.py", "run_pi_review_follow_up.py"):
+        (shared / filename).write_text((REPO_ROOT / "agent/_shared" / filename).read_text())
+    return repo_root
+
+
+def _follow_up_success_payload() -> str:
+    """Return a valid result consumed by the real follow-up supervisor.
+
+    :returns: Serialized successful follow-up result.
+    """
+    return json.dumps(
+        {
+            "status": "complete",
+            "attempts": [
+                {
+                    "skill": "correctness-review",
+                    "pass_name": "free-pool",
+                    "model": "kimi-coding/k3",
+                    "status": "success",
+                    "agent_id": "agent-follow-up",
+                    "output_path": ".pi/output/agent-follow-up.jsonl",
+                    "detail": "validated report",
+                }
+            ],
+            "diagnostics": [],
+            "late_findings": [],
+            "posted_review_url": None,
+            "child_exit_code": None,
+            "log_tail": "",
+            "completed_at": "2026-08-02T00:00:00Z",
+        }
+    )
+
+
+def _deferred_manifest_payload() -> str:
+    """Return a valid manifest that requires one follow-up pass.
+
+    :returns: Serialized follow-up manifest.
+    """
+    return json.dumps(
+        {
+            "version": 1,
+            "mode": "full",
+            "repo": "tinaudio/synth-setter",
+            "pr_number": 2174,
+            "base_sha": "a" * 40,
+            "head_sha": "b" * 40,
+            "target": "PR #2174",
+            "deferred_passes": [
+                {
+                    "skill": "correctness-review",
+                    "pass_name": "free-pool",
+                    "origin": "primary",
+                    "model": "kimi-coding/k3",
+                    "verification_model": "openai-codex/gpt-5.6-sol",
+                    "thinking": "high",
+                }
+            ],
+            "foreground_fingerprints": [],
+        }
+    )
+
+
+def _write_manifest_pi(tmp_path: Path) -> None:
+    """Create a fake Pi that drives foreground and real follow-up protocols.
+
+    :param tmp_path: Temporary directory placed first on PATH.
+    """
+    final_event = json.dumps(
+        {
+            "type": "message_end",
+            "message": {"role": "assistant", "content": "foreground-complete"},
+        }
+    )
+    script = f"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+if os.environ.get("SYNTH_SETTER_PI_REVIEW_FOLLOW_UP") == "1":
+    if os.environ.get("FOLLOW_UP_FAIL") == "1":
+        raise SystemExit(9)
+    runtime = Path(os.environ["PI_REVIEW_FOLLOW_UP_RUNTIME_MANIFEST"])
+    Path(str(runtime) + ".result.json").write_text({_follow_up_success_payload()!r})
+    raise SystemExit(0)
+manifest = Path(os.environ["PI_REVIEW_FOLLOW_UP_MANIFEST"])
+Path(os.environ["MANIFEST_PATH_FILE"]).write_text(str(manifest))
+manifest.write_text({_deferred_manifest_payload()!r})
+print({final_event!r})
+"""
+    pi = tmp_path / "pi"
+    pi.write_text(script)
+    pi.chmod(0o755)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_ci_waits_for_supervised_follow_up(tmp_path: Path) -> None:
+    """CI returns the foreground result only after real follow-up succeeds.
+
+    :param tmp_path: Temporary minimal repository and fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    repo_root = _write_ci_follow_up_repo(tmp_path)
+    _write_manifest_pi(tmp_path)
+    manifest_path_file = tmp_path / "manifest-path"
+
+    result = sh.Command(str(repo_root / "agent/_shared/run_pi_review.sh"))(
+        "repo-review-full",
+        "--target",
+        "2174",
+        _cwd=repo_root,
+        _env={
+            **os.environ,
+            "CI": "true",
+            "MANIFEST_PATH_FILE": str(manifest_path_file),
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "SYNTH_SETTER_PI_REVIEW": "",
+        },
+    )
+
+    assert str(result).strip() == "foreground-complete"
+    manifest = Path(manifest_path_file.read_text())
+    follow_up_result = json.loads(Path(f"{manifest}.result.json").read_text())
+    assert follow_up_result["status"] == "complete"
+    assert follow_up_result["child_exit_code"] == 0
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_ci_follow_up_failure_withholds_foreground_result(
+    tmp_path: Path,
+) -> None:
+    """CI fails closed instead of publishing success when real follow-up fails.
+
+    :param tmp_path: Temporary minimal repository and fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    repo_root = _write_ci_follow_up_repo(tmp_path)
+    _write_manifest_pi(tmp_path)
+    manifest_path_file = tmp_path / "manifest-path"
+    stdout = io.BytesIO()
+
+    with pytest.raises(sh.ErrorReturnCode):
+        sh.Command(str(repo_root / "agent/_shared/run_pi_review.sh"))(
+            "repo-review-full",
+            "--target",
+            "2174",
+            _cwd=repo_root,
+            _env={
+                **os.environ,
+                "FOLLOW_UP_FAIL": "1",
+                "CI": "true",
+                "MANIFEST_PATH_FILE": str(manifest_path_file),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "SYNTH_SETTER_PI_REVIEW": "",
+            },
+            _out=stdout,
+        )
+
+    manifest = Path(manifest_path_file.read_text())
+    follow_up_result = json.loads(Path(f"{manifest}.result.json").read_text())
+    assert follow_up_result["status"] == "failed"
+    assert stdout.getvalue() == b""
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -572,7 +748,7 @@ def test_pi_review_launcher_rejects_zero_pr_number(tmp_path: Path) -> None:
         )
 
 
-def test_aftercare_manifest_free_pool_codex_requires_fallback_origin() -> None:
+def test_follow_up_manifest_free_pool_codex_requires_fallback_origin() -> None:
     """Distinguish independent free-pool coverage from an explicit Codex fallback."""
     base = {
         "version": 1,
@@ -594,49 +770,49 @@ def test_aftercare_manifest_free_pool_codex_requires_fallback_origin() -> None:
     }
 
     with pytest.raises(ValueError, match="origin does not match"):
-        AftercareManifest.model_validate_json(json.dumps({**base, "deferred_passes": [primary]}))
+        FollowUpManifest.model_validate_json(json.dumps({**base, "deferred_passes": [primary]}))
 
     fallback = {**primary, "origin": "codex-fallback"}
-    manifest = AftercareManifest.model_validate_json(
+    manifest = FollowUpManifest.model_validate_json(
         json.dumps({**base, "deferred_passes": [fallback]})
     )
     assert manifest.deferred_passes[0].origin == "codex-fallback"
 
 
-def test_pi_review_launcher_declares_detached_aftercare_contract() -> None:
+def test_pi_review_launcher_declares_detached_follow_up_contract() -> None:
     """Keep deferred second passes auditable after the foreground host exits."""
     launcher = (REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text()
-    aftercare = (REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py").read_text()
+    follow_up = (REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py").read_text()
 
-    assert "PI_REVIEW_AFTERCARE_MANIFEST" in launcher
+    assert "PI_REVIEW_FOLLOW_UP_MANIFEST" in launcher
     assert 'export PI_REVIEW_PYTHON="${review_python}"' in launcher
-    assert '"${review_python}" agent/_shared/run_pi_review_aftercare.py' in launcher
-    assert '"--supervise"' in aftercare
-    assert "start_new_session" in aftercare
-    launch_source = aftercare.split("def launch_aftercare", 1)[1]
+    assert '"${review_python}" agent/_shared/run_pi_review_follow_up.py' in launcher
+    assert '"--supervise"' in follow_up
+    assert "start_new_session" in follow_up
+    launch_source = follow_up.split("def launch_follow_up", 1)[1]
     assert "stdout=log_file" in launch_source
     assert "stderr=subprocess.STDOUT" in launch_source
-    assert "openai-codex" in aftercare
-    assert "gpt-5.6-terra" in aftercare
-    assert "anthropic" not in aftercare.lower()
+    assert "openai-codex" in follow_up
+    assert "gpt-5.6-terra" in follow_up
+    assert "anthropic" not in follow_up.lower()
     analysis = (REPO_ROOT / "agent/skills/_shared/repo-review-full-analysis.md").read_text()
     assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt' in analysis
     assert '`pass_name: "codex"`' in analysis
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Path) -> None:
-    """Drive the real aftercare entrypoint through manifest validation and process launch.
+def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Path) -> None:
+    """Drive the real follow-up entrypoint through manifest validation and process launch.
 
     :param tmp_path: Temporary directory containing the fake Pi executable.
     """
-    launcher = REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py"
-    manifest = REPO_ROOT / ".agent-reviews/test-aftercare-manifest.json"
-    marker = tmp_path / "aftercare-ran"
+    launcher = REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py"
+    manifest = REPO_ROOT / ".agent-reviews/test-follow-up-manifest.json"
+    marker = tmp_path / "follow-up-ran"
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/bin/bash\n"
-        '[[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]\n'
+        '[[ "${SYNTH_SETTER_PI_REVIEW_FOLLOW_UP:-}" == 1 ]]\n'
         '[[ -z "${SYNTH_SETTER_PI_REVIEW:-}" ]]\n'
         f"touch {marker}\n"
     )
@@ -693,7 +869,7 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
         _assert_process_terminated(pid, timeout=2)
     finally:
         manifest.unlink(missing_ok=True)
-        Path(f"{manifest}.aftercare.log").unlink(missing_ok=True)
+        Path(f"{manifest}.follow-up.log").unlink(missing_ok=True)
         Path(f"{manifest}.result.json").unlink(missing_ok=True)
 
 

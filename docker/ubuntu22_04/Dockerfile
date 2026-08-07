@@ -409,12 +409,17 @@ COPY --from=node:24.15.0-bookworm-slim /usr/local/ /usr/local/
 COPY --from=synth-setter-src /home/build/synth-setter/package.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/studiorack.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack.lock.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/studiorack-cardinal.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack-cardinal.lock.json /artifacts/studiorack/
 COPY --from=synth-setter-src /home/build/synth-setter/scripts/studiorack/patch-core.mjs /artifacts/studiorack/scripts/studiorack/patch-core.mjs
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/__init__.py /artifacts/studiorack-src/synth_setter/__init__.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_integrity.py /artifacts/studiorack-src/synth_setter/plugin_integrity.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_manager.py /artifacts/studiorack-src/synth_setter/plugin_manager.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_runtime.py /artifacts/studiorack-src/synth_setter/plugin_runtime.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/__init__.py /artifacts/studiorack-src/synth_setter/cli/__init__.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/plugins.py /artifacts/studiorack-src/synth_setter/cli/plugins.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
 WORKDIR /artifacts/studiorack
 RUN npm ci
 ENV STUDIORACK_PLUGINS_DIR=/opt/studiorack
@@ -430,7 +435,8 @@ RUN if [[ "${TARGETARCH:-}" == "amd64" ]]; then \
       PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
         --manifest /artifacts/studiorack/studiorack.json \
         --links-dir /usr/lib/vst3 install "${packages[@]}"; \
-      PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+      PYTHONPATH=/artifacts/studiorack-src /artifacts/run-linux-vst-headless.sh \
+        python -m synth_setter.cli.plugins \
         --manifest /artifacts/studiorack/studiorack-cardinal.json \
         --links-dir /usr/lib/vst3 install --plugin distrho/cardinal; \
     fi
@@ -452,7 +458,6 @@ RUN if [[ "${BUILD_MODE}" == "source" ]]; then \
       --plugin kayrockscreenprinting/ultramaster-kr106
 
 WORKDIR /artifacts
-COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 RUN ./run-linux-vst-headless.sh \
@@ -517,6 +522,9 @@ RUN git init && \
 # --no-deps pairs with the `--no-install-project` on the earlier `uv sync` above —
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
+
+# Reuse the patched, lockfile-pinned Studiorack graph installed by the parent stage.
+RUN ln -s /artifacts/studiorack/node_modules node_modules
 
 # The in-image pytest runs the Pi hook suite, which needs a Node that strips
 # TypeScript inline (--experimental-strip-types, Node >= 22.6). npm/npx are not
