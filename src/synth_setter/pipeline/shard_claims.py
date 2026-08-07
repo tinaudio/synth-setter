@@ -117,7 +117,7 @@ def _claimable_predicate(now_s: int) -> str:
     """
     return (
         f"status = '{_STATUS_AVAILABLE}' "
-        f"OR (status = '{_STATUS_CLAIMED}' AND lease_expiry_s < {now_s})"
+        f"OR (status = '{_STATUS_CLAIMED}' AND lease_expiry_s <= {now_s})"
     )
 
 

@@ -538,9 +538,10 @@ def test_from_hydra_claims_mode_renders_claimed_shards_and_completes_all(
 
 
 @pytest.mark.fake_vst
-def test_from_hydra_claims_mode_crashed_claim_rerenders_only_after_lease_lapse(
+def test_from_hydra_claims_mode_crashed_claim_rerenders_at_lease_cutoff(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,  # noqa: ARG001 — activates the local-typed remote
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A crashed claim is shielded while its lease lives, then recovered by relaunch.
 
@@ -554,6 +555,7 @@ def test_from_hydra_claims_mode_crashed_claim_rerenders_only_after_lease_lapse(
         and ``tmp_path``-pinned paths.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
         (fixture-activation only — referenced via the ARG001 noqa).
+    :param monkeypatch: Pins recovery to the persisted lease cutoff.
     """
     from synth_setter.pipeline.r2_io import lance_target
     from synth_setter.pipeline.shard_claims import ShardClaims
@@ -594,8 +596,9 @@ def test_from_hydra_claims_mode_crashed_claim_rerenders_only_after_lease_lapse(
     assert renderer_calls == [], "a live lease must shield the crashed claim from relaunch"
     assert not shard_has_complete_attempt(spec, 0)
 
-    # Age the crashed claim's lease in place of waiting out the real 2 hours.
-    lance.dataset(claims.uri).update({"lease_expiry_s": "0"}, where="status = 'claimed'")
+    cutoff_s = 1_000
+    lance.dataset(claims.uri).update({"lease_expiry_s": str(cutoff_s)}, where="status = 'claimed'")
+    monkeypatch.setattr("synth_setter.pipeline.shard_claims.time.time", lambda: cutoff_s)
 
     with patch(
         "synth_setter.cli.generate_dataset._check_call_streamed",
