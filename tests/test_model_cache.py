@@ -101,6 +101,33 @@ def test_cache_r2_file_replaces_corrupt_cached_bytes_via_real_rclone(
     assert repaired.read_bytes() == payload
 
 
+def test_cache_r2_file_digest_mismatch_never_publishes_final_file(
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Reject wrong remote bytes without publishing them under the requested pin.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Isolates the XDG cache root.
+    :param tmp_path: Holds the source object and cache.
+    """
+    source = fake_r2_remote / "bucket" / "models" / "weights.ckpt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"wrong bytes")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        cache_r2_file(
+            "r2://bucket/models/weights.ckpt",
+            "surge-sketch",
+            hashlib.sha256(b"expected bytes").hexdigest(),
+        )
+
+    cache_root = tmp_path / "cache" / "synth-setter" / "models" / "artifacts"
+    assert list(cache_root.rglob("weights.ckpt")) == []
+
+
 def test_cache_r2_file_failed_transfer_never_publishes_partial_file(
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,

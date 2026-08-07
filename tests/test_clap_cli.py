@@ -197,6 +197,7 @@ def test_output_artifacts_round_trip_through_real_rclone(
     assert manifest["r2_uri"] == destination
     assert manifest["checkpoint"]["sha256"]
     assert manifest["stats"]["sha256"]
+    assert manifest["git_sha"]
 
 
 def _compatible_checkpoint() -> dict[str, object]:
@@ -239,6 +240,16 @@ def test_validate_checkpoint_compatibility_ambiguous_token_count_raises() -> Non
     """Conflicting legacy and current sketch widths cannot be normalized silently."""
     checkpoint = _compatible_checkpoint()
     checkpoint["hyper_parameters"]["sketch_controls"]["num_control_tokens"] = 64  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="token"):
+        validate_checkpoint_compatibility(checkpoint)
+
+
+def test_validate_checkpoint_compatibility_conflicting_legacy_token_count_raises() -> None:
+    """Reject a conflicting legacy token count even when the current value is valid."""
+    checkpoint = _compatible_checkpoint()
+    checkpoint["hyper_parameters"]["sketch_controls"]["num_ctrl_tokens"] = 64  # type: ignore[index]
+    checkpoint["hyper_parameters"]["sketch_controls"]["num_control_tokens"] = 32  # type: ignore[index]
 
     with pytest.raises(ValueError, match="token"):
         validate_checkpoint_compatibility(checkpoint)

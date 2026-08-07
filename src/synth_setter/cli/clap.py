@@ -1,6 +1,7 @@
 """Render a Surge patch from reference timbre and guide sketch controls.
 
 Run ``synth-setter-clap --guide_audio guide.wav --ref_audio reference.wav``.
+Checkpoint rotation requires updating its pinned digest and state-shape contract together.
 """
 
 import json
@@ -32,6 +33,7 @@ from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.resources import as_file, surge_simple_preset, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
 from synth_setter.synth_spec import SYNTHS, SynthName
+from synth_setter.utils.logging_utils import resolve_git_sha
 
 DEFAULT_CHECKPOINT_URI = (
     "r2://intermediate-data/checkpoints/flow_sketch_prelim/"
@@ -235,6 +237,7 @@ def write_run_manifest(output_dir: Path, destination_uri: str) -> None:
         "run_id": output_dir.name,
         "r2_uri": destination_uri,
         "code_version": version("synth-setter"),
+        "git_sha": resolve_git_sha(),
         "checkpoint": {"uri": DEFAULT_CHECKPOINT_URI, "sha256": _CHECKPOINT_SHA256},
         "stats": {"uri": DEFAULT_STATS_URI, "sha256": _STATS_SHA256},
         "render": {
@@ -288,7 +291,14 @@ def validate_checkpoint_compatibility(checkpoint: Mapping[str, object]) -> dict[
         raise ValueError("checkpoint must enable sketch controls")
     normalized_sketch = dict(sketch)
     legacy_token_count = normalized_sketch.pop("num_ctrl_tokens", None)
-    if "num_control_tokens" not in normalized_sketch:
+    current_token_count = normalized_sketch.get("num_control_tokens")
+    if (
+        legacy_token_count is not None
+        and current_token_count is not None
+        and legacy_token_count != current_token_count
+    ):
+        raise ValueError("checkpoint sketch token-count fields conflict")
+    if current_token_count is None:
         normalized_sketch["num_control_tokens"] = legacy_token_count
     if normalized_sketch != _EXPECTED_SKETCH_CONFIG:
         raise ValueError(

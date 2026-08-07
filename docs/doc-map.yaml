@@ -585,7 +585,7 @@ docs:
         scope: "tart"
 
   - doc: docs/guides/surge-sketch-render.md
-    description: Surge sketch-match CLI usage and artifact contract
+    description: Surge sketch-match CLI contract
     sources:
       - pattern: "src/synth_setter/cli/clap.py"
         covers: "Sketch-conditioned Surge render lifecycle"

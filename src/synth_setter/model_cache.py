@@ -54,11 +54,12 @@ def _validate_cache_request(r2_uri: str, namespace: str, expected_sha256: str) -
         raise ValueError(f"not an r2:// URI: {r2_uri!r}")
 
 
-def _cache_destination(r2_uri: str, namespace: str) -> Path:
+def _cache_destination(r2_uri: str, namespace: str, expected_sha256: str) -> Path:
     """Derive a collision-resistant local path for one R2 object.
 
     :param r2_uri: Validated source object URI.
     :param namespace: Validated cache namespace.
+    :param expected_sha256: Required content identity.
     :returns: Destination retaining the source basename.
     """
     source_key = hashlib.sha256(r2_uri.encode()).hexdigest()[:16]
@@ -68,6 +69,7 @@ def _cache_destination(r2_uri: str, namespace: str) -> Path:
         / "artifacts"
         / namespace
         / source_key
+        / expected_sha256
         / Path(r2_uri).name
     )
 
@@ -107,7 +109,7 @@ def cache_r2_file(r2_uri: str, namespace: str, expected_sha256: str) -> Path:
     :returns: Digest-verified local artifact path.
     """
     _validate_cache_request(r2_uri, namespace, expected_sha256)
-    destination = _cache_destination(r2_uri, namespace)
+    destination = _cache_destination(r2_uri, namespace, expected_sha256)
     lock_path = destination.with_name(f".{destination.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(lock_path):
