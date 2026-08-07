@@ -580,6 +580,41 @@ def _resolve_output(output: Path | None, settings: _ClapRenderSettings, run_id: 
     return output
 
 
+def _dispatch_audio_mode(
+    audio_paths: tuple[Path | None, Path | None],
+    text_prompt: str | None,
+    unsupported_options: tuple[tuple[str, object], ...],
+) -> bool:
+    """Validate and dispatch guide/reference audio mode when selected.
+
+    :param audio_paths: Optional guide and reference audio paths.
+    :param text_prompt: Optional text-mode positional argument.
+    :param unsupported_options: Text-only option names and parsed values.
+    :returns: Whether audio mode was selected and dispatched.
+    :raises click.ClickException: Audio mode inputs or options are invalid.
+    """
+    guide_audio, ref_audio = audio_paths
+    audio_mode = guide_audio is not None or ref_audio is not None
+    if not audio_mode:
+        return False
+    if guide_audio is None or ref_audio is None:
+        raise click.ClickException("--guide_audio and --ref_audio must be provided together")
+    if text_prompt is not None:
+        raise click.ClickException("TEXT_PROMPT cannot be combined with guide/reference audio")
+    for option, value in unsupported_options:
+        is_overridden = value is not None and value is not False
+        if is_overridden:
+            raise click.ClickException(f"{option} is not supported with guide/reference audio")
+    from synth_setter.cli.clap import main as guide_audio_main
+
+    guide_audio_main.main(
+        args=["--guide_audio", str(guide_audio), "--ref_audio", str(ref_audio)],
+        prog_name="synth-setter-clap",
+        standalone_mode=False,
+    )
+    return True
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("text_prompt", required=False)
 @click.option(
@@ -641,32 +676,16 @@ def main(
     :raises click.ClickException: CLI arguments are invalid.
     :raises RuntimeError: The default CLAP checkpoint fails identity validation.
     """
-    audio_mode = guide_audio is not None or ref_audio is not None
-    if audio_mode:
-        if guide_audio is None or ref_audio is None:
-            raise click.ClickException("--guide_audio and --ref_audio must be provided together")
-        if text_prompt is not None:
-            raise click.ClickException("TEXT_PROMPT cannot be combined with guide/reference audio")
-        unsupported_options = (
-            ("--checkpoint", checkpoint),
-            ("--clap-checkpoint", clap_checkpoint),
-            ("--output", output),
-            ("--upload-uri", upload_uri),
-            ("--device", device),
-            ("--seed", seed),
-            ("--no-upload", not upload),
-        )
-        for option, value in unsupported_options:
-            is_overridden = value is not None and value is not False
-            if is_overridden:
-                raise click.ClickException(f"{option} is not supported with guide/reference audio")
-        from synth_setter.cli.clap import main as guide_audio_main
-
-        guide_audio_main.main(
-            args=["--guide_audio", str(guide_audio), "--ref_audio", str(ref_audio)],
-            prog_name="synth-setter-clap",
-            standalone_mode=False,
-        )
+    unsupported_audio_options = (
+        ("--checkpoint", checkpoint),
+        ("--clap-checkpoint", clap_checkpoint),
+        ("--output", output),
+        ("--upload-uri", upload_uri),
+        ("--device", device),
+        ("--seed", seed),
+        ("--no-upload", not upload),
+    )
+    if _dispatch_audio_mode((guide_audio, ref_audio), text_prompt, unsupported_audio_options):
         return
 
     if text_prompt is None:

@@ -137,7 +137,10 @@ def _fit_audio_to_model_grid(audio: np.ndarray) -> torch.Tensor:
     target_samples = int(_SAMPLE_RATE * _DURATION_SECONDS)
     if audio.shape[1] < target_samples:
         audio = np.pad(audio, ((0, 0), (0, target_samples - audio.shape[1])))
-    return torch.from_numpy(audio[:, :target_samples]).to(dtype=torch.float32)
+    fitted_audio = audio[:, :target_samples]
+    if not np.isfinite(fitted_audio).all() or np.any(np.abs(fitted_audio) > 1.0):
+        raise ValueError("input audio must be finite and within [-1, 1]")
+    return torch.from_numpy(fitted_audio).to(dtype=torch.float32)
 
 
 def _load_model_audio(path: Path) -> torch.Tensor:
@@ -256,7 +259,7 @@ def write_run_manifest(output_dir: Path, destination_uri: str) -> None:
 
 
 def upload_output_artifacts(output_dir: Path, destination_uri: str) -> None:
-    """Upload the four public output artifacts through the shared rclone path.
+    """Upload the output artifact directory through the shared rclone path.
 
     :param output_dir: Directory containing only public output artifacts.
     :param destination_uri: Unique R2 prefix receiving the directory contents.

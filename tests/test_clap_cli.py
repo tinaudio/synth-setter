@@ -15,6 +15,7 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.clap import (
     PreparedAudioInputs,
     RenderedPatch,
+    _fit_audio_to_model_grid,
     _load_model_audio,
     _predict_patch,
     _render_patch,
@@ -79,6 +80,19 @@ def test_load_model_audio_short_and_long_inputs_fit_four_second_grid(
     assert prepared.shape == (2, 176400)
     assert torch.all(prepared[:, 0] > 0.2)
     assert prepared[0, -1].item() == pytest.approx(expected_last_sample, abs=1e-5)
+
+
+@pytest.mark.parametrize("invalid_sample", [float("nan"), float("inf"), 1.01, -1.01])
+def test_fit_audio_to_model_grid_invalid_sample_raises(invalid_sample: float) -> None:
+    """Reject non-finite or out-of-range input before feature extraction.
+
+    :param invalid_sample: Value outside the model waveform contract.
+    """
+    audio = np.zeros((1, 176400), dtype=np.float32)
+    audio[0, 0] = invalid_sample
+
+    with pytest.raises(ValueError, match=r"finite.*\[-1, 1\]"):
+        _fit_audio_to_model_grid(audio)
 
 
 def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_path: Path) -> None:
