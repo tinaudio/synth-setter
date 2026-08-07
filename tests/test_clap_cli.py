@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -15,6 +16,10 @@ from synth_setter.cli.clap import (
     PreparedAudioInputs,
     RenderedPatch,
     _load_model_audio,
+    _predict_patch,
+    _render_patch,
+    _run_request,
+    _validate_stats,
     main,
     prepare_audio_inputs,
     upload_output_artifacts,
@@ -24,6 +29,8 @@ from synth_setter.cli.clap import (
 )
 from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS, SKETCH_PITCH_SLICE
+from synth_setter.resources import surge_simple_preset
+from synth_setter.synth_spec import SYNTHS, SynthName
 
 
 def test_help_exposes_two_required_audio_options() -> None:
@@ -222,6 +229,204 @@ def _compatible_checkpoint() -> dict[str, object]:
             "vector_field.projection._assignment": torch.empty(128, 92),
         },
     }
+
+
+def test_validate_stats_expected_arrays_returns_without_error(tmp_path: Path) -> None:
+    """Finite positive training statistics satisfy the model input contract.
+
+    :param tmp_path: Holds the candidate statistics artifact.
+    """
+    stats_path = tmp_path / "stats.npz"
+    np.savez(
+        stats_path,
+        mean=np.zeros((2, 128, 401), dtype=np.float32),
+        std=np.ones((2, 128, 401), dtype=np.float32),
+    )
+
+    _validate_stats(stats_path)
+
+
+def test_validate_stats_missing_std_raises(tmp_path: Path) -> None:
+    """A statistics artifact missing std fails before inference.
+
+    :param tmp_path: Holds the candidate statistics artifact.
+    """
+    stats_path = tmp_path / "stats.npz"
+    np.savez(stats_path, mean=np.zeros((2, 128, 401)))
+
+    with pytest.raises(ValueError, match="exactly mean and std"):
+        _validate_stats(stats_path)
+
+
+def test_validate_stats_wrong_shape_raises(tmp_path: Path) -> None:
+    """Statistics for another model input shape fail before inference.
+
+    :param tmp_path: Holds the candidate statistics artifact.
+    """
+    stats_path = tmp_path / "stats.npz"
+    np.savez(
+        stats_path,
+        mean=np.zeros((1, 128, 401)),
+        std=np.ones((1, 128, 401)),
+    )
+
+    with pytest.raises(ValueError, match="shape"):
+        _validate_stats(stats_path)
+
+
+def test_validate_stats_nonpositive_std_raises(tmp_path: Path) -> None:
+    """Nonpositive standard deviations fail before inference.
+
+    :param tmp_path: Holds the candidate statistics artifact.
+    """
+    stats_path = tmp_path / "stats.npz"
+    np.savez(
+        stats_path,
+        mean=np.zeros((2, 128, 401)),
+        std=np.zeros((2, 128, 401)),
+    )
+
+    with pytest.raises(ValueError, match="positive"):
+        _validate_stats(stats_path)
+
+
+def test_predict_patch_finite_prediction_decodes_real_param_spec() -> None:
+    """A finite model-space prediction reaches the real Surge decoder."""
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.zeros(2, 176400),
+        ref_audio=torch.zeros(2, 176400),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+    model = Mock()
+    model.device = torch.device("cpu")
+    model.predict_step.return_value = (torch.zeros(1, 92), None)
+
+    synth_params, note_params = _predict_patch(prepared, model)
+
+    assert len(synth_params) > 80
+    assert 0 <= note_params["pitch"] <= 127
+    assert len(note_params["note_start_and_end"]) == 2
+
+
+def test_predict_patch_wrong_shape_raises() -> None:
+    """A checkpoint prediction with the wrong output width fails before decoding."""
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.zeros(2, 176400),
+        ref_audio=torch.zeros(2, 176400),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+    model = Mock()
+    model.device = torch.device("cpu")
+    model.predict_step.return_value = (torch.zeros(1, 91), None)
+
+    with pytest.raises(ValueError, match="shape"):
+        _predict_patch(prepared, model)
+
+
+def test_render_patch_descending_note_interval_reaches_renderer_ordered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Independently decoded note endpoints reach Surge in ascending order.
+
+    :param monkeypatch: Replaces the installed VST and renderer boundaries.
+    :param tmp_path: Supplies a non-system plugin fixture path.
+    """
+    synth_version = SYNTHS[SynthName("surge_simple")].synth_version
+    plugin_path = str(tmp_path / "Surge.vst3")
+    monkeypatch.setattr("synth_setter.cli.clap.default_plugin_path", lambda: plugin_path)
+    monkeypatch.setattr("synth_setter.cli.clap.extract_renderer_version", lambda _: synth_version)
+    renderer = Mock()
+    renderer.render.return_value = np.zeros((2, 176400), dtype=np.float32)
+    monkeypatch.setattr("synth_setter.cli.clap.make_audio_renderer", lambda _: renderer)
+
+    patch = _render_patch(
+        {"filter_1_cutoff": 0.5},
+        {"pitch": 60, "note_start_and_end": (3.2, 0.8)},
+    )
+
+    assert patch.audio.shape == (2, 176400)
+    assert renderer.render.call_args.args[3] == (0.8, 3.2)
+
+
+def test_packaged_surge_simple_preset_is_nonempty() -> None:
+    """The preset consumed by the renderer is shipped with package data."""
+    preset = surge_simple_preset()
+
+    assert preset.is_file()
+    assert preset.read_bytes().startswith(b"VST3")
+
+
+def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
+    fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One request retains and uploads consumable artifacts around model boundaries.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Replaces heavyweight checkpoint and VST boundaries.
+    :param tmp_path: Holds real inputs, statistics, and retained outputs.
+    """
+    sample_rate = 44100
+    time = np.arange(4 * sample_rate, dtype=np.float32) / sample_rate
+    guide_path = tmp_path / "guide.wav"
+    ref_path = tmp_path / "ref.wav"
+    with AudioFile(str(guide_path), "w", sample_rate, 1) as audio_file:
+        audio_file.write((0.5 * np.sin(2 * np.pi * 220.0 * time))[None])
+    with AudioFile(str(ref_path), "w", sample_rate, 2) as audio_file:
+        audio_file.write(
+            np.stack(
+                [
+                    0.4 * np.sin(2 * np.pi * 330.0 * time),
+                    0.2 * np.sin(2 * np.pi * 330.0 * time),
+                ]
+            ).astype(np.float32)
+        )
+    stats_path = tmp_path / "stats.npz"
+    np.savez(
+        stats_path,
+        mean=np.zeros((2, 128, 401), dtype=np.float32),
+        std=np.ones((2, 128, 401), dtype=np.float32),
+    )
+    checkpoint_path = tmp_path / "model.ckpt"
+    checkpoint_path.write_bytes(b"checkpoint boundary fixture")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("synth_setter.cli.clap.r2_io.ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(
+        "synth_setter.cli.clap.cache_r2_file",
+        lambda uri, _namespace, _digest: (
+            stats_path if uri.endswith("stats.npz") else checkpoint_path
+        ),
+    )
+    model = Mock()
+    monkeypatch.setattr("synth_setter.cli.clap._load_model", lambda *_: model)
+    monkeypatch.setattr(
+        "synth_setter.cli.clap._predict_patch",
+        lambda *_: (
+            {"filter_1_cutoff": 0.5},
+            {"pitch": 60, "note_start_and_end": (0.05, 3.95)},
+        ),
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.clap._render_patch",
+        lambda synth_params, note_params: RenderedPatch(
+            audio=np.full((2, 176400), 0.0625, dtype=np.float32),
+            synth_params=synth_params,
+            note_params=note_params,
+        ),
+    )
+
+    output_dir, destination = _run_request(guide_path, ref_path)
+
+    assert output_dir.is_dir()
+    assert destination.startswith("r2://intermediate-data/eval/synth-setter-clap/")
+    remote = fake_r2_remote / destination.removeprefix("r2://")
+    with AudioFile(str(remote / "pred.wav"), "r") as audio_file:
+        rendered = audio_file.read(audio_file.frames)
+    assert rendered.shape == (2, 176400)
+    assert np.isfinite(rendered).all()
+    assert np.abs(rendered).max() > 0.05
 
 
 def test_validate_checkpoint_compatibility_accepts_pinned_legacy_sketch_metadata() -> None:

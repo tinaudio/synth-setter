@@ -647,6 +647,19 @@ def main(
             raise click.ClickException("--guide_audio and --ref_audio must be provided together")
         if text_prompt is not None:
             raise click.ClickException("TEXT_PROMPT cannot be combined with guide/reference audio")
+        unsupported_options = (
+            ("--checkpoint", checkpoint),
+            ("--clap-checkpoint", clap_checkpoint),
+            ("--output", output),
+            ("--upload-uri", upload_uri),
+            ("--device", device),
+            ("--seed", seed),
+            ("--no-upload", not upload),
+        )
+        for option, value in unsupported_options:
+            is_overridden = value is not None and value is not False
+            if is_overridden:
+                raise click.ClickException(f"{option} is not supported with guide/reference audio")
         from synth_setter.cli.clap import main as guide_audio_main
 
         guide_audio_main.main(

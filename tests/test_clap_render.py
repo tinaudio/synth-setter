@@ -41,6 +41,85 @@ def test_cli_one_audio_conditioning_input_exits_before_inference(tmp_path: Path)
     assert "must be provided together" in result.output
 
 
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--checkpoint", "checkpoint.ckpt"),
+        ("--clap-checkpoint", "clap.pt"),
+        ("--output", "output.wav"),
+        ("--upload-uri", "r2://intermediate-data/test.wav"),
+        ("--device", "cpu"),
+        ("--seed", "4"),
+    ],
+)
+def test_cli_audio_mode_text_option_exits_before_inference(
+    option: str, value: str, tmp_path: Path
+) -> None:
+    """Text-render options cannot be accepted and then ignored in audio mode.
+
+    :param option: Text-render option rejected by audio mode.
+    :param value: Value belonging to the rejected option.
+    :param tmp_path: Holds the argument-validation fixtures.
+    """
+    guide = tmp_path / "guide.wav"
+    reference = tmp_path / "reference.wav"
+    guide.write_bytes(b"not decoded before argument validation")
+    reference.write_bytes(b"not decoded before argument validation")
+    result = CliRunner().invoke(
+        main,
+        ["--guide_audio", str(guide), "--ref_audio", str(reference), option, value],
+    )
+
+    assert result.exit_code != 0
+    assert f"{option} is not supported with guide/reference audio" in result.output
+
+
+def test_cli_audio_mode_no_upload_exits_before_inference(tmp_path: Path) -> None:
+    """Audio mode rejects the text renderer's no-upload behavior.
+
+    :param tmp_path: Holds the argument-validation fixtures.
+    """
+    guide = tmp_path / "guide.wav"
+    reference = tmp_path / "reference.wav"
+    guide.write_bytes(b"not decoded before argument validation")
+    reference.write_bytes(b"not decoded before argument validation")
+
+    result = CliRunner().invoke(
+        main,
+        ["--guide_audio", str(guide), "--ref_audio", str(reference), "--no-upload"],
+    )
+
+    assert result.exit_code != 0
+    assert "--no-upload is not supported with guide/reference audio" in result.output
+
+
+def test_cli_audio_mode_dispatches_to_sketch_renderer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The installed public command routes both audio inputs to sketch rendering.
+
+    :param monkeypatch: Replaces the expensive request after Click routing.
+    :param tmp_path: Holds argument-validation fixtures.
+    """
+    guide = tmp_path / "guide.wav"
+    reference = tmp_path / "reference.wav"
+    guide.write_bytes(b"validated path")
+    reference.write_bytes(b"validated path")
+    destination = "r2://intermediate-data/eval/synth-setter-clap/test-run"
+    monkeypatch.setenv("SYNTH_SETTER_CLAP_HEADLESS", "1")
+    monkeypatch.setattr(
+        "synth_setter.cli.clap._run_request", lambda *_: (tmp_path / "output", destination)
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["--guide_audio", str(guide), "--ref_audio", str(reference)],
+    )
+
+    assert result.exit_code == 0
+    assert result.output.strip() == destination
+
+
 def test_cli_text_and_audio_modes_together_exit_before_inference(tmp_path: Path) -> None:
     """Text and audio conditioning modes are mutually exclusive.
 

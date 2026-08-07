@@ -57,6 +57,7 @@ _HEADLESS_TIMEOUT_SECONDS = 1200
 _SURGE_PARAM_SPEC_NAME = "surge_simple"
 _EXPECTED_PARAM_WIDTH = param_specs[_SURGE_PARAM_SPEC_NAME].encoded_width
 _PITCH_ZERO_THRESHOLD = 0.1
+_MIN_LOUDNESS_DB = -55.0
 _EXPECTED_STATE_SHAPES = {
     "encoder.patch_embed.projection.weight": (512, 2, 16, 16),
     "sketch_tokens.positional_encoding": (1, 32, 512),
@@ -420,18 +421,19 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
             channels=_CHANNELS,
             velocity=100,
             signal_duration_seconds=_DURATION_SECONDS,
-            min_loudness=-55.0,
+            min_loudness=_MIN_LOUDNESS_DB,
             samples_per_shard=1,
             samples_per_render_batch=1,
             plugin_reload_cadence="once",
             gui_toggle_cadence="once",
         )
         renderer = make_audio_renderer(render_config)
+        note_start, note_end = sorted(note_params["note_start_and_end"])
         audio = renderer.render(
             synth_params,
             int(note_params["pitch"]),
             render_config.velocity,
-            note_params["note_start_and_end"],
+            (note_start, note_end),
             warmup=True,
         )
     return RenderedPatch(audio=audio, synth_params=synth_params, note_params=note_params)
