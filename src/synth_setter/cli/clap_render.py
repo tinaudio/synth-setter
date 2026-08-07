@@ -29,7 +29,7 @@ from synth_setter.conditioning import resolve_embedding_conditioning
 from synth_setter.data.vst.core import write_wav
 from synth_setter.data.vst.param_spec import decode_model_output
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.model_cache import synth_setter_cache_dir
+from synth_setter.model_cache import file_sha256, synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -41,7 +41,6 @@ _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 _EXPECTED_CONDITIONING_COLUMN = "clap"
 _EXPECTED_CONDITIONING_SHAPE = (512,)
 _DEFAULT_CONFIG_NAME = "clap_render"
-_HASH_CHUNK_BYTES = 1024 * 1024
 _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
     "prompt",
     "wav_r2_uri",
@@ -291,19 +290,6 @@ def _checkpoint_lock(path: Path) -> Iterator[None]:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def _file_sha256(path: Path) -> str:
-    """Hash a checkpoint without loading it into memory.
-
-    :param path: Checkpoint file.
-    :returns: Lowercase SHA-256 digest.
-    """
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(_HASH_CHUNK_BYTES), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _checkpoint_matches(path: Path, expected_sha256: str | None) -> bool:
     """Check file presence, non-empty content, and an optional digest.
 
@@ -314,7 +300,7 @@ def _checkpoint_matches(path: Path, expected_sha256: str | None) -> bool:
     return (
         path.is_file()
         and path.stat().st_size > 0
-        and (expected_sha256 is None or _file_sha256(path) == expected_sha256)
+        and (expected_sha256 is None or file_sha256(path) == expected_sha256)
     )
 
 
@@ -580,8 +566,53 @@ def _resolve_output(output: Path | None, settings: _ClapRenderSettings, run_id: 
     return output
 
 
+def _dispatch_audio_mode(
+    audio_paths: tuple[Path | None, Path | None],
+    text_prompt: str | None,
+    unsupported_options: tuple[tuple[str, object], ...],
+) -> bool:
+    """Validate and dispatch guide/reference audio mode when selected.
+
+    :param audio_paths: Optional guide and reference audio paths.
+    :param text_prompt: Optional text-mode positional argument.
+    :param unsupported_options: Text-only option names and parsed values.
+    :returns: Whether audio mode was selected and dispatched.
+    :raises click.ClickException: Audio mode inputs or options are invalid.
+    """
+    guide_audio, ref_audio = audio_paths
+    audio_mode = guide_audio is not None or ref_audio is not None
+    if not audio_mode:
+        return False
+    if guide_audio is None or ref_audio is None:
+        raise click.ClickException("--guide_audio and --ref_audio must be provided together")
+    if text_prompt is not None:
+        raise click.ClickException("TEXT_PROMPT cannot be combined with guide/reference audio")
+    for option, value in unsupported_options:
+        is_overridden = value is not None and value is not False
+        if is_overridden:
+            raise click.ClickException(f"{option} is not supported with guide/reference audio")
+    from synth_setter.cli.clap import main as guide_audio_main
+
+    guide_audio_main.main(
+        args=["--guide_audio", str(guide_audio), "--ref_audio", str(ref_audio)],
+        prog_name="synth-setter-clap",
+        standalone_mode=False,
+    )
+    return True
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("text_prompt")
+@click.argument("text_prompt", required=False)
+@click.option(
+    "--guide_audio",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Guide audio supplying sketch controls.",
+)
+@click.option(
+    "--ref_audio",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Reference audio supplying mel/timbre conditioning.",
+)
 @click.option(
     "--checkpoint",
     envvar="SYNTH_SETTER_CLAP_INVERSE_CHECKPOINT",
@@ -603,7 +634,9 @@ def _resolve_output(output: Path | None, settings: _ClapRenderSettings, run_id: 
 @click.option("--seed", type=int, default=None, help="Flow sampling seed [default: 0].")
 @click.option("--upload/--no-upload", default=True, show_default=True)
 def main(
-    text_prompt: str,
+    text_prompt: str | None,
+    guide_audio: Path | None,
+    ref_audio: Path | None,
     checkpoint: str | None,
     clap_checkpoint: str | None,
     output: Path | None,
@@ -612,11 +645,13 @@ def main(
     seed: int | None,
     upload: bool,
 ) -> None:
-    """Render TEXT_PROMPT as a Surge WAV and upload it to R2.
+    """Render a text prompt or guide/reference audio as a Surge WAV.
 
-    Example: synth-setter-clap "frog croak"
+    Use ``synth-setter-clap "frog croak"`` for text or pass both audio options.
 
-    :param text_prompt: Natural-language sound description.
+    :param text_prompt: Optional natural-language sound description.
+    :param guide_audio: Optional audio supplying sketch controls.
+    :param ref_audio: Optional audio supplying mel/timbre conditioning.
     :param checkpoint: Optional inverse-checkpoint override.
     :param clap_checkpoint: Optional CLAP encoder override.
     :param output: Optional local WAV destination.
@@ -627,6 +662,20 @@ def main(
     :raises click.ClickException: CLI arguments are invalid.
     :raises RuntimeError: The default CLAP checkpoint fails identity validation.
     """
+    unsupported_audio_options = (
+        ("--checkpoint", checkpoint),
+        ("--clap-checkpoint", clap_checkpoint),
+        ("--output", output),
+        ("--upload-uri", upload_uri),
+        ("--device", device),
+        ("--seed", seed),
+        ("--no-upload", not upload),
+    )
+    if _dispatch_audio_mode((guide_audio, ref_audio), text_prompt, unsupported_audio_options):
+        return
+
+    if text_prompt is None:
+        raise click.ClickException("provide TEXT_PROMPT or guide/reference audio")
     prompt = text_prompt.strip()
     if not prompt:
         raise click.ClickException("prompt must contain text")

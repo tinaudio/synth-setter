@@ -373,6 +373,7 @@ namespaces = true
   "configs/**/*.sh",
   "scripts/*.sh",
   "data/vst/*_param_map.json",
+  "data/vst/*.vstpreset",
 ]
 
 
