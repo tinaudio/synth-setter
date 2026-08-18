@@ -55,7 +55,7 @@ def test_finalization_workflow_runs_static_and_queue_lance_scenarios(
     rows = generate["strategy"]["matrix"]["include"]
     assert {row["scenario"] for row in rows} == {"static", "queue"}
     assert "matrix.scenario == 'queue'" in generate["with"]["hydra_overrides"]
-    assert "use_shard_queue=true" in generate["with"]["hydra_overrides"]
+    assert "use_shard_queue=true render.parallel=true" in generate["with"]["hydra_overrides"]
     assert "matrix.scenario" in generate["with"]["artifact_name"]
 
     verify_rows = finalization_workflow["jobs"]["verify-artifacts"]["strategy"]["matrix"][

@@ -40,6 +40,7 @@ on:
     # GitHub Actions rejects YAML anchors, so the pull_request trigger repeats this
     # list; `tests/infra/test_vst_slow_workflow_triggers.py` fails on any divergence.
     paths:
+      - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/data/vst/**"
       - "src/synth_setter/renderer_backend.py"
       - "src/synth_setter/renderer_factory.py"
@@ -48,6 +49,7 @@ on:
       - "tests/integration/test_parallel_shard_render_linux.py"
       - "tests/conftest.py"
       - "tests/test_eval.py"
+      - "tests/test_generate_dataset.py"
       - "tests/test_train.py"
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
@@ -71,6 +73,7 @@ on:
   # Mirrors the push paths above; the trigger-parity test is the enforcement.
   pull_request:
     paths:
+      - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/data/vst/**"
       - "src/synth_setter/renderer_backend.py"
       - "src/synth_setter/renderer_factory.py"
@@ -79,6 +82,7 @@ on:
       - "tests/integration/test_parallel_shard_render_linux.py"
       - "tests/conftest.py"
       - "tests/test_eval.py"
+      - "tests/test_generate_dataset.py"
       - "tests/test_train.py"
       - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
@@ -131,6 +135,7 @@ jobs:
               tests/data/vst/test_run_with_editor_held_open_real_plugin.py
               tests/data/vst/test_pedalboard_threading_contract.py
               tests/integration/test_parallel_shard_render_linux.py
+              tests/test_generate_dataset.py::test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards
           - synth: obxf
             plugin_path: /usr/lib/vst3/OB-Xf.vst3
             pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
