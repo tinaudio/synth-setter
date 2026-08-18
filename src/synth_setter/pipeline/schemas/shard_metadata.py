@@ -69,6 +69,11 @@ class ShardMetadata(BaseModel):
         :type: int
 
         Per-row loudness-gate retry budget used during rendering.
+
+    .. attribute :: managed_plugin_digest
+        :type: str | None
+
+        Managed plugin seal identity, or ``None`` for unmanaged and in-process synths.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -99,6 +104,13 @@ class ShardMetadata(BaseModel):
             "Per-row loudness-gate retry budget used during rendering. Defaults to "
             f"{DEFAULT_ATTEMPTS_PER_SAMPLE} so sidecars written before this field existed "
             "still validate."
+        ),
+    )
+    managed_plugin_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "Managed plugin seal identity; None preserves unmanaged, in-process, and legacy shards."
         ),
     )
 

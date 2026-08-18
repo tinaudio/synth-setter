@@ -70,7 +70,12 @@ from synth_setter.pipeline.schemas.render_metrics import (
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
-from synth_setter.plugin_manager import ArtifactLock, PluginManifest, adopt_plugin_bundle
+from synth_setter.plugin_manager import (
+    ArtifactLock,
+    PluginManifest,
+    adopt_plugin_bundle,
+    link_plugin,
+)
 from tests._vst import (
     PLUGIN_PATH,
 )
@@ -147,6 +152,29 @@ def _managed_real_plugin(tmp_path: Path) -> Path:
     )
 
 
+def _manager_owned_real_plugin_alias(tmp_path: Path) -> Path:
+    """Adopt and link the real Surge bundle through the production manager API.
+
+    :param tmp_path: Scratch root for managed state and the stable alias.
+    :returns: Manager-owned stable alias to the real plugin.
+    """
+    manifest = PluginManifest.load(_REPO_ROOT / "studiorack.json")
+    plugin = manifest.resolve("surge-synthesizer/surge")
+    artifact_lock = ArtifactLock.load(_REPO_ROOT / "studiorack.lock.json", manifest)
+    adopt_plugin_bundle(
+        plugin,
+        plugins_dir=tmp_path / "managed",
+        bundle=_REAL_PLUGIN_VST3,
+        locked_package=artifact_lock.package_for(plugin),
+    )
+    return link_plugin(
+        plugin,
+        artifact_lock=artifact_lock,
+        plugins_dir=tmp_path / "managed",
+        links_dir=tmp_path / "plugins",
+    )
+
+
 def _worker_shard_staging_path(root: Path, spec: DatasetSpec, shard_id: int) -> Path:
     """Return the fake-R2 staging directory for one worker shard attempt.
 
@@ -193,6 +221,8 @@ def test_cfg_dataset_composes_and_validates_as_dataset_spec(
     :param cfg_dataset: Function-scoped fixture composing ``dataset.yaml`` with the
         ``generate_dataset/smoke-shard`` experiment and ``tmp_path``-pinned paths.
     """
+    with open_dict(cfg_dataset):
+        cfg_dataset.synth.plugin_path = str(_TEST_PLUGIN_VST3)
     spec = spec_from_cfg(cfg_dataset)
     assert isinstance(spec, DatasetSpec)
     # smoke-shard fans 10 samples over 3 shards at 4 per shard, so a floor of 1
@@ -300,6 +330,8 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
     :param cfg_dataset_default_cadence: Function-scoped fixture composing
         ``dataset.yaml`` with an experiment that sets no cadence keys.
     """
+    with open_dict(cfg_dataset_default_cadence):
+        cfg_dataset_default_cadence.synth.plugin_path = str(_TEST_PLUGIN_VST3)
     spec = spec_from_cfg(cfg_dataset_default_cadence)
     assert spec.render.plugin_reload_cadence == "once"
 
@@ -1052,6 +1084,7 @@ def test_from_hydra_applies_extras_writing_tags_and_config_tree(
     """
     with open_dict(cfg_dataset):
         cfg_dataset.logger = None
+        cfg_dataset.synth.plugin_path = str(_TEST_PLUGIN_VST3)
     output_dir = Path(cfg_dataset.paths.output_dir)
 
     monkeypatch.setattr("synth_setter.cli.generate_dataset.generate", lambda *_a, **_k: None)
@@ -1149,7 +1182,7 @@ def _make_fake_worker_runtime(tmp_path: Path, trace: Path) -> Path:
         f'printf "install:%s\\n" "$*" >> {shlex.quote(str(trace))}\n',
     )
     _write_executable(
-        fake_bin / "synth-setter-generate-dataset-from-hydra",
+        fake_bin / "synth-setter-generate-dataset-from-spec-uri",
         f'#!/bin/bash\nprintf "exec:%s\\n" "$*" >> {shlex.quote(str(trace))}\n',
     )
     return fake_bin
@@ -1220,7 +1253,9 @@ def test_main_skypilot_env_file_endpoint_active_at_submission(
 
     submitted_task = fake_sky.jobs.launch.call_args.args[0]
     assert submitted_task.run is not None
-    assert f"skypilot_launch.env_file={env_file}" in submitted_task.run
+    assert "synth-setter-generate-dataset-from-spec-uri" in submitted_task.run
+    assert "WORKER_SPEC_URI" in submitted_task.run
+    assert f"skypilot_launch.env_file={env_file}" not in submitted_task.run
     fake_sky.jobs.launch.assert_called_once()
 
 
@@ -1275,6 +1310,7 @@ def remote_worker_dispatch(
                     cwd=tmp_path,
                     check=False,
                     capture_output=True,
+                    env={**os.environ, **sky_cfg.extra_envs},
                     text=True,
                 )
             )
@@ -1443,10 +1479,9 @@ def test_main_remote_worker_command_repairs_stale_unpinned_checkout_then_execute
     assert repaired_version == "(3, 12, 13)"
     install, invocation = trace.read_text().splitlines()
     assert install == "install:pip install --group runtime -e ."
-    assert invocation.startswith("exec:experiment=generate_dataset/smoke-shard ")
-    assert f"synth.plugin_path={_TEST_PLUGIN_VST3}" in invocation
-    assert "skypilot_launch/compute=runpod/smoke" in invocation
-    assert "+created_at=" in invocation
+    assert invocation.startswith("exec:r2://intermediate-data/")
+    assert invocation.endswith("/input_spec.json")
+    assert "experiment=" not in invocation
 
 
 def _r2_claims_steal_worker(
@@ -1548,7 +1583,7 @@ def test_generate_dataset_renders_shards_to_r2(
     cfg_dataset: DictConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``from_hydra`` renders every shard in ``spec.shards`` and uploads to real R2.
+    """``from_hydra`` consumes a sealed alias and uploads real renders to R2.
 
     The unique-per-run ``r2.prefix`` override keeps concurrent runs isolated; a
     best-effort ``rclone purge`` in ``finally`` removes the prefix even on test
@@ -1565,8 +1600,12 @@ def test_generate_dataset_renders_shards_to_r2(
     unique_prefix = (
         f"test-runs/test_generate_dataset_renders_shards_to_r2/{uuid.uuid4().hex[:12]}/"
     )
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    alias = _manager_owned_real_plugin_alias(Path(cfg_dataset.paths.output_dir))
     with open_dict(cfg_dataset):
         cfg_dataset.r2.prefix = unique_prefix
+        cfg_dataset.synth.plugin_path = str(alias)
 
     spec = spec_from_cfg(cfg_dataset)
     try:
@@ -1577,6 +1616,35 @@ def test_generate_dataset_renders_shards_to_r2(
             )
     finally:
         r2_io.purge_prefix(spec.r2.bucket, spec.r2.prefix)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_generate_dataset_retargeted_manager_alias_fails_before_render(
+    cfg_dataset: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """``from_hydra`` rejects stale alias ownership before starting a render.
+
+    :param cfg_dataset: Hydra dataset config reduced to one real VST sample.
+    :param tmp_path: Scratch root for managed state, alias, and render output.
+    """
+    alias = _manager_owned_real_plugin_alias(tmp_path)
+    different_bundle = tmp_path / "unmanaged/Surge XT.vst3"
+    different_bundle.mkdir(parents=True)
+    alias.unlink()
+    alias.symlink_to(different_bundle, target_is_directory=True)
+    with open_dict(cfg_dataset):
+        cfg_dataset.logger = None
+        cfg_dataset.synth.plugin_path = str(alias)
+        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+
+    with pytest.raises(FileNotFoundError, match="managed bundle integrity"):
+        from_hydra(cfg_dataset)
+
+    assert not list(tmp_path.rglob("*.lance")), "alias mismatch must fail before rendering"
 
 
 @pytest.mark.integration_r2

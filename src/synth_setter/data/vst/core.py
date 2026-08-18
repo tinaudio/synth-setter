@@ -11,6 +11,7 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.plugin_integrity import PluginIntegrityError
 from synth_setter.plugin_runtime import plugin_bundle_version, validated_bundle_lease
 from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
 
@@ -68,7 +69,12 @@ def extract_renderer_version(plugin_path: Path) -> str:
     return plugin_bundle_version(plugin_path)
 
 
-def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
+def load_plugin(
+    plugin_path: str,
+    plugin_name: str | None = None,
+    *,
+    expected_managed_digest: str | None = None,
+) -> VST3Plugin:
     """Load a VST3 plugin instance after validating manager-owned integrity.
 
     No warm-up — see ``warmup_plugin``.
@@ -77,10 +83,13 @@ def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
     :param plugin_name: Factory class to open from a multi-class bundle; ``None``
         opens the sole class, and pedalboard raises ``ValueError`` listing the
         classes when a bundle exposes more than one.
+    :param expected_managed_digest: Managed identity pinned by the render config.
     :returns: The loaded plugin.
     """
     logger.info(f"Loading plugin {plugin_path}")
-    with validated_bundle_lease(Path(plugin_path)) as validated_bundle:
+    with validated_bundle_lease(
+        Path(plugin_path), expected_digest=expected_managed_digest
+    ) as validated_bundle:
         validated_path = str(validated_bundle)
         p = (
             VST3Plugin(validated_path)
@@ -203,7 +212,9 @@ def render_params(
     channels: int,
     plugin_state_path: str | None = None,
     *,
+    expected_managed_digest: str | None = None,
     plugin: VST3Plugin | None = None,
+    preloaded_managed_digest: str | None = None,
     warmup: bool = False,
 ) -> np.ndarray:
     """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
@@ -223,14 +234,27 @@ def render_params(
     :param sample_rate: Audio sample rate in Hz.
     :param channels: Number of output channels.
     :param plugin_state_path: Optional pedalboard plugin-state file to load.
+    :param expected_managed_digest: Managed identity pinned by the render config.
     :param plugin: Existing plugin instance to reuse.
+    :param preloaded_managed_digest: Validated identity carried with ``plugin``.
     :param warmup: Whether to run the plugin warm-up sequence.
     :returns: Rendered audio as a channel-first NumPy array.
+    :raises PluginIntegrityError: A preloaded plugin lacks the configured identity.
     """
     if plugin is None:
-        plugin = load_plugin(plugin_path)
+        if expected_managed_digest is None:
+            plugin = load_plugin(plugin_path)
+        else:
+            plugin = load_plugin(
+                plugin_path,
+                expected_managed_digest=expected_managed_digest,
+            )
         if plugin_state_path is not None:
             load_preset(plugin, plugin_state_path)
+    elif preloaded_managed_digest != expected_managed_digest:
+        raise PluginIntegrityError(
+            "preloaded plugin managed identity does not match the render config"
+        )
 
     if warmup:
         warmup_plugin(plugin)

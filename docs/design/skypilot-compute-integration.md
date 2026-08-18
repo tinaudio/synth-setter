@@ -113,9 +113,9 @@ synth-setter-skypilot-launch skypilot_launch/compute=runpod/training-hclass 'sky
 
 All options share the launcher (`src/synth_setter/pipeline/skypilot_launch.py`),
 the `dev-snapshot` Docker image, the R2-uploaded spec contract, and the
-unified worker entrypoint (`synth-setter-generate-dataset-from-hydra` —
-the `@hydra.main` worker-side console script in
-`src/synth_setter/cli/generate_dataset.py`). They differ only in the
+`synth-setter-generate-dataset-from-spec-uri` worker entrypoint. Workers load
+the launcher's canonical `WORKER_SPEC_URI` rather than recomposing Hydra. The
+options differ only in the
 `resources:` entries (provider, accelerators vs. CPU/memory floor) and the
 provider-specific credential setup in CI. Future targets follow the same
 pattern.

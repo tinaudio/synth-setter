@@ -81,6 +81,19 @@ class TestShardMetadataStrictness:
         with pytest.raises(ValidationError):
             ShardMetadata(**_valid_kwargs(velocity="100"))
 
+    @pytest.mark.parametrize(
+        "digest",
+        ["a" * 63, "A" * 64, "g" * 64],
+        ids=["short", "uppercase", "nonhex"],
+    )
+    def test_managed_plugin_digest_invalid_shape_rejected(self, digest: str) -> None:
+        """Managed artifact identity requires exactly 64 lowercase hex characters.
+
+        :param digest: Malformed managed bundle digest.
+        """
+        with pytest.raises(ValidationError, match="managed_plugin_digest"):
+            ShardMetadata(**_valid_kwargs(managed_plugin_digest=digest))
+
     def test_malformed_sidecar_json_raises(self) -> None:
         """A malformed provenance payload (missing field) fails loudly on validate."""
         payload = json.dumps({"velocity": 100, "channels": 2})  # incomplete

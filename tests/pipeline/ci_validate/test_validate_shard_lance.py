@@ -567,6 +567,94 @@ def test_validate_lance_shard_reports_attempt_budget_metadata_mismatch(tmp_path:
     assert any("attempts_per_sample" in error for error in errors)
 
 
+def test_validate_lance_shard_reports_managed_plugin_digest_mismatch(tmp_path: Path) -> None:
+    """A shard rendered with managed artifact B cannot validate against spec A.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    base = build_lance_smoke_spec()
+    synth_a = base.render.synth.model_copy(update={"managed_plugin_digest": "a" * 64})
+    render_a = base.render.model_copy(update={"synth": synth_a})
+    spec_a = base.model_copy(update={"render": render_a})
+    shapes = dataset_field_shapes(spec_a.render, spec_a.num_params)
+    metadata_b = _first_shard_metadata(spec_a).model_copy(
+        update={"managed_plugin_digest": "b" * 64}
+    )
+    schema = lance_schema(shapes, metadata_b)
+    shard = tmp_path / spec_a.shards[0].filename
+    write_lance_dataset(
+        shard,
+        schema,
+        [record_batch_from_arrays(_zero_arrays(shapes), schema, debug=None)],
+    )
+
+    errors = validate_shard(shard, spec_a)
+
+    assert any("managed_plugin_digest" in error and "does not match" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_missing_managed_plugin_digest(tmp_path: Path) -> None:
+    """A managed spec rejects legacy shard metadata without its artifact identity.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    base = build_lance_smoke_spec()
+    synth_a = base.render.synth.model_copy(update={"managed_plugin_digest": "a" * 64})
+    spec_a = base.model_copy(update={"render": base.render.model_copy(update={"synth": synth_a})})
+    shapes = dataset_field_shapes(spec_a.render, spec_a.num_params)
+    metadata_without_digest = _first_shard_metadata(base)
+    schema = lance_schema(shapes, metadata_without_digest)
+    shard = tmp_path / spec_a.shards[0].filename
+    write_lance_dataset(
+        shard,
+        schema,
+        [record_batch_from_arrays(_zero_arrays(shapes), schema, debug=None)],
+    )
+
+    errors = validate_shard(shard, spec_a)
+
+    assert any("managed_plugin_digest" in error and "missing" in error for error in errors)
+
+
+def test_validate_lance_shard_reports_unexpected_managed_plugin_digest(tmp_path: Path) -> None:
+    """An unmanaged spec rejects shard metadata that claims managed content.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    metadata = _first_shard_metadata(spec).model_copy(update={"managed_plugin_digest": "a" * 64})
+    schema = lance_schema(shapes, metadata)
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(
+        shard,
+        schema,
+        [record_batch_from_arrays(_zero_arrays(shapes), schema, debug=None)],
+    )
+
+    errors = validate_shard(shard, spec)
+
+    assert any("managed_plugin_digest" in error and "does not match" in error for error in errors)
+
+
+def test_validate_lance_shard_accepts_absent_digest_for_unmanaged_spec(tmp_path: Path) -> None:
+    """Absent digest provenance matches an unmanaged spec.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = build_lance_smoke_spec()
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    shard = tmp_path / spec.shards[0].filename
+    write_lance_dataset(
+        shard,
+        schema,
+        [record_batch_from_arrays(_zero_arrays(shapes), schema, debug=None)],
+    )
+
+    assert validate_shard(shard, spec) == []
+
+
 def test_validate_lance_shard_reports_missing_column(tmp_path: Path) -> None:
     """A Lance shard missing one writer field reports the absent column.
 

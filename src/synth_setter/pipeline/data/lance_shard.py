@@ -85,7 +85,9 @@ def lance_schema(
     fields.extend(PREVIEW_SCHEMA)
     return pa.schema(
         fields,
-        metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode("utf-8")},
+        metadata={
+            SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json(exclude_none=True).encode("utf-8")
+        },
     )
 
 

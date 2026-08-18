@@ -1323,6 +1323,38 @@ class TestRun(RenderSeamFixtures):
 
         assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
+    def test_managed_plugin_digest_mismatch_raises_before_render(
+        self,
+        patched_subprocess: MagicMock,
+        fake_r2_remote: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fail before renderer or R2 work when managed content differs from the spec.
+
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param fake_r2_remote: Local-typed R2 remote — asserted empty.
+        :param tmp_path: Pytest tmp dir used by ``_base_spec_kwargs``.
+        :param monkeypatch: Reports the worker's validated managed-plugin identity.
+        """
+        kwargs = _base_spec_kwargs(tmp_path)
+        render = kwargs["render"]
+        render["synth"] = {  # type: ignore[index]
+            **render["synth"],  # type: ignore[index]
+            "managed_plugin_digest": "a" * 64,
+        }
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.managed_plugin_digest",
+            lambda _path: "b" * 64,
+        )
+
+        with pytest.raises(RuntimeError, match="Managed plugin digest mismatch"):
+            generate(spec, tmp_path, [])
+
+        patched_subprocess.assert_not_called()
+        assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+
     def test_synth_version_mismatch_raises_before_uploads(
         self,
         patched_subprocess: MagicMock,
@@ -2444,6 +2476,68 @@ class TestSpecFromCfg:
         assert spec.r2.bucket == "from-group-bucket"
         assert spec.r2.prefix_root == "data"
 
+    def test_detected_managed_digest_is_pinned_in_nested_synth(
+        self,
+        valid_dataset_spec_kwargs: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Launcher materialization copies validated managed identity into the spec.
+
+        :param valid_dataset_spec_kwargs: Baseline spec kwargs from conftest.
+        :param monkeypatch: Supplies the managed digest detected from local content.
+        """
+        from omegaconf import OmegaConf
+
+        from synth_setter.cli import generate_dataset
+
+        monkeypatch.setattr(generate_dataset, "managed_plugin_digest", lambda _path: "a" * 64)
+
+        spec = generate_dataset.spec_from_cfg(OmegaConf.create(valid_dataset_spec_kwargs))
+
+        assert spec.render.synth.managed_plugin_digest == "a" * 64
+
+    def test_unmanaged_plugin_preserves_absent_digest(
+        self,
+        valid_dataset_spec_kwargs: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Launcher materialization leaves unmanaged plugin identity absent.
+
+        :param valid_dataset_spec_kwargs: Baseline spec kwargs from conftest.
+        :param monkeypatch: Classifies the local plugin path as unmanaged.
+        """
+        from omegaconf import OmegaConf
+
+        from synth_setter.cli import generate_dataset
+
+        monkeypatch.setattr(generate_dataset, "managed_plugin_digest", lambda _path: None)
+
+        spec = generate_dataset.spec_from_cfg(OmegaConf.create(valid_dataset_spec_kwargs))
+
+        assert spec.render.synth.managed_plugin_digest is None
+
+    def test_configured_digest_conflict_rejected_before_launch(
+        self,
+        valid_dataset_spec_kwargs: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Launcher refuses configured provenance that contradicts local content.
+
+        :param valid_dataset_spec_kwargs: Baseline spec kwargs from conftest.
+        :param monkeypatch: Supplies the conflicting managed digest detected locally.
+        """
+        from omegaconf import OmegaConf
+
+        from synth_setter.cli import generate_dataset
+
+        render = valid_dataset_spec_kwargs["render"]
+        synth = render["synth"]  # type: ignore[index]
+        synth["managed_plugin_digest"] = "a" * 64  # type: ignore[index]
+        monkeypatch.setattr(generate_dataset, "managed_plugin_digest", lambda _path: "b" * 64)
+
+        with pytest.raises(ValueError, match="configured managed plugin digest"):
+            generate_dataset.spec_from_cfg(OmegaConf.create(valid_dataset_spec_kwargs))
+
 
 # PROJECT_ROOT-bootstrap behavior is exercised end-to-end by tests/pipeline/configs/
 # test_experiment_yamls.py — those tests fail with an InterpolationResolutionError if the
@@ -2456,7 +2550,7 @@ class TestSpecFromCfg:
 
 
 class TestBuildWorkerCmd:
-    """The worker cmd reconstructs the operator's Hydra invocation under bash."""
+    """The worker command consumes the launcher's uploaded canonical spec."""
 
     @pytest.fixture()
     def spec(self, tmp_path: Path) -> DatasetSpec:
@@ -2467,104 +2561,65 @@ class TestBuildWorkerCmd:
         """
         return DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
 
-    def test_cmd_uses_from_hydra_console_script(self, spec: DatasetSpec) -> None:
-        """The worker reproduces the composition by re-entering the from_hydra entry point.
+    def test_cmd_uses_canonical_spec_uri_console_script(self, spec: DatasetSpec) -> None:
+        """The worker loads ``WORKER_SPEC_URI`` instead of recomposing Hydra config.
 
-        :param spec: Fixture-provided ``DatasetSpec``.
+        :param spec: Fixture-provided ``DatasetSpec`` proving no local spec input is needed.
         """
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd(["experiment=foo"], spec)
-        assert "synth-setter-generate-dataset-from-hydra" in cmd
-        assert "experiment=foo" in cmd
+        cmd = _build_worker_cmd()
+        assert "synth-setter-generate-dataset-from-spec-uri" in cmd
+        assert "WORKER_SPEC_URI" in cmd
+        assert "from-hydra" not in cmd
+        assert spec.created_at.isoformat() not in cmd
 
-    def test_cmd_cds_to_worker_repo_root_not_launcher_repo(self, spec: DatasetSpec) -> None:
-        """Cd target is the worker checkout, not the launcher's path.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        """
+    def test_cmd_cds_to_worker_repo_root_not_launcher_repo(self) -> None:
+        """Cd target is the worker checkout, not the launcher's path."""
         from synth_setter.cli.generate_dataset import _WORKER_REPO_ROOT, _build_worker_cmd
 
-        cmd = _build_worker_cmd([], spec)
+        cmd = _build_worker_cmd()
         assert cmd.startswith(f"cd {_WORKER_REPO_ROOT}")
         assert _WORKER_REPO_ROOT == "/home/build/synth-setter"
 
-    def test_cmd_uses_configured_worker_checkout_dir(self, spec: DatasetSpec) -> None:
-        """Dataset dispatch honors a non-default worker checkout directory.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        """
+    def test_cmd_uses_configured_worker_checkout_dir(self) -> None:
+        """Dataset dispatch honors a non-default worker checkout directory."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd([], spec, worker_checkout_dir="/workspace/custom repo")
+        cmd = _build_worker_cmd(worker_checkout_dir="/workspace/custom repo")
 
         assert cmd.startswith("cd '/workspace/custom repo'")
 
-    def test_cmd_runs_sync_worker_checkout_before_exec(self, spec: DatasetSpec) -> None:
-        """sync_worker_checkout.sh bypasses dev-snapshot bake-lag when WORKER_GIT_REF is set.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        """
+    def test_cmd_runs_sync_worker_checkout_before_exec(self) -> None:
+        """sync_worker_checkout.sh bypasses dev-snapshot bake-lag when WORKER_GIT_REF is set."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd([], spec)
+        cmd = _build_worker_cmd()
         sync_idx = cmd.find("bash scripts/sync_worker_checkout.sh")
-        exec_idx = cmd.find("exec synth-setter-generate-dataset-from-hydra")
+        exec_idx = cmd.find("exec synth-setter-generate-dataset-from-spec-uri")
         assert sync_idx != -1, f"sync step missing from cmd: {cmd!r}"
         assert exec_idx != -1, f"exec step missing from cmd: {cmd!r}"
         assert sync_idx < exec_idx, "sync_worker_checkout must run before exec"
 
-    def test_cmd_repairs_stale_worker_python_before_sync(self, spec: DatasetSpec) -> None:
-        """The PR checkout can raise the Python floor before the image is rebuilt.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        """
+    def test_cmd_repairs_stale_worker_python_before_sync(self) -> None:
+        """The PR checkout can raise the Python floor before the image is rebuilt."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd([], spec)
+        cmd = _build_worker_cmd()
         sync_idx = cmd.find("bash scripts/sync_worker_checkout.sh")
         repair_idx = cmd.find("source scripts/ensure_worker_python.sh")
-        exec_idx = cmd.find("exec synth-setter-generate-dataset-from-hydra")
+        exec_idx = cmd.find("exec synth-setter-generate-dataset-from-spec-uri")
         assert repair_idx != -1, f"python repair step missing from cmd: {cmd!r}"
         assert "uv venv --python 3.12.13" in cmd
         assert "bash scripts/sync_worker_checkout.sh --python-ready" in cmd
         assert repair_idx < sync_idx < exec_idx
 
-    def test_cmd_pins_spec_created_at_via_hydra_override(self, spec: DatasetSpec) -> None:
-        """Worker compose must inherit launcher's created_at to land on the same r2.prefix.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        """
+    def test_cmd_requires_worker_spec_uri_without_trailing_shell_whitespace(self) -> None:
+        """The shell fails clearly when dispatch omitted the canonical spec URI."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd([], spec)
-        # `+key=value` is Hydra's add-key syntax; spec.created_at.isoformat() goes in verbatim
-        # (no surrounding quotes added by shlex when the value has no shell metachars).
-        assert f"+created_at={spec.created_at.isoformat()}" in cmd
-
-    def test_cmd_shell_quotes_overrides_with_spaces(self, spec: DatasetSpec) -> None:
-        """Spaces and special chars in an override survive bash interpretation in run:.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        """
-        from synth_setter.cli.generate_dataset import _build_worker_cmd
-
-        cmd = _build_worker_cmd(["task_name=value with space"], spec)
-        # shlex.quote wraps the whole assignment in single quotes; the bare-word form
-        # would be split into two argv items by bash.
-        assert "'task_name=value with space'" in cmd
-
-    def test_cmd_handles_empty_operator_overrides(self, spec: DatasetSpec) -> None:
-        """No operator overrides → cmd is just cd + sync + exec + pinned-runtime override.
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        """
-        from synth_setter.cli.generate_dataset import _build_worker_cmd
-
-        cmd = _build_worker_cmd([], spec)
-        assert cmd.startswith("cd ")
-        assert " && exec synth-setter-generate-dataset-from-hydra " in cmd
-        # No bash-interpretable trailing whitespace that would surface as an empty argv item.
+        cmd = _build_worker_cmd()
+        assert "${WORKER_SPEC_URI:?WORKER_SPEC_URI is required}" in cmd
         assert cmd == cmd.rstrip()
 
 
@@ -2807,7 +2862,7 @@ class TestMainDispatchBranches:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """A selected compute option routes through dispatch_via_skypilot with cmd populated.
+        """A selected compute option dispatches a worker that consumes the frozen spec.
 
         :param monkeypatch: Pytest fixture used to patch argv and module functions.
         :param tmp_path: Pytest fixture providing a fresh test directory.
@@ -2829,6 +2884,7 @@ class TestMainDispatchBranches:
             f"synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             f"skypilot_launch.env_file={env_file}",
+            "~logger",
         ]
         monkeypatch.setattr("sys.argv", argv)
 
@@ -2849,11 +2905,41 @@ class TestMainDispatchBranches:
         submitted_task = fake_sky.jobs.launch.call_args.args[0]
         worker_cmd = submitted_task.run
         assert worker_cmd is not None
-        for override in argv[1:]:
-            assert override in worker_cmd, (
-                f"override {override!r} missing from worker cmd: {worker_cmd!r}"
-            )
+        assert "synth-setter-generate-dataset-from-spec-uri" in worker_cmd
+        assert "WORKER_SPEC_URI" in worker_cmd
+        assert "--no-wandb" in worker_cmd
+        assert all(override not in worker_cmd for override in argv[1:])
         fake_sky.jobs.launch.assert_called_once()
+
+    def test_remote_managed_digest_hashed_once_before_uploaded_spec(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Remote dispatch reuses the digest pinned by config materialization.
+
+        :param monkeypatch: Records launcher-side digest validation calls.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "synth-setter-generate-dataset",
+                "experiment=generate_dataset/smoke-shard",
+                f"synth.plugin_path={TEST_PLUGIN_VST3}",
+                "skypilot_launch/compute=runpod/smoke",
+            ],
+        )
+        digest = MagicMock(return_value="a" * 64)
+        monkeypatch.setattr(gd, "managed_plugin_digest", digest)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", MagicMock())
+
+        _call_hydra_main(gd.main)
+
+        uploaded = gd.upload_spec.call_args.args[0]  # type: ignore[attr-defined]
+        assert uploaded.render.synth.managed_plugin_digest == "a" * 64
+        digest.assert_called_once_with(TEST_PLUGIN_VST3)
 
     def test_remote_dawdreamer_dispatch_does_not_validate_launcher_runtime(
         self,
@@ -3166,7 +3252,10 @@ class TestMainDispatchBranches:
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
         # Identity is one nested field; updating the read-only flat properties
         # through model_copy would be silently ignored.
-        render = spec.render.model_copy(update={"synth": SYNTHS[SynthName("surge_xt")]})
+        synth = SYNTHS[SynthName("surge_xt")].model_copy(
+            update={"managed_plugin_digest": "a" * 64}
+        )
+        render = spec.render.model_copy(update={"synth": synth})
         predict_file = dataset_root / "test.lance"
         n_samples = 4
         _write_lance_split(predict_file, n_samples)
@@ -3208,6 +3297,7 @@ class TestMainDispatchBranches:
         assert "synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
         assert "synth.plugin_path=plugins/Surge XT.vst3" in called_argv
         assert f"synth.synth_version={render.synth.synth_version}" in called_argv
+        assert f"+synth.managed_plugin_digest={'a' * 64}" in called_argv
         assert f"render.renderer_backend={render.renderer_backend}" in called_argv
         assert f"render.plugin_reload_cadence={render.plugin_reload_cadence}" in called_argv
         assert f"render.gui_toggle_cadence={render.gui_toggle_cadence}" in called_argv

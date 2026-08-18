@@ -87,11 +87,25 @@ def test_make_audio_renderer_surgepy_returns_real_renderer() -> None:
 
 
 def test_make_audio_renderer_pedalboard_render_cadence_stays_lazy() -> None:
-    """Render cadence defers plugin loading to each renderer call."""
-    renderer = make_audio_renderer(_render_config(plugin_reload_cadence="render"))
+    """Render cadence defers plugin loading while retaining its managed identity."""
+    digest = "a" * 64
+    config = _render_config(
+        plugin_reload_cadence="render",
+        synth={
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-simple.vstpreset",
+            "synth_version": "1.3.4",
+            "managed_plugin_digest": digest,
+        },
+    )
+
+    renderer = make_audio_renderer(config)
 
     assert isinstance(renderer, PedalboardRenderer)
     assert renderer.plugin is None
+    assert renderer.expected_managed_digest == digest
 
 
 @pytest.mark.requires_vst
@@ -113,17 +127,30 @@ def test_make_audio_renderer_pedalboard_once_loads_preset(
     """
     plugin = MagicMock(name="plugin")
     loaded_presets: list[tuple[object, str]] = []
-    monkeypatch.setattr("synth_setter.data.vst.core.load_plugin", lambda _path: plugin)
+    loaded_digests: list[str | None] = []
+
+    def _load(_path: str, *, expected_managed_digest: str | None) -> MagicMock:
+        loaded_digests.append(expected_managed_digest)
+        return plugin
+
+    monkeypatch.setattr("synth_setter.data.vst.core.load_plugin", _load)
     monkeypatch.setattr(
         "synth_setter.data.vst.core.load_preset",
         lambda loaded, path: loaded_presets.append((loaded, path)),
     )
     config = _render_config(plugin_reload_cadence="once")
+    config = config.model_copy(
+        update={
+            "synth": config.synth.model_copy(update={"managed_plugin_digest": "a" * 64})
+        }
+    )
 
     renderer = make_audio_renderer(config)
 
     assert isinstance(renderer, PedalboardRenderer)
     assert renderer.plugin is plugin
+    assert renderer.preloaded_managed_digest == config.synth.managed_plugin_digest
+    assert loaded_digests == [config.synth.managed_plugin_digest]
     assert loaded_presets == [(plugin, config.plugin_state_path)]
 
 
@@ -162,10 +189,19 @@ def test_make_audio_renderer_dawdreamer_unit_maps_reload_cadence(
     config = _render_config(
         renderer_backend="dawdreamer",
         plugin_reload_cadence=cadence,
+        synth={
+            "name": "surge_simple",
+            "param_spec_name": "surge_simple",
+            "plugin_path": "plugins/Surge XT.vst3",
+            "plugin_state_path": "presets/surge-simple.vstpreset",
+            "synth_version": "1.3.4",
+            "managed_plugin_digest": "a" * 64,
+        },
     )
 
     make_audio_renderer(config)
 
+    assert captured["expected_managed_digest"] == "a" * 64
     assert captured["reload_plugin_each_render"] is reload_each_render
 
 

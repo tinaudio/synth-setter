@@ -109,6 +109,16 @@ def _metadata_mismatch_errors(
         wanted = getattr(expected, field)
         if observed != wanted:
             errors.append(f"{source}: {field}={observed!r} does not match spec value {wanted!r}")
+
+    expected_digest = expected.managed_plugin_digest
+    digest_is_present = "managed_plugin_digest" in present_fields
+    if expected_digest is not None and not digest_is_present:
+        errors.append(f"{source}: managed_plugin_digest is missing for managed spec")
+    elif metadata.managed_plugin_digest != expected_digest:
+        errors.append(
+            f"{source}: managed_plugin_digest={metadata.managed_plugin_digest!r} "
+            f"does not match spec value {expected_digest!r}"
+        )
     return errors
 
 
@@ -148,6 +158,7 @@ def _expected_shard_metadata(
         base_seed=spec.render.base_seed if base_seed is None else base_seed,
         sample_offset=spec.render.sample_offset if sample_offset is None else sample_offset,
         attempts_per_sample=spec.render.attempts_per_sample,
+        managed_plugin_digest=spec.render.synth.managed_plugin_digest,
     )
 
 
