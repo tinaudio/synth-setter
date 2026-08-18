@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 __all__ = ["_to_dict", "compose_subtree", "compose_train_cfg"]
 
@@ -36,12 +36,28 @@ def clean_global_hydra() -> Iterator[None]:
 
 
 def _to_dict(node: Any) -> dict[str, Any]:
-    """Resolve an OmegaConf node to ``dict[str, Any]`` for ``model_validate``.
+    """Convert OmegaConf to a dict and resolve typed conditioning fields.
 
-    :param node: OmegaConf container to resolve.
+    Runtime-only interpolations remain unresolved in extra fields; Pydantic receives
+    resolved values for every conditioning field it validates.
+
+    :param node: OmegaConf container to convert.
     :return: Plain ``dict[str, Any]`` representation.
     """
-    return cast("dict[str, Any]", OmegaConf.to_container(node, resolve=False))
+    container = cast("dict[str, Any]", OmegaConf.to_container(node, resolve=False))
+    for section_name in (None, "datamodule", "model"):
+        section = node if section_name is None else node.get(section_name)
+        target = container if section_name is None else container.get(section_name)
+        if not isinstance(section, DictConfig) or not isinstance(target, dict):
+            continue
+        if "conditioning" in section:
+            conditioning = section.conditioning
+            target["conditioning"] = (
+                OmegaConf.to_container(conditioning, resolve=True, throw_on_missing=True)
+                if OmegaConf.is_config(conditioning)
+                else conditioning
+            )
+    return container
 
 
 def compose_train_cfg(

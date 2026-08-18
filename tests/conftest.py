@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -21,7 +22,11 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from synth_setter.conditioning import NUM_SKETCH_TRACK_ROWS, SKETCH_PITCH_BINS
+from synth_setter.conditioning import (
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_PITCH_BINS,
+    EmbeddingConditioningSpec,
+)
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
@@ -29,7 +34,8 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
-from synth_setter.resources import vst_headless_wrapper
+from synth_setter.resources import configs_dir, vst_headless_wrapper
+from synth_setter.schemas.train_config import TrainConfig
 from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.utils.callbacks import LogPerParamMSE
 from synth_setter.utils.utils import register_resolvers
@@ -55,16 +61,6 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
-_EMBEDDING_KEYS = (
-    "clap",
-    "m2l",
-    "same_s",
-    "same_l",
-    "ssondo",
-    "t5gemma",
-    "matpac_plus",
-    "meanaudio_16k",
-)
 _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
@@ -95,6 +91,71 @@ def assert_clap_preserves_resampler_output(encoder: ClapAudioEncoder, checkpoint
 
     assert resampled.abs().max() > 1.0
     assert torch.allclose(encoder.features(waveform), expected, atol=1e-5, rtol=0.0)
+
+
+@dataclass(frozen=True)
+class CachedEmbeddingConditioningProfile:
+    """Describe one validated cached Hydra conditioning profile.
+
+    .. attribute :: profile
+
+        Shared Hydra profile and embedding registry key.
+
+    .. attribute :: conditioning
+
+        Canonical persisted conditioning contract.
+    """
+
+    profile: str
+    conditioning: EmbeddingConditioningSpec
+
+
+def cached_embedding_conditioning_profiles() -> tuple[CachedEmbeddingConditioningProfile, ...]:
+    """Compose cached profiles and match them to their registry producers.
+
+    :returns: Profiles ordered by their Hydra config name.
+    :raises AssertionError: Config and registry conditioning inventories disagree.
+    """
+    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+
+    profiles: list[CachedEmbeddingConditioningProfile] = []
+    config_paths = sorted((configs_dir() / "conditioning").glob("*.yaml"))
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        for config_path in config_paths:
+            profile = config_path.stem
+            cfg = compose(
+                config_name="eval.yaml",
+                overrides=[
+                    "experiment=surge/flow_simple",
+                    f"conditioning={profile}",
+                    "trainer=cpu",
+                ],
+            )
+            parsed = TrainConfig.from_hydra_cfg(cfg)
+            if parsed.model is None:
+                raise AssertionError(f"conditioning profile {profile!r} has no model config")
+            conditioning = parsed.model.conditioning
+            if not isinstance(conditioning, EmbeddingConditioningSpec):
+                continue
+
+            producer = EMBEDDING_REGISTRY.get(profile)
+            if (
+                producer is None
+                or not producer.supports_cached_conditioning
+                or producer.column != conditioning.column
+            ):
+                raise AssertionError(
+                    f"conditioning profile {profile!r} does not match its registry producer"
+                )
+            profiles.append(CachedEmbeddingConditioningProfile(profile, conditioning))
+
+    registered = {
+        name for name, spec in EMBEDDING_REGISTRY.items() if spec.supports_cached_conditioning
+    }
+    discovered = {profile.profile for profile in profiles}
+    if registered != discovered:
+        raise AssertionError(f"conditioning inventories disagree: {registered ^ discovered}")
+    return tuple(profiles)
 
 
 def assert_log_per_param_mse_wired(trainer: Any, param_spec_name: str) -> None:
@@ -1353,6 +1414,7 @@ def local_embedding_checkpoints() -> dict[str, str]:
 
     from synth_setter.pipeline.data.meanaudio import resolve_meanaudio_checkpoint
     from synth_setter.pipeline.data.ssondo import resolve_ssondo_checkpoint
+    from synth_setter.pupujepa import resolve_pupujepa_checkpoint
 
     download_model()
     snapshot_download(
@@ -1392,6 +1454,8 @@ def local_embedding_checkpoints() -> dict[str, str]:
         pytest.skip(message)
     checkpoints = {name: str(path) for name, path in _EMBEDDING_E2E_CHECKPOINTS.items()}
     checkpoints["meanaudio_16k"] = str(resolve_meanaudio_checkpoint())
+    checkpoints["pupujepa_tiny"] = str(resolve_pupujepa_checkpoint(variant="tiny"))
+    checkpoints["pupujepa_large"] = str(resolve_pupujepa_checkpoint(variant="large"))
     checkpoints["ssondo"] = str(resolve_ssondo_checkpoint())
     return checkpoints
 
@@ -1775,20 +1839,25 @@ def augment_lance_splits_with_all_embeddings(
     :returns: Augmented dataset root.
     """
     train_uri = dataset_root / "train.lance"
-    command = [
-        sys.executable,
-        "-m",
-        "synth_setter.pipeline.data.add_embeddings",
-        f"lance_uri={train_uri}",
-        f"embeddings=[{','.join(_EMBEDDING_KEYS)}]",
-        f"param_spec_name={param_spec_name}",
-        "device=cpu",
-        "build_index=false",
-        *(f"checkpoints.{name}={checkpoint}" for name, checkpoint in checkpoints.items()),
-    ]
-    subprocess.run(  # noqa: S603 — validated local paths passed to the project CLI
-        command, check=True, timeout=3600
-    )
+    for case in cached_embedding_conditioning_profiles():
+        checkpoint = checkpoints.get(case.profile)
+        checkpoint_override = (
+            [] if checkpoint is None else [f"checkpoints.{case.profile}={checkpoint}"]
+        )
+        command = [
+            sys.executable,
+            "-m",
+            "synth_setter.pipeline.data.add_embeddings",
+            f"lance_uri={train_uri}",
+            f"embeddings=[{case.profile}]",
+            f"param_spec_name={param_spec_name}",
+            "device=cpu",
+            "build_index=false",
+            *checkpoint_override,
+        ]
+        subprocess.run(  # noqa: S603 — validated local paths passed to the project CLI
+            command, check=True, timeout=3600
+        )
     for split in ("val", "test"):
         destination = dataset_root / f"{split}.lance"
         shutil.rmtree(destination)
@@ -1883,95 +1952,52 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     """
     import lance
 
-    from synth_setter.data.vst.shapes import (
-        AUDIO_FIELD,
-        CLAP_FIELD,
-        M2L_FIELD,
-        MATPAC_PLUS_FIELD,
-        MEANAUDIO_16K_FIELD,
-        MEL_SPEC_FIELD,
-        PARAM_ARRAY_FIELD,
-        SAME_L_FIELD,
-        SAME_S_FIELD,
-        SSONDO_FIELD,
-        T5GEMMA_FIELD,
-    )
-    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
-    from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
+    from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 
+    profiles = cached_embedding_conditioning_profiles()
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(_EMBEDDING_KEYS) == set(EMBEDDING_REGISTRY)
-    assert {
+    expected_columns = {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
         PARAM_ARRAY_FIELD,
-        CLAP_FIELD,
-        M2L_FIELD,
-        SAME_S_FIELD,
-        SAME_L_FIELD,
-        SSONDO_FIELD,
-        T5GEMMA_FIELD,
-        MATPAC_PLUS_FIELD,
-        MEANAUDIO_16K_FIELD,
-    } <= set(dataset.schema.names)
+        *(case.conditioning.column for case in profiles),
+    }
+    assert expected_columns <= set(dataset.schema.names)
     assert dataset.count_rows() == _EMBEDDING_E2E_ROWS
 
     table = dataset.to_table(
-        columns=[
-            AUDIO_FIELD,
-            CLAP_FIELD,
-            M2L_FIELD,
-            SAME_S_FIELD,
-            SAME_L_FIELD,
-            SSONDO_FIELD,
-            T5GEMMA_FIELD,
-            MATPAC_PLUS_FIELD,
-            MEANAUDIO_16K_FIELD,
-        ]
+        columns=[AUDIO_FIELD, *(case.conditioning.column for case in profiles)]
     )
     for column in table.columns:
         assert column.null_count == 0
 
     audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
-    clap = np.stack(table.column(CLAP_FIELD).to_numpy(zero_copy_only=False))
-    m2l = table.column(M2L_FIELD).combine_chunks().to_numpy_ndarray()
-    same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
-    same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
-    ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
-    t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
-    matpac_plus = table.column(MATPAC_PLUS_FIELD).combine_chunks().to_numpy_ndarray()
-    meanaudio_16k = table.column(MEANAUDIO_16K_FIELD).combine_chunks().to_numpy_ndarray()
-
     assert audio.shape == (_EMBEDDING_E2E_ROWS, 2, 176400)
     assert not np.array_equal(audio[0], audio[1])
-    for name, values, shape in (
-        ("clap", clap, (_EMBEDDING_E2E_ROWS, 512)),
-        ("m2l", m2l, (_EMBEDDING_E2E_ROWS, 128, 42)),
-        ("same_s", same_s, (_EMBEDDING_E2E_ROWS, 256, 44)),
-        ("same_l", same_l, (_EMBEDDING_E2E_ROWS, 256, 44)),
-        ("ssondo", ssondo, (_EMBEDDING_E2E_ROWS, 960)),
-        ("matpac_plus", matpac_plus, (_EMBEDDING_E2E_ROWS, 3840, 25)),
-        ("meanaudio_16k", meanaudio_16k, (_EMBEDDING_E2E_ROWS, 20, 125)),
-    ):
-        assert values.shape == shape, f"{name} shape is {values.shape}, expected {shape}"
-        assert values.dtype == np.float32, f"{name} dtype is {values.dtype}"
-        assert np.isfinite(values).all(), f"{name} contains non-finite values"
-        flat = values.reshape(_EMBEDDING_E2E_ROWS, -1)
-        assert np.linalg.norm(flat, axis=1).min() > 0, f"{name} contains a zero row"
-        assert flat.std(axis=1).min() > 0, f"{name} contains a constant row"
-        assert not np.array_equal(values[0], values[1]), f"{name} collapsed distinct inputs"
 
-    assert t5gemma.shape == (
-        _EMBEDDING_E2E_ROWS,
-        T5GEMMA_EMBEDDING_DIM,
-        T5GEMMA_MAX_LENGTH,
-    )
-    assert t5gemma.dtype == np.float32
-    assert np.isfinite(t5gemma).all()
-    assert np.linalg.norm(t5gemma.reshape(_EMBEDDING_E2E_ROWS, -1), axis=1).min() > 0
-    np.testing.assert_array_equal(t5gemma[0], t5gemma[1])
+    for case in profiles:
+        column = table.column(case.conditioning.column).combine_chunks()
+        if hasattr(column, "to_numpy_ndarray"):
+            values = column.to_numpy_ndarray()
+        else:
+            values = np.stack(column.to_numpy(zero_copy_only=False))
+        expected_shape = (_EMBEDDING_E2E_ROWS, *case.conditioning.input_shape)
+        assert values.shape == expected_shape, (
+            f"{case.profile} shape is {values.shape}, expected {expected_shape}"
+        )
+        assert values.dtype == np.float32, f"{case.profile} dtype is {values.dtype}"
+        assert np.isfinite(values).all(), f"{case.profile} contains non-finite values"
+        flat = values.reshape(_EMBEDDING_E2E_ROWS, -1)
+        assert np.linalg.norm(flat, axis=1).min() > 0, f"{case.profile} contains a zero row"
+        assert flat.std(axis=1).min() > 0, f"{case.profile} contains a constant row"
+        if case.profile == "t5gemma":
+            np.testing.assert_array_equal(values[0], values[1])
+        else:
+            assert not np.array_equal(values[0], values[1]), (
+                f"{case.profile} collapsed distinct inputs"
+            )
 
 
 def augment_lance_splits_with_same(dataset_root: Path, conditioning: str) -> Path:
