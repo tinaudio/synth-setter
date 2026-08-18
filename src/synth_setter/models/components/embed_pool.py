@@ -25,7 +25,8 @@ def make_sin_pos_enc(max_len: int, d_enc: int) -> torch.Tensor:
     )
     pe[:, 0::2] = torch.sin(position * div_term)
     # An odd width has one fewer cosine column than sine, so the top band is sine-only.
-    pe[:, 1::2] = torch.cos(position * div_term[: d_enc // 2])
+    if d_enc // 2:
+        pe[:, 1::2] = torch.cos(position * div_term[: d_enc // 2])
 
     # Add an extra dimension for batch size compatibility.
     pe = pe.unsqueeze(0)  # Shape: (1, max_len, d_model)

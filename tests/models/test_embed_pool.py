@@ -6,7 +6,7 @@ import torch
 from synth_setter.models.components.embed_pool import make_sin_pos_enc
 
 
-@pytest.mark.parametrize("d_enc", [8, 7], ids=["even-width", "odd-width"])
+@pytest.mark.parametrize("d_enc", [8, 7, 1], ids=["even-width", "odd-width", "single-width"])
 def test_make_sin_pos_enc_at_any_width_pairs_each_cosine_column_with_its_sine(
     d_enc: int,
 ) -> None:
