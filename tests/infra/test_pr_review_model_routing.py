@@ -797,7 +797,25 @@ def test_pi_review_launcher_declares_detached_follow_up_contract() -> None:
     assert "anthropic" not in follow_up.lower()
     analysis = (REPO_ROOT / "agent/skills/_shared/repo-review-full-analysis.md").read_text()
     assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt' in analysis
+    assert "set -o pipefail" in analysis
+    assert "history_fetched=false" in analysis
+    assert "gh api --paginate" in analysis
+    assert "--jq '.[]' | jq -s '.'" in analysis
+    assert "pr_author=<PR-author-login-from-Step-1>" in analysis
+    assert "pi_review_routing.py review-history" in analysis
+    assert '--review-history "$review_history"' in analysis
     assert '`pass_name: "codex"`' in analysis
+
+    follow_up_brief = (REPO_ROOT / "agent/skills/_shared/repo-review-follow-up.md").read_text()
+    assert "set -o pipefail" in follow_up_brief
+    assert "history_fetched=false" in follow_up_brief
+    assert "gh api --paginate" in follow_up_brief
+    assert "--jq '.[]' | jq -s '.'" in follow_up_brief
+    assert "pr_author=<PR-author-login-from-Step-2>" in follow_up_brief
+    assert "pi_review_routing.py review-history" in follow_up_brief
+    assert '--review-history "$review_history"' in follow_up_brief
+    assert "including adopted" in follow_up_brief
+    assert "against the refreshed review history" in follow_up_brief
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
