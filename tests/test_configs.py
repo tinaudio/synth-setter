@@ -594,6 +594,24 @@ def test_pupujepa_tiny_online_profile_pins_checkpoint_identity() -> None:
     assert cfg.model.encoder.head.embed_dim == 1536
 
 
+def test_pupujepa_online_head_pools_the_same_span_as_the_cached_profile() -> None:
+    """Online and cached PupuJEPA profiles describe one four-second teacher sequence.
+
+    The online head builds a persistent positional buffer from ``max_seq_len``, so a
+    span wider than the render emits leaves trained rows the forward pass never reads.
+    """
+    cached = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny", "trainer=cpu"],
+    )
+    online = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny_online", "trainer=cpu"],
+    )
+
+    assert online.model.encoder.head.max_seq_len == cached.model.conditioning.input_shape[1]
+
+
 def test_eval_config_conditioning_unset_composes() -> None:
     """eval.yaml still composes when the ``conditioning`` group is left at null."""
     cfg = _compose("eval.yaml", ["experiment=surge/flow_simple", "trainer=cpu"])

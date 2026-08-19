@@ -59,5 +59,6 @@ synth-setter-add-embeddings \
 Use `conditioning=pupujepa_tiny` or `conditioning=pupujepa_large` for cached four-second
 sequences. Use the corresponding `_online` profile to resample waveforms and pool the frozen
 teacher sequence at training or evaluation time. All profiles use the existing `EmbeddingPool`
-head; online heads accept up to 256 time patches, matching the checkpoint's 1,024-frame training
-window. Frozen teachers run in float32 even when the surrounding trainer uses mixed precision.
+head sized to the 100 time patches a four-second render emits, matching the cached profiles'
+sequence length. Frozen teachers run in float32 even when the surrounding trainer uses mixed
+precision.
