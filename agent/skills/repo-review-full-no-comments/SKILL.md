@@ -66,8 +66,12 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > appears below — never run the command with the literal `<N>` placeholder:
 >
 > ```bash
-> gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
->   --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+> repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+> gh pr view <N> --repo "$repo" \
+>   --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup \
+>   || exit $?
+> base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)" || exit $?
+> printf 'base_sha=%s\n' "$base_sha"
 > ```
 >
 > This is the exact call from `agent/skills/_shared/repo-review-full-analysis.md`
@@ -90,7 +94,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 > - `number`: `null` — no PR yet; use the branch name in any user-facing text.
 > - `headRefOid`: `head_sha`
-> - `baseRefOid`: `base_sha`
+> - `base_sha`: computed merge base SHA.
 > - `headRefName`: `head_ref`
 > - `title`: `git log -1 --pretty=%s` (informational only).
 > - `files`: parsed `git diff --name-status` output.
