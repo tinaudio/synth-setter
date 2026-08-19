@@ -28,6 +28,7 @@ repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 gh pr view <N> --repo "$repo" \
   --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
 base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)"
+printf 'base_sha=%s\n' "$base_sha"
 ```
 
 If there is no PR for the current branch, stop and tell the user to push and open a PR first.
