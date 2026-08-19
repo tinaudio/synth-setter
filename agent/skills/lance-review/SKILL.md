@@ -55,7 +55,8 @@ against in your report so a future reviewer can re-check against a newer release
 
 Restrict to files in the PR/diff. Find every Lance interaction. `$BASE` and
 `$HEAD` are the PR's base- and head-commit SHAs (from PR metadata, e.g.
-`gh pr view <N> --json baseRefOid,headRefOid`, or otherwise set by the harness);
+`gh api repos/<owner>/<repo>/pulls/<n> --jq .base.sha` and
+`gh pr view <N> --json headRefOid`, or otherwise set by the harness);
 export them before running the snippet:
 
 ```bash

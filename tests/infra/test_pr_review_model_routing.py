@@ -261,6 +261,27 @@ def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
     )
 
 
+def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
+    """Keep PR review metadata compatible with the installed gh CLI."""
+    skill_paths = (
+        "agent/skills/_shared/repo-review-full-analysis.md",
+        "agent/skills/correctness-review/SKILL.md",
+        "agent/skills/lance-review/SKILL.md",
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "agent/skills/repo-review/SKILL.md",
+    )
+    skills = {path: (REPO_ROOT / path).read_text() for path in skill_paths}
+    metadata_paths = (
+        "agent/skills/_shared/repo-review-full-analysis.md",
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "agent/skills/repo-review/SKILL.md",
+    )
+    assert all("baseRefOid" not in text for text in skills.values())
+    for path in metadata_paths:
+        assert "number,headRefOid,baseRefName,files,title,headRefName" in skills[path]
+        assert 'gh api "repos/${repo}/pulls/<N>" --jq .base.sha' in skills[path]
+
+
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
