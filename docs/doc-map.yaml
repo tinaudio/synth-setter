@@ -513,6 +513,8 @@ docs:
         covers: "PLUGIN_PATH, VST_AVAILABLE, VST_SUBPROCESS_TIMEOUT_SECONDS, TEST_SYNTH_VERSION (composed live from the root configs/synth/<synth>.yaml group at import, not hardcoded)"
       - pattern: "tests/data/vst/test_synth_version_pins.py"
         covers: "Synth-version pin tests"
+      - pattern: "tests/test_experiment_configs_compose.py"
+        covers: "Composability sweep over every shipped experiment/**/*.yaml against the entrypoint it targets (dataset.yaml for generate_dataset/*, else train.yaml); strict-xfail carve-out for configs whose model group is missing"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
       - pattern: "tests/pipeline/**"
