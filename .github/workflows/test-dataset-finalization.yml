@@ -95,7 +95,7 @@ jobs:
       tail: true
       local: true
       artifact_name: finalize-presubmit-${{ matrix.output_format }}-${{ matrix.scenario }}
-      hydra_overrides: ${{ matrix.scenario == 'queue' && 'use_shard_queue=true' || '' }}
+      hydra_overrides: ${{ matrix.scenario == 'queue' && 'use_shard_queue=true render.parallel=true' || '' }}
       # github.run_id keeps every push on a fresh R2 prefix — a new push resets
       # run_attempt to 1, and reusing a prior push's prefix replays its stale
       # claim state ("no staged-valid attempt", see #2084).

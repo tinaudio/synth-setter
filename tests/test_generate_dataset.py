@@ -36,8 +36,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -70,6 +71,7 @@ from synth_setter.pipeline.schemas.render_metrics import (
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
+from synth_setter.pipeline.subprocess_stream import check_call_streamed
 from synth_setter.plugin_manager import ArtifactLock, PluginManifest, adopt_plugin_bundle
 from tests._vst import (
     PLUGIN_PATH,
@@ -701,16 +703,17 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
+def test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Claims mode stages one real VST Lance shard that validates from fake R2.
+    """Parallel claims mode overlaps two real VST renders and stages both shards.
 
-    :param cfg_dataset: Hydra dataset config reduced to one sample and shard.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
-        (also where ``lance_target`` resolves the claims table).
+    :param cfg_dataset: Hydra dataset config reduced to two one-sample shards.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Synchronizes renderer entry and pins two local workers.
     :param tmp_path: Scratch directory holding Hydra's worktree-relative links.
     """
     from synth_setter.pipeline.r2_io import lance_target
@@ -720,9 +723,10 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
-        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.train_val_test_sizes = [2, 0, 0]
         cfg_dataset.use_shard_queue = True
         cfg_dataset.synth.plugin_path = str(_managed_real_plugin(tmp_path))
+        cfg_dataset.render.parallel = True
         cfg_dataset.render.samples_per_render_batch = 1
         cfg_dataset.render.samples_per_shard = 1
         cfg_dataset.r2.prefix = "fake-r2/real-vst-claims/"
@@ -731,13 +735,25 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     spec = spec_from_cfg(cfg_dataset)
     claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
     claims.populate(shard.shard_id for shard in spec.shards)
+    render_barrier = threading.Barrier(2, timeout=10.0)
+
+    def _synchronize_renderers(cmd: Sequence[str]) -> bytes:
+        if any(Path(part).name == "generate_vst_dataset.py" for part in cmd):
+            render_barrier.wait()
+        return check_call_streamed(cmd)
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        _synchronize_renderers,
+    )
 
     from_hydra(cfg_dataset)
 
     staging_root = (
         fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
     )
-    assert len(list(staging_root.rglob("*.valid"))) == 1
+    assert len(list(staging_root.rglob("*.valid"))) == 2
     assert validate_all_shards_from_r2(spec) == []
     assert claims.claim() is None
     assert claims.status_counts() == {"done": spec.num_shards}

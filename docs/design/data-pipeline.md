@@ -54,13 +54,13 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > implemented today (`src/synth_setter/cli/generate_dataset.py` loops over
 > `spec.shards`, skipping shards already present in R2 — worker-side
 > resumability MVP per #750; the launcher-side reconciliation engine described
-> in §7.4 / §7.7 is not yet built). When `render.parallel=True`, owned shards
+> in §7.4 / §7.7 is not yet built). When `render.parallel=true`, owned shards
 > dispatch concurrently via a thread pool sized to half the worker's
 > affinity-aware CPU count; transient renderer subprocess failures are retried
 > up to `render.max_retries` times (default 0 = strict fail-fast).
 > `use_shard_queue=true` instead claims shard IDs dynamically from the run's
-> Lance shard-claims table (§7.1); claims mode renders one claim at a time and
-> ignores `render.parallel`. The
+> Lance shard-claims table (§7.1), using the same local concurrency bound when
+> parallel rendering is enabled. The
 > distributed/parallel pipeline described below — CLI, backends, reconciliation,
 > and finalize stages — is the design target and not yet built.
 
