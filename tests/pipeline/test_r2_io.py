@@ -1606,6 +1606,90 @@ class TestLanceTarget:
         assert options is not None and options["endpoint"] == "https://r2.example"
 
 
+class TestDeleteObject:
+    """Tests for strict single-object deletion through real rclone."""
+
+    def test_operational_failure_raises(
+        self, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Propagate rclone failures instead of reporting a successful deletion.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param monkeypatch: Replaces the backend type with an invalid rclone backend.
+        """
+        marker = fake_r2_remote / "bucket" / "run" / "dataset.complete"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "not-a-backend")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            r2_io.delete_object("r2://bucket/run/dataset.complete")
+
+        assert marker.exists()
+
+    def test_existing_object_is_removed(self, fake_r2_remote: Path) -> None:
+        """Remove an existing object and verify its absence.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        marker = fake_r2_remote / "bucket" / "run" / "dataset.complete"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("")
+
+        r2_io.delete_object("r2://bucket/run/dataset.complete")
+
+        assert not marker.exists()
+
+    def test_absent_object_is_tolerated(self, fake_r2_remote: Path) -> None:
+        """Treat confirmed absence as an idempotent successful deletion.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        r2_io.delete_object("r2://bucket/run/missing.json")
+
+
+class TestDeletePrefix:
+    """Tests for strict prefix deletion through real rclone."""
+
+    def test_existing_prefix_is_removed(self, fake_r2_remote: Path) -> None:
+        """Remove every object under the exact prefix.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        prefix = fake_r2_remote / "bucket" / "run" / "val.lance"
+        (prefix / "data").mkdir(parents=True)
+        (prefix / "data" / "fragment.lance").write_text("rows")
+
+        r2_io.delete_prefix("r2://bucket/run/val.lance/")
+
+        assert not prefix.exists()
+
+    def test_absent_prefix_is_tolerated(self, fake_r2_remote: Path) -> None:
+        """Treat confirmed prefix absence as an idempotent successful deletion.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        r2_io.delete_prefix("r2://bucket/run/missing/")
+
+    def test_operational_failure_raises(
+        self, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Propagate rclone prefix deletion failures.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param monkeypatch: Replaces the backend type with an invalid rclone backend.
+        """
+        prefix = fake_r2_remote / "bucket" / "run" / "val.lance"
+        prefix.mkdir(parents=True)
+        (prefix / "fragment.lance").write_text("rows")
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "not-a-backend")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            r2_io.delete_prefix("r2://bucket/run/val.lance/")
+
+        assert prefix.exists()
+
+
 class TestPurgePrefix:
     """Tests for purge_prefix — best-effort recursive delete via `rclone purge`."""
 
