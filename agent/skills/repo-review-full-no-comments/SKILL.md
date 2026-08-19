@@ -68,8 +68,9 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > ```bash
 > repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 > gh pr view <N> --repo "$repo" \
->   --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
-> base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)"
+>   --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup \
+>   || exit $?
+> base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)" || exit $?
 > printf 'base_sha=%s\n' "$base_sha"
 > ```
 >

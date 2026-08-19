@@ -280,6 +280,7 @@ def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
     for path in metadata_paths:
         assert "number,headRefOid,baseRefName,files,title,headRefName" in skills[path]
         assert 'gh api "repos/${repo}/pulls/<N>" --jq .base.sha' in skills[path]
+        assert skills[path].count("|| exit $?") >= 2
         assert "printf 'base_sha=%s\\n' \"$base_sha\"" in skills[path]
 
 
