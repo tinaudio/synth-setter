@@ -23,6 +23,7 @@ from synth_setter.conditioning import (
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.constants import conditioning_stats_filename
 from synth_setter.pipeline.data.lance_materialize import materialize_splits, subset_dirname
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
@@ -106,6 +107,8 @@ def prepare_batch(
     rescale_params: bool,
     ot: bool,
     generator: torch.Generator,
+    conditioning_mean: np.ndarray | None = None,
+    conditioning_std: np.ndarray | None = None,
     sketch_pitch_zero_threshold: float | None = None,
 ) -> dict[str, torch.Tensor | None]:
     """Turn one batch of stored columns into model-ready tensors.
@@ -116,6 +119,8 @@ def prepare_batch(
     :param rescale_params: Whether to map parameters from ``[0, 1]`` to ``[-1, 1]``.
     :param ot: Whether to Hungarian-match noise to parameters.
     :param generator: RNG for the noise draw.
+    :param conditioning_mean: Cached-conditioning mean, or ``None`` to skip.
+    :param conditioning_std: Cached-conditioning standard deviation, or ``None`` to skip.
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread
@@ -126,6 +131,8 @@ def prepare_batch(
     validation_error = _raw_batch_validation_error(raw)
     if validation_error is not None:
         raise ValueError(validation_error)
+    if (conditioning_mean is None) != (conditioning_std is None):
+        raise ValueError("conditioning_mean and conditioning_std must be provided together")
 
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
@@ -147,13 +154,24 @@ def prepare_batch(
     m2l = torch.from_numpy(m2l_raw).to(dtype=torch.float32) if m2l_raw is not None else None
 
     conditioning_raw = raw.get("conditioning")
-    conditioning = (
-        torch.from_numpy(conditioning_raw).to(dtype=torch.float32)
-        if conditioning_raw is not None
-        else None
-    )
-    if conditioning is not None and not torch.isfinite(conditioning).all():
-        raise ValueError("conditioning float32 conversion produced non-finite values")
+    if conditioning_raw is not None:
+        if conditioning_mean is not None and conditioning_std is not None:
+            affine_shape = (
+                (len(conditioning_mean), 1)
+                if conditioning_raw.ndim == 3 and len(conditioning_mean) > 1
+                else conditioning_mean.shape
+            )
+            with np.errstate(over="ignore", invalid="ignore"):
+                conditioning_raw = (
+                    conditioning_raw - conditioning_mean.reshape(affine_shape)
+                ) / conditioning_std.reshape(affine_shape)
+            if not np.isfinite(conditioning_raw).all():
+                raise ValueError("conditioning normalization produced non-finite values")
+        conditioning = torch.from_numpy(conditioning_raw).to(dtype=torch.float32)
+        if not torch.isfinite(conditioning).all():
+            raise ValueError("conditioning float32 conversion produced non-finite values")
+    else:
+        conditioning = None
 
     sketch_raw = raw.get(SKETCH_CTRL_FIELD)
     if sketch_raw is not None:
@@ -209,6 +227,45 @@ def ranked_generator_seed(base_seed: int, rank: int, num_workers: int = 1) -> in
     :returns: Rank-specific seed accepted by ``manual_seed``.
     """
     return (base_seed + rank * num_workers) % (2**64)
+
+
+def load_conditioning_statistics(
+    dataset_file: str | Path, spec: EmbeddingConditioningSpec
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Optionally load one cached column's dataset-level affine statistics.
+
+    :param dataset_file: Split path whose parent may contain the additive archive.
+    :param spec: Conditioning column, shape, and normalization policy.
+    :returns: ``(mean, std)``, or ``None`` when normalization or its stats are absent.
+    :raises ValueError: Selected arrays are incomplete, mis-shaped, or numerically invalid.
+    """
+    if spec.normalization == "none":
+        return None
+    stats_file = Path(dataset_file).parent / conditioning_stats_filename(spec.column)
+    if not stats_file.exists():
+        return None
+    with np.load(stats_file) as stats:
+        if set(stats.files) != {"mean", "std"}:
+            raise ValueError(
+                f"conditioning statistics for {spec.column!r} must contain mean and std"
+            )
+        mean = stats["mean"]
+        std = stats["std"]
+    expected_shape = (1,) if spec.normalization == "global" else (spec.input_shape[0],)
+    if mean.shape != expected_shape or std.shape != expected_shape:
+        raise ValueError(
+            f"conditioning statistics for {spec.column!r} have shapes "
+            f"{mean.shape}/{std.shape}, expected {expected_shape}"
+        )
+    if not np.isfinite(mean).all() or not np.isfinite(std).all():
+        raise ValueError(
+            f"conditioning statistics for {spec.column!r} must contain finite values"
+        )
+    if np.any(std <= 0):
+        raise ValueError(
+            f"conditioning statistics std for {spec.column!r} must be positive"
+        )
+    return mean, std
 
 
 def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.ndarray]:

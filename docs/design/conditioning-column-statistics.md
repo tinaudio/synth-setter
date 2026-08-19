@@ -51,6 +51,30 @@ uv run python scripts/dev/characterise_conditioning_columns.py DATASET.lance \
 - **clap: already normalised — skip** — every sampled row has L2 norm 1.000000.
 - **ssondo: standardise** — row norms average 2.74 and channel scales vary by more than 20x.
 
+## Training integration
+
+Each measured profile now declares its normalization policy. Sequence columns use one dataset-level
+mean and standard deviation per channel, broadcast over frames; vector columns use one pair per
+feature. MATPAC++ uses one global pair across all channels and bands so relative spectral energy is
+preserved. CLAP and PupuJEPA Tiny skip normalization. MeanAudio remains unchanged because it was not
+measured here.
+
+The streaming Welford command writes an immutable, column-specific artifact beside the finalized
+training split. It accepts local or canonical R2 Lance URIs and publishes
+`conditioning_stats.<column>.npz`; finalized `stats.npz` remains owned exclusively by Lance
+finalization.
+
+```bash
+uv run python -m synth_setter.pipeline.data.stats TRAIN.lance \
+  --conditioning-column same_l \
+  --conditioning-shape 256 44 \
+  --conditioning-normalization per_channel
+```
+
+The datamodule reuses the training affine for validation and test splits. Missing column statistics
+are a backward-compatible no-op. Standard deviations below `1e-6` are replaced with one, so a dead
+channel becomes zero after mean subtraction instead of producing a non-finite value.
+
 ## Specific checks
 
 ### CLAP L2 normalization
