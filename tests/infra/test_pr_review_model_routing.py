@@ -285,6 +285,53 @@ def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
         assert "printf 'base_sha=%s\\n' \"$base_sha\"" in skills[path]
 
 
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pr_review_metadata_command_returns_base_sha_with_supported_gh_fields(
+    tmp_path: Path,
+) -> None:
+    """Execute the canonical metadata command through a controlled gh boundary.
+
+    :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    """
+    analysis = (
+        REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
+    ).read_text()
+    metadata_section = analysis.split("Fetch metadata once:", maxsplit=1)[1]
+    command = metadata_section.split("```bash\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
+
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == repo && $2 == view ]]; then
+  printf '%s\\n' 'tinaudio/synth-setter'
+elif [[ $1 == pr && $2 == view ]]; then
+  [[ $* == *baseRefName* && $* != *baseRefOid* ]]
+  printf '%s\\n' '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
+elif [[ $1 == api && $2 == repos/tinaudio/synth-setter/pulls/123 ]]; then
+  printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+else
+  exit 64
+fi
+"""
+    )
+    fake_gh.chmod(0o755)
+    env = os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}"}
+
+    sh = importlib.import_module("sh")
+    result = sh.bash(
+        "-c",
+        command.replace("<N>", "123"),
+        _cwd=REPO_ROOT,
+        _env=env,
+    )
+
+    assert str(result).splitlines() == [
+        '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}',
+        "base_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]
+
+
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     """Keep natural-language orchestration connected to tested routing behavior."""
     text = (
