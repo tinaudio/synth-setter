@@ -277,6 +277,7 @@ def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
         "agent/skills/repo-review/SKILL.md",
     )
     assert all("baseRefOid" not in text for text in skills.values())
+    assert all("pulls/<n>" not in text for text in skills.values())
     for path in metadata_paths:
         assert "number,headRefOid,baseRefName,files,title,headRefName" in skills[path]
         assert 'gh api "repos/${repo}/pulls/<N>" --jq .base.sha' in skills[path]
