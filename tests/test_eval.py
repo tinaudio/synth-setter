@@ -134,11 +134,18 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
     assert "test/param_mse" in result.stdout
 
 
-def test_evaluate_flow_sketch_prelim_test_mode_uses_sketch_controls(
+@pytest.mark.parametrize(
+    "experiment",
+    ["surge/flow_sketch_prelim", "surge/flow_sketch_440k"],
+    ids=["prelim", "440k"],
+)
+def test_evaluate_shipped_sketch_experiments_use_sketch_controls(
+    experiment: str,
     cfg_train_sketch_lance: DictConfig,
 ) -> None:
-    """The shipped sketch experiment composes and evaluates its nested controls.
+    """Each shipped sketch experiment composes and evaluates its nested controls.
 
+    :param experiment: Shipped sketch experiment driven through ``evaluate``.
     :param cfg_train_sketch_lance: Fixture providing real m2l+sketch Lance splits.
     """
     GlobalHydra.instance().clear()
@@ -147,7 +154,7 @@ def test_evaluate_flow_sketch_prelim_test_mode_uses_sketch_controls(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/flow_sketch_prelim",
+                f"experiment={experiment}",
                 "datamodule=surge_lance",
                 "synth=surge_4",
                 "conditioning=m2l",
