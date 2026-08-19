@@ -14,17 +14,18 @@ import torch
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
-from synth_setter.cli import clap_render
+from synth_setter.cli import clap_render, surge_render
 from synth_setter.cli.clap_render import (
     compare_embeddings,
     main,
-    resolve_inverse_checkpoint,
     summarize_cosine_distances,
     write_summary_csv,
 )
+from synth_setter.cli.surge_render import resolve_inverse_checkpoint
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_CLI_HELP_TIMEOUT_SECONDS = 120
 
 
 def test_cli_whitespace_prompt_exits_before_creating_output() -> None:
@@ -167,7 +168,7 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
     :param monkeypatch: Renderer-boundary replacement fixture.
     """
     render_config = clap_render._load_settings().render
-    spec = clap_render.param_specs[render_config.param_spec_name]
+    spec = surge_render.param_specs[render_config.param_spec_name]
     synth_params, _ = spec.sample(np.random.default_rng(0))
     encoded = spec.encode(
         synth_params,
@@ -185,6 +186,15 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
             velocity: int,
             note_start_and_end: tuple[float, float],
         ) -> np.ndarray:
+            """Accept only a valid note window and return bounded silence.
+
+            :param params: Decoded Surge parameters.
+            :param midi_note: Predicted MIDI note.
+            :param velocity: Configured note velocity.
+            :param note_start_and_end: Canonical note window in seconds.
+            :returns: Finite channel-first waveform.
+            :raises ValueError: The note window violates the renderer contract.
+            """
             del params, midi_note, velocity
             start, end = note_start_and_end
             if not 0.0 <= start < end <= render_config.signal_duration_seconds:
@@ -194,13 +204,48 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
             return np.zeros((render_config.channels, samples), dtype=np.float32)
 
     renderer = StrictRenderer()
-    monkeypatch.setattr(clap_render, "make_audio_renderer", lambda _: renderer)
+    monkeypatch.setattr(surge_render, "make_audio_renderer", lambda _: renderer)
 
     output = tmp_path / "descending-note.wav"
-    clap_render._render_wav(prediction, render_config, output)
+    surge_render.render_wav(prediction, render_config, output)
 
     assert renderer.note_window == pytest.approx((0.8, 3.2))
     assert output.is_file()
+
+
+def test_render_wav_out_of_range_audio_rejects_before_persistence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid renderer output never reaches the WAV writer.
+
+    :param tmp_path: Temporary WAV destination.
+    :param monkeypatch: Renderer-boundary replacement fixture.
+    """
+    render_config = clap_render._load_settings().render
+    spec = surge_render.param_specs[render_config.param_spec_name]
+    synth_params, note_params = spec.sample(np.random.default_rng(0))
+    prediction = torch.from_numpy(
+        spec.encoded_to_model(spec.encode(synth_params, note_params))
+    ).unsqueeze(0)
+
+    class OutOfRangeRenderer:
+        def render(self, *_args: object) -> np.ndarray:
+            """Return audio that violates the persisted waveform contract.
+
+            :param *_args: Ignored production render inputs.
+            :returns: Out-of-range channel-first waveform.
+            """
+            samples = int(render_config.sample_rate * render_config.signal_duration_seconds)
+            return np.full((render_config.channels, samples), 1.01, dtype=np.float32)
+
+    monkeypatch.setattr(surge_render, "make_audio_renderer", lambda _: OutOfRangeRenderer())
+    output = tmp_path / "invalid.wav"
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        surge_render.render_wav(prediction, render_config, output)
+
+    assert not output.exists()
 
 
 def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
@@ -273,7 +318,7 @@ def test_console_script_is_installed_and_callable() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr
