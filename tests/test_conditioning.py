@@ -24,6 +24,13 @@ def test_embedding_conditioning_spec_accepts_fixed_shape() -> None:
     assert spec.input_shape == (512,)
 
 
+def test_embedding_conditioning_spec_accepts_hydra_list_shape() -> None:
+    """The canonical config model accepts Hydra's list representation."""
+    spec = EmbeddingConditioningSpec.model_validate({"column": "clap", "input_shape": [512]})
+
+    assert spec.input_shape == (512,)
+
+
 def test_embedding_conditioning_spec_rejects_extra_fields() -> None:
     """Unknown configuration cannot silently cross the conditioning boundary."""
     with pytest.raises(ValidationError, match="unexpected"):

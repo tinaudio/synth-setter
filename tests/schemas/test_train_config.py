@@ -7,8 +7,10 @@ obvious mistakes (wrong types, blank ``task_name``, negative ``seed``) fail.
 from __future__ import annotations
 
 import pytest
+from omegaconf import OmegaConf
 from pydantic import ValidationError
 
+from synth_setter.conditioning import EmbeddingConditioningSpec
 from synth_setter.schemas.train_config import TrainConfig
 from tests.schemas.conftest import compose_train_cfg
 
@@ -28,6 +30,15 @@ class TestTrainConfigAcceptsLiveCompose:
         parsed = TrainConfig.model_validate(cfg_dict)
         assert isinstance(parsed, TrainConfig)
 
+    def test_partial_hydra_composition_without_consumers_validates(self) -> None:
+        """A partial config may omit model and datamodule subtrees."""
+        cfg = OmegaConf.create({"task_name": "train"})
+
+        parsed = TrainConfig.from_hydra_cfg(cfg)
+
+        assert parsed.model is None
+        assert parsed.datamodule is None
+
     def test_typed_scalars_survive_round_trip(self) -> None:
         """Every typed scalar lands on the model with the right type / shape."""
         cfg_dict = compose_train_cfg()
@@ -42,9 +53,45 @@ class TestTrainConfigAcceptsLiveCompose:
         assert model.optimized_metric is None or isinstance(model.optimized_metric, str)
         assert model.watch_gradients is None or isinstance(model.watch_gradients, bool)
 
+    def test_cached_conditioning_uses_canonical_model_for_both_consumers(self) -> None:
+        """A composed cached profile uses the canonical conditioning model."""
+        cfg_dict = compose_train_cfg(
+            overrides=[
+                "datamodule=surge_lance",
+                "model=vst_flow",
+                "conditioning=clap",
+                "synth=surge_xt",
+            ]
+        )
+
+        parsed = TrainConfig.from_hydra_cfg(OmegaConf.create(cfg_dict))
+
+        assert parsed.model is not None
+        assert parsed.datamodule is not None
+        assert isinstance(parsed.model.conditioning, EmbeddingConditioningSpec)
+        assert parsed.model.conditioning == parsed.datamodule.conditioning
+
 
 class TestTrainConfigRejectsBadInputs:
     """Validators must reject obvious mistakes on the scalar fields."""
+
+    def test_mismatched_model_and_datamodule_conditioning_rejected(self) -> None:
+        """The composed boundary rejects consumers wired to different columns."""
+        cfg_dict = compose_train_cfg(
+            overrides=[
+                "datamodule=surge_lance",
+                "model=vst_flow",
+                "conditioning=clap",
+                "synth=surge_xt",
+            ]
+        )
+        cfg_dict["datamodule"]["conditioning"] = {
+            "column": "other",
+            "input_shape": [512],
+        }
+
+        with pytest.raises(ValidationError, match="conditioning must match"):
+            TrainConfig.model_validate(cfg_dict)
 
     def test_blank_task_name_rejected(self) -> None:
         """A blank ``task_name`` would produce an empty output dir; reject it."""

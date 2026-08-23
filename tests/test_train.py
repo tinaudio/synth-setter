@@ -68,6 +68,7 @@ from tests.conftest import (
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
     build_surge_xt_embedding_train_cfg,
+    cached_embedding_conditioning_profiles,
     flatten_lance_embedding_column,
     train_loss_keys,
 )
@@ -2189,18 +2190,6 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = (
-    "clap",
-    "m2l",
-    "same_s",
-    "same_l",
-    "ssondo",
-    "t5gemma",
-    "matpac_plus",
-    "meanaudio_16k",
-)
-
-
 def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
     """Validate a trained embedding-conditioned checkpoint.
 
@@ -2416,6 +2405,7 @@ def test_train_matpac_plus_flattened_lance_returns_finite_loss(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.network
 @pytest.mark.integration_r2
 @pytest.mark.r2
 def test_train_all_embedding_conditioning_and_eval_real_e2e(
@@ -2438,9 +2428,11 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
     )
     assert_embedding_columns(dataset_root)
 
-    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
+    for case in cached_embedding_conditioning_profiles():
+        conditioning = case.profile
+        output_dir = tmp_path / conditioning
         cfg = build_surge_xt_embedding_train_cfg(
-            tmp_path / conditioning,
+            output_dir,
             dataset_root,
             param_spec_name=param_spec_name,
             conditioning=conditioning,
@@ -2458,8 +2450,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
         assert_finite_train_loss(metric_dict)
         if conditioning in {"ssondo", "meanaudio_16k"}:
             _assert_model_predictions_depend_on_conditioning(object_dict)
-        if conditioning == "ssondo":
-            _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
+        _assert_conditioning_checkpoint_validates(cfg, output_dir)
 
     _assert_t5gemma_feed_forward_checkpoint_validates(
         tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name
