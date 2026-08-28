@@ -85,6 +85,105 @@ def _write_lance_split(path: Path, num_rows: int) -> None:
     lance.write_dataset(pa.table({"audio": pa.array(range(num_rows))}), str(path))
 
 
+class _ObservedLock:
+    """Expose lock contention while retaining ordinary mutex semantics."""
+
+    def __init__(self, waiter_started: threading.Event) -> None:
+        """Create a mutex that signals when a contending caller arrives.
+
+        :param waiter_started: Set before a caller waits on an occupied mutex.
+        """
+        self._lock = threading.Lock()
+        self._waiter_started = waiter_started
+
+    def __enter__(self) -> None:
+        if self._lock.locked():
+            self._waiter_started.set()
+        self._lock.acquire()
+
+    def __exit__(self, *_args: object) -> None:
+        self._lock.release()
+
+
+class _ValidationConcurrencyHarness:
+    """Coordinate two shard completion paths without timing-based sleeps."""
+
+    def __init__(self, first_shard: ShardSpec) -> None:
+        """Create synchronization gates for the first shard's completion path.
+
+        :param first_shard: Shard whose validation and staging are held open.
+        """
+        self.first_validation_started = threading.Event()
+        self.release_first_validation = threading.Event()
+        self.validation_waiter_started = threading.Event()
+        self.first_stage_started = threading.Event()
+        self.release_first_stage = threading.Event()
+        self.second_validation_started = threading.Event()
+        self.validation_lock = _ObservedLock(self.validation_waiter_started)
+        self._first_filename = first_shard.filename
+        self._first_shard_id = first_shard.shard_id
+
+    def validate(self, shard_path: Path, _spec: DatasetSpec) -> list[str]:
+        """Block the first validation and observe entry into the second.
+
+        :param shard_path: Rendered shard identifying the first or second path.
+        :param _spec: Dataset spec accepted by the validation boundary.
+        :returns: An empty validation-error list.
+        """
+        if shard_path.name == self._first_filename:
+            self.first_validation_started.set()
+            assert self.release_first_validation.wait(timeout=5.0)
+        else:
+            assert self.first_stage_started.wait(timeout=5.0)
+            self.second_validation_started.set()
+        return []
+
+    def stage(
+        self,
+        _spec: DatasetSpec,
+        shard: ShardSpec,
+        _shard_path: Path,
+        *,
+        worker_id: str,
+        attempt_uuid: str,
+    ) -> None:
+        """Hold first-shard staging open so second validation can overlap it.
+
+        :param _spec: Dataset spec accepted by the staging boundary.
+        :param shard: Shard whose staging may be held open.
+        :param _shard_path: Local shard path accepted by the staging boundary.
+        :param worker_id: Worker identity accepted by the staging boundary.
+        :param attempt_uuid: Attempt identity accepted by the staging boundary.
+        """
+        del worker_id, attempt_uuid
+        if shard.shard_id == self._first_shard_id:
+            self.first_stage_started.set()
+            assert self.release_first_stage.wait(timeout=5.0)
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the observed mutex and controlled completion boundaries.
+
+        :param monkeypatch: Pytest patcher for the shard completion boundaries.
+        """
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._FULL_SHARD_VALIDATION_LOCK",
+            self.validation_lock,
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.write_rendering_marker",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.validate_shard", self.validate)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt", self.stage
+        )
+
+    def release(self) -> None:
+        """Release both gates during normal completion or assertion failure."""
+        self.release_first_validation.set()
+        self.release_first_stage.set()
+
+
 def _render_valid_shard(args: list[str], spec: DatasetSpec) -> None:
     """Write the validation-shaped Lance shard the renderer promises, for ``spec``.
 
@@ -1886,73 +1985,8 @@ class TestRun(RenderSeamFixtures):
         :param monkeypatch: Installs deterministic validation and staging boundaries.
         """
         spec = _multi_shard_spec(tmp_path, n=2)
-        first_validation_started = threading.Event()
-        release_first_validation = threading.Event()
-        validation_waiter_started = threading.Event()
-        first_stage_started = threading.Event()
-        release_first_stage = threading.Event()
-        second_validation_started = threading.Event()
-        state_lock = threading.Lock()
-        active_validations = 0
-        max_active_validations = 0
-
-        class _ObservedLock:
-            """Expose lock contention while retaining ordinary mutex semantics."""
-
-            def __init__(self) -> None:
-                self._lock = threading.Lock()
-
-            def __enter__(self) -> None:
-                if self._lock.locked():
-                    validation_waiter_started.set()
-                self._lock.acquire()
-
-            def __exit__(self, *_args: object) -> None:
-                self._lock.release()
-
-        def _controlled_validation(_shard_path: Path, _spec: DatasetSpec) -> list[str]:
-            nonlocal active_validations, max_active_validations
-            with state_lock:
-                active_validations += 1
-                max_active_validations = max(max_active_validations, active_validations)
-                validation_number = active_validations
-            try:
-                if validation_number == 1 and not first_validation_started.is_set():
-                    first_validation_started.set()
-                    assert release_first_validation.wait(timeout=5.0)
-                else:
-                    assert first_stage_started.wait(timeout=5.0)
-                    second_validation_started.set()
-                return []
-            finally:
-                with state_lock:
-                    active_validations -= 1
-
-        first_shard_id = spec.shards[0].shard_id
-
-        def _controlled_stage(
-            _spec: DatasetSpec,
-            shard: ShardSpec,
-            _shard_path: Path,
-            **_kwargs: object,
-        ) -> None:
-            if shard.shard_id == first_shard_id:
-                first_stage_started.set()
-                assert release_first_stage.wait(timeout=5.0)
-
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset._FULL_SHARD_VALIDATION_LOCK", _ObservedLock()
-        )
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset.write_rendering_marker",
-            lambda *_args, **_kwargs: None,
-        )
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset.validate_shard", _controlled_validation
-        )
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt", _controlled_stage
-        )
+        concurrency = _ValidationConcurrencyHarness(spec.shards[0])
+        concurrency.install(monkeypatch)
 
         with (
             patch(
@@ -1965,24 +1999,21 @@ class TestRun(RenderSeamFixtures):
                 _render_and_upload_shard, spec, spec.shards[0], tmp_path, loggers=[]
             )
             try:
-                assert first_validation_started.wait(timeout=5.0)
+                assert concurrency.first_validation_started.wait(timeout=5.0)
                 second = executor.submit(
                     _render_and_upload_shard, spec, spec.shards[1], tmp_path, loggers=[]
                 )
-                assert validation_waiter_started.wait(timeout=5.0)
-                assert max_active_validations == 1
-                release_first_validation.set()
-                assert first_stage_started.wait(timeout=5.0)
-                assert second_validation_started.wait(timeout=5.0)
+                assert concurrency.validation_waiter_started.wait(timeout=5.0)
+                assert not concurrency.second_validation_started.is_set()
+                concurrency.release_first_validation.set()
+                assert concurrency.first_stage_started.wait(timeout=5.0)
+                assert concurrency.second_validation_started.wait(timeout=5.0)
                 assert not first.done()
-                release_first_stage.set()
+                concurrency.release_first_stage.set()
                 first.result(timeout=5.0)
                 second.result(timeout=5.0)
             finally:
-                release_first_validation.set()
-                release_first_stage.set()
-
-        assert max_active_validations == 1
+                concurrency.release()
 
     def test_parallel_render_propagates_subprocess_failure(
         self,

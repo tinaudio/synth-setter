@@ -709,7 +709,7 @@ def test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Parallel claims mode overlaps two real VST renders and stages both shards.
+    """Parallel claims mode renders, validates, and stages two consumable shards.
 
     :param cfg_dataset: Hydra dataset config reduced to two one-sample shards.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
@@ -754,6 +754,7 @@ def test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards(
         fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
     )
     assert len(list(staging_root.rglob("*.valid"))) == 2
+    assert all(shard_has_complete_attempt(spec, shard.shard_id) for shard in spec.shards)
     assert validate_all_shards_from_r2(spec) == []
     assert claims.claim() is None
     assert claims.status_counts() == {"done": spec.num_shards}
