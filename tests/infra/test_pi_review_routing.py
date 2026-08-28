@@ -782,12 +782,51 @@ def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> N
         stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
 
 
-def test_stream_host_events_error_without_text_reports_bounded_diagnostic(tmp_path: Path) -> None:
+def test_stream_host_events_error_without_text_reports_provider_diagnostic(tmp_path: Path) -> None:
     """Surface the provider failure that prevented a terminal host response.
 
     :param tmp_path: Temporary location for the live host transcript.
     """
-    provider_error = "OAuth refresh failed: token=secret-value; " + "x" * 5_000
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant","content":[],'
+        '"provider":"openai-codex","model":"gpt-5.6-terra",'
+        '"stopReason":"error","errorMessage":"OAuth refresh failed"}}\n'
+    )
+
+    with pytest.raises(ValueError) as error:
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+    assert "openai-codex/gpt-5.6-terra stopped with error: OAuth refresh failed" in str(
+        error.value
+    )
+
+
+def test_stream_host_events_provider_diagnostic_redacts_compound_tokens(tmp_path: Path) -> None:
+    """Keep OAuth credential fields out of surfaced host errors.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant","content":[],'
+        '"stopReason":"error","errorMessage":'
+        '"refresh_token=refresh-secret access_token=access-secret token=plain-secret"}}\n'
+    )
+
+    with pytest.raises(ValueError) as error:
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+    diagnostic = str(error.value)
+    assert diagnostic.count("<redacted>") == 3
+    assert "refresh-secret" not in diagnostic
+    assert "access-secret" not in diagnostic
+    assert "plain-secret" not in diagnostic
+
+
+def test_stream_host_events_provider_diagnostic_is_bounded(tmp_path: Path) -> None:
+    """Cap provider failures before writing them to caller logs.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
     source = io.StringIO(
         json.dumps(
             {
@@ -795,10 +834,8 @@ def test_stream_host_events_error_without_text_reports_bounded_diagnostic(tmp_pa
                 "message": {
                     "role": "assistant",
                     "content": [],
-                    "provider": "openai-codex",
-                    "model": "gpt-5.6-terra",
                     "stopReason": "error",
-                    "errorMessage": provider_error,
+                    "errorMessage": "x" * 5_000,
                 },
             }
         )
@@ -809,12 +846,53 @@ def test_stream_host_events_error_without_text_reports_bounded_diagnostic(tmp_pa
         stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
 
     diagnostic = str(error.value)
-    assert "openai-codex/gpt-5.6-terra stopped with error" in diagnostic
-    assert "OAuth refresh failed" in diagnostic
-    assert "<redacted>" in diagnostic
-    assert "secret-value" not in diagnostic
-    assert "[truncated]" in diagnostic
-    assert len(diagnostic) < 2_200
+    provider_failure = diagnostic.partition("; transcript:")[0]
+    assert "[truncated]" in provider_failure
+    assert len(provider_failure) < 2_100
+
+
+def test_stream_host_events_empty_event_after_error_preserves_diagnostic(tmp_path: Path) -> None:
+    """Retain a host failure through a later empty lifecycle event.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant","content":[],'
+        '"stopReason":"error","errorMessage":"OAuth refresh failed"}}\n'
+        '{"type":"message_end","message":{"role":"assistant","content":[]}}\n'
+    )
+
+    with pytest.raises(ValueError, match="OAuth refresh failed"):
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+
+def test_stream_host_events_error_with_partial_text_raises(tmp_path: Path) -> None:
+    """Reject partial output from a provider-failed terminal turn.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant",'
+        '"content":"partial report","stopReason":"error",'
+        '"errorMessage":"OAuth refresh failed"}}\n'
+    )
+
+    with pytest.raises(ValueError, match="OAuth refresh failed"):
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+
+def test_stream_host_events_success_after_error_returns_final_text(tmp_path: Path) -> None:
+    """Allow a substantive successful retry to supersede a host failure.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    source = io.StringIO(
+        '{"type":"message_end","message":{"role":"assistant","content":[],'
+        '"stopReason":"error","errorMessage":"transient provider error"}}\n'
+        '{"type":"message_end","message":{"role":"assistant","content":"final report"}}\n'
+    )
+
+    assert stream_host_events(source, tmp_path / "host.jsonl", io.StringIO()) == "final report"
 
 
 def test_extract_report_returns_terminal_assistant_text_without_interpretation(

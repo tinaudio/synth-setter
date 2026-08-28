@@ -570,7 +570,7 @@ def _redact_diagnostic(diagnostic: str) -> str:
         diagnostic,
     )
     return re.sub(
-        r"(?i)\b(bearer|api[-_ ]?key|token)\b"
+        r"(?i)\b(bearer|api[-_ ]?key|(?:(?:access|refresh)[-_ ]?)?token)\b"
         r"((?:\s+(?:is|expired))?\s*[:=\"']*\s*)\S+",
         r"\1\2<redacted>",
         redacted,
@@ -623,8 +623,11 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
             if not raw_line.strip():
                 continue
             event = _HostEvent.model_validate_json(raw_line)
+            event_host_error = None
             if event.message is not None and event.message.role == "assistant":
-                host_error = _host_error_diagnostic(event.message)
+                event_host_error = _host_error_diagnostic(event.message)
+                if event_host_error is not None:
+                    host_error = event_host_error
             if event.type == "message_start" and event.message is not None:
                 message = event.message
                 if message.role == "assistant" and message.provider and message.model:
@@ -649,11 +652,13 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
                     )
                     if not is_acknowledgement:
                         final_text = assistant_text
+                        if assistant_text.strip() and event_host_error is None:
+                            host_error = None
                     notification_pending = False
             progress.flush()
+    if host_error is not None:
+        raise ValueError(f"Pi host {host_error}; transcript: {transcript}")
     if not final_text.strip():
-        if host_error is not None:
-            raise ValueError(f"Pi host {host_error}; transcript: {transcript}")
         raise ValueError(f"Pi host transcript has no final assistant text: {transcript}")
     return final_text
 
