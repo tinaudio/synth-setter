@@ -50,6 +50,7 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import read_spec_text
 
+# Bound scan buffers before NumPy checks and preview decoding amplify batch memory.
 LANCE_VALIDATION_BATCH_SIZE_BYTES = 64 * 1024 * 1024
 
 

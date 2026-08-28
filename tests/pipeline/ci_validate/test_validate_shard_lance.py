@@ -99,6 +99,55 @@ def _first_shard_metadata(spec: DatasetSpec) -> ShardMetadata:
     return smoke_shard_metadata(render)
 
 
+def _write_final_uuid_mismatch_shard(shard: Path, spec: DatasetSpec) -> None:
+    """Write a valid shard except for the final row's audio UUID.
+
+    :param shard: Destination Lance dataset path.
+    :param spec: Dataset contract used to build the shard.
+    """
+    shapes = dataset_field_shapes(spec.render, spec.num_params)
+    schema = lance_schema(shapes, _first_shard_metadata(spec))
+    tensor_arrays = _zero_arrays(shapes)
+    audio_rows = tensor_arrays[AUDIO_FIELD]
+    uuid_rows = [audio_uuid(row) for row in audio_rows]
+    uuid_rows[-1] = "not-the-final-audio-uuid"
+    arrays: dict[str, np.ndarray | Sequence[bytes] | Sequence[str]] = {
+        **tensor_arrays,
+        AUDIO_MP3_FIELD: [
+            encode_audio_to_mp3(row, spec.render.sample_rate, 128) for row in audio_rows
+        ],
+        AUDIO_UUID_FIELD: uuid_rows,
+    }
+    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
+
+
+def _observe_lance_batch_rows(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record row counts from real Lance batches during validation.
+
+    :param monkeypatch: Pytest fixture used to wrap the Lance scanner.
+    :returns: Mutable row-count list populated as batches are yielded.
+    """
+    observed_batch_rows: list[int] = []
+    original_to_batches = lance.LanceDataset.to_batches
+
+    def observe_batches(
+        dataset: lance.LanceDataset,
+        *,
+        columns: list[str] | None = None,
+        batch_size_bytes: int | None = None,
+    ) -> Iterator[pa.RecordBatch]:
+        for batch in original_to_batches(
+            dataset,
+            columns=columns,
+            batch_size_bytes=batch_size_bytes,
+        ):
+            observed_batch_rows.append(batch.num_rows)
+            yield batch
+
+    monkeypatch.setattr(lance.LanceDataset, "to_batches", observe_batches)
+    return observed_batch_rows
+
+
 def test_validate_lance_shard_accepts_split_local_sample_offset(tmp_path: Path) -> None:
     """Validation matches nonzero split-local offset provenance.
 
@@ -153,41 +202,10 @@ def test_validate_lance_shard_bounded_batches_traverse_every_row(
     :param monkeypatch: Pytest fixture reducing the production scan cap and observing batches.
     """
     spec = build_lance_smoke_spec()
-    shapes = dataset_field_shapes(spec.render, spec.num_params)
-    schema = lance_schema(shapes, _first_shard_metadata(spec))
-    tensor_arrays = _zero_arrays(shapes)
-    audio_rows = tensor_arrays[AUDIO_FIELD]
-    uuid_rows = [audio_uuid(row) for row in audio_rows]
-    uuid_rows[-1] = "not-the-final-audio-uuid"
-    arrays: dict[str, np.ndarray | Sequence[bytes] | Sequence[str]] = {
-        **tensor_arrays,
-        AUDIO_MP3_FIELD: [
-            encode_audio_to_mp3(row, spec.render.sample_rate, 128) for row in audio_rows
-        ],
-        AUDIO_UUID_FIELD: uuid_rows,
-    }
     shard = tmp_path / spec.shards[0].filename
-    write_lance_dataset(shard, schema, [record_batch_from_arrays(arrays, schema)])
-
-    observed_batch_rows: list[int] = []
-    original_to_batches = lance.LanceDataset.to_batches
-
-    def observe_batches(
-        dataset: lance.LanceDataset,
-        *,
-        columns: list[str] | None = None,
-        batch_size_bytes: int | None = None,
-    ) -> Iterator[pa.RecordBatch]:
-        for batch in original_to_batches(
-            dataset,
-            columns=columns,
-            batch_size_bytes=batch_size_bytes,
-        ):
-            observed_batch_rows.append(batch.num_rows)
-            yield batch
-
+    _write_final_uuid_mismatch_shard(shard, spec)
+    observed_batch_rows = _observe_lance_batch_rows(monkeypatch)
     monkeypatch.setattr(validate_shard_module, "LANCE_VALIDATION_BATCH_SIZE_BYTES", 1)
-    monkeypatch.setattr(lance.LanceDataset, "to_batches", observe_batches)
 
     errors = validate_shard(shard, spec)
 
