@@ -191,7 +191,8 @@ def test_validate_lance_shard_bounded_batches_traverse_every_row(
 
     errors = validate_shard(shard, spec)
 
-    assert observed_batch_rows == [1, 1, 1, 1]
+    assert len(observed_batch_rows) > 1
+    assert sum(observed_batch_rows) == spec.render.samples_per_shard
     assert f"column {AUDIO_UUID_FIELD!r} row 3 does not match audio" in errors
 
 

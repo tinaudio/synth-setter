@@ -335,6 +335,10 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     monkeypatch.setenv("WANDB_MODE", "offline")
     monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
+    monkeypatch.setattr(
+        "synth_setter.pipeline.ci.validate_shard.LANCE_VALIDATION_BATCH_SIZE_BYTES",
+        1,
+    )
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.synth.plugin_path = str(_TEST_PLUGIN_VST3)
