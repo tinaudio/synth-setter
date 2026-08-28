@@ -26,6 +26,7 @@ from typing import Literal, TextIO
 import sh
 from pydantic import BaseModel, Field, model_validator
 
+_HOST_ERROR_MAX_CHARS = 2_000
 _REPORT_KEYS = frozenset({"findings", "skill", "target", "what_looks_good"})
 _REVIEW_FINDING_BODY_MAX_CHARS = 70_000
 _REVIEW_FINDING_RE = re.compile(r"^\*\*\[[a-z0-9-]+:(?:block|warn|nit)\]\*\*", re.MULTILINE)
@@ -148,6 +149,16 @@ class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
         :type: str | None
 
         Effective model for host lifecycle events.
+
+    .. attribute :: stop_reason
+        :type: str | None
+
+        Provider stop reason for the turn.
+
+    .. attribute :: error_message
+        :type: str | None
+
+        Provider diagnostic when the turn stops with an error.
     """
 
     role: str
@@ -155,6 +166,8 @@ class _TranscriptMessage(BaseModel, strict=True, extra="ignore"):
     usage: _TranscriptUsage | None = None
     provider: str | None = None
     model: str | None = None
+    stop_reason: str | None = Field(default=None, alias="stopReason")
+    error_message: str | None = Field(default=None, alias="errorMessage")
 
 
 class _TranscriptEntry(BaseModel, strict=True, extra="ignore"):
@@ -575,6 +588,22 @@ def _is_notification_acknowledgement(text: str, deliverable: str) -> bool:
     return not stripped or (stripped.startswith("Sentinel:") and "Sentinel:" in deliverable)
 
 
+def _host_error_diagnostic(message: _TranscriptMessage) -> str | None:
+    """Render a safe bounded diagnostic for a failed host turn.
+
+    :param message: Assistant lifecycle payload from Pi.
+    :returns: Provider failure detail, or ``None`` for a non-error turn.
+    """
+    if message.stop_reason != "error":
+        return None
+    selector = "/".join(filter(None, (message.provider, message.model))) or "unknown model"
+    diagnostic = _redact_diagnostic(message.error_message or "no provider diagnostic")
+    marker = "... [truncated]"
+    if len(diagnostic) > _HOST_ERROR_MAX_CHARS:
+        diagnostic = diagnostic[: _HOST_ERROR_MAX_CHARS - len(marker)] + marker
+    return f"{selector} stopped with error: {diagnostic}"
+
+
 def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> str:
     """Persist Pi JSON events live and emit a sanitized progress projection.
 
@@ -585,6 +614,7 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
     :raises ValueError: If an event is malformed or no final response exists.
     """
     final_text = ""
+    host_error: str | None = None
     notification_pending = False
     with transcript.open("w") as transcript_file:
         for raw_line in source:
@@ -593,6 +623,8 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
             if not raw_line.strip():
                 continue
             event = _HostEvent.model_validate_json(raw_line)
+            if event.message is not None and event.message.role == "assistant":
+                host_error = _host_error_diagnostic(event.message)
             if event.type == "message_start" and event.message is not None:
                 message = event.message
                 if message.role == "assistant" and message.provider and message.model:
@@ -620,6 +652,8 @@ def stream_host_events(source: TextIO, transcript: Path, progress: TextIO) -> st
                     notification_pending = False
             progress.flush()
     if not final_text.strip():
+        if host_error is not None:
+            raise ValueError(f"Pi host {host_error}; transcript: {transcript}")
         raise ValueError(f"Pi host transcript has no final assistant text: {transcript}")
     return final_text
 

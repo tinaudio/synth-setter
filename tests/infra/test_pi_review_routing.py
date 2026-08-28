@@ -782,6 +782,41 @@ def test_stream_host_events_empty_terminal_assistant_raises(tmp_path: Path) -> N
         stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
 
 
+def test_stream_host_events_error_without_text_reports_bounded_diagnostic(tmp_path: Path) -> None:
+    """Surface the provider failure that prevented a terminal host response.
+
+    :param tmp_path: Temporary location for the live host transcript.
+    """
+    provider_error = "OAuth refresh failed: token=secret-value; " + "x" * 5_000
+    source = io.StringIO(
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [],
+                    "provider": "openai-codex",
+                    "model": "gpt-5.6-terra",
+                    "stopReason": "error",
+                    "errorMessage": provider_error,
+                },
+            }
+        )
+        + "\n"
+    )
+
+    with pytest.raises(ValueError) as error:
+        stream_host_events(source, tmp_path / "host.jsonl", io.StringIO())
+
+    diagnostic = str(error.value)
+    assert "openai-codex/gpt-5.6-terra stopped with error" in diagnostic
+    assert "OAuth refresh failed" in diagnostic
+    assert "<redacted>" in diagnostic
+    assert "secret-value" not in diagnostic
+    assert "[truncated]" in diagnostic
+    assert len(diagnostic) < 2_200
+
+
 def test_extract_report_returns_terminal_assistant_text_without_interpretation(
     tmp_path: Path,
 ) -> None:
