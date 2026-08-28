@@ -48,6 +48,7 @@ from synth_setter.cli.generate_dataset import (
     _dispatch_shards_from_claims_parallel,
     _dispatch_shards_parallel,
     _load_render_rejections,
+    _render_and_upload_shard,
     _render_one_owned_shard,
     build_generate_args,
     generate,
@@ -58,7 +59,7 @@ from synth_setter.pipeline.schemas.render_metrics import (
     RenderRejectionMetrics,
     render_metrics_path,
 )
-from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.synth_spec import SYNTHS, SynthName
@@ -1873,6 +1874,115 @@ class TestRun(RenderSeamFixtures):
         assert len(thread_ids) >= 2
         for shard in spec.shards:
             assert shard_has_complete_attempt(spec, shard.shard_id)
+
+    def test_full_shard_validation_serializes_only_validation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Concurrent completion paths validate one-at-a-time without serializing staging.
+
+        :param tmp_path: Per-test work directory for two rendered Lance shards.
+        :param monkeypatch: Installs deterministic validation and staging boundaries.
+        """
+        spec = _multi_shard_spec(tmp_path, n=2)
+        first_validation_started = threading.Event()
+        release_first_validation = threading.Event()
+        validation_waiter_started = threading.Event()
+        first_stage_started = threading.Event()
+        release_first_stage = threading.Event()
+        second_validation_started = threading.Event()
+        state_lock = threading.Lock()
+        active_validations = 0
+        max_active_validations = 0
+
+        class _ObservedLock:
+            """Expose lock contention while retaining ordinary mutex semantics."""
+
+            def __init__(self) -> None:
+                self._lock = threading.Lock()
+
+            def __enter__(self) -> None:
+                if self._lock.locked():
+                    validation_waiter_started.set()
+                self._lock.acquire()
+
+            def __exit__(self, *_args: object) -> None:
+                self._lock.release()
+
+        def _controlled_validation(_shard_path: Path, _spec: DatasetSpec) -> list[str]:
+            nonlocal active_validations, max_active_validations
+            with state_lock:
+                active_validations += 1
+                max_active_validations = max(max_active_validations, active_validations)
+                validation_number = active_validations
+            try:
+                if validation_number == 1 and not first_validation_started.is_set():
+                    first_validation_started.set()
+                    assert release_first_validation.wait(timeout=5.0)
+                else:
+                    assert first_stage_started.wait(timeout=5.0)
+                    second_validation_started.set()
+                return []
+            finally:
+                with state_lock:
+                    active_validations -= 1
+
+        first_shard_id = spec.shards[0].shard_id
+
+        def _controlled_stage(
+            _spec: DatasetSpec,
+            shard: ShardSpec,
+            _shard_path: Path,
+            **_kwargs: object,
+        ) -> None:
+            if shard.shard_id == first_shard_id:
+                first_stage_started.set()
+                assert release_first_stage.wait(timeout=5.0)
+
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._FULL_SHARD_VALIDATION_LOCK", _ObservedLock()
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.write_rendering_marker",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.validate_shard", _controlled_validation
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt", _controlled_stage
+        )
+
+        with (
+            patch(
+                "synth_setter.cli.generate_dataset._check_call_streamed",
+                side_effect=lambda args: _render_valid_shard(args, spec),
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(
+                _render_and_upload_shard, spec, spec.shards[0], tmp_path, loggers=[]
+            )
+            try:
+                assert first_validation_started.wait(timeout=5.0)
+                second = executor.submit(
+                    _render_and_upload_shard, spec, spec.shards[1], tmp_path, loggers=[]
+                )
+                assert validation_waiter_started.wait(timeout=5.0)
+                assert max_active_validations == 1
+                release_first_validation.set()
+                assert first_stage_started.wait(timeout=5.0)
+                assert second_validation_started.wait(timeout=5.0)
+                assert not first.done()
+                release_first_stage.set()
+                first.result(timeout=5.0)
+                second.result(timeout=5.0)
+            finally:
+                release_first_validation.set()
+                release_first_stage.set()
+
+        assert max_active_validations == 1
 
     def test_parallel_render_propagates_subprocess_failure(
         self,
