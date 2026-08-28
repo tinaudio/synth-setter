@@ -193,7 +193,8 @@ def test_validate_lance_shard_bounded_batches_traverse_every_row(
 
     assert len(observed_batch_rows) > 1
     assert sum(observed_batch_rows) == spec.render.samples_per_shard
-    assert f"column {AUDIO_UUID_FIELD!r} row 3 does not match audio" in errors
+    final_row = spec.render.samples_per_shard - 1
+    assert f"column {AUDIO_UUID_FIELD!r} row {final_row} does not match audio" in errors
 
 
 def test_validate_lance_shard_missing_preview_columns_reports_both(tmp_path: Path) -> None:
