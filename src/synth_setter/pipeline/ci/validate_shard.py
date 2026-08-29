@@ -50,6 +50,9 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
 from synth_setter.pipeline.spec_io import read_spec_text
 
+# Bound scan buffers before NumPy checks and preview decoding amplify batch memory.
+LANCE_VALIDATION_BATCH_SIZE_BYTES = 64 * 1024 * 1024
+
 
 def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
     """Adapt ``spec`` to :func:`dataset_field_shapes`, the shape contract's home.
@@ -255,7 +258,10 @@ def _validate_lance_values(dataset: lance.LanceDataset, spec: DatasetSpec) -> li
     errors: set[str] = set()
     row_offset = 0
     columns = [*DATASET_FIELD_NAMES, *PREVIEW_FIELD_NAMES]
-    for batch in dataset.to_batches(columns=columns):
+    for batch in dataset.to_batches(
+        columns=columns,
+        batch_size_bytes=LANCE_VALIDATION_BATCH_SIZE_BYTES,
+    ):
         errors.update(_validate_tensor_batch_values(batch))
         errors.update(_validate_preview_batch_values(batch, spec, row_offset))
         row_offset += batch.num_rows
