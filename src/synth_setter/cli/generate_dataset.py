@@ -23,6 +23,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -99,6 +100,9 @@ _RENDERER_SCRIPT = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_da
 _BADWINDOW_FAILURE_METRIC = "generation/badwindow_detected"
 _BADWINDOW_SIGNATURE = b"BadWindow (invalid Window parameter)"
 _X_GET_PROPERTY_SIGNATURE = b"20 (X_GetProperty)"
+# Full Lance validation can hold a multi-GiB shard resident; cap that peak to one shard
+# per process while rendering, staging, and cleanup remain independently parallel.
+_FULL_SHARD_VALIDATION_LOCK = threading.Lock()
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -1051,7 +1055,8 @@ def _render_and_upload_shard(
     logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
     # Worker-side validation gates staging — corrupt renders never earn a
     # .valid marker (design §7.3 shard write protocol).
-    shard_errors = validate_shard(shard_path, spec)
+    with _FULL_SHARD_VALIDATION_LOCK:
+        shard_errors = validate_shard(shard_path, spec)
     if shard_errors:
         raise RuntimeError(
             f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
