@@ -1,4 +1,4 @@
-"""Tests for serving third-party Lance audio corpora with mel conditioning."""
+"""Tests for serving third-party audio corpora with live batch transforms."""
 
 from __future__ import annotations
 
@@ -16,8 +16,28 @@ import torch
 from lance.blob import blob_array, blob_field
 from pedalboard.io import AudioFile
 
-from synth_setter.data.third_party_datamodule import ThirdPartyAudioDataModule, decode_clip
+from synth_setter.conditioning import (
+    EMBEDDING_BATCH_KEY,
+    LEGACY_M2L_INPUT_SHAPE,
+    NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_SLICE,
+    SKETCH_CTRL_FIELD,
+    Conditioning,
+    EmbeddingConditioningSpec,
+    SketchControls,
+    SketchControlSpec,
+)
+from synth_setter.data.third_party_datamodule import (
+    registry_spec,
+    LiveEmbedding,
+    ThirdPartyAudioDataModule,
+    decode_clip,
+)
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
+from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, Encoder
+from synth_setter.pipeline.data.ssondo import SSONDO_EMBEDDING_DIM
 from tests.helpers.lance_fixtures import wav_bytes, write_blob_audio_corpus
 
 # Keep the test corpus compact while retaining a legal mel front-end.
@@ -77,6 +97,9 @@ def _datamodule(
     amplitude_scale: float = 1.0,
     row_limit: int | None = None,
     num_workers: int = 0,
+    conditioning: Conditioning = "mel",
+    sketch: SketchControls = None,
+    embedding_encoder: Encoder | None = None,
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
 ) -> ThirdPartyAudioDataModule:
@@ -88,6 +111,9 @@ def _datamodule(
     :param amplitude_scale: Gain applied to decoded audio.
     :param row_limit: Cap on served rows, or ``None`` for the whole corpus.
     :param num_workers: Dataloader worker processes.
+    :param conditioning: Conditioning mode or embedding spec under test.
+    :param sketch: Sketch-control spec, or ``None`` for no control tokens.
+    :param embedding_encoder: Encoder standing in for downloaded frozen weights.
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
     :returns: Configured, un-setup datamodule.
@@ -102,6 +128,9 @@ def _datamodule(
         amplitude_scale=amplitude_scale,
         row_limit=row_limit,
         num_workers=num_workers,
+        conditioning=conditioning,
+        sketch=sketch,
+        embedding_encoder=embedding_encoder,
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
     )
@@ -247,19 +276,29 @@ def test_saved_statistics_without_uri_raises(tmp_path: Path) -> None:
         _datamodule(tmp_path / "corpus.lance", use_saved_mean_and_variance=True)
 
 
-def test_non_mel_conditioning_raises(tmp_path: Path) -> None:
-    """Reject a conditioning mode this datamodule cannot compute.
+def test_embedding_conditioning_does_not_require_mel_statistics(tmp_path: Path) -> None:
+    """An arm that never reads mel is servable without a statistics source.
 
     :param tmp_path: Isolated corpus fixture directory.
     """
-    with pytest.raises(ValueError, match="mel conditioning only"):
-        ThirdPartyAudioDataModule(
-            dataset_uri=str(tmp_path / "corpus.lance"),
-            sample_rate=_TARGET_SAMPLE_RATE,
-            channels=_TARGET_CHANNELS,
-            signal_duration_seconds=_DURATION_SECONDS,
-            conditioning="clap",
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=15)])
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        return np.ones((len(source), SSONDO_EMBEDDING_DIM), dtype=np.float32)
+
+    batch = _first_batch(
+        _datamodule(
+            tmp_path / "corpus.lance",
+            conditioning=EmbeddingConditioningSpec(
+                column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+            ),
+            embedding_encoder=encode,
+            use_saved_mean_and_variance=True,
         )
+    )
+
+    assert "mel" not in batch
 
 
 def test_corpus_with_its_own_blob_column_name_is_servable(tmp_path: Path) -> None:
@@ -312,6 +351,126 @@ def test_row_limit_caps_served_rows(tmp_path: Path) -> None:
     datamodule.setup("predict")
 
     assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 3
+
+
+def test_live_embedding_emits_the_stored_column_shape() -> None:
+    """The registry's own encode contract shapes the live conditioning tensor."""
+    audio = np.zeros((2, 1, 32_000), dtype=np.float32)
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del source, sample_rate
+        return np.ones((2, SSONDO_EMBEDDING_DIM), dtype=np.float32)
+
+    live = LiveEmbedding(EMBEDDING_REGISTRY["ssondo"], encode, sample_rate=_TARGET_SAMPLE_RATE)
+
+    assert live(audio)["ssondo"].shape == (2, SSONDO_EMBEDDING_DIM)
+
+
+def test_live_embedding_rejects_output_disagreeing_with_registry() -> None:
+    """A malformed live embedding fails where the stored writer would have failed."""
+    audio = np.zeros((2, 1, 32_000), dtype=np.float32)
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del source, sample_rate
+        return np.ones((2, 3), dtype=np.float32)
+
+    live = LiveEmbedding(EMBEDDING_REGISTRY["ssondo"], encode, sample_rate=_TARGET_SAMPLE_RATE)
+
+    with pytest.raises(ValueError, match="produced shape"):
+        live(audio)
+
+
+def test_embedding_conditioning_populates_the_model_batch_key(tmp_path: Path) -> None:
+    """A configured embedding column reaches the model under the shared batch key.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=11)])
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        # Derived from the audio, so a datamodule that passed the wrong tensor fails.
+        level = float(np.abs(source).mean())
+        return np.full((len(source), SSONDO_EMBEDDING_DIM), level, dtype=np.float64)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        conditioning=EmbeddingConditioningSpec(
+            column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+        ),
+        embedding_encoder=encode,
+    )
+    conditioning = _first_batch(datamodule)["conditioning"]
+
+    assert conditioning.shape == (1, SSONDO_EMBEDDING_DIM)
+    assert conditioning.dtype == torch.float32
+    assert torch.isfinite(conditioning).all()
+    assert float(conditioning[0, 0]) == pytest.approx(
+        float(np.abs(_first_batch(datamodule)["audio"].numpy()).mean()), abs=1e-6
+    )
+    assert float(conditioning[0, 0]) > 0.0
+
+
+def test_embedding_conditioning_shape_mismatch_raises(tmp_path: Path) -> None:
+    """A column whose live shape contradicts the checkpoint's spec is rejected.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=12)])
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        return np.ones((len(source), SSONDO_EMBEDDING_DIM), dtype=np.float32)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        conditioning=EmbeddingConditioningSpec(column="ssondo", input_shape=(7,)),
+        embedding_encoder=encode,
+    )
+
+    with pytest.raises(ValueError, match="input_shape"):
+        _first_batch(datamodule)
+
+
+def test_unknown_conditioning_column_raises(tmp_path: Path) -> None:
+    """Only columns the embedding registry can produce are servable live.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=13)])
+
+    with pytest.raises(KeyError, match="nonesuch"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            conditioning=EmbeddingConditioningSpec(column="nonesuch", input_shape=(4,)),
+        )
+
+
+@pytest.mark.slow
+def test_sketch_conditioning_emits_the_control_stack(tmp_path: Path) -> None:
+    """Sketch controls are extracted live and reassembled into the model tensor.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    sketch_rate = 16_000
+    _write_corpus(
+        tmp_path / "corpus.lance",
+        [_tone(_DURATION_SECONDS, sample_rate=sketch_rate, seed=14)],
+        sample_rate=sketch_rate,
+    )
+
+    batch = _first_batch(
+        _datamodule(
+            tmp_path / "corpus.lance",
+            sample_rate=sketch_rate,
+            sketch=SketchControlSpec(num_frames=51, num_control_tokens=4),
+        )
+    )
+
+    controls = batch[SKETCH_CTRL_FIELD]
+
+    assert controls.shape == (1, NUM_SKETCH_CONTROLS, 51)
+    assert controls.dtype == torch.float32
 
 
 def test_multichannel_source_disagreeing_with_contract_raises() -> None:
@@ -423,6 +582,32 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
 
 
+@pytest.mark.slow
+def test_sketch_frames_disagreeing_with_the_checkpoint_spec_raise(tmp_path: Path) -> None:
+    """Live controls whose frame axis contradicts the checkpoint's spec are rejected.
+
+    A corpus duration or rate that yields a different control grid would otherwise hand the model
+    silently misaligned tokens.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    sketch_rate = 16_000
+    _write_corpus(
+        tmp_path / "corpus.lance",
+        [_tone(_DURATION_SECONDS, sample_rate=sketch_rate, seed=21)],
+        sample_rate=sketch_rate,
+    )
+
+    with pytest.raises(ValueError, match="num_frames"):
+        _first_batch(
+            _datamodule(
+                tmp_path / "corpus.lance",
+                sample_rate=sketch_rate,
+                sketch=SketchControlSpec(num_frames=50, num_control_tokens=4),
+            )
+        )
+
+
 def test_decode_rejects_audio_outside_the_storage_range(tmp_path: Path) -> None:
     """Gain that drives a clip past full scale is rejected, not fed to the mel front-end.
 
@@ -458,6 +643,28 @@ def test_non_positive_row_limit_raises(tmp_path: Path, limit: int) -> None:
 
     with pytest.raises(ValueError, match="row_limit"):
         _datamodule(tmp_path / "corpus.lance", row_limit=limit)
+
+
+@pytest.mark.parametrize("column", ["t5gemma", "param_shift"])
+def test_conditioning_columns_not_derivable_from_audio_are_rejected(
+    tmp_path: Path, column: str
+) -> None:
+    """Registry membership alone does not make a column servable from a corpus.
+
+    ``t5gemma`` encodes stored parameters and ``param_shift`` re-renders them;
+    neither has a source in a third-party corpus, so both must fail at
+    construction rather than at the first batch.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param column: Registry column whose input is not audio.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=24)])
+
+    with pytest.raises(ValueError, match="audio"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            conditioning=EmbeddingConditioningSpec(column=column, input_shape=(4,)),
+        )
 
 
 def test_boolean_row_limit_raises(tmp_path: Path) -> None:
@@ -513,6 +720,61 @@ def test_non_integer_row_limit_raises(tmp_path: Path, limit: object) -> None:
         _datamodule(tmp_path / "corpus.lance", row_limit=limit)  # type: ignore[arg-type]
 
 
+def test_legacy_m2l_conditioning_serves_a_batch(tmp_path: Path) -> None:
+    """``conditioning="m2l"`` names ``music2latent`` while the encoder emits ``m2l``.
+
+    Constructing the datamodule is not enough: the stored-name/registry-name
+    split only surfaces when a batch is actually encoded.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=28)])
+
+    def encode(source: np.ndarray) -> np.ndarray:
+        return np.ones((len(source), *LEGACY_M2L_INPUT_SHAPE), dtype=np.float32)
+
+    batch = _first_batch(
+        _datamodule(tmp_path / "corpus.lance", conditioning="m2l", embedding_encoder=encode)
+    )
+
+    assert batch[EMBEDDING_BATCH_KEY].shape == (1, *LEGACY_M2L_INPUT_SHAPE)
+
+
+def test_sketch_pitch_below_threshold_is_zero_binned(tmp_path: Path) -> None:
+    """Low-confidence pitch activations are zeroed and the control order is preserved.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=29)])
+    frames = _MEL_FRAMES
+    controls = np.zeros((1, NUM_SKETCH_CONTROLS, frames), dtype=np.float32)
+    controls[:, SKETCH_LOUDNESS_ROW] = -0.5
+    controls[:, SKETCH_CENTROID_ROW] = 0.25
+    controls[:, SKETCH_PITCH_SLICE.start] = 0.05
+    controls[:, SKETCH_PITCH_SLICE.start + 1] = 0.4
+
+    def encode(audio: np.ndarray, sample_rate: int, **_: object) -> np.ndarray:
+        del audio, sample_rate
+        return controls
+
+    batch = _first_batch(
+        _datamodule(
+            tmp_path / "corpus.lance",
+            sketch=SketchControlSpec(
+                num_frames=frames, num_control_tokens=4, pitch_zero_threshold=0.1
+            ),
+            embedding_encoder=encode,
+        )
+    )
+    served = batch[SKETCH_CTRL_FIELD]
+
+    assert served[0, SKETCH_LOUDNESS_ROW] == pytest.approx([-0.5] * frames)
+    assert served[0, SKETCH_CENTROID_ROW] == pytest.approx([0.25] * frames)
+    # Below the configured threshold: zero-binned; above it: preserved.
+    assert served[0, SKETCH_PITCH_SLICE.start] == pytest.approx([0.0] * frames)
+    assert served[0, SKETCH_PITCH_SLICE.start + 1] == pytest.approx([0.4] * frames, abs=1e-6)
+
+
 def test_statistics_underflowing_float32_are_rejected(tmp_path: Path) -> None:
     """Statistics that survive float64 validation but vanish in float32 are rejected.
 
@@ -555,6 +817,74 @@ def test_statistics_producing_non_finite_mel_are_rejected(tmp_path: Path) -> Non
                 mel_stats_uri=str(stats_file),
             )
         )
+
+
+def test_single_injected_encoder_with_two_streams_raises(tmp_path: Path) -> None:
+    """One injected encoder cannot serve two streams that need different weights.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=32)])
+
+    def encode(audio: np.ndarray, sample_rate: int, **_: object) -> np.ndarray:
+        del audio, sample_rate
+        return np.zeros((1, NUM_SKETCH_CONTROLS, _MEL_FRAMES), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="one encoder"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            conditioning=EmbeddingConditioningSpec(
+                column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+            ),
+            sketch=SketchControlSpec(num_frames=_MEL_FRAMES, num_control_tokens=4),
+            embedding_encoder=encode,
+        )
+
+
+def test_non_finite_conditioning_is_rejected(tmp_path: Path) -> None:
+    """A correctly shaped but non-finite embedding must not reach the model.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=33)])
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        return np.full((len(source), SSONDO_EMBEDDING_DIM), np.nan, dtype=np.float32)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        conditioning=EmbeddingConditioningSpec(
+            column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+        ),
+        embedding_encoder=encode,
+    )
+
+    with pytest.raises(ValueError, match="non-finite"):
+        _first_batch(datamodule)
+
+
+def test_non_finite_sketch_controls_are_rejected(tmp_path: Path) -> None:
+    """Non-finite live sketch controls are rejected rather than tokenized.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=34)])
+    controls = np.zeros((1, NUM_SKETCH_CONTROLS, _MEL_FRAMES), dtype=np.float32)
+    controls[:, SKETCH_LOUDNESS_ROW] = np.nan
+
+    def encode(audio: np.ndarray, sample_rate: int, **_: object) -> np.ndarray:
+        del audio, sample_rate
+        return controls
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        sketch=SketchControlSpec(num_frames=_MEL_FRAMES, num_control_tokens=4),
+        embedding_encoder=encode,
+    )
+
+    with pytest.raises(ValueError, match="non-finite"):
+        _first_batch(datamodule)
 
 
 def test_native_blob_v2_column_is_servable(tmp_path: Path) -> None:
@@ -666,6 +996,26 @@ def test_empty_corpus_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="no rows"):
         _datamodule(tmp_path / "corpus.lance").setup("predict")
+
+
+def test_checkpoint_override_for_an_unused_column_raises(tmp_path: Path) -> None:
+    """A checkpoint override that no stream reads would be silently ignored.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=38)])
+
+    with pytest.raises(ValueError, match="embedding_checkpoints"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            conditioning=EmbeddingConditioningSpec(
+                column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+            ),
+            embedding_checkpoints={"clap": "some/checkpoint"},
+        )
 
 
 @pytest.mark.parametrize(
@@ -784,6 +1134,29 @@ def test_negative_rate_and_duration_cancelling_into_a_positive_grid_raises(
         )
 
 
+def test_injected_encoder_without_an_embedding_stream_raises(tmp_path: Path) -> None:
+    """An encoder that nothing would call means the run is misconfigured.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=44)])
+
+    with pytest.raises(ValueError, match="conditions on no embedding stream"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            conditioning="mel",
+            embedding_encoder=lambda batch: batch,
+        )
+
+
+def test_legacy_music2latent_column_resolves_to_the_m2l_policy() -> None:
+    """The bare ``conditioning=m2l`` literal names a column the registry keys as ``m2l``."""
+    assert registry_spec("music2latent") is EMBEDDING_REGISTRY["m2l"]
+
+
 def test_setup_pins_the_snapshot_against_later_corpus_commits(tmp_path: Path) -> None:
     """A commit landing mid-evaluation must not change what the run scores.
 
@@ -809,6 +1182,29 @@ def test_setup_pins_the_snapshot_against_later_corpus_commits(tmp_path: Path) ->
         amplitude_scale=1.0,
     )
     assert torch.equal(served, torch.from_numpy(expected).unsqueeze(0))
+
+
+def test_conditioning_overflowing_float32_raises(tmp_path: Path) -> None:
+    """A value finite in float64 but not float32 must not reach the model as inf.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=47)])
+
+    def overflowing(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del sample_rate
+        return np.full((len(source), SSONDO_EMBEDDING_DIM), 1e39, dtype=np.float64)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        conditioning=EmbeddingConditioningSpec(
+            column="ssondo", input_shape=(SSONDO_EMBEDDING_DIM,)
+        ),
+        embedding_encoder=overflowing,
+    )
+
+    with pytest.raises(ValueError, match="non-finite values"):
+        _first_batch(datamodule)
 
 
 def test_non_numeric_duration_raises(tmp_path: Path) -> None:

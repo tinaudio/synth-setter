@@ -15,7 +15,13 @@ num_workers: 4
 # First-N rows, for smoke sweeps over a corpus that is otherwise served whole.
 row_limit: null
 
+# Overridden by the `conditioning` and `sketch` groups to match the checkpoint.
 conditioning: mel
+sketch: null
+# Null auto-selects; live encoders hold frozen weights in the main process.
+embedding_device: null
+# Per stored column; each conditioning stream loads its own encoder.
+embedding_checkpoints: {}
 
 use_saved_mean_and_variance: true
 # Mel arms must pin the statistics their checkpoint trained with — a corpus of its

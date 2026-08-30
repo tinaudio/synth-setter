@@ -243,24 +243,26 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing()` after `trainer.predict()`. Both phases shell out to the existing CLIs (`predict_vst_audio.py`, `compute_audio_metrics.py`) and are gated by `cfg.evaluation`:
 
-| Key                          | Default | Effect when true                                                                                                                                                                                                             |
-| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}` from the `cfg.render` backend knobs joined with the root `cfg.synth` identity via `RenderConfig.from_cfg_nodes` (#2565) |
-| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                               |
-| `evaluation.rerender_target` | `true`  | Forwards `--rerender-target True` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                    |
-| `evaluation.no_params`       | `false` | Forwards `--no-params True` so the renderer never looks for `target-params-*.pt`; raises with `rerender_target=true`, which has no target params to re-render                                                                |
-| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                 |
-| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)             |
+| Key                          | Default | Effect when true                                                                                                                                                                                                                                                              |
+| ---------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}` from the `cfg.render` backend knobs joined with the root `cfg.synth` identity via `RenderConfig.from_cfg_nodes` (#2565)                                                  |
+| `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                                                                                |
+| `evaluation.rerender_target` | `true`  | Forwards `--rerender-target True` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                                                                     |
+| `evaluation.no_params`       | `false` | Forwards `--no-params True` so the renderer never looks for `target-params-*.pt`; for predict splits with no ground-truth patch, where `target.wav` can only come from the dataset. Raises when combined with `rerender_target=true`, which would have no params to re-render |
+| `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                                                                  |
+| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)                                                              |
 
 ### Third-party corpora
 
-`datamodule=third_party/{nsynth_test,esc50}` scores a mel-conditioned checkpoint against
-published Lance corpora under `r2:experiments/third_party`. Source WAV blobs are read in
-place and mapped onto the checkpoint's render contract per batch: decode, resample, mono
-to stereo, pad or trim, amplitude scale, canonical mel computation, and optional
-normalization with the checkpoint's pinned `datamodule.mel_stats_uri`. These corpora carry
-no ground-truth patch, so runs pair `evaluation.no_params=true` with
-`evaluation.rerender_target=false`.
+`datamodule=third_party/{nsynth_test,esc50}` scores a checkpoint against the corpora published
+under `r2:experiments/third_party`, which store source WAV bytes as `lance.blob.v2` columns and
+are read in place. `ThirdPartyAudioDataModule` maps each clip onto the checkpoint's render
+contract per batch — decode, resample, mono to stereo, pad/trim, amplitude scale, mel — and
+computes conditioning through the same `EMBEDDING_REGISTRY` encode functions that write the
+stored columns, so a checkpoint trained on a stored column loads unmodified. These corpora carry
+no ground-truth patch, so runs against them pair `evaluation.no_params=true` with
+`evaluation.rerender_target=false`. Mel arms must pin `datamodule.mel_stats_uri` to the
+statistics the checkpoint trained with; the corpus has none of its own.
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
