@@ -273,6 +273,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             signal_duration_seconds, (int, float)
         ):
             raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
+        if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
+            raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
         if batch_size <= 0:
             raise ValueError(f"batch_size={batch_size} must be positive")
         if sample_rate <= 0:

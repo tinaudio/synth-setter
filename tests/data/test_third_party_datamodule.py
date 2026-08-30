@@ -734,6 +734,21 @@ def test_boolean_count_argument_raises(tmp_path: Path, field: str) -> None:
         ThirdPartyAudioDataModule(**kwargs)  # type: ignore[arg-type]
 
 
+def test_boolean_amplitude_scale_raises(tmp_path: Path) -> None:
+    """A YAML ``false`` must not silently turn every corpus clip into silence.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    with pytest.raises(ValueError, match="amplitude_scale=False"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            amplitude_scale=False,
+        )
+
+
 def test_non_positive_batch_size_raises(tmp_path: Path) -> None:
     """A zero batch size would build a loader that yields nothing.
 
