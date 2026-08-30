@@ -134,12 +134,11 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
     assert "test/param_mse" in result.stdout
 
 
-def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
-    cfg_train_sketch_lance: DictConfig,
-) -> None:
-    """The eval entrypoint routes sketch CFG independently into test sampling.
+def _compose_sketch_cfg_eval(cfg_train_sketch_lance: DictConfig) -> DictConfig:
+    """Compose the toy sketch-conditioned evaluation configuration.
 
-    :param cfg_train_sketch_lance: Fixture providing real m2l+sketch Lance splits.
+    :param cfg_train_sketch_lance: Fixture providing paths and generated Lance splits.
+    :returns: Evaluation config with sketch guidance disabled initially.
     """
     GlobalHydra.instance().clear()
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -177,14 +176,20 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
         cfg.model.vector_field.projection.num_tokens = 8
         cfg.trainer.fast_dev_run = True
         cfg.trainer.precision = "32-true"
+    return cfg
 
+
+def _save_nonzero_sketch_checkpoint(cfg: DictConfig, checkpoint_path: Path) -> None:
+    """Save a checkpoint whose sketch branch differs from its unconditional branch.
+
+    :param cfg: Sketch-conditioned model configuration.
+    :param checkpoint_path: Checkpoint destination.
+    """
     model = instantiate(cfg.model)
-    assert model.sketch_tokens is not None
     torch.manual_seed(11)
     with torch.no_grad():
         for projection in model.sketch_tokens.projections.values():
             projection.weight.normal_()
-    checkpoint_path = Path(cfg.paths.output_dir) / "sketch-cfg.ckpt"
     trainer = Trainer(
         accelerator="cpu",
         devices=1,
@@ -196,7 +201,20 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
     trainer.strategy.connect(model)
     trainer.save_checkpoint(checkpoint_path)
 
+
+def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """The eval entrypoint routes sketch CFG independently into test sampling.
+
+    :param cfg_train_sketch_lance: Fixture providing real m2l+sketch Lance splits.
+    """
+    cfg = _compose_sketch_cfg_eval(cfg_train_sketch_lance)
+    checkpoint_path = Path(cfg.paths.output_dir) / "sketch-cfg.ckpt"
+    _save_nonzero_sketch_checkpoint(cfg, checkpoint_path)
     cfg.ckpt_path = str(checkpoint_path)
+
+    torch.manual_seed(17)
     HydraConfig().set_config(cfg)
     try:
         sketch_disabled_metrics, objects = evaluate(cfg)
@@ -204,6 +222,7 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
         GlobalHydra.instance().clear()
 
     cfg.model.test_sketch_cfg_strength = 8.0
+    torch.manual_seed(17)
     HydraConfig().set_config(cfg)
     try:
         sketch_guided_metrics, _ = evaluate(cfg)
