@@ -1342,3 +1342,50 @@ def test_torchsynth_finetune_without_base_checkpoint_raises() -> None:
 
     with pytest.raises(MissingMandatoryValue):
         _ = cfg.model.base_checkpoint
+
+
+def test_flow_sketch_440k_experiments_differ_only_in_sketch_conditioning() -> None:
+    """The 440k A/B arms share every knob that is not sketch conditioning."""
+    base = _compose("train.yaml", ["experiment=surge/flow_sketch_440k_base"])
+    sketch = _compose("train.yaml", ["experiment=surge/flow_sketch_440k"])
+
+    for cfg in (base, sketch):
+        assert cfg.datamodule.download_dataset_root_uri == (
+            "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
+            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/"
+        )
+        assert cfg.seed == 3407
+        assert cfg.datamodule.param_spec_name == "surge_simple"
+        assert cfg.datamodule.batch_size == 1024
+        assert cfg.datamodule.num_workers == 24
+        assert cfg.datamodule.prefetch_factor == 4
+        assert cfg.trainer.max_steps == 50000
+        assert cfg.trainer.min_steps == 50000
+        assert cfg.trainer.val_check_interval == 2000
+        assert cfg.training.val_audio_probe is True
+        assert cfg.training.val_audio_probe_samples == 32
+        assert cfg.test is False
+    assert base.run_name == "flow440k_base"
+    assert base.model.sketch_controls is None
+    assert base.datamodule.sketch is None
+    assert sketch.run_name == "flow440k_sketch"
+    assert sketch.model.sketch_controls.column == "sketch"
+    assert sketch.model.sketch_controls.num_frames == 401
+    assert sketch.datamodule.sketch == sketch.model.sketch_controls
+
+
+@pytest.mark.parametrize("experiment", ["flow_sketch_440k_base", "flow_sketch_440k"])
+def test_flow_sketch_440k_anneals_cosine_over_its_whole_run(experiment: str) -> None:
+    """Both arms anneal across exactly the steps they train for.
+
+    ``CosineAnnealingLR.T_max`` interpolates ``${trainer.max_steps}``, so a run
+    length set below ``max_steps`` leaves the LR pinned near its peak for the
+    whole run and the model never converges.
+
+    :param experiment: Surge experiment basename for the arm under test.
+    """
+    cfg = _compose("train.yaml", [f"experiment=surge/{experiment}"])
+
+    assert cfg.model.scheduler.T_max == cfg.trainer.max_steps
+    assert cfg.model.scheduler.T_max == 50000
+    assert cfg.model.scheduler.eta_min == pytest.approx(cfg.model.optimizer.lr * 1e-2)

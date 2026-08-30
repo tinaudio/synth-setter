@@ -127,8 +127,10 @@ def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint(
     [
         "train-runpod-smoke.yaml",
         "train-runpod-flow-simple-440k.yaml",
+        "train-runpod-sketch-440k-base.yaml",
+        "train-runpod-sketch-440k.yaml",
     ],
-    ids=["smoke", "flow-simple-440k"],
+    ids=["smoke", "flow-simple-440k", "sketch-440k-base", "sketch-440k"],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     launch_config_name: str,
@@ -169,3 +171,82 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     assert result.returncode == 0, result.stderr
     assert task.to_yaml_config()["run"] == task.run
     assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
+
+
+def test_sketch_440k_arms_share_one_pinned_accelerator() -> None:
+    """Both A/B arms request one H100-SXM.
+
+    An any-of pool can place the two arms on different GPUs, which confounds the comparison the A/B
+    exists to make. The SKU is pinned too: bs=1024 was sized against the 80 GB card, so a matched-
+    but-smaller accelerator would silently change the shape the arms run at.
+    """
+    arms = [
+        load_launch_config(_LAUNCH_DIR / "train-runpod-sketch-440k-base.yaml"),
+        load_launch_config(_LAUNCH_DIR / "train-runpod-sketch-440k.yaml"),
+    ]
+
+    for arm in arms:
+        task = _compose_task(arm)
+        task.validate()
+        resources = next(iter(task.resources))
+        assert resources.accelerators == {"H100-SXM": 1}, resources.accelerators
+
+
+_SKETCH_440K_ARMS = {
+    "base": ("train-runpod-sketch-440k-base.yaml", "flow440k_base"),
+    "sketch": ("train-runpod-sketch-440k.yaml", "flow440k_sketch"),
+}
+
+
+@pytest.mark.parametrize(
+    ("arm", "expected_run_name"), [(k, v[1]) for k, v in _SKETCH_440K_ARMS.items()]
+)
+def test_sketch_440k_launch_resolves_its_own_arm(arm: str, expected_run_name: str) -> None:
+    """Each launch resolves to the arm it is named for.
+
+    Composition alone cannot catch a launch that points at the wrong experiment: both arms are
+    valid configs, so a base-pointing sketch launch would submit two identical jobs and the A/B
+    would silently compare nothing.
+
+    :param arm: Key into the shipped launch configs under test.
+    :param expected_run_name: ``run_name`` the arm's experiment must resolve to.
+    """
+    launch_config = load_launch_config(_LAUNCH_DIR / _SKETCH_440K_ARMS[arm][0])
+    task = _compose_task(launch_config)
+    assert isinstance(task.run, str)
+    _, entrypoint, train_args = task.run.partition("exec synth-setter-train")
+    assert entrypoint
+
+    train_entrypoint = Path(sys.executable).with_name("synth-setter-train")
+    result = subprocess.run(  # noqa: S603 - real packaged CLI with config-owned arguments
+        ["/bin/bash", "-c", f"exec {train_entrypoint} {train_args} --cfg job --resolve"],
+        cwd=_REPO_ROOT,
+        env={**os.environ, "DATASET_ROOT_URI": "", "EXPERIMENT": "", "HYDRA_FULL_ERROR": "1"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"run_name: {expected_run_name}" in result.stdout
+    # The sketch arm is the only one that resolves a populated sketch_controls block.
+    assert ("sketch_controls: null" in result.stdout) is (arm == "base")
+
+
+def test_sketch_440k_arms_share_every_operational_setting() -> None:
+    """The arms differ only in which experiment they select.
+
+    The operational scaffolding is duplicated across two files so each arm stays reproducible by
+    name; this pins the duplication so an image-tag, env-file, or tail change to one arm cannot
+    silently invalidate the matched comparison.
+    """
+    base, sketch = (
+        load_launch_config(_LAUNCH_DIR / _SKETCH_440K_ARMS[arm][0]) for arm in ("base", "sketch")
+    )
+
+    assert base.compute == sketch.compute
+    assert base.worker_image_tag == sketch.worker_image_tag
+    assert base.env_file == sketch.env_file
+    assert base.tail == sketch.tail
+    assert base.cmd is not None and sketch.cmd is not None
+    assert base.cmd.replace("surge/flow_sketch_440k_base", "surge/flow_sketch_440k") == sketch.cmd

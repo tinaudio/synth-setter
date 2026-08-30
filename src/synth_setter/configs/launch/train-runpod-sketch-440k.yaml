@@ -1,0 +1,14 @@
+# RunPod launch for the sketch arm of the 440k sketch A/B (#2612).
+# Keep experiment selection in the cmd so arms cannot drift through launch overrides.
+
+compute: runpod/training-h100
+worker_image_tag: devcontainer-tools
+env_file: .env
+# Detach after SkyPilot accepts the launch so GitHub Actions does not wait for training.
+tail: false
+cmd: >-
+  cd /home/build/synth-setter &&
+  bash scripts/sync_worker_checkout.sh &&
+  exec synth-setter-train
+  experiment=surge/flow_sketch_440k
+  hydra.run.dir=/home/build/synth-setter/train-run
