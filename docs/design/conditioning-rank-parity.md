@@ -31,5 +31,6 @@ model:
     n_conditioning_outputs: ${model.vector_field.num_layers}
 ```
 
-Slot count must equal the consuming field's `num_layers`; the field indexes one slot per layer and
-raises on a shorter slot axis.
+Configure `n_conditioning_outputs` to the consuming field's `num_layers`. Both supported fields
+index one slot per layer: fewer slots fail during forward indexing, while extra slots are accepted
+but unused. This PR adds no encoder/field slot-count validation.

@@ -27,7 +27,7 @@ docs:
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
 
   - doc: docs/design/conditioning-rank-parity.md
-    description: Per-field-layer conditioning slots on cached encoders and the shared CFG null
+    description: Cached-encoder conditioning-slot contract
     sources:
       - pattern: "src/synth_setter/models/components/embed_pool.py"
         covers: "Learned-query pooling at one query per conditioning slot"

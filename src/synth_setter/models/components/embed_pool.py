@@ -96,7 +96,7 @@ class EmbeddingPool(nn.Module):
         pos_enc: Literal["sin", "learned"] = "sin",
         max_seq_len: int = 42,
         n_conditioning_outputs: int = 1,
-    ):
+    ) -> None:
         super().__init__()
 
         if n_conditioning_outputs < 1:
