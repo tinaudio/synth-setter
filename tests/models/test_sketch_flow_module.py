@@ -1,5 +1,6 @@
 """Tests for sketch-control conditioning in the flow-matching module."""
 
+from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -115,6 +116,22 @@ class _KeepCountAudioLoss(torch.nn.Module):
         """
         del t, target_audio
         return keep.to(theta_hat.dtype).sum()
+
+
+def _constant_field(
+    value: float,
+) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Build a time-independent field for exact CFG algebra checks.
+
+    :param value: Constant velocity value.
+    :returns: Field matching the sampler's state-and-time signature.
+    """
+
+    def field(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, value)
+
+    return field
 
 
 def _batch(*, with_sketch: bool) -> dict[str, torch.Tensor]:
@@ -239,8 +256,8 @@ def test_sample_routes_separate_sketch_strength_to_guided_velocity() -> None:
     torch.testing.assert_close(sample, torch.full_like(sample, 40.0))
 
 
-def test_sample_without_content_preserves_explicit_conditional_control_branch() -> None:
-    """Sampling does not reinterpret conditional controls when content is absent."""
+def test_sample_without_content_uses_explicit_sketch_strength() -> None:
+    """Sketch-only sampling ignores the separate content strength."""
     module = _module(None)
     module.vector_field = _BranchField()
     control_tokens = ControlTokenBranches(
@@ -253,31 +270,19 @@ def test_sample_without_content_preserves_explicit_conditional_control_branch() 
         torch.zeros(_BATCH, _NUM_PARAMS),
         steps=1,
         cfg_strength=4.0,
+        sketch_cfg_strength=3.0,
         control_tokens=control_tokens,
     )
 
-    torch.testing.assert_close(sample, torch.full_like(sample, -1.0))
+    torch.testing.assert_close(sample, torch.zeros_like(sample))
 
 
 def test_multi_cfg_velocity_applies_three_branch_algebra() -> None:
     """Multi-CFG scales sketch and content deltas independently."""
-
-    def unconditional(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        del t
-        return torch.full_like(x, 2.0)
-
-    def sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        del t
-        return torch.full_like(x, 5.0)
-
-    def content_sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        del t
-        return torch.full_like(x, 11.0)
-
     guided_velocity = multi_cfg_velocity(
-        unconditional,
-        sketch,
-        content_sketch,
+        _constant_field(2.0),
+        _constant_field(5.0),
+        _constant_field(11.0),
         sketch_cfg_strength=3.0,
         content_cfg_strength=4.0,
     )
@@ -289,25 +294,14 @@ def test_multi_cfg_velocity_applies_three_branch_algebra() -> None:
 
 def test_multi_cfg_equal_strength_matches_joint_cfg() -> None:
     """Equal sketch and content scales preserve joint-CFG output."""
-
-    def unconditional(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        del t
-        return torch.full_like(x, 2.0)
-
-    def sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        del t
-        return torch.full_like(x, 5.0)
-
-    def content_sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        del t
-        return torch.full_like(x, 11.0)
-
+    unconditional = _constant_field(2.0)
+    content_sketch = _constant_field(11.0)
     x = torch.zeros(2, 3)
     t = torch.zeros(2, 1)
 
     multi_guided = multi_cfg_velocity(
         unconditional,
-        sketch,
+        _constant_field(5.0),
         content_sketch,
         sketch_cfg_strength=4.0,
         content_cfg_strength=4.0,
