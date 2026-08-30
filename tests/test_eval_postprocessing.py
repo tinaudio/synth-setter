@@ -1252,7 +1252,8 @@ def test_postprocessing_no_params_forwards_flag_to_render(
 
     _run_predict_postprocessing(cfg)
 
-    assert "--no-params" in captured_argv[0]
+    no_params_index = captured_argv[0].index("--no-params")
+    assert captured_argv[0][no_params_index : no_params_index + 2] == ["--no-params", "True"]
 
 
 def test_postprocessing_params_present_omits_no_params_flag(
