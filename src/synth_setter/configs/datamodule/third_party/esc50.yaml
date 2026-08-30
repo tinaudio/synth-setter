@@ -1,0 +1,7 @@
+defaults:
+  - third_party/base@_here_
+  - _self_
+
+# This corpus uses a non-default blob-column name.
+dataset_uri: r2://experiments/third_party/ESC50/all.lance
+audio_column: audio_wav

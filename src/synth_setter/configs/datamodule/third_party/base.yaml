@@ -1,0 +1,25 @@
+_target_: synth_setter.data.third_party_datamodule.ThirdPartyAudioDataModule
+
+# The corpus is mapped onto the checkpoint's render contract at read time, so the
+# stored clips need no matching rate, channel count, or duration.
+sample_rate: ${render.sample_rate}
+channels: ${render.channels}
+signal_duration_seconds: ${render.signal_duration_seconds}
+
+dataset_uri: ???
+# Published corpora name their blob column differently; each corpus config sets its own.
+audio_column: audio
+amplitude_scale: 1.0
+batch_size: 128
+num_workers: 4
+# First-N rows, for smoke sweeps over a corpus that is otherwise served whole.
+row_limit: null
+
+conditioning: mel
+
+use_saved_mean_and_variance: true
+# Mel arms must pin the statistics their checkpoint trained with — a corpus of its
+# own has none, and normalizing with the wrong ones silently shifts the model input.
+mel_stats_uri: null
+# Cache a fetched statistics object with the run's other artifacts.
+stats_cache_dir: ${paths.output_dir}/mel-stats
