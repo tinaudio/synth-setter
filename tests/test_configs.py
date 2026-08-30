@@ -1368,10 +1368,11 @@ def test_third_party_eval_config_resolves_per_corpus(corpus: str, audio_column: 
             "mode=predict",
             "callbacks=eval_vst",
             "ckpt_path=/tmp/none.ckpt",
+            "conditioning=clap",
         ],
     )
 
     assert cfg.datamodule.audio_column == audio_column
     assert cfg.datamodule.sample_rate == cfg.render.sample_rate
     assert cfg.datamodule.signal_duration_seconds == cfg.render.signal_duration_seconds
-    assert cfg.datamodule.conditioning == "mel"
+    assert cfg.datamodule.conditioning.column == "clap"

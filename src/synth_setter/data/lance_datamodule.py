@@ -136,7 +136,7 @@ def _sketch_child_shapes(num_frames: int) -> dict[str, tuple[int, ...]]:
     }
 
 
-def _stack_sketch_children(
+def stack_sketch_children(
     loudness: np.ndarray, centroid: np.ndarray, pitch: np.ndarray
 ) -> np.ndarray:
     """Reassemble stored struct children into the flat model control stack.
@@ -300,7 +300,7 @@ class PrepareBatchCollate:
             # Unread companions (e.g. the vec child) never reach prepare_batch.
             for key in [key for key in raw_values if key.startswith(prefix)]:
                 del raw_values[key]
-            raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(loudness, centroid, pitch)
+            raw_values[SKETCH_CTRL_FIELD] = stack_sketch_children(loudness, centroid, pitch)
         raw = cast(RawBatch, raw_values)
         return prepare_batch(
             raw,
