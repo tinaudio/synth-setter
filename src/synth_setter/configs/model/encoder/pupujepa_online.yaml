@@ -12,4 +12,4 @@ head:
   d_model: ${model.encoder.out_dim}
   num_heads: ${model.encoder_num_heads}
   pos_enc: sin
-  max_seq_len: 256
+  max_seq_len: 100
