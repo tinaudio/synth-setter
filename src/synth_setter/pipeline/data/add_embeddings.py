@@ -137,9 +137,6 @@ _EMBEDDING_ARTIFACT_METADATA = b"synth_setter.embedding.artifact"
 SAME_LATENT_FRAMES: int = 44
 SAME_ENCODE_MAX_BATCH: int = 16
 SKETCH_INDEX_SUB_VECTORS: int = 2
-# PESTO's per-clip intermediates scale with batch size: a full 128-row Lance
-# batch peaked at ~8.8 GiB RSS and drew earlyoom SIGTERMs in the field (#2707).
-SKETCH_ENCODE_MAX_BATCH: int = 32
 # Dotted path of the nested IVF companion inside the sketch struct (#2707).
 # Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
 # per-child schema evolution (unused here) is the 2.2-only operation.
@@ -787,11 +784,7 @@ def _encode_t5gemma_column(
 def _sketch_encode(
     audio: Float[np.ndarray, "batch channel time"], sample_rate: int, device: str = "cpu"
 ) -> Float[np.ndarray, "batch control frame"]:
-    """Extract sketch controls for one audio batch in memory-capped chunks.
-
-    Every track is per-clip independent, so chunking only moves values within
-    float32 kernel jitter (~1e-6, already batch-size-dependent) while bounding
-    extraction RSS at the default Lance batch size.
+    """Extract sketch controls for one audio batch.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
@@ -803,15 +796,7 @@ def _sketch_encode(
     from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
-    chunks = [
-        extract_sketch_controls_batch(
-            batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate, device=device
-        )
-        .cpu()
-        .numpy()
-        for start in range(0, len(batch), SKETCH_ENCODE_MAX_BATCH)
-    ]
-    return np.concatenate(chunks, axis=0)
+    return extract_sketch_controls_batch(batch, sample_rate, device=device).cpu().numpy()
 
 
 def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:

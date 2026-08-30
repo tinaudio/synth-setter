@@ -3561,18 +3561,15 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
-def test_sketch_encode_never_exceeds_extraction_batch_cap(
+def test_sketch_encode_processes_lance_batch_in_single_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every extractor invocation stays within SKETCH_ENCODE_MAX_BATCH.
+    """The extractor receives the complete Lance batch.
 
-    :param monkeypatch: Fixture recording extractor input batch sizes.
+    :param monkeypatch: Fixture recording the extractor input batch size.
     """
     import synth_setter.features.sketch_controls as sketch_controls
-    from synth_setter.pipeline.data.add_embeddings import (
-        SKETCH_ENCODE_MAX_BATCH,
-        _sketch_encode,
-    )
+    from synth_setter.pipeline.data.add_embeddings import _sketch_encode
 
     seen_sizes: list[int] = []
 
@@ -3582,41 +3579,13 @@ def test_sketch_encode_never_exceeds_extraction_batch_cap(
         return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
 
     monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
-    rows = 2 * SKETCH_ENCODE_MAX_BATCH + 5
+    rows = 37
     audio = np.zeros((rows, 1, _FIXTURE_SAMPLES), dtype=np.float32)
 
     controls = _sketch_encode(audio, _SAMPLE_RATE)
 
     assert len(controls) == rows
-    assert sum(seen_sizes) == rows
-    assert max(seen_sizes) == SKETCH_ENCODE_MAX_BATCH
-    assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
-
-
-@pytest.mark.slow
-def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
-    """Memory-capped chunking preserves control values within float32 kernel jitter.
-
-    Torch reduction kernels can vary by batch shape at approximately 1e-6.
-    """
-    from synth_setter.pipeline.data.add_embeddings import (
-        SKETCH_ENCODE_MAX_BATCH,
-        _sketch_encode,
-    )
-
-    rows = SKETCH_ENCODE_MAX_BATCH + 3
-    # Clips long enough for PESTO's CQT and the loudness STFT windows.
-    samples = 8192
-    audio = (
-        (np.random.default_rng(23).random((rows, 1, samples)) - 0.5) * 0.8
-    ).astype(np.float32)
-
-    chunked = _sketch_encode(audio, _SAMPLE_RATE)
-
-    full = (
-        extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE).cpu().numpy()
-    )
-    np.testing.assert_allclose(chunked, full, atol=1e-5)
+    assert seen_sizes == [rows]
 
 
 def test_sketch_encode_column_with_wrong_frame_count_raises() -> None:
