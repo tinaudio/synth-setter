@@ -18,6 +18,7 @@ from synth_setter.models.vst_flow_matching_module import (
     VSTFlowMatchingModule,
     build_guided_velocity,
     joint_cfg_velocity,
+    multi_cfg_velocity,
     rk4_step,
 )
 
@@ -161,8 +162,27 @@ class _BranchField(torch.nn.Module):
         return value.expand_as(x)
 
 
-def test_build_guided_velocity_uses_pe_only_unconditional_control_branch() -> None:
-    """Joint CFG evaluates each content branch with its matching control-token state."""
+def test_build_guided_velocity_applies_separate_sketch_and_content_strengths() -> None:
+    """Sketch CFG isolates full controls before adding content conditioning."""
+    x = torch.zeros(_BATCH, _NUM_PARAMS)
+    guided_velocity = build_guided_velocity(
+        _BranchField(),
+        torch.ones(_BATCH, 8),
+        cfg_strength=4.0,
+        sketch_cfg_strength=3.0,
+        control_tokens=ControlTokenBranches(
+            conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+            unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+        ),
+    )
+
+    guided = guided_velocity(x, torch.zeros(_BATCH, 1))
+
+    torch.testing.assert_close(guided, torch.full_like(x, 40.0))
+
+
+def test_build_guided_velocity_defaults_sketch_strength_to_content_strength() -> None:
+    """Omitted sketch scale preserves the previous joint-CFG result."""
     x = torch.zeros(_BATCH, _NUM_PARAMS)
     guided_velocity = build_guided_velocity(
         _BranchField(),
@@ -177,6 +197,46 @@ def test_build_guided_velocity_uses_pe_only_unconditional_control_branch() -> No
     guided = guided_velocity(x, torch.zeros(_BATCH, 1))
 
     torch.testing.assert_close(guided, torch.full_like(x, 39.0))
+
+
+def test_build_guided_velocity_accepts_zero_sketch_strength() -> None:
+    """Zero sketch guidance leaves the content delta independently active."""
+    x = torch.zeros(_BATCH, _NUM_PARAMS)
+    guided_velocity = build_guided_velocity(
+        _BranchField(),
+        torch.ones(_BATCH, 8),
+        cfg_strength=4.0,
+        sketch_cfg_strength=0.0,
+        control_tokens=ControlTokenBranches(
+            conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+            unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+        ),
+    )
+
+    guided = guided_velocity(x, torch.zeros(_BATCH, 1))
+
+    torch.testing.assert_close(guided, torch.full_like(x, 43.0))
+
+
+def test_sample_routes_separate_sketch_strength_to_guided_velocity() -> None:
+    """Sampling keeps sketch guidance independent from content guidance."""
+    module = _module(None)
+    module.vector_field = _BranchField()
+    control_tokens = ControlTokenBranches(
+        conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+        unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+    )
+
+    sample = module._sample(  # noqa: SLF001
+        torch.zeros(_BATCH, *_MEL_SHAPE),
+        torch.zeros(_BATCH, _NUM_PARAMS),
+        steps=1,
+        cfg_strength=4.0,
+        sketch_cfg_strength=3.0,
+        control_tokens=control_tokens,
+    )
+
+    torch.testing.assert_close(sample, torch.full_like(sample, 40.0))
 
 
 def test_sample_without_content_preserves_explicit_conditional_control_branch() -> None:
@@ -197,6 +257,64 @@ def test_sample_without_content_preserves_explicit_conditional_control_branch() 
     )
 
     torch.testing.assert_close(sample, torch.full_like(sample, -1.0))
+
+
+def test_multi_cfg_velocity_applies_three_branch_algebra() -> None:
+    """Multi-CFG scales sketch and content deltas independently."""
+
+    def unconditional(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 2.0)
+
+    def sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 5.0)
+
+    def content_sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 11.0)
+
+    guided_velocity = multi_cfg_velocity(
+        unconditional,
+        sketch,
+        content_sketch,
+        sketch_cfg_strength=3.0,
+        content_cfg_strength=4.0,
+    )
+
+    guided = guided_velocity(torch.zeros(2, 3), torch.zeros(2, 1))
+
+    torch.testing.assert_close(guided, torch.full((2, 3), 35.0))
+
+
+def test_multi_cfg_equal_strength_matches_joint_cfg() -> None:
+    """Equal sketch and content scales preserve joint-CFG output."""
+
+    def unconditional(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 2.0)
+
+    def sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 5.0)
+
+    def content_sketch(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, 11.0)
+
+    x = torch.zeros(2, 3)
+    t = torch.zeros(2, 1)
+
+    multi_guided = multi_cfg_velocity(
+        unconditional,
+        sketch,
+        content_sketch,
+        sketch_cfg_strength=4.0,
+        content_cfg_strength=4.0,
+    )
+    joint_guided = joint_cfg_velocity(content_sketch, unconditional, cfg_strength=4.0)
+
+    torch.testing.assert_close(multi_guided(x, t), joint_guided(x, t))
 
 
 def test_joint_cfg_velocity_applies_two_branch_algebra() -> None:
