@@ -119,8 +119,10 @@ def prepare_batch(
     :param rescale_params: Whether to map parameters from ``[0, 1]`` to ``[-1, 1]``.
     :param ot: Whether to Hungarian-match noise to parameters.
     :param generator: RNG for the noise draw.
-    :param conditioning_mean: Cached-conditioning mean, or ``None`` to skip.
-    :param conditioning_std: Cached-conditioning standard deviation, or ``None`` to skip.
+    :param conditioning_mean: Global ``(1,)`` or per-channel ``(D,)`` mean for
+        conditioning shaped ``(B, D)`` or ``(B, D, T)``; ``None`` skips normalization.
+    :param conditioning_std: Standard deviation with the same shape contract as
+        ``conditioning_mean``; ``None`` skips normalization.
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread
@@ -181,9 +183,7 @@ def prepare_batch(
             # caller's stored batch.
             sketch = sketch.clone()
             pitch = sketch[:, SKETCH_PITCH_SLICE]
-            sketch[:, SKETCH_PITCH_SLICE] = pitch.where(
-                pitch >= sketch_pitch_zero_threshold, 0.0
-            )
+            sketch[:, SKETCH_PITCH_SLICE] = pitch.where(pitch >= sketch_pitch_zero_threshold, 0.0)
     else:
         sketch = None
 
@@ -200,9 +200,7 @@ def prepare_batch(
     return {
         "mel": mel.contiguous() if mel is not None else None,
         "m2l": m2l.contiguous() if m2l is not None else None,
-        "conditioning": (
-            conditioning.contiguous() if conditioning is not None else None
-        ),
+        "conditioning": (conditioning.contiguous() if conditioning is not None else None),
         SKETCH_CTRL_FIELD: sketch.contiguous() if sketch is not None else None,
         "params": params.contiguous(),
         "noise": noise.contiguous(),
@@ -232,18 +230,21 @@ def ranked_generator_seed(base_seed: int, rank: int, num_workers: int = 1) -> in
 def load_conditioning_statistics(
     dataset_file: str | Path, spec: EmbeddingConditioningSpec
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Optionally load one cached column's dataset-level affine statistics.
+    """Load the configured cached column's dataset-level affine statistics.
 
-    :param dataset_file: Split path whose parent may contain the additive archive.
+    :param dataset_file: Split path whose parent contains the required archive.
     :param spec: Conditioning column, shape, and normalization policy.
-    :returns: ``(mean, std)``, or ``None`` when normalization or its stats are absent.
+    :returns: ``(mean, std)``, or ``None`` when normalization is disabled.
+    :raises FileNotFoundError: A normalized profile's artifact is absent.
     :raises ValueError: Selected arrays are incomplete, mis-shaped, or numerically invalid.
     """
     if spec.normalization == "none":
         return None
     stats_file = Path(dataset_file).parent / conditioning_stats_filename(spec.column)
     if not stats_file.exists():
-        return None
+        raise FileNotFoundError(
+            f"conditioning normalization {spec.normalization!r} requires {stats_file}"
+        )
     with np.load(stats_file) as stats:
         if set(stats.files) != {"mean", "std"}:
             raise ValueError(
@@ -258,13 +259,9 @@ def load_conditioning_statistics(
             f"{mean.shape}/{std.shape}, expected {expected_shape}"
         )
     if not np.isfinite(mean).all() or not np.isfinite(std).all():
-        raise ValueError(
-            f"conditioning statistics for {spec.column!r} must contain finite values"
-        )
+        raise ValueError(f"conditioning statistics for {spec.column!r} must contain finite values")
     if np.any(std <= 0):
-        raise ValueError(
-            f"conditioning statistics std for {spec.column!r} must be positive"
-        )
+        raise ValueError(f"conditioning statistics std for {spec.column!r} must be positive")
     return mean, std
 
 
@@ -328,8 +325,7 @@ class _MaterializeConfig(BaseModel):
         :raises ValueError: Materialization lacks a source or has invalid split keys.
         """
         materialize = (
-            self.download_dataset_txids is not None
-            or self.download_dataset_row_limit is not None
+            self.download_dataset_txids is not None or self.download_dataset_row_limit is not None
         )
         if materialize and not self.download_dataset_root_uri:
             raise ValueError(
@@ -339,9 +335,7 @@ class _MaterializeConfig(BaseModel):
         if self.download_dataset_txids is None:
             return self
         missing = [
-            split
-            for split in _MATERIALIZE_SPLITS
-            if split not in self.download_dataset_txids
+            split for split in _MATERIALIZE_SPLITS if split not in self.download_dataset_txids
         ]
         if missing:
             raise ValueError(f"download_dataset_txids is missing txids for splits: {missing}")
@@ -410,9 +404,7 @@ class VSTDataModule(LightningDataModule):
         """
         materialize_config = _MaterializeConfig(
             download_dataset_txids=(
-                dict(download_dataset_txids)
-                if download_dataset_txids is not None
-                else None
+                dict(download_dataset_txids) if download_dataset_txids is not None else None
             ),
             download_dataset_row_limit=download_dataset_row_limit,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -450,9 +442,7 @@ class VSTDataModule(LightningDataModule):
             return spec.column
         return "audio" if self.conditioning == "audio" else "mel_spec"
 
-    def _predict_split(
-        self, predict_file: str | Path | None, configured_root: Path
-    ) -> str | None:
+    def _predict_split(self, predict_file: str | Path | None, configured_root: Path) -> str | None:
         """Identify which materialized split, if any, also serves prediction.
 
         Resolved against the configured root rather than the subset directory,
@@ -545,7 +535,6 @@ class VSTDataModule(LightningDataModule):
             row_limit=self.download_dataset_row_limit,
             shard_suffix=self.shard_suffix,
         )
-
 
 
 def __getattr__(name: str) -> object:

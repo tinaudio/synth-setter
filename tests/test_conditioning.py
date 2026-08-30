@@ -37,6 +37,35 @@ def test_embedding_conditioning_spec_rejects_unknown_normalization() -> None:
         )
 
 
+def test_embedding_conditioning_spec_rejects_per_channel_rank_above_two() -> None:
+    """Per-channel normalization accepts only vectors and channel-first sequences."""
+    with pytest.raises(ValidationError, match=r"vector \[D\] or sequence \[D, T\]"):
+        EmbeddingConditioningSpec(
+            column="embedding",
+            input_shape=(2, 3, 2),
+            normalization="per_channel",
+        )
+
+
+@pytest.mark.parametrize("normalization", ["none", "global"])
+def test_embedding_conditioning_spec_non_per_channel_accepts_higher_rank(
+    normalization: str,
+) -> None:
+    """Non-channel policies do not impose an axis interpretation.
+
+    :param normalization: Policy that does not require a channel axis.
+    """
+    spec = EmbeddingConditioningSpec.model_validate(
+        {
+            "column": "embedding",
+            "input_shape": (2, 3, 2),
+            "normalization": normalization,
+        }
+    )
+
+    assert spec.input_shape == (2, 3, 2)
+
+
 def test_embedding_conditioning_spec_rejects_extra_fields() -> None:
     """Unknown configuration cannot silently cross the conditioning boundary."""
     with pytest.raises(ValidationError, match="unexpected"):

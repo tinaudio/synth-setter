@@ -1,7 +1,8 @@
 """Behavior tests for additive cached-conditioning statistics."""
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pyarrow as pa
@@ -10,7 +11,11 @@ import torch
 
 from synth_setter.conditioning import EmbeddingConditioningSpec
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
-from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
+from synth_setter.data.vst_datamodule import (
+    RawBatch,
+    load_conditioning_statistics,
+    prepare_batch,
+)
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import conditioning_stats_filename
@@ -44,7 +49,9 @@ def _write_conditioning_dataset(
             raise ValueError("fixed-size-list fixture requires vector rows")
         primitive = pa.array(values.reshape(-1), type=pa.from_numpy_dtype(values.dtype))
         array = pa.FixedSizeListArray.from_arrays(primitive, shape[0])
-        field = pa.field(column, pa.list_(pa.from_numpy_dtype(values.dtype), shape[0]), nullable=False)
+        field = pa.field(
+            column, pa.list_(pa.from_numpy_dtype(values.dtype), shape[0]), nullable=False
+        )
     else:
         array = tensor_array(values, values.dtype, shape)
         field = pa.field(
@@ -220,14 +227,18 @@ def test_stream_conditioning_stats_global_uses_one_shared_affine(tmp_path: Path)
     np.testing.assert_allclose(std, np.array([np.sqrt(5.25)], dtype=np.float32))
 
 
-def test_conditioning_stats_dead_channel_standardizes_to_zero(tmp_path: Path) -> None:
-    """A constant channel receives unit std and becomes zero in a real dataloader.
+def test_conditioning_stats_validation_uses_training_affine(tmp_path: Path) -> None:
+    """Validation values are transformed only with training-split statistics.
 
     :param tmp_path: Dataset root shared by the producer and datamodule consumer.
     """
     values = np.array([[1.0, 9.0], [3.0, 9.0], [5.0, 9.0], [7.0, 9.0]], dtype=np.float32)
+    validation_values = np.array(
+        [[11.0, 19.0], [13.0, 19.0], [15.0, 19.0], [17.0, 19.0]],
+        dtype=np.float32,
+    )
     _write_conditioning_dataset(tmp_path / "train.lance", "embedding", values)
-    _write_conditioning_dataset(tmp_path / "val.lance", "embedding", values)
+    _write_conditioning_dataset(tmp_path / "val.lance", "embedding", validation_values)
     get_conditioning_stats_lance(
         tmp_path / "train.lance",
         column="embedding",
@@ -253,7 +264,13 @@ def test_conditioning_stats_dead_channel_standardizes_to_zero(tmp_path: Path) ->
         module.teardown()
 
     assert conditioning is not None
-    torch.testing.assert_close(conditioning[:, 1], torch.zeros(2))
+    torch.testing.assert_close(
+        conditioning,
+        torch.tensor(
+            [[3.130495, 10.0], [4.024922, 10.0]],
+            dtype=torch.float32,
+        ),
+    )
 
 
 def test_conditioning_stats_near_dead_channel_uses_unit_standard_deviation(
@@ -264,7 +281,12 @@ def test_conditioning_stats_near_dead_channel_uses_unit_standard_deviation(
     :param tmp_path: Directory receiving the real Lance dataset.
     """
     dataset = tmp_path / "train.lance"
-    values = np.array([[1.0, 9.0], [3.0, 9.0000001], [5.0, 9.0]], dtype=np.float32)
+    base = np.float32(9.0)
+    perturbed = np.nextafter(base, np.float32(np.inf))
+    values = np.array([[1.0, base], [3.0, perturbed], [5.0, base]], dtype=np.float32)
+    raw_std = values[:, 1].astype(np.float64).std()
+    assert perturbed > base
+    assert 0 < raw_std < 1e-6
     _write_conditioning_dataset(dataset, "embedding", values)
 
     _, std = stream_conditioning_stats_lance(
@@ -330,9 +352,7 @@ def test_prepare_batch_global_standardization_uses_shared_affine() -> None:
         conditioning_std=np.array([2.0], dtype=np.float32),
     )
 
-    torch.testing.assert_close(
-        batch["conditioning"], torch.tensor([[[-1.0, 0.0], [1.0, 2.0]]])
-    )
+    torch.testing.assert_close(batch["conditioning"], torch.tensor([[[-1.0, 0.0], [1.0, 2.0]]]))
 
 
 def test_prepare_batch_incomplete_conditioning_affine_raises() -> None:
@@ -377,33 +397,119 @@ def test_prepare_batch_conditioning_normalization_overflow_raises() -> None:
         )
 
 
-def test_datamodule_conditioning_stats_absent_preserves_values(tmp_path: Path) -> None:
-    """Configured normalization is backward compatible when its artifact is absent.
+@pytest.mark.parametrize("normalization", ["per_channel", "global"])
+def test_load_conditioning_statistics_normalized_profile_missing_artifact_raises(
+    tmp_path: Path, normalization: str
+) -> None:
+    """A configured affine requires its column-specific statistics artifact.
+
+    :param tmp_path: Dataset root without conditioning statistics.
+    :param normalization: Normalization policy requiring an artifact.
+    """
+    spec = EmbeddingConditioningSpec.model_validate(
+        {
+            "column": "embedding",
+            "input_shape": (2,),
+            "normalization": normalization,
+        }
+    )
+
+    with pytest.raises(FileNotFoundError, match="conditioning_stats.embedding.npz"):
+        load_conditioning_statistics(tmp_path / "train.lance", spec)
+
+
+def test_load_conditioning_statistics_none_missing_artifact_returns_none(
+    tmp_path: Path,
+) -> None:
+    """A profile that disables normalization needs no statistics artifact.
 
     :param tmp_path: Dataset root without conditioning statistics.
     """
-    values = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
-    _write_conditioning_dataset(tmp_path / "val.lance", "embedding", values)
-    module = LanceVSTDataModule(
-        dataset_root=tmp_path,
-        batch_size=2,
-        conditioning=EmbeddingConditioningSpec(
-            column="embedding", input_shape=(2,), normalization="per_channel"
+    spec = EmbeddingConditioningSpec(column="embedding", input_shape=(2,))
+
+    assert load_conditioning_statistics(tmp_path / "train.lance", spec) is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"mean": np.zeros(2)}, "must contain mean and std"),
+        ({"std": np.ones(2)}, "must contain mean and std"),
+        (
+            {"mean": np.zeros(2), "std": np.ones(2), "count": np.array([2])},
+            "must contain mean and std",
         ),
-        use_saved_mean_and_variance=False,
-        num_workers=0,
-        pin_memory=False,
-        param_spec_name=ParamSpecName("surge_xt"),
+        ({"mean": np.zeros(1), "std": np.ones(2)}, "have shapes"),
+        ({"mean": np.zeros(2), "std": np.ones(1)}, "have shapes"),
+        ({"mean": np.array([np.nan, 0.0]), "std": np.ones(2)}, "finite values"),
+        ({"mean": np.zeros(2), "std": np.array([np.inf, 1.0])}, "finite values"),
+        ({"mean": np.zeros(2), "std": np.array([0.0, 1.0])}, "must be positive"),
+        ({"mean": np.zeros(2), "std": np.array([-1.0, 1.0])}, "must be positive"),
+    ],
+)
+def test_load_conditioning_statistics_malformed_artifact_raises(
+    tmp_path: Path, payload: dict[str, np.ndarray], message: str
+) -> None:
+    """Malformed affine artifacts fail at the loading boundary.
+
+    :param tmp_path: Dataset root receiving the malformed artifact.
+    :param payload: Arrays written to the archive.
+    :param message: Expected contract violation.
+    """
+    np.savez(
+        tmp_path / conditioning_stats_filename("embedding"), **cast(Any, payload)
+    )
+    spec = EmbeddingConditioningSpec(
+        column="embedding", input_shape=(2,), normalization="per_channel"
     )
 
-    module.setup("validate")
-    try:
-        conditioning = next(iter(module.val_dataloader()))["conditioning"]
-    finally:
-        module.teardown()
+    with pytest.raises(ValueError, match=message):
+        load_conditioning_statistics(tmp_path / "train.lance", spec)
 
-    assert conditioning is not None
-    torch.testing.assert_close(conditioning, torch.from_numpy(values))
+
+def test_stream_conditioning_stats_float32_overflow_raises(tmp_path: Path) -> None:
+    """Finite source values must produce finite float32 artifact arrays.
+
+    :param tmp_path: Dataset root receiving the float64 Lance column.
+    """
+    dataset = tmp_path / "train.lance"
+    _write_conditioning_dataset(
+        dataset,
+        "embedding",
+        np.array([[-1e40], [1e40]], dtype=np.float64),
+    )
+
+    with pytest.raises(ValueError, match="finite float32"):
+        get_conditioning_stats_lance(
+            dataset,
+            column="embedding",
+            input_shape=(1,),
+            normalization="per_channel",
+        )
+
+    assert not (tmp_path / conditioning_stats_filename("embedding")).exists()
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--conditioning-column", "embedding"],
+        ["--conditioning-shape", "2"],
+        ["--conditioning-normalization", "per_channel"],
+        ["--conditioning-column", "embedding", "--conditioning-shape", "2"],
+        ["--conditioning-column", "embedding", "--conditioning-normalization", "per_channel"],
+        ["--conditioning-shape", "2", "--conditioning-normalization", "per_channel"],
+        ["--conditioning-batch-size", "4"],
+    ],
+)
+def test_conditioning_stats_cli_incomplete_flags_raise(tmp_path: Path, flags: list[str]) -> None:
+    """Any partial conditioning invocation fails before legacy dispatch.
+
+    :param tmp_path: Input path that legacy dispatch must not consume.
+    :param flags: Incomplete conditioning option group.
+    """
+    with pytest.raises(ValueError, match="must be provided together"):
+        main([str(tmp_path), *flags])
 
 
 def test_conditioning_stats_cli_writes_one_immutable_artifact_per_column(tmp_path: Path) -> None:
@@ -564,5 +670,7 @@ def test_conditioning_stats_r2_uri_reads_and_uploads_artifact(
     )
 
     assert output == "r2://bucket/run/conditioning_stats.embedding.npz"
-    with np.load(fake_r2_remote / "bucket" / "run" / conditioning_stats_filename("embedding")) as stats:
+    with np.load(
+        fake_r2_remote / "bucket" / "run" / conditioning_stats_filename("embedding")
+    ) as stats:
         np.testing.assert_allclose(stats["mean"], [2.0, 4.0])

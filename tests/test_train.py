@@ -60,6 +60,7 @@ from tests.conftest import (
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
     assert_clap_preserves_resampler_output,
+    assert_conditioning_batch_uses_artifact,
     assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
@@ -2436,6 +2437,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
             f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
         )
         assert_finite_train_loss(metric_dict)
+        assert_conditioning_batch_uses_artifact(cfg, object_dict)
         if conditioning in {"ssondo", "meanaudio_16k"}:
             _assert_model_predictions_depend_on_conditioning(object_dict)
         if conditioning == "ssondo":

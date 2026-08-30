@@ -1,7 +1,6 @@
 """Stream dataset-level mel and cached-conditioning normalization statistics."""
 
 import argparse
-import logging
 import os
 import subprocess
 import tempfile
@@ -11,6 +10,7 @@ from typing import NamedTuple
 
 import numpy as np
 import pyarrow as pa
+import structlog
 
 from synth_setter.conditioning import EmbeddingNormalization
 from synth_setter.data.audio_datamodule import AudioFolderDataset
@@ -18,7 +18,7 @@ from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import conditioning_stats_filename
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 type WelfordValue = np.ndarray | int
 type WelfordState = tuple[int, WelfordValue, WelfordValue]
@@ -146,11 +146,11 @@ def _fix_degenerate_bins(std: np.ndarray, *, threshold: float = 0.0) -> np.ndarr
     if found is None:
         return np.asarray(std)
     logger.warning(
-        "Masking %d degenerate bin(s) with std=1.0 (std shape %s; indices %s%s).",
-        found.n_degenerate,
-        found.std.shape,
-        found.preview,
-        found.overflow_suffix,
+        "masked_degenerate_bins",
+        count=found.n_degenerate,
+        std_shape=found.std.shape,
+        indices=found.preview,
+        overflow_suffix=found.overflow_suffix,
     )
     # Preserve std's dtype: ``np.where(mask, 1.0, std)`` would promote
     # float32 → float64 from the Python literal and silently inflate
@@ -217,11 +217,7 @@ def finalize(
     :returns: Population ``(mean, std)`` arrays.
     """
     count, mean, M2 = existing
-    variance = (
-        M2 / count
-        if count > 1
-        else np.zeros_like(mean) if allow_single_observation else 0
-    )
+    variance = M2 / count if count > 1 else np.zeros_like(mean) if allow_single_observation else 0
     std = np.sqrt(variance)
     if mask_degenerate:
         std = _fix_degenerate_bins(std, threshold=degenerate_threshold)
@@ -230,9 +226,7 @@ def finalize(
     return mean, std
 
 
-def get_stats_directory(
-    directory: str | Path, mask_degenerate: bool = False
-) -> None:
+def get_stats_directory(directory: str | Path, mask_degenerate: bool = False) -> None:
     """Write mel normalization statistics for an audio directory.
 
     :param directory: Audio folder consumed by :class:`AudioFolderDataset`.
@@ -248,11 +242,11 @@ def get_stats_directory(
         existing = update(existing, x)
 
         if i % 10 == 0:
-            logger.info(f"Processed {i + 1} files...")
+            logger.info("processed_audio_files", count=i + 1)
 
     mean, std = finalize(existing, mask_degenerate=mask_degenerate)
 
-    logger.info(f"Saving to {str(out_file)}")
+    logger.info("saved_audio_statistics", path=str(out_file))
 
     np.savez(out_file, mean=mean, std=std)
 
@@ -303,7 +297,7 @@ def stream_stats_lance(
     existing: WelfordState = (0, 0, 0)
     folded_any = False
     for shard_uri in shard_uris:
-        logger.info("Processing %s...", Path(str(shard_uri)).name)
+        logger.info("processing_lance_shard", shard=Path(str(shard_uri)).name)
         existing = fold_lance_shard_into_welford(
             existing, shard_uri, storage_options=storage_options
         )
@@ -350,9 +344,7 @@ def _conditioning_observations(
     return observations.astype(np.float64, copy=False)
 
 
-def _conditioning_array_to_numpy(
-    array: pa.Array, input_shape: tuple[int, ...]
-) -> np.ndarray:
+def _conditioning_array_to_numpy(array: pa.Array, input_shape: tuple[int, ...]) -> np.ndarray:
     """Decode fixed-shape-tensor or fixed-size-list conditioning rows.
 
     :param array: Arrow batch column from Lance.
@@ -431,12 +423,15 @@ def stream_conditioning_stats_lance(
         degenerate_threshold=_CONDITIONING_DEGENERATE_STD,
         allow_single_observation=True,
     )
-    return mean.astype(np.float32), std.astype(np.float32)
+    with np.errstate(over="ignore", invalid="ignore"):
+        float32_mean = mean.astype(np.float32)
+        float32_std = std.astype(np.float32)
+    if not np.isfinite(float32_mean).all() or not np.isfinite(float32_std).all():
+        raise ValueError("conditioning statistics cannot be represented as finite float32 values")
+    return float32_mean, float32_std
 
 
-def _assert_conditioning_stats_match(
-    stats_file: Path, mean: np.ndarray, std: np.ndarray
-) -> None:
+def _assert_conditioning_stats_match(stats_file: Path, mean: np.ndarray, std: np.ndarray) -> None:
     """Reject an existing artifact whose affine differs from this computation.
 
     :param stats_file: Existing column-specific archive.
@@ -520,12 +515,12 @@ def get_conditioning_stats_lance(
     if output_directory is not None:
         stats_file = Path(output_directory) / filename
         _write_conditioning_stats(stats_file, mean, std)
-        logger.info("Saving conditioning statistics to %s", stats_file)
+        logger.info("saved_conditioning_statistics", path=str(stats_file))
         return stats_file
     if not r2_io.is_r2_uri(dataset_uri_string):
         stats_file = Path(dataset_uri).parent / filename
         _write_conditioning_stats(stats_file, mean, std)
-        logger.info("Saving conditioning statistics to %s", stats_file)
+        logger.info("saved_conditioning_statistics", path=str(stats_file))
         return stats_file
 
     destination = f"{dataset_uri_string.rsplit('/', 1)[0]}/{filename}"
@@ -545,7 +540,7 @@ def get_conditioning_stats_lance(
             existing_file = Path(temporary) / f"existing-{filename}"
             r2_io.download_to_path(destination, existing_file)
             _assert_conditioning_stats_match(existing_file, mean, std)
-    logger.info("Saving conditioning statistics to %s", destination)
+    logger.info("saved_conditioning_statistics", uri=destination)
     return destination
 
 
@@ -568,7 +563,7 @@ def get_stats_lance(directory: str | Path, mask_degenerate: bool = False) -> Non
         raise FileNotFoundError(f"no {_SHARD_GLOB} files in {directory}")
     mean, std = stream_stats_lance(shard_paths, mask_degenerate=mask_degenerate)
     out_file = directory / "stats.npz"
-    logger.info("Saving to %s", out_file)
+    logger.info("saved_lance_statistics", path=str(out_file))
     np.savez(out_file, mean=mean, std=std)
 
 
@@ -604,8 +599,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--conditioning-batch-size",
         type=int,
-        default=16,
-        help="Lance rows scanned per conditioning-statistics batch.",
+        help="Lance rows scanned per conditioning-statistics batch (default: 16).",
     )
     parser.add_argument(
         "--mask-degenerate-bins",
@@ -636,27 +630,31 @@ def main(argv: list[str] | None = None) -> None:
     """
     args = _parse_args(argv)
 
-    # Without this the stdlib root logger stays at WARNING and the per-file
-    # progress + "Saving to..." messages emitted by get_stats_*() are silently
-    # dropped, leaving the operator staring at a blank terminal during long
-    # runs over thousands of files.
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    conditioning_options = (
+        args.conditioning_column,
+        args.conditioning_shape,
+        args.conditioning_normalization,
     )
-
-    if args.conditioning_column is not None:
-        if args.conditioning_shape is None or args.conditioning_normalization is None:
-            raise ValueError(
-                "--conditioning-column requires --conditioning-shape and "
-                "--conditioning-normalization"
-            )
+    has_conditioning_option = any(option is not None for option in conditioning_options)
+    has_complete_conditioning = all(option is not None for option in conditioning_options)
+    if args.conditioning_batch_size is not None:
+        has_conditioning_option = True
+    if has_conditioning_option and not has_complete_conditioning:
+        raise ValueError(
+            "--conditioning-column, --conditioning-shape, and "
+            "--conditioning-normalization must be provided together"
+        )
+    if has_complete_conditioning:
         get_conditioning_stats_lance(
             args.input,
             column=args.conditioning_column,
             input_shape=tuple(args.conditioning_shape),
             normalization=args.conditioning_normalization,
-            batch_size=args.conditioning_batch_size,
+            batch_size=(
+                args.conditioning_batch_size
+                if args.conditioning_batch_size is not None
+                else 16
+            ),
         )
         return
 

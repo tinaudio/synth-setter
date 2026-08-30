@@ -86,9 +86,7 @@ def _fixed_embedding_shape(field: pa.Field) -> tuple[int, ...]:
     return shape
 
 
-def _validate_embedding_column(
-    shard_path: Path, spec: EmbeddingConditioningSpec
-) -> None:
+def _validate_embedding_column(shard_path: Path, spec: EmbeddingConditioningSpec) -> None:
     """Validate one Lance split against a fixed-shape embedding specification.
 
     :param shard_path: Lance dataset selected for a Lightning split.
@@ -99,17 +97,14 @@ def _validate_embedding_column(
     dataset = lance.dataset(str(shard_path))
     column_index = dataset.schema.get_field_index(spec.column)
     if column_index < 0:
-        raise KeyError(
-            f"conditioning column {spec.column!r} is absent from {shard_path}"
-        )
+        raise KeyError(f"conditioning column {spec.column!r} is absent from {shard_path}")
     field = dataset.schema.field(column_index)
     shape = _fixed_embedding_shape(field)
     flattened_shape = (prod(spec.input_shape),)
     flattened_fixed_list = pa.types.is_fixed_size_list(field.type) and shape == flattened_shape
     if shape != spec.input_shape and not flattened_fixed_list:
         raise ValueError(
-            f"conditioning column {spec.column!r} has shape {shape}, "
-            f"expected {spec.input_shape}"
+            f"conditioning column {spec.column!r} has shape {shape}, expected {spec.input_shape}"
         )
     if dataset.count_rows() == 0:
         raise ValueError(
@@ -119,9 +114,7 @@ def _validate_embedding_column(
     record_batch = sample.to_batches()[0]
     values = batch_to_shaped_tensors(record_batch)[spec.column]
     if not torch.isfinite(values).all():
-        raise ValueError(
-            f"conditioning column {spec.column!r} sample contains non-finite values"
-        )
+        raise ValueError(f"conditioning column {spec.column!r} sample contains non-finite values")
 
 
 def _sketch_child_shapes(num_frames: int) -> dict[str, tuple[int, ...]]:
@@ -307,9 +300,7 @@ class PrepareBatchCollate:
             raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(loudness, centroid, pitch)
         raw = cast(RawBatch, raw_values)
         conditioning_mean, conditioning_std = (
-            self.conditioning_stats
-            if self.conditioning_stats is not None
-            else (None, None)
+            self.conditioning_stats if self.conditioning_stats is not None else (None, None)
         )
         return prepare_batch(
             raw,
@@ -348,9 +339,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         self._num_params = num_params
         self._read_audio = read_audio or conditioning == "audio"
         self._read_mel = conditioning == "mel"
-        self._preserve_legacy_m2l = (
-            isinstance(conditioning, str) and conditioning == "m2l"
-        )
+        self._preserve_legacy_m2l = isinstance(conditioning, str) and conditioning == "m2l"
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
         self._sketch = sketch
 
@@ -424,9 +413,7 @@ def _model_batch_passthrough(batch: object) -> ModelBatch:
 class _RepeatFirstBatchDataset(torch.utils.data.Dataset[ModelBatch]):
     """Fold every requested sample index into the first full batch."""
 
-    def __init__(
-        self, dataset: LanceMapDataset | _FakeMapDataset, batch_size: int
-    ) -> None:
+    def __init__(self, dataset: LanceMapDataset | _FakeMapDataset, batch_size: int) -> None:
         """Wrap a map dataset with first-batch index folding.
 
         :param dataset: Sample-indexed real or synthetic dataset.
@@ -690,8 +677,7 @@ class LanceVSTDataModule(VSTDataModule):
             if "predict" in split_names:
                 predict_stats = (
                     split_stats
-                    if split_stats is not None
-                    and self.predict_file.parent == self.dataset_root
+                    if split_stats is not None and self.predict_file.parent == self.dataset_root
                     else load_dataset_statistics(self.predict_file)
                 )
         spec = self.embedding_conditioning
@@ -702,7 +688,8 @@ class LanceVSTDataModule(VSTDataModule):
             if "predict" in split_names:
                 predict_conditioning_stats = (
                     split_conditioning_stats
-                    if self.predict_file.parent == self.dataset_root
+                    if split_conditioning_stats is not None
+                    and self.predict_file.parent == self.dataset_root
                     else load_conditioning_statistics(self.predict_file, spec)
                 )
         shard_paths = {
@@ -718,9 +705,7 @@ class LanceVSTDataModule(VSTDataModule):
                 read_audio=name == "predict",
                 mel_stats=predict_stats if name == "predict" else split_stats,
                 conditioning_stats=(
-                    predict_conditioning_stats
-                    if name == "predict"
-                    else split_conditioning_stats
+                    predict_conditioning_stats if name == "predict" else split_conditioning_stats
                 ),
             )
             for name in split_names
@@ -732,16 +717,12 @@ class LanceVSTDataModule(VSTDataModule):
         :param stage: Lightning stage hint; ``None`` retains eager all-split setup.
         """
         split_names = (
-            self._ALL_SPLITS
-            if stage is None
-            else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
+            self._ALL_SPLITS if stage is None else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
         )
         num_params = resolve_param_spec(self.param_spec_name).encoded_width
         if self.fake:
             self._splits = {
-                name: self._build_fake_split(
-                    num_params=num_params, read_audio=name == "predict"
-                )
+                name: self._build_fake_split(num_params=num_params, read_audio=name == "predict")
                 for name in split_names
             }
         else:

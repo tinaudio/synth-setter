@@ -20,7 +20,6 @@ from omegaconf import OmegaConf
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.constants import conditioning_stats_filename
 from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from tests.helpers.lance_fixtures import (
     NUM_PARAMS,
@@ -67,8 +66,7 @@ def _txids(source_root: Path) -> dict[str, str]:
     :return: ``{split: txid}`` mapping for all three splits.
     """
     return {
-        split: _split_txid(source_root / f"{split}.lance")
-        for split in ("train", "val", "test")
+        split: _split_txid(source_root / f"{split}.lance") for split in ("train", "val", "test")
     }
 
 
@@ -150,9 +148,7 @@ class TestMaterializeInitValidation:
             )
 
     @pytest.mark.parametrize("row_limit", [-1, 0])
-    def test_init_non_positive_row_limit_raises(
-        self, tmp_path: Path, row_limit: int
-    ) -> None:
+    def test_init_non_positive_row_limit_raises(self, tmp_path: Path, row_limit: int) -> None:
         """A non-positive row cap is rejected before hydration.
 
         :param tmp_path: Local dataset root.
@@ -235,32 +231,6 @@ class TestMaterializedSubsetLayout:
         train_split = lance.dataset(str(module.dataset_root / "train.lance"))
         assert train_split.schema.names == ["param_array", "mel_spec"]
         assert train_split.count_rows() == 8
-
-    def test_prepare_data_copies_optional_conditioning_statistics(
-        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Hydration carries the additive archive when the source has one.
-
-        :param source_root: Fixture-provided hydration source.
-        :param tmp_path: Parent of the local dataset root.
-        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
-        """
-        filename = conditioning_stats_filename("same_s")
-        artifact = source_root / filename
-        artifact.write_bytes(b"conditioning-statistics")
-        monkeypatch.setattr(
-            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
-            _sidecar_copier(source_root)[0],
-        )
-        module = LanceVSTDataModule(
-            dataset_root=tmp_path / "local",
-            download_dataset_root_uri=source_root.as_uri(),
-            param_spec_name=_PARAM_SPEC,
-        )
-
-        module.prepare_data()
-
-        assert (module.dataset_root / filename).read_bytes() == artifact.read_bytes()
 
     def test_prepare_data_audio_conditioning_projects_waveform_once_per_split(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

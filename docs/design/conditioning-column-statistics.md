@@ -71,9 +71,11 @@ uv run python -m synth_setter.pipeline.data.stats TRAIN.lance \
   --conditioning-normalization per_channel
 ```
 
-The datamodule reuses the training affine for validation and test splits. Missing column statistics
-are a backward-compatible no-op. Standard deviations below `1e-6` are replaced with one, so a dead
-channel becomes zero after mean subtraction instead of producing a non-finite value.
+The datamodule reuses the training affine for validation and test splits. Profiles configured with
+`per_channel` or `global` normalization require the column-specific artifact and fail before loading
+data when it is absent. Profiles configured with `none` need no artifact. Standard deviations below
+`1e-6` are replaced with one, so a dead channel becomes zero after mean subtraction instead of
+producing a non-finite value.
 
 ## Specific checks
 

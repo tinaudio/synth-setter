@@ -27,6 +27,7 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule, PrepareBatchC
 from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.constants import conditioning_stats_filename
 from tests.helpers.lance_fixtures import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLES,
@@ -109,9 +110,7 @@ class _DDPIndexRecorder(LightningModule):
         self.scale = torch.nn.Parameter(torch.ones(()))
         self.seen_indices: list[int] = []
 
-    def training_step(
-        self, batch: dict[str, torch.Tensor | None], batch_idx: int
-    ) -> torch.Tensor:
+    def training_step(self, batch: dict[str, torch.Tensor | None], batch_idx: int) -> torch.Tensor:
         """Recover and retain the source index of every row in this rank's batch.
 
         :param batch: Model-ready batch from the map dataloader.
@@ -249,9 +248,7 @@ class TestPrepareBatchCollate:
         def noise_for_rank(rank: int) -> torch.Tensor:
             monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
             torch.manual_seed(1234)
-            collate = PrepareBatchCollate(
-                mean=None, std=None, rescale_params=False, ot=False
-            )
+            collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
             return _unwrap(collate(self._raw_batch())["noise"])
 
         assert not torch.equal(noise_for_rank(0), noise_for_rank(1))
@@ -273,13 +270,9 @@ class TestPrepareBatchCollate:
             monkeypatch.setattr(
                 torch.utils.data,
                 "get_worker_info",
-                lambda: SimpleNamespace(
-                    seed=base_seed + worker_id, num_workers=num_workers
-                ),
+                lambda: SimpleNamespace(seed=base_seed + worker_id, num_workers=num_workers),
             )
-            collate = PrepareBatchCollate(
-                mean=None, std=None, rescale_params=False, ot=False
-            )
+            collate = PrepareBatchCollate(mean=None, std=None, rescale_params=False, ot=False)
             return _unwrap(collate(self._raw_batch())["noise"])
 
         rank_worker_pairs = list(product(range(2), range(num_workers)))
@@ -290,10 +283,7 @@ class TestPrepareBatchCollate:
             torch.equal(first, second)
             for first, second in zip(first_pass, second_pass, strict=True)
         )
-        assert all(
-            not torch.equal(left, right)
-            for left, right in combinations(first_pass, 2)
-        )
+        assert all(not torch.equal(left, right) for left, right in combinations(first_pass, 2))
 
 
 class TestLanceMapDataModuleSetup:
@@ -467,9 +457,7 @@ class TestLanceMapDataModuleSetup:
             assert module.train_dataloader().num_workers == 3
             assert module.val_dataloader().num_workers == 0
 
-    def test_validation_loader_worker_override_is_honored(
-        self, dataset_root: Path
-    ) -> None:
+    def test_validation_loader_worker_override_is_honored(self, dataset_root: Path) -> None:
         """Validation can opt into workers without changing training workers.
 
         :param dataset_root: Fixture-provided dataset-root directory.
@@ -525,9 +513,7 @@ class TestLanceMapDataModuleSetup:
             assert loader.persistent_workers is False
             assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
 
-    def test_persistent_workers_with_workers_remains_enabled(
-        self, dataset_root: Path
-    ) -> None:
+    def test_persistent_workers_with_workers_remains_enabled(self, dataset_root: Path) -> None:
         """Configured persistence reaches loaders that own worker processes.
 
         :param dataset_root: Fixture-provided dataset-root directory.
@@ -864,16 +850,12 @@ class TestLanceMapDataModuleFlows:
         assert _unwrap(predict_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         assert _unwrap(predict_batch["audio"]).dtype == torch.float32
 
-    def test_embedding_spec_routes_music2latent_to_conditioning(
-        self, dataset_root: Path
-    ) -> None:
+    def test_embedding_spec_routes_music2latent_to_conditioning(self, dataset_root: Path) -> None:
         """A spec projects ``music2latent`` to the generic key and drops mel.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
-        spec = EmbeddingConditioningSpec(
-            column="music2latent", input_shape=(6, 7)
-        )
+        spec = EmbeddingConditioningSpec(column="music2latent", input_shape=(6, 7))
         with _set_up_map_module(
             dataset_root=dataset_root, batch_size=2, ot=False, conditioning=spec
         ) as module:
@@ -884,6 +866,76 @@ class TestLanceMapDataModuleFlows:
             _unwrap(batch["conditioning"]).numpy(),
             make_shard_columns(6, seed=2)["music2latent"][:2],
         )
+
+    def test_predict_only_in_root_applies_conditioning_statistics(
+        self, dataset_root: Path
+    ) -> None:
+        """Predict-only setup loads the affine beside the in-root prediction split.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        np.savez(
+            dataset_root / conditioning_stats_filename("music2latent"),
+            mean=np.full(6, 1.0, dtype=np.float32),
+            std=np.full(6, 2.0, dtype=np.float32),
+        )
+        spec = EmbeddingConditioningSpec(
+            column="music2latent",
+            input_shape=(6, 7),
+            normalization="per_channel",
+        )
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root,
+            batch_size=2,
+            conditioning=spec,
+            use_saved_mean_and_variance=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.setup("predict")
+        try:
+            conditioning = _unwrap(next(iter(module.predict_dataloader()))["conditioning"])
+        finally:
+            module.teardown()
+
+        expected = (make_shard_columns(6, seed=3)["music2latent"][:2] - 1.0) / 2.0
+        np.testing.assert_allclose(conditioning.numpy(), expected)
+
+    def test_predict_external_normalized_profile_missing_artifact_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """An external prediction split must carry its configured affine.
+
+        :param tmp_path: Separate dataset and prediction roots.
+        """
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        predict_root = tmp_path / "capture"
+        predict_root.mkdir()
+        predict_file = predict_root / "predict.lance"
+        write_seeded_lance_shard(predict_file, num_rows=2, seed=3)
+        spec = EmbeddingConditioningSpec(
+            column="music2latent",
+            input_shape=(6, 7),
+            normalization="per_channel",
+        )
+        module = LanceVSTDataModule(
+            dataset_root=dataset_root,
+            predict_file=predict_file,
+            batch_size=2,
+            conditioning=spec,
+            use_saved_mean_and_variance=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        with pytest.raises(
+            FileNotFoundError, match=r"capture/conditioning_stats\.music2latent\.npz"
+        ):
+            module.setup("predict")
 
     def test_mel_normalized_with_saved_stats(self, tmp_path: Path) -> None:
         """Loaded ``stats.npz`` mean/std are applied as ``(mel - mean) / std``.
@@ -1013,6 +1065,7 @@ class TestLanceMapDataModuleModes:
 
         :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
         """
+
         def draw() -> dict[str, torch.Tensor | None]:
             torch.manual_seed(1234)
             with _set_up_map_module(
@@ -1182,9 +1235,7 @@ class TestLanceMapDataModuleModes:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("num_rows", [15, 16])
-    def test_ddp_sim_default_sampler_covers_epoch(
-        self, tmp_path: Path, num_rows: int
-    ) -> None:
+    def test_ddp_sim_default_sampler_covers_epoch(self, tmp_path: Path, num_rows: int) -> None:
         """Lightning's default distributed sampler covers divisible and padded epochs.
 
         Uses the same CPU, two-device, ``ddp_spawn`` geometry as
@@ -1199,9 +1250,7 @@ class TestLanceMapDataModuleModes:
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
         for seed, split in enumerate(("train", "val", "test"), start=1):
-            write_seeded_lance_shard(
-                dataset_root / f"{split}.lance", num_rows=num_rows, seed=seed
-            )
+            write_seeded_lance_shard(dataset_root / f"{split}.lance", num_rows=num_rows, seed=seed)
         write_mel_stats(dataset_root)
         source_rows = make_shard_columns(num_rows, seed=1)["param_array"] * 2 - 1
         output_dir = tmp_path / "rank-indices"
@@ -1245,9 +1294,7 @@ class TestLanceMapDataModuleModes:
         dataset_root = tmp_path / "data"
         dataset_root.mkdir()
         for seed, split in enumerate(("train", "val", "test"), start=1):
-            write_seeded_lance_shard(
-                dataset_root / f"{split}.lance", num_rows=num_rows, seed=seed
-            )
+            write_seeded_lance_shard(dataset_root / f"{split}.lance", num_rows=num_rows, seed=seed)
         write_mel_stats(dataset_root)
         source_rows = make_shard_columns(num_rows, seed=1)["param_array"] * 2 - 1
         output_dir = tmp_path / "rank-indices"

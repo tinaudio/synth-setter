@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from types import ModuleType
 
 import numpy as np
 import pytest
 from pedalboard.io import AudioFile
+from structlog.testing import capture_logs
 
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, dataset_field_shapes
 from synth_setter.pipeline.data import stats as _stats_module
@@ -175,7 +175,7 @@ def test_finalize_constant_bin_raises_by_default(stats_script: ModuleType) -> No
 
 
 def test_finalize_constant_bin_masked_substitutes_unit_std_and_warns(
-    stats_script: ModuleType, caplog: pytest.LogCaptureFixture
+    stats_script: ModuleType,
 ) -> None:
     """With ``mask_degenerate=True``, the degenerate bin's ``std`` is replaced by 1.0 and logged.
 
@@ -184,7 +184,6 @@ def test_finalize_constant_bin_masked_substitutes_unit_std_and_warns(
     no datamodule changes are needed.
 
     :param stats_script: Imported get_dataset_stats module (fixture).
-    :param caplog: pytest log-capture fixture.
     """
     rng = np.random.default_rng(2)
     samples = rng.normal(size=(50, 4))
@@ -192,13 +191,13 @@ def test_finalize_constant_bin_masked_substitutes_unit_std_and_warns(
 
     existing = _existing_from_samples(stats_script, samples)
 
-    with caplog.at_level(logging.WARNING):
+    with capture_logs() as logs:
         mean, std = stats_script.finalize(existing, mask_degenerate=True)
 
     assert std[1] == 1.0
     assert (std[[0, 2, 3]] > 0).all() and (std[[0, 2, 3]] != 1.0).all()
     np.testing.assert_allclose(mean[1], -7.0)
-    assert any("[1]" in record.message for record in caplog.records), caplog.text
+    assert any(log.get("indices") == [1] for log in logs), logs
 
 
 def test_finalize_multiple_constant_bins_lists_all_indices(
@@ -289,20 +288,19 @@ def test_fix_degenerate_bins_no_zeros_returns_input_unchanged(
 
 
 def test_fix_degenerate_bins_zero_entry_substitutes_unit_std_and_warns(
-    stats_script: ModuleType, caplog: pytest.LogCaptureFixture
+    stats_script: ModuleType,
 ) -> None:
     """A single ``std==0`` entry is substituted with ``1.0`` and the index is logged.
 
     :param stats_script: Imported get_dataset_stats module (fixture).
-    :param caplog: pytest log-capture fixture.
     """
     std = np.array([0.1, 0.0, 0.5])
 
-    with caplog.at_level(logging.WARNING):
+    with capture_logs() as logs:
         returned = stats_script._fix_degenerate_bins(std)
 
     np.testing.assert_array_equal(returned, np.array([0.1, 1.0, 0.5]))
-    assert any("[1]" in record.message for record in caplog.records), caplog.text
+    assert any(log.get("indices") == [1] for log in logs), logs
 
 
 def test_fix_degenerate_bins_preserves_input_dtype(
