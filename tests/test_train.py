@@ -1162,6 +1162,7 @@ def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     """
     with open_dict(cfg_train_sketch_lance):
         cfg_train_sketch_lance.model.validation_sketch_cfg_strength = 0.0
+        cfg_train_sketch_lance.model.test_sketch_cfg_strength = 0.0
     HydraConfig().set_config(cfg_train_sketch_lance)
     metric_dict, object_dict = train(cfg_train_sketch_lance)
 
@@ -1182,7 +1183,25 @@ def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     torch.manual_seed(17)
     sketch_guided = trainer.validate(model, datamodule, verbose=False)[0]["val/param_mse"]
 
+    model.hparams.test_sketch_cfg_strength = 0.0
+    torch.manual_seed(19)
+    test_sketch_disabled = trainer.test(model, datamodule, verbose=False)[0]["test/param_mse"]
+    model.hparams.test_sketch_cfg_strength = 8.0
+    torch.manual_seed(19)
+    test_sketch_guided = trainer.test(model, datamodule, verbose=False)[0]["test/param_mse"]
+
+    datamodule.setup("test")
+    predict_loader = datamodule.test_dataloader()
+    model.hparams.test_sketch_cfg_strength = 0.0
+    torch.manual_seed(23)
+    predict_sketch_disabled = trainer.predict(model, dataloaders=predict_loader)[0][0]
+    model.hparams.test_sketch_cfg_strength = 8.0
+    torch.manual_seed(23)
+    predict_sketch_guided = trainer.predict(model, dataloaders=predict_loader)[0][0]
+
     assert sketch_disabled != sketch_guided
+    assert test_sketch_disabled != test_sketch_guided
+    assert not torch.allclose(predict_sketch_disabled, predict_sketch_guided)
 
 
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(

@@ -199,7 +199,7 @@ def test_build_guided_velocity_applies_separate_sketch_and_content_strengths() -
 
 
 def test_build_guided_velocity_defaults_sketch_strength_to_content_strength() -> None:
-    """Omitted sketch scale preserves the previous joint-CFG result."""
+    """Omitted sketch scale applies the content scale to both guidance deltas."""
     x = torch.zeros(_BATCH, _NUM_PARAMS)
     guided_velocity = build_guided_velocity(
         _BranchField(),
