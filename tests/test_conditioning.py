@@ -22,6 +22,48 @@ def test_embedding_conditioning_spec_accepts_fixed_shape() -> None:
 
     assert spec.column == "clap"
     assert spec.input_shape == (512,)
+    assert spec.normalization == "none"
+
+
+def test_embedding_conditioning_spec_rejects_unknown_normalization() -> None:
+    """Only measured normalization strategies cross the strict config boundary."""
+    with pytest.raises(ValidationError, match="normalization"):
+        EmbeddingConditioningSpec.model_validate(
+            {
+                "column": "embedding",
+                "input_shape": (2,),
+                "normalization": "layer_norm",
+            }
+        )
+
+
+def test_embedding_conditioning_spec_rejects_per_channel_rank_above_two() -> None:
+    """Per-channel normalization accepts only vectors and channel-first sequences."""
+    with pytest.raises(ValidationError, match=r"vector \[D\] or sequence \[D, T\]"):
+        EmbeddingConditioningSpec(
+            column="embedding",
+            input_shape=(2, 3, 2),
+            normalization="per_channel",
+        )
+
+
+@pytest.mark.parametrize("normalization", ["none", "global"])
+def test_embedding_conditioning_spec_non_per_channel_accepts_higher_rank(
+    normalization: str,
+) -> None:
+    """Non-channel policies do not impose an axis interpretation.
+
+    :param normalization: Policy that does not require a channel axis.
+    """
+    spec = EmbeddingConditioningSpec.model_validate(
+        {
+            "column": "embedding",
+            "input_shape": (2, 3, 2),
+            "normalization": normalization,
+        }
+    )
+
+    assert spec.input_shape == (2, 3, 2)
 
 
 def test_embedding_conditioning_spec_rejects_extra_fields() -> None:

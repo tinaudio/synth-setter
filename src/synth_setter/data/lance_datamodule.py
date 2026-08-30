@@ -40,6 +40,7 @@ from synth_setter.data.vst_datamodule import (
     RawBatch,
     VSTDataModule,
     draw_generator_seed,
+    load_conditioning_statistics,
     load_dataset_statistics,
     prepare_batch,
     ranked_generator_seed,
@@ -85,9 +86,7 @@ def _fixed_embedding_shape(field: pa.Field) -> tuple[int, ...]:
     return shape
 
 
-def _validate_embedding_column(
-    shard_path: Path, spec: EmbeddingConditioningSpec
-) -> None:
+def _validate_embedding_column(shard_path: Path, spec: EmbeddingConditioningSpec) -> None:
     """Validate one Lance split against a fixed-shape embedding specification.
 
     :param shard_path: Lance dataset selected for a Lightning split.
@@ -98,17 +97,14 @@ def _validate_embedding_column(
     dataset = lance.dataset(str(shard_path))
     column_index = dataset.schema.get_field_index(spec.column)
     if column_index < 0:
-        raise KeyError(
-            f"conditioning column {spec.column!r} is absent from {shard_path}"
-        )
+        raise KeyError(f"conditioning column {spec.column!r} is absent from {shard_path}")
     field = dataset.schema.field(column_index)
     shape = _fixed_embedding_shape(field)
     flattened_shape = (prod(spec.input_shape),)
     flattened_fixed_list = pa.types.is_fixed_size_list(field.type) and shape == flattened_shape
     if shape != spec.input_shape and not flattened_fixed_list:
         raise ValueError(
-            f"conditioning column {spec.column!r} has shape {shape}, "
-            f"expected {spec.input_shape}"
+            f"conditioning column {spec.column!r} has shape {shape}, expected {spec.input_shape}"
         )
     if dataset.count_rows() == 0:
         raise ValueError(
@@ -118,9 +114,7 @@ def _validate_embedding_column(
     record_batch = sample.to_batches()[0]
     values = batch_to_shaped_tensors(record_batch)[spec.column]
     if not torch.isfinite(values).all():
-        raise ValueError(
-            f"conditioning column {spec.column!r} sample contains non-finite values"
-        )
+        raise ValueError(f"conditioning column {spec.column!r} sample contains non-finite values")
 
 
 def _sketch_child_shapes(num_frames: int) -> dict[str, tuple[int, ...]]:
@@ -215,6 +209,7 @@ class PrepareBatchCollate:
         ot: bool,
         conditioning_column: str | None = None,
         conditioning_shape: tuple[int, ...] | None = None,
+        conditioning_stats: tuple[np.ndarray, np.ndarray] | None = None,
         sketch_column: str | None = None,
         sketch_pitch_zero_threshold: float | None = None,
         preserve_legacy_m2l: bool = False,
@@ -227,6 +222,7 @@ class PrepareBatchCollate:
         :param ot: Whether to Hungarian-match noise to parameters.
         :param conditioning_column: Generic embedding column to expose as ``conditioning``.
         :param conditioning_shape: Per-row model shape restored from flattened storage.
+        :param conditioning_stats: Cached-column ``(mean, std)``, or ``None``.
         :param sketch_column: Stored sketch struct column whose expanded
             children are reassembled into ``sketch_ctrl``.
         :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
@@ -239,6 +235,7 @@ class PrepareBatchCollate:
         self.ot = ot
         self.conditioning_column = conditioning_column
         self.conditioning_shape = conditioning_shape
+        self.conditioning_stats = conditioning_stats
         self.sketch_column = sketch_column
         self.sketch_pitch_zero_threshold = sketch_pitch_zero_threshold
         self.preserve_legacy_m2l = preserve_legacy_m2l
@@ -302,10 +299,15 @@ class PrepareBatchCollate:
                 del raw_values[key]
             raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(loudness, centroid, pitch)
         raw = cast(RawBatch, raw_values)
+        conditioning_mean, conditioning_std = (
+            self.conditioning_stats if self.conditioning_stats is not None else (None, None)
+        )
         return prepare_batch(
             raw,
             mean=self.mean,
             std=self.std,
+            conditioning_mean=conditioning_mean,
+            conditioning_std=conditioning_std,
             rescale_params=self.rescale_params,
             ot=self.ot,
             generator=self._live_generator(),
@@ -337,9 +339,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         self._num_params = num_params
         self._read_audio = read_audio or conditioning == "audio"
         self._read_mel = conditioning == "mel"
-        self._preserve_legacy_m2l = (
-            isinstance(conditioning, str) and conditioning == "m2l"
-        )
+        self._preserve_legacy_m2l = isinstance(conditioning, str) and conditioning == "m2l"
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
         self._sketch = sketch
 
@@ -413,9 +413,7 @@ def _model_batch_passthrough(batch: object) -> ModelBatch:
 class _RepeatFirstBatchDataset(torch.utils.data.Dataset[ModelBatch]):
     """Fold every requested sample index into the first full batch."""
 
-    def __init__(
-        self, dataset: LanceMapDataset | _FakeMapDataset, batch_size: int
-    ) -> None:
+    def __init__(self, dataset: LanceMapDataset | _FakeMapDataset, batch_size: int) -> None:
         """Wrap a map dataset with first-batch index folding.
 
         :param dataset: Sample-indexed real or synthetic dataset.
@@ -607,14 +605,16 @@ class LanceVSTDataModule(VSTDataModule):
         *,
         ot: bool,
         read_audio: bool,
-        stats: tuple[np.ndarray, np.ndarray] | None,
+        mel_stats: tuple[np.ndarray, np.ndarray] | None,
+        conditioning_stats: tuple[np.ndarray, np.ndarray] | None,
     ) -> _MapSplit:
         """Build one real Lance split and its batch transformer.
 
         :param shard_path: Lance dataset directory.
         :param ot: Whether to match batch noise to parameters.
         :param read_audio: Whether to project prediction audio.
-        :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
+        :param mel_stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
+        :param conditioning_stats: Cached-column affine, or ``None`` to skip.
         :returns: Sample-indexed dataset and collate operation.
         """
         spec = self.embedding_conditioning
@@ -624,7 +624,7 @@ class LanceVSTDataModule(VSTDataModule):
         if sketch is not None:
             _validate_sketch_column(shard_path, sketch)
         columns = self._loader_columns(read_audio=read_audio)
-        mean, std = stats if stats is not None else (None, None)
+        mean, std = mel_stats if mel_stats is not None else (None, None)
         return _MapSplit(
             dataset=LanceMapDataset(shard_path, columns=columns),
             collate=PrepareBatchCollate(
@@ -634,6 +634,7 @@ class LanceVSTDataModule(VSTDataModule):
                 ot=ot,
                 conditioning_column=spec.column if spec is not None else None,
                 conditioning_shape=spec.input_shape if spec is not None else None,
+                conditioning_stats=conditioning_stats,
                 sketch_column=sketch.column if sketch is not None else None,
                 sketch_pitch_zero_threshold=(
                     sketch.pitch_zero_threshold if sketch is not None else None
@@ -676,9 +677,20 @@ class LanceVSTDataModule(VSTDataModule):
             if "predict" in split_names:
                 predict_stats = (
                     split_stats
-                    if split_stats is not None
-                    and self.predict_file.parent == self.dataset_root
+                    if split_stats is not None and self.predict_file.parent == self.dataset_root
                     else load_dataset_statistics(self.predict_file)
+                )
+        spec = self.embedding_conditioning
+        split_conditioning_stats = predict_conditioning_stats = None
+        if spec is not None:
+            if any(name != "predict" for name in split_names):
+                split_conditioning_stats = load_conditioning_statistics(train_shard, spec)
+            if "predict" in split_names:
+                predict_conditioning_stats = (
+                    split_conditioning_stats
+                    if split_conditioning_stats is not None
+                    and self.predict_file.parent == self.dataset_root
+                    else load_conditioning_statistics(self.predict_file, spec)
                 )
         shard_paths = {
             "train": train_shard,
@@ -691,7 +703,10 @@ class LanceVSTDataModule(VSTDataModule):
                 shard_paths[name],
                 ot=self.ot if name == "train" else False,
                 read_audio=name == "predict",
-                stats=predict_stats if name == "predict" else split_stats,
+                mel_stats=predict_stats if name == "predict" else split_stats,
+                conditioning_stats=(
+                    predict_conditioning_stats if name == "predict" else split_conditioning_stats
+                ),
             )
             for name in split_names
         }
@@ -702,16 +717,12 @@ class LanceVSTDataModule(VSTDataModule):
         :param stage: Lightning stage hint; ``None`` retains eager all-split setup.
         """
         split_names = (
-            self._ALL_SPLITS
-            if stage is None
-            else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
+            self._ALL_SPLITS if stage is None else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
         )
         num_params = resolve_param_spec(self.param_spec_name).encoded_width
         if self.fake:
             self._splits = {
-                name: self._build_fake_split(
-                    num_params=num_params, read_audio=name == "predict"
-                )
+                name: self._build_fake_split(num_params=num_params, read_audio=name == "predict")
                 for name in split_names
             }
         else:

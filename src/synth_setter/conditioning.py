@@ -1,11 +1,12 @@
 """Conditioning contracts shared across data and model layers."""
 
 from collections.abc import Mapping, Sequence
-from typing import Literal, cast
+from typing import Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
 
 ConditioningMode = Literal["mel", "m2l", "audio"]
+EmbeddingNormalization = Literal["none", "per_channel", "global"]
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
 # Modes read straight from the model-batch entry of the same name. "audio" serves
 # online-render synths, which have no stored mel because their audio only exists
@@ -49,12 +50,30 @@ class EmbeddingConditioningSpec(BaseModel):
     .. attribute :: input_shape
 
         Fixed per-row tensor shape expected from the column.
+
+    .. attribute :: normalization
+
+        Dataset-statistics affine strategy; normalized profiles require an artifact.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     column: str = Field(min_length=1)
     input_shape: tuple[PositiveInt, ...] = Field(min_length=1)
+    normalization: EmbeddingNormalization = "none"
+
+    @model_validator(mode="after")
+    def _validate_per_channel_rank(self) -> Self:
+        """Restrict channel-wise statistics to layouts with an explicit channel axis.
+
+        :returns: Validated specification.
+        :raises ValueError: Per-channel input rank exceeds the supported layouts.
+        """
+        if self.normalization == "per_channel" and len(self.input_shape) > 2:
+            raise ValueError(
+                "per-channel normalization requires vector [D] or sequence [D, T] values"
+            )
+        return self
 
 
 Conditioning = ConditioningMode | EmbeddingConditioningSpec | Mapping[str, object]

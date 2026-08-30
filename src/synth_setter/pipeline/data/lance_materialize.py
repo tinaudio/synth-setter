@@ -690,7 +690,7 @@ def materialize_splits(
             columns=columns,
             limit=row_limit,
         )
-    # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
+    # Non-Lance sidecars (including both statistics archives) hydrate via rclone;
     # split datasets and pipeline-internal metadata/ never feed the loaders.
     r2_io.download_dir_no_overwrite(
         source_root_uri,

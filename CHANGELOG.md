@@ -1,5 +1,8 @@
 # CHANGELOG
 
+## Unreleased
+
+- Add dataset-level standardization artifacts required by normalized cached conditioning profiles.
 
 ## v11.0.0 (2026-07-31)
 

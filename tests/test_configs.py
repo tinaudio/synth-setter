@@ -471,6 +471,48 @@ _CACHED_CONDITIONING_PROFILES = [
 ]
 
 
+@pytest.mark.parametrize(
+    ("profile", "normalization"),
+    [
+        ("clap", "none"),
+        ("m2l", "per_channel"),
+        ("matpac_plus", "global"),
+        ("pupujepa_large", "per_channel"),
+        ("pupujepa_tiny", "none"),
+        ("same_l", "per_channel"),
+        ("same_s", "per_channel"),
+        ("ssondo", "per_channel"),
+        ("t5gemma", "per_channel"),
+    ],
+)
+def test_conditioning_profile_uses_measured_normalization_policy(
+    profile: str, normalization: str
+) -> None:
+    """Measured cached profiles configure the same affine on data and model sides.
+
+    :param profile: Cached conditioning profile.
+    :param normalization: Evidence-backed normalization strategy.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", f"conditioning={profile}", "trainer=cpu"],
+    )
+
+    assert cfg.model.conditioning.normalization == normalization
+    assert cfg.datamodule.conditioning.normalization == normalization
+
+
+def test_meanaudio_profile_does_not_declare_unmeasured_normalization() -> None:
+    """MeanAudio remains policy-free until its representation is measured."""
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=meanaudio_16k", "trainer=cpu"],
+    )
+
+    assert "normalization" not in cfg.model.conditioning
+    assert "normalization" not in cfg.datamodule.conditioning
+
+
 @pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)
 @pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
 def test_embedding_conditioning_profile_encoder_matches_model_output(

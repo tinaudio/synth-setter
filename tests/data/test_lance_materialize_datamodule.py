@@ -66,17 +66,16 @@ def _txids(source_root: Path) -> dict[str, str]:
     :return: ``{split: txid}`` mapping for all three splits.
     """
     return {
-        split: _split_txid(source_root / f"{split}.lance")
-        for split in ("train", "val", "test")
+        split: _split_txid(source_root / f"{split}.lance") for split in ("train", "val", "test")
     }
 
 
 def _sidecar_copier(
     source_root: Path,
 ) -> tuple[Callable[..., None], list[dict[str, object]]]:
-    """Build a rclone-boundary stand-in that copies only ``stats.npz``.
+    """Build a rclone-boundary stand-in that copies root ``.npz`` sidecars.
 
-    :param source_root: Hydration source directory holding ``stats.npz``.
+    :param source_root: Hydration source directory holding statistics artifacts.
     :return: Replacement for ``download_dir_no_overwrite`` and its call record.
     """
     calls: list[dict[str, object]] = []
@@ -84,7 +83,8 @@ def _sidecar_copier(
     def hydrate(source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
         calls.append({"source_uri": source_uri, "dest": dest_path, "exclude": exclude})
         dest_path.mkdir(parents=True, exist_ok=True)
-        shutil.copy(source_root / "stats.npz", dest_path / "stats.npz")
+        for sidecar in source_root.glob("*.npz"):
+            shutil.copy(sidecar, dest_path / sidecar.name)
 
     return hydrate, calls
 
@@ -148,9 +148,7 @@ class TestMaterializeInitValidation:
             )
 
     @pytest.mark.parametrize("row_limit", [-1, 0])
-    def test_init_non_positive_row_limit_raises(
-        self, tmp_path: Path, row_limit: int
-    ) -> None:
+    def test_init_non_positive_row_limit_raises(self, tmp_path: Path, row_limit: int) -> None:
         """A non-positive row cap is rejected before hydration.
 
         :param tmp_path: Local dataset root.

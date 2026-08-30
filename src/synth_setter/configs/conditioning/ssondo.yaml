@@ -8,6 +8,7 @@ model:
   conditioning:
     column: ssondo
     input_shape: [960]
+    normalization: per_channel
   encoder:
     input_dim: 960
 
@@ -15,3 +16,4 @@ datamodule:
   conditioning:
     column: ssondo
     input_shape: [960]
+    normalization: per_channel

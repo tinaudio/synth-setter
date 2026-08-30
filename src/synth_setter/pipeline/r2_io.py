@@ -51,6 +51,7 @@ __all__ = [
     "upload",
     "upload_dir",
     "upload_to_uri",
+    "upload_to_uri_immutable",
 ]
 
 _CHECKOUT_MARKER = ".project-root"
@@ -532,6 +533,24 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
     transfer summaries so a CI failure leaves actionable evidence without credential-bearing debug.
     """
     args = _rclone_argv("copyto", str(local_path), _to_rclone_path(r2_uri))
+    subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def upload_to_uri_immutable(  # noqa: DOC502
+    local_path: Path, r2_uri: str
+) -> None:
+    """Publish one object without replacing different destination content.
+
+    :param local_path: Local file to publish.
+    :param r2_uri: Exact destination object URI.
+    :raises subprocess.CalledProcessError: The destination already differs or transfer fails.
+    """
+    args = _rclone_argv(
+        "copyto",
+        "--immutable",
+        str(local_path),
+        _to_rclone_path(r2_uri),
+    )
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
