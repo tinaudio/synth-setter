@@ -60,6 +60,16 @@ def test_image_default_user_matches_expected() -> None:
     not _RUN_DEVCONTAINER_SMOKE,
     reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
 )
+def test_btop_available() -> None:
+    """Require the packaged binary to execute successfully."""
+    _run_text("btop", "--version")
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
 def test_codex_sandbox_prerequisites_available() -> None:
     """Validate the Codex CLI and sandbox prerequisite in the built image."""
     system_codex = Path("/usr/local/bin/codex")
