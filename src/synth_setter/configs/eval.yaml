@@ -33,6 +33,9 @@ evaluation:
   render_vst: false
   compute_metrics: false
   rerender_target: true
+  # Third-party corpora carry no ground-truth patch; set with rerender_target=false
+  # so target audio comes from the dataset instead of a re-render.
+  no_params: false
   num_workers: 1
   # Render-order probe (#489): probe runs automatically when params are uniform;
   # non-zero seed raises if params are non-uniform rather than silently skipping.
