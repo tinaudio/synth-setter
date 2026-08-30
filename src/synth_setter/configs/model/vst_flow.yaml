@@ -58,8 +58,9 @@ cfg_dropout_rate: 0.1
 
 # sketch-control token conditioning; the `sketch=on` group fills the spec
 sketch_controls: null
-sketch_dropout_rate: 0.2
-all_conditioning_dropout_rate: 0.2
+# Match Flash Foley's independent and global CFG dropout policy.
+sketch_dropout_rate: 0.1
+all_conditioning_dropout_rate: 0.1
 
 rectified_sigma_min: 0.0
 

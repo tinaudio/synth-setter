@@ -1166,6 +1166,9 @@ def test_train_fast_dev_run_sketch_tokens_lance(
 
     model = object_dict["model"]
     assert model.sketch_tokens is not None
+    assert model.hparams.cfg_dropout_rate == 0.1
+    assert model.hparams.sketch_dropout_rate == 0.1
+    assert model.hparams.all_conditioning_dropout_rate == 0.1
     assert object_dict["datamodule"].sketch_controls is not None
     assert torch.isfinite(metric_dict["train/loss"])
 
