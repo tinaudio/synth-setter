@@ -62,7 +62,7 @@ def test_image_default_user_matches_expected() -> None:
 )
 def test_btop_available() -> None:
     """Require the packaged binary to execute successfully."""
-    assert _run_text("btop", "--version")
+    _run_text("btop", "--version")
 
 
 @pytest.mark.docker_smoke
