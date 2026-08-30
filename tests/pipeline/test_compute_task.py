@@ -258,6 +258,17 @@ class TestComputeOptionCompose:
         with pytest.raises(ValueError, match=option):
             load_compute_option(option)
 
+    def test_training_option_builds_consumer_gpu_task(self) -> None:
+        """The standard training pool offers only the supported consumer GPUs."""
+        compute = load_compute_option("runpod/training")
+        task = _build_task(compute, cmd="echo hi")
+
+        assert sorted(str(resource.accelerators) for resource in task.resources) == [
+            "{'RTX3090': 1}",
+            "{'RTX4090': 1}",
+        ]
+        assert {resource.disk_size for resource in task.resources} == {750}
+
     def test_training_hclass_option_builds_non_volume_high_tier_task(self) -> None:
         """The native high-tier option requests one H-class GPU and local training disk."""
         compute = load_compute_option("runpod/training-hclass")
