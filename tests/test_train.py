@@ -9,6 +9,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -1199,6 +1200,12 @@ def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     torch.manual_seed(23)
     predict_sketch_guided = trainer.predict(model, dataloaders=predict_loader)[0][0]
 
+    assert math.isfinite(sketch_disabled)
+    assert math.isfinite(sketch_guided)
+    assert math.isfinite(test_sketch_disabled)
+    assert math.isfinite(test_sketch_guided)
+    assert torch.isfinite(predict_sketch_disabled).all()
+    assert torch.isfinite(predict_sketch_guided).all()
     assert sketch_disabled != sketch_guided
     assert test_sketch_disabled != test_sketch_guided
     assert not torch.allclose(predict_sketch_disabled, predict_sketch_guided)

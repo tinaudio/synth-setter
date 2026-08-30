@@ -184,9 +184,9 @@ def multi_cfg_velocity(
     ) -> Shaped[torch.Tensor, "batch ..."]:
         """Evaluate each branch once and combine its guidance delta.
 
-        :param x: Parameter state.
-        :param t: Flow time per row.
-        :returns: Guided velocity with the same shape as ``x``.
+        :param x: Shared trajectory point evaluated by every branch.
+        :param t: Shared flow time evaluated by every branch.
+        :returns: Unconditional velocity plus separately scaled sketch and content deltas.
         """
         unconditional = unconditional_field(x, t)
         sketch = sketch_field(x, t)
