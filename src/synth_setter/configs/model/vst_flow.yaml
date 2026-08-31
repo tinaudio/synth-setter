@@ -66,8 +66,10 @@ rectified_sigma_min: 0.0
 # sampling
 validation_sample_steps: 50
 validation_cfg_strength: 2.0
+validation_sketch_cfg_strength: ${model.validation_cfg_strength}
 test_sample_steps: 200
 test_cfg_strength: 2.0
+test_sketch_cfg_strength: ${model.test_cfg_strength}
 
 # compile model for faster training with pytorch 2.0
 compile: true

@@ -403,6 +403,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         conditioning: Shaped[Tensor, _BATCH_ANY_SHAPE] | None,
         cfg_strength: float,
         control_tokens: ControlTokenBranches | None,
+        *,
+        sketch_cfg_strength: float | None = None,
     ) -> _TimeField:
         """Build a sampling field whose velocity carries simulator feedback above ``t_min``.
 
@@ -416,8 +418,10 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         https://github.com/tinaudio/synth-setter/issues/2782.
 
         :param conditioning: Encoded content conditioning for the conditional branch.
-        :param cfg_strength: Joint classifier-free-guidance scale.
+        :param cfg_strength: Classifier-free-guidance scale for content conditioning.
         :param control_tokens: Complete control-token state; rejected at construction.
+        :param sketch_cfg_strength: Guidance scale for sketch controls; unused because
+            finetuning rejects sketch conditioning.
         :returns: Two-argument velocity field over parameter state and time.
         :raises RuntimeError: No observation is bound, which would silently sample the
             frozen base and report it as this arm's result.
@@ -429,7 +433,11 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             )
         target_audio = self._sampling_target
         guided = build_guided_velocity(
-            self.vector_field.flow, conditioning, cfg_strength, control_tokens=control_tokens
+            self.vector_field.flow,
+            conditioning,
+            cfg_strength,
+            sketch_cfg_strength=sketch_cfg_strength,
+            control_tokens=control_tokens,
         )
 
         @jaxtyped(typechecker=beartype)
