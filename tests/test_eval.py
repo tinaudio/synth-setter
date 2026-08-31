@@ -790,6 +790,45 @@ _FLOW_LAD_EVAL_OVERRIDES = {
 }
 
 
+@pytest.mark.slow
+def test_evaluate_test_mps_flow_config_runs_one_cpu_batch(tmp_path: Path) -> None:
+    """The MPS flow experiment also runs through the shared eval entrypoint.
+
+    :param tmp_path: Pinned as Hydra output and log directory.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/test-mps-flow",
+                "trainer=cpu",
+                "mode=test",
+                "model.test_sample_steps=1",
+            ],
+        )
+
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.datamodule.fake = True
+        cfg.datamodule.batch_size = 1
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.trainer.limit_test_batches = 1
+        cfg.ckpt_path = None
+        cfg.logger = None
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metric_dict["test/param_mse"])
+
+
 # slow: dominates the inner loop (#2274 profile; flow_simple case is #2280).
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment", sorted(_FLOW_LAD_EVAL_OVERRIDES))
