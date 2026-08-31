@@ -46,6 +46,7 @@ from synth_setter.models.components.pretrained_encoder import (
     PretrainedConditioningEncoder,
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
+from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -655,9 +656,12 @@ def test_eval_torchsynth_clap_online_validates_real_offline_backbone(
         GlobalHydra.instance().clear()
 
     assert torch.isfinite(metric_dict["val/param_mse"])
-    encoder = object_dict["model"].encoder
+    model = object_dict["model"]
+    encoder = model.encoder
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert isinstance(encoder.head, VectorProjection)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
     assert_clap_preserves_resampler_output(encoder.backbone, cfg.model.encoder.backbone.checkpoint)
 
 
@@ -683,9 +687,12 @@ def test_eval_torchsynth_same_online_validates_real_offline_backbone(
         GlobalHydra.instance().clear()
 
     assert torch.isfinite(metric_dict["val/param_mse"])
-    encoder = object_dict["model"].encoder
+    model = object_dict["model"]
+    encoder = model.encoder
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, SameAudioEncoder)
+    assert isinstance(encoder.head, EmbeddingPool)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
 
 
 _FAKE_ORACLE_DATASETS = [

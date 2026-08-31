@@ -44,6 +44,7 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
+from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.utils import resolve_run_config_id
@@ -222,10 +223,14 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
 
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
-    encoder = object_dict["model"].encoder
-    assert isinstance(object_dict["model"].audio_loss, AudioFeedbackLoss)
+    assert torch.isfinite(metric_dict["train/slot_cosine"])
+    model = object_dict["model"]
+    encoder = model.encoder
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert isinstance(encoder.head, VectorProjection)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
     assert encoder.backbone.out_dim == 8
     assert not encoder.backbone.clap.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
@@ -248,12 +253,14 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
 
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
+    assert torch.isfinite(metric_dict["train/slot_cosine"])
     model = object_dict["model"]
     encoder = model.encoder
     assert isinstance(model.audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, SameAudioEncoder)
     assert isinstance(encoder.head, EmbeddingPool)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
     assert not encoder.backbone.autoencoder.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
     assert any(parameter.requires_grad for parameter in encoder.head.parameters())
