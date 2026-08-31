@@ -44,8 +44,10 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
+from synth_setter.models.components.transformer import ApproxEquivTransformer
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
@@ -944,6 +946,34 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
 
     if experiment_name == _ORACLE_EXPERIMENT:
         _assert_oracle_zero_train_loss(metric_dict)
+
+
+@pytest.mark.mps
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["mps"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/test-mps-flow"], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
+def test_train_surge_flow_mps_uses_eight_layer_production_field(
+    cfg_surge_real_train: DictConfig,
+) -> None:
+    """Train one real MPS flow step with the eight-layer production vector field.
+
+    :param cfg_surge_real_train: Surge XT flow smoke config over a real rendered dataset.
+    """
+    with open_dict(cfg_surge_real_train):
+        cfg_surge_real_train.trainer.limit_val_batches = 0
+
+    HydraConfig().set_config(cfg_surge_real_train)
+    metric_dict, object_dict = train(cfg_surge_real_train)
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowMatchingModule)
+    vector_field = model.vector_field
+    assert isinstance(vector_field, ApproxEquivTransformer)
+    assert len(vector_field.layers) == 8
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
 
 
 @pytest.mark.requires_vst
