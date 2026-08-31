@@ -23,12 +23,23 @@ slot-collapse cosine logged during training is the evidence that would justify t
 
 ## Enabling it
 
-Layerwise conditioning is opt-in per experiment, not a default:
+Layerwise conditioning is opt-in per experiment, not a default. Cached-embedding profiles such as
+`clap` and `same_l` configure the projection or pooling module directly:
 
 ```yaml
 model:
   encoder:
     n_conditioning_outputs: ${model.vector_field.num_layers}
+```
+
+Online profiles such as `clap_online` and `same_s_online` wrap that module as the frozen encoder's
+head:
+
+```yaml
+model:
+  encoder:
+    head:
+      n_conditioning_outputs: ${model.vector_field.num_layers}
 ```
 
 Configure `n_conditioning_outputs` to the consuming field's `num_layers`. Both supported fields
