@@ -1047,6 +1047,15 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.test is False
 
 
+def test_vst_flow_dropout_defaults_match_flash_foley_policy() -> None:
+    """Content, sketch-group, and global CFG dropout share Flash Foley's rate."""
+    cfg = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
+
+    assert cfg.model.cfg_dropout_rate == 0.1
+    assert cfg.model.sketch_dropout_rate == 0.1
+    assert cfg.model.all_conditioning_dropout_rate == 0.1
+
+
 def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
     """The preliminary A/B arms differ only in sketch conditioning."""
     base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])

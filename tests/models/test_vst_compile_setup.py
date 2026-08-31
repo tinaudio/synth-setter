@@ -115,6 +115,14 @@ def test_feed_forward_uncompiled_state_dict_loads_strict_into_compiled_module() 
     assert torch.equal(resumed.net(inputs), trained.net(inputs))
 
 
+def test_flow_matching_constructor_dropout_defaults_match_flash_foley_policy() -> None:
+    """Direct callers retain the shared Flash Foley CFG dropout policy."""
+    module = _flow_matching_module()
+
+    assert module.hparams["sketch_dropout_rate"] == 0.1
+    assert module.hparams["all_conditioning_dropout_rate"] == 0.1
+
+
 def test_flow_matching_constructor_without_num_params_raises_type_error() -> None:
     """Flow models require an explicit target width from configuration."""
     with pytest.raises(TypeError, match="num_params"):

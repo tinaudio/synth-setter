@@ -47,8 +47,8 @@ class _FlattenEncoder(torch.nn.Module):
 def _module(
     sketch: SketchControlSpec | None,
     *,
-    sketch_dropout_rate: float = 0.2,
-    all_conditioning_dropout_rate: float = 0.2,
+    sketch_dropout_rate: float = 0.1,
+    all_conditioning_dropout_rate: float = 0.1,
     cfg_dropout_rate: float = 0.1,
     audio_loss: torch.nn.Module | None = None,
 ) -> VSTFlowMatchingModule:
