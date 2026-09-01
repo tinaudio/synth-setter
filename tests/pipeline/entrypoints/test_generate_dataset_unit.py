@@ -3418,8 +3418,8 @@ class TestMainDispatchBranches:
         assert f"render.velocity={render.velocity}" in called_argv
         assert f"render.signal_duration_seconds={render.signal_duration_seconds}" in called_argv
         effect_override = (
-            "render.pyfdn_effect={package_version:0.4.2,"
-            "preset_name:colorless_N8_d1,decay_seconds:1.5,wet_mix:0.1}"
+            'render.pyfdn_effect={package_version:"0.4.2",'
+            'preset_name:"colorless_N8_d1",decay_seconds:1.5,wet_mix:0.1}'
         )
         assert effect_override in called_argv
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):

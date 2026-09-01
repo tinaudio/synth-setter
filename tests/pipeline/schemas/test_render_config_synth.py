@@ -80,12 +80,13 @@ class TestPyFDNEffectConfig:
         [
             ("decay_seconds", 0.0),
             ("decay_seconds", -1.0),
+            ("decay_seconds", 1e-20),
             ("wet_mix", 0.0),
             ("wet_mix", 1.01),
         ],
     )
     def test_effect_rejects_out_of_range_values(self, field: str, value: float) -> None:
-        """Decay must be positive and wet mix must stay in the enabled unit interval.
+        """Decay must remain finite in pyFDN and wet mix stays in the enabled interval.
 
         :param field: Effect field under test.
         :param value: Invalid boundary value.

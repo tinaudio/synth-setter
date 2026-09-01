@@ -156,7 +156,7 @@ docs:
     description: Render-pipeline architecture and profile boundaries
     sources:
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "RenderConfig identity, backend, and optional post-render effect contract"
+        covers: "RenderConfig's optional post-render-effect contract"
       - pattern: "src/synth_setter/renderer_factory.py"
         covers: "Shared backend construction and optional effect wrapping"
       - pattern: "src/synth_setter/configs/render/**"

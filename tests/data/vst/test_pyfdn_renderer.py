@@ -49,10 +49,16 @@ class _FixedAudioRenderer(AudioRenderer):
         return self.audio.copy()
 
 
-def _effect_renderer(audio: np.ndarray, *, wet_mix: float = 1.0) -> PyFDNEffectRenderer:
+def _effect_renderer(
+    audio: np.ndarray,
+    *,
+    decay_seconds: float = 0.5,
+    wet_mix: float = 1.0,
+) -> PyFDNEffectRenderer:
     """Build the real pyFDN effect around deterministic source audio.
 
     :param audio: Fixed dry waveform supplied by the inner renderer.
+    :param decay_seconds: Homogeneous decay time.
     :param wet_mix: Linear wet-signal proportion.
     :returns: Effect renderer configured with the bundled preset.
     """
@@ -61,7 +67,7 @@ def _effect_renderer(audio: np.ndarray, *, wet_mix: float = 1.0) -> PyFDNEffectR
         effect=PyFDNEffectConfig(
             package_version="0.4.2",
             preset_name="colorless_N8_d1",
-            decay_seconds=0.5,
+            decay_seconds=decay_seconds,
             wet_mix=wet_mix,
         ),
     )
@@ -113,12 +119,26 @@ def test_pyfdn_effect_processes_channels_independently() -> None:
     assert np.count_nonzero(effected[1]) == 0
 
 
+def test_pyfdn_effect_preserves_overrange_for_pipeline_clipping_gate() -> None:
+    """Over-range wet output stays visible so generation can reject the sampled row."""
+    bounded_noise = np.random.default_rng(42).uniform(
+        -1.0, 1.0, size=(1, _NUM_SAMPLES)
+    ).astype(np.float32)
+
+    effected = _render(_effect_renderer(bounded_noise, decay_seconds=1.5))
+
+    assert np.max(np.abs(bounded_noise)) <= 1.0
+    assert np.isfinite(effected).all()
+    assert np.max(np.abs(effected)) > 1.0
+
+
 def test_pyfdn_effect_wet_mix_blends_dry_and_wet_audio() -> None:
-    """Linear wet mix preserves the configured dry contribution at sample zero."""
+    """Wet mix scales both sides of the configured linear interpolation."""
     impulse = np.zeros((1, _NUM_SAMPLES), dtype=np.float32)
     impulse[0, 0] = 1.0
+    full_wet = _render(_effect_renderer(impulse, wet_mix=1.0))
 
-    effected = _render(_effect_renderer(impulse, wet_mix=0.25))
+    mixed = _render(_effect_renderer(impulse, wet_mix=0.25))
 
-    assert effected[0, 0] == 0.75
-    assert np.max(np.abs(effected[0, 800:])) > 0.001
+    expected = 0.75 * impulse + 0.25 * full_wet
+    assert np.array_equal(mixed, expected)

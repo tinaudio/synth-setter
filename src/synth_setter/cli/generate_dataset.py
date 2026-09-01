@@ -122,14 +122,9 @@ def _pyfdn_effect_override(render: RenderConfig) -> str:
     effect = render.pyfdn_effect
     if effect is None:
         return "render.pyfdn_effect=null"
-    return (
-        "render.pyfdn_effect={"
-        f"package_version:{effect.package_version},"
-        f"preset_name:{effect.preset_name},"
-        f"decay_seconds:{effect.decay_seconds},"
-        f"wet_mix:{effect.wet_mix}"
-        "}"
-    )
+    fields = effect.model_dump(mode="json")
+    encoded = ",".join(f"{key}:{json.dumps(value)}" for key, value in fields.items())
+    return f"render.pyfdn_effect={{{encoded}}}"
 
 
 def _run_oracle_eval_subprocess(

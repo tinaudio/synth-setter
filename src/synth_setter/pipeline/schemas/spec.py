@@ -248,7 +248,7 @@ class PyFDNEffectConfig(BaseModel):  # noqa: DOC603 — descriptions live on Pyd
         description="Bundled mono colorless FDN preset."
     )
     decay_seconds: float = Field(
-        gt=0.0,
+        ge=0.001,
         description="Homogeneous FDN decay time in seconds.",
     )
     wet_mix: float = Field(

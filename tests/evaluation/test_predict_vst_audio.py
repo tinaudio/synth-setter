@@ -306,16 +306,19 @@ def _invoke_main(
     return SimpleNamespace(exit_code=0, output="")
 
 
+@pytest.mark.parametrize("amplitude", [-1.01, 1.01])
 def test_main_out_of_range_render_raises_before_writing_audio(
     pred_dir: Path,
     out_dir: Path,
     fake_renderer: MagicMock,
+    amplitude: float,
 ) -> None:
     """Evaluation rejects over-range renderer output instead of clipping it silently.
 
     :param pred_dir: Prediction batch destination.
     :param out_dir: Planned artifact destination.
     :param fake_renderer: Renderer boundary configured with over-range output.
+    :param amplitude: Positive or negative out-of-range sample value.
     """
     _write_batch(
         pred_dir,
@@ -324,7 +327,7 @@ def test_main_out_of_range_render_raises_before_writing_audio(
         with_target_params=False,
     )
     fake_renderer.render.side_effect = None
-    fake_renderer.render.return_value = np.full((_CHANNELS, _SAMPLES), 1.01, dtype=np.float32)
+    fake_renderer.render.return_value = np.full((_CHANNELS, _SAMPLES), amplitude, dtype=np.float32)
 
     with pytest.raises(ValueError, match=r"outside \[-1, 1\]"):
         _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
