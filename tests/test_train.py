@@ -1675,14 +1675,15 @@ def test_train_recovers_r2_checkpoint_after_fit_raises(
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", [_ORACLE_EXPERIMENT], indirect=True)
 @pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS[:1], indirect=True)
-def test_train_surge_xt_pyfdn_val_audio_probe_renders_scores_and_uploads(
+@pytest.mark.parametrize("cfg_surge_real_train", ["vst", "vst_pyfdn"], indirect=True)
+def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     cfg_surge_real_train: DictConfig,
     param_spec_name: str,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The val audio probe renders real pyFDN audio, scores it, and archives it to R2.
+    """The val audio probe renders dry or pyFDN audio, scores it, and archives it to R2.
 
     Drives the whole chain for real — Surge XT renders the oracle's predictions through
     the headless wrapper, ``compute_audio_metrics`` scores the wavs, and the real rclone
@@ -1730,13 +1731,6 @@ def test_train_surge_xt_pyfdn_val_audio_probe_renders_scores_and_uploads(
         # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
         cfg_surge_real_train.training.val_audio_probe_samples = probe_samples
-        cfg_surge_real_train.render.sample_rate = 48000
-        cfg_surge_real_train.render.pyfdn_effect = {
-            "package_version": "0.4.2",
-            "preset_name": "colorless_N8_d1",
-            "decay_seconds": 1.5,
-            "wet_mix": 0.1,
-        }
         # max_steps=1 stops fit before the end-of-epoch val check; an integer interval
         # forces a real validation after step 1 (the sanity check never stages a probe).
         cfg_surge_real_train.trainer.val_check_interval = 1
@@ -1749,9 +1743,13 @@ def test_train_surge_xt_pyfdn_val_audio_probe_renders_scores_and_uploads(
     assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"
     probe = probes[0]
     settings = probe._probe_fn.keywords["settings"]  # noqa: SLF001
-    assert settings.sample_rate == 48000
-    assert settings.pyfdn_effect is not None
-    assert settings.pyfdn_effect.preset_name == "colorless_N8_d1"
+    assert settings.sample_rate == cfg_surge_real_train.render.sample_rate
+    expected_effect = cfg_surge_real_train.render.pyfdn_effect
+    if expected_effect is None:
+        assert settings.pyfdn_effect is None
+    else:
+        assert settings.pyfdn_effect is not None
+        assert settings.pyfdn_effect.preset_name == expected_effect.preset_name
     assert probe._future is not None, "validation ran but no probe was launched"
     concurrent.futures.wait([probe._future], timeout=600)
     metrics = probe._future.result()

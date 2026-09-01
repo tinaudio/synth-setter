@@ -96,6 +96,16 @@ _AUDIO_PREDICTION_SAMPLE_COUNT = int(
 _SURGE_XT_PREDICTION_WIDTH = 300
 
 
+def _read_wav(path: Path) -> np.ndarray:
+    """Read a WAV artifact with channels on the first axis.
+
+    :param path: Audio artifact written by evaluation.
+    :returns: Decoded channel-first waveform.
+    """
+    with AudioFile(str(path)) as audio_file:
+        return audio_file.read(audio_file.frames)
+
+
 @pytest.mark.slow
 def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) -> None:
     """Run workflow-default evaluation through the launcher and headless wrapper.
@@ -1180,16 +1190,12 @@ def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
     )
     assert torch.equal(dry_pred_params, effected_target_params)
 
-    def read_wav(root: Path, name: str) -> np.ndarray:
-        with AudioFile(str(root / "audio" / "sample_0" / name)) as audio_file:
-            return audio_file.read(audio_file.frames)
-
-    dry_root = Path(dry_cfg.paths.output_dir)
-    effected_root = Path(effected_cfg.paths.output_dir)
-    dry_pred = read_wav(dry_root, "pred.wav")
-    dry_target = read_wav(dry_root, "target.wav")
-    effected_pred = read_wav(effected_root, "pred.wav")
-    effected_target = read_wav(effected_root, "target.wav")
+    dry_audio_root = Path(dry_cfg.paths.output_dir) / "audio" / "sample_0"
+    effected_audio_root = Path(effected_cfg.paths.output_dir) / "audio" / "sample_0"
+    dry_pred = _read_wav(dry_audio_root / "pred.wav")
+    dry_target = _read_wav(dry_audio_root / "target.wav")
+    effected_pred = _read_wav(effected_audio_root / "pred.wav")
+    effected_target = _read_wav(effected_audio_root / "target.wav")
     assert dry_pred.shape == dry_target.shape == effected_pred.shape == effected_target.shape
     assert not np.array_equal(effected_pred, dry_pred)
     assert not np.array_equal(effected_target, dry_target)

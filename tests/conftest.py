@@ -966,6 +966,7 @@ def _build_surge_xt_smoke_cfg(
     *,
     datamodule_group: Literal["surge", "surge_lance"] | None = "surge",
     callbacks_override: str | None = "[default_vst,eval_vst,log_per_param_mse]",
+    render_group: str | None = None,
 ) -> DictConfig:
     """Construct the Surge XT smoke-test config without the accelerator availability gate.
 
@@ -987,6 +988,7 @@ def _build_surge_xt_smoke_cfg(
         experiment's selection.
     :param callbacks_override: Hydra callbacks selection, or ``None`` to retain the
         experiment's selection.
+    :param render_group: Optional Hydra render-profile override.
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
     """
@@ -995,6 +997,8 @@ def _build_surge_xt_smoke_cfg(
         overrides.insert(1, f"datamodule={datamodule_group}")
     if callbacks_override is not None:
         overrides.append(f"callbacks={callbacks_override}")
+    if render_group is not None:
+        overrides.append(f"render={render_group}")
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -1687,9 +1691,14 @@ def _apply_smoke_train_paths(
     :param variant: Dataset-format arm selecting the predict-split suffix.
     :param tmp_path: Shared output/log directory (and checkpoint parent for eval).
     """
+    effect = cfg.render.get("pyfdn_effect")
+    profile_sample_rate = cfg.render.sample_rate
     render_values = _surge_smoke_render_config(
         str(cfg.datamodule.param_spec_name), variant.plugin_path
     )
+    if effect is not None:
+        render_values["pyfdn_effect"] = dict(effect)
+        render_values["sample_rate"] = profile_sample_rate
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
@@ -1716,7 +1725,7 @@ def cfg_surge_real_train(
     Surge XT subprocess.
 
     :param surge_smoke_variant: Dataset-format arm (h5 or Lance) under test.
-    :param request: Resolves the variant's dataset fixture via ``getfixturevalue``.
+    :param request: Resolves the dataset fixture and optional indirect render profile.
     :param accelerator: Parametrized accelerator driving ``trainer.accelerator``.
     :param param_spec_name: Param spec the cfg is wired for.
     :param experiment_name: Hydra ``experiment=...`` override.
@@ -1724,11 +1733,13 @@ def cfg_surge_real_train(
     :yields DictConfig: One-step train cfg pinned to the variant's splits.
     """
     dataset_root = request.getfixturevalue(surge_smoke_variant.dataset_fixture)
+    render_group = getattr(request, "param", None)
     cfg = _build_surge_xt_smoke_cfg(
         accelerator=accelerator,
         param_spec_name=param_spec_name,
         experiment=experiment_name,
         datamodule_group=surge_smoke_variant.datamodule_group,
+        render_group=render_group,
     )
     _apply_smoke_train_paths(cfg, dataset_root, surge_smoke_variant, tmp_path)
 
