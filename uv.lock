@@ -4919,7 +4919,7 @@ provides-extras = ["cpu", "cu128"]
 
 [package.metadata.requires-dev]
 audio = [
-    { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
     { name = "librosa" },
     { name = "mido" },
     { name = "pedalboard" },
@@ -4949,7 +4949,7 @@ data = [
 dev = [
     { name = "beartype", specifier = ">=0.19" },
     { name = "click", specifier = "<8.2" },
-    { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
     { name = "dtw-python", specifier = "==1.7.4" },
     { name = "duckdb", specifier = ">=1.5.4" },
     { name = "einops" },
@@ -5039,7 +5039,7 @@ notebooks = [
 runtime = [
     { name = "beartype", specifier = ">=0.19" },
     { name = "click", specifier = "<8.2" },
-    { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
     { name = "dtw-python", specifier = "==1.7.4" },
     { name = "einops" },
     { name = "hydra-colorlog", specifier = "==1.2.0" },
