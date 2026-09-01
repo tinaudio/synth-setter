@@ -7,6 +7,9 @@ helpers, so each test pins one shape against the ``dataset_field_shapes`` /
 validator silently drifting apart.
 """
 
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -32,6 +35,27 @@ from synth_setter.data.vst.shapes import (
 from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+
+
+def test_shape_constants_import_without_loading_audio_frontend() -> None:
+    """Schema consumers do not import optional audio-processing dependencies."""
+    result = subprocess.run(  # noqa: S603 — fixed interpreter and test-owned code
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "from synth_setter.data.vst.shapes import AUDIO_FIELD; "
+                "assert AUDIO_FIELD == 'audio'; "
+                "assert 'librosa' not in sys.modules"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_dataset_field_names_match_writer_emissions() -> None:
