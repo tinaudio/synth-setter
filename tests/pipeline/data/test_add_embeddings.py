@@ -1026,13 +1026,22 @@ def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
     )
 
 
-def test_sketch_artifact_identity_pins_pooled_storage_policy() -> None:
-    """Sketch metadata distinguishes pooled controls from legacy full-resolution rows."""
+def test_sketch_artifact_identity_tracks_storage_frame_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sketch metadata identifies the active pooled storage grid.
+
+    :param monkeypatch: Replaces the storage frame count for the identity probe.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.SKETCH_STORAGE_FRAMES",
+        17,
+    )
     spec = EMBEDDING_REGISTRY["sketch"]
 
     identity = spec.resolve_artifact_identity(spec.default_checkpoint)
 
-    assert identity.endswith(";storage:avgmax32")
+    assert identity.endswith(";storage:avgmax17")
 
 
 def test_resume_source_identity_changes_with_input_contract(tmp_path: Path) -> None:

@@ -32,7 +32,7 @@ from einops import rearrange
 from jaxtyping import Float, jaxtyped
 
 from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
-from synth_setter.conditioning import SKETCH_STORAGE_POLICY
+from synth_setter.conditioning import SKETCH_STORAGE_FRAMES
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -344,7 +344,8 @@ def _sketch_artifact_identity(checkpoint: str) -> str:
     """
     version = importlib.metadata.version("pesto-pitch")
     identity = (
-        f"package:{version};checkpoint:{checkpoint};storage:{SKETCH_STORAGE_POLICY}"
+        f"package:{version};checkpoint:{checkpoint};"
+        f"storage:avgmax{SKETCH_STORAGE_FRAMES}"
     )
     return _versioned_artifact_identity("sketch", identity)
 
