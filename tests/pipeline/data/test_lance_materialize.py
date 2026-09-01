@@ -54,6 +54,45 @@ def _raise_flush_error(_fd: int) -> None:
     raise OSError(5, "flush failed")
 
 
+def test_materialize_lance_subset_uses_throughput_tuned_scan_and_write(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Materialization applies the production R2-read and local-write tuning.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param monkeypatch: Records scanner and writer options around real Lance operations.
+    """
+    source, txid = two_version_source
+    scanner_calls: list[dict[str, object]] = []
+    writer_calls: list[dict[str, object]] = []
+    real_scanner = cast(Callable[..., object], lance.LanceDataset.scanner)
+    real_write_dataset = cast(Callable[..., lance.LanceDataset], lance.write_dataset)
+
+    def recording_scanner(*args: object, **kwargs: object) -> object:
+        scanner_calls.append(kwargs)
+        return real_scanner(*args, **kwargs)
+
+    def recording_writer(*args: object, **kwargs: object) -> lance.LanceDataset:
+        writer_calls.append(kwargs)
+        return real_write_dataset(*args, **kwargs)
+
+    monkeypatch.setattr(lance.LanceDataset, "scanner", recording_scanner)
+    monkeypatch.setattr(lance, "write_dataset", recording_writer)
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert scanner_calls[0]["batch_size"] == 1024
+    assert scanner_calls[0]["io_buffer_size"] == 4 * 1024**3
+    assert scanner_calls[0]["fragment_readahead"] == 16
+    assert writer_calls[0]["max_rows_per_group"] == 2048
+    assert writer_calls[0]["max_bytes_per_file"] == 64 * 1024**3
+    assert lance.dataset(str(destination)).count_rows() == 3
+
+
 def test_materialize_lance_subset_evicts_written_data_files(
     tmp_path: Path,
     two_version_source: tuple[str, str],
