@@ -1,8 +1,9 @@
 """Synth/note parameter definitions, sampling, and encoding for VST param specs."""
 
 import math
-from collections.abc import Iterator, Mapping
-from typing import Any, Generic, Literal, TypedDict, TypeVar
+from collections.abc import Iterator, Mapping, Sequence
+from numbers import Integral, Real
+from typing import Literal, TypedDict
 
 import numpy as np
 
@@ -11,11 +12,11 @@ import numpy as np
 type ParameterValue = float | int | tuple[float, ...] | np.ndarray
 type ParameterValues = dict[str, ParameterValue]
 
-_ParameterValueT = TypeVar("_ParameterValueT")
 _MAX_EXACT_FLOAT32_INTEGER_SPAN = (1 << 23) - 1
+_MAX_EXACT_FLOAT64_INTEGER = 1 << 53
 
 
-class Parameter(Generic[_ParameterValueT]):
+class Parameter:
     name: str
 
     def __init__(self, name: str) -> None:
@@ -24,13 +25,13 @@ class Parameter(Generic[_ParameterValueT]):
     def __len__(self) -> int:
         raise NotImplementedError
 
-    def sample(self, rng: np.random.Generator) -> _ParameterValueT:
+    def sample(self, rng: np.random.Generator) -> ParameterValue:
         raise NotImplementedError
 
-    def encode(self, raw_value: _ParameterValueT) -> np.ndarray:
+    def encode(self, raw_value: object) -> np.ndarray:
         raise NotImplementedError
 
-    def decode(self, encoded: np.ndarray) -> _ParameterValueT:
+    def decode(self, encoded: np.ndarray) -> ParameterValue:
         raise NotImplementedError
 
     def encoded_names(self) -> tuple[str, ...]:
@@ -43,11 +44,11 @@ class Parameter(Generic[_ParameterValueT]):
         return tuple(f"{self.name}.{index}" for index in range(len(self)))
 
 
-class CategoricalParameter(Parameter[float]):
+class CategoricalParameter(Parameter):
     def __init__(
         self,
         name: str,
-        values: list[Any],
+        values: Sequence[object],
         raw_values: list[float] | None = None,
         weights: list[float] | None = None,
         encoding: Literal["scalar", "onehot"] = "scalar",
@@ -69,7 +70,7 @@ class CategoricalParameter(Parameter[float]):
         else:
             weights = [1.0] * len(values)
 
-        self.values = values
+        self.values = list(values)
         self.raw_values = raw_values
         self.weights = weights
         self.encoding = encoding
@@ -98,11 +99,14 @@ class CategoricalParameter(Parameter[float]):
     def _encode_scalar(self, raw_value: float) -> np.ndarray:
         return np.array([raw_value])
 
-    def encode(self, raw_value: float) -> np.ndarray:
+    def encode(self, raw_value: object) -> np.ndarray:
+        if not isinstance(raw_value, Real):
+            raise TypeError(f"{self.name} must be numeric")
+        value = float(raw_value)
         if self.encoding == "scalar":
-            return self._encode_scalar(raw_value)
+            return self._encode_scalar(value)
         else:
-            return self._encode_onehot(raw_value)
+            return self._encode_onehot(value)
 
     def _decode_onehot(self, onehot: np.ndarray) -> float:
         idx = np.argmax(onehot)
@@ -121,7 +125,7 @@ class CategoricalParameter(Parameter[float]):
         return f'CategoricalParameter(name="{self.name}", values={self.values}, raw_values={self.raw_values})'
 
 
-class DiscreteLiteralParameter(Parameter[int]):
+class DiscreteLiteralParameter(Parameter):
     def __init__(
         self,
         name: str,
@@ -155,11 +159,14 @@ class DiscreteLiteralParameter(Parameter[int]):
     def _encode_scalar(self, raw_value: int) -> np.ndarray:
         return (np.array([raw_value]) - self.min) / (self.max - self.min)
 
-    def encode(self, raw_value: int) -> np.ndarray:
+    def encode(self, raw_value: object) -> np.ndarray:
+        if not isinstance(raw_value, Integral):
+            raise TypeError(f"{self.name} must be an integer")
+        value = int(raw_value)
         if self.encoding == "scalar":
-            return self._encode_scalar(raw_value)
+            return self._encode_scalar(value)
         else:
-            return self._encode_onehot(raw_value)
+            return self._encode_onehot(value)
 
     def _decode_onehot(self, onehot: np.ndarray) -> int:
         idx = np.argmax(onehot)
@@ -179,7 +186,7 @@ class DiscreteLiteralParameter(Parameter[int]):
         return f'DiscreteParameter(name="{self.name}", min={self.min}, max={self.max})'
 
 
-class ContinuousParameter(Parameter[float]):
+class ContinuousParameter(Parameter):
     def __init__(
         self,
         name: str,
@@ -216,8 +223,10 @@ class ContinuousParameter(Parameter[float]):
 
         return float(rng.uniform(self.min, self.max))
 
-    def encode(self, raw_value: float) -> np.ndarray:
-        return (np.array([raw_value]) - self.min) / (self.max - self.min)
+    def encode(self, raw_value: object) -> np.ndarray:
+        if not isinstance(raw_value, Real):
+            raise TypeError(f"{self.name} must be numeric")
+        return (np.array([float(raw_value)]) - self.min) / (self.max - self.min)
 
     def decode(self, encoded: np.ndarray) -> float:
         return self.min + encoded.item() * (self.max - self.min)
@@ -226,7 +235,7 @@ class ContinuousParameter(Parameter[float]):
         return f'ContinuousParameter(name="{self.name}", min={self.min}, max={self.max})'
 
 
-class ContinuousArrayParameter(Parameter[np.ndarray]):
+class ContinuousArrayParameter(Parameter):
     """A fixed-shape continuous parameter encoded elementwise into ``[0, 1]``."""
 
     def __init__(
@@ -245,15 +254,18 @@ class ContinuousArrayParameter(Parameter[np.ndarray]):
         :raises ValueError: The shape or bounds cannot define a finite array domain.
         """
         super().__init__(name)
-        if not shape or any(size <= 0 for size in shape):
-            raise ValueError("shape must contain positive dimensions")
+        if not shape or any(
+            not isinstance(size, Integral) or isinstance(size, bool) or size <= 0
+            for size in shape
+        ):
+            raise ValueError("shape must contain positive integer dimensions")
         if not np.isfinite(min) or not np.isfinite(max):
             raise ValueError("bounds must be finite")
         if max <= min:
             raise ValueError("max must be greater than min")
         if not np.isfinite(max - min):
             raise ValueError("span must be finite")
-        self.shape = shape
+        self.shape = tuple(int(size) for size in shape)
         self.min = min
         self.max = max
 
@@ -268,7 +280,7 @@ class ContinuousArrayParameter(Parameter[np.ndarray]):
         """
         return rng.uniform(self.min, self.max, size=self.shape)
 
-    def encode(self, raw_value: np.ndarray) -> np.ndarray:
+    def encode(self, raw_value: object) -> np.ndarray:
         """Encode a native array as a flat C-order float32 vector.
 
         :param raw_value: Finite values shaped ``self.shape`` within the native bounds.
@@ -335,6 +347,8 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         :raises ValueError: The integer range cannot round-trip through float32 encoding.
         """
         super().__init__(name=name, shape=shape, min=min, max=max)
+        if min < -_MAX_EXACT_FLOAT64_INTEGER or max > _MAX_EXACT_FLOAT64_INTEGER:
+            raise ValueError("bounds exceed exact float64 integer range")
         if max - min > _MAX_EXACT_FLOAT32_INTEGER_SPAN:
             raise ValueError("range is too wide for exact float32 encoding")
 
@@ -346,7 +360,7 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         """
         return rng.integers(self.min, self.max + 1, size=self.shape, dtype=np.int64)
 
-    def encode(self, raw_value: np.ndarray) -> np.ndarray:
+    def encode(self, raw_value: object) -> np.ndarray:
         """Encode native integers as a flat C-order float32 vector.
 
         :param raw_value: Integral values shaped ``self.shape`` within the native bounds.
@@ -368,7 +382,7 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         return np.rint(super().decode(encoded)).astype(np.int64)
 
 
-class NoteDurationParameter(Parameter[tuple[float, ...]]):
+class NoteDurationParameter(Parameter):
     """A special parameter for sampling note durations."""
 
     def __init__(self, name: str, max_note_duration_seconds: float):
@@ -383,8 +397,14 @@ class NoteDurationParameter(Parameter[tuple[float, ...]]):
 
         return start, end
 
-    def encode(self, raw_value: tuple[float, ...]) -> np.ndarray:
-        return np.array(raw_value) / self.max_note_duration_seconds
+    def encode(self, raw_value: object) -> np.ndarray:
+        if not (
+            isinstance(raw_value, tuple)
+            and len(raw_value) == 2
+            and all(isinstance(value, Real) for value in raw_value)
+        ):
+            raise TypeError(f"{self.name} must be a pair of numeric endpoints")
+        return np.array(raw_value, dtype=np.float64) / self.max_note_duration_seconds
 
     def decode(self, encoded: np.ndarray) -> tuple[float, ...]:
         return tuple(float(value) for value in encoded * self.max_note_duration_seconds)
@@ -402,8 +422,8 @@ class NoteParams(TypedDict):  # noqa: DOC601, DOC603
 class ParamSpec:
     def __init__(
         self,
-        synth_params: list[Parameter[Any]],
-        note_params: list[Parameter[Any]],
+        synth_params: list[Parameter],
+        note_params: list[Parameter],
     ) -> None:
         self.synth_params = synth_params
         self.note_params = note_params
@@ -424,7 +444,7 @@ class ParamSpec:
     def __len__(self) -> int:
         return self.encoded_width
 
-    def encoded_slices(self) -> Iterator[tuple[Parameter[Any], slice]]:
+    def encoded_slices(self) -> Iterator[tuple[Parameter, slice]]:
         """Pair each parameter with the columns it occupies in an encoded row.
 
         Spans are contiguous from 0, ordered ``synth_params`` then ``note_params``
@@ -434,7 +454,7 @@ class ParamSpec:
         correspondence between :attr:`names` and encoded columns.
 
         :yields: One ``(parameter, span)`` pair per parameter, in encoding order.
-        :ytype: tuple[Parameter[Any], slice]
+        :ytype: tuple[Parameter, slice]
         """
         pointer = 0
         for param in (*self.synth_params, *self.note_params):

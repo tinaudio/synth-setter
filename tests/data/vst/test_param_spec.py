@@ -242,6 +242,28 @@ def test_continuous_array_encode_rejects_out_of_bounds_value(value: float) -> No
         parameter.encode(np.array([[value]]))
 
 
+def test_array_parameter_rejects_noninteger_shape_dimension() -> None:
+    """Construction rejects shapes that NumPy cannot allocate."""
+    with pytest.raises(ValueError, match="shape must contain positive integer dimensions"):
+        ContinuousArrayParameter(
+            name="matrix",
+            shape=(1.5,),  # type: ignore[arg-type]
+            min=-1.0,
+            max=1.0,
+        )
+
+
+def test_discrete_array_rejects_large_offset_that_float64_cannot_roundtrip() -> None:
+    """A discrete domain must remain exact during native float64 arithmetic."""
+    with pytest.raises(ValueError, match="bounds exceed exact float64 integer range"):
+        DiscreteArrayParameter(
+            name="offset",
+            shape=(1,),
+            min=2**53,
+            max=2**53 + 1,
+        )
+
+
 def test_discrete_array_rejects_range_that_float32_cannot_roundtrip() -> None:
     """A discrete domain must remain distinguishable after float32 encoding."""
     with pytest.raises(ValueError, match="range is too wide for exact float32 encoding"):
@@ -303,9 +325,9 @@ def test_array_encoded_names_follow_c_order_coordinates() -> None:
 
 
 def _tiny_spec() -> ParamSpec:
-    """Return the scalar and expanded spec shared by legacy contract tests.
+    """Build the scalar and expanded spec shared by legacy contract tests.
 
-    :returns: Six-column mixed synth/note parameter specification.
+    :returns: A fresh mixed synth/note parameter specification.
     """
     return ParamSpec(
         [
@@ -652,7 +674,7 @@ def test_categorical_onehot_golden_encoding_remains_unchanged() -> None:
 
 
 def test_note_duration_golden_encoding_remains_unchanged() -> None:
-    """Note-duration encoding retains its established two-coordinate values."""
+    """Preserve legacy note-duration encoding and decoding behavior."""
     parameter = NoteDurationParameter(
         name="note_start_and_end",
         max_note_duration_seconds=4.0,
