@@ -78,7 +78,44 @@ class SketchPoolBackfillConfig(BaseModel):
 
 @dataclass(frozen=True)
 class SketchPoolBackfillResult:
-    """Summarize a committed or already-complete migration."""
+    """Summarize a committed or already-complete migration.
+
+    .. attribute :: branch
+
+        Mutated Lance branch.
+
+    .. attribute :: rows
+
+        Rows preserved by the migration.
+
+    .. attribute :: fragments
+
+        Fragments represented by the committed snapshot.
+
+    .. attribute :: source_version
+
+        Version read by the operation.
+
+    .. attribute :: committed_version
+
+        Latest version after data and index publication.
+
+    .. attribute :: elapsed_seconds
+
+        Total wall-clock duration.
+
+    .. attribute :: rows_per_second
+
+        End-to-end row throughput, or zero when data was already complete.
+
+    .. attribute :: already_complete
+
+        Whether the pooled data existed before this invocation.
+
+    .. attribute :: index_built
+
+        Whether this invocation published the canonical index.
+    """
 
     branch: str
     rows: int
@@ -101,17 +138,19 @@ def _branch_reference(branch: str, version: int | None) -> tuple[str | None, int
     return (None if branch == "main" else branch, version)
 
 
-def _storage_options(uri: str) -> dict[str, str] | None:
-    """Resolve credentials only for object-store datasets.
+def _lance_target(uri: str) -> tuple[str, dict[str, str] | None]:
+    """Resolve a public dataset URI to the target Lance can open.
 
     :param uri: Lance dataset URI or local path.
-    :returns: R2 Lance options for ``s3://`` URIs, otherwise ``None``.
+    :returns: Openable URI or path plus object-store credentials when required.
     """
-    if not uri.startswith("s3://"):
-        return None
-    from synth_setter.pipeline.r2_io import r2_storage_options
+    from synth_setter.pipeline.r2_io import is_r2_uri, lance_target, r2_storage_options
 
-    return r2_storage_options()
+    if is_r2_uri(uri):
+        return lance_target(uri)
+    if uri.startswith("s3://"):
+        return uri, r2_storage_options()
+    return uri, None
 
 
 def _transform_fragment(
@@ -199,6 +238,8 @@ def _ensure_canonical_index(
     :param dataset: Dataset carrying canonical pooled sketches.
     :param config: Index build selection and partition override.
     :returns: Latest dataset snapshot and whether this call built an index.
+    :raises ValueError: Existing canonical indexes are ambiguous or incompatible.
+    :raises RuntimeError: The registry policy lacks its required index specification.
     """
     from synth_setter.pipeline.data.add_embeddings import (
         EMBEDDING_REGISTRY,
@@ -298,9 +339,9 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
             _sketch_pool_artifact_identity,
         )
 
-        storage_options = _storage_options(config.lance_uri)
+        lance_uri, storage_options = _lance_target(config.lance_uri)
         dataset = lance.dataset(
-            config.lance_uri, storage_options=storage_options
+            lance_uri, storage_options=storage_options
         ).checkout_version(_branch_reference(config.branch, None))
         artifact = _sketch_pool_artifact_identity("").encode()
         if _is_complete(dataset, artifact):
@@ -369,7 +410,7 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
                 )
             )
             dataset = lance.dataset(
-                config.lance_uri, storage_options=storage_options
+                lance_uri, storage_options=storage_options
             ).checkout_version(_branch_reference(config.branch, None))
 
         source_version = dataset.version
@@ -380,7 +421,7 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
         )(_transform_fragment)
         pending = [
             remote_transform.remote(
-                config.lance_uri,
+                lance_uri,
                 storage_options,
                 config.branch,
                 source_version,

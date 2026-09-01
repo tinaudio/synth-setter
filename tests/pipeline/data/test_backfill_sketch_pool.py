@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import pickle
 import sys
 from pathlib import Path
 from typing import cast
@@ -20,53 +20,53 @@ from synth_setter.data.vst.shapes import (
     SKETCH_PITCH_CHILD,
     SKETCH_STRUCT_FIELD,
 )
-from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
+from synth_setter.pipeline.data.add_embeddings import (
+    SKETCH_FULL_STRUCT_FIELD,
+    _sketch_pool_artifact_identity,
+)
+from synth_setter.pipeline.data.backfill_sketch_pool import (
+    SketchPoolBackfillConfig,
+    _parse_args,
+    _transform_fragment,
+    backfill_sketch_pool,
+)
 from synth_setter.pipeline.data.lance_shard import sketch_struct_array
 from synth_setter.sketch import pool_sketch_controls
 
 
-@pytest.mark.slow
 def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
-    tmp_path: Path,
+    fake_r2_remote: Path,
 ) -> None:
     """The public CLI must commit exact pooled controls and remain retry-safe.
 
-    :param tmp_path: Temporary directory for the real Lance dataset.
+    :param fake_r2_remote: Filesystem-backed real rclone remote root.
     """
     rows = 256
     controls = np.arange(
         rows * (SKETCH_PITCH_BINS + 2) * 401, dtype=np.float32
     ).reshape(rows, SKETCH_PITCH_BINS + 2, 401)
     source = sketch_struct_array(controls)
-    uri = tmp_path / "sketches.lance"
+    local_uri = fake_r2_remote / "test-bucket" / "sketches.lance"
+    local_uri.parent.mkdir()
     lance.write_dataset(
         pa.table({"row_id": np.arange(rows), SKETCH_STRUCT_FIELD: source}),
-        uri,
+        local_uri,
         max_rows_per_file=64,
         max_rows_per_group=64,
     )
-    command = [
-        sys.executable,
-        "-m",
-        "synth_setter.pipeline.data.backfill_sketch_pool",
-        "--lance-uri",
-        str(uri),
-        "--workers",
-        "2",
-        "--batch-size",
-        "64",
-        "--tasks-per-worker",
-        "1",
-        "--rollback-tag",
-        "before-sketch-pool",
-        "--num-partitions",
-        "2",
-    ]
+    config = SketchPoolBackfillConfig(
+        lance_uri="r2://test-bucket/sketches.lance",
+        workers=2,
+        batch_size=64,
+        tasks_per_worker=1,
+        rollback_tag="before-sketch-pool",
+        num_partitions=2,
+    )
 
-    subprocess.run(command, check=True, timeout=180)  # noqa: S603
-    subprocess.run(command, check=True, timeout=180)  # noqa: S603
+    backfill_sketch_pool(config)
+    backfill_sketch_pool(config)
 
-    dataset = lance.dataset(uri)
+    dataset = lance.dataset(local_uri)
     assert dataset.version == 4
     assert dataset.tags.get_version("before-sketch-pool") == 1
     assert dataset.take(range(rows), columns=["row_id"]).column(0).to_pylist() == list(
@@ -91,3 +91,83 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
     actual = np.concatenate((loudness[:, None], centroid[:, None], pitch), axis=1)
     expected = pool_sketch_controls(torch.from_numpy(controls)).numpy()
     np.testing.assert_array_equal(actual, expected)
+
+
+def test_transform_fragment_real_lance_source_returns_merge_metadata(tmp_path: Path) -> None:
+    """The Ray worker callable must write valid uncommitted merge metadata.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    rows = 2
+    controls = np.arange(
+        rows * (SKETCH_PITCH_BINS + 2) * 401, dtype=np.float32
+    ).reshape(rows, SKETCH_PITCH_BINS + 2, 401)
+    uri = tmp_path / "source.lance"
+    dataset = lance.write_dataset(
+        pa.table({SKETCH_FULL_STRUCT_FIELD: sketch_struct_array(controls)}), uri
+    )
+    fragment_id = dataset.get_fragments()[0].metadata.id
+
+    metadata_bytes, schema_bytes, transformed_rows = _transform_fragment(
+        str(uri),
+        None,
+        "main",
+        dataset.version,
+        fragment_id,
+        2,
+        _sketch_pool_artifact_identity("").encode(),
+    )
+
+    metadata = pickle.loads(metadata_bytes)  # noqa: S301
+    schema = pickle.loads(schema_bytes)  # noqa: S301
+    assert transformed_rows == rows
+    assert metadata.id == fragment_id
+    arrow_schema = schema.to_pyarrow()
+    assert arrow_schema.names == [SKETCH_FULL_STRUCT_FIELD, SKETCH_STRUCT_FIELD]
+    assert arrow_schema.field(SKETCH_STRUCT_FIELD).metadata[
+        b"synth_setter.embedding.name"
+    ] == b"sketch_pool"
+
+
+def test_parse_args_with_explicit_cli_values_returns_strict_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public CLI flags must map to the strict migration boundary.
+
+    :param monkeypatch: Fixture replacing the process argument vector.
+    """
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synth-setter-backfill-sketch-pool",
+            "--lance-uri",
+            "r2://bucket/split.lance",
+            "--branch",
+            "candidate",
+            "--workers",
+            "3",
+            "--batch-size",
+            "16",
+            "--tasks-per-worker",
+            "2",
+            "--rollback-tag",
+            "before",
+            "--no-build-index",
+            "--result",
+            "result.json",
+        ],
+    )
+
+    config = _parse_args()
+
+    assert config == SketchPoolBackfillConfig(
+        lance_uri="r2://bucket/split.lance",
+        branch="candidate",
+        workers=3,
+        batch_size=16,
+        tasks_per_worker=2,
+        rollback_tag="before",
+        build_index=False,
+        result=Path("result.json"),
+    )
