@@ -100,6 +100,7 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              uv pip install --python /venv/main/bin/python --group audio
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest tests/test_generate_dataset.py \
                   -m "integration_r2" \
