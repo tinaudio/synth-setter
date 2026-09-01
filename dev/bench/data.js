@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788236575845,
+  "lastUpdate": 1788236579464,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -30826,6 +30826,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.000004172325134277344,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d2557c68c6c440124f69e583a4b9988cb1c55634",
+          "message": "internal-feat(data-pipeline): pool stored sketch controls (#2979)\n\n* internal-feat(data-pipeline): pool stored sketch controls\n\n* internal-fix(data-pipeline): preserve full sketch profile\n\n* internal-fix(data-pipeline): separate pooled sketch profile\n\n* internal-fix(data-pipeline): cover full sketch compatibility\n\n* internal-fix(data-pipeline): tighten sketch pooling prose\n\n* internal-fix(data-pipeline): require pooled sketch profile\n\n* internal-fix(testing): exercise pooled sketch experiment\n\n* internal-fix(data-pipeline): derive sketch storage identity",
+          "timestamp": "2026-08-31T23:09:57-04:00",
+          "tree_id": "43b7eebdddbcd0c088421438a9ed32d9e09d32d5",
+          "url": "https://github.com/tinaudio/synth-setter/commit/d2557c68c6c440124f69e583a4b9988cb1c55634"
+        },
+        "date": 1788236578876,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/repeated-patch/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-seconds-per-render",
+            "value": 12.458462642266666,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-realtime-factor",
+            "value": 3.1146156605666664,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-seconds-per-render",
+            "value": 5.616055125966659,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-realtime-factor",
+            "value": 1.4040137814916647,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-seconds-per-render",
+            "value": 0.2733702258999983,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-realtime-factor",
+            "value": 0.06834255647499958,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 2.0403265953063965,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mss-max",
+            "value": 0.5853574872016907,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.00613683694973588,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 1.284757530563511,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.000007987022399902344,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 2.0955185890197754,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mss-max",
+            "value": 0.5981497168540955,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/sot-max",
+            "value": 0.006129666697233915,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 1.280998920898419,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000011861324310302734,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 2.075735569000244,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mss-max",
+            "value": 0.5912510752677917,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.006097491830587387,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 1.246846925963182,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000004589557647705078,
             "unit": "1-cos"
           }
         ]
