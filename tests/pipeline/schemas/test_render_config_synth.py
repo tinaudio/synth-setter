@@ -81,6 +81,7 @@ class TestPyFDNEffectConfig:
             ("decay_seconds", 0.0),
             ("decay_seconds", -1.0),
             ("decay_seconds", 1e-20),
+            ("decay_seconds", float("inf")),
             ("wet_mix", 0.0),
             ("wet_mix", 1.01),
         ],

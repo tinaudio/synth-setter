@@ -249,6 +249,7 @@ class PyFDNEffectConfig(BaseModel):  # noqa: DOC603 — descriptions live on Pyd
     )
     decay_seconds: float = Field(
         ge=0.001,
+        allow_inf_nan=False,
         description="Homogeneous FDN decay time in seconds.",
     )
     wet_mix: float = Field(

@@ -34,14 +34,12 @@ from lightning import Trainer, seed_everything
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationResolutionError
 from pedalboard.io import AudioFile
-from pydantic_settings import CliApp
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
-from synth_setter.data.vst import param_specs, plugin_state_paths
+from synth_setter.data.vst import plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
-from synth_setter.evaluation.predict_vst_audio import main as predict_audio_main
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
@@ -50,15 +48,9 @@ from synth_setter.models.components.pretrained_encoder import (
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
-from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
-from synth_setter.pipeline.schemas.spec import (
-    DatasetSpec,
-    PyFDNEffectConfig,
-    RenderConfig,
-)
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
-from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import (
@@ -102,84 +94,6 @@ _AUDIO_PREDICTION_SAMPLE_COUNT = int(
     _AUDIO_PREDICTION_DURATION_SECONDS * _AUDIO_PREDICTION_SAMPLE_RATE
 )
 _SURGE_XT_PREDICTION_WIDTH = 300
-
-
-@pytest.mark.slow
-def test_predict_audio_entrypoint_pyfdn_effects_predicted_and_target_audio(tmp_path: Path) -> None:
-    """The real prediction-audio entrypoint writes bounded pyFDN WAV artifacts.
-
-    :param tmp_path: Destination for prediction inputs and dry/effected outputs.
-    """
-    param_spec_name = ParamSpecName("torchsynth_simple")
-    pred_dir = tmp_path / "predictions"
-    pred_dir.mkdir()
-    encoded = torch.zeros((1, len(param_specs[param_spec_name])), dtype=torch.float32)
-    torch.save(encoded, pred_dir / "pred-0.pt")
-    torch.save(encoded.clone(), pred_dir / "target-params-0.pt")
-    dry_config = RenderConfig(
-        synth=SynthSpec(
-            name=SynthName("torchsynth_simple"),
-            param_spec_name=param_spec_name,
-            plugin_path="torchsynth",
-            plugin_state_path="",
-            synth_version="1.0.2",
-        ),
-        renderer_backend="torchsynth",
-        sample_rate=48000,
-        channels=2,
-        velocity=100,
-        signal_duration_seconds=4.0,
-        min_loudness=-70.0,
-        samples_per_render_batch=1,
-        samples_per_shard=1,
-        gui_toggle_cadence="never",
-    )
-    effect_config = dry_config.model_copy(
-        update={
-            "pyfdn_effect": PyFDNEffectConfig(
-                package_version="0.4.2",
-                preset_name="colorless_N8_d1",
-                decay_seconds=0.5,
-                wet_mix=0.1,
-            )
-        }
-    )
-    dry_dir = tmp_path / "dry"
-    effected_dir = tmp_path / "effected"
-
-    predict_audio_main(
-        [
-            str(pred_dir),
-            str(dry_dir),
-            *CliApp.serialize(dry_config),
-            "--rerender-target",
-            "True",
-            "--skip-spectrogram",
-            "True",
-        ]
-    )
-    predict_audio_main(
-        [
-            str(pred_dir),
-            str(effected_dir),
-            *CliApp.serialize(effect_config),
-            "--rerender-target",
-            "True",
-            "--skip-spectrogram",
-            "True",
-        ]
-    )
-
-    with AudioFile(str(dry_dir / "sample_0" / "pred.wav")) as dry_file:
-        dry_audio = dry_file.read(dry_file.frames)
-    with AudioFile(str(effected_dir / "sample_0" / "pred.wav")) as effected_file:
-        effected_audio = effected_file.read(effected_file.frames)
-    with AudioFile(str(effected_dir / "sample_0" / "target.wav")) as target_file:
-        target_audio = target_file.read(target_file.frames)
-    assert not np.array_equal(effected_audio, dry_audio)
-    assert np.array_equal(effected_audio, target_audio)
-    assert np.isfinite(effected_audio).all()
-    assert np.max(np.abs(effected_audio)) <= 1.0
 
 
 @pytest.mark.slow
@@ -1140,6 +1054,7 @@ def _compose_fake_oracle_eval_cfg(
     mode: str,
     param_spec_name: str = "surge_4",
     datamodule: str | None = None,
+    render_group: str | None = None,
 ) -> DictConfig:
     """Compose ``eval.yaml`` with the CPU ``surge/fake_oracle`` experiment, pinned to a dataset.
 
@@ -1156,6 +1071,7 @@ def _compose_fake_oracle_eval_cfg(
     :param param_spec_name: Param spec selecting the dataset schema and render group.
     :param datamodule: Optional datamodule group override (e.g. ``surge_lance``);
         ``None`` keeps the experiment's default ``surge`` group.
+    :param render_group: Optional real render profile; ``None`` installs the fake plugin config.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -1163,7 +1079,8 @@ def _compose_fake_oracle_eval_cfg(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
-            + ([f"datamodule={datamodule}"] if datamodule else []),
+            + ([f"datamodule={datamodule}"] if datamodule else [])
+            + ([f"render={render_group}"] if render_group else []),
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
@@ -1182,28 +1099,102 @@ def _compose_fake_oracle_eval_cfg(
         # Pin the full split because surge/base bounds validation by batch count.
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
-        # Render group is null on fake_oracle; set it inline to the dataset's spec.
-        cfg.render = RenderConfig.model_validate(
-            {
-                "synth": {
-                    "name": param_spec_name,
-                    "param_spec_name": param_spec_name,
-                    "plugin_state_path": str(plugin_state_paths[param_spec_name]),
-                    "plugin_path": "plugins/fake.vst3",
-                    "synth_version": "1.3.4",
-                },
-                "sample_rate": 44100,
-                "channels": 2,
-                "velocity": 100,
-                "signal_duration_seconds": 4.0,
-                "min_loudness": -55.0,
-                "samples_per_render_batch": 1,
-                "samples_per_shard": 5,
-                "plugin_reload_cadence": "render",
-                "gui_toggle_cadence": "never",
-            }
-        ).model_dump(mode="json")
+        if render_group is None:
+            # Render group is null on fake_oracle; set it inline to the dataset's spec.
+            cfg.render = RenderConfig.model_validate(
+                {
+                    "synth": {
+                        "name": param_spec_name,
+                        "param_spec_name": param_spec_name,
+                        "plugin_state_path": str(plugin_state_paths[param_spec_name]),
+                        "plugin_path": "plugins/fake.vst3",
+                        "synth_version": "1.3.4",
+                    },
+                    "sample_rate": 44100,
+                    "channels": 2,
+                    "velocity": 100,
+                    "signal_duration_seconds": 4.0,
+                    "min_loudness": -55.0,
+                    "samples_per_render_batch": 1,
+                    "samples_per_shard": 5,
+                    "plugin_reload_cadence": "render",
+                    "gui_toggle_cadence": "never",
+                }
+            ).model_dump(mode="json")
     return cfg
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """The full eval entrypoint composes and applies the pyFDN render profile.
+
+    :param tmp_path: Roots independent dry and effected eval outputs.
+    :param surge_xt_smoke_datasets: Real Surge Lance splits consumed by the oracle.
+    :param param_spec_name: Shared dataset, model, and renderer parameter identity.
+    """
+    dry_cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path / "dry",
+        surge_xt_smoke_datasets,
+        mode="predict",
+        param_spec_name=param_spec_name,
+        datamodule="surge_lance",
+        render_group="vst",
+    )
+    effected_cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path / "effected",
+        surge_xt_smoke_datasets,
+        mode="predict",
+        param_spec_name=param_spec_name,
+        datamodule="surge_lance",
+        render_group="vst_pyfdn",
+    )
+    for cfg in (dry_cfg, effected_cfg):
+        with open_dict(cfg):
+            cfg.render.sample_rate = 48000
+            cfg.render.gui_toggle_cadence = "never"
+            cfg.evaluation.compute_metrics = False
+            cfg.evaluation.rerender_target = True
+            cfg.trainer.limit_predict_batches = 1
+
+    HydraConfig().set_config(dry_cfg)
+    evaluate(dry_cfg)
+    HydraConfig().set_config(effected_cfg)
+    evaluate(effected_cfg)
+
+    effect = RenderConfig.from_cfg_nodes(effected_cfg.render, effected_cfg.synth).pyfdn_effect
+    assert effect is not None
+    assert effect.preset_name == "colorless_N8_d1"
+    dry_pred_params = torch.load(
+        Path(dry_cfg.paths.output_dir) / "predictions" / "pred-0.pt",
+        weights_only=True,
+    )
+    effected_target_params = torch.load(
+        Path(effected_cfg.paths.output_dir) / "predictions" / "target-params-0.pt",
+        weights_only=True,
+    )
+    assert torch.equal(dry_pred_params, effected_target_params)
+
+    def read_wav(root: Path, name: str) -> np.ndarray:
+        with AudioFile(str(root / "audio" / "sample_0" / name)) as audio_file:
+            return audio_file.read(audio_file.frames)
+
+    dry_root = Path(dry_cfg.paths.output_dir)
+    effected_root = Path(effected_cfg.paths.output_dir)
+    dry_pred = read_wav(dry_root, "pred.wav")
+    dry_target = read_wav(dry_root, "target.wav")
+    effected_pred = read_wav(effected_root, "pred.wav")
+    effected_target = read_wav(effected_root, "target.wav")
+    assert dry_pred.shape == dry_target.shape == effected_pred.shape == effected_target.shape
+    assert not np.array_equal(effected_pred, dry_pred)
+    assert not np.array_equal(effected_target, dry_target)
+    assert np.isfinite(effected_pred).all()
+    assert np.max(np.abs(effected_pred)) <= 1.0
 
 
 def test_evaluate_row_limited_file_uri_hydration_without_txids(
