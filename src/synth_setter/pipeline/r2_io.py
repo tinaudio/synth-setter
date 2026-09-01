@@ -561,10 +561,10 @@ def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None
 
 
 def copy_directory(source_uri: str, destination_uri: str) -> None:
-    """Copy every R2 source object under the destination prefix.
+    """Copy source-relative R2 objects into the destination prefix.
 
-    :param source_uri: Source ``r2://`` directory URI.
-    :param destination_uri: Destination ``r2://`` directory URI.
+    :param source_uri: Validated R2 directory defining relative object paths.
+    :param destination_uri: Distinct R2 prefix receiving those relative paths.
     """
     args = _rclone_argv(
         "copy",

@@ -1,63 +1,206 @@
-"""Branch-safe distributed embedding backfill and candidate promotion."""
+"""Branch-safe distributed embedding backfill and candidate promotion.
+
+Typical candidate publication uses the CLI after validating a branch::
+
+    python -m synth_setter.pipeline.data.backfill_embeddings promote \\
+        --lance-uri /data/split.lance --candidate-branch embeddings \\
+        --rollback-tag pre-embeddings --columns clap meanaudio_16k
+"""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
-import pickle
 import resource
 import shutil
 import sys
 import time
+import uuid
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, cast, overload
+from urllib.parse import unquote, urlparse
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+if TYPE_CHECKING:
+    import lance
+    import numpy as np
+    import pyarrow as pa
+    import ray
+
+    from synth_setter.pipeline.data.add_embeddings import EmbeddingSpec
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
 logger = structlog.get_logger(__name__)
 
-_WORKER_ENCODERS: dict[tuple[str, str], Any] = {}
+_PROGRESS_INTERVAL_SECONDS = 30.0
 
 
-@dataclass(frozen=True)
-class WorkerMetrics:
-    """Capture one fragment task's resource and throughput measurements.
+class _AudioEncoder(Protocol):
+    """Encode a decoded audio batch into one model-specific array."""
 
-    .. attribute :: pid
+    def __call__(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Encode audio.
 
-        Worker process identifier.
+        :param audio: Float audio batch.
+        :param sample_rate: Source sample rate in Hz.
+        :returns: Model-specific embeddings.
+        """
+        ...
 
-    .. attribute :: rows
 
-        Fragment rows transformed.
+_WORKER_ENCODERS: dict[tuple[str, str], _AudioEncoder] = {}
 
-    .. attribute :: elapsed_seconds
 
-        Fragment task wall time.
+class _FragmentTask(BaseModel):
+    """Validate one immutable Ray fragment request.
 
-    .. attribute :: peak_rss_bytes
+    .. attribute :: model_config
 
-        Process peak resident memory.
+        Strict immutable trust-boundary policy.
+    .. attribute :: uri
 
-    .. attribute :: peak_gpu_allocated_bytes
+        Lance-openable dataset target.
+    .. attribute :: storage_options
 
-        PyTorch peak allocated GPU memory.
+        Optional object-store credentials.
+    .. attribute :: branch
 
-    .. attribute :: peak_gpu_reserved_bytes
+        Candidate branch name.
+    .. attribute :: source_version
 
-        PyTorch peak reserved GPU memory.
+        Immutable branch-local source version.
+    .. attribute :: fragment_id
+
+        Source fragment ID.
+    .. attribute :: embedding
+
+        Supported registry key.
+    .. attribute :: checkpoint
+
+        Model checkpoint identity.
+    .. attribute :: sample_rate
+
+        Source audio sample rate in Hz.
+    .. attribute :: batch_size
+
+        Rows per callback batch.
+    .. attribute :: artifact
+
+        Versioned output identity.
     """
 
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    uri: str
+    storage_options: dict[str, str] | None
+    branch: str
+    source_version: int
+    fragment_id: int
+    embedding: Literal["clap", "meanaudio_16k"]
+    checkpoint: str
+    sample_rate: int = Field(gt=0)
+    batch_size: int = Field(gt=0)
+    artifact: str
+
+
+class _FragmentReport(BaseModel):
+    """Validate one resumable Ray worker report.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary policy.
+    .. attribute :: fragment_id
+
+        Transformed source fragment ID.
+    .. attribute :: metadata_json
+
+        Lance fragment metadata JSON.
+    .. attribute :: schema_ipc
+
+        Base64 Arrow schema IPC.
+    .. attribute :: pid
+
+        Worker process ID.
+    .. attribute :: rows
+
+        Transformed row count.
+    .. attribute :: elapsed_seconds
+
+        Fragment wall time.
+    .. attribute :: peak_rss_bytes
+
+        Worker peak resident memory.
+    .. attribute :: peak_gpu_allocated_bytes
+
+        PyTorch peak allocated GPU bytes.
+    .. attribute :: peak_gpu_reserved_bytes
+
+        PyTorch peak reserved GPU bytes.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    fragment_id: int
+    metadata_json: str
+    schema_ipc: str
     pid: int
-    rows: int
-    elapsed_seconds: float
-    peak_rss_bytes: int
-    peak_gpu_allocated_bytes: int
-    peak_gpu_reserved_bytes: int
+    rows: int = Field(ge=0)
+    elapsed_seconds: float = Field(ge=0)
+    peak_rss_bytes: int = Field(ge=0)
+    peak_gpu_allocated_bytes: int = Field(ge=0)
+    peak_gpu_reserved_bytes: int = Field(ge=0)
+
+
+class _CacheIdentity(BaseModel):
+    """Bind reconciliation reports to one immutable embedding operation.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary policy.
+    .. attribute :: lance_uri
+
+        Public dataset identity.
+    .. attribute :: branch
+
+        Candidate branch name.
+    .. attribute :: source_version
+
+        Immutable branch-local source version.
+    .. attribute :: embedding
+
+        Supported registry key.
+    .. attribute :: checkpoint
+
+        Model checkpoint identity.
+    .. attribute :: sample_rate
+
+        Source audio sample rate in Hz.
+    .. attribute :: batch_size
+
+        Rows per callback batch.
+    .. attribute :: artifact
+
+        Versioned output identity.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    lance_uri: str
+    branch: str
+    source_version: int
+    embedding: Literal["clap", "meanaudio_16k"]
+    checkpoint: str
+    sample_rate: int
+    batch_size: int
+    artifact: str
 
 
 class EmbeddingBackfillConfig(BaseModel):
@@ -107,6 +250,14 @@ class EmbeddingBackfillConfig(BaseModel):
 
         IVF partition override, or ``None`` for a row-derived count.
 
+    .. attribute :: resume_dir
+
+        Optional host-local reconciliation cache directory.
+
+    .. attribute :: timeout_seconds
+
+        Overall fragment-dispatch deadline before cancellation.
+
     .. attribute :: result
 
         Optional JSON result path.
@@ -124,6 +275,8 @@ class EmbeddingBackfillConfig(BaseModel):
     checkpoint: str | None = None
     build_index: bool = True
     num_partitions: int | None = Field(default=None, ge=1)
+    resume_dir: Path | None = None
+    timeout_seconds: float = Field(default=21_600.0, gt=0)
     result: Path | None = None
 
     @field_validator("branch")
@@ -218,6 +371,14 @@ class EmbeddingPromotionResult:
 class EmbeddingBackfillResult:
     """Summarize one branch-scoped distributed embedding write.
 
+    .. attribute :: run_id
+
+        Unique invocation identity.
+
+    .. attribute :: git_commit
+
+        Git revision that ran the invocation.
+
     .. attribute :: branch
 
         Candidate branch name.
@@ -283,6 +444,8 @@ class EmbeddingBackfillResult:
         Whether this invocation built the canonical index.
     """
 
+    run_id: str
+    git_commit: str
     branch: str
     embedding: str
     rows: int
@@ -301,6 +464,134 @@ class EmbeddingBackfillResult:
     index_built: bool
 
 
+@dataclass(frozen=True)
+class _RunIdentity:
+    """Carry audit identities shared by every result path.
+
+    .. attribute :: run_id
+
+        Unique invocation identity.
+    .. attribute :: git_commit
+
+        Implementation Git revision.
+    """
+
+    run_id: str
+    git_commit: str
+
+
+@dataclass(frozen=True)
+class _BackfillContext:
+    """Bind one candidate snapshot to its model and worker inputs.
+
+    .. attribute :: dataset
+
+        Immutable candidate snapshot.
+    .. attribute :: storage_options
+
+        Optional object-store credentials.
+    .. attribute :: spec
+
+        Registry embedding policy.
+    .. attribute :: add_config
+
+        Registry index and artifact policy.
+    .. attribute :: checkpoint
+
+        Model checkpoint identity.
+    .. attribute :: artifact
+
+        Versioned output identity.
+    .. attribute :: source_version
+
+        Candidate version read by workers.
+    .. attribute :: sample_rate
+
+        Source audio sample rate in Hz.
+    .. attribute :: total_rows
+
+        Expected transformed row count.
+    """
+
+    dataset: lance.LanceDataset
+    storage_options: dict[str, str] | None
+    spec: EmbeddingSpec
+    add_config: AddEmbeddingsConfig
+    checkpoint: str
+    artifact: str
+    source_version: int
+    sample_rate: int
+    total_rows: int
+
+
+@dataclass(frozen=True)
+class _BackfillOutcome:
+    """Bundle publication state consumed by result rendering.
+
+    .. attribute :: dataset
+
+        Final candidate snapshot.
+    .. attribute :: reports
+
+        Worker reports, empty for an idempotent invocation.
+    .. attribute :: data_version
+
+        Version carrying embedding data.
+    .. attribute :: index_built
+
+        Whether this invocation built the index.
+    """
+
+    dataset: lance.LanceDataset
+    reports: Sequence[_FragmentReport]
+    data_version: int
+    index_built: bool
+
+
+@dataclass(frozen=True)
+class _ReportStore:
+    """Locate local staging and shared reconciliation reports.
+
+    .. attribute :: local_dir
+
+        Host-local atomic-write directory.
+    .. attribute :: remote_uri
+
+        Shared R2 prefix when applicable.
+    """
+
+    local_dir: Path
+    remote_uri: str | None
+
+
+@dataclass(frozen=True)
+class _DispatchState:
+    """Hold mutable report collection state for one Ray dispatch.
+
+    .. attribute :: pending
+
+        Outstanding Ray references.
+    .. attribute :: reports
+
+        Durable reports keyed by fragment ID.
+    .. attribute :: fragment_ids
+
+        Complete expected fragment ID set.
+    .. attribute :: total_rows
+
+        Expected source row count.
+    .. attribute :: store
+
+        Local and shared report locations.
+    """
+
+    pending: list[ray.ObjectRef]
+    reports: dict[int, _FragmentReport]
+    fragment_ids: set[int]
+    total_rows: int
+    store: _ReportStore
+
+
 def _storage_options(uri: str) -> dict[str, str] | None:
     """Resolve credentials only for object-store datasets.
 
@@ -314,7 +605,7 @@ def _storage_options(uri: str) -> dict[str, str] | None:
     return r2_storage_options()
 
 
-def _worker_encoder(embedding: str, checkpoint: str) -> Any:
+def _worker_encoder(embedding: str, checkpoint: str) -> _AudioEncoder:
     """Load at most one encoder per recycled Ray worker process.
 
     :param embedding: Supported embedding registry key.
@@ -336,36 +627,16 @@ def _worker_encoder(embedding: str, checkpoint: str) -> Any:
         device="cuda",
         build_index=False,
     )
-    encoder = EMBEDDING_REGISTRY[embedding].load_encoder(checkpoint, config)
-    _WORKER_ENCODERS[key] = encoder
-    return encoder
+    loaded = cast("_AudioEncoder", EMBEDDING_REGISTRY[embedding].load_encoder(checkpoint, config))
+    _WORKER_ENCODERS[key] = loaded
+    return loaded
 
 
-def _transform_fragment(
-    uri: str,
-    storage_options: dict[str, str] | None,
-    branch: str,
-    source_version: int,
-    fragment_id: int,
-    embedding: str,
-    checkpoint: str,
-    sample_rate: int,
-    batch_size: int,
-    artifact: bytes,
-) -> tuple[bytes, bytes, int, WorkerMetrics]:
+def _transform_fragment(task_value: object) -> _FragmentReport:
     """Write one fragment's embedding data without committing a manifest.
 
-    :param uri: Lance dataset URI or local path.
-    :param storage_options: Object-store credentials when required.
-    :param branch: Source branch name.
-    :param source_version: Immutable source version on the branch.
-    :param fragment_id: Fragment to transform.
-    :param embedding: Supported embedding registry key.
-    :param checkpoint: Registry checkpoint source.
-    :param sample_rate: Source audio sample rate in Hz.
-    :param batch_size: Rows decoded per callback.
-    :param artifact: Versioned artifact identity stored in field metadata.
-    :returns: Pickled fragment metadata/schema, row count, and resource metrics.
+    :param task_value: Strict fragment request crossing the Ray process boundary.
+    :returns: Strict serializable fragment metadata, schema, and resource report.
     :raises ValueError: The source fragment cannot be found.
     """
     import lance
@@ -379,32 +650,33 @@ def _transform_fragment(
         _output_columns,
     )
 
+    task = _FragmentTask.model_validate(task_value, strict=True)
     started = time.monotonic()
-    dataset = lance.dataset(uri, storage_options=storage_options).checkout_version(
-        (None if branch == "main" else branch, source_version)
+    dataset = lance.dataset(task.uri, storage_options=task.storage_options).checkout_version(
+        (task.branch, task.source_version)
     )
-    fragment = dataset.get_fragment(fragment_id)
+    fragment = dataset.get_fragment(task.fragment_id)
     if fragment is None:
-        raise ValueError(f"missing fragment {fragment_id}")
-    spec = EMBEDDING_REGISTRY[embedding]
-    encoder = _worker_encoder(embedding, checkpoint)
+        raise ValueError(f"missing fragment {task.fragment_id}")
+    spec = EMBEDDING_REGISTRY[task.embedding]
+    encoder = _worker_encoder(task.embedding, task.checkpoint)
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
     def transform(batch: pa.RecordBatch) -> pa.RecordBatch:
         encoded = _encode_columns(
             _decoded_sources(batch, spec.input_fields),
-            sample_rate,
+            task.sample_rate,
             [spec],
             [encoder],
         )
-        metadata = {
-            b"synth_setter.embedding.name": embedding.encode(),
-            b"synth_setter.embedding.artifact": artifact,
+        field_metadata = {
+            b"synth_setter.embedding.name": task.embedding.encode(),
+            b"synth_setter.embedding.artifact": task.artifact.encode(),
         }
         columns = _output_columns(spec)
         schema = pa.schema(
-            [encoded.schema.field(column).with_metadata(metadata) for column in columns]
+            [encoded.schema.field(column).with_metadata(field_metadata) for column in columns]
         )
         return pa.RecordBatch.from_arrays(
             [encoded.column(column) for column in columns], schema=schema
@@ -413,23 +685,42 @@ def _transform_fragment(
     metadata, schema = fragment.merge_columns(
         transform,
         list(spec.input_fields),
-        batch_size=batch_size,
+        batch_size=task.batch_size,
     )
     rows = fragment.count_rows()
-    peak_allocated = torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0
-    peak_reserved = torch.cuda.max_memory_reserved() if torch.cuda.is_available() else 0
-    metrics = WorkerMetrics(
+    return _FragmentReport(
+        fragment_id=task.fragment_id,
+        metadata_json=json.dumps(metadata.to_json()),
+        schema_ipc=base64.b64encode(schema.to_pyarrow().serialize().to_pybytes()).decode(),
         pid=os.getpid(),
         rows=rows,
         elapsed_seconds=time.monotonic() - started,
         peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
-        peak_gpu_allocated_bytes=peak_allocated,
-        peak_gpu_reserved_bytes=peak_reserved,
+        peak_gpu_allocated_bytes=(
+            torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0
+        ),
+        peak_gpu_reserved_bytes=(
+            torch.cuda.max_memory_reserved() if torch.cuda.is_available() else 0
+        ),
     )
-    return pickle.dumps(metadata), pickle.dumps(schema), rows, metrics
 
 
-def _write_result(result: Any, destination: Path | None) -> Any:
+@overload
+def _write_result(
+    result: EmbeddingBackfillResult, destination: Path | None
+) -> EmbeddingBackfillResult: ...
+
+
+@overload
+def _write_result(
+    result: EmbeddingPromotionResult, destination: Path | None
+) -> EmbeddingPromotionResult: ...
+
+
+def _write_result(
+    result: EmbeddingBackfillResult | EmbeddingPromotionResult,
+    destination: Path | None,
+) -> EmbeddingBackfillResult | EmbeddingPromotionResult:
     """Print and optionally persist a dataclass result.
 
     :param result: Dataclass result to serialize.
@@ -444,7 +735,9 @@ def _write_result(result: Any, destination: Path | None) -> Any:
     return result
 
 
-def _embedding_is_complete(dataset: Any, spec: Any, artifact: bytes) -> bool:
+def _embedding_is_complete(
+    dataset: lance.LanceDataset, spec: EmbeddingSpec, artifact: bytes
+) -> bool:
     """Validate the selected policy's complete output identity.
 
     :param dataset: Candidate branch dataset.
@@ -470,7 +763,11 @@ def _embedding_is_complete(dataset: Any, spec: Any, artifact: bytes) -> bool:
     return True
 
 
-def _ensure_embedding_index(dataset: Any, spec: Any, config: Any) -> tuple[Any, bool]:
+def _ensure_embedding_index(
+    dataset: lance.LanceDataset,
+    spec: EmbeddingSpec,
+    config: AddEmbeddingsConfig,
+) -> tuple[lance.LanceDataset, bool]:
     """Build the selected registry index when requested and absent.
 
     :param dataset: Candidate branch dataset carrying the embedding.
@@ -492,20 +789,438 @@ def _ensure_embedding_index(dataset: Any, spec: Any, config: Any) -> tuple[Any, 
     return dataset, built
 
 
+def _validate_resume_directory(config: EmbeddingBackfillConfig, path: Path) -> Path:
+    """Require reconciliation staging to be disjoint from protected paths.
+
+    :param config: Dataset and output paths that staging must not overlap.
+    :param path: Candidate staging directory.
+    :returns: Resolved dedicated staging directory.
+    :raises ValueError: The path is protected or overlaps local source/output data.
+    """
+    resolved = path.expanduser().resolve()
+    if resolved in {Path(resolved.anchor), Path.home().resolve(), Path.cwd().resolve()}:
+        raise ValueError(f"resume directory {resolved} is not a dedicated cleanup path")
+    dataset_path = None
+    if config.lance_uri.startswith("file://"):
+        dataset_path = Path(unquote(urlparse(config.lance_uri).path)).resolve()
+    elif "://" not in config.lance_uri:
+        dataset_path = Path(config.lance_uri).expanduser().resolve()
+    if dataset_path is not None and (
+        resolved == dataset_path
+        or resolved in dataset_path.parents
+        or dataset_path in resolved.parents
+    ):
+        raise ValueError(f"resume directory {resolved} overlaps local dataset {dataset_path}")
+    if config.result is not None:
+        result_path = config.result.expanduser().resolve()
+        if (
+            result_path == resolved
+            or resolved in result_path.parents
+            or result_path in resolved.parents
+        ):
+            raise ValueError(f"result path {result_path} is inside resume directory {resolved}")
+    return resolved
+
+
+def _report_store(config: EmbeddingBackfillConfig, identity: _CacheIdentity) -> _ReportStore:
+    """Resolve local staging and shared R2 reconciliation storage.
+
+    :param config: Dataset and optional local report path.
+    :param identity: Immutable source operation identity.
+    :returns: Stable local directory and optional R2 metadata prefix.
+    """
+    digest = hashlib.sha256(identity.model_dump_json().encode()).hexdigest()[:20]
+    default = Path.home() / ".cache" / "synth-setter" / "embedding-backfill" / digest
+    local_dir = _validate_resume_directory(config, config.resume_dir or default)
+    remote_uri = None
+    if config.lance_uri.startswith("s3://"):
+        from synth_setter.pipeline.r2_io import from_s3_uri
+
+        root = from_s3_uri(config.lance_uri.rstrip("/"))
+        remote_uri = f"{root}/metadata/workers/embedding-backfill/{digest}"
+    return _ReportStore(local_dir=local_dir, remote_uri=remote_uri)
+
+
+def _hydrate_remote_reports(store: _ReportStore) -> None:
+    """Hydrate shared reports before local trust-boundary validation.
+
+    :param store: Local staging and optional R2 reconciliation prefix.
+    """
+    if store.remote_uri is None:
+        return
+    from synth_setter.pipeline.r2_io import (
+        download_to_path,
+        list_entries,
+        r2_directory_exists,
+    )
+
+    if not r2_directory_exists(store.remote_uri):
+        return
+    for entry in list_entries(store.remote_uri):
+        download_to_path(
+            f"{store.remote_uri}/{entry.path}", store.local_dir / Path(entry.path).name
+        )
+
+
+def _load_reports(
+    store: _ReportStore,
+    identity: _CacheIdentity,
+    fragment_ids: set[int],
+) -> dict[int, _FragmentReport]:
+    """Load only reports bound to the current immutable operation.
+
+    :param store: Local and shared reconciliation locations.
+    :param identity: Expected operation identity.
+    :param fragment_ids: Valid source fragment IDs.
+    :returns: Validated reports keyed by fragment ID.
+    :raises ValueError: Existing staging belongs to another operation.
+    """
+    from synth_setter.pipeline.r2_io import upload_to_uri
+
+    store.local_dir.mkdir(parents=True, exist_ok=True)
+    identity_path = store.local_dir / "identity.json"
+    if identity_path.exists():
+        cached = _CacheIdentity.model_validate_json(identity_path.read_text(), strict=True)
+        if cached != identity:
+            raise ValueError(f"resume directory {store.local_dir} has another identity")
+    _hydrate_remote_reports(store)
+    if identity_path.exists():
+        cached = _CacheIdentity.model_validate_json(identity_path.read_text(), strict=True)
+        if cached != identity:
+            raise ValueError(f"resume directory {store.local_dir} has another identity")
+    else:
+        identity_path.write_text(identity.model_dump_json(indent=2) + "\n")
+        if store.remote_uri is not None:
+            upload_to_uri(identity_path, f"{store.remote_uri}/identity.json")
+    reports: dict[int, _FragmentReport] = {}
+    for path in sorted(store.local_dir.glob("fragment-*.json")):
+        report = _FragmentReport.model_validate_json(path.read_text(), strict=True)
+        if report.fragment_id in fragment_ids:
+            reports.setdefault(report.fragment_id, report)
+    return reports
+
+
+def _persist_report(store: _ReportStore, report: _FragmentReport) -> None:
+    """Atomically persist one successful worker attempt before merge publication.
+
+    :param store: Local and shared reconciliation locations.
+    :param report: Strict worker report.
+    """
+    from synth_setter.pipeline.r2_io import upload_to_uri
+
+    attempt = uuid.uuid4().hex
+    destination = store.local_dir / f"fragment-{report.fragment_id}-{attempt}.json"
+    temporary = store.local_dir / f".{destination.name}.{uuid.uuid4().hex}.tmp"
+    temporary.write_text(report.model_dump_json() + "\n")
+    temporary.replace(destination)
+    if store.remote_uri is not None:
+        upload_to_uri(destination, f"{store.remote_uri}/{destination.name}")
+
+
+def _prepare_context(config: EmbeddingBackfillConfig) -> _BackfillContext:
+    """Resolve and validate one candidate source snapshot.
+
+    :param config: Branch and model policy.
+    :returns: Immutable source, artifact, and model context.
+    :raises ValueError: The candidate is empty or carries incompatible output fields.
+    """
+    import lance
+
+    from synth_setter.pipeline.data.add_embeddings import (
+        EMBEDDING_REGISTRY,
+        _output_columns,
+        _resolve_artifact_identity,
+    )
+    from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    storage_options = _storage_options(config.lance_uri)
+    dataset = lance.dataset(config.lance_uri, storage_options=storage_options).checkout_version(
+        (config.branch, None)
+    )
+    spec = EMBEDDING_REGISTRY[config.embedding]
+    checkpoint = config.checkpoint or spec.default_checkpoint
+    add_config = AddEmbeddingsConfig(
+        lance_uri=config.lance_uri,
+        embeddings=(config.embedding,),
+        checkpoints={config.embedding: checkpoint},
+        device="cuda",
+        batch_size=config.batch_size,
+        build_index=config.build_index,
+        num_partitions=config.num_partitions,
+    )
+    artifact = _resolve_artifact_identity(spec, add_config)
+    if not _embedding_is_complete(dataset, spec, artifact.encode()) and any(
+        column in dataset.schema.names for column in _output_columns(spec)
+    ):
+        raise ValueError(f"candidate has incompatible {config.embedding} output columns")
+    total_rows = dataset.count_rows()
+    if total_rows < 1:
+        raise ValueError("cannot backfill an empty dataset")
+    return _BackfillContext(
+        dataset=dataset,
+        storage_options=storage_options,
+        spec=spec,
+        add_config=add_config,
+        checkpoint=checkpoint,
+        artifact=artifact,
+        source_version=dataset.version,
+        sample_rate=int(read_shard_metadata(dataset.schema).sample_rate),
+        total_rows=total_rows,
+    )
+
+
+def _prepare_dispatch(
+    config: EmbeddingBackfillConfig, context: _BackfillContext
+) -> _DispatchState:
+    """Load durable reports and schedule only missing source fragments.
+
+    :param config: Ray and reconciliation policy.
+    :param context: Immutable source and model context.
+    :returns: Initialized dispatch state.
+    """
+    import ray
+
+    fragments = context.dataset.get_fragments()
+    fragment_ids = {fragment.metadata.id for fragment in fragments}
+    identity = _CacheIdentity(
+        lance_uri=config.lance_uri,
+        branch=config.branch,
+        source_version=context.source_version,
+        embedding=config.embedding,
+        checkpoint=context.checkpoint,
+        sample_rate=context.sample_rate,
+        batch_size=config.batch_size,
+        artifact=context.artifact,
+    )
+    store = _report_store(config, identity)
+    reports = _load_reports(store, identity, fragment_ids)
+    transform = ray.remote(
+        num_cpus=1,
+        num_gpus=config.gpu_per_worker,
+        max_calls=config.tasks_per_worker,
+    )(_transform_fragment)
+    pending = [
+        transform.remote(
+            _FragmentTask(
+                uri=config.lance_uri,
+                storage_options=context.storage_options,
+                branch=config.branch,
+                source_version=context.source_version,
+                fragment_id=fragment_id,
+                embedding=config.embedding,
+                checkpoint=context.checkpoint,
+                sample_rate=context.sample_rate,
+                batch_size=config.batch_size,
+                artifact=context.artifact,
+            )
+        )
+        for fragment_id in sorted(fragment_ids - reports.keys())
+    ]
+    return _DispatchState(
+        pending=pending,
+        reports=reports,
+        fragment_ids=fragment_ids,
+        total_rows=context.total_rows,
+        store=store,
+    )
+
+
+def _cancel_dispatch(pending: Sequence[ray.ObjectRef]) -> None:
+    """Force-cancel unfinished Ray work before an invocation-level retry.
+
+    :param pending: Outstanding task references.
+    """
+    import ray
+
+    for reference in pending:
+        ray.cancel(reference, force=True)
+
+
+def _poll_dispatch(
+    state: _DispatchState,
+    config: EmbeddingBackfillConfig,
+    started: float,
+) -> list[_FragmentReport]:
+    """Collect strict reports until completion or the overall deadline.
+
+    Successful reports are durable, so a timed-out invocation can be retried without recomputing
+    completed fragments.
+
+    :param state: Prepared task and reconciliation state.
+    :param config: Deadline and progress policy.
+    :param started: Invocation monotonic start.
+    :returns: One report per source fragment in source order.
+    :raises TimeoutError: The deadline expires after pending tasks are cancelled.
+    :raises ValueError: A worker returns an unknown or duplicate fragment report.
+    """
+    import ray
+
+    pending = state.pending
+    rows_done = sum(report.rows for report in state.reports.values())
+    last_log = started
+    while pending:
+        remaining = config.timeout_seconds - (time.monotonic() - started)
+        if remaining <= 0:
+            _cancel_dispatch(pending)
+            raise TimeoutError(
+                f"fragment tasks exceeded {config.timeout_seconds} seconds; retry resumes "
+                f"{len(state.reports)} completed fragments"
+            )
+        ready, pending = ray.wait(pending, num_returns=1, timeout=min(10.0, remaining))
+        if ready:
+            report = _FragmentReport.model_validate(ray.get(ready[0]), strict=True)
+            if report.fragment_id not in state.fragment_ids or report.fragment_id in state.reports:
+                _cancel_dispatch(pending)
+                raise ValueError(f"unexpected worker report for fragment {report.fragment_id}")
+            _persist_report(state.store, report)
+            state.reports[report.fragment_id] = report
+            rows_done += report.rows
+        now = time.monotonic()
+        if now - last_log >= _PROGRESS_INTERVAL_SECONDS or not pending:
+            elapsed = now - started
+            rate = rows_done / elapsed
+            logger.info(
+                "embedding_backfill_progress",
+                embedding=config.embedding,
+                branch=config.branch,
+                rows=rows_done,
+                total_rows=state.total_rows,
+                fragments=len(state.reports),
+                total_fragments=len(state.fragment_ids),
+                rows_per_second=rate,
+                elapsed_seconds=elapsed,
+                eta_seconds=(state.total_rows - rows_done) / rate if rate > 0 else None,
+            )
+            last_log = now
+    if state.reports.keys() != state.fragment_ids:
+        raise ValueError("worker reports do not cover every source fragment")
+    return [state.reports[fragment_id] for fragment_id in sorted(state.fragment_ids)]
+
+
+def _decode_reports(
+    reports: Sequence[_FragmentReport],
+) -> tuple[list[lance.FragmentMetadata], pa.Schema]:
+    """Decode trusted report payloads and enforce one worker schema.
+
+    :param reports: Strict reports from durable staging.
+    :returns: Lance metadata and common Arrow output schema.
+    :raises ValueError: No schema exists or worker schemas differ.
+    """
+    import lance
+    import pyarrow as pa
+
+    metadata = [lance.FragmentMetadata.from_json(report.metadata_json) for report in reports]
+    schemas = [
+        pa.ipc.read_schema(pa.BufferReader(base64.b64decode(report.schema_ipc)))
+        for report in reports
+    ]
+    if not schemas or any(schema != schemas[0] for schema in schemas[1:]):
+        raise ValueError("worker schemas differ")
+    return metadata, schemas[0]
+
+
+def _commit_reports(
+    config: EmbeddingBackfillConfig,
+    context: _BackfillContext,
+    reports: Sequence[_FragmentReport],
+) -> lance.LanceDataset:
+    """Publish one merge or recover an identically completed uncertain commit.
+
+    :param config: Candidate branch identity.
+    :param context: Immutable source and artifact context.
+    :param reports: Complete strict fragment reports.
+    :returns: Committed or recovered candidate snapshot.
+    :raises ValueError: Another writer advanced the candidate incompatibly.
+    """
+    import lance
+
+    latest = lance.dataset(
+        config.lance_uri, storage_options=context.storage_options
+    ).checkout_version((config.branch, None))
+    if latest.version != context.source_version:
+        if _embedding_is_complete(latest, context.spec, context.artifact.encode()):
+            return latest
+        raise ValueError(
+            f"branch advanced from source version {context.source_version} to "
+            f"incompatible version {latest.version}"
+        )
+    metadata, schema = _decode_reports(reports)
+    return lance.LanceDataset.commit(
+        context.dataset,
+        lance.LanceOperation.Merge(metadata, schema),
+        read_version=context.source_version,
+        storage_options=context.storage_options,
+        commit_message=f"Add {config.embedding} embeddings",
+    )
+
+
+def _summarize_backfill(
+    config: EmbeddingBackfillConfig,
+    context: _BackfillContext,
+    outcome: _BackfillOutcome,
+    identity: _RunIdentity,
+    started: float,
+) -> EmbeddingBackfillResult:
+    """Render measured task and publication state into the public result.
+
+    :param config: Branch and worker policy.
+    :param context: Immutable source and row count.
+    :param outcome: Final publication and worker state.
+    :param identity: Run and Git audit identity.
+    :param started: Invocation monotonic start.
+    :returns: Serializable backfill result.
+    :raises RuntimeError: Observed worker reuse exceeds the configured bound.
+    """
+    elapsed = time.monotonic() - started
+    tasks_by_pid = Counter(report.pid for report in outcome.reports)
+    max_tasks = max(tasks_by_pid.values(), default=0)
+    if max_tasks > config.tasks_per_worker:
+        raise RuntimeError(
+            f"Ray worker served {max_tasks} tasks, exceeding bound {config.tasks_per_worker}"
+        )
+    return EmbeddingBackfillResult(
+        run_id=identity.run_id,
+        git_commit=identity.git_commit,
+        branch=config.branch,
+        embedding=config.embedding,
+        rows=outcome.dataset.count_rows(),
+        fragments=len(outcome.dataset.get_fragments()),
+        source_version=context.source_version,
+        data_version=outcome.data_version,
+        final_version=outcome.dataset.version,
+        elapsed_seconds=elapsed,
+        rows_per_second=context.total_rows / elapsed if outcome.reports else 0.0,
+        worker_processes=len(tasks_by_pid),
+        max_tasks_per_process=max_tasks,
+        peak_rss_bytes=max((report.peak_rss_bytes for report in outcome.reports), default=0),
+        peak_gpu_allocated_bytes=max(
+            (report.peak_gpu_allocated_bytes for report in outcome.reports), default=0
+        ),
+        peak_gpu_reserved_bytes=max(
+            (report.peak_gpu_reserved_bytes for report in outcome.reports), default=0
+        ),
+        already_complete=not outcome.reports,
+        index_built=outcome.index_built,
+    )
+
+
 def backfill_embedding(config: EmbeddingBackfillConfig) -> EmbeddingBackfillResult:
     """Write one embedding through recycled Ray workers and one branch merge commit.
 
-    :param config: Strict branch, model, worker, and index configuration.
-    :returns: Distributed write result with measured resource peaks.
+    :param config: Strict branch, model, worker, deadline, and index configuration.
+    :returns: Distributed write result with measured resource peaks and audit identities.
     :raises RuntimeError: CUDA is unavailable or Ray exceeds the process reuse bound.
-    :raises ValueError: Source, artifact, or worker schemas are incompatible.
     """
     import ray
     import torch
 
+    from synth_setter.utils.logging_utils import resolve_git_sha
+
     if not torch.cuda.is_available():
         raise RuntimeError("distributed embedding backfill requires CUDA")
     started = time.monotonic()
+    identity = _RunIdentity(run_id=uuid.uuid4().hex, git_commit=resolve_git_sha())
     ray.init(
         num_cpus=config.workers,
         num_gpus=1,
@@ -513,161 +1228,42 @@ def backfill_embedding(config: EmbeddingBackfillConfig) -> EmbeddingBackfillResu
         log_to_driver=False,
     )
     try:
-        import lance
-
-        from synth_setter.pipeline.data.add_embeddings import (
-            EMBEDDING_REGISTRY,
-            _output_columns,
-            _resolve_artifact_identity,
-        )
-        from synth_setter.pipeline.data.lance_shard import read_shard_metadata
-        from synth_setter.pipeline.schemas.add_embeddings_config import (
-            AddEmbeddingsConfig,
-        )
-
-        storage_options = _storage_options(config.lance_uri)
-        dataset = lance.dataset(
-            config.lance_uri, storage_options=storage_options
-        ).checkout_version((config.branch, None))
-        spec = EMBEDDING_REGISTRY[config.embedding]
-        checkpoint = config.checkpoint or spec.default_checkpoint
-        checkpoints = {config.embedding: checkpoint}
-        add_config = AddEmbeddingsConfig(
-            lance_uri=config.lance_uri,
-            embeddings=(config.embedding,),
-            checkpoints=checkpoints,
-            device="cuda",
-            batch_size=config.batch_size,
-            build_index=config.build_index,
-            num_partitions=config.num_partitions,
-        )
-        artifact = _resolve_artifact_identity(spec, add_config).encode()
-        if _embedding_is_complete(dataset, spec, artifact):
-            source_version = dataset.version
-            dataset, index_built = _ensure_embedding_index(dataset, spec, add_config)
-            return _write_result(
-                EmbeddingBackfillResult(
-                    branch=config.branch,
-                    embedding=config.embedding,
-                    rows=dataset.count_rows(),
-                    fragments=len(dataset.get_fragments()),
-                    source_version=source_version,
-                    data_version=source_version,
-                    final_version=dataset.version,
-                    elapsed_seconds=time.monotonic() - started,
-                    rows_per_second=0.0,
-                    worker_processes=0,
-                    max_tasks_per_process=0,
-                    peak_rss_bytes=0,
-                    peak_gpu_allocated_bytes=0,
-                    peak_gpu_reserved_bytes=0,
-                    already_complete=True,
+        context = _prepare_context(config)
+        if _embedding_is_complete(context.dataset, context.spec, context.artifact.encode()):
+            indexed, index_built = _ensure_embedding_index(
+                context.dataset, context.spec, context.add_config
+            )
+            result = _summarize_backfill(
+                config,
+                context,
+                _BackfillOutcome(
+                    dataset=indexed,
+                    reports=(),
+                    data_version=context.source_version,
                     index_built=index_built,
                 ),
-                config.result,
+                identity,
+                started,
             )
-        if any(column in dataset.schema.names for column in _output_columns(spec)):
-            raise ValueError(f"candidate has incompatible {config.embedding} output columns")
-        total_rows = dataset.count_rows()
-        if total_rows < 1:
-            raise ValueError("cannot backfill an empty dataset")
-        sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
-        source_version = dataset.version
-        fragments = dataset.get_fragments()
-        transform = ray.remote(
-            num_cpus=1,
-            num_gpus=config.gpu_per_worker,
-            max_calls=config.tasks_per_worker,
-        )(_transform_fragment)
-        pending = [
-            transform.remote(
-                config.lance_uri,
-                storage_options,
-                config.branch,
-                source_version,
-                fragment.metadata.id,
-                config.embedding,
-                checkpoint,
-                sample_rate,
-                config.batch_size,
-                artifact,
-            )
-            for fragment in fragments
-        ]
-        results: list[tuple[bytes, bytes, int, WorkerMetrics]] = []
-        rows_done = 0
-        last_log = started
-        while pending:
-            ready, pending = ray.wait(pending, num_returns=1, timeout=10)
-            if ready:
-                result = ray.get(ready[0])
-                results.append(result)
-                rows_done += result[2]
-            now = time.monotonic()
-            if now - last_log >= 30 or not pending:
-                elapsed = now - started
-                rate = rows_done / elapsed
-                logger.info(
-                    "embedding_backfill_progress",
-                    embedding=config.embedding,
-                    branch=config.branch,
-                    rows=rows_done,
-                    total_rows=total_rows,
-                    fragments=len(results),
-                    total_fragments=len(fragments),
-                    rows_per_second=rate,
-                    elapsed_seconds=elapsed,
-                    eta_seconds=(total_rows - rows_done) / rate if rate > 0 else None,
-                )
-                last_log = now
-
-        metadata = [pickle.loads(result[0]) for result in results]  # noqa: S301
-        schemas = [pickle.loads(result[1]) for result in results]  # noqa: S301
-        if not schemas or any(schema != schemas[0] for schema in schemas[1:]):
-            raise ValueError("worker schemas differ")
-        metrics = [result[3] for result in results]
-        tasks_by_pid = Counter(metric.pid for metric in metrics)
-        max_tasks = max(tasks_by_pid.values(), default=0)
-        if max_tasks > config.tasks_per_worker:
-            raise RuntimeError(
-                f"Ray worker served {max_tasks} tasks, exceeding bound {config.tasks_per_worker}"
-            )
-        operation = lance.LanceOperation.Merge(metadata, schemas[0])
-        committed = lance.LanceDataset.commit(
-            dataset,
-            operation,
-            read_version=source_version,
-            storage_options=storage_options,
-            commit_message=f"Add {config.embedding} embeddings",
-        )
+            return _write_result(result, config.result)
+        state = _prepare_dispatch(config, context)
+        reports = _poll_dispatch(state, config, started)
+        committed = _commit_reports(config, context, reports)
         data_version = committed.version
-        committed, index_built = _ensure_embedding_index(committed, spec, add_config)
-        elapsed = time.monotonic() - started
-        return _write_result(
-            EmbeddingBackfillResult(
-                branch=config.branch,
-                embedding=config.embedding,
-                rows=committed.count_rows(),
-                fragments=len(committed.get_fragments()),
-                source_version=source_version,
+        indexed, index_built = _ensure_embedding_index(committed, context.spec, context.add_config)
+        result = _summarize_backfill(
+            config,
+            context,
+            _BackfillOutcome(
+                dataset=indexed,
+                reports=reports,
                 data_version=data_version,
-                final_version=committed.version,
-                elapsed_seconds=elapsed,
-                rows_per_second=total_rows / elapsed,
-                worker_processes=len(tasks_by_pid),
-                max_tasks_per_process=max_tasks,
-                peak_rss_bytes=max((metric.peak_rss_bytes for metric in metrics), default=0),
-                peak_gpu_allocated_bytes=max(
-                    (metric.peak_gpu_allocated_bytes for metric in metrics), default=0
-                ),
-                peak_gpu_reserved_bytes=max(
-                    (metric.peak_gpu_reserved_bytes for metric in metrics), default=0
-                ),
-                already_complete=False,
                 index_built=index_built,
             ),
-            config.result,
+            identity,
+            started,
         )
+        return _write_result(result, config.result)
     finally:
         ray.shutdown()
 
@@ -691,21 +1287,24 @@ def _copy_candidate_data_directory(uri: str, branch: str) -> None:
     shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
 
 
-def _main_merge_operation(candidate: Any, branch: str, source_version: int) -> Any:
-    """Materialize candidate files under main and rebuild its latest merge operation.
+def _candidate_merge_operation(
+    candidate: lance.LanceDataset, source_version: int
+) -> lance.LanceOperation.Merge:
+    """Rebuild the candidate's latest merge with main-relative data references.
 
     :param candidate: Validated candidate branch dataset.
-    :param branch: Candidate branch name.
     :param source_version: Candidate parent version on main.
-    :returns: Lance merge operation whose data paths are main-relative.
-    :raises ValueError: No merge transaction exists or a file uses an unexpected base.
+    :returns: Normalized merge operation without copying files.
+    :raises ValueError: No merge exists or a file uses an unexpected base.
     """
     import lance
 
-    operation = None
+    operation: lance.LanceOperation.Merge | None = None
     for version in range(candidate.version, source_version, -1):
         transaction = candidate.read_transaction(version)
-        if isinstance(transaction.operation, lance.LanceOperation.Merge):
+        if transaction is not None and isinstance(
+            transaction.operation, lance.LanceOperation.Merge
+        ):
             operation = transaction.operation
             break
     if operation is None:
@@ -725,8 +1324,50 @@ def _main_merge_operation(candidate: Any, branch: str, source_version: int) -> A
             else:
                 raise ValueError(f"candidate data file uses unexpected base id {base_id}")
         fragments.append(lance.FragmentMetadata.from_json(json.dumps(payload)))
-    _copy_candidate_data_directory(candidate.uri, branch)
     return lance.LanceOperation.Merge(fragments, candidate.schema)
+
+
+def _main_merge_operation(
+    candidate: lance.LanceDataset, branch: str, source_version: int
+) -> lance.LanceOperation.Merge:
+    """Materialize candidate files and return their normalized merge operation.
+
+    :param candidate: Validated candidate branch dataset.
+    :param branch: Candidate branch name.
+    :param source_version: Candidate parent version on main.
+    :returns: Lance merge operation whose data paths are main-relative.
+    """
+    operation = _candidate_merge_operation(candidate, source_version)
+    _copy_candidate_data_directory(candidate.uri, branch)
+    return operation
+
+
+def _main_contains_candidate_merge(
+    main: lance.LanceDataset,
+    candidate: lance.LanceDataset,
+    source_version: int,
+) -> bool:
+    """Prove that main's first post-source commit published this candidate.
+
+    :param main: Current main snapshot, potentially followed by index commits.
+    :param candidate: Validated branch snapshot.
+    :param source_version: Common parent version.
+    :returns: Whether fragment metadata and schema match the promoted candidate.
+    """
+    import lance
+
+    if main.version <= source_version:
+        return False
+    expected = _candidate_merge_operation(candidate, source_version)
+    transaction = main.read_transaction(source_version + 1)
+    if transaction is None:
+        return False
+    actual = transaction.operation
+    if not isinstance(actual, lance.LanceOperation.Merge) or actual.schema != expected.schema:
+        return False
+    actual_fragments = [fragment.to_json() for fragment in actual.fragments]
+    expected_fragments = [fragment.to_json() for fragment in expected.fragments]
+    return actual_fragments == expected_fragments
 
 
 def promote_embedding_candidate(
@@ -749,6 +1390,7 @@ def promote_embedding_candidate(
     if rollback is None or rollback["branch"] not in {None, "main"}:
         raise ValueError(f"rollback tag {config.rollback_tag!r} must identify main")
     source_version = rollback["version"]
+    source = root.checkout_version((None, source_version))
     branches = root.branches.list()
     branch = branches.get(config.candidate_branch)
     if (
@@ -763,12 +1405,23 @@ def promote_embedding_candidate(
     missing_candidate = set(config.columns) - set(candidate.schema.names)
     if missing_candidate:
         raise ValueError(f"candidate lacks columns {sorted(missing_candidate)}")
+    expected_names = set(source.schema.names) | set(config.columns)
+    candidate_names = set(candidate.schema.names)
+    if candidate_names != expected_names:
+        extras = sorted(candidate_names - expected_names)
+        raise ValueError(f"candidate has unselected columns {extras}")
+    if candidate.schema.metadata != source.schema.metadata or any(
+        candidate.schema.field(name) != source.schema.field(name) for name in source.schema.names
+    ):
+        raise ValueError("candidate changed the rollback source schema")
     present_main = set(config.columns) & set(main.schema.names)
     if present_main:
         if present_main != set(config.columns):
             raise ValueError(f"main has partial candidate columns {sorted(present_main)}")
         if any(main.schema.field(name) != candidate.schema.field(name) for name in config.columns):
             raise ValueError("main candidate column schema differs from the validated branch")
+        if not _main_contains_candidate_merge(main, candidate, source_version):
+            raise ValueError("main does not contain the validated candidate merge")
         return EmbeddingPromotionResult(
             source_version=source_version,
             candidate_version=candidate.version,
@@ -818,6 +1471,8 @@ def _parse_args() -> EmbeddingBackfillConfig | EmbeddingPromotionConfig:
     backfill.add_argument("--checkpoint")
     backfill.add_argument("--build-index", action=argparse.BooleanOptionalAction, default=True)
     backfill.add_argument("--num-partitions", type=int)
+    backfill.add_argument("--resume-dir", type=Path)
+    backfill.add_argument("--timeout-seconds", type=float, default=21_600.0)
     backfill.add_argument("--result", type=Path)
 
     promote = subparsers.add_parser("promote")
