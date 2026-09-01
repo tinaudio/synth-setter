@@ -32,6 +32,7 @@ from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
     clap_checkpoint_sha256,
 )
+from synth_setter.conditioning import SKETCH_STORAGE_FRAMES
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -115,6 +116,7 @@ from synth_setter.same import (
     SAME_SAMPLE_RATE,
     resolve_same_checkpoint,
 )
+from synth_setter.sketch import pool_sketch_controls
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
@@ -1022,6 +1024,24 @@ def test_versioned_artifact_identity_uses_explicit_policy_version() -> None:
         _versioned_artifact_identity("matpac_plus", "checkpoint:sha256:abc")
         == "matpac_plus:policy-v1:checkpoint:sha256:abc"
     )
+
+
+def test_sketch_artifact_identity_tracks_storage_frame_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sketch metadata identifies the active pooled storage grid.
+
+    :param monkeypatch: Replaces the storage frame count for the identity probe.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.SKETCH_STORAGE_FRAMES",
+        17,
+    )
+    spec = EMBEDDING_REGISTRY["sketch"]
+
+    identity = spec.resolve_artifact_identity(spec.default_checkpoint)
+
+    assert identity.endswith(";storage:avgmax17")
 
 
 def test_resume_source_identity_changes_with_input_contract(tmp_path: Path) -> None:
@@ -3499,8 +3519,8 @@ def _stored_sketch_struct(dataset: lance.LanceDataset) -> pa.StructArray:
     return cast("pa.StructArray", table.column(SKETCH_STRUCT_FIELD).combine_chunks())
 
 
-def test_sketch_encode_column_builds_struct_with_split_children_and_vec() -> None:
-    """The sketch closure splits controls into struct children without value drift."""
+def test_sketch_encode_column_builds_pooled_struct_and_vec() -> None:
+    """The sketch closure stores pooled controls and their search vector."""
     audio = np.random.default_rng(7).random((3, 2, _FIXTURE_SAMPLES)).astype(np.float16)
     spec = EMBEDDING_REGISTRY["sketch"]
 
@@ -3508,14 +3528,18 @@ def test_sketch_encode_column_builds_struct_with_split_children_and_vec() -> Non
 
     assert pa.types.is_struct(array.type)
     struct = cast("pa.StructArray", array)
-    frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
     child_types = {field.name: field.type for field in struct.type}
-    assert child_types[SKETCH_LOUDNESS_CHILD] == pa.list_(pa.float32(), frames)
-    assert child_types[SKETCH_CENTROID_CHILD] == pa.list_(pa.float32(), frames)
+    assert child_types[SKETCH_LOUDNESS_CHILD] == pa.list_(
+        pa.float32(), SKETCH_STORAGE_FRAMES
+    )
+    assert child_types[SKETCH_CENTROID_CHILD] == pa.list_(
+        pa.float32(), SKETCH_STORAGE_FRAMES
+    )
     pitch_type = cast("pa.FixedShapeTensorType", child_types[SKETCH_PITCH_CHILD])
-    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, frames]
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES]
     assert child_types[SKETCH_VEC_CHILD] == pa.list_(pa.float32(), NUM_SKETCH_CONTROLS)
-    expected = _fake_sketch(audio, _SAMPLE_RATE)
+    full_controls = _fake_sketch(audio, _SAMPLE_RATE)
+    expected = pool_sketch_controls(torch.from_numpy(full_controls)).numpy()
     np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
     np.testing.assert_allclose(_struct_sketch_vec(struct), expected.mean(axis=-1), rtol=1e-6)
 
@@ -3667,14 +3691,14 @@ def test_write_columns_appends_sketch_struct_to_existing_dataset(
     assert SKETCH_STRUCT_FIELD in dataset.schema.names
     struct_type = dataset.schema.field(SKETCH_STRUCT_FIELD).type
     assert pa.types.is_struct(struct_type)
-    frames = sketch_num_frames(_FIXTURE_SAMPLES, _SAMPLE_RATE)
     pitch_type = cast(
         "pa.FixedShapeTensorType",
         struct_type.field(struct_type.get_field_index(SKETCH_PITCH_CHILD)).type,
     )
-    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, frames]
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES]
     struct = _stored_sketch_struct(dataset)
-    expected = _fake_sketch(audio, _SAMPLE_RATE)
+    full_controls = _fake_sketch(audio, _SAMPLE_RATE)
+    expected = pool_sketch_controls(torch.from_numpy(full_controls)).numpy()
     np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
     np.testing.assert_allclose(_struct_sketch_vec(struct), expected.mean(axis=-1), rtol=1e-6)
     # Dotted-path child projection must serve reads without the sibling children.
@@ -3730,7 +3754,8 @@ def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
         _SAMPLE_RATE,
         AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
     )
-    refreshed = np.clip(_fake_sketch(audio, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+    full_controls = np.clip(_fake_sketch(audio, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+    refreshed = pool_sketch_controls(torch.from_numpy(full_controls)).numpy()
     replacement = f"{SKETCH_STRUCT_FIELD}_refreshed"
 
     dataset = lance.dataset(str(uri))
@@ -3740,7 +3765,8 @@ def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
         # schema inference, so call order carries no row-position information.
         decoded = batch.column(AUDIO_FIELD).to_numpy_ndarray()
         rows = np.clip(_fake_sketch(decoded, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
-        return pa.RecordBatch.from_arrays([sketch_struct_array(rows)], names=[replacement])
+        pooled = pool_sketch_controls(torch.from_numpy(rows)).numpy()
+        return pa.RecordBatch.from_arrays([sketch_struct_array(pooled)], names=[replacement])
 
     dataset.add_columns(rewrite, read_columns=[AUDIO_FIELD])
     dataset.drop_columns([SKETCH_STRUCT_FIELD])
@@ -3752,6 +3778,11 @@ def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
     reread = lance.dataset(str(uri))
     assert SKETCH_STRUCT_FIELD in reread.schema.names
     assert replacement not in reread.schema.names
+    pitch_type = cast(
+        "pa.FixedShapeTensorType",
+        reread.schema.field(SKETCH_STRUCT_FIELD).type.field(SKETCH_PITCH_CHILD).type,
+    )
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES]
     np.testing.assert_array_equal(
         _struct_sketch_controls(_stored_sketch_struct(reread)), refreshed
     )
@@ -3792,8 +3823,11 @@ def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
     controls = _struct_sketch_controls(_stored_sketch_struct(dataset))
     render = spec.render_for_shard(spec.shards[0])
     audio_shape = dataset_field_shapes(render, spec.num_params)[AUDIO_FIELD]
-    frames = sketch_num_frames(audio_shape[-1], int(render.sample_rate))
-    assert controls.shape == (audio_shape[0], NUM_SKETCH_CONTROLS, frames)
+    assert controls.shape == (
+        audio_shape[0],
+        NUM_SKETCH_CONTROLS,
+        SKETCH_STORAGE_FRAMES,
+    )
     assert np.isfinite(controls).all()
     assert controls.min() >= -1.0 and controls.max() <= 1.0
 
@@ -3821,11 +3855,15 @@ def test_add_embeddings_sketch_with_real_pesto_round_trips(tmp_path: Path) -> No
 
     controls = _struct_sketch_controls(_stored_sketch_struct(lance.dataset(str(uri))))
     sample_rate = int(render.sample_rate)
-    expected = extract_sketch_controls_batch(
+    full_controls = extract_sketch_controls_batch(
         torch.from_numpy(audio.astype(np.float32)), sample_rate, device="cpu"
-    ).numpy()
-    frames = sketch_num_frames(audio_shape[-1], sample_rate)
-    assert controls.shape == (audio_shape[0], NUM_SKETCH_CONTROLS, frames)
+    )
+    expected = pool_sketch_controls(full_controls).numpy()
+    assert controls.shape == (
+        audio_shape[0],
+        NUM_SKETCH_CONTROLS,
+        SKETCH_STORAGE_FRAMES,
+    )
     np.testing.assert_allclose(controls, expected, atol=1e-5)
     assert np.isfinite(controls).all()
     assert controls.min() >= -1.0 and controls.max() <= 1.0
@@ -3908,7 +3946,8 @@ def test_add_embeddings_sketch_end_to_end_writes_struct_and_nested_index(
     indices = cast("list[dict[str, object]]", dataset.list_indices())
     assert [SKETCH_VEC_COLUMN] in [index["fields"] for index in indices]
     struct = _stored_sketch_struct(dataset)
-    expected = _fake_sketch(audio.astype(np.float32), int(render.sample_rate))
+    full_controls = _fake_sketch(audio.astype(np.float32), int(render.sample_rate))
+    expected = pool_sketch_controls(torch.from_numpy(full_controls)).numpy()
     np.testing.assert_array_equal(_struct_sketch_controls(struct), expected)
     hits = dataset.to_table(
         nearest={"column": SKETCH_VEC_COLUMN, "q": _struct_sketch_vec(struct)[7], "k": 1}

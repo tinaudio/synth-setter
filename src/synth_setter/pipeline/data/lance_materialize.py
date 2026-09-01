@@ -47,6 +47,14 @@ _DIRNAME_PREFIX_CHARS = 8
 _MAX_LANCE_READ_ATTEMPTS = 3
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
+_SAFE_MATERIALIZE_BATCH_SIZE = 512
+_SAFE_MATERIALIZE_MAX_ROWS_PER_GROUP = 1024
+_HIGH_MEMORY_MATERIALIZE_BATCH_SIZE = 8192
+_HIGH_MEMORY_MATERIALIZE_IO_BUFFER_SIZE = 32 * 1024**3
+_HIGH_MEMORY_MATERIALIZE_FRAGMENT_READAHEAD = 128
+_HIGH_MEMORY_MATERIALIZE_BATCH_READAHEAD = 2
+_HIGH_MEMORY_MATERIALIZE_MAX_ROWS_PER_GROUP = 4096
+_HIGH_MEMORY_MATERIALIZE_MAX_BYTES_PER_FILE = 256 * 1024**3
 _RETRYABLE_LANCE_IO_MARKERS = (
     "408 request timeout",
     "429 too many requests",
@@ -488,20 +496,41 @@ def _write_materialized_snapshot(
     *,
     dest_path: Path,
     manifest: MaterializeManifest,
-    batch_size: int,
+    batch_size: int | None,
+    high_memory_materialization: bool,
 ) -> Path:
     """Write one selected source snapshot and its cache manifest.
 
     :param snapshot: Selected source dataset snapshot.
     :param dest_path: Local destination dataset directory.
     :param manifest: Validated request and source identity to persist.
-    :param batch_size: Scan batch size in rows.
+    :param batch_size: Optional scan batch-size override in rows.
+    :param high_memory_materialization: Whether to use high-memory Lance tuning.
     :returns: ``dest_path``.
     :raises OSError: Manifest writing or atomic publication fails without a winner.
     :raises ValueError: The written dataset has no transaction identity.
     """
+    if high_memory_materialization:
+        default_batch_size = _HIGH_MEMORY_MATERIALIZE_BATCH_SIZE
+        io_buffer_size = _HIGH_MEMORY_MATERIALIZE_IO_BUFFER_SIZE
+        fragment_readahead = _HIGH_MEMORY_MATERIALIZE_FRAGMENT_READAHEAD
+        batch_readahead = _HIGH_MEMORY_MATERIALIZE_BATCH_READAHEAD
+        max_rows_per_group = _HIGH_MEMORY_MATERIALIZE_MAX_ROWS_PER_GROUP
+        max_bytes_per_file = _HIGH_MEMORY_MATERIALIZE_MAX_BYTES_PER_FILE
+    else:
+        default_batch_size = _SAFE_MATERIALIZE_BATCH_SIZE
+        io_buffer_size = None
+        fragment_readahead = None
+        batch_readahead = None
+        max_rows_per_group = _SAFE_MATERIALIZE_MAX_ROWS_PER_GROUP
+        max_bytes_per_file = LANCE_MAX_BYTES_PER_FILE
     scanner = snapshot.scanner(
-        columns=list(manifest.columns), limit=manifest.limit, batch_size=batch_size
+        columns=list(manifest.columns),
+        limit=manifest.limit,
+        batch_size=default_batch_size if batch_size is None else batch_size,
+        io_buffer_size=io_buffer_size,
+        fragment_readahead=fragment_readahead,
+        batch_readahead=batch_readahead,
     )
     logger.info(
         "lance_materialize.start",
@@ -525,7 +554,8 @@ def _write_materialized_snapshot(
         schema=scanner.projected_schema,
         transaction_properties=transaction_properties,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
-        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
+        max_rows_per_group=max_rows_per_group,
+        max_bytes_per_file=max_bytes_per_file,
     )
     row_count = written.count_rows()
     transaction = written.read_transaction(written.version)
@@ -573,13 +603,15 @@ def materialize_lance_subset(  # noqa: DOC502
     txid: str | None,
     columns: Sequence[str],
     limit: int | None = None,
-    batch_size: int = 512,
+    batch_size: int | None = None,
+    high_memory_materialization: bool = False,
 ) -> Path:
     """Stream a projected source snapshot scan into ``dest_path``.
 
-    Peak memory is ~one batch; transferred bytes scale with the subset, not
-    the source. A txid pins the source snapshot when supplied; otherwise the
-    latest version at hydration time is used.
+    Memory use depends on the selected tuning and projected row width;
+    transferred bytes scale with the subset, not the source. A txid pins the
+    source snapshot when supplied; otherwise the latest version at hydration
+    time is used.
 
     :param source_uri: Source dataset — ``r2://`` URI (resolved via
         :func:`synth_setter.pipeline.r2_io.lance_target`) or local path.
@@ -588,7 +620,9 @@ def materialize_lance_subset(  # noqa: DOC502
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
-    :param batch_size: Scan batch size in rows — the streaming memory unit.
+    :param batch_size: Optional scan batch-size override in rows.
+    :param high_memory_materialization: Whether to opt into high-memory scanner and
+        writer tuning. Cache reuse is unaffected because contents are identical.
     :returns: ``dest_path``.
     :raises LookupError: ``txid`` matches no live source version.
     :raises RuntimeError: A transient source read exhausts the retry budget.
@@ -633,6 +667,7 @@ def materialize_lance_subset(  # noqa: DOC502
         dest_path=dest_path,
         manifest=manifest,
         batch_size=batch_size,
+        high_memory_materialization=high_memory_materialization,
     )
 
 
@@ -668,6 +703,7 @@ def materialize_splits(
     projection: Mapping[str, Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
+    high_memory_materialization: bool = False,
 ) -> None:
     """Materialize each split under a root, then rclone non-Lance sidecars.
 
@@ -679,6 +715,7 @@ def materialize_splits(
     :param projection: Columns to materialize per split.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
+    :param high_memory_materialization: Whether to use high-memory Lance tuning.
     """
     _require_dataset_complete(source_root_uri)
     for split, columns in projection.items():
@@ -689,6 +726,7 @@ def materialize_splits(
             txid=txids[split] if txids is not None else None,
             columns=columns,
             limit=row_limit,
+            high_memory_materialization=high_memory_materialization,
         )
     # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
     # split datasets and pipeline-internal metadata/ never feed the loaders.

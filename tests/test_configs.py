@@ -302,7 +302,7 @@ def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["conditioning"].shape == (2, 128, 42)
-    assert batch["sketch_ctrl"].shape == (2, NUM_SKETCH_CONTROLS, 401)
+    assert batch["sketch_ctrl"].shape == (2, NUM_SKETCH_CONTROLS, 32)
     loss = model._train_step(batch).loss  # noqa: SLF001
     assert torch.isfinite(loss)
 
@@ -592,6 +592,24 @@ def test_pupujepa_tiny_online_profile_pins_checkpoint_identity() -> None:
     assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
     assert cfg.model.encoder.backbone.variant == "tiny"
     assert cfg.model.encoder.head.embed_dim == 1536
+
+
+def test_pupujepa_online_head_pools_the_same_span_as_the_cached_profile() -> None:
+    """Online and cached PupuJEPA profiles describe one four-second teacher sequence.
+
+    The online head builds a persistent positional buffer from ``max_seq_len``, so a
+    span wider than the render emits leaves trained rows the forward pass never reads.
+    """
+    cached = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny", "trainer=cpu"],
+    )
+    online = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny_online", "trainer=cpu"],
+    )
+
+    assert online.model.encoder.head.max_seq_len == cached.model.conditioning.input_shape[1]
 
 
 def test_eval_config_conditioning_unset_composes() -> None:
@@ -1029,6 +1047,15 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.test is False
 
 
+def test_vst_flow_dropout_defaults_match_flash_foley_policy() -> None:
+    """Content, sketch-group, and global CFG dropout share Flash Foley's rate."""
+    cfg = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
+
+    assert cfg.model.cfg_dropout_rate == 0.1
+    assert cfg.model.sketch_dropout_rate == 0.1
+    assert cfg.model.all_conditioning_dropout_rate == 0.1
+
+
 def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
     """The preliminary A/B arms differ only in sketch conditioning."""
     base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
@@ -1051,7 +1078,7 @@ def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> 
     assert base.datamodule.sketch is None
     assert sketch.run_name == "flow1k_prelim_sketch"
     assert sketch.model.sketch_controls.column == "sketch"
-    assert sketch.model.sketch_controls.num_frames == 401
+    assert sketch.model.sketch_controls.num_frames == 32
     assert sketch.datamodule.sketch == sketch.model.sketch_controls
 
 

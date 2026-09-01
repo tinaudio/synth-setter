@@ -14,5 +14,6 @@ cmd: >-
   bash scripts/sync_worker_checkout.sh &&
   exec synth-setter-train
   "experiment=${EXPERIMENT:-surge/flow_simple_440k}"
+  datamodule.high_memory_materialization=true
   training.upload_checkpoints_during_training=true
   hydra.run.dir=/home/build/synth-setter/train-run

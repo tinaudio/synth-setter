@@ -23,10 +23,12 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
+from itertools import islice
 from pathlib import Path
 from shutil import rmtree
 from typing import Any, cast
@@ -66,7 +68,7 @@ from synth_setter.pipeline.schemas.render_metrics import (
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec, Split
-from synth_setter.pipeline.shard_claims import ShardClaims
+from synth_setter.pipeline.shard_claims import ClaimedShard, ShardClaims
 from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
@@ -98,6 +100,9 @@ _RENDERER_SCRIPT = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_da
 _BADWINDOW_FAILURE_METRIC = "generation/badwindow_detected"
 _BADWINDOW_SIGNATURE = b"BadWindow (invalid Window parameter)"
 _X_GET_PROPERTY_SIGNATURE = b"20 (X_GetProperty)"
+# Full Lance validation can hold a multi-GiB shard resident; cap that peak to one shard
+# per process while rendering, staging, and cleanup remain independently parallel.
+_FULL_SHARD_VALIDATION_LOCK = threading.Lock()
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -660,17 +665,13 @@ def _dispatch_shards(
             "(use_shard_queue=true; rank/world partitioning bypassed)",
             num_shards=spec.num_shards,
         )
-        if spec.render.parallel:
-            logger.warning(
-                "render.parallel=true is ignored with use_shard_queue=true: "
-                "claims mode renders one claim at a time per machine"
-            )
-        rendered, skipped, rejections = _dispatch_shards_from_claims(
-            _shard_claims_for_spec(spec),
-            spec,
-            work_dir=work_dir,
-            loggers=loggers,
+        claims = _shard_claims_for_spec(spec)
+        dispatch = (
+            _dispatch_shards_from_claims_parallel
+            if spec.render.parallel and spec.num_shards > 0
+            else _dispatch_shards_from_claims
         )
+        rendered, skipped, rejections = dispatch(claims, spec, work_dir=work_dir, loggers=loggers)
         return rendered, skipped, rendered + skipped, rejections
 
     rank, world = read_rank_world_from_env()
@@ -748,6 +749,122 @@ def _dispatch_shards_from_claims(
         rendered += int(did_render)
         skipped += int(did_skip)
         rejections = _sum_rejections(rejections, shard_rejections)
+    return rendered, skipped, rejections
+
+
+def _claim_next_shard(claims: ShardClaims, spec: DatasetSpec) -> ClaimedShard | None:
+    """Claim one shard whose ID belongs to ``spec``.
+
+    :param claims: Claims table from which this worker takes a shard.
+    :param spec: Dataset spec defining allowed shard IDs.
+    :returns: A validated claim, or ``None`` when the queue is drained.
+    :raises ValueError: A claimed shard ID falls outside the spec.
+    """
+    claimed = claims.claim()
+    if claimed is None:
+        return None
+    if not 0 <= claimed.shard_id < spec.num_shards:
+        raise ValueError(f"claimed shard_id {claimed.shard_id} is outside [0, {spec.num_shards})")
+    logger.info(
+        "claimed shard {shard_id} (generation {claim_gen})",
+        shard_id=claimed.shard_id,
+        claim_gen=claimed.claim_gen,
+    )
+    return claimed
+
+
+def _finish_claim_future(
+    claims: ShardClaims,
+    future: Future[tuple[bool, bool, RenderRejectionMetrics]],
+    in_flight: dict[Future[tuple[bool, bool, RenderRejectionMetrics]], ClaimedShard],
+) -> tuple[bool, bool, RenderRejectionMetrics]:
+    """Resolve one render and complete its held claim.
+
+    :param claims: Claims table receiving the fenced completion.
+    :param future: Finished render future.
+    :param in_flight: Submitted futures and their held claims.
+    :returns: Rendered/skipped flags and rejection metrics from ``future``.
+    """
+    claimed = in_flight.pop(future)
+    outcome = future.result()
+    claims.complete(claimed)
+    return outcome
+
+
+def _drain_claim_futures(
+    claims: ShardClaims,
+    in_flight: dict[Future[tuple[bool, bool, RenderRejectionMetrics]], ClaimedShard],
+) -> list[BaseException]:
+    """Complete successful peers while collecting failures.
+
+    :param claims: Claims table receiving fenced completions.
+    :param in_flight: Submitted peer futures and their held claims.
+    :returns: Render or completion failures encountered while draining.
+    """
+    failures: list[BaseException] = []
+    while in_flight:
+        done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+        for future in done:
+            try:
+                _finish_claim_future(claims, future, in_flight)
+            except BaseException as exc:  # every failure is re-raised by the caller
+                failures.append(exc)
+    return failures
+
+
+def _dispatch_shards_from_claims_parallel(
+    claims: ShardClaims,
+    spec: DatasetSpec,
+    *,
+    work_dir: Path,
+    loggers: list[Logger],
+) -> tuple[int, int, RenderRejectionMetrics]:
+    """Claim and render shards with bounded local concurrency.
+
+    :param claims: Claims table from which this worker takes shards.
+    :param spec: Validated dataset spec with at least one shard.
+    :param work_dir: Directory where shards are rendered before upload.
+    :param loggers: Loggers receiving per-shard metrics.
+    :returns: Rendered/skipped counts and rejection totals over won claims.
+    :raises BaseException: Claim, render, or completion fails after successful peers drain.
+    :raises BaseExceptionGroup: Primary and peer-completion failures both occur.
+    """
+    workers = min(max(1, available_cpus() // 2), spec.num_shards)
+    logger.info(f"parallel claims dispatch: workers={workers} shards={spec.num_shards}")
+    pending = iter(lambda: _claim_next_shard(claims, spec), None)
+    rendered = 0
+    skipped = 0
+    rejections = RenderRejectionMetrics()
+    in_flight: dict[Future[tuple[bool, bool, RenderRejectionMetrics]], ClaimedShard] = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        try:
+            for claimed in islice(pending, workers):
+                future = pool.submit(
+                    _render_one_owned_shard, spec, claimed.shard_id, work_dir, loggers
+                )
+                in_flight[future] = claimed
+            while in_flight:
+                done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    did_render, did_skip, shard_rejections = _finish_claim_future(
+                        claims, future, in_flight
+                    )
+                    rendered += int(did_render)
+                    skipped += int(did_skip)
+                    rejections = _sum_rejections(rejections, shard_rejections)
+                for claimed in islice(pending, len(done)):
+                    future = pool.submit(
+                        _render_one_owned_shard, spec, claimed.shard_id, work_dir, loggers
+                    )
+                    in_flight[future] = claimed
+        except BaseException as primary:
+            peer_failures = _drain_claim_futures(claims, in_flight)
+            if peer_failures:
+                raise BaseExceptionGroup(
+                    "parallel claim dispatch failed",
+                    [primary, *peer_failures],
+                ) from primary
+            raise
     return rendered, skipped, rejections
 
 
@@ -938,7 +1055,8 @@ def _render_and_upload_shard(
     logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
     # Worker-side validation gates staging — corrupt renders never earn a
     # .valid marker (design §7.3 shard write protocol).
-    shard_errors = validate_shard(shard_path, spec)
+    with _FULL_SHARD_VALIDATION_LOCK:
+        shard_errors = validate_shard(shard_path, spec)
     if shard_errors:
         raise RuntimeError(
             f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"

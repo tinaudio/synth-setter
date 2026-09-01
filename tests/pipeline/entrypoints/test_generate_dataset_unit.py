@@ -33,6 +33,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,8 +45,10 @@ from synth_setter.cli.generate_dataset import (
     _RENDERER_SCRIPT,
     _dispatch_shards,
     _dispatch_shards_from_claims,
+    _dispatch_shards_from_claims_parallel,
     _dispatch_shards_parallel,
     _load_render_rejections,
+    _render_and_upload_shard,
     _render_one_owned_shard,
     build_generate_args,
     generate,
@@ -56,7 +59,7 @@ from synth_setter.pipeline.schemas.render_metrics import (
     RenderRejectionMetrics,
     render_metrics_path,
 )
-from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.synth_spec import SYNTHS, SynthName
@@ -80,6 +83,105 @@ def _write_lance_split(path: Path, num_rows: int) -> None:
     import pyarrow as pa
 
     lance.write_dataset(pa.table({"audio": pa.array(range(num_rows))}), str(path))
+
+
+class _ObservedLock:
+    """Expose lock contention while retaining ordinary mutex semantics."""
+
+    def __init__(self, waiter_started: threading.Event) -> None:
+        """Create a mutex that signals when a contending caller arrives.
+
+        :param waiter_started: Set before a caller waits on an occupied mutex.
+        """
+        self._lock = threading.Lock()
+        self._waiter_started = waiter_started
+
+    def __enter__(self) -> None:
+        if self._lock.locked():
+            self._waiter_started.set()
+        self._lock.acquire()
+
+    def __exit__(self, *_args: object) -> None:
+        self._lock.release()
+
+
+class _ValidationConcurrencyHarness:
+    """Coordinate two shard completion paths without timing-based sleeps."""
+
+    def __init__(self, first_shard: ShardSpec) -> None:
+        """Create synchronization gates for the first shard's completion path.
+
+        :param first_shard: Shard whose validation and staging are held open.
+        """
+        self.first_validation_started = threading.Event()
+        self.release_first_validation = threading.Event()
+        self.validation_waiter_started = threading.Event()
+        self.first_stage_started = threading.Event()
+        self.release_first_stage = threading.Event()
+        self.second_validation_started = threading.Event()
+        self.validation_lock = _ObservedLock(self.validation_waiter_started)
+        self._first_filename = first_shard.filename
+        self._first_shard_id = first_shard.shard_id
+
+    def validate(self, shard_path: Path, _spec: DatasetSpec) -> list[str]:
+        """Block the first validation and observe entry into the second.
+
+        :param shard_path: Rendered shard identifying the first or second path.
+        :param _spec: Dataset spec accepted by the validation boundary.
+        :returns: An empty validation-error list.
+        """
+        if shard_path.name == self._first_filename:
+            self.first_validation_started.set()
+            assert self.release_first_validation.wait(timeout=5.0)
+        else:
+            assert self.first_stage_started.wait(timeout=5.0)
+            self.second_validation_started.set()
+        return []
+
+    def stage(
+        self,
+        _spec: DatasetSpec,
+        shard: ShardSpec,
+        _shard_path: Path,
+        *,
+        worker_id: str,
+        attempt_uuid: str,
+    ) -> None:
+        """Hold first-shard staging open so second validation can overlap it.
+
+        :param _spec: Dataset spec accepted by the staging boundary.
+        :param shard: Shard whose staging may be held open.
+        :param _shard_path: Local shard path accepted by the staging boundary.
+        :param worker_id: Worker identity accepted by the staging boundary.
+        :param attempt_uuid: Attempt identity accepted by the staging boundary.
+        """
+        del worker_id, attempt_uuid
+        if shard.shard_id == self._first_shard_id:
+            self.first_stage_started.set()
+            assert self.release_first_stage.wait(timeout=5.0)
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the observed mutex and controlled completion boundaries.
+
+        :param monkeypatch: Pytest patcher for the shard completion boundaries.
+        """
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._FULL_SHARD_VALIDATION_LOCK",
+            self.validation_lock,
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.write_rendering_marker",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.validate_shard", self.validate)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt", self.stage
+        )
+
+    def release(self) -> None:
+        """Release both gates during normal completion or assertion failure."""
+        self.release_first_validation.set()
+        self.release_first_stage.set()
 
 
 def _render_valid_shard(args: list[str], spec: DatasetSpec) -> None:
@@ -1872,6 +1974,47 @@ class TestRun(RenderSeamFixtures):
         for shard in spec.shards:
             assert shard_has_complete_attempt(spec, shard.shard_id)
 
+    def test_full_shard_validation_serializes_only_validation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Concurrent completion paths validate one-at-a-time without serializing staging.
+
+        :param tmp_path: Per-test work directory for two rendered Lance shards.
+        :param monkeypatch: Installs deterministic validation and staging boundaries.
+        """
+        spec = _multi_shard_spec(tmp_path, n=2)
+        concurrency = _ValidationConcurrencyHarness(spec.shards[0])
+        concurrency.install(monkeypatch)
+
+        with (
+            patch(
+                "synth_setter.cli.generate_dataset._check_call_streamed",
+                side_effect=lambda args: _render_valid_shard(args, spec),
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(
+                _render_and_upload_shard, spec, spec.shards[0], tmp_path, loggers=[]
+            )
+            try:
+                assert concurrency.first_validation_started.wait(timeout=5.0)
+                second = executor.submit(
+                    _render_and_upload_shard, spec, spec.shards[1], tmp_path, loggers=[]
+                )
+                assert concurrency.validation_waiter_started.wait(timeout=5.0)
+                assert not concurrency.second_validation_started.is_set()
+                concurrency.release_first_validation.set()
+                assert concurrency.first_stage_started.wait(timeout=5.0)
+                assert concurrency.second_validation_started.wait(timeout=5.0)
+                assert not first.done()
+                concurrency.release_first_stage.set()
+                first.result(timeout=5.0)
+                second.result(timeout=5.0)
+            finally:
+                concurrency.release()
+
     def test_parallel_render_propagates_subprocess_failure(
         self,
         fake_r2_remote: Path,
@@ -2213,45 +2356,90 @@ class TestRunWithShardClaims(RenderSeamFixtures):
 
         assert claims.status_counts() == {"claimed": 1}
 
-    def test_generate_claims_mode_ignores_render_parallel_with_warning(
+    def test_generate_claims_mode_parallel_bounds_claims_and_completes_all(
         self,
         patched_subprocess: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """``render.parallel=true`` + claims mode warns and never enters the thread pool.
+        """Blocked renders hold one claim per local worker before slots refill.
 
-        :param patched_subprocess: Renderer stub; renders succeed.
-        :param monkeypatch: Guards the parallel dispatcher against being called.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param patched_subprocess: Renderer boundary held until claim state is inspected.
+        :param monkeypatch: Pins two local render workers.
+        :param tmp_path: Caller-supplied work directory.
         """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
+        base = _claims_spec(tmp_path, n=4)
+        spec = base.model_copy(
+            update={"render": base.render.model_copy(update={"parallel": True})}
+        )
+        claims = self._populate(spec, [0, 1, 2, 3])
+        two_renders_started = threading.Event()
+        release_renders = threading.Event()
+        active_renders = 0
+        lock = threading.Lock()
+
+        def _blocked_renderer(args: list[str]) -> None:
+            nonlocal active_renders
+            with lock:
+                active_renders += 1
+                if active_renders == 2:
+                    two_renders_started.set()
+            if not release_renders.wait(timeout=5.0):
+                raise AssertionError("test did not release blocked renders")
+            _render_valid_shard(args, spec)
+
+        patched_subprocess.side_effect = _blocked_renderer
+
+        with ThreadPoolExecutor(max_workers=1) as test_pool:
+            dispatch = test_pool.submit(generate, spec, tmp_path, [])
+            try:
+                assert two_renders_started.wait(timeout=5.0)
+                assert claims.status_counts() == {"available": 2, "claimed": 2}
+            finally:
+                release_renders.set()
+            dispatch.result(timeout=10.0)
+
+        assert claims.status_counts() == {"done": 4}
+
+    def test_generate_claims_mode_parallel_failure_completes_successful_peer(
+        self,
+        patched_subprocess: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A failed claim stays held while its successful in-flight peer completes.
+
+        :param patched_subprocess: Renderer boundary failing one synchronized call.
+        :param monkeypatch: Pins two local render workers.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
         base = _claims_spec(tmp_path, n=2)
         spec = base.model_copy(
             update={"render": base.render.model_copy(update={"parallel": True})}
         )
         claims = self._populate(spec, [0, 1])
-        patched_subprocess.side_effect = stub_renderer(spec)
+        render_barrier = threading.Barrier(2, timeout=5.0)
+        call_count = 0
+        lock = threading.Lock()
 
-        def _parallel_must_not_fire(*_args: object, **_kwargs: object) -> tuple[int, int]:
-            raise AssertionError("_dispatch_shards_parallel must not run in claims mode")
+        def _one_failure(args: list[str]) -> None:
+            nonlocal call_count
+            with lock:
+                call_count += 1
+                should_fail = call_count == 1
+            render_barrier.wait()
+            if should_fail:
+                raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
+            _render_valid_shard(args, spec)
 
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset._dispatch_shards_parallel",
-            _parallel_must_not_fire,
-        )
-        from loguru import logger as loguru_logger
+        patched_subprocess.side_effect = _one_failure
 
-        warnings: list[str] = []
-        sink_id = loguru_logger.add(lambda m: warnings.append(str(m)), level="WARNING")
-        try:
+        with pytest.raises(subprocess.CalledProcessError):
             generate(spec, tmp_path, [])
-        finally:
-            loguru_logger.remove(sink_id)
 
-        assert any("render.parallel=true is ignored" in w for w in warnings)
-        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
-        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
-        assert claims.status_counts() == {"done": 2}
+        assert claims.status_counts() == {"claimed": 1, "done": 1}
 
     def test_generate_shard_already_in_r2_completes_without_render(
         self,
@@ -3927,12 +4115,75 @@ def test_worker_id_sanitizes_hostname_for_object_key_use(
     assert generate_dataset._worker_id() == "pod-host-1-x"
 
 
+def test_parallel_claims_failure_completes_fast_peer_before_slow_peer_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A successful peer completes while a slower peer still drains.
+
+    :param monkeypatch: Pins three workers and replaces the renderer boundary.
+    :param tmp_path: Builds the claims spec and receives dispatcher work.
+    """
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 6)
+    spec = _claims_spec(tmp_path, n=3)
+    claims = MagicMock()
+    claims.claim.side_effect = [
+        SimpleNamespace(shard_id=0, claim_gen=1),
+        SimpleNamespace(shard_id=1, claim_gen=1),
+        SimpleNamespace(shard_id=2, claim_gen=1),
+        None,
+    ]
+    all_started = threading.Barrier(3, timeout=5.0)
+    release_slow_peer = threading.Event()
+    fast_peer_completed = threading.Event()
+
+    def _render(
+        _spec: DatasetSpec, shard_id: int, *_args: object
+    ) -> tuple[bool, bool, RenderRejectionMetrics]:
+        all_started.wait()
+        if shard_id == 0:
+            raise subprocess.CalledProcessError(1, "renderer")
+        if shard_id == 2 and not release_slow_peer.wait(timeout=5.0):
+            raise AssertionError("test did not release slow peer")
+        return True, False, RenderRejectionMetrics()
+
+    def _complete(claimed: SimpleNamespace) -> None:
+        if claimed.shard_id == 1:
+            fast_peer_completed.set()
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset._render_one_owned_shard", _render)
+    claims.complete.side_effect = _complete
+
+    with ThreadPoolExecutor(max_workers=1) as test_pool:
+        dispatch = test_pool.submit(
+            _dispatch_shards_from_claims_parallel,
+            claims,
+            spec,
+            work_dir=tmp_path,
+            loggers=[],
+        )
+        try:
+            assert fast_peer_completed.wait(timeout=5.0)
+        finally:
+            release_slow_peer.set()
+        with pytest.raises(subprocess.CalledProcessError):
+            dispatch.result(timeout=5.0)
+
+    assert sorted(call.args[0].shard_id for call in claims.complete.call_args_list) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "dispatch",
+    [_dispatch_shards_from_claims, _dispatch_shards_from_claims_parallel],
+)
 def test_claims_dispatch_aggregates_rejections_without_rclone(
+    dispatch: Callable[..., tuple[int, int, RenderRejectionMetrics]],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """Claims dispatch returns exact totals from completed claim reports.
 
+    :param dispatch: Serial or parallel claims dispatcher under test.
     :param monkeypatch: Replaces the renderer boundary.
     :param tmp_path: Builds the claims spec and receives the dispatcher work path.
     """
@@ -3952,7 +4203,7 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
         lambda _spec, shard_id, _work_dir, _loggers: outcomes[shard_id],
     )
 
-    rendered, skipped, rejections = _dispatch_shards_from_claims(
+    rendered, skipped, rejections = dispatch(
         claims,
         spec,
         work_dir=tmp_path,

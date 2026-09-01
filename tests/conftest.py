@@ -21,7 +21,11 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from synth_setter.conditioning import NUM_SKETCH_TRACK_ROWS, SKETCH_PITCH_BINS
+from synth_setter.conditioning import (
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_PITCH_BINS,
+    SKETCH_STORAGE_FRAMES,
+)
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
@@ -599,6 +603,8 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.encoder.backbone.checkpoint_sha256 = None
         cfg.model.encoder.backbone.backbone_config = tiny_clap_config
         cfg.model.encoder.head.input_dim = 8
+        cfg.model.encoder.head.n_conditioning_outputs = 2
+        cfg.model.vector_field.num_layers = 2
     return cfg
 
 
@@ -635,6 +641,8 @@ def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.encoder.head.embed_dim = TINY_SAME_LATENT_DIM
         cfg.model.encoder.head.max_seq_len = 8
         cfg.model.encoder.head.num_heads = 1
+        cfg.model.encoder.head.n_conditioning_outputs = 2
+        cfg.model.vector_field.num_layers = 2
     return cfg
 
 
@@ -2623,7 +2631,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 def _write_sketch_lance_root(dataset_root: Path) -> None:
-    """Write tiny m2l+sketch train/val/test Lance splits.
+    """Write tiny pooled m2l+sketch train/val/test Lance splits.
 
     :param dataset_root: Directory receiving the three splits.
     """
@@ -2634,8 +2642,12 @@ def _write_sketch_lance_root(dataset_root: Path) -> None:
 
     for seed, split in enumerate(("train", "val", "test")):
         rng = np.random.default_rng(seed)
-        pitch = rng.random((4, SKETCH_PITCH_BINS, 401)).astype(np.float32)
-        tracks = rng.uniform(-1.0, 1.0, (4, NUM_SKETCH_TRACK_ROWS, 401)).astype(np.float32)
+        pitch = rng.random((4, SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES)).astype(np.float32)
+        tracks = rng.uniform(
+            -1.0,
+            1.0,
+            (4, NUM_SKETCH_TRACK_ROWS, SKETCH_STORAGE_FRAMES),
+        ).astype(np.float32)
         write_lance_shard_with_sketch(
             dataset_root / f"{split}.lance",
             {
@@ -2648,7 +2660,7 @@ def _write_sketch_lance_root(dataset_root: Path) -> None:
 
 @pytest.fixture
 def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose a ``conditioning=m2l sketch=on`` training cfg over generated Lance splits.
+    """Compose a pooled-sketch training cfg over generated Lance splits.
 
     Mirrors :func:`cfg_train_lance` with the vst_flow model shrunk to a toy so
     a ``fast_dev_run`` step (including two-step RK4 CFG validation sampling)
@@ -2667,11 +2679,10 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
+                "experiment=surge/flow_sketch_prelim",
                 "datamodule=surge_lance",
                 "synth=surge_4",
-                "model=vst_flow",
                 "conditioning=m2l",
-                "sketch=on",
                 "trainer=cpu",
             ],
         )
@@ -2687,13 +2698,17 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
             # Not a loop bound under fast_dev_run — the scheduler resolves
             # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
             cfg.trainer.max_steps = 1
+            cfg.trainer.min_steps = 1
+            cfg.training.val_audio_probe = False
             cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.download_dataset_root_uri = None
             cfg.datamodule.batch_size = 2
             cfg.datamodule.num_workers = 0
             cfg.datamodule.persistent_workers = False
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.validation_sample_steps = 2
+            cfg.model.test_sample_steps = 2
             cfg.model.vector_field.num_layers = 1
             cfg.model.vector_field.d_model = 32
             cfg.model.vector_field.d_ff = 32

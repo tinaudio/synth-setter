@@ -85,15 +85,15 @@ class ConditioningKeepMasks:
 
 @dataclass(frozen=True)
 class ControlTokenBranches:
-    """Complete control-token state for the two joint-CFG branches.
+    """Full-sketch and PE-only control-token states for CFG sampling.
 
     .. attribute :: conditional
 
-       Full sketch-control tokens for the content-conditioned branch.
+       Full sketch-control tokens used by sketch-only and content-plus-sketch branches.
 
     .. attribute :: unconditional
 
-       PE-only tokens for the unconditional branch.
+       PE-only tokens used by the unconditional branch.
     """
 
     conditional: Float[torch.Tensor, "batch tokens d_model"]
@@ -159,27 +159,84 @@ def joint_cfg_velocity(
 
 
 @jaxtyped(typechecker=beartype)
+def multi_cfg_velocity(
+    unconditional_field: _TimeField,
+    sketch_field: _TimeField,
+    content_sketch_field: _TimeField,
+    *,
+    sketch_cfg_strength: float,
+    content_cfg_strength: float,
+) -> _TimeField:
+    """Build a three-branch field with independent sketch and content guidance.
+
+    :param unconditional_field: Field without content or sketch controls.
+    :param sketch_field: Field conditioned only on sketch controls.
+    :param content_sketch_field: Field conditioned on content and sketch controls.
+    :param sketch_cfg_strength: Guidance scale for adding sketch controls.
+    :param content_cfg_strength: Guidance scale for adding content conditioning.
+    :returns: Two-argument guided velocity field.
+    """
+
+    @jaxtyped(typechecker=beartype)
+    def guided(
+        x: Shaped[torch.Tensor, "batch ..."],
+        t: Shaped[torch.Tensor, "batch 1"],
+    ) -> Shaped[torch.Tensor, "batch ..."]:
+        """Evaluate each branch once and combine its guidance delta.
+
+        :param x: Shared trajectory point evaluated by every branch.
+        :param t: Shared flow time evaluated by every branch.
+        :returns: Unconditional velocity plus separately scaled sketch and content deltas.
+        """
+        unconditional = unconditional_field(x, t)
+        sketch = sketch_field(x, t)
+        content_sketch = content_sketch_field(x, t)
+        return (
+            unconditional
+            + sketch_cfg_strength * (sketch - unconditional)
+            + content_cfg_strength * (content_sketch - sketch)
+        )
+
+    return guided
+
+
+@jaxtyped(typechecker=beartype)
 def build_guided_velocity(
     field: torch.nn.Module,
     conditioning: Shaped[torch.Tensor, "batch ..."] | None,
     cfg_strength: float,
     *,
+    sketch_cfg_strength: float | None = None,
     control_tokens: ControlTokenBranches | None = None,
 ) -> _TimeField:
-    """Bind content and optional control tokens into the two joint-CFG branches.
+    """Bind content and optional control tokens into classifier-free-guidance branches.
 
     :param field: Model velocity field.
     :param conditioning: Encoded content conditioning for the conditional branch.
-    :param cfg_strength: Joint classifier-free-guidance scale.
-    :param control_tokens: Complete conditional/unconditional control-token state.
+    :param cfg_strength: Classifier-free-guidance scale for content conditioning.
+    :param sketch_cfg_strength: Guidance scale for sketch controls; defaults to
+        ``cfg_strength`` for joint-CFG compatibility.
+    :param control_tokens: Complete full-sketch and PE-only control-token state.
     :returns: Two-argument guided velocity field.
     """
-    conditional = control_tokens.conditional if control_tokens is not None else None
-    unconditional = control_tokens.unconditional if control_tokens is not None else None
-    return joint_cfg_velocity(
-        _bind_branch(field, conditioning, conditional),
-        _bind_branch(field, None, unconditional),
-        cfg_strength,
+    if control_tokens is None:
+        return joint_cfg_velocity(
+            _bind_branch(field, conditioning, None),
+            _bind_branch(field, None, None),
+            cfg_strength,
+        )
+
+    sketch_strength = cfg_strength if sketch_cfg_strength is None else sketch_cfg_strength
+    unconditional = _bind_branch(field, None, control_tokens.unconditional)
+    sketch = _bind_branch(field, None, control_tokens.conditional)
+    if conditioning is None:
+        return joint_cfg_velocity(sketch, unconditional, sketch_strength)
+    return multi_cfg_velocity(
+        unconditional,
+        sketch,
+        _bind_branch(field, conditioning, control_tokens.conditional),
+        sketch_cfg_strength=sketch_strength,
+        content_cfg_strength=cfg_strength,
     )
 
 
@@ -243,8 +300,8 @@ class VSTFlowMatchingModule(LightningModule):
         param_spec: str | None = None,
         conditioning: Conditioning = "mel",
         sketch_controls: SketchControls = None,
-        sketch_dropout_rate: float = 0.2,
-        all_conditioning_dropout_rate: float = 0.2,
+        sketch_dropout_rate: float = 0.1,
+        all_conditioning_dropout_rate: float = 0.1,
         audio_loss: AudioFeedbackLoss | None = None,
         encoder_num_heads: int | None = None,
         encoder_output_dim: int | None = None,
@@ -253,8 +310,10 @@ class VSTFlowMatchingModule(LightningModule):
         rectified_sigma_min: float = 0.0,
         validation_sample_steps: int = 50,
         validation_cfg_strength: float = 4.0,
+        validation_sketch_cfg_strength: float | None = None,
         test_sample_steps: int = 100,
         test_cfg_strength: float = 4.0,
+        test_sketch_cfg_strength: float | None = None,
         compile: bool = False,
     ) -> None:
         """Wire the encoder/vector-field and persist the flow-matching hyperparameters.
@@ -281,9 +340,13 @@ class VSTFlowMatchingModule(LightningModule):
             during training (CFG).
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
         :param validation_sample_steps: RK4 integration steps used at validation.
-        :param validation_cfg_strength: Classifier-free-guidance strength at validation.
+        :param validation_cfg_strength: Content guidance strength at validation.
+        :param validation_sketch_cfg_strength: Sketch guidance strength at validation;
+            defaults to ``validation_cfg_strength``.
         :param test_sample_steps: RK4 integration steps used at test.
-        :param test_cfg_strength: Classifier-free-guidance strength at test.
+        :param test_cfg_strength: Content guidance strength at test and prediction.
+        :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
+            defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
         :raises ValueError: ``audio_loss`` is combined with a nonzero
             ``rectified_sigma_min`` or with ``compile=True`` (#2585).
@@ -467,6 +530,12 @@ class VSTFlowMatchingModule(LightningModule):
             configured spec), and the keep masks that produced both.
         """
         conditioning = self.encoder(self._get_conditioning_from_batch(batch))
+        if (
+            conditioning.ndim == 3
+            and conditioning.shape[1] > 1
+            and self._is_trainer_logging_step()
+        ):
+            self._log_slot_cosine(conditioning.detach())
         if self.sketch_tokens is None:
             # Legacy path: apply_dropout draws its own mask, keeping the no-sketch
             # RNG stream identical to runs from before sketch support.
@@ -500,7 +569,7 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
     @jaxtyped(typechecker=beartype)
-    def _should_probe_gradient_balance(self) -> bool:
+    def _is_trainer_logging_step(self) -> bool:
         """Whether this step pays for the probe's extra backward through the renderer.
 
         :returns: True on Lightning's own logging cadence; False when detached from a trainer.
@@ -511,6 +580,22 @@ class VSTFlowMatchingModule(LightningModule):
             return False
         every = self.trainer.log_every_n_steps
         return every > 0 and self.trainer.global_step % every == 0
+
+    @jaxtyped(typechecker=beartype)
+    def _log_slot_cosine(self, conditioning: Float[torch.Tensor, "batch slots dim"]) -> None:
+        """Log how far apart the per-layer conditioning slots sit before dropout.
+
+        A value approaching one means nominally separate slots have converged to the same read, so
+        the extra slots carry nothing the field's layers can distinguish.
+
+        :param conditioning: Detached layerwise conditioning.
+        """
+        slots = torch.nn.functional.normalize(conditioning, dim=-1)
+        gram = slots @ slots.transpose(-2, -1)
+        count = gram.shape[-1]
+        off_diagonal = gram.sum(dim=(-2, -1)) - gram.diagonal(dim1=-2, dim2=-1).sum(-1)
+        mean = (off_diagonal / (count * (count - 1))).mean()
+        self.log("train/slot_cosine", mean, on_step=True, on_epoch=False)
 
     @jaxtyped(typechecker=beartype)
     def _log_gradient_time_profile(
@@ -575,7 +660,7 @@ class VSTFlowMatchingModule(LightningModule):
                 batch["audio"],
                 keep=conditioning_keep.identity_keep,
             )
-            if self._should_probe_gradient_balance():
+            if self._is_trainer_logging_step():
                 from synth_setter.models.components.audio_feedback import gradient_balance
 
                 grad_balance = gradient_balance(
@@ -634,6 +719,8 @@ class VSTFlowMatchingModule(LightningModule):
         conditioning: Shaped[torch.Tensor, "batch ..."] | None,
         cfg_strength: float,
         control_tokens: ControlTokenBranches | None,
+        *,
+        sketch_cfg_strength: float | None = None,
     ) -> _TimeField:
         """Build the time field the sampler integrates.
 
@@ -641,14 +728,16 @@ class VSTFlowMatchingModule(LightningModule):
         velocity overrides this and inherits the integration loop unchanged.
 
         :param conditioning: Encoded content conditioning for the conditional branch.
-        :param cfg_strength: Joint classifier-free-guidance scale.
+        :param cfg_strength: Classifier-free-guidance scale for content conditioning.
         :param control_tokens: Complete control-token state, or ``None`` without sketch support.
+        :param sketch_cfg_strength: Guidance scale for sketch controls.
         :returns: Two-argument velocity field over parameter state and time.
         """
         return build_guided_velocity(
             self.vector_field,
             conditioning,
             cfg_strength,
+            sketch_cfg_strength=sketch_cfg_strength,
             control_tokens=control_tokens,
         )
 
@@ -659,12 +748,18 @@ class VSTFlowMatchingModule(LightningModule):
         steps: int,
         cfg_strength: float,
         *,
+        sketch_cfg_strength: float | None = None,
         control_tokens: ControlTokenBranches | None = None,
     ) -> torch.Tensor:
         if conditioning is not None:
             conditioning = self.encoder(conditioning)
 
-        guided_velocity = self._velocity_field(conditioning, cfg_strength, control_tokens)
+        guided_velocity = self._velocity_field(
+            conditioning,
+            cfg_strength,
+            control_tokens,
+            sketch_cfg_strength=sketch_cfg_strength,
+        )
         t = torch.zeros(noise.shape[0], 1, device=noise.device)
         dt = 1.0 / steps
         sample = noise
@@ -686,6 +781,7 @@ class VSTFlowMatchingModule(LightningModule):
             torch.randn_like(batch["params"]),
             self.hparams.validation_sample_steps,
             self.hparams.validation_cfg_strength,
+            sketch_cfg_strength=self.hparams.validation_sketch_cfg_strength,
             control_tokens=self._control_token_branches_from_batch(batch),
         )
 
@@ -737,6 +833,7 @@ class VSTFlowMatchingModule(LightningModule):
             torch.randn_like(batch["params"]),
             self.hparams.test_sample_steps,
             self.hparams.test_cfg_strength,
+            sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
             control_tokens=self._control_token_branches_from_batch(batch),
         )
 
@@ -778,6 +875,7 @@ class VSTFlowMatchingModule(LightningModule):
                 ),
                 self.hparams.test_sample_steps,
                 self.hparams.test_cfg_strength,
+                sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
                 control_tokens=self._control_token_branches_from_batch(batch),
             ),
             batch,

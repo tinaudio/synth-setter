@@ -26,6 +26,16 @@ docs:
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
 
+  - doc: docs/design/conditioning-rank-parity.md
+    description: Cached-encoder conditioning-slot contract
+    sources:
+      - pattern: "src/synth_setter/models/components/embed_pool.py"
+        covers: "Learned-query pooling at one query per conditioning slot"
+      - pattern: "src/synth_setter/models/components/vector_projection.py"
+        covers: "Fixed-width projection at one output block per conditioning slot"
+      - pattern: "src/synth_setter/models/components/transformer.py"
+        covers: "Per-layer slot indexing and the shared CFG null it broadcasts"
+
   - doc: docs/design/conditioning-column-statistics.md
     description: Measured cached-conditioning scales and normalization recommendations
     sources:
@@ -59,6 +69,8 @@ docs:
         covers: "Bounded offline Lance adapter"
       - pattern: "src/synth_setter/configs/conditioning/pupujepa_*.yaml"
         covers: "PupuJEPA conditioning profiles"
+      - pattern: "src/synth_setter/configs/model/encoder/pupujepa_online.yaml"
+        covers: "Online head sizing (max_seq_len) and backbone wiring"
       - pattern: "pyproject.toml"
         covers: "Exact timm runtime pin"
 
@@ -186,7 +198,7 @@ docs:
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "Lance dataset writer entrypoint and shard metadata wiring"
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
+        covers: "Shared Lance field and tensor-shape contract, including the canonical mel front-end."
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
         covers: "Lance dataset-shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_dataset / lance_fragment / commit_lance_dataset on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
       - pattern: "src/synth_setter/pipeline/data/lance_staging.py"
@@ -644,13 +656,13 @@ docs:
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/generate_vst_dataset.py"
-        covers: "generate_sample / VSTDataSample / make_spectrogram — per-sample render and feature-extraction primitives invoked by the writers in writers.py"
+        covers: "generate_sample / VSTDataSample — per-sample render and feature-extraction primitives invoked by the writers in writers.py"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "Render captured patches into a Lance train split"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Mel and audio tensor-shape contract for Lance writers"
+        covers: "Mel and audio tensor-shape contract for Lance writers, plus make_spectrogram"
         scope: "interactive"
 
   - doc: docs/guides/adding-a-new-synth.md

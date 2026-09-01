@@ -159,3 +159,54 @@ def test_build_guided_velocity_calls_every_backbone_signature(
 
     assert velocity.shape == (2, 2)
     assert torch.isfinite(velocity).all()
+
+
+@pytest.mark.parametrize(
+    "model_factory",
+    (_conditional_residual_mlp, _approx_equiv_transformer),
+    ids=["conditional-residual-mlp", "approx-equiv-transformer"],
+)
+@pytest.mark.parametrize(
+    ("batch", "slots"), [(4, 3), (3, 3)], ids=["batch-ne-slots", "batch-eq-slots"]
+)
+def test_apply_dropout_on_rank_three_conditioning_drops_whole_rows_not_slots(
+    model_factory: Callable[[], ConditionalResidualMLP | ApproxEquivTransformer],
+    batch: int,
+    slots: int,
+) -> None:
+    """Layerwise conditioning drops along the batch axis, never along the slot axis.
+
+    The ``batch == slots`` case is the dangerous one: a keep mask shaped ``(batch, 1)``
+    broadcasts against ``(batch, slots, dim)`` without error and silently masks slots.
+
+    :param model_factory: Backbone constructor under test.
+    :param batch: Conditioning batch size.
+    :param slots: Per-layer conditioning slot count.
+    """
+    field = model_factory()
+    conditioning = torch.randn(batch, slots, 3)
+
+    torch.manual_seed(0)
+    dropped, keep = field.apply_dropout(conditioning, 0.5)
+
+    assert dropped.shape == conditioning.shape
+    row_kept = (dropped == conditioning).all(dim=-1)
+    assert torch.equal(row_kept, keep[:, None].expand(-1, slots))
+
+
+@pytest.mark.parametrize(
+    ("batch", "slots"), [(4, 3), (3, 3)], ids=["batch-ne-slots", "batch-eq-slots"]
+)
+def test_vector_field_rejects_rank_three_conditioning(batch: int, slots: int) -> None:
+    """VectorField.forward has no slot indexing, so rank-3 must fail at the boundary.
+
+    Without the guard a ``(batch, 1)`` mask right-aligns onto ``(batch, slots, dim)`` and
+    masks the slot axis whenever batch equals slots, corrupting dropout silently.
+
+    :param batch: Conditioning batch size.
+    :param slots: Per-layer conditioning slot count.
+    """
+    field = _vector_field()
+
+    with pytest.raises(ValueError, match="rank-2 conditioning"):
+        field.apply_dropout(torch.randn(batch, slots, 3), 0.5)

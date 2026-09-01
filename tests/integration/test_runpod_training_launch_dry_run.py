@@ -123,19 +123,23 @@ def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint(
 
 
 @pytest.mark.parametrize(
-    "launch_config_name",
+    ("launch_config_name", "high_memory_materialization", "memory_floor"),
     [
-        "train-runpod-smoke.yaml",
-        "train-runpod-flow-simple-440k.yaml",
+        ("train-runpod-smoke.yaml", False, None),
+        ("train-runpod-flow-simple-440k.yaml", True, "128+"),
     ],
     ids=["smoke", "flow-simple-440k"],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     launch_config_name: str,
+    high_memory_materialization: bool,
+    memory_floor: str | None,
 ) -> None:
     """Prepare the real SkyPilot task and compose its worker command without submission.
 
     :param launch_config_name: Shipped RunPod training launch config to exercise.
+    :param high_memory_materialization: Expected worker-side hydration setting.
+    :param memory_floor: Expected SkyPilot host-memory request.
     """
     launch_config = load_launch_config(_LAUNCH_DIR / launch_config_name)
     assert launch_config.compute is not None
@@ -168,4 +172,7 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
 
     assert result.returncode == 0, result.stderr
     assert task.to_yaml_config()["run"] == task.run
+    assert {resource.memory for resource in task.resources} == {memory_floor}
     assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
+    expected_setting = str(high_memory_materialization).lower()
+    assert f"high_memory_materialization: {expected_setting}" in result.stdout

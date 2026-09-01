@@ -8,8 +8,8 @@ import shutil
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
 from pathlib import Path
+from threading import Barrier
 from typing import cast
 
 import lance
@@ -26,6 +26,7 @@ from synth_setter.pipeline.data.lance_materialize import (
     resolve_txid_version,
     sidecar_path,
 )
+from tests.helpers.lance_fixtures import record_lance_scan_and_write_options
 
 
 @pytest.fixture
@@ -52,6 +53,107 @@ def _raise_advice_error(*_args: int) -> None:
 
 def _raise_flush_error(_fd: int) -> None:
     raise OSError(5, "flush failed")
+
+
+@pytest.fixture
+def lance_call_recorder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Record options while preserving real Lance scanner and writer operations.
+
+    :param monkeypatch: Replaces Lance callables for the duration of one test.
+    :returns: Scanner and writer keyword-argument records.
+    """
+    return record_lance_scan_and_write_options(monkeypatch)
+
+
+def test_materialize_lance_subset_high_memory_applies_tuning(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    lance_call_recorder: tuple[list[dict[str, object]], list[dict[str, object]]],
+) -> None:
+    """The high-memory option applies production R2-read and local-write tuning.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param lance_call_recorder: Records options around real Lance operations.
+    """
+    source, txid = two_version_source
+    scanner_calls, writer_calls = lance_call_recorder
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(
+        source,
+        destination,
+        txid=txid,
+        columns=("a",),
+        high_memory_materialization=True,
+    )
+
+    assert scanner_calls[0]["batch_size"] == 8192
+    assert scanner_calls[0]["io_buffer_size"] == 32 * 1024**3
+    assert scanner_calls[0]["fragment_readahead"] == 128
+    assert scanner_calls[0]["batch_readahead"] == 2
+    assert writer_calls[0]["max_rows_per_group"] == 4096
+    assert writer_calls[0]["max_bytes_per_file"] == 256 * 1024**3
+    assert lance.dataset(str(destination)).count_rows() == 3
+
+
+def test_materialize_lance_subset_high_memory_crosses_batch_boundary(
+    tmp_path: Path,
+) -> None:
+    """High-memory materialization preserves scalar rows across a full scan batch.
+
+    :param tmp_path: Isolates the source and materialized destination.
+    """
+    source = tmp_path / "source.lance"
+    lance.write_dataset(
+        pa.table({"a": pa.array(range(8193), type=pa.int32())}),
+        source,
+    )
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(
+        str(source),
+        destination,
+        txid=None,
+        columns=("a",),
+        high_memory_materialization=True,
+    )
+
+    materialized = lance.dataset(str(destination))
+    values = materialized.to_table()["a"].to_pylist()
+    assert materialized.count_rows() == 8193
+    assert len(set(values)) == 8193
+    assert materialized.schema == pa.schema([pa.field("a", pa.int32())])
+    assert values[0] == 0
+    assert values[-1] == 8192
+
+
+def test_materialize_lance_subset_default_delegates_memory_tuning_to_lance(
+    tmp_path: Path,
+    two_version_source: tuple[str, str],
+    lance_call_recorder: tuple[list[dict[str, object]], list[dict[str, object]]],
+) -> None:
+    """Default materialization leaves I/O buffering and read-ahead to Lance.
+
+    :param tmp_path: Isolates the published destination.
+    :param two_version_source: Supplies a real version-pinned Lance source.
+    :param lance_call_recorder: Records options around real Lance operations.
+    """
+    source, txid = two_version_source
+    scanner_calls, writer_calls = lance_call_recorder
+    destination = tmp_path / "materialized.lance"
+
+    materialize_lance_subset(source, destination, txid=txid, columns=("a",))
+
+    assert scanner_calls[0]["batch_size"] == 512
+    assert scanner_calls[0]["io_buffer_size"] is None
+    assert scanner_calls[0]["fragment_readahead"] is None
+    assert scanner_calls[0]["batch_readahead"] is None
+    assert writer_calls[0]["max_rows_per_group"] == 1024
+    assert writer_calls[0]["max_bytes_per_file"] == 32 * 1024**3
+    assert lance.dataset(str(destination)).count_rows() == 3
 
 
 def test_materialize_lance_subset_evicts_written_data_files(

@@ -11,7 +11,8 @@ def make_sin_pos_enc(max_len: int, d_enc: int) -> torch.Tensor:
     """Build a sinusoidal positional-encoding tensor.
 
     :param max_len: Maximum sequence length the encoding should cover.
-    :param d_enc: Dimensionality of the encoding (must be even).
+    :param d_enc: Dimensionality of the encoding; an odd width leaves the top band's
+        sine without a cosine partner.
     :returns: A tensor of shape ``(1, max_len, d_enc)`` containing sin/cos positional
         encodings interleaved across the feature dimension. The leading singleton
         dimension allows broadcasting across a batch.
@@ -23,7 +24,9 @@ def make_sin_pos_enc(max_len: int, d_enc: int) -> torch.Tensor:
         torch.arange(0, d_enc, 2, dtype=torch.float32) * (-math.log(10000.0) / d_enc)
     )
     pe[:, 0::2] = torch.sin(position * div_term)
-    pe[:, 1::2] = torch.cos(position * div_term)
+    # An odd width has one fewer cosine column than sine, so the top band is sine-only.
+    if d_enc // 2:
+        pe[:, 1::2] = torch.cos(position * div_term[: d_enc // 2])
 
     # Add an extra dimension for batch size compatibility.
     pe = pe.unsqueeze(0)  # Shape: (1, max_len, d_model)
@@ -69,10 +72,10 @@ class PosEnc(nn.Module):
 
 
 class EmbeddingPool(nn.Module):
-    """Pool a variable-length embedding sequence into a single ``d_model`` vector.
+    """Pool a variable-length embedding sequence into ``d_model`` conditioning slots.
 
     The module applies a positional encoding and a feed-forward residual block to the
-    input embedding, then collapses the sequence dimension via a single-query
+    input embedding, then collapses the sequence dimension via a learned-query
     multi-head attention over the resulting tokens.
 
     :param embed_dim: Dimensionality of the input embedding features.
@@ -80,6 +83,9 @@ class EmbeddingPool(nn.Module):
     :param num_heads: Number of attention heads.
     :param pos_enc: Positional-encoding variant forwarded to :class:`PosEnc`.
     :param max_seq_len: Maximum fixed sequence length accepted by the encoder.
+    :param n_conditioning_outputs: Conditioning slots to emit; one per consuming field
+        layer, or ``1`` for a single shared conditioning vector.
+    :raises ValueError: ``n_conditioning_outputs`` is not positive.
     """
 
     def __init__(
@@ -89,12 +95,18 @@ class EmbeddingPool(nn.Module):
         num_heads: int,
         pos_enc: Literal["sin", "learned"] = "sin",
         max_seq_len: int = 42,
-    ):
+        n_conditioning_outputs: int = 1,
+    ) -> None:
         super().__init__()
 
+        if n_conditioning_outputs < 1:
+            raise ValueError(
+                f"n_conditioning_outputs must be positive, got {n_conditioning_outputs}"
+            )
         self.input_dim = embed_dim
+        self.n_conditioning_outputs = n_conditioning_outputs
         self.attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
-        self.query = nn.Parameter(torch.randn(1, 1, d_model))
+        self.query = nn.Parameter(torch.randn(1, n_conditioning_outputs, d_model))
         self.positional_encoding = PosEnc(embed_dim, max_seq_len, pos_enc)
 
         self.ffn = nn.Sequential(
@@ -111,7 +123,8 @@ class EmbeddingPool(nn.Module):
         :param embed: Input tensor of shape ``(batch, embed_dim, seq)``. The sequence
             axis is permuted to the middle position internally before the attention
             pool collapses it.
-        :returns: A tensor of shape ``(batch, d_model)`` summarising each input sequence.
+        :returns: ``(batch, d_model)`` for a single conditioning slot, otherwise
+            ``(batch, n_conditioning_outputs, d_model)``.
         :rtype: torch.Tensor
         """
         embed = embed.permute(0, 2, 1)
@@ -121,4 +134,6 @@ class EmbeddingPool(nn.Module):
         query = self.query.repeat(embed.shape[0], 1, 1)
         embed, _ = self.attn(query=query, key=embed, value=embed)
 
-        return embed.squeeze(1)
+        if self.n_conditioning_outputs == 1:
+            return embed.squeeze(1)
+        return embed

@@ -217,7 +217,6 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
     :param dataset_file: Split path whose parent contains ``stats.npz``.
     :returns: Broadcasting ``(mean, std)`` arrays.
     :raises FileNotFoundError: If ``stats.npz`` is missing.
-    :raises ValueError: If values are non-finite or standard deviations are not positive.
     """
     stats_file = Path(dataset_file).parent / "stats.npz"
     if not stats_file.exists():
@@ -225,6 +224,16 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
             f"Could not find statistics file {stats_file}. \n"
             "Make sure to first run `src/synth_setter/pipeline/data/stats.py`."
         )
+    return load_mel_statistics(stats_file)
+
+
+def load_mel_statistics(stats_file: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load and validate one mel-statistics ``.npz``.
+
+    :param stats_file: Path to the ``.npz`` holding ``mean`` and ``std``.
+    :returns: Broadcasting ``(mean, std)`` arrays.
+    :raises ValueError: If values are non-finite or standard deviations are not positive.
+    """
     with np.load(stats_file) as stats:
         mean = stats["mean"]
         std = stats["std"]
@@ -255,6 +264,10 @@ class _MaterializeConfig(BaseModel):
     .. attribute :: download_dataset_row_limit
 
         First-N row cap per split, or ``None``.
+
+    .. attribute :: high_memory_materialization
+
+        Whether materialization uses high-memory Lance tuning.
     """
 
     model_config = ConfigDict(strict=True, frozen=True)
@@ -262,6 +275,7 @@ class _MaterializeConfig(BaseModel):
     download_dataset_root_uri: str | None
     download_dataset_txids: dict[str, str] | None
     download_dataset_row_limit: PositiveInt | None
+    high_memory_materialization: bool
 
     @model_validator(mode="after")
     def validate_consistency(self) -> Self:
@@ -323,6 +337,7 @@ class VSTDataModule(LightningDataModule):
         param_spec_name: ParamSpecName,
         download_dataset_txids: dict[str, str] | None = None,
         download_dataset_row_limit: int | None = None,
+        high_memory_materialization: bool = False,
     ) -> None:
         """Store configuration shared by concrete VST datamodules.
 
@@ -348,6 +363,7 @@ class VSTDataModule(LightningDataModule):
             source snapshots. Each split has independent transaction history.
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
+        :param high_memory_materialization: Whether to use high-memory Lance tuning.
         :raises ValueError: If the materialization settings are inconsistent —
             fail at construction, never silently hydrate the wrong data.
         """
@@ -359,6 +375,7 @@ class VSTDataModule(LightningDataModule):
             ),
             download_dataset_row_limit=download_dataset_row_limit,
             download_dataset_root_uri=download_dataset_root_uri,
+            high_memory_materialization=high_memory_materialization,
         )
         super().__init__()
         configured_root = Path(dataset_root)
@@ -378,6 +395,9 @@ class VSTDataModule(LightningDataModule):
         self.param_spec_name = param_spec_name
         self.download_dataset_txids = materialize_config.download_dataset_txids
         self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
+        self.high_memory_materialization = (
+            materialize_config.high_memory_materialization
+        )
         predict_split = self._predict_split(predict_file, configured_root)
         self.projection = self._derive_projection(predict_split)
         self.dataset_root = self._resolve_dataset_root(configured_root, self.projection)
@@ -487,6 +507,7 @@ class VSTDataModule(LightningDataModule):
             projection=self.projection,
             row_limit=self.download_dataset_row_limit,
             shard_suffix=self.shard_suffix,
+            high_memory_materialization=self.high_memory_materialization,
         )
 
 

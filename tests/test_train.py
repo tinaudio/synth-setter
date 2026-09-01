@@ -9,6 +9,7 @@ that no private ``synth_setter.cli`` helper is imported here.
 
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -43,6 +44,7 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
+from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline import r2_io
 from synth_setter.utils import resolve_run_config_id
@@ -221,10 +223,14 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
 
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
-    encoder = object_dict["model"].encoder
-    assert isinstance(object_dict["model"].audio_loss, AudioFeedbackLoss)
+    assert torch.isfinite(metric_dict["train/slot_cosine"])
+    model = object_dict["model"]
+    encoder = model.encoder
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert isinstance(encoder.head, VectorProjection)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
     assert encoder.backbone.out_dim == 8
     assert not encoder.backbone.clap.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
@@ -247,12 +253,14 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
 
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
+    assert torch.isfinite(metric_dict["train/slot_cosine"])
     model = object_dict["model"]
     encoder = model.encoder
     assert isinstance(model.audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, SameAudioEncoder)
     assert isinstance(encoder.head, EmbeddingPool)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
     assert not encoder.backbone.autoencoder.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
     assert any(parameter.requires_grad for parameter in encoder.head.parameters())
@@ -341,6 +349,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
+    assert torch.isfinite(metric_dict["per_param_mse_number_group_swap/adsr_1.attack"]).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
@@ -682,6 +691,7 @@ def test_train_row_limited_hydration_evicts_materialized_file_cache(
         cfg_train_lance.datamodule.dataset_root = str(destination)
         cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
         cfg_train_lance.datamodule.download_dataset_row_limit = 2
+        cfg_train_lance.datamodule.high_memory_materialization = True
         cfg_train_lance.datamodule.batch_size = 2
         cfg_train_lance.datamodule.num_workers = 0
 
@@ -689,6 +699,7 @@ def test_train_row_limited_hydration_evicts_materialized_file_cache(
     _, object_dict = train(cfg_train_lance)
 
     assert object_dict["trainer"].global_step > 0
+    assert object_dict["datamodule"].high_memory_materialization is True
     assert advised_fds
 
 
@@ -1148,26 +1159,72 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert datamodule.val_num_workers == 0
 
 
-def test_train_fast_dev_run_sketch_tokens_lance(
+def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     cfg_train_sketch_lance: DictConfig,
 ) -> None:
-    """Run a real ``train(cfg)`` step with ``conditioning=m2l sketch=on``.
+    """Route a composed sketch CFG scale through real validation sampling.
 
     Drives the full sketch stack end-to-end on real Lance shards: projected
-    ``sketch_ctrl`` reads, pitch zero-binning and conditioning z-scoring in the
-    collate, control-token injection in the training step, and CFG sampling at
-    validation.
+    ``sketch_ctrl`` reads, conditioning collation, control-token injection, and
+    independent sketch guidance during validation.
 
-    :param cfg_train_sketch_lance: Composed ``sketch=on`` training config over
+    :param cfg_train_sketch_lance: Composed pooled-sketch training config over
         generated m2l+sketch Lance splits.
     """
+    assert cfg_train_sketch_lance.run_name == "flow1k_prelim_sketch"
+    with open_dict(cfg_train_sketch_lance):
+        cfg_train_sketch_lance.model.validation_sketch_cfg_strength = 0.0
+        cfg_train_sketch_lance.model.test_sketch_cfg_strength = 0.0
     HydraConfig().set_config(cfg_train_sketch_lance)
     metric_dict, object_dict = train(cfg_train_sketch_lance)
 
     model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
     assert model.sketch_tokens is not None
+    assert model.hparams.cfg_dropout_rate == 0.1
+    assert model.hparams.sketch_dropout_rate == 0.1
+    assert model.hparams.all_conditioning_dropout_rate == 0.1
     assert object_dict["datamodule"].sketch_controls is not None
+    assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.num_frames == 32
     assert torch.isfinite(metric_dict["train/loss"])
+
+    torch.manual_seed(11)
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.values():
+            projection.weight.normal_()
+    trainer = object_dict["trainer"]
+    torch.manual_seed(17)
+    sketch_disabled = trainer.validate(model, datamodule, verbose=False)[0]["val/param_mse"]
+    model.hparams.validation_sketch_cfg_strength = 8.0
+    torch.manual_seed(17)
+    sketch_guided = trainer.validate(model, datamodule, verbose=False)[0]["val/param_mse"]
+
+    model.hparams.test_sketch_cfg_strength = 0.0
+    torch.manual_seed(19)
+    test_sketch_disabled = trainer.test(model, datamodule, verbose=False)[0]["test/param_mse"]
+    model.hparams.test_sketch_cfg_strength = 8.0
+    torch.manual_seed(19)
+    test_sketch_guided = trainer.test(model, datamodule, verbose=False)[0]["test/param_mse"]
+
+    datamodule.setup("test")
+    predict_loader = datamodule.test_dataloader()
+    model.hparams.test_sketch_cfg_strength = 0.0
+    torch.manual_seed(23)
+    predict_sketch_disabled = trainer.predict(model, dataloaders=predict_loader)[0][0]
+    model.hparams.test_sketch_cfg_strength = 8.0
+    torch.manual_seed(23)
+    predict_sketch_guided = trainer.predict(model, dataloaders=predict_loader)[0][0]
+
+    assert math.isfinite(sketch_disabled)
+    assert math.isfinite(sketch_guided)
+    assert math.isfinite(test_sketch_disabled)
+    assert math.isfinite(test_sketch_guided)
+    assert torch.isfinite(predict_sketch_disabled).all()
+    assert torch.isfinite(predict_sketch_guided).all()
+    assert sketch_disabled != sketch_guided
+    assert test_sketch_disabled != test_sketch_guided
+    assert not torch.allclose(predict_sketch_disabled, predict_sketch_guided)
 
 
 def test_train_fit_mode_partial_lance_root_does_not_build_test_split(

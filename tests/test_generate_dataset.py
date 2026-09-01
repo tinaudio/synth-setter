@@ -36,8 +36,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -70,6 +71,7 @@ from synth_setter.pipeline.schemas.render_metrics import (
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
+from synth_setter.pipeline.subprocess_stream import check_call_streamed
 from synth_setter.plugin_manager import ArtifactLock, PluginManifest, adopt_plugin_bundle
 from tests._vst import (
     PLUGIN_PATH,
@@ -78,6 +80,7 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.wandb_offline import read_history_rows, read_run_project
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -330,6 +333,12 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
+    monkeypatch.setattr(
+        "synth_setter.pipeline.ci.validate_shard.LANCE_VALIDATION_BATCH_SIZE_BYTES",
+        1,
+    )
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.synth.plugin_path = str(_TEST_PLUGIN_VST3)
@@ -340,20 +349,12 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         # from_hydra rebuilds internally derive the same shard URIs — an unpinned
         # created_at would fire its default factory twice and diverge the run_id.
         cfg_dataset.r2.prefix = "fake-r2/test-run/"
-        # Disable the default wandb logger: generate() would call wandb.init() and block.
-        cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
     # smoke-shard partitions into one shard per split, so the stub covers train→val→test.
     assert spec.split_shard_ranges == {"train": (0, 1), "val": (1, 2), "test": (2, 3)}
 
     render_shard = stub_renderer(spec)
-    metrics_rows: list[tuple[int | None, dict[str, object]]] = []
-    recording_logger = SimpleNamespace(
-        finalize=lambda _status: None,
-        log_hyperparams=lambda _payload: None,
-        log_metrics=lambda payload, step=None: metrics_rows.append((step, dict(payload))),
-    )
 
     def _render_with_rejections(args: list[str]) -> None:
         render_shard(args)
@@ -363,24 +364,31 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
                 RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
             )
 
-    with (
-        patch(
-            "synth_setter.cli.generate_dataset._check_call_streamed",
-            side_effect=_render_with_rejections,
-        ),
-        patch(
-            "synth_setter.cli.generate_dataset._loggers_pinned_to_spec",
-            return_value=[recording_logger],
-        ),
+    with patch(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        side_effect=_render_with_rejections,
     ):
         from_hydra(cfg_dataset)
 
-    shard_rows = [payload for step, payload in metrics_rows if step is not None]
-    assert [row["shard/samples_rejected_clipped"] for row in shard_rows] == [2, 2, 2]
-    assert [row["shard/samples_rejected_silent"] for row in shard_rows] == [3, 3, 3]
-    summary = next(payload for step, payload in metrics_rows if step is None)
-    assert summary["generation/samples_rejected_clipped"] == 6
-    assert summary["generation/samples_rejected_silent"] == 9
+    wandb_binaries = list(
+        Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
+    )
+    assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
+    wandb_binary = wandb_binaries[0]
+    assert read_run_project(wandb_binary) == "synth-setter-citest"
+    rows = read_history_rows(
+        wandb_binary,
+        until=lambda scanned: (
+            sum("shard/samples_rejected_clipped" in row for row in scanned) == 3
+            and any("generation/samples_rejected_clipped" in row for row in scanned)
+        ),
+    )
+    shard_rows = [row for row in rows if "shard/samples_rejected_clipped" in row]
+    assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2, 2]
+    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3, 3]
+    summary = next(row for row in rows if "generation/samples_rejected_clipped" in row)
+    assert json.loads(summary["generation/samples_rejected_clipped"]) == 6
+    assert json.loads(summary["generation/samples_rejected_silent"]) == 9
 
     # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
@@ -409,6 +417,9 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         physical_schema = LanceFileReader(str(data_files[0])).metadata().schema
         assert physical_schema.field("audio").type.value_type == pa.float32()
         assert physical_schema.field("mel_spec").type.value_type == pa.float16()
+
+    with open_dict(cfg_dataset):
+        cfg_dataset.logger = None
 
     renderer_invocations = 0
 
@@ -696,16 +707,17 @@ def test_from_hydra_lance_render_failing_local_validation_never_stages_a_valid_m
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
+def test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Claims mode stages one real VST Lance shard that validates from fake R2.
+    """Parallel claims mode renders, validates, and stages two consumable shards.
 
-    :param cfg_dataset: Hydra dataset config reduced to one sample and shard.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote
-        (also where ``lance_target`` resolves the claims table).
+    :param cfg_dataset: Hydra dataset config reduced to two one-sample shards.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Synchronizes renderer entry and pins two local workers.
     :param tmp_path: Scratch directory holding Hydra's worktree-relative links.
     """
     from synth_setter.pipeline.r2_io import lance_target
@@ -715,9 +727,10 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
-        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.train_val_test_sizes = [2, 0, 0]
         cfg_dataset.use_shard_queue = True
         cfg_dataset.synth.plugin_path = str(_managed_real_plugin(tmp_path))
+        cfg_dataset.render.parallel = True
         cfg_dataset.render.samples_per_render_batch = 1
         cfg_dataset.render.samples_per_shard = 1
         cfg_dataset.r2.prefix = "fake-r2/real-vst-claims/"
@@ -726,13 +739,26 @@ def test_from_hydra_claims_mode_real_vst_writes_consumable_shard(
     spec = spec_from_cfg(cfg_dataset)
     claims = ShardClaims.for_run(*lance_target(spec.r2.shard_claims_uri()))
     claims.populate(shard.shard_id for shard in spec.shards)
+    render_barrier = threading.Barrier(2, timeout=10.0)
+
+    def _synchronize_renderers(cmd: Sequence[str]) -> bytes:
+        if any(Path(part).name == "generate_vst_dataset.py" for part in cmd):
+            render_barrier.wait()
+        return check_call_streamed(cmd)
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        _synchronize_renderers,
+    )
 
     from_hydra(cfg_dataset)
 
     staging_root = (
         fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "metadata" / "workers" / "shards"
     )
-    assert len(list(staging_root.rglob("*.valid"))) == 1
+    assert len(list(staging_root.rglob("*.valid"))) == 2
+    assert all(shard_has_complete_attempt(spec, shard.shard_id) for shard in spec.shards)
     assert validate_all_shards_from_r2(spec) == []
     assert claims.claim() is None
     assert claims.status_counts() == {"done": spec.num_shards}

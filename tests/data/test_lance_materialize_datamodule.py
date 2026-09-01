@@ -23,6 +23,7 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from tests.helpers.lance_fixtures import (
     NUM_PARAMS,
+    record_lance_scan_and_write_options,
     write_mel_stats,
     write_seeded_lance_shard,
 )
@@ -91,6 +92,20 @@ def _sidecar_copier(
 
 class TestMaterializeInitValidation:
     """``__init__`` fails loudly on inconsistent materialization configuration."""
+
+    def test_init_non_bool_high_memory_materialization_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-boolean memory setting is rejected at the config boundary.
+
+        :param tmp_path: Local dataset root.
+        """
+        with pytest.raises(ValueError, match="high_memory_materialization"):
+            LanceVSTDataModule(
+                dataset_root=tmp_path,
+                high_memory_materialization=cast(bool, "yes"),
+                param_spec_name=_PARAM_SPEC,
+            )
 
     def test_init_materialize_missing_split_txid_raises(self, tmp_path: Path) -> None:
         """A mapping that omits a needed split is rejected.
@@ -486,10 +501,10 @@ class TestMaterializedSubsetLayout:
 class TestMaterializePrepareData:
     """``prepare_data()`` rematerializes projected, row-capped local splits."""
 
-    def test_prepare_data_materialize_on_builds_projected_row_capped_splits(
+    def test_prepare_data_high_memory_builds_projected_row_capped_splits(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Each split lands locally with only the derived columns and the row cap.
+        """The high-memory option reaches real hydration and preserves split contents.
 
         :param source_root: Fixture-provided hydration source.
         :param tmp_path: Parent of the local dataset root.
@@ -500,11 +515,13 @@ class TestMaterializePrepareData:
         monkeypatch.setattr(
             "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite", hydrate
         )
+        scanner_calls, writer_calls = record_lance_scan_and_write_options(monkeypatch)
         module = LanceVSTDataModule(
             dataset_root=destination,
             download_dataset_root_uri=source_root.as_uri(),
             download_dataset_txids=_txids(source_root),
             download_dataset_row_limit=4,
+            high_memory_materialization=True,
             batch_size=2,
             num_workers=0,
             pin_memory=False,
@@ -513,6 +530,9 @@ class TestMaterializePrepareData:
 
         module.prepare_data()
 
+        assert module.high_memory_materialization is True
+        assert [call["batch_size"] for call in scanner_calls] == [8192, 8192, 8192]
+        assert [call["max_rows_per_group"] for call in writer_calls] == [4096, 4096, 4096]
         expected_columns = {
             "train": ["param_array", "mel_spec"],
             "val": ["param_array", "mel_spec"],

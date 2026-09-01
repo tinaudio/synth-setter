@@ -54,13 +54,13 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > implemented today (`src/synth_setter/cli/generate_dataset.py` loops over
 > `spec.shards`, skipping shards already present in R2 — worker-side
 > resumability MVP per #750; the launcher-side reconciliation engine described
-> in §7.4 / §7.7 is not yet built). When `render.parallel=True`, owned shards
+> in §7.4 / §7.7 is not yet built). When `render.parallel=true`, owned shards
 > dispatch concurrently via a thread pool sized to half the worker's
 > affinity-aware CPU count; transient renderer subprocess failures are retried
 > up to `render.max_retries` times (default 0 = strict fail-fast).
 > `use_shard_queue=true` instead claims shard IDs dynamically from the run's
-> Lance shard-claims table (§7.1); claims mode renders one claim at a time and
-> ignores `render.parallel`. The
+> Lance shard-claims table (§7.1), using the same local concurrency bound when
+> parallel rendering is enabled. The
 > distributed/parallel pipeline described below — CLI, backends, reconciliation,
 > and finalize stages — is the design target and not yet built.
 
@@ -1156,12 +1156,13 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 
 `sketch` is not a learned embedding: it extracts the Sketch2Sound-style
 loudness, spectral-centroid, and PESTO pitch tracks
-(`features/sketch_controls.py`) from `audio` on the mel frame grid and writes
-them as a `sketch` struct column (#2707) with `loudness`/`centroid`
-fixed-size-list children, a `pitch` fixed-shape-tensor child, and a
-frame-mean `vec` child indexed via its dotted path for contour-similarity
-search. The struct is an atomic write unit — refreshing one child means
-rewriting the whole column (requires Lance data storage 2.2). Its `IndexSpec`
+(`features/sketch_controls.py`) from `audio` on the mel frame grid, then stores
+32-frame model-ready controls in a `sketch` struct column (#2707). Loudness and
+centroid use adaptive average pooling; pitch uses adaptive maximum pooling and
+remains unthresholded. The `vec` child stores the pooled frame mean for
+contour-similarity search. The struct is an atomic write unit — refreshing
+one child means rewriting the whole column (requires Lance data storage 2.2).
+`sketch=on` consumes this canonical layout. Its `IndexSpec`
 fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config

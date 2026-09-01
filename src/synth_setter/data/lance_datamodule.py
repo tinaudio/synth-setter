@@ -520,6 +520,7 @@ class LanceVSTDataModule(VSTDataModule):
         prefetch_factor: int | None = None,
         download_dataset_txids: dict[str, str] | None = None,
         download_dataset_row_limit: int | None = None,
+        high_memory_materialization: bool = False,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -545,6 +546,7 @@ class LanceVSTDataModule(VSTDataModule):
             source snapshots.
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
+        :param high_memory_materialization: Whether to use high-memory Lance tuning.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -562,6 +564,7 @@ class LanceVSTDataModule(VSTDataModule):
             param_spec_name=param_spec_name,
             download_dataset_txids=download_dataset_txids,
             download_dataset_row_limit=download_dataset_row_limit,
+            high_memory_materialization=high_memory_materialization,
         )
         self.val_num_workers = val_num_workers
         self.persistent_workers = persistent_workers

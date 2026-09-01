@@ -85,6 +85,41 @@ def test_vst_slow_meanaudio_changes_trigger_real_eval_e2e(
 
 
 @pytest.mark.infra
+def test_vst_slow_runs_parallel_queue_real_vst_e2e(project_root: Path) -> None:
+    """The Surge cell proves two queue-owned VST renders overlap.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    """
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    strategy = cast(dict[str, object], jobs["run_vst_slow_tests"]["strategy"])
+    matrix = cast(dict[str, list[dict[str, str]]], strategy["matrix"])
+    surge = next(row for row in matrix["include"] if row["synth"] == "surge_xt")
+
+    assert (
+        "tests/test_generate_dataset.py::"
+        "test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards"
+        in surge["pytest_targets"].split()
+    )
+
+
+@pytest.mark.infra
+@pytest.mark.parametrize("event_name", ["push", "pull_request"])
+def test_vst_slow_parallel_queue_changes_trigger_real_vst_e2e(
+    project_root: Path, event_name: str
+) -> None:
+    """Queue implementation and E2E changes select the real-VST workflow.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    :param event_name: GitHub event whose path filter is checked.
+    """
+    triggers = _load_triggers(project_root)
+
+    assert "src/synth_setter/cli/generate_dataset.py" in triggers[event_name]["paths"]
+    assert "tests/test_generate_dataset.py" in triggers[event_name]["paths"]
+
+
+@pytest.mark.infra
 def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None:
     """Pin the JSON handoff and benchmark action required for publication.
 
