@@ -1831,6 +1831,8 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 "-m",
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                "render=vst_pyfdn",
+                "render.sample_rate=48000",
                 f"r2.prefix_root={prefix_root}",
                 f"hydra.run.dir={run_dir}",
             ],
@@ -1856,7 +1858,13 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert eval_cfg.render.renderer_backend == "pedalboard"
             assert eval_cfg.render.plugin_reload_cadence == "render"
             assert eval_cfg.render.gui_toggle_cadence == "once"
-            assert eval_cfg.render.sample_rate == 44100
+            assert eval_cfg.render.sample_rate == 48000
+            assert eval_cfg.render.pyfdn_effect == {
+                "package_version": "0.4.2",
+                "preset_name": "colorless_N8_d1",
+                "decay_seconds": 1.5,
+                "wet_mix": 0.1,
+            }
 
         # One metrics.json per split: oracle_eval/<split>/<run_id>/metrics/metrics.json.
         metrics_files = list(run_dir.glob("oracle_eval/*/*/metrics/metrics.json"))

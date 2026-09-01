@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class PyFDNEffectRenderer(AudioRenderer):
     """Apply a fixed feedback-delay-network effect after an inner render."""
 
-    def __init__(self, *, inner: AudioRenderer, effect: PyFDNEffectConfig) -> None:
+    def __init__(self, *, inner: AudioRenderer, effect: PyFDNEffectConfig):
         """Load and validate the configured pyFDN build.
 
         :param inner: Synth renderer whose channel-first output is processed live.
@@ -56,32 +56,26 @@ class PyFDNEffectRenderer(AudioRenderer):
 
     @property
     def plugin_path(self) -> str:
-        """Delegate the wrapped renderer's plugin identity."""
         return self.inner.plugin_path
 
     @property
     def sample_rate(self) -> float:
-        """Delegate the wrapped renderer's sample rate in Hz."""
         return self.inner.sample_rate
 
     @property
     def channels(self) -> int:
-        """Delegate the wrapped renderer's output channel count."""
         return self.inner.channels
 
     @property
     def signal_duration_seconds(self) -> float:
-        """Delegate the wrapped renderer's fixed signal duration."""
         return self.inner.signal_duration_seconds
 
     @property
     def plugin_state_path(self) -> str | None:
-        """Delegate the wrapped renderer's baseline preset path."""
         return self.inner.plugin_state_path
 
     @property
     def editor_plugin(self) -> VST3Plugin | None:
-        """Expose the wrapped cached plugin for always-on editor sessions."""
         return self.inner.editor_plugin
 
     def render(

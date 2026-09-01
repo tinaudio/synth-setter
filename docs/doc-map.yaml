@@ -151,7 +151,6 @@ docs:
       - pattern: "src/synth_setter/utils/utils.py"
         covers: "${wandb:…} resolver (_resolve_wandb_checkpoint) and register_resolvers cache behavior"
 
-  # ── Architecture overview ──────────────────────────────────────
   - doc: docs/architecture.md
     description: Render-pipeline architecture and profile boundaries
     sources:
