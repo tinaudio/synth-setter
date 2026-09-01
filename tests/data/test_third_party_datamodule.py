@@ -75,6 +75,7 @@ def _datamodule(
     sample_rate: int = _TARGET_SAMPLE_RATE,
     audio_column: str = AUDIO_FIELD,
     amplitude_scale: float = 1.0,
+    dataset_version: int = 1,
     row_limit: int | None = None,
     num_workers: int = 0,
     use_saved_mean_and_variance: bool = False,
@@ -86,6 +87,7 @@ def _datamodule(
     :param sample_rate: Target render rate the corpus is mapped onto.
     :param audio_column: Blob column the corpus stores its audio in.
     :param amplitude_scale: Gain applied to decoded audio.
+    :param dataset_version: Immutable Lance snapshot to serve.
     :param row_limit: Cap on served rows, or ``None`` for the whole corpus.
     :param num_workers: Dataloader worker processes.
     :param use_saved_mean_and_variance: Whether mel is standardized.
@@ -97,6 +99,7 @@ def _datamodule(
         sample_rate=sample_rate,
         channels=_TARGET_CHANNELS,
         signal_duration_seconds=_DURATION_SECONDS,
+        dataset_version=dataset_version,
         batch_size=2,
         audio_column=audio_column,
         amplitude_scale=amplitude_scale,
@@ -258,6 +261,7 @@ def test_non_mel_conditioning_raises(tmp_path: Path) -> None:
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=_DURATION_SECONDS,
+            dataset_version=1,
             conditioning="clap",
         )
 
@@ -695,6 +699,7 @@ def test_render_contract_without_a_positive_sample_grid_raises(
             sample_rate=sample_rate,
             channels=channels,
             signal_duration_seconds=duration,
+            dataset_version=1,
         )
 
 
@@ -711,6 +716,7 @@ def test_non_positive_channel_count_raises(tmp_path: Path) -> None:
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=0,
             signal_duration_seconds=_DURATION_SECONDS,
+            dataset_version=1,
         )
 
 
@@ -727,6 +733,7 @@ def test_boolean_count_argument_raises(tmp_path: Path, field: str) -> None:
         "sample_rate": _TARGET_SAMPLE_RATE,
         "channels": _TARGET_CHANNELS,
         "signal_duration_seconds": _DURATION_SECONDS,
+        "dataset_version": 1,
         field: True,
     }
 
@@ -747,6 +754,7 @@ def test_boolean_amplitude_scale_raises(tmp_path: Path, amplitude_scale: bool) -
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=_DURATION_SECONDS,
+            dataset_version=1,
             amplitude_scale=amplitude_scale,
         )
 
@@ -768,6 +776,7 @@ def test_amplitude_scale_outside_positive_finite_domain_raises(
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=_DURATION_SECONDS,
+            dataset_version=1,
             amplitude_scale=amplitude_scale,
         )
 
@@ -785,6 +794,7 @@ def test_non_positive_batch_size_raises(tmp_path: Path) -> None:
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=_DURATION_SECONDS,
+            dataset_version=1,
             batch_size=0,
         )
 
@@ -804,6 +814,7 @@ def test_negative_rate_and_duration_cancelling_into_a_positive_grid_raises(
             sample_rate=-4000,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=-0.5,
+            dataset_version=1,
         )
 
 
@@ -841,6 +852,49 @@ def test_setup_transient_lance_open_failure_retries_and_serves_corpus(
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
 
 
+def test_dataloader_batch_reads_blobs_together_and_preserves_requested_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One native blob read serves an ordered batch with duplicate indices.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param monkeypatch: Fixture requiring one complete Lance selection.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=index) for index in range(4)])
+    datamodule = _datamodule(corpus)
+    datamodule.setup("predict")
+    pinned = lance.dataset(corpus, version=datamodule.dataset_version)
+
+    class CompleteBatchOnly:
+        def read_blobs(
+            self,
+            blob_column: str,
+            *,
+            indices: list[int],
+            preserve_order: bool = True,
+        ) -> list[tuple[int, bytes]]:
+            if indices != [2, 0, 2, 1]:
+                raise AssertionError(f"expected one complete batch, got {indices}")
+            return pinned.read_blobs(
+                blob_column, indices=indices, preserve_order=preserve_order
+            )
+
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.lance.dataset",
+        lambda *args, **kwargs: CompleteBatchOnly(),
+    )
+    dataset = datamodule.predict_dataloader().dataset
+    loader = torch.utils.data.DataLoader(dataset, batch_sampler=[[2, 0, 2, 1]])
+
+    audio = next(iter(loader))["audio"]
+
+    assert audio.shape == (4, _TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert torch.equal(audio[0], audio[2])
+    assert not torch.equal(audio[0], audio[1])
+    assert not torch.equal(audio[2], audio[3])
+
+
 def test_row_read_transient_blob_failure_retries_and_returns_audio(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -850,7 +904,10 @@ def test_row_read_transient_blob_failure_retries_and_returns_audio(
     :param monkeypatch: Fixture injecting one transient Lance failure.
     """
     corpus = tmp_path / "corpus.lance"
-    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=45)])
+    _write_corpus(
+        corpus,
+        [_tone(_DURATION_SECONDS, seed=45), _tone(_DURATION_SECONDS, seed=46)],
+    )
     datamodule = _datamodule(corpus)
     datamodule.setup("predict")
     pinned = lance.dataset(corpus, version=datamodule.dataset_version)
@@ -860,12 +917,20 @@ def test_row_read_transient_blob_failure_retries_and_returns_audio(
             self.attempts = 0
 
         def read_blobs(
-            self, blob_column: str, *, indices: list[int]
+            self,
+            blob_column: str,
+            *,
+            indices: list[int],
+            preserve_order: bool = True,
         ) -> list[tuple[int, bytes]]:
+            if indices != [0, 1]:
+                raise AssertionError(f"expected one complete batch, got {indices}")
             self.attempts += 1
             if self.attempts == 1:
                 raise TimeoutError("transient object-store timeout")
-            return pinned.read_blobs(blob_column, indices=indices)
+            return pinned.read_blobs(
+                blob_column, indices=indices, preserve_order=preserve_order
+            )
 
     flaky_dataset = BlobReadAfterTimeout()
     monkeypatch.setattr(
@@ -875,7 +940,40 @@ def test_row_read_transient_blob_failure_retries_and_returns_audio(
 
     batch = next(iter(datamodule.predict_dataloader()))
 
-    assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert batch["audio"].shape == (2, _TARGET_CHANNELS, _TARGET_SAMPLES)
+
+
+def test_configured_version_replays_snapshot_after_later_commit(tmp_path: Path) -> None:
+    """A stored dataset version reproduces the same corpus after later commits.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    original = _tone(_DURATION_SECONDS, seed=47)
+    _write_corpus(corpus, [original])
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=48)], mode="overwrite")
+
+    served = _first_batch(_datamodule(corpus, dataset_version=1))["audio"]
+    expected = decode_clip(
+        wav_bytes(original, _SOURCE_SAMPLE_RATE),
+        sample_rate=_TARGET_SAMPLE_RATE,
+        channels=_TARGET_CHANNELS,
+        num_samples=_TARGET_SAMPLES,
+        amplitude_scale=1.0,
+    )
+
+    assert torch.equal(served, torch.from_numpy(expected).unsqueeze(0))
+
+
+@pytest.mark.parametrize("dataset_version", [True, 0, -1])
+def test_invalid_dataset_version_raises(tmp_path: Path, dataset_version: int) -> None:
+    """A mutable or nonexistent snapshot identifier fails before corpus access.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param dataset_version: Invalid Lance version.
+    """
+    with pytest.raises(ValueError, match="dataset_version"):
+        _datamodule(tmp_path / "corpus.lance", dataset_version=dataset_version)
 
 
 def test_setup_pins_the_snapshot_against_later_corpus_commits(tmp_path: Path) -> None:
@@ -918,6 +1016,7 @@ def test_non_numeric_duration_raises(tmp_path: Path) -> None:
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds="0.5",  # type: ignore[arg-type]
+            dataset_version=1,
         )
 
 
@@ -934,6 +1033,7 @@ def test_statistics_configured_with_normalization_off_raises(tmp_path: Path) -> 
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=_DURATION_SECONDS,
+            dataset_version=1,
             use_saved_mean_and_variance=False,
             mel_stats_uri="r2://intermediate-data/stats.json",
         )

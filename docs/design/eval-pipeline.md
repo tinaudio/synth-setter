@@ -255,8 +255,10 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 ### Third-party corpora
 
 `datamodule=third_party/{nsynth_test,esc50}` scores a mel-conditioned checkpoint against
-published Lance corpora under `r2:experiments/third_party`. Source WAV blobs are read in
-place and mapped onto the checkpoint's render contract per batch: decode, resample, mono
+published Lance corpora under `r2:experiments/third_party`. Each corpus config pins an
+immutable `datamodule.dataset_version`, so the resolved Hydra config replays the same Lance
+snapshot after later corpus commits. Source WAV blobs are read in place through native batched
+reads and mapped onto the checkpoint's render contract per batch: decode, resample, mono
 to stereo, pad or trim, amplitude scale, canonical mel computation, and optional
 normalization with the checkpoint's pinned `datamodule.mel_stats_uri`. That URI is mandatory
 because corpus statistics cannot replace the checkpoint's training statistics. A checkpoint

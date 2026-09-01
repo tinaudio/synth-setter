@@ -7,6 +7,7 @@ channels: ${render.channels}
 signal_duration_seconds: ${render.signal_duration_seconds}
 
 dataset_uri: ???
+dataset_version: ???
 # Published corpora name their blob column differently; each corpus config sets its own.
 audio_column: audio
 amplitude_scale: 1.0

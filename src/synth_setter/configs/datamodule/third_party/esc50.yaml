@@ -4,4 +4,5 @@ defaults:
 
 # This corpus uses a non-default blob-column name.
 dataset_uri: r2://experiments/third_party/ESC50/all.lance
+dataset_version: 1
 audio_column: audio_wav

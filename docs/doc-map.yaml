@@ -362,7 +362,7 @@ docs:
       - pattern: "src/synth_setter/data/third_party_datamodule.py"
         covers: "Predict-only loader for published third-party audio corpora."
       - pattern: "src/synth_setter/configs/datamodule/third_party/**"
-        covers: "Per-corpus descriptors and the required checkpoint mel-statistics contract."
+        covers: "Per-corpus snapshot pins and the checkpoint mel-statistics contract."
       - pattern: "src/synth_setter/configs/train.yaml"
         covers: "Top-level training config, Hydra defaults list, config groups"
       - pattern: "src/synth_setter/configs/trainer/**"

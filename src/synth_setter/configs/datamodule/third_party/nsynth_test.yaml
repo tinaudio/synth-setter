@@ -4,3 +4,4 @@ defaults:
 
 # The published corpus is read in place.
 dataset_uri: r2://experiments/third_party/NSynth/test.lance
+dataset_version: 1

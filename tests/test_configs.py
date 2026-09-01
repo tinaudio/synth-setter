@@ -1382,6 +1382,7 @@ def test_third_party_eval_config_resolves_per_corpus(corpus: str, audio_column: 
     )
 
     assert cfg.datamodule.audio_column == audio_column
+    assert cfg.datamodule.dataset_version == 1
     assert cfg.datamodule.sample_rate == cfg.render.sample_rate
     assert cfg.datamodule.signal_duration_seconds == cfg.render.signal_duration_seconds
     assert cfg.datamodule.conditioning == "mel"

@@ -14,7 +14,7 @@ import io
 import logging
 import math
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -100,6 +100,7 @@ def _validate_numeric_config(
     channels: int,
     signal_duration_seconds: float,
     amplitude_scale: float,
+    dataset_version: int,
     batch_size: int,
     num_workers: int,
 ) -> int:
@@ -109,6 +110,7 @@ def _validate_numeric_config(
     :param channels: Target channel count.
     :param signal_duration_seconds: Target clip duration.
     :param amplitude_scale: Gain applied to decoded audio.
+    :param dataset_version: Immutable Lance snapshot to serve.
     :param batch_size: Rows per predict batch.
     :param num_workers: Dataloader workers decoding rows.
     :returns: Target samples per clip.
@@ -117,6 +119,7 @@ def _validate_numeric_config(
     for name, value in (
         ("sample_rate", sample_rate),
         ("channels", channels),
+        ("dataset_version", dataset_version),
         ("batch_size", batch_size),
         ("num_workers", num_workers),
     ):
@@ -128,6 +131,8 @@ def _validate_numeric_config(
         raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
     if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
         raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
+    if dataset_version <= 0:
+        raise ValueError(f"dataset_version={dataset_version} must be positive")
     if batch_size <= 0:
         raise ValueError(f"batch_size={batch_size} must be positive")
     if sample_rate <= 0:
@@ -256,16 +261,12 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
             )
         return self._dataset
 
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        """Decode one row onto the render contract.
+    def _decode(self, data: bytes) -> dict[str, torch.Tensor]:
+        """Decode one stored container into model audio and mel tensors.
 
-        :param index: Row index.
+        :param data: Source audio container bytes.
         :returns: ``audio`` and ``mel`` for one clip.
         """
-        _, data = _retry_lance_read(
-            "third_party_blob_read",
-            lambda: self._open().read_blobs(self.audio_column, indices=[index]),
-        )[0]
         audio = decode_clip(
             data,
             sample_rate=self.sample_rate,
@@ -275,6 +276,31 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         )
         mel = make_spectrogram(audio, self.sample_rate).astype(np.float32)
         return {"audio": torch.from_numpy(audio), "mel": torch.from_numpy(mel)}
+
+    def __getitems__(self, indices: Sequence[int]) -> list[dict[str, torch.Tensor]]:
+        """Decode one ordered index batch through Lance's native blob scheduler.
+
+        :param indices: Row indices, including any requested duplicates.
+        :returns: One decoded sample per index in the requested order.
+        """
+        selected = list(indices)
+        blobs = _retry_lance_read(
+            "third_party_blob_read",
+            lambda: self._open().read_blobs(
+                self.audio_column,
+                indices=selected,
+                preserve_order=True,
+            ),
+        )
+        return [self._decode(data) for _, data in blobs]
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        """Decode one row onto the render contract.
+
+        :param index: Row index.
+        :returns: ``audio`` and ``mel`` for one clip.
+        """
+        return self.__getitems__((index,))[0]
 
 
 class ThirdPartyAudioDataModule(LightningDataModule):
@@ -291,6 +317,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         sample_rate: int,
         channels: int,
         signal_duration_seconds: float,
+        dataset_version: int,
         audio_column: str = AUDIO_FIELD,
         amplitude_scale: float = 1.0,
         batch_size: int = 32,
@@ -307,6 +334,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param sample_rate: Target sample rate in Hz.
         :param channels: Target channel count.
         :param signal_duration_seconds: Target clip duration.
+        :param dataset_version: Immutable Lance snapshot to serve.
         :param audio_column: Blob column holding source container bytes.
         :param amplitude_scale: Gain applied to decoded audio before the mel front-end.
         :param batch_size: Rows per predict batch.
@@ -329,10 +357,12 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             channels=channels,
             signal_duration_seconds=signal_duration_seconds,
             amplitude_scale=amplitude_scale,
+            dataset_version=dataset_version,
             batch_size=batch_size,
             num_workers=num_workers,
         )
         self.dataset_uri = dataset_uri
+        self.dataset_version = dataset_version
         self.sample_rate = sample_rate
         self.channels = channels
         self.num_samples = num_samples
@@ -344,7 +374,6 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.conditioning = conditioning
         self.mel_stats_uri = mel_stats_uri
         self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
-        self.dataset_version: int | None = None
         self._statistics: tuple[torch.Tensor, torch.Tensor] | None = None
         self._predict_dataset: _BlobAudioDataset | None = None
 
@@ -388,7 +417,11 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         )
         dataset = _retry_lance_read(
             "third_party_corpus_open",
-            lambda: lance.dataset(uri, storage_options=storage_options),
+            lambda: lance.dataset(
+                uri,
+                version=self.dataset_version,
+                storage_options=storage_options,
+            ),
         )
         if self.audio_column not in dataset.schema.names:
             raise KeyError(
