@@ -19,8 +19,10 @@ import click
 import numpy as np
 import torch
 from pedalboard.io import AudioFile
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from synth_setter.cli._cfg_strength import (
+    CfgStrengths,
     apply_cfg_strength_overrides,
     validate_cfg_strength,
 )
@@ -88,6 +90,48 @@ _EXPECTED_SKETCH_CONFIG = MappingProxyType(
         "pitch_zero_threshold": _PITCH_ZERO_THRESHOLD,
     }
 )
+_RETAINED_ARTIFACT_FILENAMES = (
+    "guide.wav",
+    "manifest.json",
+    "params.csv",
+    "pred.wav",
+    "ref.wav",
+)
+
+
+class _RetainedRunManifest(BaseModel):
+    """Validated upload coordinates read from a retained run manifest.
+
+    .. attribute :: model_config
+
+        Strict immutable manifest validation.
+
+    .. attribute :: run_id
+
+        Identifier expected to match the retained directory name.
+
+    .. attribute :: r2_uri
+
+        Recorded R2 upload destination.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+
+    run_id: str
+    r2_uri: str
+
+    @field_validator("r2_uri")
+    @classmethod
+    def _r2_uri_is_valid(cls, value: str) -> str:
+        """Require an R2 destination.
+
+        :param value: Recorded artifact destination.
+        :returns: Validated destination unchanged.
+        :raises ValueError: The destination does not use the R2 URI scheme.
+        """
+        if not r2_io.is_r2_uri(value):
+            raise ValueError("manifest r2_uri must use r2://")
+        return value
 
 
 @dataclass(frozen=True)
@@ -256,15 +300,13 @@ def write_output_artifacts(
 def write_run_manifest(
     output_dir: Path,
     destination_uri: str,
-    content_cfg_strength: float,
-    sketch_cfg_strength: float,
+    cfg_strengths: CfgStrengths[float],
 ) -> None:
     """Record immutable model, feature, render, and destination provenance.
 
     :param output_dir: Retained local output directory.
     :param destination_uri: R2 prefix receiving the run artifacts.
-    :param content_cfg_strength: Effective reference-mel guidance strength.
-    :param sketch_cfg_strength: Effective sketch-control guidance strength.
+    :param cfg_strengths: Effective content and sketch guidance strengths.
     """
     synth_identity = SYNTHS[SynthName(_SURGE_PARAM_SPEC_NAME)]
     manifest = {
@@ -273,8 +315,8 @@ def write_run_manifest(
         "r2_uri": destination_uri,
         "code_version": version("synth-setter"),
         "git_sha": resolve_git_sha(),
-        "content_cfg_strength": content_cfg_strength,
-        "sketch_cfg_strength": sketch_cfg_strength,
+        "content_cfg_strength": cfg_strengths.content,
+        "sketch_cfg_strength": cfg_strengths.sketch,
         "checkpoint": {"uri": DEFAULT_CHECKPOINT_URI, "sha256": _CHECKPOINT_SHA256},
         "stats": {"uri": DEFAULT_STATS_URI, "sha256": _STATS_SHA256},
         "render": {
@@ -298,6 +340,41 @@ def upload_output_artifacts(output_dir: Path, destination_uri: str) -> None:
     :param destination_uri: Unique R2 prefix receiving the directory contents.
     """
     r2_io.upload_dir(output_dir, destination_uri)
+
+
+def retry_output_upload(output_dir: Path) -> str:
+    """Validate and upload one retained sketch-render directory.
+
+    :param output_dir: Existing directory from a failed upload attempt.
+    :returns: Recorded R2 destination.
+    :raises click.ClickException: The retained manifest or artifact set is invalid.
+    """
+    for filename in _RETAINED_ARTIFACT_FILENAMES:
+        artifact = output_dir / filename
+        if not artifact.is_file() or artifact.is_symlink():
+            raise click.ClickException(f"missing retained artifact: {filename}")
+    unexpected = sorted(
+        path.name for path in output_dir.iterdir() if path.name not in _RETAINED_ARTIFACT_FILENAMES
+    )
+    if unexpected:
+        raise click.ClickException(f"unexpected retained artifact: {unexpected[0]}")
+
+    manifest_path = output_dir / "manifest.json"
+    try:
+        manifest = _RetainedRunManifest.model_validate_json(
+            manifest_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError) as exc:
+        raise click.ClickException("could not read manifest.json") from exc
+    except ValidationError as exc:
+        detail = str(exc.errors()[0]["msg"]).removeprefix("Value error, ")
+        raise click.ClickException(f"invalid manifest.json: {detail}") from exc
+    if manifest.run_id != output_dir.name:
+        raise click.ClickException("manifest run_id must match output directory name")
+
+    r2_io.ensure_r2_env_loaded()
+    upload_output_artifacts(output_dir, manifest.r2_uri)
+    return manifest.r2_uri
 
 
 def _normalize_sketch_config(hyper_parameters: Mapping[str, object]) -> dict[str, object]:
@@ -413,21 +490,17 @@ def _load_model(checkpoint_path: Path, device: torch.device) -> VSTFlowMatchingM
 def _predict_patch(
     prepared: PreparedAudioInputs,
     model: VSTFlowMatchingModule,
-    content_cfg_strength: float | None,
-    sketch_cfg_strength: float | None,
-) -> tuple[dict[str, float], NoteParams, float, float]:
+    requested_strengths: CfgStrengths[float | None],
+) -> tuple[dict[str, float], NoteParams, CfgStrengths[float]]:
     """Infer and decode one Surge patch through the model's predict step.
 
     :param prepared: Reference mel and guide controls.
     :param model: Compatible flow model in eval mode.
-    :param content_cfg_strength: Optional reference-mel guidance override.
-    :param sketch_cfg_strength: Optional sketch-control guidance override.
-    :returns: Renderer parameters followed by effective content and sketch strengths.
+    :param requested_strengths: Optional content and sketch guidance overrides.
+    :returns: Renderer parameters and effective guidance strengths.
     :raises ValueError: The prediction is non-finite or has the wrong shape.
     """
-    effective_content, effective_sketch = apply_cfg_strength_overrides(
-        model.hparams, content_cfg_strength, sketch_cfg_strength
-    )
+    effective_strengths = apply_cfg_strength_overrides(model.hparams, requested_strengths)
     batch = {
         "mel": prepared.ref_mel.unsqueeze(0).to(model.device),
         "sketch_ctrl": prepared.sketch_controls.unsqueeze(0).to(model.device),
@@ -446,7 +519,7 @@ def _predict_patch(
     synth_params, note_params = decode_model_output(
         prediction[0].detach().cpu().float().numpy(), param_specs[_SURGE_PARAM_SPEC_NAME]
     )
-    return synth_params, note_params, effective_content, effective_sketch
+    return synth_params, note_params, effective_strengths
 
 
 def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> RenderedPatch:
@@ -527,15 +600,13 @@ def _artifact_roots() -> tuple[Path, str]:
 def _run_request(
     guide_audio: Path,
     ref_audio: Path,
-    content_cfg_strength: float | None,
-    sketch_cfg_strength: float | None,
+    requested_strengths: CfgStrengths[float | None],
 ) -> tuple[Path, str]:
     """Run one complete local render and R2 upload.
 
     :param guide_audio: Audio supplying sketch controls.
     :param ref_audio: Audio supplying mel conditioning.
-    :param content_cfg_strength: Optional reference-mel guidance override.
-    :param sketch_cfg_strength: Optional sketch-control guidance override.
+    :param requested_strengths: Optional content and sketch guidance overrides.
     :returns: Retained local output path and uploaded R2 prefix.
     """
     r2_io.ensure_r2_env_loaded()
@@ -546,8 +617,8 @@ def _run_request(
     prepared = prepare_audio_inputs(guide_audio, ref_audio, stats_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _load_model(checkpoint_path, device)
-    synth_params, note_params, effective_content, effective_sketch = _predict_patch(
-        prepared, model, content_cfg_strength, sketch_cfg_strength
+    synth_params, note_params, effective_strengths = _predict_patch(
+        prepared, model, requested_strengths
     )
     patch = _render_patch(synth_params, note_params)
 
@@ -556,7 +627,7 @@ def _run_request(
     output_dir = output_root / run_id
     destination_uri = f"{upload_root}/{run_id}"
     write_output_artifacts(output_dir, prepared, patch)
-    write_run_manifest(output_dir, destination_uri, effective_content, effective_sketch)
+    write_run_manifest(output_dir, destination_uri, effective_strengths)
     resolved_output = output_dir.resolve()
     click.echo(f"Local output: {resolved_output}", err=True)
     upload_output_artifacts(output_dir, destination_uri)
@@ -566,15 +637,13 @@ def _run_request(
 def _run_under_headless_wrapper(
     guide_audio: Path,
     ref_audio: Path,
-    content_cfg_strength: float | None,
-    sketch_cfg_strength: float | None,
+    requested_strengths: CfgStrengths[float | None],
 ) -> None:
     """Re-enter the public module under the packaged Linux X11 wrapper.
 
     :param guide_audio: Audio supplying sketch controls.
     :param ref_audio: Audio supplying mel conditioning.
-    :param content_cfg_strength: Optional reference-mel guidance override.
-    :param sketch_cfg_strength: Optional sketch-control guidance override.
+    :param requested_strengths: Optional content and sketch guidance overrides.
     """
     with as_file(vst_headless_wrapper()) as wrapper:
         command = [
@@ -588,10 +657,10 @@ def _run_under_headless_wrapper(
             "--ref_audio",
             str(ref_audio.resolve()),
         ]
-        if content_cfg_strength is not None:
-            command.extend(["--content-cfg-strength", str(content_cfg_strength)])
-        if sketch_cfg_strength is not None:
-            command.extend(["--sketch-cfg-strength", str(sketch_cfg_strength)])
+        if requested_strengths.content is not None:
+            command.extend(["--content-cfg-strength", str(requested_strengths.content)])
+        if requested_strengths.sketch is not None:
+            command.extend(["--sketch-cfg-strength", str(requested_strengths.sketch)])
         subprocess.run(  # noqa: S603 — fixed package entrypoint and validated paths
             command,
             check=True,
@@ -638,15 +707,15 @@ def main(
     :param content_cfg_strength: Optional reference-mel guidance override.
     :param sketch_cfg_strength: Optional sketch-control guidance override.
     """
+    requested_strengths = CfgStrengths(
+        content=content_cfg_strength,
+        sketch=sketch_cfg_strength,
+    )
     if sys.platform == "linux" and os.environ.get(_HEADLESS_ENV) != "1":
-        _run_under_headless_wrapper(
-            guide_audio, ref_audio, content_cfg_strength, sketch_cfg_strength
-        )
+        _run_under_headless_wrapper(guide_audio, ref_audio, requested_strengths)
         return
 
-    _, destination_uri = _run_request(
-        guide_audio, ref_audio, content_cfg_strength, sketch_cfg_strength
-    )
+    _, destination_uri = _run_request(guide_audio, ref_audio, requested_strengths)
     click.echo(destination_uri)
 
 

@@ -5,7 +5,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tenacity import wait_none
 
+from synth_setter import model_cache
 from synth_setter.model_cache import (
     cache_r2_file,
     checkpoint_files_sha256,
@@ -96,6 +98,43 @@ def test_cache_r2_file_invalid_namespace_raises(
             namespace,
             hashlib.sha256(b"expected").hexdigest(),
         )
+
+
+def test_cache_r2_file_transient_download_failure_retries_and_caches_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A transient first transfer is retried without weakening production backoff.
+
+    :param monkeypatch: Replaces the R2 transfer and removes test-only retry waiting.
+    :param tmp_path: Holds the isolated cache.
+    """
+    payload = b"complete checkpoint bytes"
+    attempts = 0
+
+    def flaky_download(_uri: str, destination: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.CalledProcessError(1, ["rclone", "copyto"])
+        destination.write_bytes(payload)
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(model_cache.r2_io, "download_to_path", flaky_download)
+    monkeypatch.setattr(
+        model_cache,
+        "_download_r2_file",
+        model_cache._download_r2_file.retry_with(wait=wait_none()),
+    )
+
+    cached = cache_r2_file(
+        "r2://bucket/models/weights.ckpt",
+        "surge-sketch",
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+    assert cached.read_bytes() == payload
+    assert attempts == 2
 
 
 def test_cache_r2_file_replaces_corrupt_cached_bytes_via_real_rclone(

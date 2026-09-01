@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -99,6 +100,16 @@ def _cache_destination(r2_uri: str, namespace: str, expected_sha256: str) -> Pat
     )
 
 
+@retry_external_io(retry_exceptions=(subprocess.CalledProcessError,))
+def _download_r2_file(r2_uri: str, destination: Path) -> None:
+    """Download one R2 object with bounded retries for transient rclone failures.
+
+    :param r2_uri: Source object URI.
+    :param destination: Exact local destination.
+    """
+    r2_io.download_to_path(r2_uri, destination)
+
+
 def _download_verified(r2_uri: str, destination: Path, expected_sha256: str) -> None:
     """Publish downloaded bytes only after digest verification.
 
@@ -113,7 +124,7 @@ def _download_verified(r2_uri: str, destination: Path, expected_sha256: str) -> 
     os.close(file_descriptor)
     temporary_path = Path(temporary_name)
     try:
-        r2_io.download_to_path(r2_uri, temporary_path)
+        _download_r2_file(r2_uri, temporary_path)
         actual_sha256 = file_sha256(temporary_path)
         if actual_sha256 != expected_sha256:
             raise ValueError(

@@ -42,4 +42,9 @@ local root.
 The same artifacts upload to a unique prefix under
 `r2://intermediate-data/eval/synth-setter-clap/`. Set
 `SYNTH_SETTER_SKETCH_UPLOAD_PREFIX` to use another `r2://` prefix. The command prints
-the local path to stderr and the final R2 URI as the last stdout line.
+the local path to stderr and the final R2 URI as the last stdout line. If that upload
+fails after inference, resume it from the retained directory:
+
+```bash
+synth-setter-clap --retry-upload outputs/synth-setter-clap/<run_id>
+```

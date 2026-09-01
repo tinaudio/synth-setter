@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
 from synth_setter.cli import clap_render
+from synth_setter.cli._cfg_strength import CfgStrengths
 from synth_setter.cli.clap_render import (
     compare_embeddings,
     main,
@@ -26,6 +28,231 @@ from synth_setter.cli.clap_render import (
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_RETAINED_FILENAMES = ("guide.wav", "manifest.json", "params.csv", "pred.wav", "ref.wav")
+
+
+def _write_retained_run(output_dir: Path, destination: str, run_id: str | None = None) -> None:
+    """Write the five retained artifacts needed by upload recovery.
+
+    :param output_dir: Retained run directory to populate.
+    :param destination: Manifest R2 destination.
+    :param run_id: Manifest run identifier, defaulting to the directory name.
+    """
+    output_dir.mkdir(parents=True)
+    for filename in _RETAINED_FILENAMES:
+        (output_dir / filename).write_bytes(f"retained {filename}".encode())
+    manifest = {"run_id": run_id or output_dir.name, "r2_uri": destination}
+    (output_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_cli_retry_upload_real_rclone_publishes_retained_artifacts_without_inference(
+    fake_r2_remote: Path,
+) -> None:
+    """The installed command uploads an existing run through real rclone only.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    """
+    output_dir = fake_r2_remote / "retained" / "run-1"
+    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
+    _write_retained_run(output_dir, destination)
+
+    executable = Path(sys.executable).with_name("synth-setter-clap")
+    result = subprocess.run(  # noqa: S603 — fixed installed entrypoint and fixture path.
+        [str(executable), "--retry-upload", str(output_dir)],
+        cwd=fake_r2_remote,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == destination
+    remote = fake_r2_remote / destination.removeprefix("r2://")
+    assert sorted(path.name for path in remote.iterdir()) == sorted(_RETAINED_FILENAMES)
+    assert (remote / "pred.wav").read_bytes() == b"retained pred.wav"
+
+
+def test_cli_retry_upload_non_r2_manifest_rejected_before_upload(
+    fake_r2_remote: Path,
+) -> None:
+    """A retained manifest cannot redirect recovery to a non-R2 destination.
+
+    :param fake_r2_remote: Local remote asserted to remain empty.
+    """
+    output_dir = fake_r2_remote / "retained" / "run-1"
+    _write_retained_run(output_dir, "file:///tmp/not-r2")
+
+    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "manifest r2_uri must use r2://" in result.output
+    assert not (fake_r2_remote / "intermediate-data").exists()
+
+
+def test_cli_retry_upload_mismatched_run_id_rejected_before_upload(
+    fake_r2_remote: Path,
+) -> None:
+    """A manifest from another retained run cannot choose the upload destination.
+
+    :param fake_r2_remote: Local remote asserted to remain empty.
+    """
+    output_dir = fake_r2_remote / "retained" / "run-1"
+    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
+    _write_retained_run(output_dir, destination, run_id="run-2")
+
+    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "manifest run_id must match output directory name" in result.output
+    assert not (fake_r2_remote / "intermediate-data").exists()
+
+
+def test_cli_retry_upload_missing_expected_file_rejected_before_upload(
+    fake_r2_remote: Path,
+) -> None:
+    """Recovery requires the complete retained artifact set before upload.
+
+    :param fake_r2_remote: Local remote asserted to remain empty.
+    """
+    output_dir = fake_r2_remote / "retained" / "run-1"
+    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
+    _write_retained_run(output_dir, destination)
+    (output_dir / "params.csv").unlink()
+
+    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "missing retained artifact: params.csv" in result.output
+    assert not (fake_r2_remote / "intermediate-data").exists()
+
+
+def test_cli_retry_upload_unexpected_file_rejected_before_upload(
+    fake_r2_remote: Path,
+) -> None:
+    """Recovery never uploads files outside the retained artifact contract.
+
+    :param fake_r2_remote: Local remote asserted to remain empty.
+    """
+    output_dir = fake_r2_remote / "retained" / "run-1"
+    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
+    _write_retained_run(output_dir, destination)
+    (output_dir / ".env").write_text("SECRET=do-not-upload", encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "unexpected retained artifact: .env" in result.output
+    assert not (fake_r2_remote / "intermediate-data").exists()
+
+
+def test_cli_retry_upload_invalid_manifest_encoding_rejected_before_upload(
+    fake_r2_remote: Path,
+) -> None:
+    """A corrupted manifest reports a concise CLI error before upload.
+
+    :param fake_r2_remote: Local remote asserted to remain empty.
+    """
+    output_dir = fake_r2_remote / "retained" / "run-1"
+    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
+    _write_retained_run(output_dir, destination)
+    (output_dir / "manifest.json").write_bytes(b"\xff")
+
+    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "could not read manifest.json" in result.output
+    assert not (fake_r2_remote / "intermediate-data").exists()
+
+
+def test_cli_retry_upload_text_prompt_rejected_before_upload(tmp_path: Path) -> None:
+    """Upload recovery cannot be combined with a text inference request.
+
+    :param tmp_path: Holds a valid retained run.
+    """
+    output_dir = tmp_path / "run-1"
+    _write_retained_run(output_dir, "r2://bucket/run-1")
+
+    result = CliRunner().invoke(main, ["prompt", "--retry-upload", str(output_dir)])
+
+    assert result.exit_code != 0
+    assert "TEXT_PROMPT cannot be combined with --retry-upload" in result.output
+
+
+def test_cli_retry_upload_audio_options_rejected_before_upload(tmp_path: Path) -> None:
+    """Upload recovery cannot be combined with guide/reference inference inputs.
+
+    :param tmp_path: Holds retained and audio path fixtures.
+    """
+    output_dir = tmp_path / "run-1"
+    _write_retained_run(output_dir, "r2://bucket/run-1")
+    guide = tmp_path / "guide-input.wav"
+    reference = tmp_path / "ref-input.wav"
+    guide.write_bytes(b"path fixture")
+    reference.write_bytes(b"path fixture")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--retry-upload",
+            str(output_dir),
+            "--guide_audio",
+            str(guide),
+            "--ref_audio",
+            str(reference),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--guide_audio cannot be combined with --retry-upload" in result.output
+
+
+def test_cli_retry_upload_cfg_option_rejected_before_upload(tmp_path: Path) -> None:
+    """Upload recovery cannot be combined with guidance overrides.
+
+    :param tmp_path: Holds a valid retained run.
+    """
+    output_dir = tmp_path / "run-1"
+    _write_retained_run(output_dir, "r2://bucket/run-1")
+
+    result = CliRunner().invoke(
+        main,
+        ["--retry-upload", str(output_dir), "--sketch-cfg-strength", "0"],
+    )
+
+    assert result.exit_code != 0
+    assert "--sketch-cfg-strength cannot be combined with --retry-upload" in result.output
+
+
+def test_cli_retry_upload_text_only_option_rejected_before_upload(tmp_path: Path) -> None:
+    """Upload recovery cannot be combined with text-render configuration.
+
+    :param tmp_path: Holds a valid retained run.
+    """
+    output_dir = tmp_path / "run-1"
+    _write_retained_run(output_dir, "r2://bucket/run-1")
+
+    result = CliRunner().invoke(
+        main,
+        ["--retry-upload", str(output_dir), "--checkpoint", "model.ckpt"],
+    )
+
+    assert result.exit_code != 0
+    assert "--checkpoint cannot be combined with --retry-upload" in result.output
+
+
+def test_cli_retry_upload_upload_flag_rejected_before_upload(tmp_path: Path) -> None:
+    """Upload recovery cannot be combined with text-mode upload controls.
+
+    :param tmp_path: Holds a valid retained run.
+    """
+    output_dir = tmp_path / "run-1"
+    _write_retained_run(output_dir, "r2://bucket/run-1")
+
+    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir), "--no-upload"])
+
+    assert result.exit_code != 0
+    assert "--upload/--no-upload cannot be combined with --retry-upload" in result.output
 
 
 def test_cli_one_audio_conditioning_input_exits_before_inference(tmp_path: Path) -> None:
@@ -107,15 +334,14 @@ def test_cli_audio_mode_dispatches_cfg_strengths_to_sketch_renderer(
     guide.write_bytes(b"validated path")
     reference.write_bytes(b"validated path")
     destination = "r2://intermediate-data/eval/synth-setter-clap/test-run"
-    received: list[tuple[float | None, float | None]] = []
+    received: list[CfgStrengths[float | None]] = []
 
     def capture_request(
         _guide: Path,
         _reference: Path,
-        content: float | None,
-        sketch: float | None,
+        strengths: CfgStrengths[float | None],
     ) -> tuple[Path, str]:
-        received.append((content, sketch))
+        received.append(strengths)
         return tmp_path / "output", destination
 
     monkeypatch.setenv("SYNTH_SETTER_CLAP_HEADLESS", "1")
@@ -137,7 +363,7 @@ def test_cli_audio_mode_dispatches_cfg_strengths_to_sketch_renderer(
 
     assert result.exit_code == 0
     assert result.output.strip() == destination
-    assert received == [(2.0, 3.0)]
+    assert received == [CfgStrengths(content=2.0, sketch=3.0)]
 
 
 def test_cli_text_mode_sketch_cfg_strength_rejected_before_inference() -> None:
@@ -334,16 +560,16 @@ def test_predict_patch_omitted_content_strength_preserves_checkpoint_default(
         lambda *_args, **_kwargs: model,
     )
 
-    _, effective_content_strength = clap_render._predict_patch(
+    _, effective_strengths = clap_render._predict_patch(
         torch.zeros(1, 512),
         tmp_path / "model.ckpt",
         clap_render._load_settings().render,
         torch.device("cpu"),
         0,
-        None,
+        CfgStrengths(content=None, sketch=None),
     )
 
-    assert effective_content_strength == 5.5
+    assert effective_strengths == CfgStrengths(content=5.5, sketch=5.5)
     assert model.hparams["test_cfg_strength"] == 5.5
     assert model.hparams["test_sketch_cfg_strength"] == 5.5
 
@@ -415,16 +641,16 @@ def test_predict_patch_zero_content_cfg_strength_overrides_checkpoint(
     )
     monkeypatch.setattr(clap_render, "_validate_inverse_model", lambda *_: None)
 
-    _, effective_strength = clap_render._predict_patch(
+    _, effective_strengths = clap_render._predict_patch(
         torch.zeros(1, 512),
         tmp_path / "model.ckpt",
         clap_render._load_settings().render,
         torch.device("cpu"),
         0,
-        0.0,
+        CfgStrengths(content=0.0, sketch=None),
     )
 
-    assert effective_strength == 0.0
+    assert effective_strengths == CfgStrengths(content=0.0, sketch=0.0)
     assert model.hparams["test_cfg_strength"] == 0.0
 
 
@@ -450,7 +676,10 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     monkeypatch.setattr(
         clap_render,
         "_predict_patch",
-        lambda *_: (torch.zeros(1, 92), 0.0),
+        lambda *_: (
+            torch.zeros(1, 92),
+            CfgStrengths(content=0.0, sketch=0.0),
+        ),
     )
     monkeypatch.setattr(
         clap_render,
@@ -506,6 +735,7 @@ def test_console_script_is_installed_and_callable() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "TEXT_PROMPT" in result.stdout
+    assert "--retry-upload DIRECTORY" in result.stdout
     assert 'synth-setter-clap "frog croak"' in result.stdout
 
 

@@ -14,6 +14,7 @@ import torch
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
+from synth_setter.cli._cfg_strength import CfgStrengths
 from synth_setter.cli.clap import (
     PreparedAudioInputs,
     RenderedPatch,
@@ -96,15 +97,14 @@ def test_cli_cfg_strength_zero_forwarded_to_request(
     reference = tmp_path / "reference.wav"
     guide.write_bytes(b"validated path")
     reference.write_bytes(b"validated path")
-    received: list[tuple[float | None, float | None]] = []
+    received: list[CfgStrengths[float | None]] = []
 
     def capture_request(
         _guide: Path,
         _reference: Path,
-        content: float | None,
-        sketch: float | None,
+        strengths: CfgStrengths[float | None],
     ) -> tuple[Path, str]:
-        received.append((content, sketch))
+        received.append(strengths)
         return tmp_path / "output", "r2://result"
 
     monkeypatch.setenv("SYNTH_SETTER_CLAP_HEADLESS", "1")
@@ -125,7 +125,7 @@ def test_cli_cfg_strength_zero_forwarded_to_request(
     )
 
     assert result.exit_code == 0
-    assert received == [(0.0, 0.0)]
+    assert received == [CfgStrengths(content=0.0, sketch=0.0)]
 
 
 def test_installed_console_script_exposes_public_help() -> None:
@@ -298,7 +298,7 @@ def test_output_artifacts_round_trip_through_real_rclone(
         ),
     )
     destination = "r2://intermediate-data/eval/synth-setter-clap/test-run"
-    write_run_manifest(output_dir, destination, 2.0, 3.0)
+    write_run_manifest(output_dir, destination, CfgStrengths(content=2.0, sketch=3.0))
     upload_output_artifacts(output_dir, destination)
 
     assert sorted(path.name for path in output_dir.iterdir()) == [
@@ -431,15 +431,16 @@ def test_predict_patch_finite_prediction_decodes_real_param_spec() -> None:
     model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
     model.predict_step.return_value = (torch.zeros(1, 92), None)
 
-    synth_params, note_params, content_strength, sketch_strength = _predict_patch(
-        prepared, model, None, None
+    synth_params, note_params, strengths = _predict_patch(
+        prepared,
+        model,
+        CfgStrengths(content=None, sketch=None),
     )
 
     assert len(synth_params) > 80
     assert 0 <= note_params["pitch"] <= 127
     assert len(note_params["note_start_and_end"]) == 2
-    assert content_strength == 4.0
-    assert sketch_strength == 4.0
+    assert strengths == CfgStrengths(content=4.0, sketch=4.0)
 
 
 def test_predict_patch_zero_cfg_strengths_override_checkpoint() -> None:
@@ -455,9 +456,13 @@ def test_predict_patch_zero_cfg_strengths_override_checkpoint() -> None:
     model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": 6.0}
     model.predict_step.return_value = (torch.zeros(1, 92), None)
 
-    _, _, content_strength, sketch_strength = _predict_patch(prepared, model, 0.0, 0.0)
+    _, _, strengths = _predict_patch(
+        prepared,
+        model,
+        CfgStrengths(content=0.0, sketch=0.0),
+    )
 
-    assert (content_strength, sketch_strength) == (0.0, 0.0)
+    assert strengths == CfgStrengths(content=0.0, sketch=0.0)
     assert model.hparams["test_cfg_strength"] == 0.0
     assert model.hparams["test_sketch_cfg_strength"] == 0.0
 
@@ -475,9 +480,13 @@ def test_predict_patch_saved_cfg_strengths_preserved() -> None:
     model.hparams = {"test_cfg_strength": 2.5, "test_sketch_cfg_strength": 6.5}
     model.predict_step.return_value = (torch.zeros(1, 92), None)
 
-    _, _, content_strength, sketch_strength = _predict_patch(prepared, model, None, None)
+    _, _, strengths = _predict_patch(
+        prepared,
+        model,
+        CfgStrengths(content=None, sketch=None),
+    )
 
-    assert (content_strength, sketch_strength) == (2.5, 6.5)
+    assert strengths == CfgStrengths(content=2.5, sketch=6.5)
     assert model.hparams["test_cfg_strength"] == 2.5
     assert model.hparams["test_sketch_cfg_strength"] == 6.5
 
@@ -503,9 +512,13 @@ def test_predict_patch_legacy_sketch_strength_uses_effective_content(
         model.hparams["test_sketch_cfg_strength"] = None
     model.predict_step.return_value = (torch.zeros(1, 92), None)
 
-    _, _, content_strength, sketch_strength = _predict_patch(prepared, model, 1.5, None)
+    _, _, strengths = _predict_patch(
+        prepared,
+        model,
+        CfgStrengths(content=1.5, sketch=None),
+    )
 
-    assert (content_strength, sketch_strength) == (1.5, 1.5)
+    assert strengths == CfgStrengths(content=1.5, sketch=1.5)
     assert model.hparams["test_cfg_strength"] == 1.5
     assert model.hparams["test_sketch_cfg_strength"] == 1.5
 
@@ -524,7 +537,7 @@ def test_predict_patch_wrong_shape_raises() -> None:
     model.predict_step.return_value = (torch.zeros(1, 91), None)
 
     with pytest.raises(ValueError, match="shape"):
-        _predict_patch(prepared, model, None, None)
+        _predict_patch(prepared, model, CfgStrengths(content=None, sketch=None))
 
 
 def test_render_patch_descending_note_interval_reaches_renderer_ordered(
@@ -620,7 +633,11 @@ def test_headless_wrapper_nonexecutable_script_runs_through_shell(
     monkeypatch.setattr("synth_setter.cli.clap.vst_headless_wrapper", lambda: wrapper)
     monkeypatch.setattr("synth_setter.cli.clap.as_file", nullcontext)
 
-    _run_under_headless_wrapper(tmp_path / "guide.wav", tmp_path / "reference.wav", None, None)
+    _run_under_headless_wrapper(
+        tmp_path / "guide.wav",
+        tmp_path / "reference.wav",
+        CfgStrengths(content=None, sketch=None),
+    )
 
 
 def test_headless_wrapper_cfg_strengths_forwarded(
@@ -636,7 +653,11 @@ def test_headless_wrapper_cfg_strengths_forwarded(
     run = Mock()
     monkeypatch.setattr("synth_setter.cli.clap.subprocess.run", run)
 
-    _run_under_headless_wrapper(tmp_path / "guide.wav", tmp_path / "reference.wav", 2.0, 3.0)
+    _run_under_headless_wrapper(
+        tmp_path / "guide.wav",
+        tmp_path / "reference.wav",
+        CfgStrengths(content=2.0, sketch=3.0),
+    )
 
     args = run.call_args.args[0]
     assert args[-4:] == ["--content-cfg-strength", "2.0", "--sketch-cfg-strength", "3.0"]
@@ -702,8 +723,7 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
         lambda *_: (
             {"filter_1_cutoff": 0.5},
             {"pitch": 60, "note_start_and_end": (0.05, 3.95)},
-            2.0,
-            3.0,
+            CfgStrengths(content=2.0, sketch=3.0),
         ),
     )
     monkeypatch.setattr(
@@ -716,7 +736,11 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
         ),
     )
 
-    output_dir, destination = _run_request(guide_path, ref_path, 2.0, 3.0)
+    output_dir, destination = _run_request(
+        guide_path,
+        ref_path,
+        CfgStrengths(content=2.0, sketch=3.0),
+    )
 
     assert output_dir.parent == output_root
     assert output_dir.is_dir()

@@ -16,6 +16,7 @@ from typing import Literal
 import click
 import numpy as np
 import torch
+from click.core import ParameterSource
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -26,6 +27,7 @@ from synth_setter.clap import (
     resolve_clap_checkpoint,
 )
 from synth_setter.cli._cfg_strength import (
+    CfgStrengths,
     apply_cfg_strength_overrides,
     validate_cfg_strength,
 )
@@ -45,6 +47,20 @@ _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 _EXPECTED_CONDITIONING_COLUMN = "clap"
 _EXPECTED_CONDITIONING_SHAPE = (512,)
 _DEFAULT_CONFIG_NAME = "clap_render"
+_RETRY_UPLOAD_CONFLICTS = (
+    ("text_prompt", "TEXT_PROMPT"),
+    ("guide_audio", "--guide_audio"),
+    ("ref_audio", "--ref_audio"),
+    ("checkpoint", "--checkpoint"),
+    ("clap_checkpoint", "--clap-checkpoint"),
+    ("output", "--output"),
+    ("upload_uri", "--upload-uri"),
+    ("device", "--device"),
+    ("seed", "--seed"),
+    ("content_cfg_strength", "--content-cfg-strength"),
+    ("sketch_cfg_strength", "--sketch-cfg-strength"),
+    ("upload", "--upload/--no-upload"),
+)
 _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
     "prompt",
     "wav_r2_uri",
@@ -470,8 +486,8 @@ def _predict_patch(
     render: RenderConfig,
     device: torch.device,
     seed: int,
-    content_cfg_strength: float | None,
-) -> tuple[torch.Tensor, float]:
+    requested_strengths: CfgStrengths[float | None],
+) -> tuple[torch.Tensor, CfgStrengths[float]]:
     """Sample one model-space Surge parameter row reproducibly.
 
     :param embedding: CLAP condition shaped ``(1, 512)``.
@@ -479,8 +495,8 @@ def _predict_patch(
     :param render: Renderer identity used for compatibility validation.
     :param device: Torch inference device.
     :param seed: Flow noise seed.
-    :param content_cfg_strength: Optional text-guidance override.
-    :returns: CPU prediction and effective content-guidance strength.
+    :param requested_strengths: Optional content and sketch guidance overrides.
+    :returns: CPU prediction and effective guidance strengths.
     """
     model = VSTFlowMatchingModule.load_from_checkpoint(
         checkpoint,
@@ -488,12 +504,12 @@ def _predict_patch(
         weights_only=False,
     )
     _validate_inverse_model(model, render)
-    effective_content, _ = apply_cfg_strength_overrides(model.hparams, content_cfg_strength, None)
+    effective_strengths = apply_cfg_strength_overrides(model.hparams, requested_strengths)
     model.to(device).eval()
     torch.manual_seed(seed)
     with torch.inference_mode():
         prediction, _ = model.predict_step({"conditioning": embedding}, 0)
-    return prediction.detach().cpu(), effective_content
+    return prediction.detach().cpu(), effective_strengths
 
 
 def _workspace_render_config(render: RenderConfig) -> RenderConfig:
@@ -578,7 +594,7 @@ def _dispatch_audio_mode(
     audio_paths: tuple[Path | None, Path | None],
     text_prompt: str | None,
     unsupported_options: tuple[tuple[str, object], ...],
-    cfg_strengths: tuple[float | None, float | None],
+    cfg_strengths: CfgStrengths[float | None],
 ) -> bool:
     """Validate and dispatch guide/reference audio mode when selected.
 
@@ -604,11 +620,10 @@ def _dispatch_audio_mode(
     from synth_setter.cli.clap import main as guide_audio_main
 
     args = ["--guide_audio", str(guide_audio), "--ref_audio", str(ref_audio)]
-    content_cfg_strength, sketch_cfg_strength = cfg_strengths
-    if content_cfg_strength is not None:
-        args.extend(["--content-cfg-strength", str(content_cfg_strength)])
-    if sketch_cfg_strength is not None:
-        args.extend(["--sketch-cfg-strength", str(sketch_cfg_strength)])
+    if cfg_strengths.content is not None:
+        args.extend(["--content-cfg-strength", str(cfg_strengths.content)])
+    if cfg_strengths.sketch is not None:
+        args.extend(["--sketch-cfg-strength", str(cfg_strengths.sketch)])
     guide_audio_main.main(
         args=args,
         prog_name="synth-setter-clap",
@@ -642,6 +657,11 @@ def _dispatch_audio_mode(
 @click.option("--output", type=click.Path(dir_okay=False, path_type=Path), help="Local WAV path.")
 @click.option("--upload-uri", help="Exact r2:// destination for the WAV.")
 @click.option(
+    "--retry-upload",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Upload a retained sketch-render directory without rerunning inference.",
+)
+@click.option(
     "--device",
     type=click.Choice(["auto", "cpu", "cuda", "mps"]),
     default=None,
@@ -661,7 +681,9 @@ def _dispatch_audio_mode(
     help="Sketch guidance override for guide/reference audio mode.",
 )
 @click.option("--upload/--no-upload", default=True, show_default=True)
+@click.pass_context
 def main(
+    context: click.Context,
     text_prompt: str | None,
     guide_audio: Path | None,
     ref_audio: Path | None,
@@ -669,6 +691,7 @@ def main(
     clap_checkpoint: str | None,
     output: Path | None,
     upload_uri: str | None,
+    retry_upload: Path | None,
     device: _DeviceSetting | None,
     seed: int | None,
     content_cfg_strength: float | None,
@@ -679,6 +702,7 @@ def main(
 
     Use ``synth-setter-clap "frog croak"`` for text or pass both audio options.
 
+    :param context: Active Click invocation context.
     :param text_prompt: Optional natural-language sound description.
     :param guide_audio: Optional audio supplying sketch controls.
     :param ref_audio: Optional audio supplying mel/timbre conditioning.
@@ -686,6 +710,7 @@ def main(
     :param clap_checkpoint: Optional CLAP encoder override.
     :param output: Optional local WAV destination.
     :param upload_uri: Optional exact R2 object destination.
+    :param retry_upload: Optional retained sketch-render directory to upload.
     :param device: Optional torch-device override.
     :param seed: Optional flow sampling seed.
     :param content_cfg_strength: Optional text or reference-mel guidance override.
@@ -694,6 +719,19 @@ def main(
     :raises click.ClickException: CLI arguments are invalid.
     :raises RuntimeError: The default CLAP checkpoint fails identity validation.
     """
+    requested_strengths = CfgStrengths(
+        content=content_cfg_strength,
+        sketch=sketch_cfg_strength,
+    )
+    if retry_upload is not None:
+        for parameter, option in _RETRY_UPLOAD_CONFLICTS:
+            if context.get_parameter_source(parameter) is ParameterSource.COMMANDLINE:
+                raise click.ClickException(f"{option} cannot be combined with --retry-upload")
+        from synth_setter.cli.clap import retry_output_upload
+
+        click.echo(retry_output_upload(retry_upload))
+        return
+
     unsupported_audio_options = (
         ("--checkpoint", checkpoint),
         ("--clap-checkpoint", clap_checkpoint),
@@ -707,11 +745,11 @@ def main(
         (guide_audio, ref_audio),
         text_prompt,
         unsupported_audio_options,
-        (content_cfg_strength, sketch_cfg_strength),
+        requested_strengths,
     ):
         return
 
-    if sketch_cfg_strength is not None:
+    if requested_strengths.sketch is not None:
         raise click.ClickException(
             "--sketch-cfg-strength is only supported with guide/reference audio"
         )
@@ -754,13 +792,13 @@ def main(
     expected_inverse_sha256 = settings.inverse_checkpoint_sha256 if checkpoint is None else None
     inverse_checkpoint = resolve_inverse_checkpoint(inverse_source, expected_inverse_sha256)
     render = _workspace_render_config(settings.render)
-    prediction, effective_content_strength = _predict_patch(
+    prediction, effective_strengths = _predict_patch(
         embedding,
         inverse_checkpoint,
         render,
         selected_device,
         selected_seed,
-        content_cfg_strength,
+        requested_strengths,
     )
     click.echo("Rendering Surge patch...", err=True)
     audio = _render_wav(prediction, render, output_path)
@@ -779,7 +817,7 @@ def main(
             "wav_r2_uri": wav_destination,
             "csv_r2_uri": csv_destination,
             "seed": selected_seed,
-            "content_cfg_strength": effective_content_strength,
+            "content_cfg_strength": effective_strengths.content,
             "text_embedding_norm": comparison.text_embedding_norm,
             "audio_embedding_norm": comparison.audio_embedding_norm,
             "cosine_similarity": comparison.cosine_similarity,

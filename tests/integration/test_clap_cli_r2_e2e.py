@@ -14,6 +14,7 @@ import pytest
 import torch
 from pedalboard.io import AudioFile
 
+from synth_setter.cli._cfg_strength import CfgStrengths
 from synth_setter.cli.clap import (
     _CACHE_NAMESPACE,
     _CHECKPOINT_SHA256,
@@ -91,9 +92,10 @@ def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: 
         *_write_inputs(reference_root, reference_frequency=660.0), stats_path
     )
 
-    base_params, _, _, _ = _predict_patch(base, model, 2.0, 3.0)
-    guide_params, _, _, _ = _predict_patch(guide_changed, model, 2.0, 3.0)
-    reference_params, _, _, _ = _predict_patch(reference_changed, model, 2.0, 3.0)
+    requested_strengths = CfgStrengths(content=2.0, sketch=3.0)
+    base_params, _, _ = _predict_patch(base, model, requested_strengths)
+    guide_params, _, _ = _predict_patch(guide_changed, model, requested_strengths)
+    reference_params, _, _ = _predict_patch(reference_changed, model, requested_strengths)
 
     assert guide_params != base_params
     assert reference_params != base_params
