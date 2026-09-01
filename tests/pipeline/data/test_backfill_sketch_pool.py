@@ -181,6 +181,55 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_backfill_sketch_pool_local_source_commits_exact_pooled_values(
+    tmp_path: Path,
+) -> None:
+    """The public operator completes its normal path without R2 test credentials.
+
+    :param tmp_path: Temporary directory for the real local Lance source.
+    """
+    rows = 2
+    rng = np.random.default_rng(2980)
+    controls = rng.random((rows, SKETCH_PITCH_BINS + 2, 401), dtype=np.float32)
+    controls[:, :2] = controls[:, :2] * 2.0 - 1.0
+    uri = tmp_path / "local-source.lance"
+    lance.write_dataset(
+        pa.table({SKETCH_STRUCT_FIELD: sketch_struct_array(controls)}),
+        uri,
+    )
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(uri),
+        workers=1,
+        rollback_tag="before-local-pool",
+        build_index=False,
+        resume_dir=tmp_path / "resume",
+    )
+
+    result = backfill_sketch_pool(config)
+
+    dataset = lance.dataset(uri)
+    committed_version = dataset.version
+    pooled_rows = (
+        dataset.to_table(columns=[SKETCH_STRUCT_FIELD])[SKETCH_STRUCT_FIELD]
+        .combine_chunks()
+        .to_numpy(zero_copy_only=False)
+    )
+    loudness = np.stack([row[SKETCH_LOUDNESS_CHILD] for row in pooled_rows])
+    centroid = np.stack([row[SKETCH_CENTROID_CHILD] for row in pooled_rows])
+    pitch = np.stack([row[SKETCH_PITCH_CHILD] for row in pooled_rows]).reshape(
+        rows, SKETCH_PITCH_BINS, -1
+    )
+    actual = np.concatenate((loudness[:, None], centroid[:, None], pitch), axis=1)
+    expected = pool_sketch_controls(torch.from_numpy(controls)).numpy()
+    assert result.already_complete is False
+    assert dataset.tags.get_version("before-local-pool") == 1
+    np.testing.assert_array_equal(actual, expected)
+
+    retry = backfill_sketch_pool(config)
+    assert retry.already_complete is True
+    assert lance.dataset(uri).version == committed_version
+
+
 def test_backfill_sketch_pool_cli_with_untouched_source_tags_and_renames(
     fake_r2_remote: Path,
 ) -> None:
@@ -355,6 +404,43 @@ def test_result_when_below_index_threshold_records_skip_policy(tmp_path: Path) -
     assert result.index_skip_reason == "below_min_rows"
     assert result.index_name == "sketch_pool_vec_idx"
     assert result.index_metric == "cosine"
+
+
+def test_ensure_canonical_index_with_local_vectors_builds_and_recovers(
+    tmp_path: Path,
+) -> None:
+    """Index publication and recovery validate the full canonical ANN contract.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    rows = 256
+    dimensions = SKETCH_PITCH_BINS + 2
+    vectors = np.random.default_rng(2980).random((rows, dimensions), dtype=np.float32)
+    values = pa.array(vectors.reshape(-1), type=pa.float32())
+    vector_array = pa.FixedSizeListArray.from_arrays(values, dimensions)
+    sketch_array = pa.StructArray.from_arrays(
+        [vector_array],
+        fields=[pa.field("vec", vector_array.type)],
+    )
+    dataset = lance.write_dataset(
+        pa.table({SKETCH_STRUCT_FIELD: sketch_array}),
+        tmp_path / "index-source.lance",
+    )
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(dataset.uri),
+        workers=1,
+        rollback_tag="before",
+        num_partitions=2,
+    )
+
+    indexed, built = _ensure_canonical_index(dataset, config)
+    recovered, rebuilt = _ensure_canonical_index(indexed, config)
+
+    assert built is True
+    assert rebuilt is False
+    assert recovered.version == indexed.version
+    with pytest.raises(ValueError, match="config .* does not match"):
+        _ensure_canonical_index(indexed, config.model_copy(update={"num_partitions": 1}))
 
 
 def test_ensure_canonical_index_when_disabled_skips_small_dataset(tmp_path: Path) -> None:
