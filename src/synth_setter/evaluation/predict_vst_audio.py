@@ -1,7 +1,9 @@
 """Render predicted-parameter and target audio from a trained model for offline evaluation."""
 
+import json
 import logging
 import os
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -144,13 +146,26 @@ def params_to_csv(
     pred_note_params: NoteParams,
     save_path: str,
     param_spec: ParamSpec,
+    *,
+    pred_effective_note_window: tuple[float, float],
 ) -> None:
-    """Write the target and predicted parameters to a CSV file."""
+    """Write raw, target, and effective rendered parameters to a CSV file.
+
+    :param target_synth_params: Target synth values, or ``None`` when absent.
+    :param target_note_params: Target note values, or ``None`` when absent.
+    :param pred_synth_params: Raw decoded prediction synth values.
+    :param pred_note_params: Raw decoded prediction note values.
+    :param save_path: Destination CSV path.
+    :param param_spec: Parameter ordering contract for the rendered synth.
+    :param pred_effective_note_window: Note window used to render ``pred.wav``.
+    """
     row_names = list(pred_synth_params.keys()) + list(pred_note_params.keys())
 
     synth_df = pd.DataFrame({"pred": pred_synth_params, "target": target_synth_params})
     note_df = pd.DataFrame({"pred": pred_note_params, "target": target_note_params})
     df = pd.concat([synth_df, note_df])
+    df["pred_effective"] = df["pred"]
+    df.at["note_start_and_end", "pred_effective"] = pred_effective_note_window
 
     df.to_csv(save_path)
 
@@ -233,6 +248,14 @@ def _render_prediction_artifacts(
     no_params = args.no_params
     skip_spectrogram = args.skip_spectrogram
 
+    manifest_path = Path(output_dir) / "render_manifest.json"
+    manifest_tmp_path = manifest_path.with_suffix(".json.tmp")
+    manifest_path.unlink(missing_ok=True)
+    manifest_tmp_path.unlink(missing_ok=True)
+    input_rows = 0
+    rendered_rows = 0
+    skipped_rows: list[dict[str, int | str]] = []
+
     # Glob order defines output numbering; numeric batch ordering is tracked in #2446.
     pred_path = Path(pred_dir)
     pred_files = [f for f in pred_path.glob("pred-*.pt") if f.is_file()]
@@ -273,6 +296,11 @@ def _render_prediction_artifacts(
         # 5. iterate over its internal rows and render the audio
         for j in trange(pred_params.shape[0]):
             file_idx = current_offset + j
+            input_rows += 1
+            sample_path = Path(output_dir) / f"sample_{file_idx}"
+            if sample_path.exists():
+                shutil.rmtree(sample_path)
+
             row_params = pred_params[j].float().numpy()
             synth_params, note_params = decode_model_output(row_params, spec)
             note_params["note_start_and_end"] = tuple(
@@ -285,11 +313,17 @@ def _render_prediction_artifacts(
                     sample_rate=args.sample_rate,
                 )
             except ValueError as error:
+                skipped_rows.append(
+                    {
+                        "sample_id": file_idx,
+                        "reason": "non_finite_prediction_note_window",
+                    }
+                )
                 logger.warning("Skipping prediction sample %d: %s", file_idx, error)
                 continue
 
-            sample_dir = os.path.join(output_dir, f"sample_{file_idx}")
-            os.makedirs(sample_dir, exist_ok=True)
+            sample_dir = str(sample_path)
+            sample_path.mkdir()
             pred_audio = render(
                 synth_params,
                 int(note_params["pitch"]),
@@ -341,9 +375,20 @@ def _render_prediction_artifacts(
                 note_params,
                 os.path.join(sample_dir, "params.csv"),
                 spec,
+                pred_effective_note_window=render_note_window,
             )
+            rendered_rows += 1
 
         current_offset += pred_params.shape[0]
+
+    manifest = {
+        "schema_version": 1,
+        "input_rows": input_rows,
+        "rendered_rows": rendered_rows,
+        "skipped_rows": skipped_rows,
+    }
+    manifest_tmp_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    os.replace(manifest_tmp_path, manifest_path)
 
 
 def render_prediction_audio(args: _PredictAudioCliArgs) -> None:

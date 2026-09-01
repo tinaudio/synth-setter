@@ -10,6 +10,7 @@ file shape and finiteness.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import sys
 
@@ -145,13 +146,23 @@ def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:
     tgt_s, tgt_n = _sample_param_dicts(seed=1)
     out = tmp_path / "params.csv"
 
-    params_to_csv(tgt_s, tgt_n, pred_s, pred_n, str(out), _PARAM_SPEC)
+    params_to_csv(
+        tgt_s,
+        tgt_n,
+        pred_s,
+        pred_n,
+        str(out),
+        _PARAM_SPEC,
+        pred_effective_note_window=pred_n["note_start_and_end"],
+    )
 
     df = pd.read_csv(out, index_col=0)
-    assert list(df.columns) == ["pred", "target"]
+    assert list(df.columns) == ["pred", "target", "pred_effective"]
     assert set(df.index) == set(pred_s) | set(pred_n)
     assert bool(df["pred"].notna().all())
     assert bool(df["target"].notna().all())
+    assert bool(df["pred_effective"].notna().all())
+    assert df["pred_effective"].equals(df["pred"])
 
 
 def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> None:
@@ -162,7 +173,15 @@ def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> N
     pred_s, pred_n = _sample_param_dicts()
     out = tmp_path / "params.csv"
 
-    params_to_csv(None, None, pred_s, pred_n, str(out), _PARAM_SPEC)
+    params_to_csv(
+        None,
+        None,
+        pred_s,
+        pred_n,
+        str(out),
+        _PARAM_SPEC,
+        pred_effective_note_window=pred_n["note_start_and_end"],
+    )
 
     df = pd.read_csv(out, index_col=0)
     assert bool(df["pred"].notna().all())
@@ -178,6 +197,31 @@ def test_canonicalize_prediction_note_window_clips_start_to_signal() -> None:
     )
 
     assert window == pytest.approx((0.0, 0.05))
+
+
+@pytest.mark.parametrize(
+    ("note_window", "expected"),
+    [
+        pytest.param((0.05, 0.05), (0.05, 0.050125), id="equal-interior"),
+        pytest.param((-0.5, -0.2), (0.0, 0.000125), id="both-clipped-to-zero"),
+    ],
+)
+def test_canonicalize_prediction_note_window_degenerate_start_expands_forward(
+    note_window: tuple[float, float],
+    expected: tuple[float, float],
+) -> None:
+    """A degenerate window with room after its onset expands forward one sample.
+
+    :param note_window: Predicted endpoints before canonicalization.
+    :param expected: One-sample interval expected after canonicalization.
+    """
+    window = _canonicalize_prediction_note_window(
+        note_window,
+        signal_duration_seconds=0.1,
+        sample_rate=8000,
+    )
+
+    assert window == pytest.approx(expected)
 
 
 def test_canonicalize_prediction_note_window_clips_end_to_signal() -> None:
@@ -231,6 +275,31 @@ def _fake_render(*_args: object, **_kwargs: object) -> np.ndarray:
     """
     rng = np.random.default_rng(42)
     return rng.standard_normal((_CHANNELS, _SAMPLES)).astype(np.float32)
+
+
+def _render_valid_window(
+    _params: dict[str, float],
+    _pitch: int,
+    _velocity: int,
+    note_window: tuple[float, float],
+    *,
+    warmup: bool,
+) -> np.ndarray:
+    """Reject renderer-invalid note windows before returning test audio.
+
+    :param _params: Unused synth parameters.
+    :param _pitch: Unused MIDI pitch.
+    :param _velocity: Unused MIDI velocity.
+    :param note_window: Prediction window validated against the test render.
+    :param warmup: Unused GUI warm-up request.
+    :returns: Deterministic channel-first audio.
+    :raises ValueError: The note window violates the renderer contract.
+    """
+    del warmup
+    start, end = note_window
+    if not 0 <= start < end <= _render_config().signal_duration_seconds:
+        raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
+    return _fake_render()
 
 
 def _write_batch(
@@ -385,21 +454,7 @@ def test_main_reversed_prediction_window_renders_canonical_interval(
     _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
     _set_model_note_window(pred_dir / "pred-0.pt", row=0, window=(-0.96, -0.99))
 
-    def render_valid_window(
-        _params: dict[str, float],
-        _pitch: int,
-        _velocity: int,
-        note_window: tuple[float, float],
-        *,
-        warmup: bool,
-    ) -> np.ndarray:
-        del warmup
-        start, end = note_window
-        if not 0 <= start < end <= _render_config().signal_duration_seconds:
-            raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
-        return _fake_render()
-
-    fake_renderer.render.side_effect = render_valid_window
+    fake_renderer.render.side_effect = _render_valid_window
 
     result = _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
 
@@ -409,7 +464,11 @@ def test_main_reversed_prediction_window_renders_canonical_interval(
     assert 0 <= start < end <= _render_config().signal_duration_seconds
     params = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
     raw_start, raw_end = ast.literal_eval(params.loc["note_start_and_end", "pred"])
+    effective_start, effective_end = ast.literal_eval(
+        params.loc["note_start_and_end", "pred_effective"]
+    )
     assert raw_start > raw_end
+    assert (effective_start, effective_end) == pytest.approx((start, end))
 
 
 def test_main_equal_prediction_window_renders_one_sample_interval(
@@ -467,6 +526,9 @@ def test_main_nonfinite_prediction_window_skips_only_malformed_sample(
     :param caplog: Captured log records used to verify the row diagnostic.
     """
     _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
+    stale_sample = out_dir / "sample_0"
+    stale_sample.mkdir(parents=True)
+    (stale_sample / "pred.wav").write_bytes(b"stale")
     pred_path = pred_dir / "pred-0.pt"
     _set_model_note_window(pred_path, row=0, window=(float("nan"), -0.95))
     _set_model_note_window(pred_path, row=1, window=(-0.96, -0.99))
@@ -478,6 +540,12 @@ def test_main_nonfinite_prediction_window_skips_only_malformed_sample(
     assert (out_dir / "sample_1" / "pred.wav").is_file()
     assert "Skipping prediction sample 0" in caplog.text
     assert "must be finite" in caplog.text
+    assert json.loads((out_dir / "render_manifest.json").read_text()) == {
+        "schema_version": 1,
+        "input_rows": 2,
+        "rendered_rows": 1,
+        "skipped_rows": [{"sample_id": 0, "reason": "non_finite_prediction_note_window"}],
+    }
 
 
 def test_main_skip_spectrogram_suppresses_png(pred_dir: Path, out_dir: Path) -> None:
