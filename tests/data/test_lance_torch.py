@@ -55,7 +55,11 @@ def _write_and_take_wide_batch_boundary(dest: str) -> None:
     """
     schema = pa.schema(
         [
-            pa.field(name, pa.list_(pa.float32(), width), nullable=False)
+            pa.field(
+                name,
+                pa.fixed_shape_tensor(pa.float32(), (width,)),
+                nullable=False,
+            )
             for name, width in _WIDE_TAKE_WIDTHS.items()
         ]
     )
@@ -64,8 +68,8 @@ def _write_and_take_wide_batch_boundary(dest: str) -> None:
         for rows in (_WIDE_TAKE_BATCH_BOUNDARY, _WIDE_TAKE_ROWS):
             yield pa.record_batch(
                 [
-                    pa.FixedSizeListArray.from_arrays(
-                        pa.array(np.zeros(rows * width, dtype=np.float32)), width
+                    pa.FixedShapeTensorArray.from_numpy_ndarray(
+                        np.zeros((rows, width), dtype=np.float32)
                     )
                     for width in _WIDE_TAKE_WIDTHS.values()
                 ],
