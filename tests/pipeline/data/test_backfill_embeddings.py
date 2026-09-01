@@ -314,6 +314,35 @@ def test_promote_embedding_candidate_reuses_branch_fragments_in_one_main_commit(
     assert lance.dataset(uri).version == 2
 
 
+def test_promote_embedding_candidate_with_file_uri_publishes_candidate(
+    tmp_path: Path,
+) -> None:
+    """Promotion must resolve a local file URI before copying candidate data.
+
+    :param tmp_path: Temporary directory for the real Lance dataset.
+    """
+    uri = tmp_path / "file-uri.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]]}))
+
+    result = promote_embedding_candidate(
+        EmbeddingPromotionConfig(
+            lance_uri=uri.as_uri(),
+            candidate_branch="candidate",
+            rollback_tag="rollback",
+            columns=("clap",),
+        )
+    )
+
+    assert result.committed_version == 2
+    assert lance.dataset(uri).to_table(columns=["clap"]).to_pylist() == [
+        {"clap": [1.0]},
+        {"clap": [2.0]},
+    ]
+
+
 def test_promote_embedding_candidate_rejects_unselected_candidate_column(
     tmp_path: Path,
 ) -> None:

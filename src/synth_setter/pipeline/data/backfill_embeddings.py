@@ -1282,8 +1282,11 @@ def _copy_candidate_data_directory(uri: str, branch: str) -> None:
         destination = r2_io.from_s3_uri(f"{root}/data")
         r2_io.copy_directory(source, destination)
         return
-    source_path = Path(uri) / "tree" / branch / "data"
-    destination_path = Path(uri) / "data"
+    local_root = (
+        Path(unquote(urlparse(uri).path)) if uri.startswith("file://") else Path(uri)
+    )
+    source_path = local_root / "tree" / branch / "data"
+    destination_path = local_root / "data"
     shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
 
 
