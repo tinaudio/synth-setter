@@ -1252,6 +1252,26 @@ class TestUpload:
             r2_io.upload(Path("r2://bucket/src/key.json"), "r2://bucket/dst/key.json")
 
 
+class TestCopyDirectory:
+    """Tests for checksum-preserving R2 directory copies."""
+
+    def test_remote_directory_copy_preserves_relative_paths(self, fake_r2_remote: Path) -> None:
+        """R2 directory copies retain every source-relative object path.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        source = fake_r2_remote / "bucket" / "branch" / "data"
+        source.mkdir(parents=True)
+        (source / "one.lance").write_text("one")
+        (source / "two.lance").write_text("two")
+
+        r2_io.copy_directory("r2://bucket/branch/data", "r2://bucket/main/data")
+
+        destination = fake_r2_remote / "bucket" / "main" / "data"
+        assert (destination / "one.lance").read_text() == "one"
+        assert (destination / "two.lance").read_text() == "two"
+
+
 class TestDownloadedToTempfile:
     """Tests for the downloaded_to_tempfile context manager."""
 
