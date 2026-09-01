@@ -1162,7 +1162,8 @@ centroid use adaptive average pooling; pitch uses adaptive maximum pooling and
 remains unthresholded. The `vec` child stores the pooled frame mean for
 contour-similarity search. The struct is an atomic write unit — refreshing
 one child means rewriting the whole column (requires Lance data storage 2.2).
-Its `IndexSpec`
+`sketch=on` consumes this canonical layout; `sketch=full` retains compatibility
+with full-resolution datasets and pooling experiments. Its `IndexSpec`
 fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config

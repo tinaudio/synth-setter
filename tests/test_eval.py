@@ -148,7 +148,7 @@ def _compose_sketch_cfg_eval(cfg_train_sketch_lance: DictConfig) -> DictConfig:
             return_hydra_config=True,
             overrides=[
                 "experiment=surge/flow_sketch_prelim",
-                "sketch=pooled",
+                "sketch=on",
                 "datamodule=surge_lance",
                 "synth=surge_4",
                 "conditioning=m2l",

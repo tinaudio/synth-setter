@@ -266,8 +266,8 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     assert cfg.model.conditioning.column == profile
 
 
-def test_sketch_pooled_profile_composes_with_m2l_and_trains_one_step() -> None:
-    """``sketch=pooled`` composes over ``conditioning=m2l`` and drives a train step."""
+def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
+    """``sketch=on`` composes over ``conditioning=m2l`` and drives a train step."""
     cfg = _compose(
         "train.yaml",
         [
@@ -275,7 +275,7 @@ def test_sketch_pooled_profile_composes_with_m2l_and_trains_one_step() -> None:
             "synth=surge_4",
             "model=vst_flow",
             "conditioning=m2l",
-            "sketch=pooled",
+            "sketch=on",
             "trainer=cpu",
             # The scheduler's T_max interpolates ${trainer.max_steps}, which
             # trainer/cpu.yaml leaves undefined.

@@ -75,6 +75,23 @@ def test_pool_sketch_controls_uses_track_means_and_pitch_maxima() -> None:
     torch.testing.assert_close(pooled[0, SKETCH_PITCH_SLICE.start], torch.ones(32), rtol=0, atol=0)
 
 
+def test_pool_sketch_controls_nondivisible_windows_overlap_at_boundaries() -> None:
+    """Adaptive pooling covers every source frame when windows do not divide evenly."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
+    values = torch.tensor((0.0, 1.0, 2.0, 3.0, 4.0))
+    controls[:, SKETCH_LOUDNESS_ROW] = values
+    controls[:, SKETCH_PITCH_SLICE.start] = values
+
+    pooled = pool_sketch_controls(controls, output_frames=2)
+
+    torch.testing.assert_close(
+        pooled[0, SKETCH_LOUDNESS_ROW], torch.tensor((1.0, 3.0)), rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        pooled[0, SKETCH_PITCH_SLICE.start], torch.tensor((2.0, 4.0)), rtol=0, atol=0
+    )
+
+
 @pytest.mark.parametrize("sample_rate", [22050, 44100])
 def test_extract_sketch_controls_other_sample_rates_keep_grid_and_bounds(
     sample_rate: int,

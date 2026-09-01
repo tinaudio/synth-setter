@@ -3745,7 +3745,8 @@ def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
         _SAMPLE_RATE,
         AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("sketch",), build_index=False),
     )
-    refreshed = np.clip(_fake_sketch(audio, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+    full_controls = np.clip(_fake_sketch(audio, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
+    refreshed = pool_sketch_controls(torch.from_numpy(full_controls)).numpy()
     replacement = f"{SKETCH_STRUCT_FIELD}_refreshed"
 
     dataset = lance.dataset(str(uri))
@@ -3755,7 +3756,8 @@ def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
         # schema inference, so call order carries no row-position information.
         decoded = batch.column(AUDIO_FIELD).to_numpy_ndarray()
         rows = np.clip(_fake_sketch(decoded, _SAMPLE_RATE) + 0.001, 0.0, 1.0)
-        return pa.RecordBatch.from_arrays([sketch_struct_array(rows)], names=[replacement])
+        pooled = pool_sketch_controls(torch.from_numpy(rows)).numpy()
+        return pa.RecordBatch.from_arrays([sketch_struct_array(pooled)], names=[replacement])
 
     dataset.add_columns(rewrite, read_columns=[AUDIO_FIELD])
     dataset.drop_columns([SKETCH_STRUCT_FIELD])
@@ -3767,6 +3769,11 @@ def test_full_struct_rewrite_refreshes_sketch_children(tmp_path: Path) -> None:
     reread = lance.dataset(str(uri))
     assert SKETCH_STRUCT_FIELD in reread.schema.names
     assert replacement not in reread.schema.names
+    pitch_type = cast(
+        "pa.FixedShapeTensorType",
+        reread.schema.field(SKETCH_STRUCT_FIELD).type.field(SKETCH_PITCH_CHILD).type,
+    )
+    assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES]
     np.testing.assert_array_equal(
         _struct_sketch_controls(_stored_sketch_struct(reread)), refreshed
     )

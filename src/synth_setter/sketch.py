@@ -24,7 +24,7 @@ def pool_sketch_controls(
 ) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} output_frames"]:
     """Pool controls with track means and pitch maxima.
 
-    :param controls: Full-resolution loudness, centroid, and pitch controls.
+    :param controls: Loudness, centroid, and pitch controls on any temporal grid.
     :param output_frames: Frames retained along the pooled time axis.
     :returns: Controls with averaged tracks and maximum-pooled pitch activations.
     """

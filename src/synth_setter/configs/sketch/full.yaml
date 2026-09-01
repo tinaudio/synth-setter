@@ -1,10 +1,10 @@
 # @package _global_
 
-# Pre-pool controls at the model token boundary so hydration omits discarded frames.
+# Preserve legacy datasets and pooling experiments on the four-second mel grid.
 model:
   sketch_controls:
     column: sketch
-    num_frames: 32
+    num_frames: 401
     num_control_tokens: 32
     pitch_zero_threshold: 0.1
 

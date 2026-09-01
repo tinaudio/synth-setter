@@ -2683,7 +2683,7 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
                 "synth=surge_4",
                 "model=vst_flow",
                 "conditioning=m2l",
-                "sketch=pooled",
+                "sketch=on",
                 "trainer=cpu",
             ],
         )
