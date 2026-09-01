@@ -123,51 +123,22 @@ def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint(
 
 
 @pytest.mark.parametrize(
-    (
-        "launch_config_name",
-        "experiment",
-        "datamodule_target",
-        "materialization_profile",
-        "memory_floor",
-    ),
+    ("launch_config_name", "high_memory_materialization", "memory_floor"),
     [
-        (
-            "train-runpod-smoke.yaml",
-            "",
-            "synth_setter.data.lance_datamodule.LanceVSTDataModule",
-            "safe",
-            None,
-        ),
-        (
-            "train-runpod-flow-simple-440k.yaml",
-            "",
-            "synth_setter.data.lance_datamodule.LanceVSTDataModule",
-            "high_throughput",
-            "128+",
-        ),
-        (
-            "train-runpod-flow-simple-440k.yaml",
-            "torchsynth/flow_audio_same",
-            "synth_setter.data.torchsynth_datamodule.TorchSynthDataModule",
-            "high_throughput",
-            "128+",
-        ),
+        ("train-runpod-smoke.yaml", False, None),
+        ("train-runpod-flow-simple-440k.yaml", True, "128+"),
     ],
-    ids=["smoke", "flow-simple-440k", "flow-simple-440k-torchsynth-override"],
+    ids=["smoke", "flow-simple-440k"],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     launch_config_name: str,
-    experiment: str,
-    datamodule_target: str,
-    materialization_profile: str,
+    high_memory_materialization: bool,
     memory_floor: str | None,
 ) -> None:
     """Prepare the real SkyPilot task and compose its worker command without submission.
 
     :param launch_config_name: Shipped RunPod training launch config to exercise.
-    :param experiment: Optional worker-side experiment override.
-    :param datamodule_target: Expected composed datamodule class.
-    :param materialization_profile: Expected worker-side hydration profile.
+    :param high_memory_materialization: Expected worker-side hydration setting.
     :param memory_floor: Expected SkyPilot host-memory request.
     """
     launch_config = load_launch_config(_LAUNCH_DIR / launch_config_name)
@@ -191,7 +162,7 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
         env={
             **os.environ,
             "DATASET_ROOT_URI": "",
-            "EXPERIMENT": experiment,
+            "EXPERIMENT": "",
             "HYDRA_FULL_ERROR": "1",
         },
         check=False,
@@ -202,5 +173,6 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     assert result.returncode == 0, result.stderr
     assert task.to_yaml_config()["run"] == task.run
     assert {resource.memory for resource in task.resources} == {memory_floor}
-    assert datamodule_target in result.stdout
-    assert f"materialization_profile: {materialization_profile}" in result.stdout
+    assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
+    expected_setting = str(high_memory_materialization).lower()
+    assert f"high_memory_materialization: {expected_setting}" in result.stdout

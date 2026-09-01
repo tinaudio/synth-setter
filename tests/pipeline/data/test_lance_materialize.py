@@ -67,12 +67,12 @@ def lance_call_recorder(
     return record_lance_scan_and_write_options(monkeypatch)
 
 
-def test_materialize_lance_subset_high_throughput_profile_applies_tuning(
+def test_materialize_lance_subset_high_memory_applies_tuning(
     tmp_path: Path,
     two_version_source: tuple[str, str],
     lance_call_recorder: tuple[list[dict[str, object]], list[dict[str, object]]],
 ) -> None:
-    """The opt-in profile applies the production R2-read and local-write tuning.
+    """The high-memory option applies production R2-read and local-write tuning.
 
     :param tmp_path: Isolates the published destination.
     :param two_version_source: Supplies a real version-pinned Lance source.
@@ -87,7 +87,7 @@ def test_materialize_lance_subset_high_throughput_profile_applies_tuning(
         destination,
         txid=txid,
         columns=("a",),
-        materialization_profile="high_throughput",
+        high_memory_materialization=True,
     )
 
     assert scanner_calls[0]["batch_size"] == 8192
@@ -99,10 +99,10 @@ def test_materialize_lance_subset_high_throughput_profile_applies_tuning(
     assert lance.dataset(str(destination)).count_rows() == 3
 
 
-def test_materialize_lance_subset_high_throughput_crosses_batch_boundary(
+def test_materialize_lance_subset_high_memory_crosses_batch_boundary(
     tmp_path: Path,
 ) -> None:
-    """The high-memory profile preserves scalar rows across a full scan batch.
+    """High-memory materialization preserves scalar rows across a full scan batch.
 
     :param tmp_path: Isolates the source and materialized destination.
     """
@@ -118,7 +118,7 @@ def test_materialize_lance_subset_high_throughput_crosses_batch_boundary(
         destination,
         txid=None,
         columns=("a",),
-        materialization_profile="high_throughput",
+        high_memory_materialization=True,
     )
 
     materialized = lance.dataset(str(destination))
@@ -130,7 +130,7 @@ def test_materialize_lance_subset_high_throughput_crosses_batch_boundary(
     assert values[-1] == 8192
 
 
-def test_materialize_lance_subset_safe_profile_delegates_memory_tuning_to_lance(
+def test_materialize_lance_subset_default_delegates_memory_tuning_to_lance(
     tmp_path: Path,
     two_version_source: tuple[str, str],
     lance_call_recorder: tuple[list[dict[str, object]], list[dict[str, object]]],

@@ -258,7 +258,7 @@ class TestComputeOptionCompose:
         with pytest.raises(ValueError, match=option):
             load_compute_option(option)
 
-    def test_training_option_reserves_high_throughput_materialization_memory(self) -> None:
+    def test_training_option_reserves_high_memory_materialization_ram(self) -> None:
         """The full-data RunPod pool requires enough RAM for tuned hydration."""
         compute = load_compute_option("runpod/training")
         task = _build_task(compute, cmd="echo hi")

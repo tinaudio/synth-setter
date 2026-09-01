@@ -28,9 +28,6 @@ task_name: "eval"
 tags: ["dev"]
 mode: test
 
-# Operational Lance hydration mode; VST datamodules consume this value.
-materialization_profile: safe
-
 # Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.
 evaluation:
   render_vst: false

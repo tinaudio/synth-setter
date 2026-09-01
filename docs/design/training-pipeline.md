@@ -317,7 +317,7 @@ Behavior:
 - `download_dataset_txids` pins per-split source snapshots; without them hydration uses each split's latest version, resolved independently — there is no atomic cross-split snapshot. That is accepted: reproducible or resumable runs supply txids
 - Each staged subset contains its request manifest, so one directory rename atomically publishes the Lance data and matching local transaction identity; concurrent identical writers converge on that winner. Cache hits retry transient metadata reads, verify that identity, and run Lance's structural validation. Unpinned caches additionally require the source to reopen and retain the same snapshot identity; legacy or unverifiable caches fail closed
 - `download_dataset_row_limit` accepts only positive first-N row caps for disposable smoke/tuning runs
-- `materialization_profile` defaults to `safe`, which retains Lance's I/O-buffer and read-ahead defaults; full-data RunPod launches explicitly select `high_throughput` and a compute option with a 128 GB RAM floor. Profiles affect only cold writes: identical cached subsets remain reusable because their data contract is unchanged
+- `datamodule.high_memory_materialization` defaults to `false`, retaining Lance's I/O-buffer and read-ahead defaults; full-data RunPod launches enable it alongside a compute option with a 128 GB RAM floor. The setting affects only cold writes: identical cached subsets remain reusable because their data contract is unchanged
 
 ### 6.2 Checkpoint Durability via R2
 

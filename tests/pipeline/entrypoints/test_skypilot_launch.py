@@ -2538,7 +2538,12 @@ class TestCheckedInLaunchConfigs:
         cfg = load_launch_config(self._LAUNCH_DIR / name)
         assert cfg.cmd is not None
         scientific = ("datamodule", "trainer.", "render=", "callbacks.", "test=")
-        offending = [token for token in shlex.split(cfg.cmd) if token.startswith(scientific)]
+        operational = ("datamodule.high_memory_materialization=",)
+        offending = [
+            token
+            for token in shlex.split(cfg.cmd)
+            if token.startswith(scientific) and not token.startswith(operational)
+        ]
         assert not offending, f"scientific overrides belong in the experiment: {offending}"
 
     @pytest.mark.parametrize(

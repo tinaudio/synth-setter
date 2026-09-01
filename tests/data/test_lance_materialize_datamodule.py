@@ -20,7 +20,6 @@ from omegaconf import OmegaConf
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.data.lance_materialize import MaterializationProfile
 from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from tests.helpers.lance_fixtures import (
     NUM_PARAMS,
@@ -94,15 +93,17 @@ def _sidecar_copier(
 class TestMaterializeInitValidation:
     """``__init__`` fails loudly on inconsistent materialization configuration."""
 
-    def test_init_unknown_materialization_profile_raises(self, tmp_path: Path) -> None:
-        """An unrecognized resource profile is rejected at the config boundary.
+    def test_init_non_bool_high_memory_materialization_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-boolean memory setting is rejected at the config boundary.
 
         :param tmp_path: Local dataset root.
         """
-        with pytest.raises(ValueError, match="materialization_profile"):
+        with pytest.raises(ValueError, match="high_memory_materialization"):
             LanceVSTDataModule(
                 dataset_root=tmp_path,
-                materialization_profile=cast(MaterializationProfile, "unbounded"),
+                high_memory_materialization=cast(bool, "yes"),
                 param_spec_name=_PARAM_SPEC,
             )
 
@@ -500,10 +501,10 @@ class TestMaterializedSubsetLayout:
 class TestMaterializePrepareData:
     """``prepare_data()`` rematerializes projected, row-capped local splits."""
 
-    def test_prepare_data_high_throughput_profile_builds_projected_row_capped_splits(
+    def test_prepare_data_high_memory_builds_projected_row_capped_splits(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The opt-in profile reaches real hydration and preserves split contents.
+        """The high-memory option reaches real hydration and preserves split contents.
 
         :param source_root: Fixture-provided hydration source.
         :param tmp_path: Parent of the local dataset root.
@@ -520,7 +521,7 @@ class TestMaterializePrepareData:
             download_dataset_root_uri=source_root.as_uri(),
             download_dataset_txids=_txids(source_root),
             download_dataset_row_limit=4,
-            materialization_profile="high_throughput",
+            high_memory_materialization=True,
             batch_size=2,
             num_workers=0,
             pin_memory=False,
@@ -529,7 +530,7 @@ class TestMaterializePrepareData:
 
         module.prepare_data()
 
-        assert module.materialization_profile == "high_throughput"
+        assert module.high_memory_materialization is True
         assert [call["batch_size"] for call in scanner_calls] == [8192, 8192, 8192]
         assert [call["max_rows_per_group"] for call in writer_calls] == [4096, 4096, 4096]
         expected_columns = {

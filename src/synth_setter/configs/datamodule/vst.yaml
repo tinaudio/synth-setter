@@ -22,7 +22,7 @@ download_dataset_txids: null
 # First-N rows per split; without txids, intended for disposable smoke/tuning runs.
 download_dataset_row_limit: null
 # High-memory scanner tuning requires an explicit operational launch override.
-materialization_profile: ${oc.select:materialization_profile,safe}
+high_memory_materialization: false
 # Identity flows from the root synth group (#2565); selecting a VST datamodule
 # without `synth=<name>` fails loudly at first resolution.
 param_spec_name: ${synth.param_spec_name}

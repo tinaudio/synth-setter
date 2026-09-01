@@ -1162,7 +1162,7 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
     ensure_r2.assert_not_called()
     assert torch.isfinite(metric_dict["test/param_mse"])
     datamodule = object_dict["datamodule"]
-    assert datamodule.materialization_profile == "safe"
+    assert datamodule.high_memory_materialization is False
     datamodule.setup("test")
     try:
         assert len(datamodule.test_dataset) == 2
