@@ -1222,11 +1222,11 @@ def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
         Path(dry_cfg.paths.output_dir) / "predictions" / "pred-0.pt",
         weights_only=True,
     )
-    effected_target_params = torch.load(
-        Path(effected_cfg.paths.output_dir) / "predictions" / "target-params-0.pt",
+    effected_pred_params = torch.load(
+        Path(effected_cfg.paths.output_dir) / "predictions" / "pred-0.pt",
         weights_only=True,
     )
-    assert torch.equal(dry_pred_params, effected_target_params)
+    assert torch.equal(dry_pred_params, effected_pred_params)
 
     dry_pred, dry_target = _read_eval_audio_pair(dry_cfg)
     repeated_dry_pred, repeated_dry_target = _read_eval_audio_pair(repeated_dry_cfg)
