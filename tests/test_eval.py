@@ -2208,6 +2208,7 @@ def test_train_eval_same_conditioning_real_e2e(
 
 _THIRD_PARTY_CORPUS_ROWS = 2
 _THIRD_PARTY_SOURCE_SAMPLE_RATE = 16_000
+_THIRD_PARTY_TEST_SEED = 3407
 _SURGE_SIMPLE_PREDICTION_WIDTH = 92
 # Matches jobs-style tiny widths: the checkpoint only has to load and sample once.
 _THIRD_PARTY_MODEL_OVERRIDES = (
@@ -2248,8 +2249,26 @@ def _save_third_party_checkpoint(path: Path) -> None:
         enable_progress_bar=False,
         enable_model_summary=False,
     )
+    seed_everything(_THIRD_PARTY_TEST_SEED, workers=True)
     trainer.strategy.connect(instantiate(cfg.model))
     trainer.save_checkpoint(path)
+
+
+def test_third_party_checkpoint_creation_is_reproducible(tmp_path: Path) -> None:
+    """Checkpoint weights do not depend on RNG consumed by earlier tests.
+
+    :param tmp_path: Isolated checkpoint directory.
+    """
+    first_path = tmp_path / "first.ckpt"
+    torch.manual_seed(1)
+    _save_third_party_checkpoint(first_path)
+    second_path = tmp_path / "second.ckpt"
+    torch.manual_seed(2)
+    _save_third_party_checkpoint(second_path)
+
+    first = torch.load(first_path, map_location="cpu", weights_only=False)
+    second = torch.load(second_path, map_location="cpu", weights_only=False)
+    torch.testing.assert_close(first["state_dict"], second["state_dict"], rtol=0, atol=0)
 
 
 def _run_third_party_eval(
@@ -2276,9 +2295,10 @@ def _run_third_party_eval(
             "experiment=surge/flow_simple",
             "datamodule=third_party/nsynth_test",
             "render=vst",
-            "seed=3407",
+            f"seed={_THIRD_PARTY_TEST_SEED}",
             f"datamodule.dataset_uri={corpus}",
             "datamodule.use_saved_mean_and_variance=false",
+            "datamodule.mel_stats_uri=null",
             "datamodule.num_workers=0",
             "callbacks=eval_vst",
             "mode=predict",

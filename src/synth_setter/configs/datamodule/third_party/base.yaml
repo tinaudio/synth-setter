@@ -20,6 +20,6 @@ conditioning: mel
 use_saved_mean_and_variance: true
 # Mel arms must pin the statistics their checkpoint trained with — a corpus of its
 # own has none, and normalizing with the wrong ones silently shifts the model input.
-mel_stats_uri: null
+mel_stats_uri: ???
 # Cache a fetched statistics object with the run's other artifacts.
 stats_cache_dir: ${paths.output_dir}/mel-stats

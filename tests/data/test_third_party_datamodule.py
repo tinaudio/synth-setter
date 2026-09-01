@@ -734,18 +734,41 @@ def test_boolean_count_argument_raises(tmp_path: Path, field: str) -> None:
         ThirdPartyAudioDataModule(**kwargs)  # type: ignore[arg-type]
 
 
-def test_boolean_amplitude_scale_raises(tmp_path: Path) -> None:
-    """A YAML ``false`` must not silently turn every corpus clip into silence.
+@pytest.mark.parametrize("amplitude_scale", [False, True])
+def test_boolean_amplitude_scale_raises(tmp_path: Path, amplitude_scale: bool) -> None:
+    """A YAML boolean must not silently select a numeric corpus gain.
 
     :param tmp_path: Isolated corpus fixture directory.
+    :param amplitude_scale: Boolean value supplied where a numeric gain is required.
     """
-    with pytest.raises(ValueError, match="amplitude_scale=False"):
+    with pytest.raises(ValueError, match=f"amplitude_scale={amplitude_scale}"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=_TARGET_SAMPLE_RATE,
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=_DURATION_SECONDS,
-            amplitude_scale=False,
+            amplitude_scale=amplitude_scale,
+        )
+
+
+@pytest.mark.parametrize(
+    "amplitude_scale", [0.0, -0.5, float("inf"), float("-inf"), float("nan")]
+)
+def test_amplitude_scale_outside_positive_finite_domain_raises(
+    tmp_path: Path, amplitude_scale: float
+) -> None:
+    """A gain that erases or invalidates corpus audio fails at configuration time.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param amplitude_scale: Invalid numeric gain.
+    """
+    with pytest.raises(ValueError, match="must be positive and finite"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            amplitude_scale=amplitude_scale,
         )
 
 
@@ -782,6 +805,77 @@ def test_negative_rate_and_duration_cancelling_into_a_positive_grid_raises(
             channels=_TARGET_CHANNELS,
             signal_duration_seconds=-0.5,
         )
+
+
+def test_setup_transient_lance_open_failure_retries_and_serves_corpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient object-store failure while opening the corpus does not abort evaluation.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param monkeypatch: Fixture injecting one transient Lance failure.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=44)])
+    real_open = lance.dataset
+    attempts = 0
+
+    def open_after_timeout(
+        uri: str,
+        *,
+        version: int | None = None,
+        storage_options: dict[str, str] | None = None,
+    ) -> lance.LanceDataset:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("transient object-store timeout")
+        return real_open(uri, version=version, storage_options=storage_options)
+
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.lance.dataset", open_after_timeout
+    )
+
+    batch = _first_batch(_datamodule(corpus))
+
+    assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
+
+
+def test_row_read_transient_blob_failure_retries_and_returns_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient blob read failure retries against the pinned corpus snapshot.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param monkeypatch: Fixture injecting one transient Lance failure.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=45)])
+    datamodule = _datamodule(corpus)
+    datamodule.setup("predict")
+    pinned = lance.dataset(corpus, version=datamodule.dataset_version)
+
+    class BlobReadAfterTimeout:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def read_blobs(
+            self, blob_column: str, *, indices: list[int]
+        ) -> list[tuple[int, bytes]]:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise TimeoutError("transient object-store timeout")
+            return pinned.read_blobs(blob_column, indices=indices)
+
+    flaky_dataset = BlobReadAfterTimeout()
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.lance.dataset",
+        lambda *args, **kwargs: flaky_dataset,
+    )
+
+    batch = next(iter(datamodule.predict_dataloader()))
+
+    assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
 
 
 def test_setup_pins_the_snapshot_against_later_corpus_commits(tmp_path: Path) -> None:

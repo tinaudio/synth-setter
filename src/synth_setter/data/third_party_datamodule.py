@@ -3,6 +3,8 @@
 The corpora under ``r2:experiments/third_party`` store source WAV bytes as
 ``lance.blob.v2`` columns and are never rewritten. Decode, resample, up-mix,
 length-pinning, amplitude scaling, and the mel front-end happen per batch.
+Compose ``datamodule=third_party/nsynth_test`` with
+``evaluation.no_params=true evaluation.rerender_target=false`` for prediction.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from torch.utils.data import DataLoader, Dataset
 from synth_setter.data.vst.shapes import AUDIO_FIELD, make_spectrogram
 from synth_setter.data.vst_datamodule import load_mel_statistics
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +92,64 @@ def _validate_config(
             f"mel_stats_uri={mel_stats_uri!r} is set with use_saved_mean_and_variance=false, "
             "so the statistics would be dropped and the checkpoint fed raw mel"
         )
+
+
+def _validate_numeric_config(
+    *,
+    sample_rate: int,
+    channels: int,
+    signal_duration_seconds: float,
+    amplitude_scale: float,
+    batch_size: int,
+    num_workers: int,
+) -> int:
+    """Validate the numeric render contract and return its sample count.
+
+    :param sample_rate: Target sample rate in Hz.
+    :param channels: Target channel count.
+    :param signal_duration_seconds: Target clip duration.
+    :param amplitude_scale: Gain applied to decoded audio.
+    :param batch_size: Rows per predict batch.
+    :param num_workers: Dataloader workers decoding rows.
+    :returns: Target samples per clip.
+    :raises ValueError: A value has the wrong type or lies outside its valid domain.
+    """
+    for name, value in (
+        ("sample_rate", sample_rate),
+        ("channels", channels),
+        ("batch_size", batch_size),
+        ("num_workers", num_workers),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name}={value!r} must be an integer")
+    if isinstance(signal_duration_seconds, bool) or not isinstance(
+        signal_duration_seconds, (int, float)
+    ):
+        raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
+    if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
+        raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size={batch_size} must be positive")
+    if sample_rate <= 0:
+        raise ValueError(f"sample_rate={sample_rate} must be positive")
+    if not math.isfinite(signal_duration_seconds) or signal_duration_seconds <= 0:
+        raise ValueError(
+            f"signal_duration_seconds={signal_duration_seconds} must be positive and finite"
+        )
+    if not math.isfinite(amplitude_scale) or amplitude_scale <= 0:
+        raise ValueError(f"amplitude_scale={amplitude_scale} must be positive and finite")
+    if num_workers < 0:
+        raise ValueError(f"num_workers={num_workers} must not be negative")
+    num_samples = int(sample_rate * signal_duration_seconds)
+    if num_samples <= 0:
+        raise ValueError(
+            f"sample_rate={sample_rate} x signal_duration_seconds="
+            f"{signal_duration_seconds} yields {num_samples} samples per clip; "
+            "the render contract needs a positive sample count"
+        )
+    if channels <= 0:
+        raise ValueError(f"channels={channels} must be positive")
+    return num_samples
 
 
 def decode_clip(
@@ -187,8 +248,11 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :returns: Open Lance dataset.
         """
         if self._dataset is None:
-            self._dataset = lance.dataset(
-                self.uri, version=self.version, storage_options=self.storage_options
+            self._dataset = _retry_lance_read(
+                "third_party_worker_open",
+                lambda: lance.dataset(
+                    self.uri, version=self.version, storage_options=self.storage_options
+                ),
             )
         return self._dataset
 
@@ -198,7 +262,10 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :param index: Row index.
         :returns: ``audio`` and ``mel`` for one clip.
         """
-        _, data = self._open().read_blobs(self.audio_column, indices=[index])[0]
+        _, data = _retry_lance_read(
+            "third_party_blob_read",
+            lambda: self._open().read_blobs(self.audio_column, indices=[index]),
+        )[0]
         audio = decode_clip(
             data,
             sample_rate=self.sample_rate,
@@ -249,7 +316,6 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
         :param mel_stats_uri: Training mel statistics, local or ``r2://``.
         :param stats_cache_dir: Directory for fetched statistics.
-        :raises ValueError: The render, conditioning, or normalization contract is invalid.
         """
         super().__init__()
         _validate_config(
@@ -258,42 +324,18 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             mel_stats_uri=mel_stats_uri,
             row_limit=row_limit,
         )
+        num_samples = _validate_numeric_config(
+            sample_rate=sample_rate,
+            channels=channels,
+            signal_duration_seconds=signal_duration_seconds,
+            amplitude_scale=amplitude_scale,
+            batch_size=batch_size,
+            num_workers=num_workers,
+        )
         self.dataset_uri = dataset_uri
         self.sample_rate = sample_rate
         self.channels = channels
-        for name, value in (
-            ("sample_rate", sample_rate),
-            ("channels", channels),
-            ("batch_size", batch_size),
-            ("num_workers", num_workers),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"{name}={value!r} must be an integer")
-        if isinstance(signal_duration_seconds, bool) or not isinstance(
-            signal_duration_seconds, (int, float)
-        ):
-            raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
-        if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
-            raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
-        if batch_size <= 0:
-            raise ValueError(f"batch_size={batch_size} must be positive")
-        if sample_rate <= 0:
-            raise ValueError(f"sample_rate={sample_rate} must be positive")
-        if not math.isfinite(signal_duration_seconds) or signal_duration_seconds <= 0:
-            raise ValueError(
-                f"signal_duration_seconds={signal_duration_seconds} must be positive and finite"
-            )
-        self.num_samples = int(sample_rate * signal_duration_seconds)
-        if num_workers < 0:
-            raise ValueError(f"num_workers={num_workers} must not be negative")
-        if self.num_samples <= 0:
-            raise ValueError(
-                f"sample_rate={sample_rate} x signal_duration_seconds="
-                f"{signal_duration_seconds} yields {self.num_samples} samples per clip; "
-                "the render contract needs a positive sample count"
-            )
-        if channels <= 0:
-            raise ValueError(f"channels={channels} must be positive")
+        self.num_samples = num_samples
         self.audio_column = audio_column
         self.amplitude_scale = amplitude_scale
         self.batch_size = batch_size
@@ -344,7 +386,10 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             if r2_io.is_r2_uri(self.dataset_uri)
             else (self.dataset_uri, None)
         )
-        dataset = lance.dataset(uri, storage_options=storage_options)
+        dataset = _retry_lance_read(
+            "third_party_corpus_open",
+            lambda: lance.dataset(uri, storage_options=storage_options),
+        )
         if self.audio_column not in dataset.schema.names:
             raise KeyError(
                 f"corpus {self.dataset_uri} has no {self.audio_column!r} column; "
@@ -355,7 +400,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"column {self.audio_column!r} in {self.dataset_uri} is not blob-encoded, "
                 "so its source containers cannot be read through the blob API"
             )
-        rows = dataset.count_rows()
+        rows = _retry_lance_read("third_party_row_count", dataset.count_rows)
         if rows == 0:
             raise ValueError(
                 f"corpus {self.dataset_uri} has no rows; an empty sweep writes no "
