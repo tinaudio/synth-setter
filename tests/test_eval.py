@@ -636,6 +636,30 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
 
 @pytest.mark.slow
+def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
+    cfg_torchsynth_flow_audio_train: DictConfig,
+) -> None:
+    """The eval entrypoint publishes grouped-swap errors for the active synth spec.
+
+    :param cfg_torchsynth_flow_audio_train: Composed tiny production flow configuration.
+    """
+    cfg = cfg_torchsynth_flow_audio_train
+    with open_dict(cfg):
+        cfg.mode = "validate"
+        cfg.ckpt_path = None
+        cfg.logger = None
+        cfg.trainer.limit_val_batches = 1
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metric_dict["per_param_mse_number_group_swap/adsr_1.attack"]).all()
+
+
+@pytest.mark.slow
 def test_eval_torchsynth_clap_online_validates_real_offline_backbone(
     cfg_torchsynth_clap_online_train: DictConfig,
 ) -> None:
