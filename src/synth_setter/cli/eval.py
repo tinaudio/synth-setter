@@ -187,7 +187,19 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     audio_dir = output_dir / "audio"
     metrics_dir = output_dir / "metrics"
 
+    no_params = cfg.evaluation.get("no_params", False)
+    if not isinstance(no_params, bool):
+        raise ValueError(
+            f"evaluation.no_params must be a boolean, got {no_params!r}; a quoted "
+            '"false" would otherwise select the no-params render path'
+        )
     if cfg.evaluation.render_vst:
+        if no_params and cfg.evaluation.rerender_target:
+            raise ValueError(
+                "evaluation.no_params=true means the predict split carries no ground-truth "
+                "patch, so evaluation.rerender_target must be false — the target audio can "
+                "only come from the dataset."
+            )
         if cfg.get("render") is None:
             raise ValueError(
                 "evaluation.render_vst=true requires a render config group "
@@ -215,6 +227,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             ]
             if cfg.evaluation.rerender_target:
                 args.extend(["--rerender-target", "True"])
+            if no_params:
+                args.extend(["--no-params", "True"])
             # Each pred file stores at most one configured batch, so this is a
             # conservative timeout budget when the final map-style batch is ragged.
             n_render_samples = (
@@ -289,7 +303,7 @@ def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], lis
     provenance comes from the datamodule's local or remote dataset root.
 
     :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id`` plus the
-        local or remote datamodule root.
+        local or remote datamodule root, falling back to a directly named corpus URI.
     :returns: ``(refs, unresolved)`` — the optional model ref then the discovered
         dataset ref, plus a description of the configured dataset root whose edge
         could not be derived (#2424).
@@ -305,6 +319,10 @@ def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], lis
         refs.append(ref)
         return refs, []
     unresolved = describe_unresolved_dataset_root(dataset_root, download_uri)
+    if unresolved is None:
+        # Third-party corpora name their source directly and carry no frozen spec;
+        # reporting the URI keeps the run from recording no dataset provenance at all.
+        unresolved = OmegaConf.select(cfg, "datamodule.dataset_uri")
     return refs, ([unresolved] if unresolved else [])
 
 

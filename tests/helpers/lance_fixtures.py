@@ -1,10 +1,13 @@
 """Shared writers and column builders for Lance shard test fixtures."""
 
+import io
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import lance
 import numpy as np
 import pyarrow as pa
+from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.audio_preview import (
     DEFAULT_MP3_BITRATE_KBPS,
@@ -170,3 +173,60 @@ def write_lance_shard_with_sketch(
         pa.field(SKETCH_STRUCT_FIELD, array.type, nullable=False), array
     )
     write_lance_dataset(path, extended.schema, [extended])
+
+
+def wav_bytes(clip: np.ndarray, sample_rate: int) -> bytes:
+    """Encode one mono clip as WAV container bytes.
+
+    :param clip: ``(frames,)`` float32 samples.
+    :param sample_rate: Encoded sample rate in Hz.
+    :returns: WAV container bytes.
+    """
+    buffer = io.BytesIO()
+    with AudioFile(buffer, "w", format="wav", samplerate=sample_rate, num_channels=1) as handle:
+        handle.write(clip.reshape(1, -1).astype(np.float32))
+    return buffer.getvalue()
+
+
+def write_blob_audio_corpus(
+    path: Path,
+    clips: Sequence[np.ndarray],
+    *,
+    sample_rate: int,
+    audio_column: str = AUDIO_FIELD,
+    with_sample_rate_column: bool = False,
+    mode: str = "create",
+) -> None:
+    """Write a third-party-style corpus storing WAV bytes in a blob column.
+
+    Mirrors the published ``r2:experiments/third_party`` layout: source
+    containers are stored verbatim, with no fixed-shape audio column.
+
+    :param path: Destination Lance dataset.
+    :param clips: One mono float32 clip per row.
+    :param sample_rate: Encoded sample rate for every clip.
+    :param audio_column: Blob column name; published corpora differ.
+    :param with_sample_rate_column: Whether to store the rate alongside, as NSynth does
+        and ESC50 does not.
+    :param mode: Lance write mode; ``append`` commits a further version.
+    """
+
+    def _wav_bytes(clip: np.ndarray) -> bytes:
+        return wav_bytes(clip, sample_rate)
+
+    fields = [
+        pa.field(
+            audio_column,
+            pa.large_binary(),
+            nullable=False,
+            metadata={b"lance-encoding:blob": b"true"},
+        )
+    ]
+    columns: dict[str, pa.Array] = {
+        audio_column: pa.array([_wav_bytes(clip) for clip in clips], pa.large_binary())
+    }
+    if with_sample_rate_column:
+        fields.append(pa.field("sample_rate", pa.int64(), nullable=False))
+        columns["sample_rate"] = pa.array([sample_rate] * len(clips), pa.int64())
+    table = pa.table(columns, schema=pa.schema(fields))
+    lance.write_dataset(table, path, mode=mode, data_storage_version="2.1")

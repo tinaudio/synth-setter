@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+import librosa
 import numpy as np
 
 # Re-exported for the writers and validator; canonical home is ``conditioning``.
@@ -159,6 +160,30 @@ def mel_n_frames_from_samples(num_samples: int, sample_rate: float) -> int:
     :rtype: int
     """
     return 1 + num_samples // mel_hop_length(sample_rate)
+
+
+def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Per-channel mel-spectrogram in dB; STFT params come from module-level constants.
+
+    Canonical training front-end: every consumer that must match stored
+    ``mel_spec`` values calls this rather than reimplementing the librosa call.
+
+    :param audio: Channel-leading waveform shaped ``(channels, samples)``; a 1-D
+        ``(samples,)`` waveform is also accepted.
+    :param sample_rate: Audio sample rate in Hz.
+    :returns: Decibel-scaled mel spectrogram whose rank follows the input's —
+        ``(channels, MEL_N_MELS, frames)`` for 2-D audio, ``(MEL_N_MELS, frames)`` for 1-D.
+    """
+    spec = librosa.feature.melspectrogram(
+        y=audio,
+        sr=sample_rate,
+        n_mels=MEL_N_MELS,
+        n_fft=mel_n_fft(sample_rate),
+        hop_length=mel_hop_length(sample_rate),
+        window=MEL_WINDOW,
+        center=True,
+    )
+    return librosa.power_to_db(spec, ref=np.max)
 
 
 def audio_dataset_shape(

@@ -70,6 +70,7 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.generic_launcher import run_generic_launcher_command
+from tests.helpers.lance_fixtures import write_blob_audio_corpus
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
@@ -2126,3 +2127,179 @@ def test_train_eval_same_conditioning_real_e2e(
     _assert_conditioning_train_validate_finite(
         tmp_path, dataset_root, param_spec_name, conditioning
     )
+
+
+_THIRD_PARTY_CORPUS_ROWS = 2
+_THIRD_PARTY_SOURCE_SAMPLE_RATE = 16_000
+_SURGE_SIMPLE_PREDICTION_WIDTH = 92
+# Matches jobs-style tiny widths: the checkpoint only has to load and sample once.
+_THIRD_PARTY_MODEL_OVERRIDES = (
+    "model.encoder.d_model=8",
+    "model.encoder.n_heads=1",
+    "model.encoder.n_layers=1",
+    "model.encoder.n_conditioning_outputs=1",
+    "model.encoder.patch_stride=15",
+    "model.vector_field.d_model=8",
+    "model.vector_field.num_heads=1",
+    "model.vector_field.num_layers=1",
+    "model.vector_field.d_ff=8",
+    "model.vector_field.projection.num_tokens=4",
+    "model.test_sample_steps=1",
+    "model.compile=false",
+)
+
+
+def _save_third_party_checkpoint(path: Path) -> None:
+    """Save a real surge-simple flow checkpoint from the shipped Hydra config.
+
+    :param path: Destination checkpoint path.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            overrides=[
+                "experiment=surge/flow_simple",
+                "trainer=cpu",
+                *_THIRD_PARTY_MODEL_OVERRIDES,
+            ],
+        )
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.strategy.connect(instantiate(cfg.model))
+    trainer.save_checkpoint(path)
+
+
+def _run_third_party_eval(
+    *,
+    corpus: Path,
+    checkpoint: Path,
+    output_dir: Path,
+    extra_overrides: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
+    """Run the public eval CLI over a third-party corpus with no ground-truth patch.
+
+    :param corpus: Blob-audio Lance corpus to serve.
+    :param checkpoint: Checkpoint to load.
+    :param output_dir: Eval output root.
+    :param extra_overrides: Scenario-specific Hydra overrides.
+    :returns: The completed CLI process.
+    """
+    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
+    return subprocess.run(  # noqa: S603 — argv contains only test-owned paths
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.cli.eval",
+            "experiment=surge/flow_simple",
+            "datamodule=third_party/nsynth_test",
+            "render=vst",
+            "seed=3407",
+            f"datamodule.dataset_uri={corpus}",
+            "datamodule.use_saved_mean_and_variance=false",
+            "datamodule.num_workers=0",
+            "callbacks=eval_vst",
+            "mode=predict",
+            "trainer=cpu",
+            f"ckpt_path={checkpoint}",
+            "evaluation.no_params=true",
+            "evaluation.rerender_target=false",
+            *_THIRD_PARTY_MODEL_OVERRIDES,
+            *extra_overrides,
+            f"paths.output_dir={output_dir}",
+            "hydra.job.chdir=false",
+            "+trainer.enable_progress_bar=false",
+            "+trainer.enable_model_summary=false",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        env=subprocess_env,
+    )
+
+
+@pytest.mark.slow
+def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) -> None:
+    """The public eval CLI predicts a published corpus with no ground-truth patch.
+
+    Drives the real entrypoint over blob-stored source audio: decode, resample,
+    up-mix, and the mel front-end all happen in the dataloader, and
+    ``no_params`` keeps target audio sourced from the corpus.
+
+    :param tmp_path: Isolated corpus, checkpoint, and output directories.
+    """
+    corpus = tmp_path / "corpus.lance"
+    write_blob_audio_corpus(
+        corpus,
+        [
+            np.zeros(_THIRD_PARTY_SOURCE_SAMPLE_RATE, dtype=np.float32) + 0.1 * index
+            for index in range(_THIRD_PARTY_CORPUS_ROWS)
+        ],
+        sample_rate=_THIRD_PARTY_SOURCE_SAMPLE_RATE,
+    )
+    checkpoint = tmp_path / "flow_simple.ckpt"
+    _save_third_party_checkpoint(checkpoint)
+    output_dir = tmp_path / "output"
+
+    result = _run_third_party_eval(
+        corpus=corpus,
+        checkpoint=checkpoint,
+        output_dir=output_dir,
+        extra_overrides=("datamodule.batch_size=2",),
+    )
+
+    assert result.returncode == 0, result.stderr
+    prediction = torch.load(
+        output_dir / "predictions" / "pred-0.pt", map_location="cpu", weights_only=True
+    )
+    target_audio = torch.load(
+        output_dir / "predictions" / "target-audio-0.pt", map_location="cpu", weights_only=True
+    )
+    assert prediction.shape == (_THIRD_PARTY_CORPUS_ROWS, _SURGE_SIMPLE_PREDICTION_WIDTH)
+    assert torch.isfinite(prediction).all()
+    assert not (output_dir / "predictions" / "target-params-0.pt").exists()
+    assert target_audio.shape[1:] == (2, 4 * 44_100)
+    # Mean amplitude verifies content, order, padding, and up-mixing.
+    served = [float(row.abs().mean()) for row in target_audio]
+    assert served == pytest.approx([0.0, 0.025], abs=1e-3)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Path) -> None:
+    """The ``no_params`` render branch scores predictions against the corpus's own audio.
+
+    With no target params on disk, ``target.wav`` must come from staged dataset
+    audio; a dropped or rejected ``--no-params`` flag fails this test.
+
+    :param tmp_path: Isolated corpus, checkpoint, and output directories.
+    """
+    corpus = tmp_path / "corpus.lance"
+    write_blob_audio_corpus(
+        corpus,
+        [np.full(_THIRD_PARTY_SOURCE_SAMPLE_RATE, 0.25, dtype=np.float32)],
+        sample_rate=_THIRD_PARTY_SOURCE_SAMPLE_RATE,
+    )
+    checkpoint = tmp_path / "flow_simple.ckpt"
+    _save_third_party_checkpoint(checkpoint)
+    output_dir = tmp_path / "output"
+
+    result = _run_third_party_eval(
+        corpus=corpus,
+        checkpoint=checkpoint,
+        output_dir=output_dir,
+        extra_overrides=("datamodule.batch_size=1", "evaluation.render_vst=true"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    sample = output_dir / "audio" / "sample_0"
+    with AudioFile(str(sample / "target.wav")) as handle:
+        target = handle.read(handle.frames)
+    assert (sample / "pred.wav").is_file()
+    # Staged corpus audio must be preserved; a re-render or zeroed target changes its level.
+    assert float(np.abs(target).mean()) == pytest.approx(0.0625, abs=5e-3)

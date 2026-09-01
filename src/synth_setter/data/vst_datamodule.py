@@ -217,7 +217,6 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
     :param dataset_file: Split path whose parent contains ``stats.npz``.
     :returns: Broadcasting ``(mean, std)`` arrays.
     :raises FileNotFoundError: If ``stats.npz`` is missing.
-    :raises ValueError: If values are non-finite or standard deviations are not positive.
     """
     stats_file = Path(dataset_file).parent / "stats.npz"
     if not stats_file.exists():
@@ -225,6 +224,16 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
             f"Could not find statistics file {stats_file}. \n"
             "Make sure to first run `src/synth_setter/pipeline/data/stats.py`."
         )
+    return load_mel_statistics(stats_file)
+
+
+def load_mel_statistics(stats_file: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load and validate one mel-statistics ``.npz``.
+
+    :param stats_file: Path to the ``.npz`` holding ``mean`` and ``std``.
+    :returns: Broadcasting ``(mean, std)`` arrays.
+    :raises ValueError: If values are non-finite or standard deviations are not positive.
+    """
     with np.load(stats_file) as stats:
         mean = stats["mean"]
         std = stats["std"]
