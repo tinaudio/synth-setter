@@ -177,7 +177,7 @@ compute = [
 data = [
   "pandas",
   "numpy",
-  "pylance>=7.0.0",
+  "pylance>=9.0.0,<10.0.0",
 ]
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.
