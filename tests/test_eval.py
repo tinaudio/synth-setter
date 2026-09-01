@@ -1134,6 +1134,64 @@ def _compose_fake_oracle_eval_cfg(
     return cfg
 
 
+def _compose_pyfdn_eval_configs(
+    tmp_path: Path,
+    dataset_root: Path,
+    param_spec_name: str,
+) -> tuple[DictConfig, DictConfig, DictConfig]:
+    """Compose matched dry, repeated-dry, and effected eval configs.
+
+    :param tmp_path: Root for independent eval outputs.
+    :param dataset_root: Real Surge Lance dataset root.
+    :param param_spec_name: Shared model and renderer parameter identity.
+    :returns: Dry, repeated-dry, and effected configs in comparison order.
+    """
+    configs = tuple(
+        _compose_fake_oracle_eval_cfg(
+            tmp_path / output_name,
+            dataset_root,
+            mode="predict",
+            param_spec_name=param_spec_name,
+            datamodule="surge_lance",
+            render_group=render_group,
+        )
+        for output_name, render_group in (
+            ("dry", "vst"),
+            ("dry-repeat", "vst"),
+            ("effected", "vst_pyfdn"),
+        )
+    )
+    for cfg in configs:
+        with open_dict(cfg):
+            cfg.render.sample_rate = 48000
+            cfg.render.gui_toggle_cadence = "never"
+            cfg.evaluation.compute_metrics = False
+            cfg.evaluation.rerender_target = True
+            cfg.trainer.limit_predict_batches = 1
+    with open_dict(configs[2]):
+        configs[2].render.pyfdn_effect.wet_mix = 0.5
+    return cast(tuple[DictConfig, DictConfig, DictConfig], configs)
+
+
+def _evaluate_config(cfg: DictConfig) -> None:
+    """Run one fully composed evaluation config.
+
+    :param cfg: Config passed through the public eval entrypoint.
+    """
+    HydraConfig().set_config(cfg)
+    evaluate(cfg)
+
+
+def _read_eval_audio_pair(cfg: DictConfig) -> tuple[np.ndarray, np.ndarray]:
+    """Read one eval run's prediction and target WAVs.
+
+    :param cfg: Eval config whose output directory owns the artifacts.
+    :returns: Prediction and target channel-first waveforms.
+    """
+    audio_root = Path(cfg.paths.output_dir) / "audio" / "sample_0"
+    return _read_wav(audio_root / "pred.wav"), _read_wav(audio_root / "target.wav")
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
@@ -1148,46 +1206,13 @@ def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
     :param surge_xt_smoke_datasets: Real Surge Lance splits consumed by the oracle.
     :param param_spec_name: Shared dataset, model, and renderer parameter identity.
     """
-    dry_cfg = _compose_fake_oracle_eval_cfg(
-        tmp_path / "dry",
+    dry_cfg, repeated_dry_cfg, effected_cfg = _compose_pyfdn_eval_configs(
+        tmp_path,
         surge_xt_smoke_datasets,
-        mode="predict",
-        param_spec_name=param_spec_name,
-        datamodule="surge_lance",
-        render_group="vst",
-    )
-    repeated_dry_cfg = _compose_fake_oracle_eval_cfg(
-        tmp_path / "dry-repeat",
-        surge_xt_smoke_datasets,
-        mode="predict",
-        param_spec_name=param_spec_name,
-        datamodule="surge_lance",
-        render_group="vst",
-    )
-    effected_cfg = _compose_fake_oracle_eval_cfg(
-        tmp_path / "effected",
-        surge_xt_smoke_datasets,
-        mode="predict",
-        param_spec_name=param_spec_name,
-        datamodule="surge_lance",
-        render_group="vst_pyfdn",
+        param_spec_name,
     )
     for cfg in (dry_cfg, repeated_dry_cfg, effected_cfg):
-        with open_dict(cfg):
-            cfg.render.sample_rate = 48000
-            cfg.render.gui_toggle_cadence = "never"
-            cfg.evaluation.compute_metrics = False
-            cfg.evaluation.rerender_target = True
-            cfg.trainer.limit_predict_batches = 1
-    with open_dict(effected_cfg):
-        effected_cfg.render.pyfdn_effect.wet_mix = 0.5
-
-    HydraConfig().set_config(dry_cfg)
-    evaluate(dry_cfg)
-    HydraConfig().set_config(repeated_dry_cfg)
-    evaluate(repeated_dry_cfg)
-    HydraConfig().set_config(effected_cfg)
-    evaluate(effected_cfg)
+        _evaluate_config(cfg)
 
     effect = RenderConfig.from_cfg_nodes(effected_cfg.render, effected_cfg.synth).pyfdn_effect
     assert effect is not None
@@ -1203,19 +1228,16 @@ def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
     )
     assert torch.equal(dry_pred_params, effected_target_params)
 
-    dry_audio_root = Path(dry_cfg.paths.output_dir) / "audio" / "sample_0"
-    repeated_dry_audio_root = Path(repeated_dry_cfg.paths.output_dir) / "audio" / "sample_0"
-    effected_audio_root = Path(effected_cfg.paths.output_dir) / "audio" / "sample_0"
-    dry_pred = _read_wav(dry_audio_root / "pred.wav")
-    repeated_dry_pred = _read_wav(repeated_dry_audio_root / "pred.wav")
-    dry_target = _read_wav(dry_audio_root / "target.wav")
-    effected_pred = _read_wav(effected_audio_root / "pred.wav")
-    effected_target = _read_wav(effected_audio_root / "target.wav")
+    dry_pred, dry_target = _read_eval_audio_pair(dry_cfg)
+    repeated_dry_pred, repeated_dry_target = _read_eval_audio_pair(repeated_dry_cfg)
+    effected_pred, effected_target = _read_eval_audio_pair(effected_cfg)
     assert dry_pred.shape == dry_target.shape == effected_pred.shape == effected_target.shape
-    dry_jitter = float(np.mean(np.abs(repeated_dry_pred - dry_pred)))
-    effect_delta = float(np.mean(np.abs(effected_pred - dry_pred)))
-    assert effect_delta > dry_jitter + 5e-5
-    assert not np.array_equal(effected_target, dry_target)
+    pred_jitter = float(np.mean(np.abs(repeated_dry_pred - dry_pred)))
+    pred_effect_delta = float(np.mean(np.abs(effected_pred - dry_pred)))
+    target_jitter = float(np.mean(np.abs(repeated_dry_target - dry_target)))
+    target_effect_delta = float(np.mean(np.abs(effected_target - dry_target)))
+    assert pred_effect_delta > pred_jitter + 5e-5
+    assert target_effect_delta > target_jitter + 5e-5
     assert np.isfinite(effected_pred).all()
     assert np.max(np.abs(effected_pred)) <= 1.0
 

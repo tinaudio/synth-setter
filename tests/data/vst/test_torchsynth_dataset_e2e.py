@@ -11,13 +11,14 @@ from pathlib import Path
 import lance
 import numpy as np
 import pytest
+from pydantic_settings import CliApp
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_ADSR_PARAM_SPEC
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SynthName, SynthSpec
-from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.pipeline.schemas.spec import PyFDNEffectConfig, RenderConfig
 
 _SAMPLE_RATE = 22_050
 _DURATION_SECONDS = 0.5
@@ -77,6 +78,29 @@ def _read_lance_column(path: Path, field: str) -> np.ndarray:
     """
     chunk = lance.dataset(str(path)).to_table(columns=[field]).column(field).combine_chunks()
     return chunk.to_numpy_ndarray()
+
+
+def _run_torchsynth_cli(shard: Path, config: RenderConfig) -> None:
+    """Render one shard through the public CLI with a serialized config.
+
+    :param shard: Destination Lance dataset.
+    :param config: Complete render configuration.
+    """
+    serialized = [
+        "--" + value[2:].replace("-", "_") if value.startswith("--") else value
+        for value in CliApp.serialize(config)
+    ]
+    subprocess.run(  # noqa: S603 — sys.executable and every CLI argument are test-owned
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.data.vst.generate_vst_dataset",
+            str(shard),
+            *serialized,
+        ],
+        check=True,
+        timeout=120,
+    )
 
 
 def test_make_lance_dataset_renders_a_real_torchsynth_shard(tmp_path: Path) -> None:
@@ -178,49 +202,17 @@ def test_generate_vst_dataset_cli_pyfdn_changes_persisted_audio_and_mel(tmp_path
     dry_config = _torchsynth_48k_render_cfg()
     make_lance_dataset(dry_shard, dry_config)
 
-    subprocess.run(  # noqa: S603 — sys.executable and every CLI argument are test-owned
-        [
-            sys.executable,
-            "-m",
-            "synth_setter.data.vst.generate_vst_dataset",
-            str(effected_shard),
-            "--synth",
-            json.dumps(dry_config.synth.model_dump(mode="json")),
-            "--renderer_backend",
-            "torchsynth",
-            "--sample_rate",
-            "48000",
-            "--channels",
-            "2",
-            "--velocity",
-            "100",
-            "--signal_duration_seconds",
-            "0.5",
-            "--min_loudness",
-            "-70.0",
-            "--samples_per_shard",
-            "2",
-            "--samples_per_render_batch",
-            "1",
-            "--base_seed",
-            "1757",
-            "--plugin_reload_cadence",
-            "once",
-            "--gui_toggle_cadence",
-            "never",
-            "--pyfdn_effect",
-            json.dumps(
-                {
-                    "package_version": "0.4.2",
-                    "preset_name": "colorless_N8_d1",
-                    "decay_seconds": 0.5,
-                    "wet_mix": 0.1,
-                }
-            ),
-        ],
-        check=True,
-        timeout=120,
+    effect_config = dry_config.model_copy(
+        update={
+            "pyfdn_effect": PyFDNEffectConfig(
+                package_version="0.4.2",
+                preset_name="colorless_N8_d1",
+                decay_seconds=0.5,
+                wet_mix=0.1,
+            )
+        }
     )
+    _run_torchsynth_cli(effected_shard, effect_config)
 
     assert np.array_equal(
         _read_lance_column(dry_shard, PARAM_ARRAY_FIELD),

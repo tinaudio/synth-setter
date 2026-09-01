@@ -99,6 +99,17 @@ _TEST_PLUGIN_VST3 = Path(__file__).resolve().parent / "pipeline" / "fixtures" / 
 _TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def _configure_local_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point synth-setter storage settings at the local rclone test remote.
+
+    :param monkeypatch: Applies process-local storage environment values.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "local-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "local-secret-key")
+
+
 def _run_from_spec_uri_cli(spec_path: Path, work_dir: Path) -> subprocess.CompletedProcess[str]:
     """Run the production spec-URI CLI against a local spec.
 
@@ -146,6 +157,49 @@ def _managed_real_plugin(tmp_path: Path) -> Path:
         plugins_dir=tmp_path / "managed-plugins",
         bundle=_REAL_PLUGIN_VST3,
         locked_package=artifact_lock.package_for(plugin),
+    )
+
+
+def _run_spec_uri_render(
+    root: Path,
+    cfg: DictConfig,
+    spec_filename: str,
+) -> tuple[DatasetSpec, subprocess.CompletedProcess[str]]:
+    """Materialize a config and run the real spec-URI CLI.
+
+    :param root: Directory holding the spec and CLI work outputs.
+    :param cfg: Hydra dataset config to materialize.
+    :param spec_filename: Distinct JSON filename for this run.
+    :returns: Materialized spec and completed CLI process.
+    """
+    spec = DatasetSpec.from_hydra_cfg(cfg)
+    spec_path = root / spec_filename
+    spec_path.write_text(spec.model_dump_json())
+    return spec, _run_from_spec_uri_cli(spec_path, root)
+
+
+def _read_spec_uri_shard_audio(root: Path, spec: DatasetSpec) -> np.ndarray:
+    """Read the first locally retained shard's audio column.
+
+    :param root: Root containing the spec-URI CLI work directory.
+    :param spec: Spec whose run and shard identities locate the Lance dataset.
+    :returns: Persisted float32 audio rows.
+    """
+    shard_path = (
+        root
+        / "logs"
+        / "generate_dataset"
+        / "from_spec_uri"
+        / spec.run_id
+        / spec.shards[0].filename
+    )
+    return (
+        lance.dataset(str(shard_path))
+        .to_table(columns=[AUDIO_FIELD])
+        .column(AUDIO_FIELD)
+        .combine_chunks()
+        .to_numpy_ndarray()
+        .astype(np.float32)
     )
 
 
@@ -268,10 +322,7 @@ def test_from_spec_uri_retention_opt_out_real_torchsynth_deletes_local_shard(
     :param fake_r2_remote: Local filesystem backing the real rclone transport.
     :param monkeypatch: Supplies canonical local-backend storage settings.
     """
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "local-access-key")
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost")
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "local-secret-key")
+    _configure_local_storage(monkeypatch)
     with open_dict(cfg_dataset_torchsynth):
         cfg_dataset_torchsynth.render.retain_local_shards = False
         cfg_dataset_torchsynth.logger = []
@@ -300,18 +351,15 @@ def test_from_spec_uri_pyfdn_changes_same_seed_torchsynth_audio(
     :param fake_r2_remote: Local filesystem backing the real rclone transport.
     :param monkeypatch: Supplies canonical local-backend storage settings.
     """
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "local-access-key")
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost")
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
-    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "local-secret-key")
+    _configure_local_storage(monkeypatch)
     with open_dict(cfg_dataset_torchsynth):
         cfg_dataset_torchsynth.render.sample_rate = 48000
         cfg_dataset_torchsynth.logger = []
-    dry_spec = DatasetSpec.from_hydra_cfg(cfg_dataset_torchsynth)
-    dry_spec_path = fake_r2_remote / "dry-input-spec.json"
-    dry_spec_path.write_text(dry_spec.model_dump_json())
-
-    dry_result = _run_from_spec_uri_cli(dry_spec_path, fake_r2_remote)
+    dry_spec, dry_result = _run_spec_uri_render(
+        fake_r2_remote,
+        cfg_dataset_torchsynth,
+        "dry-input-spec.json",
+    )
 
     with open_dict(cfg_dataset_torchsynth):
         cfg_dataset_torchsynth.task_name = f"{cfg_dataset_torchsynth.task_name}-effected"
@@ -321,11 +369,11 @@ def test_from_spec_uri_pyfdn_changes_same_seed_torchsynth_audio(
             "decay_seconds": 0.5,
             "wet_mix": 0.1,
         }
-    effected_spec = DatasetSpec.from_hydra_cfg(cfg_dataset_torchsynth)
-    effected_spec_path = fake_r2_remote / "effected-input-spec.json"
-    effected_spec_path.write_text(effected_spec.model_dump_json())
-
-    effected_result = _run_from_spec_uri_cli(effected_spec_path, fake_r2_remote)
+    effected_spec, effected_result = _run_spec_uri_render(
+        fake_r2_remote,
+        cfg_dataset_torchsynth,
+        "effected-input-spec.json",
+    )
 
     assert dry_result.returncode == 0, dry_result.stderr
     assert effected_result.returncode == 0, effected_result.stderr
@@ -334,21 +382,8 @@ def test_from_spec_uri_pyfdn_changes_same_seed_torchsynth_audio(
     assert dry_shard.seed == effected_shard.seed
     assert shard_has_complete_attempt(effected_spec, effected_shard.shard_id)
 
-    def read_audio(spec: DatasetSpec, filename: str) -> np.ndarray:
-        local_shard = (
-            fake_r2_remote / "logs" / "generate_dataset" / "from_spec_uri" / spec.run_id / filename
-        )
-        return (
-            lance.dataset(str(local_shard))
-            .to_table(columns=[AUDIO_FIELD])
-            .column(AUDIO_FIELD)
-            .combine_chunks()
-            .to_numpy_ndarray()
-            .astype(np.float32)
-        )
-
-    dry_audio = read_audio(dry_spec, dry_shard.filename)
-    effected_audio = read_audio(effected_spec, effected_shard.filename)
+    dry_audio = _read_spec_uri_shard_audio(fake_r2_remote, dry_spec)
+    effected_audio = _read_spec_uri_shard_audio(fake_r2_remote, effected_spec)
     assert not np.array_equal(effected_audio, dry_audio)
     assert np.isfinite(effected_audio).all()
     assert np.max(np.abs(effected_audio)) <= 1.0
