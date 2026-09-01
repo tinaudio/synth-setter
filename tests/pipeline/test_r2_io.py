@@ -1252,6 +1252,27 @@ class TestUpload:
             r2_io.upload(Path("r2://bucket/src/key.json"), "r2://bucket/dst/key.json")
 
 
+class TestCopyDirectory:
+    """Exercise recursive copies through the real rclone binary."""
+
+    def test_preserves_nested_relative_paths(self, fake_r2_remote: Path) -> None:
+        """Every nested source object must land at the same destination-relative path.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        """
+        source = fake_r2_remote / "bucket" / "candidate" / "data" / "partition-a"
+        source.mkdir(parents=True)
+        (source / "fragment.lance").write_bytes(b"fragment")
+
+        r2_io.copy_directory(
+            "r2://bucket/candidate/data",
+            "r2://bucket/main/data",
+        )
+
+        copied = fake_r2_remote / "bucket" / "main" / "data" / "partition-a" / "fragment.lance"
+        assert copied.read_bytes() == b"fragment"
+
+
 class TestDownloadedToTempfile:
     """Tests for the downloaded_to_tempfile context manager."""
 

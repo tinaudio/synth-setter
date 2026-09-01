@@ -535,6 +535,20 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
+def copy_directory(source_uri: str, destination_uri: str) -> None:
+    """Copy source-relative R2 objects into a destination prefix.
+
+    :param source_uri: Source ``r2://`` directory URI.
+    :param destination_uri: Destination ``r2://`` directory URI.
+    """
+    args = _rclone_argv(
+        "copy",
+        _to_rclone_path(source_uri),
+        _to_rclone_path(destination_uri),
+    )
+    subprocess.check_call(args)  # noqa: S603 — args from validated URIs
+
+
 def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None:
     """Copy a local directory tree into an R2 prefix (upload mirror of the dir download).
 

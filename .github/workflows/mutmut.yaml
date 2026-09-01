@@ -64,6 +64,9 @@ jobs:
           - name: pipeline-add-public
             patterns:
               - synth_setter.pipeline.data.add_*.x_[!_]*
+          - name: pipeline-backfill
+            patterns:
+              - synth_setter.pipeline.data.backfill_*
           - name: pipeline-add-private-a-m
             patterns:
               - synth_setter.pipeline.data.add_*.x__[a-m]*
