@@ -220,6 +220,14 @@ def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() 
     assert cfg.render is not None
 
 
+def test_torchsynth_flow_experiment_logs_grouped_per_param_metrics_by_default() -> None:
+    """Validation publishes grouped-swap errors under TorchSynth parameter names."""
+    cfg = _flow_cfg()
+
+    assert cfg.model.param_spec == "torchsynth_full"
+    assert cfg.callbacks.log_per_param_mse.param_spec == "torchsynth_full"
+
+
 def test_torchsynth_flow_experiment_carries_no_audio_loss() -> None:
     """The base flow experiment is the control arm and must retain every train row."""
     cfg = _flow_cfg()

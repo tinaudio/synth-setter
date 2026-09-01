@@ -6,7 +6,7 @@ defaults:
   - override /render: torchsynth
   - override /model: vst_flow
   - override /conditioning: log_mel
-  - override /callbacks: default
+  - override /callbacks: [default, log_per_param_mse]
   # vst_flow's cosine scheduler interpolates ${trainer.max_steps}.
   - override /trainer: gpu_400k_steps
   - _self_

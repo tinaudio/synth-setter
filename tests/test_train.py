@@ -349,6 +349,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
+    assert torch.isfinite(metric_dict["per_param_mse_number_group_swap/adsr_1.attack"]).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
