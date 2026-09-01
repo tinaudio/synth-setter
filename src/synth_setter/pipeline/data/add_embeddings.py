@@ -45,7 +45,10 @@ from synth_setter.data.vst.shapes import (
     SAME_L_FIELD,
     SAME_S_FIELD,
     SHIFT_FIELD,
+    SKETCH_CENTROID_CHILD,
+    SKETCH_LOUDNESS_CHILD,
     SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD,
     SKETCH_STRUCT_FIELD,
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
@@ -145,6 +148,8 @@ SKETCH_ENCODE_MAX_BATCH: int = 32
 # Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
 # per-child schema evolution (unused here) is the 2.2-only operation.
 SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
+SKETCH_FULL_STRUCT_FIELD: str = "sketch_full_401"
+_SKETCH_POOL_INPUT_FIELDS: tuple[str, ...] = (SKETCH_FULL_STRUCT_FIELD,)
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
@@ -819,6 +824,58 @@ def _sketch_encode(
     return np.concatenate(chunks, axis=0)
 
 
+def _sketch_pool_artifact_identity(checkpoint: str) -> str:
+    """Identify the deterministic full-resolution sketch pooling policy.
+
+    :param checkpoint: Empty placeholder; pooling has no model checkpoint.
+    :returns: Versioned pooling-policy identity.
+    :raises ValueError: A checkpoint override is supplied.
+    """
+    if checkpoint:
+        raise ValueError("sketch_pool does not accept a checkpoint override")
+    return _versioned_artifact_identity(
+        "sketch_pool", f"avgmax{SKETCH_STORAGE_FRAMES}"
+    )
+
+
+def _load_sketch_pool_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Return the no-model placeholder used by the uniform registry interface.
+
+    :param checkpoint: Empty placeholder validated by the artifact resolver.
+    :param config: Unused add-embeddings configuration.
+    :returns: Identity callable; the pooling transform reads stored controls directly.
+    """
+    del checkpoint, config
+    return cast("M2LEncodeFn", lambda values: values)
+
+
+def _encode_sketch_pool_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> pa.Array:
+    """Pool a renamed full-resolution sketch struct to canonical storage.
+
+    :param sources: Decoded ``sketch_full_401`` source struct.
+    :param sample_rate: Unused source sample rate.
+    :param encoder: Unused registry placeholder.
+    :returns: Canonically pooled sketch struct and frame-mean vector child.
+    """
+    import torch
+
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+    from synth_setter.sketch import pool_sketch_controls
+
+    del sample_rate, encoder
+    rows = sources[SKETCH_FULL_STRUCT_FIELD]
+    loudness = np.stack([row[SKETCH_LOUDNESS_CHILD] for row in rows])
+    centroid = np.stack([row[SKETCH_CENTROID_CHILD] for row in rows])
+    pitch = np.stack([row[SKETCH_PITCH_CHILD] for row in rows]).reshape(
+        len(rows), SKETCH_PITCH_BINS, -1
+    )
+    controls = np.concatenate((loudness[:, None], centroid[:, None], pitch), axis=1)
+    pooled = pool_sketch_controls(torch.from_numpy(controls)).numpy()
+    return sketch_struct_array(pooled)
+
+
 def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind the sketch-control extractor to the registry's uniform factory signature.
 
@@ -959,6 +1016,22 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_sketch_spec_encoder,
         encode_column=_encode_sketch_column,
         resolve_artifact_identity=_sketch_artifact_identity,
+    ),
+    "sketch_pool": EmbeddingSpec(
+        name="sketch_pool",
+        column=SKETCH_STRUCT_FIELD,
+        default_checkpoint="",
+        co_resident=False,
+        index=IndexSpec(
+            pool="none",
+            num_sub_vectors=SKETCH_INDEX_SUB_VECTORS,
+            vector_column=SKETCH_VEC_COLUMN,
+            vector_dim=NUM_SKETCH_CONTROLS,
+        ),
+        load_encoder=_load_sketch_pool_encoder,
+        encode_column=_encode_sketch_pool_column,
+        resolve_artifact_identity=_sketch_pool_artifact_identity,
+        input_fields=_SKETCH_POOL_INPUT_FIELDS,
     ),
     "ssondo": EmbeddingSpec(
         name="ssondo",
@@ -1693,7 +1766,8 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if _nested_schema_field(dataset.schema, vector_column) is not None:
                 _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
-        _validate_write_source(dataset, config.batch_size)
+        input_fields = sorted({field for spec in pending for field in spec.input_fields})
+        _validate_write_source(dataset, config.batch_size, input_fields)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info(

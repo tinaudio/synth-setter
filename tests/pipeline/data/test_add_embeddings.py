@@ -68,6 +68,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
     SAME_LATENT_FRAMES,
+    SKETCH_FULL_STRUCT_FIELD,
     SKETCH_INDEX_SUB_VECTORS,
     SKETCH_VEC_COLUMN,
     EmbeddingSpec,
@@ -414,6 +415,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "same_l",
         "same_s",
         "sketch",
+        "sketch_pool",
         "ssondo",
         "t5gemma",
         "matpac_plus",
@@ -426,6 +428,8 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         vector_dim=NUM_SKETCH_CONTROLS,
     )
     assert EMBEDDING_REGISTRY["sketch"].co_resident is True
+    assert EMBEDDING_REGISTRY["sketch_pool"].co_resident is False
+    assert EMBEDDING_REGISTRY["sketch_pool"].input_fields == (SKETCH_FULL_STRUCT_FIELD,)
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(
         pool="none", vector_dim=CLAP_EMBEDDING_DIM
     )
@@ -3517,6 +3521,54 @@ def _stored_sketch_struct(dataset: lance.LanceDataset) -> pa.StructArray:
     """
     table = dataset.to_table(columns=[SKETCH_STRUCT_FIELD])
     return cast("pa.StructArray", table.column(SKETCH_STRUCT_FIELD).combine_chunks())
+
+
+def test_sketch_pool_backfill_reads_renamed_controls_and_writes_pooled_struct(
+    tmp_path: Path,
+) -> None:
+    """The pooling policy transforms the renamed source without re-encoding audio.
+
+    :param tmp_path: Scratch directory for the source dataset.
+    """
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+
+    uri = tmp_path / "sketch-pool.lance"
+    rows = 5
+    _audio_dataset(uri, rows=rows)
+    rng = np.random.default_rng(2980)
+    controls = rng.random((rows, NUM_SKETCH_CONTROLS, 401), dtype=np.float32)
+    controls[:, :2] = controls[:, :2] * 2.0 - 1.0
+    source = sketch_struct_array(controls)
+    dataset = lance.dataset(str(uri))
+    reader = pa.RecordBatchReader.from_batches(
+        pa.schema(
+            [pa.field(SKETCH_STRUCT_FIELD, source.type)], metadata=dataset.schema.metadata
+        ),
+        [pa.record_batch([source], names=[SKETCH_STRUCT_FIELD])],
+    )
+    dataset.add_columns(reader)
+    dataset.alter_columns(
+        cast("Any", {"path": SKETCH_STRUCT_FIELD, "name": SKETCH_FULL_STRUCT_FIELD})
+    )
+
+    _write_columns(
+        dataset,
+        [EMBEDDING_REGISTRY["sketch_pool"]],
+        _SAMPLE_RATE,
+        AddEmbeddingsConfig(
+            lance_uri=str(uri),
+            embeddings=("sketch_pool",),
+            batch_size=2,
+            build_index=False,
+        ),
+    )
+
+    reread = lance.dataset(str(uri))
+    assert SKETCH_FULL_STRUCT_FIELD in reread.schema.names
+    pooled = _stored_sketch_struct(reread)
+    expected = pool_sketch_controls(torch.from_numpy(controls)).numpy()
+    np.testing.assert_array_equal(_struct_sketch_controls(pooled), expected)
+    np.testing.assert_allclose(_struct_sketch_vec(pooled), expected.mean(axis=-1), rtol=1e-6)
 
 
 def test_sketch_encode_column_builds_pooled_struct_and_vec() -> None:
