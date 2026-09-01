@@ -21,6 +21,7 @@ _PREDICT_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _PREDICT_SHARDS = {
     "evaluation-predict-misc": [
         f"{_PREDICT_MODULE}.x_[!_r]*",
+        f"{_PREDICT_MODULE}.x__canonicalize_prediction_note_window*",
         f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_1",
         f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_1?*",
         f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[5-9]",

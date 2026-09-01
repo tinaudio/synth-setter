@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 from pedalboard.io import AudioFile
 from pydantic_settings import CliApp
@@ -46,6 +47,66 @@ def _read_wav(path: Path) -> np.ndarray:
     """
     with AudioFile(str(path)) as f:
         return f.read(f.frames)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_main_surgepy_reversed_prediction_window_renders_all_artifacts(tmp_path: Path) -> None:
+    """The real prediction CLI canonicalizes a reversed window for SurgePy.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    pred_dir = tmp_path / "preds"
+    pred_dir.mkdir()
+    spec = param_specs[ParamSpecName("surge_simple")]
+    note_span = next(
+        span for parameter, span in spec.encoded_slices() if parameter.name == "note_start_and_end"
+    )
+    prediction = np.zeros((1, len(spec)), dtype=np.float32)
+    prediction[0, note_span] = [-0.96, -0.99]
+    torch.save(torch.from_numpy(prediction), pred_dir / "pred-0.pt")
+    torch.save(torch.zeros((1, 2, 800)), pred_dir / "target-audio-0.pt")
+    out_dir = tmp_path / "out"
+    render_config = RenderConfig(
+        synth=SynthSpec(
+            name=SynthName("surge_simple_surgepy"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            plugin_path="surgepy",
+            plugin_state_path="presets/surge-simple.fxp",
+            synth_version="1.3.master.f7b97c68",
+        ),
+        renderer_backend="surgepy",
+        sample_rate=8000,
+        channels=2,
+        velocity=100,
+        signal_duration_seconds=0.1,
+        min_loudness=-55.0,
+        samples_per_render_batch=1,
+        samples_per_shard=1,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
+    )
+
+    main(
+        [
+            str(pred_dir),
+            str(out_dir),
+            *CliApp.serialize(render_config),
+            "--no-params",
+            "True",
+            "--skip-spectrogram",
+            "True",
+        ]
+    )
+
+    sample_dir = out_dir / "sample_0"
+    pred_audio = _read_wav(sample_dir / "pred.wav")
+    assert pred_audio.shape == (2, 800)
+    assert np.isfinite(pred_audio).all()
+    peak = np.max(np.abs(pred_audio))
+    assert 1e-4 < peak <= 1.0
+    assert (sample_dir / "target.wav").is_file()
+    assert (sample_dir / "params.csv").is_file()
 
 
 def test_main_torchsynth_plugin_path_renders_without_plugin_host(tmp_path: Path) -> None:
