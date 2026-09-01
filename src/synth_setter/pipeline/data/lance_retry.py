@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 
 import structlog
@@ -40,9 +41,12 @@ def is_retryable_lance_io_error(error: BaseException) -> bool:
     :param error: Exception raised by a Lance or object-store operation.
     :returns: Whether retrying an idempotent or publication-recovering operation is safe.
     """
-    if isinstance(error, (ConnectionError, TimeoutError)):
+    if isinstance(error, (ConnectionError, TimeoutError, subprocess.TimeoutExpired)):
         return True
     message = str(error).casefold()
+    if isinstance(error, subprocess.CalledProcessError):
+        message = f"{message} {error.stderr or ''}".casefold()
+        return any(marker in message for marker in _RETRYABLE_IO_MARKERS)
     return "lanceerror(io)" in message and any(
         marker in message for marker in _RETRYABLE_IO_MARKERS
     )

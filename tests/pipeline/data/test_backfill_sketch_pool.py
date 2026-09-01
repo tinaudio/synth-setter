@@ -44,6 +44,7 @@ from synth_setter.pipeline.data.backfill_sketch_pool import (
     _report_store,
     _ReportStore,
     _result,
+    _ResultState,
     _resume_directory,
     _retry,
     _transform_fragment,
@@ -291,6 +292,21 @@ def test_retry_with_transient_failures_returns_eventual_result(
     assert attempts == 3
 
 
+def test_retry_with_transient_rclone_failure_returns_eventual_result() -> None:
+    """Shared reconciliation I/O retries recognized object-store failures."""
+    attempts = 0
+
+    def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 2:
+            raise subprocess.CalledProcessError(1, ["rclone"], stderr="503 Service Unavailable")
+        return "ok"
+
+    assert _retry("test_rclone", operation) == "ok"
+    assert attempts == 2
+
+
 def test_retry_with_permanent_failure_raises_without_retry() -> None:
     """Permission failures bypass transient transport retries."""
     attempts = 0
@@ -373,6 +389,35 @@ def test_resume_directory_overlapping_local_dataset_rejects_cleanup(tmp_path: Pa
         _resume_directory(config)
 
 
+def test_resume_directory_with_file_uri_or_nested_result_rejects_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Local URI sources and result artifacts remain outside disposable state.
+
+    :param tmp_path: Temporary directory containing protected paths.
+    """
+    uri = tmp_path / "source.lance"
+    resume_dir = tmp_path / "resume"
+    file_config = SketchPoolBackfillConfig(
+        lance_uri=uri.as_uri(),
+        workers=1,
+        rollback_tag="before",
+        resume_dir=uri,
+    )
+    result_config = SketchPoolBackfillConfig(
+        lance_uri=str(uri),
+        workers=1,
+        rollback_tag="before",
+        resume_dir=resume_dir,
+        result=resume_dir / "result.json",
+    )
+
+    with pytest.raises(ValueError, match="overlaps local dataset"):
+        _resume_directory(file_config)
+    with pytest.raises(ValueError, match="result path .* is inside resume directory"):
+        _resume_directory(result_config)
+
+
 def test_resume_directory_without_override_is_dataset_keyed() -> None:
     """Default report caches separate public dataset and branch identities."""
     first = SketchPoolBackfillConfig(
@@ -398,7 +443,17 @@ def test_result_when_below_index_threshold_records_skip_policy(tmp_path: Path) -
         rollback_tag="before",
     )
 
-    result = _result(config, dataset, dataset.version, time.monotonic(), True, False, "run")
+    result = _result(
+        config,
+        dataset,
+        _ResultState(
+            source_version=dataset.version,
+            started=time.monotonic(),
+            already_complete=True,
+            index_built=False,
+            run_id="run",
+        ),
+    )
 
     assert result.index_requested is True
     assert result.index_skip_reason == "below_min_rows"
@@ -481,6 +536,37 @@ def test_prepare_source_with_pooled_32_frame_sketch_rejects_before_rename(
         workers=1,
         rollback_tag="before",
         build_index=False,
+    )
+
+    with pytest.raises(ValueError, match="does not match the historical 401-frame schema"):
+        _prepare_source(dataset, config, str(uri), None)
+    assert dataset.tags.list() == {}
+
+
+def test_prepare_source_with_transposed_pitch_rejects_before_mutation(tmp_path: Path) -> None:
+    """Pitch layout must preserve the required row-major bin and frame axes.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    rows = 1
+    controls = np.zeros((rows, SKETCH_PITCH_BINS + 2, 401), dtype=np.float32)
+    canonical = sketch_struct_array(controls)
+    transposed_pitch = pa.FixedShapeTensorArray.from_numpy_ndarray(
+        controls[:, 2:].transpose(0, 2, 1)
+    )
+    source = pa.StructArray.from_arrays(
+        [canonical.field(index) for index in range(2)] + [transposed_pitch, canonical.field(3)],
+        fields=[
+            canonical.type.field(index)
+            if index != 2
+            else pa.field(SKETCH_PITCH_CHILD, transposed_pitch.type)
+            for index in range(4)
+        ],
+    )
+    uri = tmp_path / "transposed.lance"
+    dataset = lance.write_dataset(pa.table({SKETCH_STRUCT_FIELD: source}), uri)
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(uri), workers=1, rollback_tag="before", build_index=False
     )
 
     with pytest.raises(ValueError, match="does not match the historical 401-frame schema"):

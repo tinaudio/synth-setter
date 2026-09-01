@@ -12,7 +12,6 @@ import argparse
 import base64
 import hashlib
 import json
-import math
 import os
 import shutil
 import sys
@@ -22,6 +21,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypedDict, cast
+from urllib.parse import unquote, urlparse
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
@@ -133,10 +133,6 @@ class SketchPoolBackfillConfig(BaseModel):
 
         Worker-report cache, or ``None`` for a dataset-keyed user cache.
 
-    .. attribute :: resume_uri
-
-        Shared reconciliation prefix, or ``None`` for an R2 dataset-derived prefix.
-
     .. attribute :: timeout_seconds
 
         Overall fragment-task deadline.
@@ -157,7 +153,6 @@ class SketchPoolBackfillConfig(BaseModel):
     build_index: bool = True
     num_partitions: int | None = Field(default=None, ge=1)
     resume_dir: Path | None = None
-    resume_uri: str | None = None
     timeout_seconds: float = Field(default=21_600.0, gt=0.0)
     result: Path | None = None
 
@@ -850,8 +845,12 @@ def _validate_resume_directory(config: SketchPoolBackfillConfig, cache_dir: Path
     protected = {Path(resolved.anchor), Path.home().resolve(), Path.cwd().resolve()}
     if resolved in protected:
         raise ValueError(f"resume directory {resolved} is not a dedicated cleanup path")
-    if "://" not in config.lance_uri:
+    dataset_path = None
+    if config.lance_uri.startswith("file://"):
+        dataset_path = Path(unquote(urlparse(config.lance_uri).path)).resolve()
+    elif "://" not in config.lance_uri:
         dataset_path = Path(config.lance_uri).expanduser().resolve()
+    if dataset_path is not None:
         overlaps = (
             resolved == dataset_path
             or resolved in dataset_path.parents
@@ -859,6 +858,10 @@ def _validate_resume_directory(config: SketchPoolBackfillConfig, cache_dir: Path
         )
         if overlaps:
             raise ValueError(f"resume directory {resolved} overlaps local dataset {dataset_path}")
+    if config.result is not None:
+        result_path = config.result.expanduser().resolve()
+        if result_path == resolved or resolved in result_path.parents:
+            raise ValueError(f"result path {result_path} is inside resume directory {resolved}")
     return resolved
 
 
@@ -888,8 +891,8 @@ def _report_store(
     from synth_setter.pipeline.r2_io import is_r2_uri
 
     digest = hashlib.sha256(identity.model_dump_json().encode()).hexdigest()[:20]
-    remote_uri = config.resume_uri
-    if remote_uri is None and is_r2_uri(config.lance_uri):
+    remote_uri = None
+    if is_r2_uri(config.lance_uri):
         remote_uri = f"{config.lance_uri.rstrip('/')}/metadata/workers/sketch-pool/{digest}"
     return _ReportStore(local_dir=_resume_directory(config), remote_uri=remote_uri)
 
@@ -899,13 +902,18 @@ def _hydrate_remote_reports(store: _ReportStore) -> None:
 
     :param store: Local and optional shared report locations.
     """
-    if store.remote_uri is None:
+    remote_uri = store.remote_uri
+    if remote_uri is None:
         return
     from synth_setter.pipeline.r2_io import download_to_path, list_entries
 
-    for entry in list_entries(store.remote_uri):
+    entries = _retry("list_reconciliation_reports", lambda: list_entries(remote_uri))
+    for entry in entries:
         destination = store.local_dir / Path(entry.path).name
-        download_to_path(f"{store.remote_uri}/{entry.path}", destination)
+        _retry(
+            "download_reconciliation_report",
+            lambda: download_to_path(f"{remote_uri}/{entry.path}", destination),
+        )
 
 
 def _load_reports(
@@ -935,7 +943,10 @@ def _load_reports(
     else:
         identity_path.write_text(identity.model_dump_json(indent=2) + "\n")
         if store.remote_uri is not None:
-            upload_to_uri(identity_path, f"{store.remote_uri}/identity.json")
+            _retry(
+                "upload_reconciliation_identity",
+                lambda: upload_to_uri(identity_path, f"{store.remote_uri}/identity.json"),
+            )
     reports: dict[int, _FragmentReport] = {}
     for path in sorted(cache_dir.glob("fragment-*.json")):
         report = _FragmentReport.model_validate_json(path.read_text(), strict=True)
@@ -958,7 +969,10 @@ def _persist_report(store: _ReportStore, report: _FragmentReport) -> None:
     temporary.write_text(report.model_dump_json() + "\n")
     temporary.replace(destination)
     if store.remote_uri is not None:
-        upload_to_uri(destination, f"{store.remote_uri}/{destination.name}")
+        _retry(
+            "upload_reconciliation_report",
+            lambda: upload_to_uri(destination, f"{store.remote_uri}/{destination.name}"),
+        )
 
 
 def _prepare_dispatch(
@@ -1050,9 +1064,7 @@ def _poll_dispatch(
     while pending:
         remaining = config.timeout_seconds - (time.monotonic() - started)
         if remaining <= 0:
-            raise TimeoutError(
-                _cancel_timed_out_dispatch(pending, config.timeout_seconds)
-            )
+            raise TimeoutError(_cancel_timed_out_dispatch(pending, config.timeout_seconds))
         ready, pending = ray.wait(pending, num_returns=1, timeout=min(10.0, remaining))
         if ready:
             report = _FragmentReport.model_validate(ray.get(ready[0]), strict=True)
@@ -1063,9 +1075,7 @@ def _poll_dispatch(
             rows_done += report.row_count
         now = time.monotonic()
         if now - started >= config.timeout_seconds:
-            raise TimeoutError(
-                _cancel_timed_out_dispatch(pending, config.timeout_seconds)
-            )
+            raise TimeoutError(_cancel_timed_out_dispatch(pending, config.timeout_seconds))
         if now - last_log >= _PROGRESS_INTERVAL_SECONDS or not pending:
             elapsed = now - started
             rate = rows_done / elapsed
@@ -1202,32 +1212,57 @@ def _write_result(
     sys.stdout.write(f"{payload}\n")
     sys.stdout.flush()
     if destination is not None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(f"{payload}\n")
     return result
+
+
+@dataclass(frozen=True)
+class _ResultState:
+    """Bind operation timing, publication, and invocation identity.
+
+    .. attribute :: source_version
+
+        Version read by the data operation.
+
+    .. attribute :: started
+
+        Monotonic operation start.
+
+    .. attribute :: already_complete
+
+        Whether data publication was skipped.
+
+    .. attribute :: index_built
+
+        Whether this call published the index.
+
+    .. attribute :: run_id
+
+        Unique invocation ID.
+    """
+
+    source_version: int
+    started: float
+    already_complete: bool
+    index_built: bool
+    run_id: str
 
 
 def _result(
     config: SketchPoolBackfillConfig,
     dataset: lance.LanceDataset,
-    source_version: int,
-    started: float,
-    already_complete: bool,
-    index_built: bool,
-    run_id: str,
+    state: _ResultState,
 ) -> SketchPoolBackfillResult:
     """Build the auditable operation result from the final snapshot.
 
     :param config: Executed migration configuration.
     :param dataset: Final committed dataset snapshot.
-    :param source_version: Version read by the data operation.
-    :param started: Monotonic operation start.
-    :param already_complete: Whether data publication was skipped.
-    :param index_built: Whether this call published the index.
-    :param run_id: Unique invocation ID.
+    :param state: Bound operation timing, publication, and invocation identity.
     :returns: Persistable migration result.
     """
 
-    elapsed = time.monotonic() - started
+    elapsed = time.monotonic() - state.started
     partitions: int | None = None
     metric: str | None = None
     sub_vectors: int | None = None
@@ -1240,17 +1275,17 @@ def _result(
         index_skip_reason = None if canonical_indices else "below_min_rows"
     rows = _retry("count_result_rows", dataset.count_rows)
     return SketchPoolBackfillResult(
-        run_id=run_id,
+        run_id=state.run_id,
         git_commit=resolve_git_sha(),
         branch=config.branch,
         rows=rows,
         fragments=len(_retry("list_result_fragments", dataset.get_fragments)),
-        source_version=source_version,
+        source_version=state.source_version,
         committed_version=dataset.version,
         elapsed_seconds=elapsed,
-        rows_per_second=0.0 if already_complete else rows / elapsed,
-        already_complete=already_complete,
-        index_built=index_built,
+        rows_per_second=0.0 if state.already_complete else rows / elapsed,
+        already_complete=state.already_complete,
+        index_built=state.index_built,
         index_requested=config.build_index,
         index_skip_reason=index_skip_reason,
         workers=config.workers,
@@ -1358,47 +1393,52 @@ def _validate_full_source_field(
     field = dataset.schema.field(field_name)
     if not pa.types.is_struct(field.type):
         raise ValueError(f"{field_name!r} must be a nested sketch struct")
-    expected_sizes = {
+    expected_layouts = {
         SKETCH_LOUDNESS_CHILD: SKETCH_FULL_FRAMES,
         SKETCH_CENTROID_CHILD: SKETCH_FULL_FRAMES,
-        SKETCH_PITCH_CHILD: SKETCH_PITCH_BINS * SKETCH_FULL_FRAMES,
+        SKETCH_PITCH_CHILD: (
+            (SKETCH_PITCH_BINS, SKETCH_FULL_FRAMES),
+            (0, 1),
+        ),
     }
-    actual_sizes = {}
+    actual_layouts = {}
     try:
-        for child_name in expected_sizes:
+        for child_name in expected_layouts:
             child_type = field.type.field(child_name).type
             if pa.types.is_fixed_size_list(child_type):
-                actual_sizes[child_name] = child_type.list_size
+                actual_layouts[child_name] = child_type.list_size
             else:
                 tensor_shape = getattr(child_type, "shape", None)
-                actual_sizes[child_name] = (
-                    math.prod(tensor_shape) if tensor_shape is not None else None
+                permutation = getattr(child_type, "permutation", None)
+                actual_layouts[child_name] = (
+                    (tuple(tensor_shape), tuple(permutation or range(len(tensor_shape))))
+                    if tensor_shape is not None
+                    else None
                 )
     except KeyError as exc:
         raise ValueError(f"{field_name!r} is missing sketch child {exc.args[0]!r}") from exc
-    if actual_sizes != expected_sizes:
+    if actual_layouts != expected_layouts:
         raise ValueError(
             f"{field_name!r} does not match the historical 401-frame schema: "
-            f"got {actual_sizes}, expected {expected_sizes}"
+            f"got {actual_layouts}, expected {expected_layouts}"
         )
 
 
-def _prepare_source(
+def _validate_and_tag_source(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
     lance_uri: str,
     storage_options: dict[str, str] | None,
-) -> lance.LanceDataset:
-    """Validate, tag, and if necessary rename the migration source.
+) -> bool:
+    """Validate source identity and bind its exact rollback version.
 
     :param dataset: Current branch snapshot.
     :param config: Rollback tag and branch configuration.
     :param lance_uri: Lance-openable dataset target.
     :param storage_options: Object-store credentials, when required.
-    :returns: Snapshot carrying the renamed full-resolution source.
+    :returns: Whether the canonical source still requires renaming.
     :raises ValueError: Source state or rollback tag is incompatible.
     """
-
     from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
 
     names = set(dataset.schema.names)
@@ -1425,20 +1465,42 @@ def _prepare_source(
         storage_options,
         expected_version=dataset.version if has_canonical else dataset.version - 1,
     )
-    if not has_canonical:
+    return has_canonical
+
+
+def _prepare_source(
+    dataset: lance.LanceDataset,
+    config: SketchPoolBackfillConfig,
+    lance_uri: str,
+    storage_options: dict[str, str] | None,
+) -> lance.LanceDataset:
+    """Publish or recover the validated source-column rename.
+
+    :param dataset: Current branch snapshot.
+    :param config: Rollback tag and branch configuration.
+    :param lance_uri: Lance-openable dataset target.
+    :param storage_options: Object-store credentials, when required.
+    :returns: Snapshot carrying the renamed full-resolution source.
+    """
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
+
+    if not _validate_and_tag_source(dataset, config, lance_uri, storage_options):
         return dataset
-    alteration = _ColumnRename(
-        path=SKETCH_STRUCT_FIELD,
-        name=SKETCH_FULL_STRUCT_FIELD,
-    )
+    alteration = _ColumnRename(path=SKETCH_STRUCT_FIELD, name=SKETCH_FULL_STRUCT_FIELD)
 
     def rename_or_recover() -> lance.LanceDataset:
         latest = _open_dataset(lance_uri, storage_options, config.branch, None)
         latest_names = set(latest.schema.names)
         if SKETCH_FULL_STRUCT_FIELD in latest_names and SKETCH_STRUCT_FIELD not in latest_names:
+            if latest.version != dataset.version + 1:
+                raise ValueError("branch advanced after source rename publication")
             return latest
-        if SKETCH_STRUCT_FIELD not in latest_names or SKETCH_FULL_STRUCT_FIELD in latest_names:
-            raise ValueError("branch advanced to an incompatible schema during source rename")
+        if (
+            latest.version != dataset.version
+            or SKETCH_STRUCT_FIELD not in latest_names
+            or SKETCH_FULL_STRUCT_FIELD in latest_names
+        ):
+            raise ValueError("branch advanced before source rename publication")
         cast("_AlterColumnsDataset", latest).alter_columns(alteration)
         return _open_dataset(lance_uri, storage_options, config.branch, None)
 
@@ -1476,11 +1538,13 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
                 _result(
                     config,
                     dataset,
-                    source_version,
-                    started,
-                    True,
-                    index_built,
-                    run_id,
+                    _ResultState(
+                        source_version=source_version,
+                        started=started,
+                        already_complete=True,
+                        index_built=index_built,
+                        run_id=run_id,
+                    ),
                 ),
                 config.result,
             )
@@ -1508,11 +1572,13 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
             _result(
                 config,
                 committed,
-                source_version,
-                started,
-                False,
-                index_built,
-                run_id,
+                _ResultState(
+                    source_version=source_version,
+                    started=started,
+                    already_complete=False,
+                    index_built=index_built,
+                    run_id=run_id,
+                ),
             ),
             config.result,
         )
@@ -1535,7 +1601,6 @@ def _parse_args() -> SketchPoolBackfillConfig:
     parser.add_argument("--build-index", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num-partitions", type=int)
     parser.add_argument("--resume-dir", type=Path)
-    parser.add_argument("--resume-uri")
     parser.add_argument("--timeout-seconds", type=float, default=21_600.0)
     parser.add_argument("--result", type=Path)
     args = parser.parse_args()
