@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DatasetSpec",
     "OutputFormat",
+    "PyFDNEffectConfig",
     "R2Location",
     "RenderConfig",
     "ShardSpec",
@@ -214,6 +215,49 @@ class ShardSpec(BaseModel):
     )
 
 
+class PyFDNEffectConfig(BaseModel):  # noqa: DOC603 — descriptions live on Pydantic Fields.
+    """Fixed pyFDN post-render effect persisted with dataset provenance.
+
+    .. attribute :: model_config
+
+        Pydantic model configuration sentinel.
+
+    .. attribute :: package_version
+
+        Exact pyFDN distribution version.
+
+    .. attribute :: preset_name
+
+        Bundled FDN preset identity.
+
+    .. attribute :: decay_seconds
+
+        Homogeneous decay time in seconds.
+
+    .. attribute :: wet_mix
+
+        Linear wet-signal proportion.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    package_version: Literal["0.4.2"] = Field(
+        description="Exact pyFDN distribution version used to process audio."
+    )
+    preset_name: Literal["colorless_N8_d1"] = Field(
+        description="Bundled mono colorless FDN preset."
+    )
+    decay_seconds: float = Field(
+        gt=0.0,
+        description="Homogeneous FDN decay time in seconds.",
+    )
+    wet_mix: float = Field(
+        gt=0.0,
+        le=1.0,
+        description="Linear wet-signal proportion; presence enables the effect.",
+    )
+
+
 class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
@@ -244,6 +288,10 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     synth: SynthSpec = Field(
         description="Synth identity: param spec, artifact version, plugin, and baseline preset."
+    )
+    pyfdn_effect: PyFDNEffectConfig | None = Field(
+        default=None,
+        description="Optional fixed pyFDN effect applied immediately after synthesis.",
     )
     renderer_backend: RendererBackend = Field(
         default="pedalboard",
@@ -441,6 +489,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError("samples_per_render_batch must be positive")
         if self.samples_per_shard <= 0:
             raise ValueError("samples_per_shard must be positive")
+        if self.pyfdn_effect is not None and self.sample_rate != 48000:
+            raise ValueError("pyFDN colorless_N8_d1 requires sample_rate=48000")
         return self
 
     @model_validator(mode="after")

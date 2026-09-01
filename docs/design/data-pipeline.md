@@ -1489,10 +1489,17 @@ render:
 On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id>`):
 
 1. Hydra composes the experiment against `src/synth_setter/configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
+
 2. `spec_from_cfg(cfg)` (a thin wrapper over `DatasetSpec.from_hydra_cfg`) masks the cfg to `DatasetSpec`'s own fields, resolves, and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) — the same model used for the on-R2 artifact.
+
 3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. The renderer subprocess receives the complete `RenderConfig` and dispatches through `make_audio_renderer`: VST backends load their plugin and verify pinned provenance, while `dawdreamer_faust` compiles registered checked-in source and validates its exact addresses against the registered spec.
+
+   `render=vst_pyfdn` opts into the profile in `configs/render/vst_pyfdn.yaml`; other render profiles remain dry with `pyfdn_effect: null`. The factory wraps the selected backend with `PyFDNEffectRenderer`, which resets mono FDN state for every render and channel, mixes wet and dry signals, and preserves the configured clip length. Clipping and loudness checks, mel extraction, MP3 previews, and audio UUIDs therefore consume the effected waveform. The persisted config records the package, preset, decay, and wet-mix controls and requires the bundled preset's 48 kHz sample rate.
+
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
+
 5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2.prefix>/input_spec.json`).
+
 6. Proceed with reconciliation.
 
 **Dirty repo handling (planned):** `is_repo_dirty` is captured in the spec, but the design's auto-upload of `git diff` to `metadata/run_diff.patch` is not yet implemented in `generate_dataset` — captured here as the intended behavior so a dirty repo's exact code state can be reconstructed during rapid ML research iteration.

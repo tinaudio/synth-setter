@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> **Code version**: `f97fc7e` (2026-03-29, `main`)
+> **Code version**: current tree
 > **Tracking**: #383, #107
 
 ______________________________________________________________________
@@ -49,6 +49,25 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2.prefix}input_spec.json` (`r2.prefix` already ends in `/` — see `make_r2_prefix` in `src/synth_setter/pipeline/schemas/prefix.py`; no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
 - **Worker env:** `dispatch_via_skypilot` injects the canonical `spec.r2.input_spec_uri()` as `WORKER_SPEC_URI` into each worker pod's env. The canonical provenance copy at `{r2.prefix}input_spec.json` is written by `spec_io.upload_spec`, called once from `main()` on the launcher host before the dispatch branch fires, so the URI resolves before any worker boots. Workers do not re-upload the spec. See `storage-provenance-spec.md` §3a "Materialized spec: two destinations" for the consumer table.
+
+#### Live pyFDN effect
+
+`render=vst_pyfdn` derives from the generic VST profile and opts into post-render
+processing at 48 kHz. The profile's `pyfdn_effect` mapping is validated by
+`PyFDNEffectConfig` and persisted in `input_spec.json`; other shipped profiles
+remain dry. The effect runs before clipping and loudness acceptance, mel
+features, previews, and Lance persistence. Its state resets for every row and
+channel, and its tail is truncated to `signal_duration_seconds`.
+
+```bash
+synth-setter-generate-dataset \
+  experiment=generate_dataset/smoke-shard \
+  render=vst_pyfdn
+```
+
+The effect controls are fixed dataset provenance, not sampled synthesizer
+parameters or model labels. See `configs/render/vst_pyfdn.yaml` for the
+supported preset and controls.
 
 Reference: `data-pipeline.md` §14.5
 
@@ -116,7 +135,7 @@ eval.yaml + experiment config (pins model + data + checkpoint)
 
 - Experiment config pins everything: model checkpoint (W&B artifact ref), data config, eval settings
 - `evaluation:` block (in `src/synth_setter/configs/eval.yaml`) gates the in-process render and metrics phases — both default off so `mode=test`/`mode=validate` runs are unchanged
-- `render:` composes a backend-knob group and the root `synth:` group supplies the VST plugin/preset/param-spec (`synth=surge_xt render=vst`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess
+- `render:` composes a renderer profile and the root `synth:` group supplies the VST plugin/preset/param-spec (`synth=surge_xt render=vst`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess. The `vst_pyfdn` profile carries the same serialized effect configuration, so prediction and target rerenders reproduce dataset processing.
 - No eval spec — configs are the source of truth
 - Full provenance in R2 path: `eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/`
 

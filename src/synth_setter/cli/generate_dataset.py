@@ -192,6 +192,11 @@ def _run_oracle_eval_subprocess(
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",
         f"render.signal_duration_seconds={render.signal_duration_seconds}",
+        "render.pyfdn_effect="
+        + json.dumps(
+            None if render.pyfdn_effect is None else render.pyfdn_effect.model_dump(mode="json"),
+            separators=(",", ":"),
+        ),
         # id already exists in logger/wandb.yaml (id: null) so a plain
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",

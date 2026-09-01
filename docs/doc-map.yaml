@@ -151,6 +151,17 @@ docs:
       - pattern: "src/synth_setter/utils/utils.py"
         covers: "${wandb:…} resolver (_resolve_wandb_checkpoint) and register_resolvers cache behavior"
 
+  # ── Architecture overview ──────────────────────────────────────
+  - doc: docs/architecture.md
+    description: High-level pipeline, render profiles, and system boundaries
+    sources:
+      - pattern: "src/synth_setter/pipeline/schemas/spec.py"
+        covers: "RenderConfig identity, backend, and optional post-render effect contract"
+      - pattern: "src/synth_setter/renderer_factory.py"
+        covers: "Shared backend construction and optional effect wrapping"
+      - pattern: "src/synth_setter/configs/render/**"
+        covers: "Base backend profiles and derived post-render processing profiles"
+
   # ── Data pipeline design doc ────────────────────────────────────
   - doc: docs/design/data-pipeline.md
     description: Distributed data pipeline design (RunPod + R2)
@@ -182,7 +193,9 @@ docs:
       - pattern: "src/synth_setter/pipeline/spec_io.py"
         covers: "`input_spec.json` read/write/upload/discover helpers"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Backend-named render groups carrying generic render defaults and backend knobs"
+        covers: "Base backend profiles and derived opt-in post-render processing profiles"
+      - pattern: "src/synth_setter/data/vst/pyfdn_renderer.py"
+        covers: "Live pyFDN post-render processing contract"
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Canonical pipeline artifact names and staging keys"
       - pattern: "src/synth_setter/renderer_backend.py"
@@ -401,6 +414,8 @@ docs:
         covers: "synth-setter-migrate-checkpoint console script (strips legacy _orig_mod key parts; refuses overwrites, aborts on collisions/no-op) and checkpoint_migration_hint wrapping train/eval Trainer calls"
       - pattern: "src/synth_setter/evaluation/predict_vst_audio.py"
         covers: "Prediction-audio rendering pipeline"
+      - pattern: "src/synth_setter/data/vst/pyfdn_renderer.py"
+        covers: "Shared pyFDN processing for generation and evaluation parity"
       - pattern: "src/synth_setter/renderer_factory.py"
         covers: "Shared `RenderConfig` backend dispatch used for predicted and target audio"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
@@ -418,7 +433,7 @@ docs:
       - pattern: "jobs/predict/*.sh"
         covers: "Predict commands with explicit W&B checkpoint overrides"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Render-group composed by eval.yaml defaults; backend knobs joined with the root synth identity via RenderConfig.from_cfg_nodes, consumed by _run_predict_postprocessing in cli/eval.py"
+        covers: "Backend profiles and derived post-render profiles joined with root synth identity by RenderConfig.from_cfg_nodes"
       - pattern: "src/synth_setter/configs/callbacks/eval_vst.yaml"
         covers: "Eval-specific callback config, prediction writer setup"
       - pattern: "src/synth_setter/configs/callbacks/prediction_writer.yaml"
@@ -685,7 +700,7 @@ docs:
       - pattern: "src/synth_setter/data/vst/param_spec.py"
         covers: "ParamSpec and the parameter-type constructors a hand-tuned spec is built from"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Backend-named render configs selected by render=<backend>, inheriting generic render defaults; identity lives in the root configs/synth group"
+        covers: "Generic dry and effected render profiles selected independently of root synth identity"
       - pattern: "src/synth_setter/data/vst/*_param_spec.py"
         covers: "Hand-tuned reference specs (VST3 synths) or pinned code-derived specs (torchsynth), with the per-synth synth_params and encoded-width counts"
       - pattern: "src/synth_setter/scripts/run-linux-vst-headless.sh"

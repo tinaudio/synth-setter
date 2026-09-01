@@ -171,6 +171,7 @@ class TestValidateStructure:
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
             "mel_spec_dtype",
+            "pyfdn_effect",
             "retain_local_shards",
             # Checked shape-aware so the nested identity can be validated.
             "synth",

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from synth_setter.data.vst.pyfdn_renderer import PyFDNEffectRenderer
 from synth_setter.data.vst.renderers import (
     DawDreamerRenderer,
     PedalboardRenderer,
@@ -62,6 +63,34 @@ def test_make_audio_renderer_torchsynth_returns_configured_renderer() -> None:
     assert isinstance(renderer, TorchSynthRenderer)
     assert (renderer.sample_rate, renderer.channels) == (22050, 2)
     assert renderer.signal_duration_seconds == 0.5
+
+
+def test_make_audio_renderer_wraps_torchsynth_with_pyfdn_effect() -> None:
+    """The central factory places pyFDN after the selected synthesis backend."""
+    config = _render_config(
+        renderer_backend="torchsynth",
+        synth={
+            "name": "torchsynth_adsr",
+            "param_spec_name": "torchsynth_adsr",
+            "plugin_path": "torchsynth",
+            "plugin_state_path": "",
+            "synth_version": "1.0.2",
+        },
+        sample_rate=48000,
+        pyfdn_effect={
+            "package_version": "0.4.2",
+            "preset_name": "colorless_N8_d1",
+            "decay_seconds": 1.5,
+            "wet_mix": 0.1,
+        },
+        gui_toggle_cadence="never",
+    )
+
+    renderer = make_audio_renderer(config)
+
+    assert isinstance(renderer, PyFDNEffectRenderer)
+    assert isinstance(renderer.inner, TorchSynthRenderer)
+    assert renderer.sample_rate == 48000
 
 
 @pytest.mark.slow

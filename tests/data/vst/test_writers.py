@@ -645,6 +645,13 @@ def test_render_in_batches_always_on_runs_loop_via_run_with_editor_held_open(
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
         samples_per_render_batch=n,
+        sample_rate=48000,
+        pyfdn_effect={
+            "package_version": "0.4.2",
+            "preset_name": "colorless_N8_d1",
+            "decay_seconds": 0.5,
+            "wet_mix": 0.1,
+        },
         plugin_reload_cadence="once",
         gui_toggle_cadence="always_on",
     )

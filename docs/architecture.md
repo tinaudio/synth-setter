@@ -16,8 +16,9 @@ The pipeline is **synth-agnostic**: rendering, storage, features, distributed
 workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
 `RenderConfig` (backend and synth identity) looked up from a registry by name.
 Surge XT is the default and can render through Pedalboard, DawDreamer, or the
-pinned in-process SurgePy engine; OB-Xf is registered as a second VST3 synth,
-and Faust identities compile checked-in source through DawDreamer. SurgePy
+pinned in-process SurgePy engine; an opt-in pyFDN profile effects rendered audio
+before validation and feature extraction. OB-Xf is registered as a second VST3
+synth, and Faust identities compile checked-in source through DawDreamer. SurgePy
 recreates the native synth for every row and accepts only
 `plugin_reload_cadence: render`. VST3 plugins can be
 onboarded with **no edits to core pipeline, storage, or model code**. See
@@ -56,8 +57,9 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    count, shard size, parameter spec). The synth is selected by the root
    `synth` group (`synth=surge_xt`, `synth=obxf`, ...), which carries the
    registered parameter spec, preset, plugin path, and version; the paired
-   `render` group override (e.g. `render=vst`) names the backend and
-   declares backend-specific knobs only. Hydra
+   `render` group selects a renderer profile. Base profiles configure a backend;
+   derived profiles may add post-render processing. `render=vst` is dry, while
+   `render=vst_pyfdn` adds the fixed live pyFDN effect. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
@@ -158,7 +160,8 @@ an empty state path and resolve checked-in source by the same identity.
 artifact identities, and content-sealed bundles beneath stable `plugins/*.vst3`
 identity paths. Onboarding a
 new VST3 synth is additive: install its package, scaffold and hand-tune a spec,
-then register it against the generic `render=vst` backend. See
+then pair it with the dry `render=vst` profile or the effected
+`render=vst_pyfdn` profile. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 **R2 as source of truth.** Pipeline state is determined by file existence and

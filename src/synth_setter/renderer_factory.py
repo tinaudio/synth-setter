@@ -20,9 +20,24 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 
 
 def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
-    """Construct one renderer session for the configured backend.
+    """Construct the configured synthesis session and optional live effect.
 
-    :param render_config: Backend identity and host lifecycle shared across pipeline stages.
+    :param render_config: Backend, host lifecycle, and post-render effect configuration.
+    :returns: Renderer whose output includes the configured live effect, when enabled.
+    """
+    renderer = _make_base_renderer(render_config)
+    if render_config.pyfdn_effect is None:
+        return renderer
+
+    from synth_setter.data.vst.pyfdn_renderer import PyFDNEffectRenderer
+
+    return PyFDNEffectRenderer(inner=renderer, effect=render_config.pyfdn_effect)
+
+
+def _make_base_renderer(render_config: RenderConfig) -> AudioRenderer:
+    """Construct one synthesis renderer before optional post-processing.
+
+    :param render_config: Backend identity and host lifecycle configuration.
     :returns: Renderer whose native-host lifetime follows the configured reload cadence.
     """
     backend = render_config.renderer_backend

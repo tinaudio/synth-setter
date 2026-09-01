@@ -275,6 +275,10 @@ DawDreamer VST load a plugin; `torchsynth` renders in-process; and
 `param_spec_name`, then sets renderer-native values under exact compiled
 addresses. Faust accepts no source path or preset path. The render process
 is isolated and receives the complete `RenderConfig` for every backend.
+When `RenderConfig.pyfdn_effect` is present, the shared factory applies the
+same post-render effect to predicted and re-rendered target parameters. The
+effect is read from the config rather than inferred from the dataset name, so
+audio metrics compare signals rendered under the same processing.
 
 **Key behaviors:**
 

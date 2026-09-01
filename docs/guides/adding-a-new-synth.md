@@ -245,9 +245,9 @@ plugin_state_path: "presets/mysynth-base.vstpreset"
 synth_version: "1.2.3"
 ```
 
-Render groups are backend-named, not per-synth: a registered VST3 synth uses
-the generic `vst` render base (`src/synth_setter/configs/render/vst.yaml`)
-directly via `render=vst`, so no render config is generated or needed.
+A registered VST3 synth needs no per-synth render config. Use the generic
+`render=vst` profile for dry audio or its `render=vst_pyfdn` derivative for the
+live pyFDN effect; both pair with `synth=<name>`.
 
 `synth.synth_version` is cross-checked against the loaded plugin before
 rendering, so pin the exact version you onboarded against.
@@ -273,7 +273,8 @@ synth-setter-generate-dataset \
 
 This renders a small smoke dataset, proving the synth resolves through
 `spec_from_cfg` and renders non-silent audio end-to-end. Scale up by pointing
-`synth=mysynth render=vst` at a larger experiment config.
+`synth=mysynth render=vst` at a larger experiment config. For an effected
+48 kHz smoke render, replace the profile with `render=vst_pyfdn`.
 
 ## Optional — bake the synth into the Docker image
 

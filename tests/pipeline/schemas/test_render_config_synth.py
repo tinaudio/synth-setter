@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.pipeline.schemas.spec import PyFDNEffectConfig, RenderConfig
 from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec
 
 _KNOBS: dict[str, Any] = {
@@ -64,6 +64,73 @@ class TestNestedIdentity:
                 gui_toggle_cadence="never",
                 **_KNOBS,
             )
+
+
+class TestPyFDNEffectConfig:
+    """Validation and serialization for the optional live render effect."""
+
+    def test_render_config_defaults_to_dry_audio(self) -> None:
+        """Existing render configs remain dry unless the effect is explicitly enabled."""
+        cfg = RenderConfig(synth=SYNTHS[SynthName("obxf")], **_KNOBS)
+
+        assert cfg.pyfdn_effect is None
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("decay_seconds", 0.0),
+            ("decay_seconds", -1.0),
+            ("wet_mix", 0.0),
+            ("wet_mix", 1.01),
+        ],
+    )
+    def test_effect_rejects_out_of_range_values(self, field: str, value: float) -> None:
+        """Decay must be positive and wet mix must stay in the enabled unit interval.
+
+        :param field: Effect field under test.
+        :param value: Invalid boundary value.
+        """
+        values = {
+            "package_version": "0.4.2",
+            "preset_name": "colorless_N8_d1",
+            "decay_seconds": 1.5,
+            "wet_mix": 0.1,
+            field: value,
+        }
+
+        with pytest.raises(ValidationError):
+            PyFDNEffectConfig(**values)  # type: ignore[arg-type]
+
+    def test_effect_rejects_incompatible_render_sample_rate(self) -> None:
+        """The bundled preset cannot silently run against non-48 kHz audio."""
+        with pytest.raises(ValidationError, match="sample_rate=48000"):
+            RenderConfig(
+                synth=SYNTHS[SynthName("obxf")],
+                pyfdn_effect=PyFDNEffectConfig(
+                    package_version="0.4.2",
+                    preset_name="colorless_N8_d1",
+                    decay_seconds=1.5,
+                    wet_mix=0.1,
+                ),
+                **_KNOBS,
+            )
+
+    def test_effect_round_trip_preserves_provenance(self) -> None:
+        """Effect identity and controls survive persisted spec JSON."""
+        cfg = RenderConfig(
+            synth=SYNTHS[SynthName("obxf")],
+            pyfdn_effect=PyFDNEffectConfig(
+                package_version="0.4.2",
+                preset_name="colorless_N8_d1",
+                decay_seconds=1.5,
+                wet_mix=0.1,
+            ),
+            **(_KNOBS | {"sample_rate": 48000}),
+        )
+
+        restored = RenderConfig.model_validate_json(cfg.model_dump_json())
+
+        assert restored.pyfdn_effect == cfg.pyfdn_effect
 
 
 class TestBreakingVersionMigration:

@@ -3354,7 +3354,20 @@ class TestMainDispatchBranches:
         run_dir = tmp_path / "oracle_eval" / "some-run-id"
         # Identity is one nested field; updating the read-only flat properties
         # through model_copy would be silently ignored.
-        render = spec.render.model_copy(update={"synth": SYNTHS[SynthName("surge_xt")]})
+        render_values = spec.render.model_dump()
+        render_values.update(
+            {
+                "synth": SYNTHS[SynthName("surge_xt")],
+                "sample_rate": 48000,
+                "pyfdn_effect": {
+                    "package_version": "0.4.2",
+                    "preset_name": "colorless_N8_d1",
+                    "decay_seconds": 1.5,
+                    "wet_mix": 0.1,
+                },
+            }
+        )
+        render = RenderConfig.model_validate(render_values)
         predict_file = dataset_root / "test.lance"
         n_samples = 4
         _write_lance_split(predict_file, n_samples)
@@ -3403,6 +3416,10 @@ class TestMainDispatchBranches:
         assert f"render.channels={render.channels}" in called_argv
         assert f"render.velocity={render.velocity}" in called_argv
         assert f"render.signal_duration_seconds={render.signal_duration_seconds}" in called_argv
+        assert (
+            'render.pyfdn_effect={"package_version":"0.4.2",'
+            '"preset_name":"colorless_N8_d1","decay_seconds":1.5,"wet_mix":0.1}' in called_argv
+        )
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv

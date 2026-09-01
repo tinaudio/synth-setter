@@ -1,0 +1,10 @@
+defaults:
+  - vst
+  - _self_
+
+sample_rate: 48000
+pyfdn_effect:
+  package_version: "0.4.2"
+  preset_name: colorless_N8_d1
+  decay_seconds: 1.5
+  wet_mix: 0.1

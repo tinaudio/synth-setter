@@ -51,6 +51,23 @@ def _torchsynth_render_cfg() -> RenderConfig:
     )
 
 
+def _torchsynth_48k_render_cfg() -> RenderConfig:
+    """Build the dry control for the real pyFDN production-path test.
+
+    :returns: Two-row TorchSynth config at the pyFDN preset sample rate.
+    """
+    values = _torchsynth_render_cfg().model_dump()
+    values.update(
+        {
+            "sample_rate": 48_000,
+            "signal_duration_seconds": 0.5,
+            "samples_per_render_batch": 1,
+            "samples_per_shard": 2,
+        }
+    )
+    return RenderConfig.model_validate(values)
+
+
 def _read_lance_column(path: Path, field: str) -> np.ndarray:
     """Materialize one fixed-shape tensor column from a Lance shard.
 
@@ -145,6 +162,78 @@ def test_generate_vst_dataset_cli_renders_a_torchsynth_lance_shard(tmp_path: Pat
     assert dataset.count_rows() == 2
     assert audio.shape == (2, 2, int(_SAMPLE_RATE * _DURATION_SECONDS))
     assert (np.abs(audio.astype(np.float32)).max(axis=(1, 2)) > 0.0).all()
+
+
+@pytest.mark.slow
+def test_generate_vst_dataset_cli_pyfdn_changes_persisted_audio_and_mel(tmp_path: Path) -> None:
+    """The public CLI persists pyFDN audio and derives features from that effected signal.
+
+    Drives real TorchSynth through the real CLI, pyFDN, Lance writer, and Lance reader. A same-seed
+    dry control proves the effect changes both stored waveform and mel data.
+
+    :param tmp_path: Destination for dry and effected production-format shards.
+    """
+    dry_shard = tmp_path / "dry.lance"
+    effected_shard = tmp_path / "effected.lance"
+    dry_config = _torchsynth_48k_render_cfg()
+    make_lance_dataset(dry_shard, dry_config)
+
+    subprocess.run(  # noqa: S603 — sys.executable and every CLI argument are test-owned
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.data.vst.generate_vst_dataset",
+            str(effected_shard),
+            "--synth",
+            json.dumps(dry_config.synth.model_dump(mode="json")),
+            "--renderer_backend",
+            "torchsynth",
+            "--sample_rate",
+            "48000",
+            "--channels",
+            "2",
+            "--velocity",
+            "100",
+            "--signal_duration_seconds",
+            "0.5",
+            "--min_loudness",
+            "-70.0",
+            "--samples_per_shard",
+            "2",
+            "--samples_per_render_batch",
+            "1",
+            "--base_seed",
+            "1757",
+            "--plugin_reload_cadence",
+            "once",
+            "--gui_toggle_cadence",
+            "never",
+            "--pyfdn_effect",
+            json.dumps(
+                {
+                    "package_version": "0.4.2",
+                    "preset_name": "colorless_N8_d1",
+                    "decay_seconds": 0.5,
+                    "wet_mix": 0.1,
+                }
+            ),
+        ],
+        check=True,
+        timeout=120,
+    )
+
+    assert np.array_equal(
+        _read_lance_column(dry_shard, PARAM_ARRAY_FIELD),
+        _read_lance_column(effected_shard, PARAM_ARRAY_FIELD),
+    )
+    assert not np.array_equal(
+        _read_lance_column(dry_shard, AUDIO_FIELD),
+        _read_lance_column(effected_shard, AUDIO_FIELD),
+    )
+    assert not np.array_equal(
+        _read_lance_column(dry_shard, MEL_SPEC_FIELD),
+        _read_lance_column(effected_shard, MEL_SPEC_FIELD),
+    )
 
 
 def test_make_lance_dataset_compacts_shard_to_one_fragment_and_version(tmp_path: Path) -> None:

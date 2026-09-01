@@ -27,7 +27,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
 )
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.shapes import (
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
@@ -203,12 +203,13 @@ def _render_in_batches(
     try:
         # Pedalboard requires show_editor on the main thread while rendering runs on a worker.
         if render_cfg.gui_toggle_cadence == "always_on":
-            if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
+            plugin = renderer.editor_plugin
+            if plugin is None:
                 raise RuntimeError(
                     "always_on reached the renderer without a cached plugin; "
                     "RenderConfig validation should have rejected this combination."
                 )
-            run_with_editor_held_open(renderer.plugin, _render_loop)
+            run_with_editor_held_open(plugin, _render_loop)
         else:
             _render_loop()
 

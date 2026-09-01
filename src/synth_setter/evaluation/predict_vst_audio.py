@@ -16,7 +16,7 @@ from tqdm import tqdm, trange
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import run_with_editor_held_open
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model_output
-from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 
@@ -318,10 +318,11 @@ def render_prediction_audio(args: _PredictAudioCliArgs) -> None:
     if args.gui_toggle_cadence != "always_on":
         _render_prediction_artifacts(args, spec, render)
         return
-    if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
+    plugin = renderer.editor_plugin
+    if plugin is None:
         raise RuntimeError("always-on GUI rendering requires a cached Pedalboard plugin")
     run_with_editor_held_open(
-        renderer.plugin,
+        plugin,
         lambda: _render_prediction_artifacts(args, spec, render),
     )
 

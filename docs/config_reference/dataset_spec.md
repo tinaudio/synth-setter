@@ -15,6 +15,10 @@ Nested under `DatasetSpec.render`:
 
 ::: synth_setter.pipeline.schemas.spec.RenderConfig
 
+Nested under `RenderConfig.pyfdn_effect` when enabled:
+
+::: synth_setter.pipeline.schemas.spec.PyFDNEffectConfig
+
 Nested entries inside the computed `DatasetSpec.shards` tuple:
 
 ::: synth_setter.pipeline.schemas.spec.ShardSpec

@@ -16,7 +16,12 @@ from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import _GenerateCliArgs
 from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig
+from synth_setter.pipeline.schemas.spec import (
+    DatasetSpec,
+    OutputFormat,
+    PyFDNEffectConfig,
+    RenderConfig,
+)
 
 
 def test_cli_args_class_inherits_every_render_config_field() -> None:
@@ -54,11 +59,17 @@ def _smoke_spec() -> DatasetSpec:
             plugin_state_path="presets/surge-base.vstpreset",
             synth_version="1.3.4",
         ),
-        sample_rate=44100,
+        sample_rate=48000,
         channels=2,
         velocity=100,
         signal_duration_seconds=4.0,
         min_loudness=-55.0,
+        pyfdn_effect=PyFDNEffectConfig(
+            package_version="0.4.2",
+            preset_name="colorless_N8_d1",
+            decay_seconds=1.5,
+            wet_mix=0.1,
+        ),
         samples_per_render_batch=32,
         samples_per_shard=10000,
         # Darwin-portable (#714).

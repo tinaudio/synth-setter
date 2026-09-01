@@ -19,6 +19,7 @@ _GENERIC_RENDER_FIELDS = {
     "min_loudness",
     "parallel",
     "param_sample_cadence",
+    "pyfdn_effect",
     "plugin_reload_cadence",
     "renderer_backend",
     "retain_local_shards",
@@ -81,6 +82,22 @@ def test_render_group_local_shard_retention_defaults_true(group: str) -> None:
     :param group: Base render group defining the retention default.
     """
     assert _compose_render_group(group).retain_local_shards is True
+
+
+def test_vst_pyfdn_profile_enables_the_live_48khz_effect() -> None:
+    """The opt-in profile composes the supported preset and sample rate."""
+    config = RenderConfig.from_cfg_nodes(
+        _compose_render_group("vst_pyfdn"), _compose_synth_group("surge_simple")
+    )
+
+    assert config.sample_rate == 48000
+    assert config.pyfdn_effect is not None
+    assert config.pyfdn_effect.model_dump() == {
+        "package_version": "0.4.2",
+        "preset_name": "colorless_N8_d1",
+        "decay_seconds": 1.5,
+        "wet_mix": 0.1,
+    }
 
 
 def test_vst_render_group_composes_with_root_synth_identity() -> None:

@@ -272,6 +272,11 @@ class AudioRenderer(ABC):
     signal_duration_seconds: float
     plugin_state_path: str | None = None
 
+    @property
+    def editor_plugin(self) -> VST3Plugin | None:
+        """Expose the cached plugin whose editor may be held open."""
+        return None
+
     @abstractmethod
     def render(
         self,
@@ -303,6 +308,11 @@ class PedalboardRenderer(AudioRenderer):
     """
 
     plugin: VST3Plugin | None = field(default=None, repr=False)
+
+    @property
+    def editor_plugin(self) -> VST3Plugin | None:
+        """Expose the cached plugin used by the always-on editor lifecycle."""
+        return self.plugin
 
     def render(
         self,
