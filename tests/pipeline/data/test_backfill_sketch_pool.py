@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import shutil
 import subprocess
 import sys
 import time
@@ -36,6 +37,8 @@ from synth_setter.pipeline.data.backfill_sketch_pool import (
     _load_reports,
     _parse_args,
     _persist_report,
+    _prepare_source,
+    _report_store,
     _result,
     _resume_directory,
     _retry,
@@ -96,9 +99,10 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
     )
     resume_dir = config.resume_dir
     assert resume_dir is not None
-    _load_reports(resume_dir, identity, fragment_ids)
+    report_store = _report_store(config, identity)
+    _load_reports(report_store, identity, fragment_ids)
     _persist_report(
-        resume_dir,
+        report_store,
         _transform_fragment(
             _FragmentTask(
                 uri=str(local_uri),
@@ -111,6 +115,7 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
             )
         ),
     )
+    shutil.rmtree(resume_dir)
 
     backfill_sketch_pool(config)
     dataset = lance.dataset(local_uri).checkout_version(("candidate", None))
@@ -298,6 +303,31 @@ def test_ensure_canonical_index_when_disabled_skips_small_dataset(tmp_path: Path
 
     assert unchanged.version == dataset.version
     assert built is False
+
+
+def test_prepare_source_with_pooled_32_frame_sketch_rejects_before_rename(
+    tmp_path: Path,
+) -> None:
+    """A canonical model-ready sketch cannot be renamed as historical source.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    uri = tmp_path / "pooled-source.lance"
+    controls = np.zeros((1, SKETCH_PITCH_BINS + 2, 32), dtype=np.float32)
+    dataset = lance.write_dataset(
+        pa.table({SKETCH_STRUCT_FIELD: sketch_struct_array(controls)}),
+        uri,
+    )
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(uri),
+        workers=1,
+        rollback_tag="before",
+        build_index=False,
+    )
+
+    with pytest.raises(ValueError, match="does not match the historical 401-frame schema"):
+        _prepare_source(dataset, config, str(uri), None)
+    assert dataset.tags.list() == {}
 
 
 def test_ensure_rollback_tag_without_existing_tag_rejects_resume(tmp_path: Path) -> None:

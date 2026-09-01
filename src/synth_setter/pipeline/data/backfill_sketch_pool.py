@@ -12,6 +12,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -132,6 +133,10 @@ class SketchPoolBackfillConfig(BaseModel):
 
         Worker-report cache, or ``None`` for a dataset-keyed user cache.
 
+    .. attribute :: resume_uri
+
+        Shared reconciliation prefix, or ``None`` for an R2 dataset-derived prefix.
+
     .. attribute :: timeout_seconds
 
         Overall fragment-task deadline.
@@ -152,6 +157,7 @@ class SketchPoolBackfillConfig(BaseModel):
     build_index: bool = True
     num_partitions: int | None = Field(default=None, ge=1)
     resume_dir: Path | None = None
+    resume_uri: str | None = None
     timeout_seconds: float = Field(default=21_600.0, gt=0.0)
     result: Path | None = None
 
@@ -339,6 +345,23 @@ class _CacheIdentity(BaseModel):
 
 
 @dataclass(frozen=True)
+class _ReportStore:
+    """Locate local staging and shared reconciliation reports.
+
+    .. attribute :: local_dir
+
+        Host-local atomic-write staging directory.
+
+    .. attribute :: remote_uri
+
+        Shared R2 prefix, or ``None`` for local-only migrations.
+    """
+
+    local_dir: Path
+    remote_uri: str | None
+
+
+@dataclass(frozen=True)
 class _DispatchState:
     """Hold mutable state while the driver collects Ray reports.
 
@@ -358,16 +381,16 @@ class _DispatchState:
 
         Source rows for progress reporting.
 
-    .. attribute :: cache_dir
+    .. attribute :: report_store
 
-        Durable report directory.
+        Local staging and shared report locations.
     """
 
     pending: list[ray.ObjectRef]
     reports: dict[int, _FragmentReport]
     fragment_ids: set[int]
     total_rows: int
-    cache_dir: Path
+    report_store: _ReportStore
 
 
 @dataclass(frozen=True)
@@ -744,7 +767,7 @@ def _ensure_canonical_index(
     from synth_setter.pipeline.data.add_embeddings import MIN_ROWS_FOR_INDEX, SKETCH_VEC_COLUMN
 
     rows = _retry("count_index_eligibility_rows", dataset.count_rows)
-    if not config.build_index or rows < MIN_ROWS_FOR_INDEX:
+    if not config.build_index:
         return dataset, False
     partitions, metric, sub_vectors = _index_parameters(dataset, config)
     existing = _canonical_indexes(dataset)
@@ -752,6 +775,8 @@ def _ensure_canonical_index(
         raise ValueError(f"multiple indexes target {SKETCH_VEC_COLUMN!r}")
     if existing:
         _validate_index(dataset, existing[0], partitions, metric, sub_vectors)
+        return dataset, False
+    if rows < MIN_ROWS_FOR_INDEX:
         return dataset, False
     progress_callback = _index_progress_callback(time.monotonic())
 
@@ -793,18 +818,55 @@ def _resume_directory(config: SketchPoolBackfillConfig) -> Path:
     return Path.home() / ".cache" / "synth-setter" / "sketch-pool-backfill" / key
 
 
+def _report_store(
+    config: SketchPoolBackfillConfig,
+    identity: _CacheIdentity,
+) -> _ReportStore:
+    """Resolve local staging and host-independent reconciliation storage.
+
+    :param config: Dataset and optional report-location configuration.
+    :param identity: Immutable source operation identity.
+    :returns: Local staging directory and optional shared R2 prefix.
+    """
+    from synth_setter.pipeline.r2_io import is_r2_uri
+
+    digest = hashlib.sha256(identity.model_dump_json().encode()).hexdigest()[:20]
+    remote_uri = config.resume_uri
+    if remote_uri is None and is_r2_uri(config.lance_uri):
+        remote_uri = f"{config.lance_uri.rstrip('/')}/metadata/workers/sketch-pool/{digest}"
+    return _ReportStore(local_dir=_resume_directory(config), remote_uri=remote_uri)
+
+
+def _hydrate_remote_reports(store: _ReportStore) -> None:
+    """Download shared reconciliation reports into local validation staging.
+
+    :param store: Local and optional shared report locations.
+    """
+    if store.remote_uri is None:
+        return
+    from synth_setter.pipeline.r2_io import download_to_path, list_entries
+
+    for entry in list_entries(store.remote_uri):
+        destination = store.local_dir / Path(entry.path).name
+        download_to_path(f"{store.remote_uri}/{entry.path}", destination)
+
+
 def _load_reports(
-    cache_dir: Path, identity: _CacheIdentity, fragment_ids: set[int]
+    store: _ReportStore, identity: _CacheIdentity, fragment_ids: set[int]
 ) -> dict[int, _FragmentReport]:
     """Load compatible durable worker reports for an interrupted merge.
 
-    :param cache_dir: Dataset-keyed report directory.
+    :param store: Local staging and shared report locations.
     :param identity: Immutable source operation identity.
     :param fragment_ids: Current source fragment IDs.
     :returns: Valid reports keyed by fragment ID.
     :raises ValueError: Existing cache belongs to a different source operation.
     """
+    from synth_setter.pipeline.r2_io import upload_to_uri
+
+    cache_dir = store.local_dir
     cache_dir.mkdir(parents=True, exist_ok=True)
+    _hydrate_remote_reports(store)
     identity_path = cache_dir / "identity.json"
     if identity_path.exists():
         cached = _CacheIdentity.model_validate_json(identity_path.read_text(), strict=True)
@@ -815,24 +877,31 @@ def _load_reports(
             )
     else:
         identity_path.write_text(identity.model_dump_json(indent=2) + "\n")
+        if store.remote_uri is not None:
+            upload_to_uri(identity_path, f"{store.remote_uri}/identity.json")
     reports: dict[int, _FragmentReport] = {}
-    for path in cache_dir.glob("fragment-*.json"):
+    for path in sorted(cache_dir.glob("fragment-*.json")):
         report = _FragmentReport.model_validate_json(path.read_text(), strict=True)
         if report.fragment_id in fragment_ids:
-            reports[report.fragment_id] = report
+            reports.setdefault(report.fragment_id, report)
     return reports
 
 
-def _persist_report(cache_dir: Path, report: _FragmentReport) -> None:
-    """Atomically persist one worker report before acknowledging progress.
+def _persist_report(store: _ReportStore, report: _FragmentReport) -> None:
+    """Atomically persist one uniquely named worker-attempt report.
 
-    :param cache_dir: Prepared fragment-report cache directory.
+    :param store: Local staging and shared report locations.
     :param report: Strict worker result to persist.
     """
-    destination = cache_dir / f"fragment-{report.fragment_id}.json"
-    temporary = destination.with_suffix(".json.tmp")
+    from synth_setter.pipeline.r2_io import upload_to_uri
+
+    attempt = uuid.uuid4().hex
+    destination = store.local_dir / f"fragment-{report.fragment_id}-{attempt}.json"
+    temporary = store.local_dir / f".{destination.name}.{uuid.uuid4().hex}.tmp"
     temporary.write_text(report.model_dump_json() + "\n")
     temporary.replace(destination)
+    if store.remote_uri is not None:
+        upload_to_uri(destination, f"{store.remote_uri}/{destination.name}")
 
 
 def _prepare_dispatch(
@@ -857,7 +926,6 @@ def _prepare_dispatch(
 
     fragments = _retry("list_fragments", dataset.get_fragments)
     fragment_ids = {fragment.metadata.id for fragment in fragments}
-    cache_dir = _resume_directory(config)
     identity = _CacheIdentity(
         lance_uri=config.lance_uri,
         branch=config.branch,
@@ -865,7 +933,8 @@ def _prepare_dispatch(
         batch_size=config.batch_size,
         artifact=artifact,
     )
-    reports = _load_reports(cache_dir, identity, fragment_ids)
+    report_store = _report_store(config, identity)
+    reports = _load_reports(report_store, identity, fragment_ids)
     remote_transform = ray.remote(num_cpus=1, max_calls=config.tasks_per_worker)(
         _transform_fragment
     )
@@ -888,7 +957,7 @@ def _prepare_dispatch(
         reports=reports,
         fragment_ids=fragment_ids,
         total_rows=_retry("count_source_rows", dataset.count_rows),
-        cache_dir=cache_dir,
+        report_store=report_store,
     )
 
 
@@ -916,7 +985,7 @@ def _poll_dispatch(
             report = _FragmentReport.model_validate(ray.get(ready[0]), strict=True)
             if report.fragment_id not in state.fragment_ids or report.fragment_id in state.reports:
                 raise ValueError(f"unexpected worker report for fragment {report.fragment_id}")
-            _persist_report(state.cache_dir, report)
+            _persist_report(state.report_store, report)
             state.reports[report.fragment_id] = report
             rows_done += report.row_count
         now = time.monotonic()
@@ -1209,6 +1278,54 @@ def _validate_rollback_tag(
         )
 
 
+def _validate_full_source_field(
+    dataset: lance.LanceDataset,
+    field_name: str,
+) -> None:
+    """Require the exact historical 401-frame nested sketch schema before mutation.
+
+    :param dataset: Source snapshot to inspect.
+    :param field_name: Canonical or renamed source field name.
+    :raises ValueError: Nested children do not match the historical fixed-size layout.
+    """
+    import pyarrow as pa
+
+    from synth_setter.data.vst.shapes import (
+        SKETCH_CENTROID_CHILD,
+        SKETCH_LOUDNESS_CHILD,
+        SKETCH_PITCH_BINS,
+        SKETCH_PITCH_CHILD,
+    )
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_FRAMES
+
+    field = dataset.schema.field(field_name)
+    if not pa.types.is_struct(field.type):
+        raise ValueError(f"{field_name!r} must be a nested sketch struct")
+    expected_sizes = {
+        SKETCH_LOUDNESS_CHILD: SKETCH_FULL_FRAMES,
+        SKETCH_CENTROID_CHILD: SKETCH_FULL_FRAMES,
+        SKETCH_PITCH_CHILD: SKETCH_PITCH_BINS * SKETCH_FULL_FRAMES,
+    }
+    actual_sizes = {}
+    try:
+        for child_name in expected_sizes:
+            child_type = field.type.field(child_name).type
+            if pa.types.is_fixed_size_list(child_type):
+                actual_sizes[child_name] = child_type.list_size
+            else:
+                tensor_shape = getattr(child_type, "shape", None)
+                actual_sizes[child_name] = (
+                    math.prod(tensor_shape) if tensor_shape is not None else None
+                )
+    except KeyError as exc:
+        raise ValueError(f"{field_name!r} is missing sketch child {exc.args[0]!r}") from exc
+    if actual_sizes != expected_sizes:
+        raise ValueError(
+            f"{field_name!r} does not match the historical 401-frame schema: "
+            f"got {actual_sizes}, expected {expected_sizes}"
+        )
+
+
 def _prepare_source(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
@@ -1238,6 +1355,10 @@ def _prepare_source(
         )
     if _retry("count_prepared_rows", dataset.count_rows) == 0:
         raise ValueError("cannot backfill an empty dataset")
+    _validate_full_source_field(
+        dataset,
+        SKETCH_STRUCT_FIELD if has_canonical else SKETCH_FULL_STRUCT_FIELD,
+    )
     if has_canonical:
         _create_rollback_tag(dataset, config)
     _validate_rollback_tag(
@@ -1359,6 +1480,7 @@ def _parse_args() -> SketchPoolBackfillConfig:
     parser.add_argument("--build-index", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num-partitions", type=int)
     parser.add_argument("--resume-dir", type=Path)
+    parser.add_argument("--resume-uri")
     parser.add_argument("--timeout-seconds", type=float, default=21_600.0)
     parser.add_argument("--result", type=Path)
     args = parser.parse_args()
@@ -1366,7 +1488,7 @@ def _parse_args() -> SketchPoolBackfillConfig:
 
 
 def main() -> None:
-    """Run the distributed migration CLI."""
+    """Execute the migration configured by process arguments."""
     backfill_sketch_pool(_parse_args())
 
 

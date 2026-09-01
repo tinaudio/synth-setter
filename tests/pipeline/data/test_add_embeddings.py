@@ -3590,6 +3590,48 @@ def test_sketch_pool_backfill_reads_renamed_controls_and_writes_pooled_struct(
     np.testing.assert_allclose(_struct_sketch_vec(pooled), expected.mean(axis=-1), rtol=1e-6)
 
 
+def test_add_embeddings_with_sketch_pool_selection_commits_pooled_field(
+    tmp_path: Path,
+) -> None:
+    """The public endpoint selects and executes the migration-only pooling policy.
+
+    :param tmp_path: Scratch directory for the source dataset.
+    """
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+
+    uri = tmp_path / "public-sketch-pool.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    rows = lance.dataset(uri).count_rows()
+    controls = np.zeros((rows, NUM_SKETCH_CONTROLS, 401), dtype=np.float32)
+    source = sketch_struct_array(controls)
+    dataset = lance.dataset(uri)
+    reader = pa.RecordBatchReader.from_batches(
+        pa.schema([pa.field(SKETCH_STRUCT_FIELD, source.type)], metadata=dataset.schema.metadata),
+        [pa.record_batch([source], names=[SKETCH_STRUCT_FIELD])],
+    )
+    dataset.add_columns(reader)
+    dataset.alter_columns(
+        cast("Any", {"path": SKETCH_STRUCT_FIELD, "name": SKETCH_FULL_STRUCT_FIELD})
+    )
+
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(uri),
+            embeddings=("sketch_pool",),
+            batch_size=1,
+            build_index=False,
+        )
+    )
+
+    reread = lance.dataset(uri)
+    field = reread.schema.field(SKETCH_STRUCT_FIELD)
+    assert field.metadata[b"synth_setter.embedding.name"] == b"sketch_pool"
+    np.testing.assert_array_equal(
+        _struct_sketch_controls(_stored_sketch_struct(reread)),
+        pool_sketch_controls(torch.from_numpy(controls)).numpy(),
+    )
+
+
 def test_sketch_pool_backfill_with_short_affine_child_rejects_shape() -> None:
     """A source row cannot silently alter the historical 401-frame contract."""
     rows = np.array(

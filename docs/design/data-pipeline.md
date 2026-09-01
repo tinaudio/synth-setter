@@ -1172,9 +1172,11 @@ the same canonical pooled `sketch` representation without rerunning PESTO. For
 large existing splits, `synth-setter-backfill-sketch-pool --lance-uri <uri> --workers <n> --rollback-tag <tag>` renames the source, writes fragments through
 recycled Ray workers, validates the exact 401-frame finite/bounded source
 contract, publishes one branch-scoped Lance merge commit, and builds the
-canonical `sketch.vec` index. Each worker report is atomically persisted under
-`--resume-dir` (or a dataset-keyed user cache) before progress is acknowledged,
-so a retry resumes both after the rename and after completed fragments. Lance
+canonical `sketch.vec` index. Each worker attempt has a unique report object
+persisted under the R2 dataset's shared `metadata/workers/sketch-pool/`
+reconciliation prefix before progress is acknowledged; local datasets use
+`--resume-dir` or a dataset-keyed user cache. A retry therefore resumes after
+both host loss and completed fragments. Lance
 and object-store operations use the shared bounded Tenacity policy; permanent
 schema, permission, and value errors fail immediately. The JSON result records
 the run and Git IDs, worker controls, versions, throughput, requested index

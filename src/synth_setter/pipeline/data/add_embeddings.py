@@ -1790,9 +1790,13 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if _nested_schema_field(dataset.schema, vector_column) is not None:
                 _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
-        input_fields = sorted({field for spec in pending for field in spec.input_fields})
-        _validate_write_source(dataset, config.batch_size, input_fields)
-    output_columns = [column for spec in specs for column in _output_columns(spec)]
+        input_fields = set()
+        for spec in pending:
+            input_fields.update(spec.input_fields)
+        _validate_write_source(dataset, config.batch_size, sorted(input_fields))
+    output_columns = []
+    for spec in specs:
+        output_columns.extend(_output_columns(spec))
 
     logger.info(
         "adding_embeddings",
