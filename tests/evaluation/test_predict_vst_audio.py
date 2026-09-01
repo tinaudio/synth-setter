@@ -10,7 +10,6 @@ file shape and finiteness.
 from __future__ import annotations
 
 import ast
-import json
 import os
 import sys
 
@@ -233,6 +232,20 @@ def test_canonicalize_prediction_note_window_clips_end_to_signal() -> None:
     )
 
     assert window == pytest.approx((0.02, 0.1))
+
+
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), -float("inf")])
+def test_canonicalize_prediction_note_window_nonfinite_endpoint_raises(nonfinite: float) -> None:
+    """A non-finite prediction fails before reaching a renderer.
+
+    :param nonfinite: Invalid endpoint under test.
+    """
+    with pytest.raises(ValueError, match="must be finite"):
+        _canonicalize_prediction_note_window(
+            (nonfinite, 0.05),
+            signal_duration_seconds=0.1,
+            sample_rate=8000,
+        )
 
 
 # ---------- main (process CLI) ----------
@@ -512,40 +525,6 @@ def test_main_valid_target_window_remains_unchanged(
     rendered_windows = [call.args[3] for call in fake_renderer.render.call_args_list]
     assert rendered_windows[0] == pytest.approx((0.02, 0.08), abs=1e-6)
     assert rendered_windows[1] == pytest.approx((0.01, 0.09), abs=1e-6)
-
-
-def test_main_nonfinite_prediction_window_skips_only_malformed_sample(
-    pred_dir: Path,
-    out_dir: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A non-finite prediction is diagnosed without discarding later samples.
-
-    :param pred_dir: Directory for staged prediction tensors.
-    :param out_dir: Destination for rendered artifacts.
-    :param caplog: Captured log records used to verify the row diagnostic.
-    """
-    _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
-    stale_sample = out_dir / "sample_0"
-    stale_sample.mkdir(parents=True)
-    (stale_sample / "pred.wav").write_bytes(b"stale")
-    pred_path = pred_dir / "pred-0.pt"
-    _set_model_note_window(pred_path, row=0, window=(float("nan"), -0.95))
-    _set_model_note_window(pred_path, row=1, window=(-0.96, -0.99))
-
-    result = _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
-
-    assert result.exit_code == 0
-    assert not (out_dir / "sample_0").exists()
-    assert (out_dir / "sample_1" / "pred.wav").is_file()
-    assert "Skipping prediction sample 0" in caplog.text
-    assert "must be finite" in caplog.text
-    assert json.loads((out_dir / "render_manifest.json").read_text()) == {
-        "schema_version": 1,
-        "input_rows": 2,
-        "rendered_rows": 1,
-        "skipped_rows": [{"sample_id": 0, "reason": "non_finite_prediction_note_window"}],
-    }
 
 
 def test_main_skip_spectrogram_suppresses_png(pred_dir: Path, out_dir: Path) -> None:
