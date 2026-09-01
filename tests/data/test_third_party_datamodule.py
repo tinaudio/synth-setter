@@ -781,6 +781,22 @@ def test_amplitude_scale_outside_positive_finite_domain_raises(
         )
 
 
+def test_amplitude_scale_underflowing_float32_raises(tmp_path: Path) -> None:
+    """A positive float64 gain must not become zero in the float32 decode path.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    with pytest.raises(ValueError, match="not representable as positive float32"):
+        ThirdPartyAudioDataModule(
+            dataset_uri=str(tmp_path / "corpus.lance"),
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            signal_duration_seconds=_DURATION_SECONDS,
+            dataset_version=1,
+            amplitude_scale=1e-50,
+        )
+
+
 def test_non_positive_batch_size_raises(tmp_path: Path) -> None:
     """A zero batch size would build a loader that yields nothing.
 
