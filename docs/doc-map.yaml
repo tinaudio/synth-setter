@@ -432,7 +432,7 @@ docs:
       - pattern: "jobs/predict/*.sh"
         covers: "Predict commands with explicit W&B checkpoint overrides"
       - pattern: "src/synth_setter/configs/render/**"
-        covers: "Backend profiles and derived post-render profiles joined with root synth identity by RenderConfig.from_cfg_nodes"
+        covers: "Render profiles composed with root synth identity"
       - pattern: "src/synth_setter/configs/callbacks/eval_vst.yaml"
         covers: "Eval-specific callback config, prediction writer setup"
       - pattern: "src/synth_setter/configs/callbacks/prediction_writer.yaml"
