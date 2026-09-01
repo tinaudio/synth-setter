@@ -31,10 +31,7 @@ from tenacity import (
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
-from synth_setter.pipeline.data.lance_shard import (
-    LANCE_DATA_STORAGE_VERSION,
-    LANCE_MAX_BYTES_PER_FILE,
-)
+from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
 from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 logger = structlog.get_logger(__name__)
@@ -47,6 +44,12 @@ _DIRNAME_PREFIX_CHARS = 8
 _MAX_LANCE_READ_ATTEMPTS = 3
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
+_MATERIALIZE_BATCH_SIZE = 8192
+_MATERIALIZE_IO_BUFFER_SIZE = 32 * 1024**3
+_MATERIALIZE_FRAGMENT_READAHEAD = 128
+_MATERIALIZE_BATCH_READAHEAD = 8
+_MATERIALIZE_MAX_ROWS_PER_GROUP = 4096
+_MATERIALIZE_MAX_BYTES_PER_FILE = 256 * 1024**3
 _RETRYABLE_LANCE_IO_MARKERS = (
     "408 request timeout",
     "429 too many requests",
@@ -501,7 +504,12 @@ def _write_materialized_snapshot(
     :raises ValueError: The written dataset has no transaction identity.
     """
     scanner = snapshot.scanner(
-        columns=list(manifest.columns), limit=manifest.limit, batch_size=batch_size
+        columns=list(manifest.columns),
+        limit=manifest.limit,
+        batch_size=batch_size,
+        io_buffer_size=_MATERIALIZE_IO_BUFFER_SIZE,
+        fragment_readahead=_MATERIALIZE_FRAGMENT_READAHEAD,
+        batch_readahead=_MATERIALIZE_BATCH_READAHEAD,
     )
     logger.info(
         "lance_materialize.start",
@@ -525,7 +533,8 @@ def _write_materialized_snapshot(
         schema=scanner.projected_schema,
         transaction_properties=transaction_properties,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
-        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
+        max_rows_per_group=_MATERIALIZE_MAX_ROWS_PER_GROUP,
+        max_bytes_per_file=_MATERIALIZE_MAX_BYTES_PER_FILE,
     )
     row_count = written.count_rows()
     transaction = written.read_transaction(written.version)
@@ -573,13 +582,14 @@ def materialize_lance_subset(  # noqa: DOC502
     txid: str | None,
     columns: Sequence[str],
     limit: int | None = None,
-    batch_size: int = 512,
+    batch_size: int = _MATERIALIZE_BATCH_SIZE,
 ) -> Path:
     """Stream a projected source snapshot scan into ``dest_path``.
 
-    Peak memory is ~one batch; transferred bytes scale with the subset, not
-    the source. A txid pins the source snapshot when supplied; otherwise the
-    latest version at hydration time is used.
+    Scanner memory is bounded by the configured I/O buffer and read-ahead
+    batches; transferred bytes scale with the subset, not the source. A txid
+    pins the source snapshot when supplied; otherwise the latest version at
+    hydration time is used.
 
     :param source_uri: Source dataset — ``r2://`` URI (resolved via
         :func:`synth_setter.pipeline.r2_io.lance_target`) or local path.
@@ -588,7 +598,7 @@ def materialize_lance_subset(  # noqa: DOC502
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
-    :param batch_size: Scan batch size in rows — the streaming memory unit.
+    :param batch_size: Scan batch size in rows.
     :returns: ``dest_path``.
     :raises LookupError: ``txid`` matches no live source version.
     :raises RuntimeError: A transient source read exhausts the retry budget.
