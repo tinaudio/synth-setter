@@ -3633,7 +3633,7 @@ def test_add_embeddings_with_sketch_pool_selection_commits_pooled_field(
 
 
 def test_sketch_pool_backfill_with_short_affine_child_rejects_shape() -> None:
-    """A source row cannot silently alter the historical 401-frame contract."""
+    """A source row cannot silently alter the required 401-frame contract."""
     rows = np.array(
         [
             {

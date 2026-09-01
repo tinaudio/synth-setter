@@ -345,6 +345,33 @@ class _CacheIdentity(BaseModel):
 
 
 @dataclass(frozen=True)
+class _OperationContext:
+    """Bind one immutable source snapshot to its worker-open parameters.
+
+    .. attribute :: lance_uri
+
+        Lance-openable dataset target.
+
+    .. attribute :: storage_options
+
+        Object-store credentials, when required.
+
+    .. attribute :: source_version
+
+        Immutable branch-local source version.
+
+    .. attribute :: artifact
+
+        Pooling-policy identity.
+    """
+
+    lance_uri: str
+    storage_options: dict[str, str] | None
+    source_version: int
+    artifact: str
+
+
+@dataclass(frozen=True)
 class _ReportStore:
     """Locate local staging and shared reconciliation reports.
 
@@ -788,6 +815,11 @@ def _ensure_canonical_index(
                 raise ValueError(f"multiple indexes target {SKETCH_VEC_COLUMN!r}")
             _validate_index(latest, recovered[0], partitions, metric, sub_vectors)
             return latest
+        if latest.version != dataset.version:
+            raise ValueError(
+                f"branch advanced from version {dataset.version} to {latest.version} "
+                "before index creation"
+            )
         return latest.create_index(
             SKETCH_VEC_COLUMN,
             index_type="IVF_PQ",
@@ -806,16 +838,41 @@ def _ensure_canonical_index(
     return indexed, True
 
 
+def _validate_resume_directory(config: SketchPoolBackfillConfig, cache_dir: Path) -> Path:
+    """Require cleanup storage to be dedicated and disjoint from local source data.
+
+    :param config: Dataset location used to identify protected source paths.
+    :param cache_dir: Candidate local reconciliation directory.
+    :returns: Resolved safe directory.
+    :raises ValueError: The directory is protected or overlaps a local dataset.
+    """
+    resolved = cache_dir.expanduser().resolve()
+    protected = {Path(resolved.anchor), Path.home().resolve(), Path.cwd().resolve()}
+    if resolved in protected:
+        raise ValueError(f"resume directory {resolved} is not a dedicated cleanup path")
+    if "://" not in config.lance_uri:
+        dataset_path = Path(config.lance_uri).expanduser().resolve()
+        overlaps = (
+            resolved == dataset_path
+            or resolved in dataset_path.parents
+            or dataset_path in resolved.parents
+        )
+        if overlaps:
+            raise ValueError(f"resume directory {resolved} overlaps local dataset {dataset_path}")
+    return resolved
+
+
 def _resume_directory(config: SketchPoolBackfillConfig) -> Path:
-    """Resolve a stable, dataset-keyed fragment-report cache directory.
+    """Resolve a safe, stable, dataset-keyed fragment-report cache directory.
 
     :param config: Migration identity and optional cache override.
     :returns: Cache directory unique to the public dataset URI and branch.
     """
     if config.resume_dir is not None:
-        return config.resume_dir
+        return _validate_resume_directory(config, config.resume_dir)
     key = hashlib.sha256(f"{config.lance_uri}\0{config.branch}".encode()).hexdigest()[:20]
-    return Path.home() / ".cache" / "synth-setter" / "sketch-pool-backfill" / key
+    cache_dir = Path.home() / ".cache" / "synth-setter" / "sketch-pool-backfill" / key
+    return _validate_resume_directory(config, cache_dir)
 
 
 def _report_store(
@@ -907,19 +964,13 @@ def _persist_report(store: _ReportStore, report: _FragmentReport) -> None:
 def _prepare_dispatch(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
-    lance_uri: str,
-    storage_options: dict[str, str] | None,
-    source_version: int,
-    artifact: str,
+    context: _OperationContext,
 ) -> _DispatchState:
     """Load durable reports and submit only missing fragment tasks.
 
     :param dataset: Immutable source snapshot.
     :param config: Worker, batch, and recycling controls.
-    :param lance_uri: Lance-openable dataset target.
-    :param storage_options: Object-store credentials, when required.
-    :param source_version: Immutable branch-local source version.
-    :param artifact: Pooling-policy identity.
+    :param context: Immutable worker-open and source-snapshot identity.
     :returns: Initialized mutable dispatch state.
     """
     import ray
@@ -929,9 +980,9 @@ def _prepare_dispatch(
     identity = _CacheIdentity(
         lance_uri=config.lance_uri,
         branch=config.branch,
-        source_version=source_version,
+        source_version=context.source_version,
         batch_size=config.batch_size,
-        artifact=artifact,
+        artifact=context.artifact,
     )
     report_store = _report_store(config, identity)
     reports = _load_reports(report_store, identity, fragment_ids)
@@ -941,13 +992,13 @@ def _prepare_dispatch(
     pending = [
         remote_transform.remote(
             _FragmentTask(
-                uri=lance_uri,
-                storage_options=storage_options,
+                uri=context.lance_uri,
+                storage_options=context.storage_options,
                 branch=config.branch,
-                source_version=source_version,
+                source_version=context.source_version,
                 fragment_id=fragment_id,
                 batch_size=config.batch_size,
-                artifact=artifact,
+                artifact=context.artifact,
             )
         )
         for fragment_id in sorted(fragment_ids - reports.keys())
@@ -959,6 +1010,23 @@ def _prepare_dispatch(
         total_rows=_retry("count_source_rows", dataset.count_rows),
         report_store=report_store,
     )
+
+
+def _cancel_timed_out_dispatch(
+    pending: Sequence[ray.ObjectRef],
+    timeout_seconds: float,
+) -> str:
+    """Cancel every pending task and describe the operation deadline failure.
+
+    :param pending: Outstanding Ray object references.
+    :param timeout_seconds: Configured overall deadline.
+    :returns: Error detail carrying the configured deadline and pending count.
+    """
+    import ray
+
+    for reference in pending:
+        ray.cancel(reference, force=True)
+    return f"fragment tasks exceeded {timeout_seconds} seconds with {len(pending)} pending"
 
 
 def _poll_dispatch(
@@ -980,7 +1048,12 @@ def _poll_dispatch(
     rows_done = sum(report.row_count for report in state.reports.values())
     last_log = started
     while pending:
-        ready, pending = ray.wait(pending, num_returns=1, timeout=10)
+        remaining = config.timeout_seconds - (time.monotonic() - started)
+        if remaining <= 0:
+            raise TimeoutError(
+                _cancel_timed_out_dispatch(pending, config.timeout_seconds)
+            )
+        ready, pending = ray.wait(pending, num_returns=1, timeout=min(10.0, remaining))
         if ready:
             report = _FragmentReport.model_validate(ray.get(ready[0]), strict=True)
             if report.fragment_id not in state.fragment_ids or report.fragment_id in state.reports:
@@ -989,12 +1062,9 @@ def _poll_dispatch(
             state.reports[report.fragment_id] = report
             rows_done += report.row_count
         now = time.monotonic()
-        if now - started > config.timeout_seconds:
-            for reference in pending:
-                ray.cancel(reference, force=True)
+        if now - started >= config.timeout_seconds:
             raise TimeoutError(
-                f"fragment tasks exceeded {config.timeout_seconds} seconds with "
-                f"{len(pending)} pending"
+                _cancel_timed_out_dispatch(pending, config.timeout_seconds)
             )
         if now - last_log >= _PROGRESS_INTERVAL_SECONDS or not pending:
             elapsed = now - started
@@ -1015,32 +1085,19 @@ def _poll_dispatch(
 def _run_fragment_tasks(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
-    lance_uri: str,
-    storage_options: dict[str, str] | None,
-    source_version: int,
-    artifact: str,
+    context: _OperationContext,
     started: float,
 ) -> list[_FragmentReport]:
     """Run missing fragment tasks and durably record each successful output.
 
     :param dataset: Immutable source snapshot.
     :param config: Worker, batch, and recycling controls.
-    :param lance_uri: Lance-openable dataset target.
-    :param storage_options: Object-store credentials, when required.
-    :param source_version: Immutable branch-local source version.
-    :param artifact: Pooling-policy identity.
+    :param context: Immutable worker-open and source-snapshot identity.
     :param started: Migration start time for progress rates.
     :returns: One validated report per source fragment.
     :raises ValueError: Worker reports do not cover every source fragment.
     """
-    state = _prepare_dispatch(
-        dataset,
-        config,
-        lance_uri,
-        storage_options,
-        source_version,
-        artifact,
-    )
+    state = _prepare_dispatch(dataset, config, context)
     _poll_dispatch(state, config, started)
     if state.reports.keys() != state.fragment_ids:
         raise ValueError("worker reports do not cover every source fragment")
@@ -1429,15 +1486,13 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
             )
         dataset = _prepare_source(dataset, config, lance_uri, storage_options)
         source_version = dataset.version
-        reports = _run_fragment_tasks(
-            dataset,
-            config,
-            lance_uri,
-            storage_options,
-            source_version,
-            artifact,
-            started,
+        context = _OperationContext(
+            lance_uri=lance_uri,
+            storage_options=storage_options,
+            source_version=source_version,
+            artifact=artifact,
         )
+        reports = _run_fragment_tasks(dataset, config, context, started)
         committed = _commit_reports(
             dataset,
             reports,

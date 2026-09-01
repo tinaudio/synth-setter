@@ -14,6 +14,7 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import ray
 import torch
 
 from synth_setter.data.vst.shapes import (
@@ -32,13 +33,16 @@ from synth_setter.pipeline.data.backfill_sketch_pool import (
     _AlterColumnsDataset,
     _CacheIdentity,
     _ColumnRename,
+    _DispatchState,
     _ensure_canonical_index,
     _FragmentTask,
     _load_reports,
     _parse_args,
     _persist_report,
+    _poll_dispatch,
     _prepare_source,
     _report_store,
+    _ReportStore,
     _result,
     _resume_directory,
     _retry,
@@ -250,6 +254,74 @@ def test_retry_with_permanent_failure_raises_without_retry() -> None:
     with pytest.raises(PermissionError, match="permanent"):
         _retry("test", operation)
     assert attempts == 1
+
+
+def test_poll_dispatch_with_short_deadline_limits_wait_and_cancels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A task deadline bounds polling and force-cancels every pending reference.
+
+    :param tmp_path: Temporary report-staging directory.
+    :param monkeypatch: Fixture controlling Ray and monotonic time.
+    """
+    reference = cast("ray.ObjectRef", object())
+    waits: list[float] = []
+    cancellations: list[tuple[ray.ObjectRef, bool]] = []
+    monkeypatch.setattr(
+        ray,
+        "wait",
+        lambda pending, *, num_returns, timeout: (
+            waits.append(timeout) or [],
+            pending,
+        ),
+    )
+    monkeypatch.setattr(
+        ray,
+        "cancel",
+        lambda pending, *, force: cancellations.append((pending, force)),
+    )
+    clock = iter((100.0, 100.1))
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.backfill_sketch_pool.time.monotonic",
+        lambda: next(clock),
+    )
+    state = _DispatchState(
+        pending=[reference],
+        reports={},
+        fragment_ids={1},
+        total_rows=1,
+        report_store=_ReportStore(local_dir=tmp_path, remote_uri=None),
+    )
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(tmp_path / "source.lance"),
+        workers=1,
+        rollback_tag="before",
+        timeout_seconds=0.05,
+    )
+
+    with pytest.raises(TimeoutError, match="0.05 seconds with 1 pending"):
+        _poll_dispatch(state, config, 100.0)
+
+    assert waits == [0.05]
+    assert cancellations == [(reference, True)]
+
+
+def test_resume_directory_overlapping_local_dataset_rejects_cleanup(tmp_path: Path) -> None:
+    """A migration cannot designate its local dataset as disposable state.
+
+    :param tmp_path: Temporary directory containing the protected source path.
+    """
+    uri = tmp_path / "source.lance"
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(uri),
+        workers=1,
+        rollback_tag="before",
+        resume_dir=uri,
+    )
+
+    with pytest.raises(ValueError, match="overlaps local dataset"):
+        _resume_directory(config)
 
 
 def test_resume_directory_without_override_is_dataset_keyed() -> None:
