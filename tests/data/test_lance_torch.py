@@ -41,11 +41,11 @@ BATCH_SIZE = 8
 _WIDE_TAKE_BATCH_BOUNDARY = 68
 _WIDE_TAKE_ROWS = 300
 _WIDE_TAKE_TIMEOUT_SECONDS = 30
-_WIDE_TAKE_WIDTHS = {
-    "param_array": 1,
-    "mel_spec": 219_648,
-    "sketch": 4_096,
-}
+_WIDE_TAKE_COLUMNS = (
+    ("param_array", 1),
+    ("mel_spec", 219_648),
+    ("sketch", 4_096),
+)
 
 
 def _write_and_take_wide_batch_boundary(dest: str) -> None:
@@ -60,7 +60,7 @@ def _write_and_take_wide_batch_boundary(dest: str) -> None:
                 pa.fixed_shape_tensor(pa.float32(), (width,)),
                 nullable=False,
             )
-            for name, width in _WIDE_TAKE_WIDTHS.items()
+            for name, width in _WIDE_TAKE_COLUMNS
         ]
     )
 
@@ -71,7 +71,7 @@ def _write_and_take_wide_batch_boundary(dest: str) -> None:
                     pa.FixedShapeTensorArray.from_numpy_ndarray(
                         np.zeros((rows, width), dtype=np.float32)
                     )
-                    for width in _WIDE_TAKE_WIDTHS.values()
+                    for _, width in _WIDE_TAKE_COLUMNS
                 ],
                 schema=schema,
             )
@@ -82,9 +82,10 @@ def _write_and_take_wide_batch_boundary(dest: str) -> None:
         _WIDE_TAKE_BATCH_BOUNDARY + _WIDE_TAKE_ROWS,
     )
 
-    batch = LanceMapDataset(dest, columns=list(_WIDE_TAKE_WIDTHS)).__getitems__(indices)
+    columns = [name for name, _ in _WIDE_TAKE_COLUMNS]
+    batch = LanceMapDataset(dest, columns=columns).__getitems__(indices)
 
-    for name, width in _WIDE_TAKE_WIDTHS.items():
+    for name, width in _WIDE_TAKE_COLUMNS:
         assert batch[name].shape == (_WIDE_TAKE_ROWS, width)
 
 
