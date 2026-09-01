@@ -141,7 +141,7 @@ def _compose_sketch_cfg_eval(
     """Compose the toy full-resolution sketch evaluation configuration.
 
     :param cfg_train_sketch_lance: Fixture providing shared paths and model settings.
-    :param full_sketch_lance_root: Generated 401-frame Lance splits.
+    :param full_sketch_lance_root: Generated full-resolution Lance splits.
     :returns: Evaluation config with sketch guidance disabled initially.
     """
     GlobalHydra.instance().clear()

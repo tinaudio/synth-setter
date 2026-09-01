@@ -5,7 +5,7 @@ repo's mel frame grid (100 fps). Loudness and centroid use fixed affine
 normalization to ``[-1, 1]`` so a sketch means the same thing for every
 checkpoint; pitch is PESTO's raw activation matrix in ``[0, 1]`` (rows
 ``SKETCH_PITCH_SLICE``). Storage averages the scalar tracks and maximum-pools
-pitch to 32 frames without thresholding, so the consumption-time zero-bin stays
+pitch to the canonical storage grid without thresholding, so the zero-bin stays
 tunable without a re-backfill. Tracking issue: #2612.
 
 Typical usage::

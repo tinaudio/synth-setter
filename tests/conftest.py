@@ -2664,7 +2664,7 @@ def full_sketch_lance_root(tmp_path: Path) -> Path:
     """Write full-resolution sketch splits for legacy-profile integration tests.
 
     :param tmp_path: Per-test temporary directory.
-    :returns: Root containing 401-frame train, validation, and test splits.
+    :returns: Root containing full-resolution train, validation, and test splits.
     """
     dataset_root = tmp_path / "lance-data-full"
     dataset_root.mkdir()
