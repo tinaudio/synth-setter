@@ -493,6 +493,58 @@ def test_audio_dataset_predict_entrypoint_writes_artifacts(
     _assert_audio_prediction_artifacts(output_dir)
 
 
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_audio_dataset_predict_no_params_renders_against_dataset_audio(tmp_path: Path) -> None:
+    """Render a parameterless prediction against its staged dataset audio.
+
+    :param tmp_path: Isolated input, checkpoint, and output directories.
+    """
+    case = _AUDIO_PREDICTION_CASES[0]
+    audio_root = tmp_path / case.datamodule
+    audio_root.mkdir()
+    _write_audio_prediction_fixture(audio_root / case.filename)
+    checkpoint = tmp_path / f"{case.experiment}.ckpt"
+    _save_audio_prediction_checkpoint(case, checkpoint)
+    output_dir = tmp_path / "no-params-output"
+    args = _audio_prediction_cli_args(
+        case,
+        checkpoint=checkpoint,
+        audio_root=audio_root,
+        output_dir=output_dir,
+    )
+    args.extend(
+        (
+            "render=vst",
+            "evaluation.render_vst=true",
+            "evaluation.compute_metrics=false",
+            "evaluation.no_params=true",
+            "evaluation.rerender_target=false",
+        )
+    )
+    subprocess_env = {key: value for key, value in os.environ.items() if key != "WANDB_SERVICE"}
+
+    result = subprocess.run(  # noqa: S603 — argv contains only test-owned paths
+        args,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env=subprocess_env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    prediction_dir = output_dir / "predictions"
+    assert not (prediction_dir / "target-params-0.pt").exists()
+    staged_target = torch.load(
+        prediction_dir / "target-audio-0.pt", map_location="cpu", weights_only=True
+    )[0]
+    sample_dir = output_dir / "audio" / "sample_0"
+    with AudioFile(str(sample_dir / "target.wav")) as target_file:
+        rendered_target = torch.from_numpy(target_file.read(target_file.frames))
+    assert (sample_dir / "pred.wav").is_file()
+    torch.testing.assert_close(rendered_target, staged_target, atol=1e-4, rtol=0)
+
+
 def _compose_torchsynth_train_cfg(tmp_path: Path) -> DictConfig:
     """Compose the deterministic TorchSynth checkpoint smoke run.
 
