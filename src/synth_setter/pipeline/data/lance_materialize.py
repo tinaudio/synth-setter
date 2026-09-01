@@ -90,7 +90,7 @@ def _is_retryable_lance_read_error(error: BaseException) -> bool:
 def _retry_lance_read[ReadResult](
     operation_name: str, read: Callable[[], ReadResult]
 ) -> ReadResult:
-    """Run one idempotent Lance metadata read under the bounded retry policy.
+    """Run one idempotent Lance read under the bounded retry policy.
 
     :param operation_name: Secret-free operation label included in retry logs.
     :param read: Zero-argument Lance read operation.

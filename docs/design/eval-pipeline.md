@@ -252,6 +252,21 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 | `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                 |
 | `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)             |
 
+### Third-party corpora
+
+`datamodule=third_party/{nsynth_test,esc50}` scores a mel-conditioned checkpoint against
+published Lance corpora under `r2:experiments/third_party`. Each corpus config pins an
+immutable `datamodule.dataset_version`, so the resolved Hydra config replays the same Lance
+snapshot after later corpus commits. Source WAV blobs are read in place through native batched
+reads and mapped onto the checkpoint's render contract per batch: decode, resample, mono
+to stereo, pad or trim, amplitude scale, canonical mel computation, and optional
+normalization with the checkpoint's pinned `datamodule.mel_stats_uri`. That URI is mandatory
+because corpus statistics cannot replace the checkpoint's training statistics. A checkpoint
+trained without normalization must explicitly set both
+`datamodule.use_saved_mean_and_variance=false` and `datamodule.mel_stats_uri=null`. These
+corpora carry no ground-truth patch, so runs pair `evaluation.no_params=true` with
+`evaluation.rerender_target=false`.
+
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
 `predict_vst_audio` also accepts a staging layout with **no** `target-audio-*.pt` files when `--rerender_target` is on and target params are staged (the training val-audio probe's layout — training batches carry no raw audio); with no target-audio file and rerendering off, it raises a directed `ValueError` rather than rendering without a target source. When dataset audio is absent the spectrogram falls back to the re-rendered target.
