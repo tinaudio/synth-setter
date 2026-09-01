@@ -292,7 +292,7 @@ When `oracle_eval_inline=true`, the local-run path shells out to
 `synth_setter.cli.eval` **once per split (train, val, test)** after `generate(...)` has closed its run.
 `_run_oracle_eval_subprocess` (`src/synth_setter/cli/generate_dataset.py`)
 re-opens the same run via `logger.wandb.id=<spec.run_id> +logger.wandb.resume=must`, runs `mode=predict` with `render=vst synth=<name>`, restating identity fields as plain `synth.<field>=...` overrides so per-run plugin substitutions survive, to
-re-render the predicted params. Generic knobs already in `vst` use plain `render.<field>=...` overrides. The launcher serializes `render.pyfdn_effect` as JSON, including `null`, so inline oracle evaluation preserves dry/effected parity with generation. The eval deposits audio-similarity metrics onto the
+re-render the predicted params. Generic knobs already in `vst` use plain `render.<field>=...` overrides. The launcher serializes `render.pyfdn_effect` with Hydra's mapping grammar, including `null`, so inline oracle evaluation preserves dry/effected parity with generation. The eval deposits audio-similarity metrics onto the
 generate run — a `wandb sync` then merges both phases under one run id. Because
 all three splits resume the **same** run, the metric keys are namespaced per
 split so they don't overwrite each other's run summary: `test` keeps the bare

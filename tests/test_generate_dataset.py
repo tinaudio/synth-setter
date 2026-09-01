@@ -288,6 +288,60 @@ def test_from_spec_uri_retention_opt_out_real_torchsynth_deletes_local_shard(
     assert not (work_dir / shard.filename).exists()
 
 
+@pytest.mark.slow
+def test_from_spec_uri_pyfdn_writes_bounded_effected_torchsynth_audio(
+    cfg_dataset_torchsynth: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real spec-URI entrypoint persists bounded audio with pyFDN enabled.
+
+    :param cfg_dataset_torchsynth: Composed production TorchSynth smoke config.
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Supplies canonical local-backend storage settings.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "local-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "local-secret-key")
+    with open_dict(cfg_dataset_torchsynth):
+        cfg_dataset_torchsynth.render.sample_rate = 48000
+        cfg_dataset_torchsynth.render.pyfdn_effect = {
+            "package_version": "0.4.2",
+            "preset_name": "colorless_N8_d1",
+            "decay_seconds": 0.5,
+            "wet_mix": 0.1,
+        }
+        cfg_dataset_torchsynth.logger = []
+    spec = DatasetSpec.from_hydra_cfg(cfg_dataset_torchsynth)
+    spec_path = fake_r2_remote / "input_spec.json"
+    spec_path.write_text(spec.model_dump_json())
+
+    result = _run_from_spec_uri_cli(spec_path, fake_r2_remote)
+
+    assert result.returncode == 0, result.stderr
+    shard = spec.shards[0]
+    assert shard_has_complete_attempt(spec, shard.shard_id)
+    local_shard = (
+        fake_r2_remote
+        / "logs"
+        / "generate_dataset"
+        / "from_spec_uri"
+        / spec.run_id
+        / shard.filename
+    )
+    audio = (
+        lance.dataset(str(local_shard))
+        .to_table(columns=[AUDIO_FIELD])
+        .column(AUDIO_FIELD)
+        .combine_chunks()
+        .to_numpy_ndarray()
+        .astype(np.float32)
+    )
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) <= 1.0
+
+
 def test_cfg_dataset_default_plugin_reload_cadence_is_once(
     cfg_dataset_default_cadence: DictConfig,
 ) -> None:

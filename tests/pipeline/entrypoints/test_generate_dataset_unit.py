@@ -40,6 +40,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from hydra import compose, initialize_config_module
 
 from synth_setter.cli.generate_dataset import (
     _RENDERER_SCRIPT,
@@ -3416,10 +3417,23 @@ class TestMainDispatchBranches:
         assert f"render.channels={render.channels}" in called_argv
         assert f"render.velocity={render.velocity}" in called_argv
         assert f"render.signal_duration_seconds={render.signal_duration_seconds}" in called_argv
-        assert (
-            'render.pyfdn_effect={"package_version":"0.4.2",'
-            '"preset_name":"colorless_N8_d1","decay_seconds":1.5,"wet_mix":0.1}' in called_argv
+        effect_override = (
+            "render.pyfdn_effect={package_version:0.4.2,"
+            "preset_name:colorless_N8_d1,decay_seconds:1.5,wet_mix:0.1}"
         )
+        assert effect_override in called_argv
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            composed = compose(
+                config_name="eval",
+                overrides=[
+                    "experiment=surge/fake_oracle",
+                    "render=vst",
+                    "synth=surge_xt",
+                    effect_override,
+                ],
+            )
+        assert render.pyfdn_effect is not None
+        assert composed.render.pyfdn_effect == render.pyfdn_effect.model_dump()
         # batch_size=1 keeps the smoke-sized test split (4 samples) from
         # flooring to zero batches under the 128 default — see #1331.
         assert "datamodule.batch_size=1" in called_argv

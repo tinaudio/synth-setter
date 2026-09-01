@@ -113,6 +113,25 @@ _ORACLE_EVAL_TIMEOUT_PER_SAMPLE_SECONDS = 120.0
 _ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.lance", "val.lance", "test.lance", STATS_NPZ_FILENAME)
 
 
+def _pyfdn_effect_override(render: RenderConfig) -> str:
+    """Encode the optional effect using Hydra's mapping override grammar.
+
+    :param render: Validated render configuration.
+    :returns: Complete ``render.pyfdn_effect=`` override.
+    """
+    effect = render.pyfdn_effect
+    if effect is None:
+        return "render.pyfdn_effect=null"
+    return (
+        "render.pyfdn_effect={"
+        f"package_version:{effect.package_version},"
+        f"preset_name:{effect.preset_name},"
+        f"decay_seconds:{effect.decay_seconds},"
+        f"wet_mix:{effect.wet_mix}"
+        "}"
+    )
+
+
 def _run_oracle_eval_subprocess(
     dataset_root: Path,
     run_dir: Path,
@@ -192,11 +211,7 @@ def _run_oracle_eval_subprocess(
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",
         f"render.signal_duration_seconds={render.signal_duration_seconds}",
-        "render.pyfdn_effect="
-        + json.dumps(
-            None if render.pyfdn_effect is None else render.pyfdn_effect.model_dump(mode="json"),
-            separators=(",", ":"),
-        ),
+        _pyfdn_effect_override(render),
         # id already exists in logger/wandb.yaml (id: null) so a plain
         # override suffices; resume is absent there and needs +append.
         f"logger.wandb.id={run_id}",

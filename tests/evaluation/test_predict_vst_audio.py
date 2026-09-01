@@ -206,7 +206,7 @@ def _fake_render(*_args: object, **_kwargs: object) -> np.ndarray:
     :return: ``(_CHANNELS, _SAMPLES)`` float32 audio array.
     """
     rng = np.random.default_rng(42)
-    return rng.standard_normal((_CHANNELS, _SAMPLES)).astype(np.float32)
+    return (0.1 * rng.standard_normal((_CHANNELS, _SAMPLES))).astype(np.float32)
 
 
 def _write_batch(
@@ -304,6 +304,30 @@ def _invoke_main(
             argv.extend([flag, "True"])
     main(argv)
     return SimpleNamespace(exit_code=0, output="")
+
+
+def test_main_out_of_range_render_raises_before_writing_audio(
+    pred_dir: Path,
+    out_dir: Path,
+    fake_renderer: MagicMock,
+) -> None:
+    """Evaluation rejects over-range renderer output instead of clipping it silently.
+
+    :param pred_dir: Prediction batch destination.
+    :param out_dir: Planned artifact destination.
+    :param fake_renderer: Renderer boundary configured with over-range output.
+    """
+    _write_batch(
+        pred_dir,
+        index=0,
+        batch_size=1,
+        with_target_params=False,
+    )
+    fake_renderer.render.side_effect = None
+    fake_renderer.render.return_value = np.full((_CHANNELS, _SAMPLES), 1.01, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"outside \[-1, 1\]"):
+        _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
 
 
 def test_main_no_params_writes_pred_target_csv_and_spectrogram(

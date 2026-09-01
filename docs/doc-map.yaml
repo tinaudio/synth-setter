@@ -153,7 +153,7 @@ docs:
 
   # ── Architecture overview ──────────────────────────────────────
   - doc: docs/architecture.md
-    description: High-level pipeline, render profiles, and system boundaries
+    description: Render-pipeline architecture and profile boundaries
     sources:
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
         covers: "RenderConfig identity, backend, and optional post-render effect contract"

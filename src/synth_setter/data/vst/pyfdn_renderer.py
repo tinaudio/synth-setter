@@ -1,4 +1,10 @@
-"""Live pyFDN post-processing for shared offline audio renderers."""
+"""Live pyFDN post-processing for shared offline audio renderers.
+
+Typical usage wraps a configured synthesis backend before rendering::
+
+    renderer = PyFDNEffectRenderer(inner=base_renderer, effect=effect_config)
+    audio = renderer.render(params, 60, 100, (0.0, 1.0))
+"""
 
 from __future__ import annotations
 

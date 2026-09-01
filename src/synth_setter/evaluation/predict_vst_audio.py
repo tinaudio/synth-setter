@@ -175,6 +175,8 @@ def _make_render_fn(args: _PredictAudioCliArgs, renderer: AudioRenderer) -> Rend
             note_start_and_end,
             warmup=warmup,
         )
+        if np.any(np.abs(audio) > 1.0):
+            raise ValueError("evaluation render contains samples outside [-1, 1]")
         warmup_pending = False
         return audio
 
