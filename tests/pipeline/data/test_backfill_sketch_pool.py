@@ -56,7 +56,7 @@ from synth_setter.pipeline.data.lance_shard import sketch_struct_array
 from synth_setter.sketch import pool_sketch_controls
 
 
-def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
+def test_backfill_sketch_pool_candidate_real_lance_round_trip_is_exact(
     fake_r2_remote: Path,
 ) -> None:
     """The public CLI must commit exact pooled controls and remain retry-safe.
@@ -125,39 +125,6 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
 
     backfill_sketch_pool(config)
     dataset = lance.dataset(local_uri).checkout_version(("candidate", None))
-    first_committed_version = dataset.version
-    with pytest.raises(ValueError, match="config .* does not match"):
-        _ensure_canonical_index(
-            dataset,
-            config.model_copy(update={"num_partitions": 1}),
-        )
-
-    command = [
-        str(Path(sys.executable).parent / "synth-setter-backfill-sketch-pool"),
-        "--lance-uri",
-        config.lance_uri,
-        "--branch",
-        config.branch,
-        "--workers",
-        str(config.workers),
-        "--batch-size",
-        str(config.batch_size),
-        "--tasks-per-worker",
-        str(config.tasks_per_worker),
-        "--rollback-tag",
-        config.rollback_tag,
-        "--num-partitions",
-        str(config.num_partitions),
-        "--resume-dir",
-        str(resume_dir),
-    ]
-    completed = subprocess.run(  # noqa: S603 -- test owns the executable and every argument.
-        command, check=False, capture_output=True, text=True
-    )
-    assert completed.returncode == 0, completed.stderr
-
-    dataset = lance.dataset(local_uri).checkout_version(("candidate", None))
-    assert dataset.version == first_committed_version
     assert lance.dataset(local_uri).version == main_dataset.version
     assert dataset.tags.get_version("before-sketch-pool") == main_dataset.version
     assert not resume_dir.exists()

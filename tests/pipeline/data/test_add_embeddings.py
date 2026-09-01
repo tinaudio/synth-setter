@@ -100,6 +100,10 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.pipeline.data.backfill_sketch_pool import (
+    _AlterColumnsDataset,
+    _ColumnRename,
+)
 from synth_setter.pipeline.data.matpac_plus import (
     MATPAC_PLUS_FRONTEND,
     matpac_plus_num_latent_frames,
@@ -3566,8 +3570,8 @@ def test_sketch_pool_backfill_reads_renamed_controls_and_writes_pooled_struct(
         [pa.record_batch([source], names=[SKETCH_STRUCT_FIELD])],
     )
     dataset.add_columns(reader)
-    dataset.alter_columns(
-        cast("Any", {"path": SKETCH_STRUCT_FIELD, "name": SKETCH_FULL_STRUCT_FIELD})
+    cast("_AlterColumnsDataset", dataset).alter_columns(
+        _ColumnRename(path=SKETCH_STRUCT_FIELD, name=SKETCH_FULL_STRUCT_FIELD)
     )
 
     _write_columns(
@@ -3610,8 +3614,8 @@ def test_add_embeddings_with_sketch_pool_selection_commits_pooled_field(
         [pa.record_batch([source], names=[SKETCH_STRUCT_FIELD])],
     )
     dataset.add_columns(reader)
-    dataset.alter_columns(
-        cast("Any", {"path": SKETCH_STRUCT_FIELD, "name": SKETCH_FULL_STRUCT_FIELD})
+    cast("_AlterColumnsDataset", dataset).alter_columns(
+        _ColumnRename(path=SKETCH_STRUCT_FIELD, name=SKETCH_FULL_STRUCT_FIELD)
     )
 
     add_embeddings(

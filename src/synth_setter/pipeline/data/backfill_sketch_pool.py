@@ -863,7 +863,11 @@ def _validate_resume_directory(config: SketchPoolBackfillConfig, cache_dir: Path
             raise ValueError(f"resume directory {resolved} overlaps local dataset {dataset_path}")
     if config.result is not None:
         result_path = config.result.expanduser().resolve()
-        if result_path == resolved or resolved in result_path.parents:
+        if (
+            result_path == resolved
+            or resolved in result_path.parents
+            or result_path in resolved.parents
+        ):
             raise ValueError(f"result path {result_path} is inside resume directory {resolved}")
     return resolved
 
@@ -1381,6 +1385,45 @@ def _validate_rollback_tag(
         )
 
 
+type _SketchChildLayout = int | tuple[tuple[int, ...], tuple[int, ...]]
+
+
+@dataclass(frozen=True)
+class _SketchChildSchema:
+    """Describe one nested sketch child's storage contract.
+
+    .. attribute :: layout
+
+        Fixed list width or tensor shape and permutation.
+
+    .. attribute :: value_type
+
+        Arrow scalar value type.
+    """
+
+    layout: _SketchChildLayout
+    value_type: str
+
+
+def _sketch_child_schema(child_type: pa.DataType) -> _SketchChildSchema | None:
+    """Normalize one Arrow child type for exact source-schema comparison.
+
+    :param child_type: Nested sketch child Arrow type.
+    :returns: Comparable layout and scalar type, or ``None`` when unsupported.
+    """
+    import pyarrow as pa
+
+    value_type = getattr(child_type, "value_type", None)
+    if pa.types.is_fixed_size_list(child_type):
+        return _SketchChildSchema(child_type.list_size, str(value_type))
+    tensor_shape = getattr(child_type, "shape", None)
+    if tensor_shape is None:
+        return None
+    permutation = getattr(child_type, "permutation", None)
+    layout = (tuple(tensor_shape), tuple(permutation or range(len(tensor_shape))))
+    return _SketchChildSchema(layout, str(value_type))
+
+
 def _validate_full_source_field(
     dataset: lance.LanceDataset,
     field_name: str,
@@ -1404,34 +1447,24 @@ def _validate_full_source_field(
     field = dataset.schema.field(field_name)
     if not pa.types.is_struct(field.type):
         raise ValueError(f"{field_name!r} must be a nested sketch struct")
-    expected_layouts = {
-        SKETCH_LOUDNESS_CHILD: SKETCH_FULL_FRAMES,
-        SKETCH_CENTROID_CHILD: SKETCH_FULL_FRAMES,
-        SKETCH_PITCH_CHILD: (
-            (SKETCH_PITCH_BINS, SKETCH_FULL_FRAMES),
-            (0, 1),
+    expected = {
+        SKETCH_LOUDNESS_CHILD: _SketchChildSchema(SKETCH_FULL_FRAMES, "float"),
+        SKETCH_CENTROID_CHILD: _SketchChildSchema(SKETCH_FULL_FRAMES, "float"),
+        SKETCH_PITCH_CHILD: _SketchChildSchema(
+            ((SKETCH_PITCH_BINS, SKETCH_FULL_FRAMES), (0, 1)), "float"
         ),
     }
-    actual_layouts = {}
     try:
-        for child_name in expected_layouts:
-            child_type = field.type.field(child_name).type
-            if pa.types.is_fixed_size_list(child_type):
-                actual_layouts[child_name] = child_type.list_size
-            else:
-                tensor_shape = getattr(child_type, "shape", None)
-                permutation = getattr(child_type, "permutation", None)
-                actual_layouts[child_name] = (
-                    (tuple(tensor_shape), tuple(permutation or range(len(tensor_shape))))
-                    if tensor_shape is not None
-                    else None
-                )
+        actual = {
+            child_name: _sketch_child_schema(field.type.field(child_name).type)
+            for child_name in expected
+        }
     except KeyError as exc:
         raise ValueError(f"{field_name!r} is missing sketch child {exc.args[0]!r}") from exc
-    if actual_layouts != expected_layouts:
+    if actual != expected:
         raise ValueError(
             f"{field_name!r} does not match the historical 401-frame schema: "
-            f"got {actual_layouts}, expected {expected_layouts}"
+            f"got {actual}, expected {expected}"
         )
 
 
@@ -1513,7 +1546,15 @@ def _prepare_source(
         ):
             raise ValueError("branch advanced before source rename publication")
         cast("_AlterColumnsDataset", latest).alter_columns(alteration)
-        return _open_dataset(lance_uri, storage_options, config.branch, None)
+        renamed = _open_dataset(lance_uri, storage_options, config.branch, None)
+        renamed_names = set(renamed.schema.names)
+        if (
+            renamed.version != dataset.version + 1
+            or SKETCH_FULL_STRUCT_FIELD not in renamed_names
+            or SKETCH_STRUCT_FIELD in renamed_names
+        ):
+            raise ValueError("branch advanced after source rename publication")
+        return renamed
 
     return _retry("rename_sketch_source", rename_or_recover)
 
