@@ -136,9 +136,9 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 
 
 def _compose_sketch_cfg_eval(cfg_train_sketch_lance: DictConfig) -> DictConfig:
-    """Compose the toy sketch-conditioned evaluation configuration.
+    """Compose the toy pooled-sketch evaluation configuration.
 
-    :param cfg_train_sketch_lance: Fixture providing paths and generated Lance splits.
+    :param cfg_train_sketch_lance: Fixture providing paths and pooled Lance splits.
     :returns: Evaluation config with sketch guidance disabled initially.
     """
     GlobalHydra.instance().clear()
@@ -208,7 +208,7 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
 ) -> None:
     """The eval entrypoint routes sketch CFG independently into test sampling.
 
-    :param cfg_train_sketch_lance: Fixture providing real m2l+sketch Lance splits.
+    :param cfg_train_sketch_lance: Fixture providing pooled-sketch Lance splits.
     """
     cfg = _compose_sketch_cfg_eval(cfg_train_sketch_lance)
     checkpoint_path = Path(cfg.paths.output_dir) / "sketch-cfg.ckpt"
@@ -237,6 +237,7 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
     assert sketch_disabled != sketch_guided
     assert objects["model"].sketch_tokens is not None
     assert objects["datamodule"].sketch_controls is not None
+    assert objects["datamodule"].sketch_controls.num_frames == 32
 
 
 def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:

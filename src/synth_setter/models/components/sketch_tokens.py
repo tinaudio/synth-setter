@@ -1,7 +1,6 @@
 """Zero-initialized sketch-control tokenizer for concat conditioning (#2612)."""
 
 import torch
-import torch.nn.functional as F
 from beartype import beartype
 from jaxtyping import Bool, Float, jaxtyped
 from torch import nn
@@ -13,6 +12,7 @@ from synth_setter.conditioning import (
     SKETCH_PITCH_SLICE,
 )
 from synth_setter.models.components.embed_pool import make_sin_pos_enc
+from synth_setter.sketch import pool_sketch_controls
 
 _CONTROL_CHANNELS = {
     "loudness": slice(SKETCH_LOUDNESS_ROW, SKETCH_LOUDNESS_ROW + 1),
@@ -21,13 +21,6 @@ _CONTROL_CHANNELS = {
 }
 # Drop-mask column order; each name keys one projection and one channel group.
 CONTROL_GROUPS = tuple(_CONTROL_CHANNELS)
-# Pooling covers every stored frame (point-sampling would skip sub-stride
-# transients); max for near-impulsive pitch activations, mean elsewhere.
-_POOLING = {
-    "loudness": F.adaptive_avg_pool1d,
-    "centroid": F.adaptive_avg_pool1d,
-    "pitch": F.adaptive_max_pool1d,
-}
 
 
 class SketchControlTokens(nn.Module):
@@ -87,11 +80,10 @@ class SketchControlTokens(nn.Module):
         :returns: Control tokens with the temporal encoding added.
         """
         keep_values = keep.to(controls.dtype)
-        num_tokens = self.positional_encoding.shape[1]
+        pooled = pool_sketch_controls(controls, self.positional_encoding.shape[1])
         tokens = self.unconditional(controls.shape[0])
         for group_index, group in enumerate(CONTROL_GROUPS):
-            channels = controls[:, _CONTROL_CHANNELS[group]]
+            channels = pooled[:, _CONTROL_CHANNELS[group]]
             channels = channels * keep_values[:, group_index, None, None]
-            resampled = _POOLING[group](channels, num_tokens)
-            tokens = tokens + self.projections[group](resampled.transpose(1, 2))
+            tokens = tokens + self.projections[group](channels.transpose(1, 2))
         return tokens

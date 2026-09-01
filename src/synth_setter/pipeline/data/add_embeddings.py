@@ -32,6 +32,7 @@ from einops import rearrange
 from jaxtyping import Float, jaxtyped
 
 from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
+from synth_setter.conditioning import SKETCH_STORAGE_FRAMES
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -342,7 +343,11 @@ def _sketch_artifact_identity(checkpoint: str) -> str:
     :returns: Versioned installed-package and checkpoint identity.
     """
     version = importlib.metadata.version("pesto-pitch")
-    return _versioned_artifact_identity("sketch", f"package:{version};checkpoint:{checkpoint}")
+    identity = (
+        f"package:{version};checkpoint:{checkpoint};"
+        f"storage:avgmax{SKETCH_STORAGE_FRAMES}"
+    )
+    return _versioned_artifact_identity("sketch", identity)
 
 
 def _ssondo_artifact_identity(checkpoint: str) -> str:
@@ -834,16 +839,19 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
 def _encode_sketch_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
 ) -> pa.Array:
-    """Encode one audio batch as the nested sketch-control struct column (#2707).
+    """Encode one audio batch as the pooled nested sketch-control struct (#2707).
 
     :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param encoder: Sketch extractor over the original audio batch.
-    :returns: Struct array with loudness/centroid/pitch children and the
-        frame-mean ``vec`` IVF companion.
+    :returns: Struct array with canonically pooled loudness/centroid/pitch
+        children and their frame-mean ``vec`` IVF companion.
     :raises ValueError: The encoder output is off the frame grid, non-finite,
         or outside the documented control bounds.
     """
+    import torch
+
+    from synth_setter.sketch import pool_sketch_controls
     from synth_setter.pipeline.data.lance_shard import sketch_struct_array
 
     audio = sources[AUDIO_FIELD]
@@ -862,7 +870,8 @@ def _encode_sketch_column(
             f"{SKETCH_STRUCT_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
             "and pitch rows in [0, 1]"
         )
-    return sketch_struct_array(controls)
+    pooled = pool_sketch_controls(torch.from_numpy(controls)).numpy()
+    return sketch_struct_array(pooled)
 
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
