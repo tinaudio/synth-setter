@@ -586,9 +586,10 @@ def materialize_lance_subset(  # noqa: DOC502
 ) -> Path:
     """Stream a projected source snapshot scan into ``dest_path``.
 
-    Peak memory is ~one batch; transferred bytes scale with the subset, not
-    the source. A txid pins the source snapshot when supplied; otherwise the
-    latest version at hydration time is used.
+    Scanner memory is bounded by the configured I/O buffer and read-ahead
+    batches; transferred bytes scale with the subset, not the source. A txid
+    pins the source snapshot when supplied; otherwise the latest version at
+    hydration time is used.
 
     :param source_uri: Source dataset — ``r2://`` URI (resolved via
         :func:`synth_setter.pipeline.r2_io.lance_target`) or local path.
@@ -597,7 +598,7 @@ def materialize_lance_subset(  # noqa: DOC502
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
-    :param batch_size: Scan batch size in rows — the streaming memory unit.
+    :param batch_size: Scan batch size in rows.
     :returns: ``dest_path``.
     :raises LookupError: ``txid`` matches no live source version.
     :raises RuntimeError: A transient source read exhausts the retry budget.

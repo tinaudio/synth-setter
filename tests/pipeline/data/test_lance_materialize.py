@@ -8,8 +8,8 @@ import shutil
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
 from pathlib import Path
+from threading import Barrier
 from typing import cast
 
 import lance
