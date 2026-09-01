@@ -36,6 +36,7 @@ from synth_setter.pipeline.data.backfill_sketch_pool import (
     _ColumnRename,
     _DispatchState,
     _ensure_canonical_index,
+    _FragmentReport,
     _FragmentTask,
     _load_reports,
     _parse_args,
@@ -59,10 +60,12 @@ from synth_setter.sketch import pool_sketch_controls
 
 def test_backfill_sketch_pool_candidate_real_lance_round_trip_is_exact(
     fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The public CLI must commit exact pooled controls and remain retry-safe.
 
     :param fake_r2_remote: Filesystem-backed real rclone remote root.
+    :param monkeypatch: Fixture rejecting recomputation of the persisted fragment.
     """
     rows = 256
     rng = np.random.default_rng(2980)
@@ -124,6 +127,17 @@ def test_backfill_sketch_pool_candidate_real_lance_round_trip_is_exact(
     )
     shutil.rmtree(resume_dir)
 
+    original_transform = _transform_fragment
+
+    def reject_recomputation(task: _FragmentTask) -> _FragmentReport:
+        if task.fragment_id == first_fragment:
+            raise AssertionError("shared fragment report was not reused")
+        return original_transform(task)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.backfill_sketch_pool._transform_fragment",
+        reject_recomputation,
+    )
     backfill_sketch_pool(config)
     dataset = lance.dataset(local_uri).checkout_version(("candidate", None))
     assert lance.dataset(local_uri).version == main_dataset.version
