@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788222385688,
+  "lastUpdate": 1788226895451,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -14442,6 +14442,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.023014843463897705,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e7559da31a5cc6c78e8da25e049abc853f894c44",
+          "message": "internal-feat(training): add per-layer slots to cached encoders (#2865)\n\n* internal-feat(training): add per-layer slots to cached encoders\n\nAST encoders already emit one conditioning slot per vector-field layer through\nn_conditioning_outputs, while EmbeddingPool and VectorProjection emitted a\nsingle shared vector. Both now take the same argument, so cached-embedding\nprofiles can supply layer-specific conditioning.\n\nThe default of 1 returns rank 2 and is bitwise identical to the previous pooled\npath, with unchanged parameter shapes and state-dict keys, so existing\ncheckpoints load unadapted and no migration shim is needed.\n\nNeither vector field changes. Both already repeat the time encoding across a\nslot axis and index z[:, i] per layer, and both already broadcast their single\ncfg_dropout_token across slots, which is the null arrangement every\ntrained-from-scratch AST run has used at eight slots.\n\n* internal-feat(training): retrigger PR title check\n\n* internal-fix(training): address cached slot review feedback\n\nIsolate slot tests from global RNG state, prove input dependence,\nand cover negative slot counts.\n\nExercise multi-slot CLAP and SAME conditioning through real train and\neval entrypoints. Clarify the slot-depth and typing contracts.\n\n* docs(training): distinguish layerwise encoder paths",
+          "timestamp": "2026-08-31T19:27:07-04:00",
+          "tree_id": "2f43c904ca08cba91f45d00c78ee6f9c8e450ea6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e7559da31a5cc6c78e8da25e049abc853f894c44"
+        },
+        "date": 1788226893216,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.6716766357421875,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.22541189333424,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.018285777419805527,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.021422922611236572,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4064996242523193,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.398857967999996,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.737668991088867,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.614189301822335,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03263907507061958,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.05806779861450195,
             "unit": "1-cos"
           },
           {
