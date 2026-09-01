@@ -21,6 +21,7 @@ from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
 )
+from synth_setter.sketch import pool_sketch_controls
 
 _BATCH = 2
 _D_MODEL = 16
@@ -211,6 +212,24 @@ class TestSketchControlTokens:
 
         torch.testing.assert_close(
             contribution[0, :, 0], torch.tensor(expected), rtol=0, atol=1e-6
+        )
+
+    def test_forward_stored_pool_matches_online_pooling(self) -> None:
+        """Persisting the canonical pool preserves the tokenizer output exactly."""
+        module = SketchControlTokens(d_model=_D_MODEL, num_control_tokens=32)
+        generator = torch.Generator().manual_seed(17)
+        with torch.no_grad():
+            for projection in module.projections.values():
+                linear = cast(torch.nn.Linear, projection)
+                linear.weight.copy_(torch.randn(linear.weight.shape, generator=generator))
+        controls = torch.rand(2, NUM_SKETCH_CONTROLS, 64, generator=generator)
+        controls[:, :NUM_SKETCH_TRACK_ROWS] = controls[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
+
+        torch.testing.assert_close(
+            module(pool_sketch_controls(controls), _keep_all()),
+            module(controls, _keep_all()),
+            rtol=0,
+            atol=0,
         )
 
     def test_forward_wrong_channel_count_raises_shape_error(self) -> None:

@@ -21,7 +21,11 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from synth_setter.conditioning import NUM_SKETCH_TRACK_ROWS, SKETCH_PITCH_BINS
+from synth_setter.conditioning import (
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_PITCH_BINS,
+    SKETCH_STORAGE_FRAMES,
+)
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
@@ -2638,8 +2642,12 @@ def _write_sketch_lance_root(dataset_root: Path) -> None:
 
     for seed, split in enumerate(("train", "val", "test")):
         rng = np.random.default_rng(seed)
-        pitch = rng.random((4, SKETCH_PITCH_BINS, 401)).astype(np.float32)
-        tracks = rng.uniform(-1.0, 1.0, (4, NUM_SKETCH_TRACK_ROWS, 401)).astype(np.float32)
+        pitch = rng.random((4, SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES)).astype(np.float32)
+        tracks = rng.uniform(
+            -1.0,
+            1.0,
+            (4, NUM_SKETCH_TRACK_ROWS, SKETCH_STORAGE_FRAMES),
+        ).astype(np.float32)
         write_lance_shard_with_sketch(
             dataset_root / f"{split}.lance",
             {

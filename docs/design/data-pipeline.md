@@ -1156,12 +1156,13 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 
 `sketch` is not a learned embedding: it extracts the Sketch2Sound-style
 loudness, spectral-centroid, and PESTO pitch tracks
-(`features/sketch_controls.py`) from `audio` on the mel frame grid and writes
-them as a `sketch` struct column (#2707) with `loudness`/`centroid`
-fixed-size-list children, a `pitch` fixed-shape-tensor child, and a
-frame-mean `vec` child indexed via its dotted path for contour-similarity
-search. The struct is an atomic write unit — refreshing one child means
-rewriting the whole column (requires Lance data storage 2.2). Its `IndexSpec`
+(`features/sketch_controls.py`) from `audio` on the mel frame grid, then stores
+32-frame model-ready controls in a `sketch` struct column (#2707). Loudness and
+centroid use adaptive average pooling; pitch uses adaptive maximum pooling and
+remains unthresholded. The `vec` child stores the pooled frame mean for
+contour-similarity search. The struct is an atomic write unit — refreshing
+one child means rewriting the whole column (requires Lance data storage 2.2).
+Its `IndexSpec`
 fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config

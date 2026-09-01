@@ -20,6 +20,7 @@ from synth_setter.features.sketch_controls import (
     sketch_num_frames,
     spectral_centroid_track,
 )
+from synth_setter.sketch import pool_sketch_controls
 from tests.helpers.run_if import RunIf
 
 _SAMPLE_RATE = 44100
@@ -53,6 +54,25 @@ def test_sketch_num_frames_one_second_matches_mel_grid() -> None:
     """Frame counts agree with the mel hop grid."""
     samples = int(_SAMPLE_RATE * _DURATION_S)
     assert sketch_num_frames(samples, _SAMPLE_RATE) == samples // mel_hop_length(_SAMPLE_RATE) + 1
+
+
+def test_pool_sketch_controls_uses_track_means_and_pitch_maxima() -> None:
+    """Canonical storage pooling preserves the declared reduction per control group."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 64)
+    controls[:, SKETCH_LOUDNESS_ROW, 1::2] = 1.0
+    controls[:, SKETCH_CENTROID_ROW, ::2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, 1::2] = 1.0
+
+    pooled = pool_sketch_controls(controls)
+
+    assert pooled.shape == (1, NUM_SKETCH_CONTROLS, 32)
+    torch.testing.assert_close(
+        pooled[0, SKETCH_LOUDNESS_ROW], torch.full((32,), 0.5), rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        pooled[0, SKETCH_CENTROID_ROW], torch.full((32,), 0.5), rtol=0, atol=0
+    )
+    torch.testing.assert_close(pooled[0, SKETCH_PITCH_SLICE.start], torch.ones(32), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("sample_rate", [22050, 44100])
