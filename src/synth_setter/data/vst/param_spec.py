@@ -2,20 +2,20 @@
 
 import math
 from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import Any, Generic, Literal, TypedDict, TypeVar
 
 import numpy as np
-
-if TYPE_CHECKING:
-    import torch
 
 # Synth values are renderer-native; semantic values are interpretable; encoded values use [0, 1].
 
 type ParameterValue = float | int | tuple[float, ...] | np.ndarray
 type ParameterValues = dict[str, ParameterValue]
 
+_ParameterValueT = TypeVar("_ParameterValueT")
+_MAX_EXACT_FLOAT32_INTEGER_SPAN = (1 << 23) - 1
 
-class Parameter:
+
+class Parameter(Generic[_ParameterValueT]):
     name: str
 
     def __init__(self, name: str) -> None:
@@ -24,13 +24,13 @@ class Parameter:
     def __len__(self) -> int:
         raise NotImplementedError
 
-    def sample(self, rng: np.random.Generator) -> Any:
+    def sample(self, rng: np.random.Generator) -> _ParameterValueT:
         raise NotImplementedError
 
-    def encode(self, raw_value: Any) -> np.ndarray:
+    def encode(self, raw_value: _ParameterValueT) -> np.ndarray:
         raise NotImplementedError
 
-    def decode(self, encoded: np.ndarray) -> Any:
+    def decode(self, encoded: np.ndarray) -> _ParameterValueT:
         raise NotImplementedError
 
     def encoded_names(self) -> tuple[str, ...]:
@@ -43,7 +43,7 @@ class Parameter:
         return tuple(f"{self.name}.{index}" for index in range(len(self)))
 
 
-class CategoricalParameter(Parameter):
+class CategoricalParameter(Parameter[float]):
     def __init__(
         self,
         name: str,
@@ -121,7 +121,7 @@ class CategoricalParameter(Parameter):
         return f'CategoricalParameter(name="{self.name}", values={self.values}, raw_values={self.raw_values})'
 
 
-class DiscreteLiteralParameter(Parameter):
+class DiscreteLiteralParameter(Parameter[int]):
     def __init__(
         self,
         name: str,
@@ -179,7 +179,7 @@ class DiscreteLiteralParameter(Parameter):
         return f'DiscreteParameter(name="{self.name}", min={self.min}, max={self.max})'
 
 
-class ContinuousParameter(Parameter):
+class ContinuousParameter(Parameter[float]):
     def __init__(
         self,
         name: str,
@@ -226,7 +226,7 @@ class ContinuousParameter(Parameter):
         return f'ContinuousParameter(name="{self.name}", min={self.min}, max={self.max})'
 
 
-class ContinuousArrayParameter(Parameter):
+class ContinuousArrayParameter(Parameter[np.ndarray]):
     """A fixed-shape continuous parameter encoded elementwise into ``[0, 1]``."""
 
     def __init__(
@@ -261,9 +261,20 @@ class ContinuousArrayParameter(Parameter):
         return math.prod(self.shape)
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
+        """Draw one native float64 array.
+
+        :param rng: Generator that owns the deterministic sample stream.
+        :returns: Values shaped ``self.shape`` within the configured native bounds.
+        """
         return rng.uniform(self.min, self.max, size=self.shape)
 
     def encode(self, raw_value: np.ndarray) -> np.ndarray:
+        """Encode a native array as a flat C-order float32 vector.
+
+        :param raw_value: Finite values shaped ``self.shape`` within the native bounds.
+        :returns: Values shaped ``(len(self),)`` in ``[0, 1]``.
+        :raises ValueError: The input has the wrong shape or invalid values.
+        """
         raw = np.asarray(raw_value)
         if raw.shape != self.shape:
             raise ValueError(f"{self.name} must have shape {self.shape}, got {raw.shape}")
@@ -275,12 +286,22 @@ class ContinuousArrayParameter(Parameter):
         return encoded.reshape(-1, order="C").astype(np.float32)
 
     def encoded_names(self) -> tuple[str, ...]:
+        """Return one C-order coordinate label per native element.
+
+        :returns: Labels ordered identically to :meth:`encode`.
+        """
         return tuple(
             f"{self.name}.{'.'.join(str(coordinate) for coordinate in index)}"
             for index in np.ndindex(self.shape)
         )
 
     def decode(self, encoded: np.ndarray) -> np.ndarray:
+        """Decode a flat unit-domain vector to its native float64 shape.
+
+        :param encoded: Finite values shaped ``(len(self),)`` in ``[0, 1]``.
+        :returns: Float64 values shaped ``self.shape``.
+        :raises ValueError: The input has the wrong shape or invalid values.
+        """
         values = np.asarray(encoded)
         expected_shape = (len(self),)
         if values.shape != expected_shape:
@@ -311,13 +332,27 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         :param shape: Non-empty native array shape with positive dimensions.
         :param min: Inclusive native lower bound.
         :param max: Inclusive native upper bound.
+        :raises ValueError: The integer range cannot round-trip through float32 encoding.
         """
         super().__init__(name=name, shape=shape, min=min, max=max)
+        if max - min > _MAX_EXACT_FLOAT32_INTEGER_SPAN:
+            raise ValueError("range is too wide for exact float32 encoding")
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
+        """Draw one native int64 array from the inclusive range.
+
+        :param rng: Generator that owns the deterministic sample stream.
+        :returns: Int64 values shaped ``self.shape``.
+        """
         return rng.integers(self.min, self.max + 1, size=self.shape, dtype=np.int64)
 
     def encode(self, raw_value: np.ndarray) -> np.ndarray:
+        """Encode native integers as a flat C-order float32 vector.
+
+        :param raw_value: Integral values shaped ``self.shape`` within the native bounds.
+        :returns: Values shaped ``(len(self),)`` in ``[0, 1]``.
+        :raises ValueError: The input has the wrong shape or invalid values.
+        """
         encoded = super().encode(raw_value)
         raw = np.asarray(raw_value)
         if not np.equal(raw, np.rint(raw)).all():
@@ -325,10 +360,15 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         return encoded
 
     def decode(self, encoded: np.ndarray) -> np.ndarray:
+        """Decode a flat unit-domain vector to its native int64 shape.
+
+        :param encoded: Finite values shaped ``(len(self),)`` in ``[0, 1]``.
+        :returns: Int64 values shaped ``self.shape``.
+        """
         return np.rint(super().decode(encoded)).astype(np.int64)
 
 
-class NoteDurationParameter(Parameter):
+class NoteDurationParameter(Parameter[tuple[float, ...]]):
     """A special parameter for sampling note durations."""
 
     def __init__(self, name: str, max_note_duration_seconds: float):
@@ -343,7 +383,7 @@ class NoteDurationParameter(Parameter):
 
         return start, end
 
-    def encode(self, raw_value: tuple[float, float]) -> np.ndarray:
+    def encode(self, raw_value: tuple[float, ...]) -> np.ndarray:
         return np.array(raw_value) / self.max_note_duration_seconds
 
     def decode(self, encoded: np.ndarray) -> tuple[float, ...]:
@@ -361,7 +401,9 @@ class NoteParams(TypedDict):  # noqa: DOC601, DOC603
 
 class ParamSpec:
     def __init__(
-        self, synth_params: list[Parameter], note_params: list[Parameter]
+        self,
+        synth_params: list[Parameter[Any]],
+        note_params: list[Parameter[Any]],
     ) -> None:
         self.synth_params = synth_params
         self.note_params = note_params
@@ -382,7 +424,7 @@ class ParamSpec:
     def __len__(self) -> int:
         return self.encoded_width
 
-    def encoded_slices(self) -> Iterator[tuple[Parameter, slice]]:
+    def encoded_slices(self) -> Iterator[tuple[Parameter[Any], slice]]:
         """Pair each parameter with the columns it occupies in an encoded row.
 
         Spans are contiguous from 0, ordered ``synth_params`` then ``note_params``
@@ -392,7 +434,7 @@ class ParamSpec:
         correspondence between :attr:`names` and encoded columns.
 
         :yields: One ``(parameter, span)`` pair per parameter, in encoding order.
-        :ytype: tuple[Parameter, slice]
+        :ytype: tuple[Parameter[Any], slice]
         """
         pointer = 0
         for param in (*self.synth_params, *self.note_params):
@@ -511,11 +553,10 @@ class ParamSpec:
 
         :returns: Coordinate labels in the same order as :meth:`encode`.
         """
-        return [
-            name
-            for parameter in (*self.synth_params, *self.note_params)
-            for name in parameter.encoded_names()
-        ]
+        names = []
+        for parameter in (*self.synth_params, *self.note_params):
+            names.extend(parameter.encoded_names())
+        return names
 
 
 def decode_model_output(
