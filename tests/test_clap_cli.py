@@ -1,5 +1,6 @@
 """Behavior tests for the Surge sketch-render CLI."""
 
+import csv
 import json
 import subprocess
 import sys
@@ -30,22 +31,101 @@ from synth_setter.cli.clap import (
     write_output_artifacts,
     write_run_manifest,
 )
-from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
+from synth_setter.data.vst.shapes import make_spectrogram
 from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS, SKETCH_PITCH_SLICE
 from synth_setter.resources import surge_simple_preset
 from synth_setter.synth_spec import SYNTHS, SynthName
 
 
-def test_help_exposes_two_required_audio_options() -> None:
-    """Help names the guide and reference inputs required by the public command."""
+def test_help_exposes_audio_and_cfg_options() -> None:
+    """Help names the audio inputs and independent guidance overrides."""
     result = CliRunner().invoke(main, ["--help"])
 
     assert result.exit_code == 0
     assert "--guide_audio FILE" in result.output
     assert "--ref_audio FILE" in result.output
+    assert "--content-cfg-strength FLOAT" in result.output
+    assert "--sketch-cfg-strength FLOAT" in result.output
     assert "Guide audio supplying sketch controls." in result.output
-    assert "Reference audio supplying mel/timbre conditioning." in result.output
+    assert "Reference audio supplying mel/timbre" in result.output
+    assert "conditioning." in result.output
     assert ":param" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--content-cfg-strength", "-1"),
+        ("--content-cfg-strength", "nan"),
+        ("--content-cfg-strength", "inf"),
+        ("--sketch-cfg-strength", "-1"),
+        ("--sketch-cfg-strength", "nan"),
+        ("--sketch-cfg-strength", "inf"),
+    ],
+)
+def test_cli_cfg_strength_invalid_value_rejected(option: str, value: str, tmp_path: Path) -> None:
+    """Guidance overrides reject negative and non-finite values.
+
+    :param option: Guidance option under test.
+    :param value: Invalid CLI value.
+    :param tmp_path: Holds validated audio path fixtures.
+    """
+    guide = tmp_path / "guide.wav"
+    reference = tmp_path / "reference.wav"
+    guide.write_bytes(b"validated path")
+    reference.write_bytes(b"validated path")
+
+    result = CliRunner().invoke(
+        main,
+        ["--guide_audio", str(guide), "--ref_audio", str(reference), option, value],
+    )
+
+    assert result.exit_code != 0
+    assert "finite and greater than or equal to zero" in result.output
+
+
+def test_cli_cfg_strength_zero_forwarded_to_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Zero remains a valid explicit override for both guidance branches.
+
+    :param monkeypatch: Captures the request boundary.
+    :param tmp_path: Holds validated audio path fixtures.
+    """
+    guide = tmp_path / "guide.wav"
+    reference = tmp_path / "reference.wav"
+    guide.write_bytes(b"validated path")
+    reference.write_bytes(b"validated path")
+    received: list[tuple[float | None, float | None]] = []
+
+    def capture_request(
+        _guide: Path,
+        _reference: Path,
+        content: float | None,
+        sketch: float | None,
+    ) -> tuple[Path, str]:
+        received.append((content, sketch))
+        return tmp_path / "output", "r2://result"
+
+    monkeypatch.setenv("SYNTH_SETTER_CLAP_HEADLESS", "1")
+    monkeypatch.setattr("synth_setter.cli.clap._run_request", capture_request)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--guide_audio",
+            str(guide),
+            "--ref_audio",
+            str(reference),
+            "--content-cfg-strength",
+            "0",
+            "--sketch-cfg-strength",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert received == [(0.0, 0.0)]
 
 
 def test_installed_console_script_exposes_public_help() -> None:
@@ -154,6 +234,7 @@ def test_write_output_artifacts_wrong_render_shape_raises(tmp_path: Path) -> Non
                 audio=np.zeros((2, 88200), dtype=np.float32),
                 synth_params={"filter_1_cutoff": 0.5},
                 note_params={"pitch": 60, "note_start_and_end": (0.05, 1.95)},
+                effective_note_window=(0.05, 1.95),
             ),
         )
 
@@ -184,6 +265,7 @@ def test_write_output_artifacts_invalid_rendered_audio_raises(
                 audio=rendered,
                 synth_params={"filter_1_cutoff": 0.5},
                 note_params={"pitch": 60, "note_start_and_end": (0.05, 3.95)},
+                effective_note_window=(0.05, 3.95),
             ),
         )
 
@@ -211,11 +293,12 @@ def test_output_artifacts_round_trip_through_real_rclone(
         RenderedPatch(
             audio=pred_audio,
             synth_params={"filter_1_cutoff": 0.5},
-            note_params={"pitch": 60, "note_start_and_end": (0.05, 3.95)},
+            note_params={"pitch": 60, "note_start_and_end": (3.95, 0.05)},
+            effective_note_window=(0.05, 3.95),
         ),
     )
     destination = "r2://intermediate-data/eval/synth-setter-clap/test-run"
-    write_run_manifest(output_dir, destination)
+    write_run_manifest(output_dir, destination, 2.0, 3.0)
     upload_output_artifacts(output_dir, destination)
 
     assert sorted(path.name for path in output_dir.iterdir()) == [
@@ -238,13 +321,18 @@ def test_output_artifacts_round_trip_through_real_rclone(
     assert round_tripped.shape == (2, 176400)
     assert np.isfinite(round_tripped).all()
     assert np.abs(round_tripped).max() > 0.05
-    assert "filter_1_cutoff" in (remote / "params.csv").read_text()
+    with (remote / "params.csv").open(newline="", encoding="utf-8") as stream:
+        rows = {row[""]: row for row in csv.DictReader(stream)}
+    assert rows["note_start_and_end"]["pred"] == "(3.95, 0.05)"
+    assert rows["note_start_and_end"]["pred_effective"] == "(0.05, 3.95)"
     manifest = json.loads((remote / "manifest.json").read_text())
     assert manifest["run_id"] == "local-output"
     assert manifest["r2_uri"] == destination
     assert manifest["checkpoint"]["sha256"]
     assert manifest["stats"]["sha256"]
     assert manifest["git_sha"]
+    assert manifest["content_cfg_strength"] == 2.0
+    assert manifest["sketch_cfg_strength"] == 3.0
 
 
 def _compatible_checkpoint() -> dict[str, object]:
@@ -294,7 +382,7 @@ def test_validate_stats_missing_std_raises(tmp_path: Path) -> None:
     stats_path = tmp_path / "stats.npz"
     np.savez(stats_path, mean=np.zeros((2, 128, 401)))
 
-    with pytest.raises(ValueError, match="exactly mean and std"):
+    with pytest.raises(KeyError, match="std"):
         _validate_stats(stats_path)
 
 
@@ -340,13 +428,86 @@ def test_predict_patch_finite_prediction_decodes_real_param_spec() -> None:
     )
     model = Mock()
     model.device = torch.device("cpu")
+    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
     model.predict_step.return_value = (torch.zeros(1, 92), None)
 
-    synth_params, note_params = _predict_patch(prepared, model)
+    synth_params, note_params, content_strength, sketch_strength = _predict_patch(
+        prepared, model, None, None
+    )
 
     assert len(synth_params) > 80
     assert 0 <= note_params["pitch"] <= 127
     assert len(note_params["note_start_and_end"]) == 2
+    assert content_strength == 4.0
+    assert sketch_strength == 4.0
+
+
+def test_predict_patch_zero_cfg_strengths_override_checkpoint() -> None:
+    """Explicit zero disables both guidance branches without falling back."""
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.zeros(2, 176400),
+        ref_audio=torch.zeros(2, 176400),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+    model = Mock()
+    model.device = torch.device("cpu")
+    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": 6.0}
+    model.predict_step.return_value = (torch.zeros(1, 92), None)
+
+    _, _, content_strength, sketch_strength = _predict_patch(prepared, model, 0.0, 0.0)
+
+    assert (content_strength, sketch_strength) == (0.0, 0.0)
+    assert model.hparams["test_cfg_strength"] == 0.0
+    assert model.hparams["test_sketch_cfg_strength"] == 0.0
+
+
+def test_predict_patch_saved_cfg_strengths_preserved() -> None:
+    """Omitted overrides preserve distinct checkpoint guidance strengths."""
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.zeros(2, 176400),
+        ref_audio=torch.zeros(2, 176400),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+    model = Mock()
+    model.device = torch.device("cpu")
+    model.hparams = {"test_cfg_strength": 2.5, "test_sketch_cfg_strength": 6.5}
+    model.predict_step.return_value = (torch.zeros(1, 92), None)
+
+    _, _, content_strength, sketch_strength = _predict_patch(prepared, model, None, None)
+
+    assert (content_strength, sketch_strength) == (2.5, 6.5)
+    assert model.hparams["test_cfg_strength"] == 2.5
+    assert model.hparams["test_sketch_cfg_strength"] == 6.5
+
+
+@pytest.mark.parametrize("legacy_sketch_strength", [None, pytest.param("missing", id="missing")])
+def test_predict_patch_legacy_sketch_strength_uses_effective_content(
+    legacy_sketch_strength: float | str | None,
+) -> None:
+    """A legacy absent sketch scale follows the effective content override.
+
+    :param legacy_sketch_strength: Legacy missing or null checkpoint representation.
+    """
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.zeros(2, 176400),
+        ref_audio=torch.zeros(2, 176400),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+    model = Mock()
+    model.device = torch.device("cpu")
+    model.hparams = {"test_cfg_strength": 4.0}
+    if legacy_sketch_strength is None:
+        model.hparams["test_sketch_cfg_strength"] = None
+    model.predict_step.return_value = (torch.zeros(1, 92), None)
+
+    _, _, content_strength, sketch_strength = _predict_patch(prepared, model, 1.5, None)
+
+    assert (content_strength, sketch_strength) == (1.5, 1.5)
+    assert model.hparams["test_cfg_strength"] == 1.5
+    assert model.hparams["test_sketch_cfg_strength"] == 1.5
 
 
 def test_predict_patch_wrong_shape_raises() -> None:
@@ -359,10 +520,11 @@ def test_predict_patch_wrong_shape_raises() -> None:
     )
     model = Mock()
     model.device = torch.device("cpu")
+    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
     model.predict_step.return_value = (torch.zeros(1, 91), None)
 
     with pytest.raises(ValueError, match="shape"):
-        _predict_patch(prepared, model)
+        _predict_patch(prepared, model, None, None)
 
 
 def test_render_patch_descending_note_interval_reaches_renderer_ordered(
@@ -387,27 +549,61 @@ def test_render_patch_descending_note_interval_reaches_renderer_ordered(
     )
 
     assert patch.audio.shape == (2, 176400)
-    assert patch.note_params["note_start_and_end"] == (0.8, 3.2)
+    assert patch.note_params["note_start_and_end"] == (3.2, 0.8)
+    assert patch.effective_note_window == (0.8, 3.2)
+    assert renderer.render.call_args.args[3] == (0.8, 3.2)
 
 
-def test_render_patch_zero_duration_note_raises(
+def test_render_patch_note_interval_outside_signal_clipped(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Equal decoded note endpoints fail before renderer construction.
+    """Decoded endpoints remain raw while rendering uses the clipped interval.
 
-    :param monkeypatch: Replaces the installed VST version boundary.
+    :param monkeypatch: Replaces the installed VST and renderer boundaries.
     :param tmp_path: Supplies a non-system plugin fixture path.
     """
     synth_version = SYNTHS[SynthName("surge_simple")].synth_version
     plugin_path = str(tmp_path / "Surge.vst3")
     monkeypatch.setattr("synth_setter.cli.clap.default_plugin_path", lambda: plugin_path)
     monkeypatch.setattr("synth_setter.cli.clap.extract_renderer_version", lambda _: synth_version)
+    renderer = Mock()
+    renderer.render.return_value = np.zeros((2, 176400), dtype=np.float32)
+    monkeypatch.setattr("synth_setter.cli.clap.make_audio_renderer", lambda _: renderer)
 
-    with pytest.raises(ValueError, match="positive duration"):
-        _render_patch(
-            {"filter_1_cutoff": 0.5},
-            {"pitch": 60, "note_start_and_end": (2.0, 2.0)},
-        )
+    patch = _render_patch(
+        {"filter_1_cutoff": 0.5},
+        {"pitch": 60, "note_start_and_end": (-1.0, 5.0)},
+    )
+
+    assert patch.note_params["note_start_and_end"] == (-1.0, 5.0)
+    assert patch.effective_note_window == (0.0, 4.0)
+    assert renderer.render.call_args.args[3] == (0.0, 4.0)
+
+
+def test_render_patch_degenerate_note_interval_expands_one_sample(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Equal decoded endpoints render through a one-sample effective interval.
+
+    :param monkeypatch: Replaces the installed VST and renderer boundaries.
+    :param tmp_path: Supplies a non-system plugin fixture path.
+    """
+    synth_version = SYNTHS[SynthName("surge_simple")].synth_version
+    plugin_path = str(tmp_path / "Surge.vst3")
+    monkeypatch.setattr("synth_setter.cli.clap.default_plugin_path", lambda: plugin_path)
+    monkeypatch.setattr("synth_setter.cli.clap.extract_renderer_version", lambda _: synth_version)
+    renderer = Mock()
+    renderer.render.return_value = np.zeros((2, 176400), dtype=np.float32)
+    monkeypatch.setattr("synth_setter.cli.clap.make_audio_renderer", lambda _: renderer)
+
+    patch = _render_patch(
+        {"filter_1_cutoff": 0.5},
+        {"pitch": 60, "note_start_and_end": (2.0, 2.0)},
+    )
+
+    assert patch.note_params["note_start_and_end"] == (2.0, 2.0)
+    assert patch.effective_note_window == pytest.approx((2.0, 2.0 + 1.0 / 44100))
+    assert renderer.render.call_args.args[3] == pytest.approx((2.0, 2.0 + 1.0 / 44100))
 
 
 def test_headless_wrapper_nonexecutable_script_runs_through_shell(
@@ -423,10 +619,27 @@ def test_headless_wrapper_nonexecutable_script_runs_through_shell(
     wrapper.chmod(0o644)
     monkeypatch.setattr("synth_setter.cli.clap.vst_headless_wrapper", lambda: wrapper)
     monkeypatch.setattr("synth_setter.cli.clap.as_file", nullcontext)
-    guide = tmp_path / "guide.wav"
-    reference = tmp_path / "reference.wav"
 
-    _run_under_headless_wrapper(guide, reference)
+    _run_under_headless_wrapper(tmp_path / "guide.wav", tmp_path / "reference.wav", None, None)
+
+
+def test_headless_wrapper_cfg_strengths_forwarded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Both guidance overrides survive Linux headless re-entry.
+
+    :param monkeypatch: Captures the subprocess command.
+    :param tmp_path: Holds audio path fixtures.
+    """
+    monkeypatch.setattr("synth_setter.cli.clap.vst_headless_wrapper", lambda: tmp_path / "wrapper")
+    monkeypatch.setattr("synth_setter.cli.clap.as_file", nullcontext)
+    run = Mock()
+    monkeypatch.setattr("synth_setter.cli.clap.subprocess.run", run)
+
+    _run_under_headless_wrapper(tmp_path / "guide.wav", tmp_path / "reference.wav", 2.0, 3.0)
+
+    args = run.call_args.args[0]
+    assert args[-4:] == ["--content-cfg-strength", "2.0", "--sketch-cfg-strength", "3.0"]
 
 
 def test_packaged_surge_simple_preset_is_nonempty() -> None:
@@ -489,6 +702,8 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
         lambda *_: (
             {"filter_1_cutoff": 0.5},
             {"pitch": 60, "note_start_and_end": (0.05, 3.95)},
+            2.0,
+            3.0,
         ),
     )
     monkeypatch.setattr(
@@ -497,10 +712,11 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
             audio=np.full((2, 176400), 0.0625, dtype=np.float32),
             synth_params=synth_params,
             note_params=note_params,
+            effective_note_window=note_params["note_start_and_end"],
         ),
     )
 
-    output_dir, destination = _run_request(guide_path, ref_path)
+    output_dir, destination = _run_request(guide_path, ref_path, 2.0, 3.0)
 
     assert output_dir.parent == output_root
     assert output_dir.is_dir()
@@ -511,6 +727,9 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     assert rendered.shape == (2, 176400)
     assert np.isfinite(rendered).all()
     assert np.abs(rendered).max() > 0.05
+    manifest = json.loads((remote / "manifest.json").read_text())
+    assert manifest["content_cfg_strength"] == 2.0
+    assert manifest["sketch_cfg_strength"] == 3.0
 
 
 def test_validate_checkpoint_compatibility_accepts_pinned_legacy_sketch_metadata() -> None:

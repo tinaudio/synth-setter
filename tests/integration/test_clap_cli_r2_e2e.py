@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import shutil
 import subprocess
 import sys
@@ -90,9 +91,9 @@ def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: 
         *_write_inputs(reference_root, reference_frequency=660.0), stats_path
     )
 
-    base_params, _ = _predict_patch(base, model)
-    guide_params, _ = _predict_patch(guide_changed, model)
-    reference_params, _ = _predict_patch(reference_changed, model)
+    base_params, _, _, _ = _predict_patch(base, model, 2.0, 3.0)
+    guide_params, _, _, _ = _predict_patch(guide_changed, model, 2.0, 3.0)
+    reference_params, _, _, _ = _predict_patch(reference_changed, model, 2.0, 3.0)
 
     assert guide_params != base_params
     assert reference_params != base_params
@@ -101,7 +102,7 @@ def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: 
 def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
     tmp_path: Path,
 ) -> None:
-    """The public two-flag command produces finite stereo audio after R2 download.
+    """The public audio command produces finite stereo audio after R2 download.
 
     :param tmp_path: Holds real input WAVs and downloaded output artifacts.
     """
@@ -117,6 +118,10 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
             str(guide_path),
             "--ref_audio",
             str(ref_path),
+            "--content-cfg-strength",
+            "2",
+            "--sketch-cfg-strength",
+            "3",
         ],
         cwd=_CHECKOUT_ROOT,
         capture_output=True,
@@ -159,7 +164,10 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
         with (downloaded / "params.csv").open(newline="") as stream:
             rows = list(csv.DictReader(stream))
         assert rows
-        assert {"pred", "target"} <= set(rows[0])
+        assert {"pred", "pred_effective", "target"} <= set(rows[0])
+        manifest = json.loads((downloaded / "manifest.json").read_text())
+        assert manifest["content_cfg_strength"] == 2.0
+        assert manifest["sketch_cfg_strength"] == 3.0
     finally:
         prefix = output_uri.removeprefix("r2://intermediate-data/") + "/"
         r2_io.purge_prefix("intermediate-data", prefix)

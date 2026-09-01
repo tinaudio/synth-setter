@@ -3,8 +3,18 @@
 Use the installed CLI to infer one Surge Simple patch from two audio files:
 
 ```bash
-synth-setter-clap --guide_audio path/to/guide.wav --ref_audio path/to/reference.wav
+synth-setter-clap \
+  --guide_audio path/to/guide.wav \
+  --ref_audio path/to/reference.wav \
+  --content-cfg-strength 2 \
+  --sketch-cfg-strength 3
 ```
+
+`--content-cfg-strength` controls reference-mel guidance in audio mode and text-prompt
+guidance in text mode. `--sketch-cfg-strength` controls sketch guidance and is rejected
+in text mode. Both accept finite nonnegative values, including zero. Omit either flag to
+use its checkpoint value; legacy checkpoints without a sketch value use the effective
+content strength.
 
 `ref_audio` supplies the model's normalized mel/timbre conditioning. `guide_audio`
 supplies loudness, spectral-centroid, and pitch sketch controls. Both inputs accept

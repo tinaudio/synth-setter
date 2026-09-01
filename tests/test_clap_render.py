@@ -6,6 +6,7 @@ import csv
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 from uuid import uuid4
 
 import numpy as np
@@ -93,7 +94,7 @@ def test_cli_audio_mode_no_upload_exits_before_inference(tmp_path: Path) -> None
     assert "--no-upload is not supported with guide/reference audio" in result.output
 
 
-def test_cli_audio_mode_dispatches_to_sketch_renderer(
+def test_cli_audio_mode_dispatches_cfg_strengths_to_sketch_renderer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The installed public command routes both audio inputs to sketch rendering.
@@ -106,18 +107,57 @@ def test_cli_audio_mode_dispatches_to_sketch_renderer(
     guide.write_bytes(b"validated path")
     reference.write_bytes(b"validated path")
     destination = "r2://intermediate-data/eval/synth-setter-clap/test-run"
+    received: list[tuple[float | None, float | None]] = []
+
+    def capture_request(
+        _guide: Path,
+        _reference: Path,
+        content: float | None,
+        sketch: float | None,
+    ) -> tuple[Path, str]:
+        received.append((content, sketch))
+        return tmp_path / "output", destination
+
     monkeypatch.setenv("SYNTH_SETTER_CLAP_HEADLESS", "1")
-    monkeypatch.setattr(
-        "synth_setter.cli.clap._run_request", lambda *_: (tmp_path / "output", destination)
-    )
+    monkeypatch.setattr("synth_setter.cli.clap._run_request", capture_request)
 
     result = CliRunner().invoke(
         main,
-        ["--guide_audio", str(guide), "--ref_audio", str(reference)],
+        [
+            "--guide_audio",
+            str(guide),
+            "--ref_audio",
+            str(reference),
+            "--content-cfg-strength",
+            "2",
+            "--sketch-cfg-strength",
+            "3",
+        ],
     )
 
     assert result.exit_code == 0
     assert result.output.strip() == destination
+    assert received == [(2.0, 3.0)]
+
+
+def test_cli_text_mode_sketch_cfg_strength_rejected_before_inference() -> None:
+    """Text conditioning cannot accept a sketch-only guidance override."""
+    result = CliRunner().invoke(main, ["soft bell", "--sketch-cfg-strength", "2"])
+
+    assert result.exit_code != 0
+    assert "--sketch-cfg-strength is only supported with guide/reference audio" in result.output
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+def test_cli_text_content_cfg_strength_invalid_value_rejected(value: str) -> None:
+    """Text guidance rejects negative and non-finite values.
+
+    :param value: Invalid CLI value.
+    """
+    result = CliRunner().invoke(main, ["soft bell", "--content-cfg-strength", value])
+
+    assert result.exit_code != 0
+    assert "finite and greater than or equal to zero" in result.output
 
 
 def test_cli_text_and_audio_modes_together_exit_before_inference(tmp_path: Path) -> None:
@@ -269,6 +309,45 @@ def test_write_summary_csv_persists_named_statistics(tmp_path: Path) -> None:
         assert list(csv.DictReader(stream)) == [{"count": "2", "mean": "0.25"}]
 
 
+def test_predict_patch_omitted_content_strength_preserves_checkpoint_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Text prediction retains the checkpoint content guidance when omitted.
+
+    :param monkeypatch: Replaces checkpoint loading with a lightweight model.
+    :param tmp_path: Supplies a checkpoint path fixture.
+    """
+    model = Mock()
+    model.hparams = {
+        "conditioning": {"column": "clap", "input_shape": [512]},
+        "num_params": 92,
+        "sketch_controls": None,
+        "test_cfg_strength": 5.5,
+        "test_sketch_cfg_strength": None,
+    }
+    model.to.return_value = model
+    model.eval.return_value = model
+    model.predict_step.return_value = (torch.zeros(1, 92), None)
+    monkeypatch.setattr(
+        clap_render.VSTFlowMatchingModule,
+        "load_from_checkpoint",
+        lambda *_args, **_kwargs: model,
+    )
+
+    _, effective_content_strength = clap_render._predict_patch(
+        torch.zeros(1, 512),
+        tmp_path / "model.ckpt",
+        clap_render._load_settings().render,
+        torch.device("cpu"),
+        0,
+        None,
+    )
+
+    assert effective_content_strength == 5.5
+    assert model.hparams["test_cfg_strength"] == 5.5
+    assert model.hparams["test_sketch_cfg_strength"] == 5.5
+
+
 def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -315,6 +394,40 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
     assert output.is_file()
 
 
+def test_predict_patch_zero_content_cfg_strength_overrides_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit zero reaches text inference without checkpoint fallback.
+
+    :param tmp_path: Holds the checkpoint path fixture.
+    :param monkeypatch: Replaces checkpoint loading and model validation.
+    """
+    model = Mock()
+    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
+    model.to.return_value = model
+    model.eval.return_value = model
+    model.predict_step.return_value = (torch.zeros(1, 92), None)
+    monkeypatch.setattr(
+        clap_render.VSTFlowMatchingModule,
+        "load_from_checkpoint",
+        lambda *_args, **_kwargs: model,
+    )
+    monkeypatch.setattr(clap_render, "_validate_inverse_model", lambda *_: None)
+
+    _, effective_strength = clap_render._predict_patch(
+        torch.zeros(1, 512),
+        tmp_path / "model.ckpt",
+        clap_render._load_settings().render,
+        torch.device("cpu"),
+        0,
+        0.0,
+    )
+
+    assert effective_strength == 0.0
+    assert model.hparams["test_cfg_strength"] == 0.0
+
+
 def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -337,7 +450,7 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     monkeypatch.setattr(
         clap_render,
         "_predict_patch",
-        lambda *_: torch.zeros(1, 92),
+        lambda *_: (torch.zeros(1, 92), 0.0),
     )
     monkeypatch.setattr(
         clap_render,
@@ -362,6 +475,8 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
             str(output),
             "--device",
             "cpu",
+            "--content-cfg-strength",
+            "0",
             "--no-upload",
         ],
     )
@@ -370,6 +485,7 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     with output.with_suffix(".csv").open(newline="", encoding="utf-8") as stream:
         row = next(csv.DictReader(stream))
     assert row["prompt"] == "soft bell"
+    assert float(row["content_cfg_strength"]) == 0.0
     assert float(row["cosine_distance"]) == pytest.approx(1.0)
     assert row["wav_r2_uri"] == ""
     assert row["csv_r2_uri"] == ""

@@ -25,6 +25,10 @@ from synth_setter.clap import (
     clap_checkpoint_sha256,
     resolve_clap_checkpoint,
 )
+from synth_setter.cli._cfg_strength import (
+    apply_cfg_strength_overrides,
+    validate_cfg_strength,
+)
 from synth_setter.conditioning import resolve_embedding_conditioning
 from synth_setter.data.vst.core import write_wav
 from synth_setter.data.vst.param_spec import decode_model_output
@@ -46,6 +50,7 @@ _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
     "wav_r2_uri",
     "csv_r2_uri",
     "seed",
+    "content_cfg_strength",
     "text_embedding_norm",
     "audio_embedding_norm",
     "cosine_similarity",
@@ -465,7 +470,8 @@ def _predict_patch(
     render: RenderConfig,
     device: torch.device,
     seed: int,
-) -> torch.Tensor:
+    content_cfg_strength: float | None,
+) -> tuple[torch.Tensor, float]:
     """Sample one model-space Surge parameter row reproducibly.
 
     :param embedding: CLAP condition shaped ``(1, 512)``.
@@ -473,7 +479,8 @@ def _predict_patch(
     :param render: Renderer identity used for compatibility validation.
     :param device: Torch inference device.
     :param seed: Flow noise seed.
-    :returns: CPU prediction shaped ``(1, len(param_spec))``.
+    :param content_cfg_strength: Optional text-guidance override.
+    :returns: CPU prediction and effective content-guidance strength.
     """
     model = VSTFlowMatchingModule.load_from_checkpoint(
         checkpoint,
@@ -481,11 +488,12 @@ def _predict_patch(
         weights_only=False,
     )
     _validate_inverse_model(model, render)
+    effective_content, _ = apply_cfg_strength_overrides(model.hparams, content_cfg_strength, None)
     model.to(device).eval()
     torch.manual_seed(seed)
     with torch.inference_mode():
         prediction, _ = model.predict_step({"conditioning": embedding}, 0)
-    return prediction.detach().cpu()
+    return prediction.detach().cpu(), effective_content
 
 
 def _workspace_render_config(render: RenderConfig) -> RenderConfig:
@@ -570,12 +578,14 @@ def _dispatch_audio_mode(
     audio_paths: tuple[Path | None, Path | None],
     text_prompt: str | None,
     unsupported_options: tuple[tuple[str, object], ...],
+    cfg_strengths: tuple[float | None, float | None],
 ) -> bool:
     """Validate and dispatch guide/reference audio mode when selected.
 
     :param audio_paths: Optional guide and reference audio paths.
     :param text_prompt: Optional text-mode positional argument.
     :param unsupported_options: Text-only option names and parsed values.
+    :param cfg_strengths: Optional content and sketch guidance overrides.
     :returns: Whether audio mode was selected and dispatched.
     :raises click.ClickException: Audio mode inputs or options are invalid.
     """
@@ -593,8 +603,14 @@ def _dispatch_audio_mode(
             raise click.ClickException(f"{option} is not supported with guide/reference audio")
     from synth_setter.cli.clap import main as guide_audio_main
 
+    args = ["--guide_audio", str(guide_audio), "--ref_audio", str(ref_audio)]
+    content_cfg_strength, sketch_cfg_strength = cfg_strengths
+    if content_cfg_strength is not None:
+        args.extend(["--content-cfg-strength", str(content_cfg_strength)])
+    if sketch_cfg_strength is not None:
+        args.extend(["--sketch-cfg-strength", str(sketch_cfg_strength)])
     guide_audio_main.main(
-        args=["--guide_audio", str(guide_audio), "--ref_audio", str(ref_audio)],
+        args=args,
         prog_name="synth-setter-clap",
         standalone_mode=False,
     )
@@ -632,6 +648,18 @@ def _dispatch_audio_mode(
     help="Inference device [default: auto].",
 )
 @click.option("--seed", type=int, default=None, help="Flow sampling seed [default: 0].")
+@click.option(
+    "--content-cfg-strength",
+    type=float,
+    callback=validate_cfg_strength,
+    help="Content guidance override; omitted uses the checkpoint value.",
+)
+@click.option(
+    "--sketch-cfg-strength",
+    type=float,
+    callback=validate_cfg_strength,
+    help="Sketch guidance override for guide/reference audio mode.",
+)
 @click.option("--upload/--no-upload", default=True, show_default=True)
 def main(
     text_prompt: str | None,
@@ -643,6 +671,8 @@ def main(
     upload_uri: str | None,
     device: _DeviceSetting | None,
     seed: int | None,
+    content_cfg_strength: float | None,
+    sketch_cfg_strength: float | None,
     upload: bool,
 ) -> None:
     """Render a text prompt or guide/reference audio as a Surge WAV.
@@ -658,6 +688,8 @@ def main(
     :param upload_uri: Optional exact R2 object destination.
     :param device: Optional torch-device override.
     :param seed: Optional flow sampling seed.
+    :param content_cfg_strength: Optional text or reference-mel guidance override.
+    :param sketch_cfg_strength: Optional sketch-control guidance override.
     :param upload: Whether to upload the rendered WAV.
     :raises click.ClickException: CLI arguments are invalid.
     :raises RuntimeError: The default CLAP checkpoint fails identity validation.
@@ -671,9 +703,18 @@ def main(
         ("--seed", seed),
         ("--no-upload", not upload),
     )
-    if _dispatch_audio_mode((guide_audio, ref_audio), text_prompt, unsupported_audio_options):
+    if _dispatch_audio_mode(
+        (guide_audio, ref_audio),
+        text_prompt,
+        unsupported_audio_options,
+        (content_cfg_strength, sketch_cfg_strength),
+    ):
         return
 
+    if sketch_cfg_strength is not None:
+        raise click.ClickException(
+            "--sketch-cfg-strength is only supported with guide/reference audio"
+        )
     if text_prompt is None:
         raise click.ClickException("provide TEXT_PROMPT or guide/reference audio")
     prompt = text_prompt.strip()
@@ -713,12 +754,13 @@ def main(
     expected_inverse_sha256 = settings.inverse_checkpoint_sha256 if checkpoint is None else None
     inverse_checkpoint = resolve_inverse_checkpoint(inverse_source, expected_inverse_sha256)
     render = _workspace_render_config(settings.render)
-    prediction = _predict_patch(
+    prediction, effective_content_strength = _predict_patch(
         embedding,
         inverse_checkpoint,
         render,
         selected_device,
         selected_seed,
+        content_cfg_strength,
     )
     click.echo("Rendering Surge patch...", err=True)
     audio = _render_wav(prediction, render, output_path)
@@ -737,6 +779,7 @@ def main(
             "wav_r2_uri": wav_destination,
             "csv_r2_uri": csv_destination,
             "seed": selected_seed,
+            "content_cfg_strength": effective_content_strength,
             "text_embedding_norm": comparison.text_embedding_norm,
             "audio_embedding_norm": comparison.audio_embedding_norm,
             "cosine_similarity": comparison.cosine_similarity,

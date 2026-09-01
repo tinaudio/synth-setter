@@ -20,11 +20,19 @@ import numpy as np
 import torch
 from pedalboard.io import AudioFile
 
+from synth_setter.cli._cfg_strength import (
+    apply_cfg_strength_overrides,
+    validate_cfg_strength,
+)
 from synth_setter.data.vst.core import extract_renderer_version
-from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 from synth_setter.data.vst.param_spec import NoteParams, decode_model_output
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, param_specs
-from synth_setter.evaluation.predict_vst_audio import params_to_csv
+from synth_setter.data.vst.shapes import make_spectrogram
+from synth_setter.data.vst_datamodule import load_mel_statistics
+from synth_setter.evaluation.predict_vst_audio import (
+    _canonicalize_prediction_note_window,
+    params_to_csv,
+)
 from synth_setter.features.sketch_controls import SKETCH_PITCH_SLICE, extract_sketch_controls
 from synth_setter.model_cache import cache_r2_file
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -123,12 +131,17 @@ class RenderedPatch:
 
     .. attribute :: note_params
 
-        Decoded MIDI pitch and note interval.
+        Raw decoded MIDI pitch and note interval.
+
+    .. attribute :: effective_note_window
+
+        Canonical note interval used by the renderer.
     """
 
     audio: np.ndarray
     synth_params: dict[str, float]
     note_params: NoteParams
+    effective_note_window: tuple[float, float]
 
 
 def _fit_audio_to_model_grid(audio: np.ndarray) -> torch.Tensor:
@@ -170,8 +183,8 @@ def _normalize_reference_mel(ref_audio: torch.Tensor, stats_file: Path) -> torch
     :returns: Float32 normalized mel shaped ``(2, 128, 401)``.
     :raises ValueError: Normalization produces a non-finite value.
     """
-    with np.load(stats_file) as stats:
-        mel = (make_spectrogram(ref_audio.numpy(), _SAMPLE_RATE) - stats["mean"]) / stats["std"]
+    mean, std = load_mel_statistics(stats_file)
+    mel = (make_spectrogram(ref_audio.numpy(), _SAMPLE_RATE) - mean) / std
     if not np.isfinite(mel).all():
         raise ValueError("reference mel normalization produced non-finite values")
     return torch.from_numpy(mel).to(dtype=torch.float32)
@@ -236,14 +249,22 @@ def write_output_artifacts(
         patch.note_params,
         str(output_dir / "params.csv"),
         param_specs[_SURGE_PARAM_SPEC_NAME],
+        pred_effective_note_window=patch.effective_note_window,
     )
 
 
-def write_run_manifest(output_dir: Path, destination_uri: str) -> None:
+def write_run_manifest(
+    output_dir: Path,
+    destination_uri: str,
+    content_cfg_strength: float,
+    sketch_cfg_strength: float,
+) -> None:
     """Record immutable model, feature, render, and destination provenance.
 
     :param output_dir: Retained local output directory.
     :param destination_uri: R2 prefix receiving the run artifacts.
+    :param content_cfg_strength: Effective reference-mel guidance strength.
+    :param sketch_cfg_strength: Effective sketch-control guidance strength.
     """
     synth_identity = SYNTHS[SynthName(_SURGE_PARAM_SPEC_NAME)]
     manifest = {
@@ -252,6 +273,8 @@ def write_run_manifest(output_dir: Path, destination_uri: str) -> None:
         "r2_uri": destination_uri,
         "code_version": version("synth-setter"),
         "git_sha": resolve_git_sha(),
+        "content_cfg_strength": content_cfg_strength,
+        "sketch_cfg_strength": sketch_cfg_strength,
         "checkpoint": {"uri": DEFAULT_CHECKPOINT_URI, "sha256": _CHECKPOINT_SHA256},
         "stats": {"uri": DEFAULT_STATS_URI, "sha256": _STATS_SHA256},
         "render": {
@@ -357,16 +380,10 @@ def _validate_stats(stats_file: Path) -> None:
     :param stats_file: Candidate ``stats.npz`` artifact.
     :raises ValueError: Mean/std shapes or values differ from the model input contract.
     """
-    with np.load(stats_file) as stats:
-        if set(stats.files) != {"mean", "std"}:
-            raise ValueError("stats.npz must contain exactly mean and std arrays")
-        mean = stats["mean"]
-        std = stats["std"]
+    mean, std = load_mel_statistics(stats_file)
     expected_shape = (_CHANNELS, 128, 401)
     if mean.shape != expected_shape or std.shape != expected_shape:
         raise ValueError(f"stats mean/std must both have shape {expected_shape}")
-    if not np.isfinite(mean).all() or not np.isfinite(std).all() or np.any(std <= 0):
-        raise ValueError("stats mean/std must be finite and std must be positive")
 
 
 def _load_model(checkpoint_path: Path, device: torch.device) -> VSTFlowMatchingModule:
@@ -394,15 +411,23 @@ def _load_model(checkpoint_path: Path, device: torch.device) -> VSTFlowMatchingM
 
 
 def _predict_patch(
-    prepared: PreparedAudioInputs, model: VSTFlowMatchingModule
-) -> tuple[dict[str, float], NoteParams]:
+    prepared: PreparedAudioInputs,
+    model: VSTFlowMatchingModule,
+    content_cfg_strength: float | None,
+    sketch_cfg_strength: float | None,
+) -> tuple[dict[str, float], NoteParams, float, float]:
     """Infer and decode one Surge patch through the model's predict step.
 
     :param prepared: Reference mel and guide controls.
     :param model: Compatible flow model in eval mode.
-    :returns: Renderer-native synth and note parameters.
+    :param content_cfg_strength: Optional reference-mel guidance override.
+    :param sketch_cfg_strength: Optional sketch-control guidance override.
+    :returns: Renderer parameters followed by effective content and sketch strengths.
     :raises ValueError: The prediction is non-finite or has the wrong shape.
     """
+    effective_content, effective_sketch = apply_cfg_strength_overrides(
+        model.hparams, content_cfg_strength, sketch_cfg_strength
+    )
     batch = {
         "mel": prepared.ref_mel.unsqueeze(0).to(model.device),
         "sketch_ctrl": prepared.sketch_controls.unsqueeze(0).to(model.device),
@@ -418,9 +443,10 @@ def _predict_patch(
             f"model prediction must be finite with shape {expected_shape}, "
             f"got {tuple(prediction.shape)}"
         )
-    return decode_model_output(
+    synth_params, note_params = decode_model_output(
         prediction[0].detach().cpu().float().numpy(), param_specs[_SURGE_PARAM_SPEC_NAME]
     )
+    return synth_params, note_params, effective_content, effective_sketch
 
 
 def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> RenderedPatch:
@@ -431,11 +457,15 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
     :returns: Rendered stereo patch and its parameters.
     :raises ValueError: The installed Surge version differs from the pinned contract.
     """
-    note_start, note_end = sorted(note_params["note_start_and_end"])
-    if note_start >= note_end:
-        raise ValueError("decoded note interval must have positive duration")
-    ordered_note_params = note_params.copy()
-    ordered_note_params["note_start_and_end"] = (note_start, note_end)
+    decoded_note_window = note_params["note_start_and_end"]
+    raw_note_window = (float(decoded_note_window[0]), float(decoded_note_window[1]))
+    raw_note_params = note_params.copy()
+    raw_note_params["note_start_and_end"] = raw_note_window
+    effective_note_window = _canonicalize_prediction_note_window(
+        raw_note_window,
+        signal_duration_seconds=_DURATION_SECONDS,
+        sample_rate=_SAMPLE_RATE,
+    )
 
     plugin_path = str(Path(default_plugin_path()).expanduser().resolve())
     synth_identity = SYNTHS[SynthName(_SURGE_PARAM_SPEC_NAME)]
@@ -468,12 +498,17 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
         renderer = make_audio_renderer(render_config)
         audio = renderer.render(
             synth_params,
-            int(ordered_note_params["pitch"]),
+            int(raw_note_params["pitch"]),
             render_config.velocity,
-            ordered_note_params["note_start_and_end"],
+            effective_note_window,
             warmup=True,
         )
-    return RenderedPatch(audio=audio, synth_params=synth_params, note_params=ordered_note_params)
+    return RenderedPatch(
+        audio=audio,
+        synth_params=synth_params,
+        note_params=raw_note_params,
+        effective_note_window=effective_note_window,
+    )
 
 
 def _artifact_roots() -> tuple[Path, str]:
@@ -489,11 +524,18 @@ def _artifact_roots() -> tuple[Path, str]:
     return output_root, upload_root
 
 
-def _run_request(guide_audio: Path, ref_audio: Path) -> tuple[Path, str]:
+def _run_request(
+    guide_audio: Path,
+    ref_audio: Path,
+    content_cfg_strength: float | None,
+    sketch_cfg_strength: float | None,
+) -> tuple[Path, str]:
     """Run one complete local render and R2 upload.
 
     :param guide_audio: Audio supplying sketch controls.
     :param ref_audio: Audio supplying mel conditioning.
+    :param content_cfg_strength: Optional reference-mel guidance override.
+    :param sketch_cfg_strength: Optional sketch-control guidance override.
     :returns: Retained local output path and uploaded R2 prefix.
     """
     r2_io.ensure_r2_env_loaded()
@@ -504,7 +546,9 @@ def _run_request(guide_audio: Path, ref_audio: Path) -> tuple[Path, str]:
     prepared = prepare_audio_inputs(guide_audio, ref_audio, stats_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _load_model(checkpoint_path, device)
-    synth_params, note_params = _predict_patch(prepared, model)
+    synth_params, note_params, effective_content, effective_sketch = _predict_patch(
+        prepared, model, content_cfg_strength, sketch_cfg_strength
+    )
     patch = _render_patch(synth_params, note_params)
 
     run_id = f"{make_wandb_run_id('synth-setter-clap')}-{uuid4().hex[:8]}"
@@ -512,32 +556,44 @@ def _run_request(guide_audio: Path, ref_audio: Path) -> tuple[Path, str]:
     output_dir = output_root / run_id
     destination_uri = f"{upload_root}/{run_id}"
     write_output_artifacts(output_dir, prepared, patch)
-    write_run_manifest(output_dir, destination_uri)
+    write_run_manifest(output_dir, destination_uri, effective_content, effective_sketch)
     resolved_output = output_dir.resolve()
     click.echo(f"Local output: {resolved_output}", err=True)
     upload_output_artifacts(output_dir, destination_uri)
     return resolved_output, destination_uri
 
 
-def _run_under_headless_wrapper(guide_audio: Path, ref_audio: Path) -> None:
+def _run_under_headless_wrapper(
+    guide_audio: Path,
+    ref_audio: Path,
+    content_cfg_strength: float | None,
+    sketch_cfg_strength: float | None,
+) -> None:
     """Re-enter the public module under the packaged Linux X11 wrapper.
 
     :param guide_audio: Audio supplying sketch controls.
     :param ref_audio: Audio supplying mel conditioning.
+    :param content_cfg_strength: Optional reference-mel guidance override.
+    :param sketch_cfg_strength: Optional sketch-control guidance override.
     """
     with as_file(vst_headless_wrapper()) as wrapper:
+        command = [
+            "/bin/bash",
+            str(wrapper),
+            sys.executable,
+            "-m",
+            "synth_setter.cli.clap",
+            "--guide_audio",
+            str(guide_audio.resolve()),
+            "--ref_audio",
+            str(ref_audio.resolve()),
+        ]
+        if content_cfg_strength is not None:
+            command.extend(["--content-cfg-strength", str(content_cfg_strength)])
+        if sketch_cfg_strength is not None:
+            command.extend(["--sketch-cfg-strength", str(sketch_cfg_strength)])
         subprocess.run(  # noqa: S603 — fixed package entrypoint and validated paths
-            [
-                "/bin/bash",
-                str(wrapper),
-                sys.executable,
-                "-m",
-                "synth_setter.cli.clap",
-                "--guide_audio",
-                str(guide_audio.resolve()),
-                "--ref_audio",
-                str(ref_audio.resolve()),
-            ],
+            command,
             check=True,
             env={**os.environ, _HEADLESS_ENV: "1"},
             timeout=_HEADLESS_TIMEOUT_SECONDS,
@@ -557,17 +613,40 @@ def _run_under_headless_wrapper(guide_audio: Path, ref_audio: Path) -> None:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Reference audio supplying mel/timbre conditioning.",
 )
-def main(guide_audio: Path, ref_audio: Path) -> None:
+@click.option(
+    "--content-cfg-strength",
+    type=float,
+    callback=validate_cfg_strength,
+    help="Reference-mel guidance override; omitted uses the checkpoint value.",
+)
+@click.option(
+    "--sketch-cfg-strength",
+    type=float,
+    callback=validate_cfg_strength,
+    help="Sketch-control guidance override; omitted uses the checkpoint value.",
+)
+def main(
+    guide_audio: Path,
+    ref_audio: Path,
+    content_cfg_strength: float | None,
+    sketch_cfg_strength: float | None,
+) -> None:
     """Infer, render, retain, and upload one Surge patch.
 
     :param guide_audio: Audio supplying sketch controls.
     :param ref_audio: Audio supplying mel/timbre conditioning.
+    :param content_cfg_strength: Optional reference-mel guidance override.
+    :param sketch_cfg_strength: Optional sketch-control guidance override.
     """
     if sys.platform == "linux" and os.environ.get(_HEADLESS_ENV) != "1":
-        _run_under_headless_wrapper(guide_audio, ref_audio)
+        _run_under_headless_wrapper(
+            guide_audio, ref_audio, content_cfg_strength, sketch_cfg_strength
+        )
         return
 
-    _, destination_uri = _run_request(guide_audio, ref_audio)
+    _, destination_uri = _run_request(
+        guide_audio, ref_audio, content_cfg_strength, sketch_cfg_strength
+    )
     click.echo(destination_uri)
 
 
