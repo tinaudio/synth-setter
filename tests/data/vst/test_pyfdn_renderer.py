@@ -111,6 +111,19 @@ def test_pyfdn_effect_impulse_produces_delayed_wet_audio() -> None:
     assert np.max(np.abs(effected[0, 800:])) > 0.01
 
 
+def test_pyfdn_effect_longer_decay_retains_more_late_tail_energy() -> None:
+    """Decay seconds controls late impulse-response energy directionally."""
+    impulse = np.zeros((1, _NUM_SAMPLES), dtype=np.float32)
+    impulse[0, 0] = 1.0
+    short_decay = _render(_effect_renderer(impulse, decay_seconds=0.05))
+    long_decay = _render(_effect_renderer(impulse, decay_seconds=1.5))
+
+    short_tail_energy = float(np.sum(np.square(short_decay[0, 2500:])))
+    long_tail_energy = float(np.sum(np.square(long_decay[0, 2500:])))
+
+    assert long_tail_energy > short_tail_energy
+
+
 def test_pyfdn_effect_repeated_render_resets_feedback_state() -> None:
     """Rows are deterministic because every render starts with empty delay/filter state."""
     impulse = np.zeros((1, _NUM_SAMPLES), dtype=np.float32)
