@@ -1538,8 +1538,12 @@ def _write_columns(
     )
 
     def add_or_recover() -> None:
-        if all(column in dataset.schema.names for column in output_columns):
+        nonlocal dataset
+        latest = _open_lance_dataset(config.lance_uri)
+        if all(column in latest.schema.names for column in output_columns):
+            dataset = latest
             return
+        dataset = latest
         dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
 
     retry_lance_io("add_embedding_columns", add_or_recover)
@@ -1731,7 +1735,10 @@ def _index_config_matches(
     :returns: Whether every persisted index segment has the requested policy.
     """
     os.environ.setdefault("LANCE_INCLUDE_VECTOR_CENTROIDS", "false")
-    stats = dataset.index_statistics(index_name)
+    stats = retry_lance_io(
+        "inspect_embedding_index_statistics",
+        lambda: dataset.index_statistics(index_name),
+    )
     segments = stats.get("indices")
     if not isinstance(segments, list) or not segments:
         return False
@@ -1766,13 +1773,16 @@ def _matching_index_exists(
     :returns: Whether a matching index targets the column.
     :raises ValueError: An index exists with incompatible search semantics.
     """
-    rows = dataset.count_rows()
+    rows = retry_lance_io("count_existing_embedding_index_rows", dataset.count_rows)
     num_partitions = (
         max(1, round(rows**0.5)) if config.num_partitions is None else config.num_partitions
     )
     num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
     metric = config.metric
-    indices = cast("list[dict[str, object]]", dataset.list_indices())
+    indices = cast(
+        "list[dict[str, object]]",
+        retry_lance_io("list_embedding_indices", dataset.list_indices),
+    )
     column_indices = [entry for entry in indices if entry.get("fields") == [column]]
     for entry in column_indices:
         index_name = entry.get("name")
@@ -1828,8 +1838,10 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     solo = [spec for spec in pending if not spec.co_resident]
     if co_resident:
         _write_columns(dataset, co_resident, sample_rate, config)
+        dataset = _open_lance_dataset(config.lance_uri)
     for spec in solo:
         _write_columns(dataset, [spec], sample_rate, config)
+        dataset = _open_lance_dataset(config.lance_uri)
 
     if config.build_index:
         for spec in specs:

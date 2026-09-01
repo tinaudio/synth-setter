@@ -1338,20 +1338,38 @@ def _create_rollback_tag(
         raise ValueError(f"rollback tag {rollback_tag!r} was not published")
 
 
+@dataclass(frozen=True)
+class _RollbackContext:
+    """Bind rollback validation to one target and expected source.
+
+    .. attribute :: lance_uri
+
+        Lance-openable dataset target.
+
+    .. attribute :: storage_options
+
+        Object-store credentials, when required.
+
+    .. attribute :: expected_version
+
+        Exact source version before rename, when known.
+    """
+
+    lance_uri: str
+    storage_options: dict[str, str] | None
+    expected_version: int | None
+
+
 def _validate_rollback_tag(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
-    lance_uri: str,
-    storage_options: dict[str, str] | None,
-    expected_version: int | None,
+    context: _RollbackContext,
 ) -> None:
     """Validate an existing immutable pre-migration rollback snapshot.
 
     :param dataset: Current branch snapshot.
     :param config: Required tag and branch identity.
-    :param lance_uri: Lance-openable dataset target.
-    :param storage_options: Object-store credentials, when required.
-    :param expected_version: Exact source version before rename, when known.
+    :param context: Bound target and expected pre-rename source version.
     :raises ValueError: The tag is missing or identifies the wrong branch, version, or schema.
     """
     from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
@@ -1366,14 +1384,17 @@ def _validate_rollback_tag(
             f"rollback tag {rollback_tag!r} identifies branch {existing['branch']!r}, "
             f"not {config.branch!r}"
         )
-    if expected_version is not None and existing["version"] != expected_version:
+    if (
+        context.expected_version is not None
+        and existing["version"] != context.expected_version
+    ):
         raise ValueError(
             f"rollback tag {rollback_tag!r} identifies version {existing['version']}, "
-            f"not source version {expected_version}"
+            f"not source version {context.expected_version}"
         )
     tagged = _open_dataset(
-        lance_uri,
-        storage_options,
+        context.lance_uri,
+        context.storage_options,
         config.branch,
         existing["version"],
     )
@@ -1505,9 +1526,11 @@ def _validate_and_tag_source(
     _validate_rollback_tag(
         dataset,
         config,
-        lance_uri,
-        storage_options,
-        expected_version=dataset.version if has_canonical else dataset.version - 1,
+        _RollbackContext(
+            lance_uri=lance_uri,
+            storage_options=storage_options,
+            expected_version=dataset.version if has_canonical else dataset.version - 1,
+        ),
     )
     return has_canonical
 
@@ -1580,9 +1603,11 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
             _validate_rollback_tag(
                 dataset,
                 config,
-                lance_uri,
-                storage_options,
-                expected_version=None,
+                _RollbackContext(
+                    lance_uri=lance_uri,
+                    storage_options=storage_options,
+                    expected_version=None,
+                ),
             )
             source_version = dataset.version
             dataset, index_built = _ensure_canonical_index(dataset, config)
@@ -1631,9 +1656,9 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
 
 
 def _parse_args() -> SketchPoolBackfillConfig:
-    """Parse the distributed migration CLI.
+    """Construct strict migration configuration from process arguments.
 
-    :returns: Strict backfill configuration.
+    :returns: Validated process configuration.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lance-uri", required=True)

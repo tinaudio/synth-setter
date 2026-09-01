@@ -48,6 +48,7 @@ from synth_setter.pipeline.data.backfill_sketch_pool import (
     _ResultState,
     _resume_directory,
     _retry,
+    _RollbackContext,
     _transform_fragment,
     _validate_rollback_tag,
     backfill_sketch_pool,
@@ -563,7 +564,11 @@ def test_ensure_rollback_tag_without_existing_tag_rejects_resume(tmp_path: Path)
     )
 
     with pytest.raises(ValueError, match="must already exist"):
-        _validate_rollback_tag(dataset, config, str(uri), None, expected_version=None)
+        _validate_rollback_tag(
+            dataset,
+            config,
+            _RollbackContext(str(uri), None, None),
+        )
 
 
 def test_validate_rollback_tag_after_source_advance_rejects_old_version(tmp_path: Path) -> None:
@@ -590,9 +595,7 @@ def test_validate_rollback_tag_after_source_advance_rejects_old_version(tmp_path
         _validate_rollback_tag(
             dataset,
             config,
-            str(uri),
-            None,
-            expected_version=dataset.version,
+            _RollbackContext(str(uri), None, dataset.version),
         )
 
 
@@ -612,7 +615,11 @@ def test_ensure_rollback_tag_with_post_rename_snapshot_rejects_tag(tmp_path: Pat
     )
 
     with pytest.raises(ValueError, match="canonical-only pre-migration schema"):
-        _validate_rollback_tag(dataset, config, str(uri), None, expected_version=None)
+        _validate_rollback_tag(
+            dataset,
+            config,
+            _RollbackContext(str(uri), None, None),
+        )
 
 
 def test_transform_fragment_with_missing_id_rejects_task(tmp_path: Path) -> None:
