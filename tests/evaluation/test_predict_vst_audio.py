@@ -9,6 +9,7 @@ file shape and finiteness.
 
 from __future__ import annotations
 
+import ast
 import os
 import sys
 
@@ -31,6 +32,7 @@ from synth_setter.data.vst import param_specs  # noqa: E402
 from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
+    _canonicalize_prediction_note_window,
     main,
     make_spectrogram,
     params_to_csv,
@@ -167,6 +169,28 @@ def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> N
     assert bool(df["target"].isna().all())
 
 
+def test_canonicalize_prediction_note_window_clips_start_to_signal() -> None:
+    """A negative predicted start clips to the beginning of the signal."""
+    window = _canonicalize_prediction_note_window(
+        (-0.5, 0.05),
+        signal_duration_seconds=0.1,
+        sample_rate=8000,
+    )
+
+    assert window == pytest.approx((0.0, 0.05))
+
+
+def test_canonicalize_prediction_note_window_clips_end_to_signal() -> None:
+    """A predicted end beyond the render clips to the signal duration."""
+    window = _canonicalize_prediction_note_window(
+        (0.02, 2.0),
+        signal_duration_seconds=0.1,
+        sample_rate=8000,
+    )
+
+    assert window == pytest.approx((0.02, 0.1))
+
+
 # ---------- main (process CLI) ----------
 
 
@@ -237,6 +261,28 @@ def _write_batch(
 
     if with_target_params:
         torch.save(torch.from_numpy(encoded.copy()), pred_dir / f"target-params-{index}.pt")
+
+
+def _set_model_note_window(
+    path: Path,
+    *,
+    row: int,
+    window: tuple[float, float],
+) -> None:
+    """Replace one staged row's model-space note-window coordinates.
+
+    :param path: Staged prediction or target tensor.
+    :param row: Tensor row to update.
+    :param window: Model-space start and end coordinates.
+    """
+    note_span = next(
+        span
+        for parameter, span in _PARAM_SPEC.encoded_slices()
+        if parameter.name == "note_start_and_end"
+    )
+    staged = torch.load(path, weights_only=True)
+    staged[row, note_span] = torch.tensor(window)
+    torch.save(staged, path)
 
 
 @pytest.fixture()
@@ -323,6 +369,115 @@ def test_main_no_params_writes_pred_target_csv_and_spectrogram(
         sample_dir = out_dir / f"sample_{j}"
         for name in ("pred.wav", "target.wav", "spec.png", "params.csv"):
             assert (sample_dir / name).is_file(), f"missing {name} under {sample_dir}"
+
+
+def test_main_reversed_prediction_window_renders_canonical_interval(
+    pred_dir: Path,
+    out_dir: Path,
+    fake_renderer: MagicMock,
+) -> None:
+    """A reversed model-predicted note window renders in chronological order.
+
+    :param pred_dir: Directory for staged prediction tensors.
+    :param out_dir: Destination for rendered artifacts.
+    :param fake_renderer: Renderer enforcing the production note-window contract.
+    """
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
+    _set_model_note_window(pred_dir / "pred-0.pt", row=0, window=(-0.96, -0.99))
+
+    def render_valid_window(
+        _params: dict[str, float],
+        _pitch: int,
+        _velocity: int,
+        note_window: tuple[float, float],
+        *,
+        warmup: bool,
+    ) -> np.ndarray:
+        del warmup
+        start, end = note_window
+        if not 0 <= start < end <= _render_config().signal_duration_seconds:
+            raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
+        return _fake_render()
+
+    fake_renderer.render.side_effect = render_valid_window
+
+    result = _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+
+    assert result.exit_code == 0
+    assert (out_dir / "sample_0" / "pred.wav").is_file()
+    start, end = fake_renderer.render.call_args.args[3]
+    assert 0 <= start < end <= _render_config().signal_duration_seconds
+    params = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    raw_start, raw_end = ast.literal_eval(params.loc["note_start_and_end", "pred"])
+    assert raw_start > raw_end
+
+
+def test_main_equal_prediction_window_renders_one_sample_interval(
+    pred_dir: Path,
+    out_dir: Path,
+    fake_renderer: MagicMock,
+) -> None:
+    """Equal predicted endpoints at the signal boundary expand inward by one sample.
+
+    :param pred_dir: Directory for staged prediction tensors.
+    :param out_dir: Destination for rendered artifacts.
+    :param fake_renderer: Renderer recording the canonical note window.
+    """
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
+    _set_model_note_window(pred_dir / "pred-0.pt", row=0, window=(-0.95, -0.95))
+
+    _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+
+    rendered_window = fake_renderer.render.call_args.args[3]
+    assert rendered_window == pytest.approx((0.099875, 0.1), abs=1e-6)
+    assert rendered_window[0] < rendered_window[1]
+
+
+def test_main_valid_target_window_remains_unchanged(
+    pred_dir: Path,
+    out_dir: Path,
+    fake_renderer: MagicMock,
+) -> None:
+    """Prediction canonicalization does not alter a valid target note window.
+
+    :param pred_dir: Directory for staged prediction tensors.
+    :param out_dir: Destination for rendered artifacts.
+    :param fake_renderer: Renderer recording prediction and target windows.
+    """
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=True)
+    _set_model_note_window(pred_dir / "pred-0.pt", row=0, window=(-0.96, -0.99))
+    _set_model_note_window(pred_dir / "target-params-0.pt", row=0, window=(-0.995, -0.955))
+
+    _invoke_main(pred_dir, out_dir, ("--rerender-target", "--skip-spectrogram"))
+
+    rendered_windows = [call.args[3] for call in fake_renderer.render.call_args_list]
+    assert rendered_windows[0] == pytest.approx((0.02, 0.08), abs=1e-6)
+    assert rendered_windows[1] == pytest.approx((0.01, 0.09), abs=1e-6)
+
+
+def test_main_nonfinite_prediction_window_skips_only_malformed_sample(
+    pred_dir: Path,
+    out_dir: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-finite prediction is diagnosed without discarding later samples.
+
+    :param pred_dir: Directory for staged prediction tensors.
+    :param out_dir: Destination for rendered artifacts.
+    :param caplog: Captured log records used to verify the row diagnostic.
+    """
+    _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
+    pred_path = pred_dir / "pred-0.pt"
+    _set_model_note_window(pred_path, row=0, window=(float("nan"), -0.95))
+    _set_model_note_window(pred_path, row=1, window=(-0.96, -0.99))
+
+    result = _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+
+    assert result.exit_code == 0
+    assert not (out_dir / "sample_0").exists()
+    assert (out_dir / "sample_1" / "pred.wav").is_file()
+    assert "Skipping prediction sample 0" in caplog.text
+    assert "must be finite" in caplog.text
 
 
 def test_main_skip_spectrogram_suppresses_png(pred_dir: Path, out_dir: Path) -> None:

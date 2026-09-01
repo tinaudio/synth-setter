@@ -1,5 +1,6 @@
 """Render predicted-parameter and target audio from a trained model for offline evaluation."""
 
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -21,6 +22,8 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 
 RenderFn = Callable[[dict[str, float], int, tuple[float, float]], np.ndarray]
+
+logger = logging.getLogger(__name__)
 
 
 class _PredictAudioCliArgs(RenderConfig, BaseSettings):
@@ -152,6 +155,34 @@ def params_to_csv(
     df.to_csv(save_path)
 
 
+def _canonicalize_prediction_note_window(
+    note_window: tuple[float, float],
+    *,
+    signal_duration_seconds: float,
+    sample_rate: int,
+) -> tuple[float, float]:
+    """Return a finite chronological prediction window accepted by renderers.
+
+    :param note_window: Model-predicted note endpoints in seconds.
+    :param signal_duration_seconds: Maximum renderable endpoint in seconds.
+    :param sample_rate: Render sample rate in Hz.
+    :returns: Clipped chronological endpoints separated by at least one available sample.
+    :raises ValueError: Either predicted endpoint is non-finite.
+    """
+    start, end = sorted(float(value) for value in note_window)
+    if not np.isfinite([start, end]).all():
+        raise ValueError(f"predicted note window must be finite, got {note_window!r}")
+
+    start = min(max(start, 0.0), signal_duration_seconds)
+    end = min(max(end, 0.0), signal_duration_seconds)
+    minimum_duration = min(1.0 / sample_rate, signal_duration_seconds)
+    if end - start >= minimum_duration:
+        return start, end
+    if start + minimum_duration <= signal_duration_seconds:
+        return start, start + minimum_duration
+    return signal_duration_seconds - minimum_duration, signal_duration_seconds
+
+
 def _make_render_fn(args: _PredictAudioCliArgs, renderer: AudioRenderer) -> RenderFn:
     """Apply capture-time GUI warm-up cadence to one renderer session.
 
@@ -242,16 +273,27 @@ def _render_prediction_artifacts(
         # 5. iterate over its internal rows and render the audio
         for j in trange(pred_params.shape[0]):
             file_idx = current_offset + j
-            sample_dir = os.path.join(output_dir, f"sample_{file_idx}")
-            os.makedirs(sample_dir, exist_ok=True)
-
             row_params = pred_params[j].float().numpy()
             synth_params, note_params = decode_model_output(row_params, spec)
+            note_params["note_start_and_end"] = tuple(
+                float(value) for value in note_params["note_start_and_end"]
+            )
+            try:
+                render_note_window = _canonicalize_prediction_note_window(
+                    note_params["note_start_and_end"],
+                    signal_duration_seconds=args.signal_duration_seconds,
+                    sample_rate=args.sample_rate,
+                )
+            except ValueError as error:
+                logger.warning("Skipping prediction sample %d: %s", file_idx, error)
+                continue
 
+            sample_dir = os.path.join(output_dir, f"sample_{file_idx}")
+            os.makedirs(sample_dir, exist_ok=True)
             pred_audio = render(
                 synth_params,
                 int(note_params["pitch"]),
-                note_params["note_start_and_end"],
+                render_note_window,
             )
 
             target_synth_params: dict[str, float] | None = None
