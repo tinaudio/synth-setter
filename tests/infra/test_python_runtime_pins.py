@@ -112,6 +112,23 @@ def test_dawdreamer_dependency_excludes_unsupported_worker_targets(
     )
 
 
+def test_dawdreamer_dependency_pins_faust_contract_version(project_root: Path) -> None:
+    """Dependency resolution preserves the checked-in Faust UI identities.
+
+    :param project_root: Repository root fixture.
+    """
+    with (project_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    dependency = next(
+        dependency
+        for dependency in pyproject["dependency-groups"]["audio"]
+        if dependency.startswith("dawdreamer")
+    )
+
+    assert str(Requirement(dependency).specifier) == "==0.8.3"
+
+
 def test_pyright_targets_python_312(project_root: Path) -> None:
     """Static analysis uses the same Python version as the runtime floor.
 
