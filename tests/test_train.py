@@ -1168,6 +1168,7 @@ def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     :param cfg_train_sketch_lance: Composed pooled-sketch training config over
         generated m2l+sketch Lance splits.
     """
+    assert cfg_train_sketch_lance.run_name == "flow1k_prelim_sketch"
     with open_dict(cfg_train_sketch_lance):
         cfg_train_sketch_lance.model.validation_sketch_cfg_strength = 0.0
         cfg_train_sketch_lance.model.test_sketch_cfg_strength = 0.0

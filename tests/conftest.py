@@ -2679,11 +2679,10 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
+                "experiment=surge/flow_sketch_prelim",
                 "datamodule=surge_lance",
                 "synth=surge_4",
-                "model=vst_flow",
                 "conditioning=m2l",
-                "sketch=on",
                 "trainer=cpu",
             ],
         )
@@ -2699,13 +2698,17 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
             # Not a loop bound under fast_dev_run — the scheduler resolves
             # ${trainer.max_steps}, which trainer/cpu.yaml leaves undefined.
             cfg.trainer.max_steps = 1
+            cfg.trainer.min_steps = 1
+            cfg.training.val_audio_probe = False
             cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.download_dataset_root_uri = None
             cfg.datamodule.batch_size = 2
             cfg.datamodule.num_workers = 0
             cfg.datamodule.persistent_workers = False
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.validation_sample_steps = 2
+            cfg.model.test_sample_steps = 2
             cfg.model.vector_field.num_layers = 1
             cfg.model.vector_field.d_model = 32
             cfg.model.vector_field.d_ff = 32
