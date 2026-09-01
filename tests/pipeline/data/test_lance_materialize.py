@@ -85,11 +85,12 @@ def test_materialize_lance_subset_uses_throughput_tuned_scan_and_write(
 
     materialize_lance_subset(source, destination, txid=txid, columns=("a",))
 
-    assert scanner_calls[0]["batch_size"] == 1024
-    assert scanner_calls[0]["io_buffer_size"] == 4 * 1024**3
-    assert scanner_calls[0]["fragment_readahead"] == 16
-    assert writer_calls[0]["max_rows_per_group"] == 2048
-    assert writer_calls[0]["max_bytes_per_file"] == 64 * 1024**3
+    assert scanner_calls[0]["batch_size"] == 8192
+    assert scanner_calls[0]["io_buffer_size"] == 32 * 1024**3
+    assert scanner_calls[0]["fragment_readahead"] == 128
+    assert scanner_calls[0]["batch_readahead"] == 8
+    assert writer_calls[0]["max_rows_per_group"] == 4096
+    assert writer_calls[0]["max_bytes_per_file"] == 256 * 1024**3
     assert lance.dataset(str(destination)).count_rows() == 3
 
 
