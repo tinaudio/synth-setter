@@ -7,4 +7,5 @@ resources:
       RTX3090: 1
       RTX4090: 1
     use_spot: false
+    memory: 128+
     disk_size: 750

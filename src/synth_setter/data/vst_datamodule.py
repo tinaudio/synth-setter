@@ -23,7 +23,11 @@ from synth_setter.conditioning import (
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import materialize_splits, subset_dirname
+from synth_setter.pipeline.data.lance_materialize import (
+    MaterializationProfile,
+    materialize_splits,
+    subset_dirname,
+)
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 _MATERIALIZE_SPLITS = ("train", "val", "test")
@@ -255,6 +259,10 @@ class _MaterializeConfig(BaseModel):
     .. attribute :: download_dataset_row_limit
 
         First-N row cap per split, or ``None``.
+
+    .. attribute :: materialization_profile
+
+        Scanner and writer resource profile.
     """
 
     model_config = ConfigDict(strict=True, frozen=True)
@@ -262,6 +270,7 @@ class _MaterializeConfig(BaseModel):
     download_dataset_root_uri: str | None
     download_dataset_txids: dict[str, str] | None
     download_dataset_row_limit: PositiveInt | None
+    materialization_profile: MaterializationProfile
 
     @model_validator(mode="after")
     def validate_consistency(self) -> Self:
@@ -323,6 +332,7 @@ class VSTDataModule(LightningDataModule):
         param_spec_name: ParamSpecName,
         download_dataset_txids: dict[str, str] | None = None,
         download_dataset_row_limit: int | None = None,
+        materialization_profile: MaterializationProfile = "safe",
     ) -> None:
         """Store configuration shared by concrete VST datamodules.
 
@@ -348,6 +358,7 @@ class VSTDataModule(LightningDataModule):
             source snapshots. Each split has independent transaction history.
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
+        :param materialization_profile: Scanner and writer resource profile.
         :raises ValueError: If the materialization settings are inconsistent —
             fail at construction, never silently hydrate the wrong data.
         """
@@ -359,6 +370,7 @@ class VSTDataModule(LightningDataModule):
             ),
             download_dataset_row_limit=download_dataset_row_limit,
             download_dataset_root_uri=download_dataset_root_uri,
+            materialization_profile=materialization_profile,
         )
         super().__init__()
         configured_root = Path(dataset_root)
@@ -378,6 +390,7 @@ class VSTDataModule(LightningDataModule):
         self.param_spec_name = param_spec_name
         self.download_dataset_txids = materialize_config.download_dataset_txids
         self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
+        self.materialization_profile = materialize_config.materialization_profile
         predict_split = self._predict_split(predict_file, configured_root)
         self.projection = self._derive_projection(predict_split)
         self.dataset_root = self._resolve_dataset_root(configured_root, self.projection)
@@ -487,6 +500,7 @@ class VSTDataModule(LightningDataModule):
             projection=self.projection,
             row_limit=self.download_dataset_row_limit,
             shard_suffix=self.shard_suffix,
+            materialization_profile=self.materialization_profile,
         )
 
 

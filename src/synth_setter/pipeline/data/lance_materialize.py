@@ -14,7 +14,9 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 import lance
@@ -31,7 +33,10 @@ from tenacity import (
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
-from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
+from synth_setter.pipeline.data.lance_shard import (
+    LANCE_DATA_STORAGE_VERSION,
+    LANCE_MAX_BYTES_PER_FILE,
+)
 from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 logger = structlog.get_logger(__name__)
@@ -44,12 +49,64 @@ _DIRNAME_PREFIX_CHARS = 8
 _MAX_LANCE_READ_ATTEMPTS = 3
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
-_MATERIALIZE_BATCH_SIZE = 8192
-_MATERIALIZE_IO_BUFFER_SIZE = 32 * 1024**3
-_MATERIALIZE_FRAGMENT_READAHEAD = 128
-_MATERIALIZE_BATCH_READAHEAD = 8
-_MATERIALIZE_MAX_ROWS_PER_GROUP = 4096
-_MATERIALIZE_MAX_BYTES_PER_FILE = 256 * 1024**3
+type MaterializationProfile = Literal["safe", "high_throughput"]
+
+
+@dataclass(frozen=True)
+class _MaterializationSettings:
+    """Resolve Lance scanner and writer settings for one resource profile.
+
+    .. attribute :: batch_size
+
+        Scan batch size in rows.
+
+    .. attribute :: io_buffer_size
+
+        Reserved scanner I/O bytes, or ``None`` for the Lance default.
+
+    .. attribute :: fragment_readahead
+
+        Concurrent fragments, or ``None`` for the Lance default.
+
+    .. attribute :: batch_readahead
+
+        Prefetched batches, or ``None`` for the Lance default.
+
+    .. attribute :: max_rows_per_group
+
+        Writer rows per group.
+
+    .. attribute :: max_bytes_per_file
+
+        Writer file rollover threshold in bytes.
+    """
+
+    batch_size: int
+    io_buffer_size: int | None
+    fragment_readahead: int | None
+    batch_readahead: int | None
+    max_rows_per_group: int
+    max_bytes_per_file: int
+
+
+_MATERIALIZATION_SETTINGS: dict[MaterializationProfile, _MaterializationSettings] = {
+    "safe": _MaterializationSettings(
+        batch_size=512,
+        io_buffer_size=None,
+        fragment_readahead=None,
+        batch_readahead=None,
+        max_rows_per_group=1024,
+        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
+    ),
+    "high_throughput": _MaterializationSettings(
+        batch_size=8192,
+        io_buffer_size=32 * 1024**3,
+        fragment_readahead=128,
+        batch_readahead=2,
+        max_rows_per_group=4096,
+        max_bytes_per_file=256 * 1024**3,
+    ),
+}
 _RETRYABLE_LANCE_IO_MARKERS = (
     "408 request timeout",
     "429 too many requests",
@@ -491,25 +548,28 @@ def _write_materialized_snapshot(
     *,
     dest_path: Path,
     manifest: MaterializeManifest,
-    batch_size: int,
+    batch_size: int | None,
+    materialization_profile: MaterializationProfile,
 ) -> Path:
     """Write one selected source snapshot and its cache manifest.
 
     :param snapshot: Selected source dataset snapshot.
     :param dest_path: Local destination dataset directory.
     :param manifest: Validated request and source identity to persist.
-    :param batch_size: Scan batch size in rows.
+    :param batch_size: Optional scan batch-size override in rows.
+    :param materialization_profile: Scanner and writer resource profile.
     :returns: ``dest_path``.
     :raises OSError: Manifest writing or atomic publication fails without a winner.
     :raises ValueError: The written dataset has no transaction identity.
     """
+    settings = _MATERIALIZATION_SETTINGS[materialization_profile]
     scanner = snapshot.scanner(
         columns=list(manifest.columns),
         limit=manifest.limit,
-        batch_size=batch_size,
-        io_buffer_size=_MATERIALIZE_IO_BUFFER_SIZE,
-        fragment_readahead=_MATERIALIZE_FRAGMENT_READAHEAD,
-        batch_readahead=_MATERIALIZE_BATCH_READAHEAD,
+        batch_size=settings.batch_size if batch_size is None else batch_size,
+        io_buffer_size=settings.io_buffer_size,
+        fragment_readahead=settings.fragment_readahead,
+        batch_readahead=settings.batch_readahead,
     )
     logger.info(
         "lance_materialize.start",
@@ -533,8 +593,8 @@ def _write_materialized_snapshot(
         schema=scanner.projected_schema,
         transaction_properties=transaction_properties,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
-        max_rows_per_group=_MATERIALIZE_MAX_ROWS_PER_GROUP,
-        max_bytes_per_file=_MATERIALIZE_MAX_BYTES_PER_FILE,
+        max_rows_per_group=settings.max_rows_per_group,
+        max_bytes_per_file=settings.max_bytes_per_file,
     )
     row_count = written.count_rows()
     transaction = written.read_transaction(written.version)
@@ -582,14 +642,15 @@ def materialize_lance_subset(  # noqa: DOC502
     txid: str | None,
     columns: Sequence[str],
     limit: int | None = None,
-    batch_size: int = _MATERIALIZE_BATCH_SIZE,
+    batch_size: int | None = None,
+    materialization_profile: MaterializationProfile = "safe",
 ) -> Path:
     """Stream a projected source snapshot scan into ``dest_path``.
 
-    Scanner memory is bounded by the configured I/O buffer and read-ahead
-    batches; transferred bytes scale with the subset, not the source. A txid
-    pins the source snapshot when supplied; otherwise the latest version at
-    hydration time is used.
+    Memory use depends on the selected resource profile and projected row width;
+    transferred bytes scale with the subset, not the source. A txid pins the
+    source snapshot when supplied; otherwise the latest version at hydration
+    time is used.
 
     :param source_uri: Source dataset — ``r2://`` URI (resolved via
         :func:`synth_setter.pipeline.r2_io.lance_target`) or local path.
@@ -598,7 +659,10 @@ def materialize_lance_subset(  # noqa: DOC502
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
     :param limit: First-N row cap, or ``None`` for all rows.
-    :param batch_size: Scan batch size in rows.
+    :param batch_size: Optional scan batch-size override in rows.
+    :param materialization_profile: ``safe`` delegates I/O buffering and read-ahead
+        to Lance; ``high_throughput`` opts into high-memory production tuning for
+        cold writes. Cache reuse is profile-independent because contents are identical.
     :returns: ``dest_path``.
     :raises LookupError: ``txid`` matches no live source version.
     :raises RuntimeError: A transient source read exhausts the retry budget.
@@ -643,6 +707,7 @@ def materialize_lance_subset(  # noqa: DOC502
         dest_path=dest_path,
         manifest=manifest,
         batch_size=batch_size,
+        materialization_profile=materialization_profile,
     )
 
 
@@ -678,6 +743,7 @@ def materialize_splits(
     projection: Mapping[str, Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
+    materialization_profile: MaterializationProfile = "safe",
 ) -> None:
     """Materialize each split under a root, then rclone non-Lance sidecars.
 
@@ -689,6 +755,7 @@ def materialize_splits(
     :param projection: Columns to materialize per split.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
+    :param materialization_profile: Scanner and writer resource profile.
     """
     _require_dataset_complete(source_root_uri)
     for split, columns in projection.items():
@@ -699,6 +766,7 @@ def materialize_splits(
             txid=txids[split] if txids is not None else None,
             columns=columns,
             limit=row_limit,
+            materialization_profile=materialization_profile,
         )
     # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
     # split datasets and pipeline-internal metadata/ never feed the loaders.

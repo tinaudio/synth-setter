@@ -123,19 +123,52 @@ def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint(
 
 
 @pytest.mark.parametrize(
-    "launch_config_name",
+    (
+        "launch_config_name",
+        "experiment",
+        "datamodule_target",
+        "materialization_profile",
+        "memory_floor",
+    ),
     [
-        "train-runpod-smoke.yaml",
-        "train-runpod-flow-simple-440k.yaml",
+        (
+            "train-runpod-smoke.yaml",
+            "",
+            "synth_setter.data.lance_datamodule.LanceVSTDataModule",
+            "safe",
+            None,
+        ),
+        (
+            "train-runpod-flow-simple-440k.yaml",
+            "",
+            "synth_setter.data.lance_datamodule.LanceVSTDataModule",
+            "high_throughput",
+            "128+",
+        ),
+        (
+            "train-runpod-flow-simple-440k.yaml",
+            "torchsynth/flow_audio_same",
+            "synth_setter.data.torchsynth_datamodule.TorchSynthDataModule",
+            "high_throughput",
+            "128+",
+        ),
     ],
-    ids=["smoke", "flow-simple-440k"],
+    ids=["smoke", "flow-simple-440k", "flow-simple-440k-torchsynth-override"],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     launch_config_name: str,
+    experiment: str,
+    datamodule_target: str,
+    materialization_profile: str,
+    memory_floor: str | None,
 ) -> None:
     """Prepare the real SkyPilot task and compose its worker command without submission.
 
     :param launch_config_name: Shipped RunPod training launch config to exercise.
+    :param experiment: Optional worker-side experiment override.
+    :param datamodule_target: Expected composed datamodule class.
+    :param materialization_profile: Expected worker-side hydration profile.
+    :param memory_floor: Expected SkyPilot host-memory request.
     """
     launch_config = load_launch_config(_LAUNCH_DIR / launch_config_name)
     assert launch_config.compute is not None
@@ -158,7 +191,7 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
         env={
             **os.environ,
             "DATASET_ROOT_URI": "",
-            "EXPERIMENT": "",
+            "EXPERIMENT": experiment,
             "HYDRA_FULL_ERROR": "1",
         },
         check=False,
@@ -168,4 +201,6 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
 
     assert result.returncode == 0, result.stderr
     assert task.to_yaml_config()["run"] == task.run
-    assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
+    assert {resource.memory for resource in task.resources} == {memory_floor}
+    assert datamodule_target in result.stdout
+    assert f"materialization_profile: {materialization_profile}" in result.stdout
