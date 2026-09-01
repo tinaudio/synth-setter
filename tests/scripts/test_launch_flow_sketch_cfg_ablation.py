@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,34 @@ def test_cfg_ablation_rejects_missing_ablation_id_before_planning() -> None:
 
     assert result.returncode == 2
     assert "--ablation-id requires a value" in result.stderr
+    assert "DRY RUN:" not in result.stdout
+
+
+def test_cfg_ablation_execute_clears_remote_skypilot_credentials(tmp_path: Path) -> None:
+    """Local dispatch does not inherit incompatible remote-client authentication.
+
+    :param tmp_path: Temporary directory for the non-launching command sentinel.
+    """
+    uv_sentinel = tmp_path / "uv"
+    uv_sentinel.write_text(
+        '#!/bin/bash\n[[ -z "${SKYPILOT_SERVICE_ACCOUNT_TOKEN+x}" ]]\n',
+        encoding="utf-8",
+    )
+    uv_sentinel.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path}:{env['PATH']}"
+    env["SKYPILOT_SERVICE_ACCOUNT_TOKEN"] = str(tmp_path)
+
+    result = subprocess.run(  # noqa: S603 — repository-owned script
+        [str(_LAUNCHER), "--execute", "--ablation-id", "credential-test"],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
     assert "DRY RUN:" not in result.stdout
 
 

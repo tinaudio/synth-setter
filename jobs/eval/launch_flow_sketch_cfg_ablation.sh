@@ -41,7 +41,7 @@ main() {
     return 2
   fi
 
-  unset SKYPILOT_API_SERVER_ENDPOINT SKYPILOT_API_SERVER_KEY SKYPILOT_API_SERVER_TOKEN
+  unset SKYPILOT_API_SERVER_ENDPOINT SKYPILOT_API_SERVER_KEY SKYPILOT_API_SERVER_TOKEN SKYPILOT_SERVICE_ACCOUNT_TOKEN
   if [[ "${execute}" == true ]]; then
     uv run python -c \
       "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance()"
