@@ -1170,9 +1170,16 @@ leaves `num_sub_vectors` null to let each spec's default apply. The migration-on
 `sketch_pool` registry entry reads a renamed `sketch_full_401` struct and writes
 the same canonical pooled `sketch` representation without rerunning PESTO. For
 large existing splits, `synth-setter-backfill-sketch-pool --lance-uri <uri> --workers <n> --rollback-tag <tag>` renames the source, writes fragments through
-recycled Ray workers, publishes one branch-scoped Lance merge commit, and builds
-the canonical `sketch.vec` index. A retry resumes after the rename and exits
-without a new version once both data and index are complete.
+recycled Ray workers, validates the exact 401-frame finite/bounded source
+contract, publishes one branch-scoped Lance merge commit, and builds the
+canonical `sketch.vec` index. Each worker report is atomically persisted under
+`--resume-dir` (or a dataset-keyed user cache) before progress is acknowledged,
+so a retry resumes both after the rename and after completed fragments. Lance
+and object-store operations use bounded exponential retries; permanent schema
+and value errors fail immediately. The JSON result records the run and Git IDs,
+worker controls, versions, throughput, and full index configuration. Existing
+indexes are accepted only when their identity, IVF-PQ parameters, coverage, and
+ANN query plan match the canonical policy.
 
 `matpac_plus` runs the frozen MATPAC++ encoder through TinyMU's public package
 API, installed from an exact Git commit in the normal heavy runtime. The pinned

@@ -231,6 +231,17 @@ class AddEmbeddingsConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
+    def _sketch_policies_are_mutually_exclusive(self) -> Self:
+        """Reject selecting generation and migration policies in one write.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: Both policies target the canonical sketch field.
+        """
+        if {"sketch", "sketch_pool"} <= set(self.embeddings):
+            raise ValueError("sketch and sketch_pool cannot be selected together")
+        return self
+
+    @model_validator(mode="after")
     def _param_sourced_embeddings_need_a_param_spec(self) -> Self:
         """Require a param spec whenever a selected embedding reads param rows.
 
@@ -240,11 +251,12 @@ class AddEmbeddingsConfig(BaseModel):
         :returns: Validated config unchanged.
         :raises ValueError: A param-sourced embedding is selected without a param spec.
         """
-        param_sourced = sorted(
-            name
-            for name, spec in ((name, EMBEDDING_REGISTRY[name]) for name in self.embeddings)
-            if PARAM_ARRAY_FIELD in spec.input_fields and not spec.rerenders
-        )
+        param_sourced = []
+        for name in self.embeddings:
+            spec = EMBEDDING_REGISTRY[name]
+            if PARAM_ARRAY_FIELD in spec.input_fields and not spec.rerenders:
+                param_sourced.append(name)
+        param_sourced.sort()
         if param_sourced and self.param_spec_name is None:
             raise ValueError(f"embeddings {param_sourced} require param_spec_name")
         return self

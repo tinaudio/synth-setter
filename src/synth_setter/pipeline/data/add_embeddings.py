@@ -42,6 +42,8 @@ from synth_setter.data.vst.shapes import (
     MEANAUDIO_16K_FIELD,
     NUM_SKETCH_CONTROLS,
     PARAM_ARRAY_FIELD,
+    PUPUJEPA_LARGE_FIELD,
+    PUPUJEPA_TINY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SHIFT_FIELD,
@@ -53,8 +55,6 @@ from synth_setter.data.vst.shapes import (
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
-    PUPUJEPA_LARGE_FIELD,
-    PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
@@ -74,18 +74,6 @@ from synth_setter.pipeline.data.meanaudio import (
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
 )
-from synth_setter.pipeline.data.pupujepa import (
-    PupuJepaEncodeFn,
-    encode_pupujepa_column,
-    encode_pupujepa_large_column,
-    load_pupujepa_audio_encoder,
-)
-from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_CHECKPOINT,
-    PUPUJEPA_LARGE_EMBEDDING_DIM,
-    PUPUJEPA_TINY_EMBEDDING_DIM,
-    pupujepa_artifact_digest,
-)
 from synth_setter.pipeline.data.param_shift import (
     PARAM_SHIFT_INPUT_FIELDS,
     ROW_ID_FIELD,
@@ -93,6 +81,12 @@ from synth_setter.pipeline.data.param_shift import (
     encode_param_shift_column,
     load_param_shifter,
     param_shift_policy_values,
+)
+from synth_setter.pipeline.data.pupujepa import (
+    PupuJepaEncodeFn,
+    encode_pupujepa_column,
+    encode_pupujepa_large_column,
+    load_pupujepa_audio_encoder,
 )
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
@@ -102,6 +96,12 @@ from synth_setter.pipeline.data.ssondo import (
     SSONDOEncodeFn,
     load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
+)
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_CHECKPOINT,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_EMBEDDING_DIM,
+    pupujepa_artifact_digest,
 )
 from synth_setter.same import (
     DEFAULT_SAME_L_CHECKPOINT,
@@ -149,6 +149,7 @@ SKETCH_ENCODE_MAX_BATCH: int = 32
 # per-child schema evolution (unused here) is the 2.2-only operation.
 SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
 SKETCH_FULL_STRUCT_FIELD: str = "sketch_full_401"
+SKETCH_FULL_FRAMES: int = 401
 _SKETCH_POOL_INPUT_FIELDS: tuple[str, ...] = (SKETCH_FULL_STRUCT_FIELD,)
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
@@ -348,10 +349,7 @@ def _sketch_artifact_identity(checkpoint: str) -> str:
     :returns: Versioned installed-package and checkpoint identity.
     """
     version = importlib.metadata.version("pesto-pitch")
-    identity = (
-        f"package:{version};checkpoint:{checkpoint};"
-        f"storage:avgmax{SKETCH_STORAGE_FRAMES}"
-    )
+    identity = f"package:{version};checkpoint:{checkpoint};storage:avgmax{SKETCH_STORAGE_FRAMES}"
     return _versioned_artifact_identity("sketch", identity)
 
 
@@ -673,9 +671,7 @@ def _load_meanaudio_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -
     )
 
 
-def _load_pupujepa_tiny_spec_encoder(
-    checkpoint: str, config: AddEmbeddingsConfig
-) -> Encoder:
+def _load_pupujepa_tiny_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load PupuJEPA through the registry's uniform factory signature.
 
     :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
@@ -689,9 +685,7 @@ def _load_pupujepa_tiny_spec_encoder(
     )
 
 
-def _load_pupujepa_large_spec_encoder(
-    checkpoint: str, config: AddEmbeddingsConfig
-) -> Encoder:
+def _load_pupujepa_large_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load PupuJEPA Large through the registry factory signature.
 
     :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
@@ -833,9 +827,7 @@ def _sketch_pool_artifact_identity(checkpoint: str) -> str:
     """
     if checkpoint:
         raise ValueError("sketch_pool does not accept a checkpoint override")
-    return _versioned_artifact_identity(
-        "sketch_pool", f"avgmax{SKETCH_STORAGE_FRAMES}"
-    )
+    return _versioned_artifact_identity("sketch_pool", f"avgmax{SKETCH_STORAGE_FRAMES}")
 
 
 def _load_sketch_pool_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -849,15 +841,45 @@ def _load_sketch_pool_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     return cast("M2LEncodeFn", lambda values: values)
 
 
+def _validated_sketch_controls(
+    controls: np.ndarray, expected_shape: tuple[int, int, int]
+) -> np.ndarray:
+    """Validate one decoded sketch-control tensor before permanent storage.
+
+    :param controls: Float controls arranged as ``(batch, control, frame)``.
+    :param expected_shape: Exact shape required by the source policy.
+    :returns: Finite, in-bounds controls unchanged.
+    :raises ValueError: Shape, finiteness, or documented bounds are invalid.
+    """
+    controls = _finite_embedding(SKETCH_STRUCT_FIELD, controls)
+    if controls.shape != expected_shape:
+        raise ValueError(
+            f"{SKETCH_STRUCT_FIELD} controls have shape {controls.shape}, "
+            f"expected {expected_shape}"
+        )
+    affine = controls[:, : NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS]
+    pitch = controls[:, NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS :]
+    if affine.min() < -1.0 or affine.max() > 1.0 or pitch.min() < 0.0 or pitch.max() > 1.0:
+        raise ValueError(
+            f"{SKETCH_STRUCT_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
+            "and pitch rows in [0, 1]"
+        )
+    return controls
+
+
 def _encode_sketch_pool_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
 ) -> pa.Array:
     """Pool a renamed full-resolution sketch struct to canonical storage.
 
+    The source children must be loudness ``(401,)``, centroid ``(401,)``, and
+    row-major pitch ``(384 * 401,)`` per row.
+
     :param sources: Decoded ``sketch_full_401`` source struct.
     :param sample_rate: Unused source sample rate.
     :param encoder: Unused registry placeholder.
     :returns: Canonically pooled sketch struct and frame-mean vector child.
+    :raises ValueError: A child has the wrong shape, non-finite values, or invalid bounds.
     """
     import torch
 
@@ -868,10 +890,24 @@ def _encode_sketch_pool_column(
     rows = sources[SKETCH_FULL_STRUCT_FIELD]
     loudness = np.stack([row[SKETCH_LOUDNESS_CHILD] for row in rows])
     centroid = np.stack([row[SKETCH_CENTROID_CHILD] for row in rows])
-    pitch = np.stack([row[SKETCH_PITCH_CHILD] for row in rows]).reshape(
-        len(rows), SKETCH_PITCH_BINS, -1
-    )
+    pitch_flat = np.stack([row[SKETCH_PITCH_CHILD] for row in rows])
+    expected_affine = (len(rows), SKETCH_FULL_FRAMES)
+    expected_pitch = (len(rows), SKETCH_PITCH_BINS * SKETCH_FULL_FRAMES)
+    if loudness.shape != expected_affine or centroid.shape != expected_affine:
+        raise ValueError(
+            f"{SKETCH_FULL_STRUCT_FIELD} affine child shapes must be {expected_affine}, "
+            f"got loudness={loudness.shape}, centroid={centroid.shape}"
+        )
+    if pitch_flat.shape != expected_pitch:
+        raise ValueError(
+            f"{SKETCH_FULL_STRUCT_FIELD} pitch child shape must be {expected_pitch}, "
+            f"got {pitch_flat.shape}"
+        )
+    pitch = pitch_flat.reshape(len(rows), SKETCH_PITCH_BINS, SKETCH_FULL_FRAMES)
     controls = np.concatenate((loudness[:, None], centroid[:, None], pitch), axis=1)
+    controls = _validated_sketch_controls(
+        controls, (len(rows), NUM_SKETCH_CONTROLS, SKETCH_FULL_FRAMES)
+    )
     pooled = pool_sketch_controls(torch.from_numpy(controls)).numpy()
     return sketch_struct_array(pooled)
 
@@ -903,30 +939,18 @@ def _encode_sketch_column(
     :param encoder: Sketch extractor over the original audio batch.
     :returns: Struct array with canonically pooled loudness/centroid/pitch
         children and their frame-mean ``vec`` IVF companion.
-    :raises ValueError: The encoder output is off the frame grid, non-finite,
-        or outside the documented control bounds.
     """
     import torch
 
-    from synth_setter.sketch import pool_sketch_controls
     from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+    from synth_setter.sketch import pool_sketch_controls
 
     audio = sources[AUDIO_FIELD]
     encode = cast("SketchEncodeFn", encoder)
-    controls = _finite_embedding(SKETCH_STRUCT_FIELD, encode(audio, sample_rate))
+    controls = encode(audio, sample_rate)
     frames = mel_n_frames_from_samples(audio.shape[-1], sample_rate)
     expected = (len(audio), NUM_SKETCH_CONTROLS, frames)
-    if controls.shape != expected:
-        raise ValueError(
-            f"{SKETCH_STRUCT_FIELD} encoder produced shape {controls.shape}, expected {expected}"
-        )
-    affine = controls[:, : NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS]
-    pitch = controls[:, NUM_SKETCH_CONTROLS - SKETCH_PITCH_BINS :]
-    if affine.min() < -1.0 or affine.max() > 1.0 or pitch.min() < 0.0 or pitch.max() > 1.0:
-        raise ValueError(
-            f"{SKETCH_STRUCT_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
-            "and pitch rows in [0, 1]"
-        )
+    controls = _validated_sketch_controls(controls, expected)
     pooled = pool_sketch_controls(torch.from_numpy(controls)).numpy()
     return sketch_struct_array(pooled)
 
@@ -1508,9 +1532,7 @@ def _write_columns(
     )
     dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
     # A zero-batch replay is valid only when the target columns are already committed.
-    uncommitted = [
-        column for column in output_columns if column not in dataset.schema.names
-    ]
+    uncommitted = [column for column in output_columns if column not in dataset.schema.names]
     if uncommitted:
         raise RuntimeError(
             f"add_columns returned without committing column(s) {uncommitted} "
@@ -1649,8 +1671,7 @@ def _missing_embedding_specs(
             column: dataset.schema.field(column).metadata or {} for column in expected
         }
         has_identity = any(
-            _EMBEDDING_NAME_METADATA in metadata
-            or _EMBEDDING_ARTIFACT_METADATA in metadata
+            _EMBEDDING_NAME_METADATA in metadata or _EMBEDDING_ARTIFACT_METADATA in metadata
             for metadata in field_metadata.values()
         )
         if not has_identity:
@@ -1724,9 +1745,7 @@ def _matching_index_exists(
     """
     rows = dataset.count_rows()
     num_partitions = (
-        max(1, round(rows**0.5))
-        if config.num_partitions is None
-        else config.num_partitions
+        max(1, round(rows**0.5)) if config.num_partitions is None else config.num_partitions
     )
     num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
     metric = config.metric

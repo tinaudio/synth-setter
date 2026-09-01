@@ -1,22 +1,91 @@
-"""Distributed migration from stored full-resolution sketches to canonical pooling."""
+"""Distribute stored full-resolution sketch pooling across Ray workers.
+
+Typical usage::
+
+    synth-setter-backfill-sketch-pool --lance-uri r2://bucket/train.lance \\
+        --workers 32 --rollback-tag pre-sketch-pool
+"""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
-import pickle
+import os
+import shutil
 import sys
 import time
+import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from synth_setter.data.vst.shapes import SKETCH_STRUCT_FIELD
+from synth_setter.data.vst.shapes import SKETCH_STRUCT_FIELD, SKETCH_VEC_CHILD
+from synth_setter.utils.logging_utils import resolve_git_sha
+
+if TYPE_CHECKING:
+    import lance
+    import pyarrow as pa
+    from lance.fragment import FragmentMetadata
+    from lance.progress import IndexProgress
+
+
+class _ColumnRename(TypedDict):
+    """Describe the required subset of one Lance column alteration.
+
+    .. attribute :: path
+
+        Existing top-level column path.
+
+    .. attribute :: name
+
+        Replacement column name.
+    """
+
+    path: str
+    name: str
+
+
+class _AlterColumnsDataset(Protocol):
+    """Expose Lance's runtime variadic column-alteration contract."""
+
+    def alter_columns(self, *alterations: _ColumnRename) -> None:
+        """Apply each column alteration.
+
+        :param *alterations: Column renames to commit together.
+        """
+
+
+class _IndexDescriptor(TypedDict):
+    """Describe the Lance index fields used by compatibility checks.
+
+    .. attribute :: name
+
+        Index name.
+
+    .. attribute :: type
+
+        Lance index type.
+
+    .. attribute :: fields
+
+        Indexed column paths.
+    """
+
+    name: str
+    type: str
+    fields: list[str]
+
 
 logger = structlog.get_logger(__name__)
+_INDEX_NAME = "sketch_pool_vec_idx"
+_RETRY_ATTEMPTS = 4
+_PROGRESS_INTERVAL_SECONDS = 30.0
 
 
 class SketchPoolBackfillConfig(BaseModel):
@@ -24,7 +93,7 @@ class SketchPoolBackfillConfig(BaseModel):
 
     .. attribute :: model_config
 
-        Pydantic model config sentinel.
+        Strict immutable trust-boundary configuration.
 
     .. attribute :: lance_uri
 
@@ -48,7 +117,7 @@ class SketchPoolBackfillConfig(BaseModel):
 
     .. attribute :: rollback_tag
 
-        Optional immutable tag created before the rename commit.
+        Immutable pre-migration tag created before the rename commit.
 
     .. attribute :: build_index
 
@@ -57,6 +126,14 @@ class SketchPoolBackfillConfig(BaseModel):
     .. attribute :: num_partitions
 
         IVF partition override, or ``None`` for a row-derived count.
+
+    .. attribute :: resume_dir
+
+        Worker-report cache, or ``None`` for a dataset-keyed user cache.
+
+    .. attribute :: timeout_seconds
+
+        Overall fragment-task deadline.
 
     .. attribute :: result
 
@@ -70,15 +147,207 @@ class SketchPoolBackfillConfig(BaseModel):
     workers: int = Field(ge=1)
     batch_size: int = Field(default=128, ge=1)
     tasks_per_worker: int = Field(default=4, ge=1)
-    rollback_tag: str | None = None
+    rollback_tag: str = Field(min_length=1)
     build_index: bool = True
     num_partitions: int | None = Field(default=None, ge=1)
+    resume_dir: Path | None = None
+    timeout_seconds: float = Field(default=21_600.0, gt=0.0)
     result: Path | None = None
+
+
+class _FragmentTask(BaseModel):
+    """Validate one Ray fragment request at the process boundary.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary configuration.
+
+    .. attribute :: uri
+
+        Lance-openable dataset target.
+
+    .. attribute :: storage_options
+
+        Optional object-store credentials.
+
+    .. attribute :: branch
+
+        Source branch.
+
+    .. attribute :: source_version
+
+        Immutable branch-local source version.
+
+    .. attribute :: fragment_id
+
+        Source fragment ID.
+
+    .. attribute :: batch_size
+
+        Rows per callback batch.
+
+    .. attribute :: artifact
+
+        Pooling-policy identity.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    uri: str
+    storage_options: dict[str, str] | None
+    branch: str
+    source_version: int
+    fragment_id: int
+    batch_size: int
+    artifact: str
+
+
+class _FragmentReport(BaseModel):
+    """Validate one resumable Ray fragment report at the process boundary.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary configuration.
+
+    .. attribute :: fragment_id
+
+        Transformed source fragment ID.
+
+    .. attribute :: metadata_json
+
+        Lance fragment metadata JSON.
+
+    .. attribute :: schema_ipc
+
+        Base64 Arrow schema IPC.
+
+    .. attribute :: row_count
+
+        Transformed rows.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    fragment_id: int
+    metadata_json: str
+    schema_ipc: str
+    row_count: int = Field(ge=0)
+
+
+class _SubIndexStats(BaseModel):
+    """Validate the PQ details returned by Lance index statistics.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary configuration.
+
+    .. attribute :: num_sub_vectors
+
+        PQ sub-vector count.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+
+    num_sub_vectors: int
+
+
+class _IndexStats(BaseModel):
+    """Validate one IVF-PQ segment returned by Lance index statistics.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary configuration.
+
+    .. attribute :: num_partitions
+
+        IVF partition count.
+
+    .. attribute :: metric_type
+
+        Distance metric.
+
+    .. attribute :: sub_index
+
+        PQ details.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+
+    num_partitions: int
+    metric_type: str
+    sub_index: _SubIndexStats
+
+
+class _IndexStatistics(BaseModel):
+    """Validate the Lance statistics envelope used for compatibility checks.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary configuration.
+
+    .. attribute :: indices
+
+        Physical IVF-PQ segment statistics.
+
+    .. attribute :: num_unindexed_rows
+
+        Rows not covered by the index.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+
+    indices: list[_IndexStats] = Field(min_length=1)
+    num_unindexed_rows: int = Field(ge=0)
+
+
+class _CacheIdentity(BaseModel):
+    """Bind cached fragment reports to one immutable migration input.
+
+    .. attribute :: model_config
+
+        Strict immutable trust-boundary configuration.
+
+    .. attribute :: lance_uri
+
+        Public dataset URI.
+
+    .. attribute :: branch
+
+        Source branch.
+
+    .. attribute :: source_version
+
+        Immutable branch-local source version.
+
+    .. attribute :: batch_size
+
+        Rows per callback batch.
+
+    .. attribute :: artifact
+
+        Pooling-policy identity.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    lance_uri: str
+    branch: str
+    source_version: int
+    batch_size: int
+    artifact: str
 
 
 @dataclass(frozen=True)
 class SketchPoolBackfillResult:
     """Summarize a committed or already-complete migration.
+
+    .. attribute :: run_id
+
+        Unique invocation ID.
+
+    .. attribute :: git_commit
+
+        Implementation Git revision.
 
     .. attribute :: branch
 
@@ -86,37 +355,67 @@ class SketchPoolBackfillResult:
 
     .. attribute :: rows
 
-        Rows preserved by the migration.
+        Rows in the final snapshot.
 
     .. attribute :: fragments
 
-        Fragments represented by the committed snapshot.
+        Fragments in the final snapshot.
 
     .. attribute :: source_version
 
-        Version read by the operation.
+        Version read by the data operation.
 
     .. attribute :: committed_version
 
-        Latest version after data and index publication.
+        Final version after data and index publication.
 
     .. attribute :: elapsed_seconds
 
-        Total wall-clock duration.
+        End-to-end wall time.
 
     .. attribute :: rows_per_second
 
-        End-to-end row throughput, or zero when data was already complete.
+        End-to-end row throughput.
 
     .. attribute :: already_complete
 
-        Whether the pooled data existed before this invocation.
+        Whether data publication was skipped.
 
     .. attribute :: index_built
 
-        Whether this invocation published the canonical index.
+        Whether this invocation built the index.
+
+    .. attribute :: workers
+
+        Configured Ray workers.
+
+    .. attribute :: batch_size
+
+        Rows per callback batch.
+
+    .. attribute :: tasks_per_worker
+
+        Tasks before worker recycling.
+
+    .. attribute :: index_name
+
+        Canonical index name when requested.
+
+    .. attribute :: index_metric
+
+        Canonical distance metric when requested.
+
+    .. attribute :: num_partitions
+
+        IVF partition count when requested.
+
+    .. attribute :: num_sub_vectors
+
+        PQ sub-vector count when requested.
     """
 
+    run_id: str
+    git_commit: str
     branch: str
     rows: int
     fragments: int
@@ -126,6 +425,43 @@ class SketchPoolBackfillResult:
     rows_per_second: float
     already_complete: bool
     index_built: bool
+    workers: int
+    batch_size: int
+    tasks_per_worker: int
+    index_name: str | None
+    index_metric: str | None
+    num_partitions: int | None
+    num_sub_vectors: int | None
+
+
+def _retry[ResultT](description: str, operation: Callable[[], ResultT]) -> ResultT:
+    """Retry bounded idempotent Lance and object-store operations.
+
+    :param description: Stable operation name for structured diagnostics.
+    :param operation: Idempotent operation to invoke.
+    :returns: The successful operation result.
+    :raises ConnectionError: The final connection attempt fails.
+    :raises OSError: The final Lance or object-store attempt fails.
+    :raises TimeoutError: The final operation attempt times out.
+    :raises AssertionError: The bounded loop exits unexpectedly.
+    """
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            return operation()
+        except (ConnectionError, OSError, TimeoutError):
+            if attempt == _RETRY_ATTEMPTS:
+                raise
+            delay = float(2 ** (attempt - 1))
+            logger.warning(
+                "sketch_pool_io_retry",
+                operation=description,
+                attempt=attempt,
+                max_attempts=_RETRY_ATTEMPTS,
+                delay_seconds=delay,
+                exc_info=True,
+            )
+            time.sleep(delay)
+    raise AssertionError("retry loop exhausted without returning or raising")
 
 
 def _branch_reference(branch: str, version: int | None) -> tuple[str | None, int | None]:
@@ -153,28 +489,37 @@ def _lance_target(uri: str) -> tuple[str, dict[str, str] | None]:
     return uri, None
 
 
-def _transform_fragment(
+def _open_dataset(
     uri: str,
     storage_options: dict[str, str] | None,
     branch: str,
-    source_version: int,
-    fragment_id: int,
-    batch_size: int,
-    artifact: bytes,
-) -> tuple[bytes, bytes, int]:
-    """Write one fragment's pooled sketch column without committing a manifest.
+    version: int | None,
+) -> lance.LanceDataset:
+    """Open one branch snapshot under the migration retry policy.
 
-    :param uri: Lance dataset URI or local path.
+    :param uri: Lance-openable dataset target.
     :param storage_options: Object-store credentials, when required.
-    :param branch: Source branch name.
-    :param source_version: Immutable source version on the branch.
-    :param fragment_id: Fragment to transform.
-    :param batch_size: Rows decoded per callback.
-    :param artifact: Versioned pooling-policy identity.
-    :returns: Pickled fragment metadata, output schema, and transformed row count.
-    :raises ValueError: The source fragment cannot be found.
+    :param branch: Branch to open.
+    :param version: Branch-local version, or ``None`` for latest.
+    :returns: Open Lance dataset snapshot.
     """
     import lance
+
+    return _retry(
+        "open_dataset",
+        lambda: lance.dataset(uri, storage_options=storage_options).checkout_version(
+            _branch_reference(branch, version)
+        ),
+    )
+
+
+def _pool_fragment_batch(batch: pa.RecordBatch, artifact: str) -> pa.RecordBatch:
+    """Pool one decoded full-resolution fragment batch.
+
+    :param batch: Batch carrying the renamed full-resolution sketch struct.
+    :param artifact: Pooling-policy identity stored in field metadata.
+    :returns: Batch carrying only the canonical pooled sketch struct.
+    """
     import pyarrow as pa
 
     from synth_setter.pipeline.data.add_embeddings import (
@@ -182,37 +527,58 @@ def _transform_fragment(
         _encode_sketch_pool_column,
     )
 
-    dataset = lance.dataset(uri, storage_options=storage_options).checkout_version(
-        _branch_reference(branch, source_version)
+    rows = batch.column(SKETCH_FULL_STRUCT_FIELD).to_numpy(zero_copy_only=False)
+    encoded = _encode_sketch_pool_column(
+        {SKETCH_FULL_STRUCT_FIELD: rows}, 0, lambda values: values
     )
-    fragment = dataset.get_fragment(fragment_id)
+    field = pa.field(
+        SKETCH_STRUCT_FIELD,
+        encoded.type,
+        metadata={
+            b"synth_setter.embedding.name": b"sketch_pool",
+            b"synth_setter.embedding.artifact": artifact.encode(),
+        },
+    )
+    return pa.RecordBatch.from_arrays([encoded], schema=pa.schema([field]))
+
+
+def _transform_fragment(task_value: object) -> _FragmentReport:
+    """Write one fragment's pooled sketch column without committing a manifest.
+
+    :param task_value: Strictly validated fragment task from the Ray driver.
+    :returns: Validated, JSON-persistable fragment metadata and row count.
+    :raises ValueError: The task or source fragment is invalid.
+    """
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
+
+    task = _FragmentTask.model_validate(task_value, strict=True)
+    dataset = _open_dataset(
+        task.uri,
+        task.storage_options,
+        task.branch,
+        task.source_version,
+    )
+    fragment = _retry("get_fragment", lambda: dataset.get_fragment(task.fragment_id))
     if fragment is None:
-        raise ValueError(f"missing fragment {fragment_id}")
+        raise ValueError(f"missing fragment {task.fragment_id}")
 
-    def transform(batch: pa.RecordBatch) -> pa.RecordBatch:
-        rows = batch.column(SKETCH_FULL_STRUCT_FIELD).to_numpy(zero_copy_only=False)
-        encoded = _encode_sketch_pool_column(
-            {SKETCH_FULL_STRUCT_FIELD: rows}, 0, lambda values: values
-        )
-        field = pa.field(
-            SKETCH_STRUCT_FIELD,
-            encoded.type,
-            metadata={
-                b"synth_setter.embedding.name": b"sketch_pool",
-                b"synth_setter.embedding.artifact": artifact,
-            },
-        )
-        return pa.RecordBatch.from_arrays([encoded], schema=pa.schema([field]))
-
-    metadata, schema = fragment.merge_columns(
-        transform,
-        [SKETCH_FULL_STRUCT_FIELD],
-        batch_size=batch_size,
+    metadata, schema = _retry(
+        "merge_fragment_columns",
+        lambda: fragment.merge_columns(
+            lambda batch: _pool_fragment_batch(batch, task.artifact),
+            [SKETCH_FULL_STRUCT_FIELD],
+            batch_size=task.batch_size,
+        ),
     )
-    return pickle.dumps(metadata), pickle.dumps(schema), fragment.count_rows()
+    return _FragmentReport(
+        fragment_id=task.fragment_id,
+        metadata_json=json.dumps(metadata.to_json(), sort_keys=True),
+        schema_ipc=base64.b64encode(schema.to_pyarrow().serialize().to_pybytes()).decode("ascii"),
+        row_count=_retry("count_fragment_rows", fragment.count_rows),
+    )
 
 
-def _is_complete(dataset: Any, artifact: bytes) -> bool:
+def _is_complete(dataset: lance.LanceDataset, artifact: bytes) -> bool:
     """Check whether the current snapshot carries the expected pooled field.
 
     :param dataset: Open Lance dataset.
@@ -230,46 +596,104 @@ def _is_complete(dataset: Any, artifact: bytes) -> bool:
     )
 
 
-def _ensure_canonical_index(
-    dataset: Any, config: SketchPoolBackfillConfig
-) -> tuple[Any, bool]:
-    """Build the pooled-vector index when requested and absent.
+def _index_parameters(
+    dataset: lance.LanceDataset, config: SketchPoolBackfillConfig
+) -> tuple[int, str, int]:
+    """Resolve the canonical index parameters for validation and creation.
 
-    :param dataset: Dataset carrying canonical pooled sketches.
-    :param config: Index build selection and partition override.
-    :returns: Latest dataset snapshot and whether this call built an index.
-    :raises ValueError: Existing canonical indexes are ambiguous or incompatible.
-    :raises RuntimeError: The registry policy lacks its required index specification.
+    :param dataset: Dataset whose row count determines default partitions.
+    :param config: Index partition override.
+    :returns: Partition count, metric, and PQ sub-vector count.
+    :raises RuntimeError: The registry policy lacks its index specification.
     """
-    from synth_setter.pipeline.data.add_embeddings import (
-        EMBEDDING_REGISTRY,
-        MIN_ROWS_FOR_INDEX,
-        SKETCH_VEC_COLUMN,
-    )
+    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
 
-    if not config.build_index or dataset.count_rows() < MIN_ROWS_FOR_INDEX:
-        return dataset, False
-    existing = [
-        candidate
-        for candidate in dataset.list_indices()
-        if candidate["fields"] == [SKETCH_VEC_COLUMN]
-    ]
-    if len(existing) > 1:
-        raise ValueError(f"multiple indexes target {SKETCH_VEC_COLUMN!r}")
-    if existing:
-        if existing[0]["type"] != "IVF_PQ":
-            raise ValueError(
-                f"existing {SKETCH_VEC_COLUMN!r} index is {existing[0]['type']}, not IVF_PQ"
-            )
-        return dataset, False
-    partitions = config.num_partitions or max(1, round(dataset.count_rows() ** 0.5))
     index = EMBEDDING_REGISTRY["sketch_pool"].index
     if index is None:
         raise RuntimeError("sketch_pool registry policy has no index specification")
-    index_started = time.monotonic()
+    rows = _retry("count_index_rows", dataset.count_rows)
+    partitions = config.num_partitions or max(1, round(rows**0.5))
+    return partitions, index.metric, index.num_sub_vectors
 
-    def log_progress(progress: Any) -> None:
-        elapsed = time.monotonic() - index_started
+
+def _validate_index(
+    dataset: lance.LanceDataset,
+    candidate: _IndexDescriptor,
+    expected_partitions: int,
+    expected_metric: str,
+    expected_sub_vectors: int,
+) -> None:
+    """Verify an existing canonical index is operational and configuration-compatible.
+
+    :param dataset: Dataset carrying the candidate index.
+    :param candidate: Lance index descriptor.
+    :param expected_partitions: Required IVF partition count.
+    :param expected_metric: Required distance metric.
+    :param expected_sub_vectors: Required PQ sub-vector count.
+    :raises ValueError: Identity, type, configuration, or ANN plan is incompatible.
+    """
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_VEC_COLUMN
+
+    name = candidate.get("name")
+    if name != _INDEX_NAME or candidate.get("type") != "IVF_PQ":
+        raise ValueError(
+            f"existing {SKETCH_VEC_COLUMN!r} index must be {_INDEX_NAME!r} IVF_PQ, "
+            f"got name={name!r} type={candidate.get('type')!r}"
+        )
+    os.environ.setdefault("LANCE_INCLUDE_VECTOR_CENTROIDS", "false")
+    payload = _retry("read_index_statistics", lambda: dataset.index_statistics(_INDEX_NAME))
+    statistics = _IndexStatistics.model_validate(payload, strict=True)
+    if len(statistics.indices) != 1:
+        raise ValueError(f"existing {_INDEX_NAME!r} has {len(statistics.indices)} index segments")
+    stats = statistics.indices[0]
+    if statistics.num_unindexed_rows != 0:
+        raise ValueError(
+            f"existing {_INDEX_NAME!r} leaves {statistics.num_unindexed_rows} rows unindexed"
+        )
+    actual = (
+        stats.num_partitions,
+        stats.metric_type.lower(),
+        stats.sub_index.num_sub_vectors,
+    )
+    expected = (expected_partitions, expected_metric.lower(), expected_sub_vectors)
+    if actual != expected:
+        raise ValueError(f"existing {_INDEX_NAME!r} config {actual!r} does not match {expected!r}")
+    vector_field = dataset.schema.field(SKETCH_STRUCT_FIELD).type.field(SKETCH_VEC_CHILD)
+    vector = [0.0] * vector_field.type.list_size
+    plan = _retry(
+        "explain_index_query",
+        lambda: dataset.scanner(
+            nearest={"column": SKETCH_VEC_COLUMN, "q": vector, "k": 1}
+        ).explain_plan(),
+    )
+    if _INDEX_NAME not in plan:
+        raise ValueError(f"ANN plan does not select {_INDEX_NAME!r}: {plan}")
+
+
+def _canonical_indexes(dataset: lance.LanceDataset) -> list[_IndexDescriptor]:
+    """List indexes targeting the canonical pooled vector child.
+
+    :param dataset: Dataset snapshot to inspect.
+    :returns: Canonical vector index descriptors.
+    """
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_VEC_COLUMN
+
+    return [
+        cast("_IndexDescriptor", candidate)
+        for candidate in _retry("list_indices", dataset.list_indices)
+        if cast("_IndexDescriptor", candidate)["fields"] == [SKETCH_VEC_COLUMN]
+    ]
+
+
+def _index_progress_callback(started: float) -> Callable[[IndexProgress], None]:
+    """Create a structured Lance index progress callback.
+
+    :param started: Monotonic index-build start time.
+    :returns: Callback logging stage rates and estimated time remaining.
+    """
+
+    def log_progress(progress: IndexProgress) -> None:
+        elapsed = time.monotonic() - started
         rate = progress.completed / elapsed if progress.completed is not None else None
         remaining = (
             (progress.total - progress.completed) / rate
@@ -281,7 +705,7 @@ def _ensure_canonical_index(
         )
         logger.info(
             "sketch_pool_index_progress",
-            event=progress.event,
+            progress_event=progress.event,
             stage=progress.stage,
             completed=progress.completed,
             total=progress.total,
@@ -291,16 +715,285 @@ def _ensure_canonical_index(
             eta_seconds=remaining,
         )
 
-    indexed = dataset.create_index(
-        SKETCH_VEC_COLUMN,
-        index_type="IVF_PQ",
-        name="sketch_pool_vec_idx",
-        metric=index.metric,
-        num_partitions=partitions,
-        num_sub_vectors=index.num_sub_vectors,
-        progress_callback=log_progress,
-    )
+    return log_progress
+
+
+def _ensure_canonical_index(
+    dataset: lance.LanceDataset, config: SketchPoolBackfillConfig
+) -> tuple[lance.LanceDataset, bool]:
+    """Build or validate the pooled-vector index when requested.
+
+    :param dataset: Dataset carrying canonical pooled sketches.
+    :param config: Index build selection and partition override.
+    :returns: Latest dataset snapshot and whether this call built an index.
+    :raises ValueError: Existing canonical indexes are ambiguous or incompatible.
+    """
+    from synth_setter.pipeline.data.add_embeddings import MIN_ROWS_FOR_INDEX, SKETCH_VEC_COLUMN
+
+    rows = _retry("count_index_eligibility_rows", dataset.count_rows)
+    if not config.build_index or rows < MIN_ROWS_FOR_INDEX:
+        return dataset, False
+    partitions, metric, sub_vectors = _index_parameters(dataset, config)
+    existing = _canonical_indexes(dataset)
+    if len(existing) > 1:
+        raise ValueError(f"multiple indexes target {SKETCH_VEC_COLUMN!r}")
+    if existing:
+        _validate_index(dataset, existing[0], partitions, metric, sub_vectors)
+        return dataset, False
+    progress_callback = _index_progress_callback(time.monotonic())
+
+    def create_or_recover() -> lance.LanceDataset:
+        latest = dataset.checkout_version(_branch_reference(config.branch, None))
+        recovered = _canonical_indexes(latest)
+        if recovered:
+            if len(recovered) != 1:
+                raise ValueError(f"multiple indexes target {SKETCH_VEC_COLUMN!r}")
+            _validate_index(latest, recovered[0], partitions, metric, sub_vectors)
+            return latest
+        return latest.create_index(
+            SKETCH_VEC_COLUMN,
+            index_type="IVF_PQ",
+            name=_INDEX_NAME,
+            metric=metric,
+            num_partitions=partitions,
+            num_sub_vectors=sub_vectors,
+            progress_callback=progress_callback,
+        )
+
+    indexed = _retry("create_index", create_or_recover)
+    created = _canonical_indexes(indexed)
+    if len(created) != 1:
+        raise ValueError(f"index creation produced {len(created)} canonical indexes")
+    _validate_index(indexed, created[0], partitions, metric, sub_vectors)
     return indexed, True
+
+
+def _resume_directory(config: SketchPoolBackfillConfig) -> Path:
+    """Resolve a stable, dataset-keyed fragment-report cache directory.
+
+    :param config: Migration identity and optional cache override.
+    :returns: Cache directory unique to the public dataset URI and branch.
+    """
+    if config.resume_dir is not None:
+        return config.resume_dir
+    key = hashlib.sha256(f"{config.lance_uri}\0{config.branch}".encode()).hexdigest()[:20]
+    return Path.home() / ".cache" / "synth-setter" / "sketch-pool-backfill" / key
+
+
+def _load_reports(
+    cache_dir: Path, identity: _CacheIdentity, fragment_ids: set[int]
+) -> dict[int, _FragmentReport]:
+    """Load compatible durable worker reports for an interrupted merge.
+
+    :param cache_dir: Dataset-keyed report directory.
+    :param identity: Immutable source operation identity.
+    :param fragment_ids: Current source fragment IDs.
+    :returns: Valid reports keyed by fragment ID.
+    :raises ValueError: Existing cache belongs to a different source operation.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    identity_path = cache_dir / "identity.json"
+    if identity_path.exists():
+        cached = _CacheIdentity.model_validate_json(identity_path.read_text(), strict=True)
+        if cached != identity:
+            raise ValueError(
+                f"resume cache {cache_dir} identifies a different source operation; "
+                "remove it or pass --resume-dir"
+            )
+    else:
+        identity_path.write_text(identity.model_dump_json(indent=2) + "\n")
+    reports: dict[int, _FragmentReport] = {}
+    for path in cache_dir.glob("fragment-*.json"):
+        report = _FragmentReport.model_validate_json(path.read_text(), strict=True)
+        if report.fragment_id in fragment_ids:
+            reports[report.fragment_id] = report
+    return reports
+
+
+def _persist_report(cache_dir: Path, report: _FragmentReport) -> None:
+    """Atomically persist one worker report before acknowledging progress.
+
+    :param cache_dir: Prepared fragment-report cache directory.
+    :param report: Strict worker result to persist.
+    """
+    destination = cache_dir / f"fragment-{report.fragment_id}.json"
+    temporary = destination.with_suffix(".json.tmp")
+    temporary.write_text(report.model_dump_json() + "\n")
+    temporary.replace(destination)
+
+
+def _run_fragment_tasks(
+    dataset: lance.LanceDataset,
+    config: SketchPoolBackfillConfig,
+    lance_uri: str,
+    storage_options: dict[str, str] | None,
+    source_version: int,
+    artifact: str,
+    started: float,
+) -> list[_FragmentReport]:
+    """Run missing fragment tasks and durably record each successful output.
+
+    :param dataset: Immutable source snapshot.
+    :param config: Worker, batch, and recycling controls.
+    :param lance_uri: Lance-openable dataset target.
+    :param storage_options: Object-store credentials, when required.
+    :param source_version: Immutable branch-local source version.
+    :param artifact: Pooling-policy identity.
+    :param started: Migration start time for progress rates.
+    :returns: One validated report per source fragment.
+    :raises TimeoutError: The configured overall task deadline expires.
+    :raises ValueError: A worker report is duplicate, unknown, or incomplete.
+    """
+    import ray
+
+    fragments = _retry("list_fragments", dataset.get_fragments)
+    total_rows = _retry("count_source_rows", dataset.count_rows)
+    fragment_ids = {fragment.metadata.id for fragment in fragments}
+    cache_dir = _resume_directory(config)
+    identity = _CacheIdentity(
+        lance_uri=config.lance_uri,
+        branch=config.branch,
+        source_version=source_version,
+        batch_size=config.batch_size,
+        artifact=artifact,
+    )
+    reports = _load_reports(cache_dir, identity, fragment_ids)
+    remote_transform = ray.remote(num_cpus=1, max_calls=config.tasks_per_worker)(
+        _transform_fragment
+    )
+    pending = [
+        remote_transform.remote(
+            _FragmentTask(
+                uri=lance_uri,
+                storage_options=storage_options,
+                branch=config.branch,
+                source_version=source_version,
+                fragment_id=fragment_id,
+                batch_size=config.batch_size,
+                artifact=artifact,
+            )
+        )
+        for fragment_id in sorted(fragment_ids - reports.keys())
+    ]
+    rows_done = sum(report.row_count for report in reports.values())
+    last_log = started
+    while pending:
+        ready, pending = ray.wait(pending, num_returns=1, timeout=10)
+        if ready:
+            report = _FragmentReport.model_validate(ray.get(ready[0]), strict=True)
+            if report.fragment_id not in fragment_ids or report.fragment_id in reports:
+                raise ValueError(f"unexpected worker report for fragment {report.fragment_id}")
+            _persist_report(cache_dir, report)
+            reports[report.fragment_id] = report
+            rows_done += report.row_count
+        now = time.monotonic()
+        if now - started > config.timeout_seconds:
+            raise TimeoutError(
+                f"fragment tasks exceeded {config.timeout_seconds} seconds with "
+                f"{len(pending)} pending"
+            )
+        if now - last_log >= _PROGRESS_INTERVAL_SECONDS or not pending:
+            elapsed = now - started
+            rate = rows_done / elapsed
+            logger.info(
+                "sketch_pool_backfill_progress",
+                rows=rows_done,
+                total_rows=total_rows,
+                rows_per_second=rate,
+                fragments=len(reports),
+                total_fragments=len(fragments),
+                elapsed_seconds=elapsed,
+                eta_seconds=(total_rows - rows_done) / rate if rate > 0 else None,
+            )
+            last_log = now
+    if reports.keys() != fragment_ids:
+        raise ValueError("worker reports do not cover every source fragment")
+    return [reports[fragment_id] for fragment_id in sorted(fragment_ids)]
+
+
+def _decode_reports(
+    reports: Sequence[_FragmentReport],
+) -> tuple[list[FragmentMetadata], pa.Schema]:
+    """Decode validated report payloads and enforce one worker schema.
+
+    :param reports: Validated reports loaded from the operation cache.
+    :returns: Lance fragment metadata list and the common Arrow schema.
+    :raises ValueError: Reports are empty or worker schemas differ.
+    """
+    import pyarrow as pa
+    from lance.fragment import FragmentMetadata
+
+    metadata = [FragmentMetadata.from_json(report.metadata_json) for report in reports]
+    schemas = [
+        pa.ipc.read_schema(pa.BufferReader(base64.b64decode(report.schema_ipc)))
+        for report in reports
+    ]
+    if not schemas or any(schema != schemas[0] for schema in schemas[1:]):
+        raise ValueError("worker schemas differ")
+    return metadata, schemas[0]
+
+
+def _commit_reports(
+    dataset: lance.LanceDataset,
+    reports: Sequence[_FragmentReport],
+    config: SketchPoolBackfillConfig,
+    lance_uri: str,
+    storage_options: dict[str, str] | None,
+    source_version: int,
+    artifact: bytes,
+) -> lance.LanceDataset:
+    """Commit worker reports with post-error publication recovery.
+
+    :param dataset: Immutable source snapshot.
+    :param reports: Complete validated fragment reports.
+    :param config: Target branch identity.
+    :param lance_uri: Lance-openable dataset target.
+    :param storage_options: Object-store credentials, when required.
+    :param source_version: Version read by every worker.
+    :param artifact: Expected pooled-field identity.
+    :returns: Committed or recovered published snapshot.
+    """
+    import lance
+
+    metadata, schema = _decode_reports(reports)
+
+    def commit_or_recover() -> lance.LanceDataset:
+        latest = _open_dataset(lance_uri, storage_options, config.branch, None)
+        if latest.version != source_version:
+            if _is_complete(latest, artifact):
+                return latest
+            raise ValueError(
+                f"branch advanced from source version {source_version} to "
+                f"incompatible version {latest.version}"
+            )
+        operation = lance.LanceOperation.Merge(metadata, schema)
+        return lance.LanceDataset.commit(
+            dataset,
+            operation,
+            read_version=source_version,
+            storage_options=storage_options,
+            commit_message="Pool stored full-resolution sketch controls",
+        )
+
+    return _retry("commit_merge", commit_or_recover)
+
+
+def _clear_resume_cache(config: SketchPoolBackfillConfig) -> None:
+    """Remove consumed fragment reports after the merge commit succeeds.
+
+    :param config: Migration whose report cache has been consumed.
+    """
+    cache_dir = _resume_directory(config)
+    try:
+        shutil.rmtree(cache_dir)
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning(
+            "sketch_pool_resume_cleanup_failed",
+            resume_dir=str(cache_dir),
+            exc_info=True,
+        )
 
 
 def _write_result(
@@ -320,169 +1013,241 @@ def _write_result(
     return result
 
 
+def _result(
+    config: SketchPoolBackfillConfig,
+    dataset: lance.LanceDataset,
+    source_version: int,
+    started: float,
+    already_complete: bool,
+    index_built: bool,
+    run_id: str,
+) -> SketchPoolBackfillResult:
+    """Build the auditable operation result from the final snapshot.
+
+    :param config: Executed migration configuration.
+    :param dataset: Final committed dataset snapshot.
+    :param source_version: Version read by the data operation.
+    :param started: Monotonic operation start.
+    :param already_complete: Whether data publication was skipped.
+    :param index_built: Whether this call published the index.
+    :param run_id: Unique invocation ID.
+    :returns: Persistable migration result.
+    """
+
+    elapsed = time.monotonic() - started
+    partitions: int | None = None
+    metric: str | None = None
+    sub_vectors: int | None = None
+    index_name: str | None = None
+    canonical_indices = _canonical_indexes(dataset)
+    if config.build_index and canonical_indices:
+        partitions, metric, sub_vectors = _index_parameters(dataset, config)
+        index_name = _INDEX_NAME
+    rows = _retry("count_result_rows", dataset.count_rows)
+    return SketchPoolBackfillResult(
+        run_id=run_id,
+        git_commit=resolve_git_sha(),
+        branch=config.branch,
+        rows=rows,
+        fragments=len(_retry("list_result_fragments", dataset.get_fragments)),
+        source_version=source_version,
+        committed_version=dataset.version,
+        elapsed_seconds=elapsed,
+        rows_per_second=0.0 if already_complete else rows / elapsed,
+        already_complete=already_complete,
+        index_built=index_built,
+        workers=config.workers,
+        batch_size=config.batch_size,
+        tasks_per_worker=config.tasks_per_worker,
+        index_name=index_name,
+        index_metric=metric,
+        num_partitions=partitions,
+        num_sub_vectors=sub_vectors,
+    )
+
+
+def _ensure_rollback_tag(
+    dataset: lance.LanceDataset,
+    config: SketchPoolBackfillConfig,
+    lance_uri: str,
+    storage_options: dict[str, str] | None,
+    create: bool,
+) -> None:
+    """Create or validate the immutable pre-migration rollback snapshot.
+
+    :param dataset: Current branch snapshot.
+    :param config: Required tag and branch identity.
+    :param lance_uri: Lance-openable dataset target.
+    :param storage_options: Object-store credentials, when required.
+    :param create: Whether a missing tag may identify the current snapshot.
+    :raises ValueError: The tag is missing or does not identify the pre-migration schema.
+    """
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
+
+    rollback_tag = config.rollback_tag
+    existing = _retry("list_tags", dataset.tags.list).get(rollback_tag)
+    if existing is None:
+        if not create:
+            raise ValueError(f"rollback tag {rollback_tag!r} must already exist")
+
+        def create_or_recover_tag() -> None:
+            if dataset.tags.list().get(rollback_tag) is not None:
+                return
+            dataset.tags.create(
+                rollback_tag,
+                _branch_reference(config.branch, dataset.version),
+            )
+
+        _retry("create_rollback_tag", create_or_recover_tag)
+        existing = _retry("list_created_tag", dataset.tags.list).get(rollback_tag)
+        if existing is None:
+            raise ValueError(f"rollback tag {rollback_tag!r} was not published")
+    allowed_branches = {None, "main"} if config.branch == "main" else {config.branch}
+    if existing["branch"] not in allowed_branches:
+        raise ValueError(
+            f"rollback tag {rollback_tag!r} identifies branch {existing['branch']!r}, "
+            f"not {config.branch!r}"
+        )
+    tagged = _open_dataset(
+        lance_uri,
+        storage_options,
+        config.branch,
+        existing["version"],
+    )
+    names = set(tagged.schema.names)
+    if SKETCH_STRUCT_FIELD not in names or SKETCH_FULL_STRUCT_FIELD in names:
+        raise ValueError(
+            f"rollback tag {rollback_tag!r} does not identify the canonical-only "
+            "pre-migration schema"
+        )
+
+
+def _prepare_source(
+    dataset: lance.LanceDataset,
+    config: SketchPoolBackfillConfig,
+    lance_uri: str,
+    storage_options: dict[str, str] | None,
+) -> lance.LanceDataset:
+    """Validate, tag, and if necessary rename the migration source.
+
+    :param dataset: Current branch snapshot.
+    :param config: Rollback tag and branch configuration.
+    :param lance_uri: Lance-openable dataset target.
+    :param storage_options: Object-store credentials, when required.
+    :returns: Snapshot carrying the renamed full-resolution source.
+    :raises ValueError: Source state or rollback tag is incompatible.
+    """
+
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
+
+    names = set(dataset.schema.names)
+    has_canonical = SKETCH_STRUCT_FIELD in names
+    has_full = SKETCH_FULL_STRUCT_FIELD in names
+    if has_canonical and has_full:
+        raise ValueError(f"existing {SKETCH_STRUCT_FIELD!r} field has incompatible metadata")
+    if not has_canonical and not has_full:
+        raise ValueError(
+            f"dataset has neither {SKETCH_STRUCT_FIELD!r} nor {SKETCH_FULL_STRUCT_FIELD!r} source"
+        )
+    if _retry("count_prepared_rows", dataset.count_rows) == 0:
+        raise ValueError("cannot backfill an empty dataset")
+    _ensure_rollback_tag(
+        dataset,
+        config,
+        lance_uri,
+        storage_options,
+        create=has_canonical,
+    )
+    if not has_canonical:
+        return dataset
+    alteration = _ColumnRename(
+        path=SKETCH_STRUCT_FIELD,
+        name=SKETCH_FULL_STRUCT_FIELD,
+    )
+
+    def rename_or_recover() -> lance.LanceDataset:
+        latest = _open_dataset(lance_uri, storage_options, config.branch, None)
+        latest_names = set(latest.schema.names)
+        if SKETCH_FULL_STRUCT_FIELD in latest_names and SKETCH_STRUCT_FIELD not in latest_names:
+            return latest
+        if SKETCH_STRUCT_FIELD not in latest_names or SKETCH_FULL_STRUCT_FIELD in latest_names:
+            raise ValueError("branch advanced to an incompatible schema during source rename")
+        cast("_AlterColumnsDataset", latest).alter_columns(alteration)
+        return _open_dataset(lance_uri, storage_options, config.branch, None)
+
+    return _retry("rename_sketch_source", rename_or_recover)
+
+
 def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfillResult:
     """Pool every fragment in parallel and publish one branch-scoped Lance commit.
 
     :param config: Strict migration configuration.
     :returns: Committed or already-complete migration summary.
-    :raises ValueError: Source columns, rollback tag, or worker schemas are incompatible.
     """
     import ray
 
     started = time.monotonic()
+    run_id = str(uuid.uuid4())
     ray.init(num_cpus=config.workers, include_dashboard=False, log_to_driver=False)
     try:
-        import lance
-
-        from synth_setter.pipeline.data.add_embeddings import (
-            SKETCH_FULL_STRUCT_FIELD,
-            _sketch_pool_artifact_identity,
-        )
+        from synth_setter.pipeline.data.add_embeddings import _sketch_pool_artifact_identity
 
         lance_uri, storage_options = _lance_target(config.lance_uri)
-        dataset = lance.dataset(
-            lance_uri, storage_options=storage_options
-        ).checkout_version(_branch_reference(config.branch, None))
-        artifact = _sketch_pool_artifact_identity("").encode()
-        if _is_complete(dataset, artifact):
+        dataset = _open_dataset(lance_uri, storage_options, config.branch, None)
+        artifact = _sketch_pool_artifact_identity("")
+        if _is_complete(dataset, artifact.encode()):
+            _ensure_rollback_tag(
+                dataset,
+                config,
+                lance_uri,
+                storage_options,
+                create=False,
+            )
             source_version = dataset.version
             dataset, index_built = _ensure_canonical_index(dataset, config)
             return _write_result(
-                SketchPoolBackfillResult(
-                    branch=config.branch,
-                    rows=dataset.count_rows(),
-                    fragments=len(dataset.get_fragments()),
-                    source_version=source_version,
-                    committed_version=dataset.version,
-                    elapsed_seconds=time.monotonic() - started,
-                    rows_per_second=0.0,
-                    already_complete=True,
-                    index_built=index_built,
+                _result(
+                    config,
+                    dataset,
+                    source_version,
+                    started,
+                    True,
+                    index_built,
+                    run_id,
                 ),
                 config.result,
             )
-
-        names = set(dataset.schema.names)
-        has_canonical = SKETCH_STRUCT_FIELD in names
-        has_full = SKETCH_FULL_STRUCT_FIELD in names
-        if has_canonical and has_full:
-            raise ValueError(
-                f"existing {SKETCH_STRUCT_FIELD!r} field has incompatible pooling metadata"
-            )
-        if not has_canonical and not has_full:
-            raise ValueError(
-                f"dataset has neither {SKETCH_STRUCT_FIELD!r} nor "
-                f"{SKETCH_FULL_STRUCT_FIELD!r} source column"
-            )
-        if dataset.count_rows() == 0:
-            raise ValueError("cannot backfill an empty dataset")
-
-        if config.rollback_tag is not None:
-            existing = dataset.tags.list().get(config.rollback_tag)
-            allowed_branches = (
-                {None, "main"} if config.branch == "main" else {config.branch}
-            )
-            rollback_version = dataset.version if has_canonical else dataset.version - 1
-            if existing is None:
-                if not has_canonical:
-                    raise ValueError(
-                        f"rollback tag {config.rollback_tag!r} must exist before resuming "
-                        "a renamed source"
-                    )
-                dataset.tags.create(
-                    config.rollback_tag,
-                    _branch_reference(config.branch, dataset.version),
-                )
-            elif (
-                existing["branch"] not in allowed_branches
-                or existing["version"] != rollback_version
-            ):
-                raise ValueError(
-                    f"rollback tag {config.rollback_tag!r} does not identify branch "
-                    f"{config.branch!r} version {rollback_version}"
-                )
-
-        if has_canonical:
-            dataset.alter_columns(
-                cast(
-                    "Any",
-                    {"path": SKETCH_STRUCT_FIELD, "name": SKETCH_FULL_STRUCT_FIELD},
-                )
-            )
-            dataset = lance.dataset(
-                lance_uri, storage_options=storage_options
-            ).checkout_version(_branch_reference(config.branch, None))
-
+        dataset = _prepare_source(dataset, config, lance_uri, storage_options)
         source_version = dataset.version
-        fragments = dataset.get_fragments()
-        total_rows = dataset.count_rows()
-        remote_transform = ray.remote(
-            num_cpus=1, max_calls=config.tasks_per_worker
-        )(_transform_fragment)
-        pending = [
-            remote_transform.remote(
-                lance_uri,
-                storage_options,
-                config.branch,
-                source_version,
-                fragment.metadata.id,
-                config.batch_size,
-                artifact,
-            )
-            for fragment in fragments
-        ]
-        results: list[tuple[bytes, bytes, int]] = []
-        rows_done = 0
-        last_log = started
-        while pending:
-            ready, pending = ray.wait(pending, num_returns=1, timeout=10)
-            if ready:
-                result = ray.get(ready[0])
-                results.append(result)
-                rows_done += result[2]
-            now = time.monotonic()
-            if now - last_log >= 30 or not pending:
-                elapsed = now - started
-                rows_per_second = rows_done / elapsed
-                logger.info(
-                    "sketch_pool_backfill_progress",
-                    rows=rows_done,
-                    total_rows=total_rows,
-                    rows_per_second=rows_per_second,
-                    fragments=len(results),
-                    total_fragments=len(fragments),
-                    elapsed_seconds=elapsed,
-                    eta_seconds=(total_rows - rows_done) / rows_per_second
-                    if rows_per_second > 0
-                    else None,
-                )
-                last_log = now
-
-        metadata = [pickle.loads(result[0]) for result in results]  # noqa: S301
-        schemas = [pickle.loads(result[1]) for result in results]  # noqa: S301
-        if not schemas or any(schema != schemas[0] for schema in schemas[1:]):
-            raise ValueError("worker schemas differ")
-        operation = lance.LanceOperation.Merge(metadata, schemas[0])
-        committed = lance.LanceDataset.commit(
+        reports = _run_fragment_tasks(
             dataset,
-            operation,
-            read_version=source_version,
-            storage_options=storage_options,
-            commit_message="Pool stored full-resolution sketch controls",
+            config,
+            lance_uri,
+            storage_options,
+            source_version,
+            artifact,
+            started,
         )
+        committed = _commit_reports(
+            dataset,
+            reports,
+            config,
+            lance_uri,
+            storage_options,
+            source_version,
+            artifact.encode(),
+        )
+        _clear_resume_cache(config)
         committed, index_built = _ensure_canonical_index(committed, config)
-        elapsed = time.monotonic() - started
         return _write_result(
-            SketchPoolBackfillResult(
-                branch=config.branch,
-                rows=committed.count_rows(),
-                fragments=len(committed.get_fragments()),
-                source_version=source_version,
-                committed_version=committed.version,
-                elapsed_seconds=elapsed,
-                rows_per_second=total_rows / elapsed,
-                already_complete=False,
-                index_built=index_built,
+            _result(
+                config,
+                committed,
+                source_version,
+                started,
+                False,
+                index_built,
+                run_id,
             ),
             config.result,
         )
@@ -501,11 +1266,11 @@ def _parse_args() -> SketchPoolBackfillConfig:
     parser.add_argument("--workers", required=True, type=int)
     parser.add_argument("--batch-size", default=128, type=int)
     parser.add_argument("--tasks-per-worker", default=4, type=int)
-    parser.add_argument("--rollback-tag")
-    parser.add_argument(
-        "--build-index", action=argparse.BooleanOptionalAction, default=True
-    )
+    parser.add_argument("--rollback-tag", required=True)
+    parser.add_argument("--build-index", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num-partitions", type=int)
+    parser.add_argument("--resume-dir", type=Path)
+    parser.add_argument("--timeout-seconds", type=float, default=21_600.0)
     parser.add_argument("--result", type=Path)
     args = parser.parse_args()
     return SketchPoolBackfillConfig.model_validate(vars(args), strict=True)

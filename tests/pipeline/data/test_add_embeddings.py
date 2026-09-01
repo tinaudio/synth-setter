@@ -77,6 +77,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     ParamTextEncodeFn,
     _configure_lance_logging,
     _downmix_to_mono,
+    _encode_sketch_pool_column,
     _encode_t5gemma_column,
     _load_clap_spec_encoder,
     _load_m2l_spec_encoder,
@@ -356,8 +357,7 @@ def _run_udf_in_process(
     :param batch_size: Maximum rows per invocation.
     """
     outputs = [
-        udf(batch)
-        for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size)
+        udf(batch) for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size)
     ]
     reader = pa.RecordBatchReader.from_batches(outputs[0].schema, outputs)
     _REAL_ADD_COLUMNS(dataset, reader, batch_size=batch_size)
@@ -585,6 +585,15 @@ def test_add_embeddings_config_with_empty_embedding_selection_raises() -> None:
     """An empty registry selection is rejected instead of becoming a silent no-op."""
     with pytest.raises(ValueError, match="embeddings must select at least one registry key"):
         AddEmbeddingsConfig(lance_uri=_LANCE_URI, embeddings=())
+
+
+def test_add_embeddings_config_with_both_sketch_policies_rejects_conflict() -> None:
+    """Generation and migration cannot both overwrite the canonical sketch field."""
+    with pytest.raises(ValueError, match="sketch and sketch_pool cannot be selected together"):
+        AddEmbeddingsConfig(
+            lance_uri=_LANCE_URI,
+            embeddings=("sketch", "sketch_pool"),
+        )
 
 
 def test_add_embeddings_config_with_m2l_checkpoint_override_raises() -> None:
@@ -1152,9 +1161,7 @@ def test_add_embeddings_with_recreated_source_rejects_stale_resume_batches(
         resume_cache=resume_cache,
         build_index=False,
     )
-    monkeypatch.setitem(
-        EMBEDDING_REGISTRY, "m2l", replace(base_spec, load_encoder=load_crashing)
-    )
+    monkeypatch.setitem(EMBEDDING_REGISTRY, "m2l", replace(base_spec, load_encoder=load_crashing))
     with pytest.raises(OSError, match="simulated crash"):
         add_embeddings(config)
     assert resume_cache.exists()
@@ -1312,9 +1319,7 @@ def test_write_columns_with_default_batch_size_bounds_work_and_progress(
     batch_sizes: list[int] = []
     spec = _fake_spec("m2l")
 
-    def encode(
-        sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
-    ) -> pa.Array:
+    def encode(sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder) -> pa.Array:
         batch_sizes.append(len(sources[AUDIO_FIELD]))
         return spec.encode_column(sources, sample_rate, encoder)
 
@@ -1564,9 +1569,7 @@ def test_missing_embedding_specs_with_legacy_metadata_accepts_existing_policy(
     clap = np.zeros((2, CLAP_EMBEDDING_DIM), dtype=np.float32)
     write_lance_shard(uri, {AUDIO_FIELD: audio, CLAP_FIELD: clap})
     spec = _fake_spec("clap")
-    config = AddEmbeddingsConfig(
-        lance_uri=str(uri), embeddings=("clap",), build_index=False
-    )
+    config = AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
 
     with capture_logs() as logs:
         missing = _missing_embedding_specs(lance.dataset(uri), [spec], config)
@@ -2293,9 +2296,7 @@ def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
     assert _resolve_clap_checkpoint(str(tmp_path)) == str(tmp_path)
 
 
-def _materialize_clap_stub(
-    downloads: list[tuple[str, Path]], uri: str, destination: Path
-) -> None:
+def _materialize_clap_stub(downloads: list[tuple[str, Path]], uri: str, destination: Path) -> None:
     """Record a checkpoint download and materialize the mirror contract.
 
     :param downloads: Download call ledger.
@@ -2417,8 +2418,7 @@ def test_resolve_clap_checkpoint_with_training_r2_source_uses_uri_cache(
     legacy.mkdir(parents=True)
     (legacy / "legacy").write_text("preserve")
     expected = (
-        tmp_path
-        / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
+        tmp_path / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
     )
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.setattr("synth_setter.pipeline.r2_io.ensure_r2_env_loaded", lambda: None)
@@ -2477,8 +2477,7 @@ def test_resolve_clap_checkpoint_with_missing_required_file_repairs_cache(
     :param missing_file: Required mirror file omitted from the published cache.
     """
     checkpoint_dir = (
-        tmp_path
-        / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
+        tmp_path / "synth-setter/models/r2/intermediate-data/models/encoders/clap-htsat-unfused"
     )
     _materialize_clap_stub([], DEFAULT_CLAP_TRAINING_CHECKPOINT, checkpoint_dir)
     (checkpoint_dir / missing_file).unlink()
@@ -2903,9 +2902,7 @@ def test_add_embeddings_uses_sample_rate_from_dataset_metadata(
     seen: list[int] = []
     spec = _fake_spec("clap")
 
-    def encode(
-        sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
-    ) -> pa.Array:
+    def encode(sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder) -> pa.Array:
         seen.append(sample_rate)
         return spec.encode_column(sources, sample_rate, encoder)
 
@@ -3488,9 +3485,7 @@ def _struct_sketch_controls(struct: pa.StructArray) -> np.ndarray:
     :param struct: Nested sketch column values.
     :returns: ``(rows, NUM_SKETCH_CONTROLS, F)`` float32 controls.
     """
-    pitch = cast(
-        "pa.FixedShapeTensorArray", struct.field(SKETCH_PITCH_CHILD)
-    ).to_numpy_ndarray()
+    pitch = cast("pa.FixedShapeTensorArray", struct.field(SKETCH_PITCH_CHILD)).to_numpy_ndarray()
     rows, _, frames = pitch.shape
     stacked = np.empty((rows, NUM_SKETCH_CONTROLS, frames), dtype=np.float32)
     for child, row in (
@@ -3541,9 +3536,7 @@ def test_sketch_pool_backfill_reads_renamed_controls_and_writes_pooled_struct(
     source = sketch_struct_array(controls)
     dataset = lance.dataset(str(uri))
     reader = pa.RecordBatchReader.from_batches(
-        pa.schema(
-            [pa.field(SKETCH_STRUCT_FIELD, source.type)], metadata=dataset.schema.metadata
-        ),
+        pa.schema([pa.field(SKETCH_STRUCT_FIELD, source.type)], metadata=dataset.schema.metadata),
         [pa.record_batch([source], names=[SKETCH_STRUCT_FIELD])],
     )
     dataset.add_columns(reader)
@@ -3571,6 +3564,61 @@ def test_sketch_pool_backfill_reads_renamed_controls_and_writes_pooled_struct(
     np.testing.assert_allclose(_struct_sketch_vec(pooled), expected.mean(axis=-1), rtol=1e-6)
 
 
+def test_sketch_pool_backfill_with_short_affine_child_rejects_shape() -> None:
+    """A source row cannot silently alter the historical 401-frame contract."""
+    rows = np.array(
+        [
+            {
+                SKETCH_LOUDNESS_CHILD: np.zeros(400, dtype=np.float32),
+                SKETCH_CENTROID_CHILD: np.zeros(401, dtype=np.float32),
+                SKETCH_PITCH_CHILD: np.zeros(SKETCH_PITCH_BINS * 401, dtype=np.float32),
+            }
+        ],
+        dtype=object,
+    )
+
+    with pytest.raises(ValueError, match="affine child shapes"):
+        _encode_sketch_pool_column({SKETCH_FULL_STRUCT_FIELD: rows}, 0, lambda values: values)
+
+
+def test_sketch_pool_backfill_with_nonfinite_control_rejects_value() -> None:
+    """A non-finite historical control cannot enter the canonical pooled column."""
+    loudness = np.zeros(401, dtype=np.float32)
+    loudness[200] = np.nan
+    rows = np.array(
+        [
+            {
+                SKETCH_LOUDNESS_CHILD: loudness,
+                SKETCH_CENTROID_CHILD: np.zeros(401, dtype=np.float32),
+                SKETCH_PITCH_CHILD: np.zeros(SKETCH_PITCH_BINS * 401, dtype=np.float32),
+            }
+        ],
+        dtype=object,
+    )
+
+    with pytest.raises(ValueError, match="non-finite values"):
+        _encode_sketch_pool_column({SKETCH_FULL_STRUCT_FIELD: rows}, 0, lambda values: values)
+
+
+def test_sketch_pool_backfill_with_negative_pitch_rejects_bounds() -> None:
+    """A historical pitch activation cannot fall below its documented zero bound."""
+    pitch = np.zeros(SKETCH_PITCH_BINS * 401, dtype=np.float32)
+    pitch[200] = -0.1
+    rows = np.array(
+        [
+            {
+                SKETCH_LOUDNESS_CHILD: np.zeros(401, dtype=np.float32),
+                SKETCH_CENTROID_CHILD: np.zeros(401, dtype=np.float32),
+                SKETCH_PITCH_CHILD: pitch,
+            }
+        ],
+        dtype=object,
+    )
+
+    with pytest.raises(ValueError, match="controls out of bounds"):
+        _encode_sketch_pool_column({SKETCH_FULL_STRUCT_FIELD: rows}, 0, lambda values: values)
+
+
 def test_sketch_encode_column_builds_pooled_struct_and_vec() -> None:
     """The sketch closure stores pooled controls and their search vector."""
     audio = np.random.default_rng(7).random((3, 2, _FIXTURE_SAMPLES)).astype(np.float16)
@@ -3581,12 +3629,8 @@ def test_sketch_encode_column_builds_pooled_struct_and_vec() -> None:
     assert pa.types.is_struct(array.type)
     struct = cast("pa.StructArray", array)
     child_types = {field.name: field.type for field in struct.type}
-    assert child_types[SKETCH_LOUDNESS_CHILD] == pa.list_(
-        pa.float32(), SKETCH_STORAGE_FRAMES
-    )
-    assert child_types[SKETCH_CENTROID_CHILD] == pa.list_(
-        pa.float32(), SKETCH_STORAGE_FRAMES
-    )
+    assert child_types[SKETCH_LOUDNESS_CHILD] == pa.list_(pa.float32(), SKETCH_STORAGE_FRAMES)
+    assert child_types[SKETCH_CENTROID_CHILD] == pa.list_(pa.float32(), SKETCH_STORAGE_FRAMES)
     pitch_type = cast("pa.FixedShapeTensorType", child_types[SKETCH_PITCH_CHILD])
     assert list(pitch_type.shape) == [SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES]
     assert child_types[SKETCH_VEC_CHILD] == pa.list_(pa.float32(), NUM_SKETCH_CONTROLS)
@@ -3683,15 +3727,11 @@ def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
     rows = SKETCH_ENCODE_MAX_BATCH + 3
     # Clips long enough for PESTO's CQT and the loudness STFT windows.
     samples = 8192
-    audio = (
-        (np.random.default_rng(23).random((rows, 1, samples)) - 0.5) * 0.8
-    ).astype(np.float32)
+    audio = ((np.random.default_rng(23).random((rows, 1, samples)) - 0.5) * 0.8).astype(np.float32)
 
     chunked = _sketch_encode(audio, _SAMPLE_RATE)
 
-    full = (
-        extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE).cpu().numpy()
-    )
+    full = extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE).cpu().numpy()
     np.testing.assert_allclose(chunked, full, atol=1e-5)
 
 
@@ -3934,9 +3974,7 @@ def _nested_vec_dataset(uri: Path, rows: int) -> np.ndarray:
         pa.array(vectors.reshape(-1), pa.float32()), NUM_SKETCH_CONTROLS
     )
     struct = pa.StructArray.from_arrays([vec], names=[SKETCH_VEC_CHILD])
-    table = pa.table(
-        {SKETCH_STRUCT_FIELD: struct, "row": pa.array(np.arange(rows), pa.int32())}
-    )
+    table = pa.table({SKETCH_STRUCT_FIELD: struct, "row": pa.array(np.arange(rows), pa.int32())})
     lance.write_dataset(table, str(uri))
     return vectors
 
