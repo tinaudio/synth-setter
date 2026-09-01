@@ -11,7 +11,15 @@ readonly CHECKPOINT_PATH="/home/build/flow_sketch_prelim.ckpt"
 readonly R2_BASE="r2://experiments/eval/flow_sketch_prelim/flow_sketch_prelim-20260901T163655048Z/cfg-ablation"
 readonly -a CONTENT_STRENGTHS=(0 1 2)
 readonly -a SKETCH_STRENGTHS=(0 1 2)
-# Validate routing and launch one job per CFG pair.
+# Validate options and plan or launch one managed job per CFG pair.
+# Globals:
+#   Reads launch constants and CFG strength arrays; clears remote SkyPilot credentials.
+# Arguments:
+#   Optional --ablation-id ID and --execute flags; no positional arguments.
+# Outputs:
+#   Progress and plans to stdout; usage and submission failures to stderr.
+# Returns:
+#   0 on success, 1 if submission fails, 2 for invalid input, or the preflight status.
 main() {
   local execute=false
   local ablation_id
@@ -19,7 +27,7 @@ main() {
   while (($# > 0)); do
     case "$1" in
       --ablation-id)
-        if (($# < 2)); then
+        if (($# < 2)) || [[ "$2" == --* ]]; then
           echo "--ablation-id requires a value" >&2
           return 2
         fi
@@ -36,7 +44,7 @@ main() {
         ;;
     esac
   done
-  if [[ ! "${ablation_id}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  if [[ ! "${ablation_id}" =~ ^[A-Za-z0-9._-]+$ || "${ablation_id}" == "." || "${ablation_id}" == ".." ]]; then
     echo "ablation ID must contain only letters, numbers, dot, underscore, or hyphen" >&2
     return 2
   fi
@@ -92,7 +100,7 @@ main() {
   done
 
   if [[ "${execute}" == false ]]; then
-    echo "Nothing submitted. Re-run with --execute to launch the 3x3 grid."
+    echo "Nothing submitted. Re-run with --execute to launch the CFG grid."
   fi
   return "${status}"
 }

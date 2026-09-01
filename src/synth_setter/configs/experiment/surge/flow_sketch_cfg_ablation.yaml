@@ -1,7 +1,6 @@
 # @package _global_
 
 # Content/sketch CFG evaluation grid for the flow_sketch_prelim checkpoint (#3000).
-# Cross-process seeding and immutable checkpoint/dataset pins remain follow-up hardening.
 defaults:
   - /experiment/surge/flow_sketch_prelim
   - override /callbacks: [eval_vst, log_per_param_mse]

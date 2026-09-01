@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).parents[2]
 _LAUNCHER = _REPO_ROOT / "jobs/eval/launch_flow_sketch_cfg_ablation.sh"
@@ -79,6 +80,29 @@ def test_cfg_ablation_rejects_missing_ablation_id_before_planning() -> None:
     assert "DRY RUN:" not in result.stdout
 
 
+def test_cfg_ablation_rejects_flag_as_ablation_id_before_planning() -> None:
+    """Do not consume an execution flag as an ablation ID."""
+    result = _dry_run(("--ablation-id", "--execute"))
+
+    assert result.returncode == 2
+    assert "--ablation-id requires a value" in result.stderr
+    assert "balance preflight passed" not in result.stdout
+    assert "DRY RUN:" not in result.stdout
+
+
+@pytest.mark.parametrize("ablation_id", ["../other-run", ".", ".."])
+def test_cfg_ablation_rejects_unsafe_ablation_id_before_planning(ablation_id: str) -> None:
+    """Keep local and R2 outputs inside the ablation namespace.
+
+    :param ablation_id: Invalid output namespace component.
+    """
+    result = _dry_run(("--ablation-id", ablation_id))
+
+    assert result.returncode == 2
+    assert "ablation ID must contain" in result.stderr
+    assert "DRY RUN:" not in result.stdout
+
+
 def test_cfg_ablation_execute_clears_remote_skypilot_credentials(tmp_path: Path) -> None:
     """Local dispatch does not inherit incompatible remote-client authentication.
 
@@ -86,12 +110,21 @@ def test_cfg_ablation_execute_clears_remote_skypilot_credentials(tmp_path: Path)
     """
     uv_sentinel = tmp_path / "uv"
     uv_sentinel.write_text(
-        '#!/bin/bash\n[[ -z "${SKYPILOT_SERVICE_ACCOUNT_TOKEN+x}" ]]\n',
+        """#!/bin/bash
+set -euo pipefail
+[[ -z "${SKYPILOT_API_SERVER_ENDPOINT+x}" ]]
+[[ -z "${SKYPILOT_API_SERVER_KEY+x}" ]]
+[[ -z "${SKYPILOT_API_SERVER_TOKEN+x}" ]]
+[[ -z "${SKYPILOT_SERVICE_ACCOUNT_TOKEN+x}" ]]
+""",
         encoding="utf-8",
     )
     uv_sentinel.chmod(0o755)
     env = os.environ.copy()
     env["PATH"] = f"{tmp_path}:{env['PATH']}"
+    env["SKYPILOT_API_SERVER_ENDPOINT"] = str(tmp_path)
+    env["SKYPILOT_API_SERVER_KEY"] = str(tmp_path)
+    env["SKYPILOT_API_SERVER_TOKEN"] = str(tmp_path)
     env["SKYPILOT_SERVICE_ACCOUNT_TOKEN"] = str(tmp_path)
 
     result = subprocess.run(  # noqa: S603 — repository-owned script
@@ -105,26 +138,3 @@ def test_cfg_ablation_execute_clears_remote_skypilot_credentials(tmp_path: Path)
 
     assert result.returncode == 0, result.stderr
     assert "DRY RUN:" not in result.stdout
-
-
-def test_cfg_ablation_experiment_loads_through_eval_entrypoint() -> None:
-    """Hydra discovers the experiment through the installed evaluation CLI."""
-    result = subprocess.run(  # noqa: S603 — repository-owned module
-        [
-            sys.executable,
-            "-m",
-            "synth_setter.cli.eval",
-            "--cfg",
-            "job",
-            "experiment=surge/flow_sketch_cfg_ablation",
-        ],
-        cwd=_REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "consumed_train_config_id: flow_sketch_prelim" in result.stdout
-    assert "predict_file: ${datamodule.dataset_root}/val.lance" in result.stdout
-    assert "test_sample_steps: 50" in result.stdout

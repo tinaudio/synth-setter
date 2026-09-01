@@ -135,10 +135,14 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
     assert "test/param_mse" in result.stdout
 
 
-def _compose_sketch_cfg_eval(cfg_train_sketch_lance: DictConfig) -> DictConfig:
+def _compose_sketch_cfg_eval(
+    cfg_train_sketch_lance: DictConfig,
+    experiment: str = "surge/flow_sketch_prelim",
+) -> DictConfig:
     """Compose the toy pooled-sketch evaluation configuration.
 
     :param cfg_train_sketch_lance: Fixture providing paths and pooled Lance splits.
+    :param experiment: Experiment config group exercised by evaluation.
     :returns: Evaluation config with sketch guidance disabled initially.
     """
     GlobalHydra.instance().clear()
@@ -147,7 +151,7 @@ def _compose_sketch_cfg_eval(cfg_train_sketch_lance: DictConfig) -> DictConfig:
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/flow_sketch_prelim",
+                f"experiment={experiment}",
                 "datamodule=surge_lance",
                 "synth=surge_4",
                 "conditioning=m2l",
@@ -164,11 +168,13 @@ def _compose_sketch_cfg_eval(cfg_train_sketch_lance: DictConfig) -> DictConfig:
         cfg.mode = "test"
         cfg.datamodule.dataset_root = cfg_train_sketch_lance.datamodule.dataset_root
         cfg.datamodule.download_dataset_root_uri = None
+        cfg.datamodule.download_dataset_row_limit = None
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
         cfg.datamodule.persistent_workers = False
         cfg.datamodule.pin_memory = False
         cfg.model.compile = False
+        cfg.model.validation_sample_steps = 2
         cfg.model.test_sample_steps = 2
         cfg.model.test_sketch_cfg_strength = 0.0
         cfg.model.vector_field.num_layers = 1
@@ -201,6 +207,33 @@ def _save_nonzero_sketch_checkpoint(cfg: DictConfig, checkpoint_path: Path) -> N
     )
     trainer.strategy.connect(model)
     trainer.save_checkpoint(checkpoint_path)
+
+
+def test_evaluate_flow_sketch_cfg_ablation_validate_returns_finite_metric(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """Consume the ablation config through the real evaluation entrypoint.
+
+    :param cfg_train_sketch_lance: Fixture providing pooled-sketch Lance splits.
+    """
+    cfg = _compose_sketch_cfg_eval(
+        cfg_train_sketch_lance,
+        experiment="surge/flow_sketch_cfg_ablation",
+    )
+    cfg.mode = "validate"
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metric_dict["val/param_mse"])
+    assert object_dict["model"].sketch_tokens is not None
+    assert object_dict["datamodule"].sketch_controls is not None
+    assert cfg.consumed_train_config_id == "flow_sketch_prelim"
+    assert cfg.evaluation.render_vst is True
+    assert cfg.evaluation.compute_metrics is True
 
 
 def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
