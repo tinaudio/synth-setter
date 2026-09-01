@@ -36,6 +36,8 @@ from synth_setter.pipeline.data.backfill_sketch_pool import (
     _load_reports,
     _parse_args,
     _persist_report,
+    _resume_directory,
+    _retry,
     _transform_fragment,
     backfill_sketch_pool,
 )
@@ -108,6 +110,15 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
         ),
     )
 
+    backfill_sketch_pool(config)
+    dataset = lance.dataset(local_uri).checkout_version(("candidate", None))
+    first_committed_version = dataset.version
+    with pytest.raises(ValueError, match="config .* does not match"):
+        _ensure_canonical_index(
+            dataset,
+            config.model_copy(update={"num_partitions": 1}),
+        )
+
     command = [
         str(Path(sys.executable).parent / "synth-setter-backfill-sketch-pool"),
         "--lance-uri",
@@ -131,15 +142,6 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
         command, check=False, capture_output=True, text=True
     )
     assert completed.returncode == 0, completed.stderr
-    dataset = lance.dataset(local_uri).checkout_version(("candidate", None))
-    first_committed_version = dataset.version
-    with pytest.raises(ValueError, match="config .* does not match"):
-        _ensure_canonical_index(
-            dataset,
-            config.model_copy(update={"num_partitions": 1}),
-        )
-
-    backfill_sketch_pool(config)
 
     dataset = lance.dataset(local_uri).checkout_version(("candidate", None))
     assert dataset.version == first_committed_version
@@ -168,6 +170,104 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_retry_with_transient_failures_returns_eventual_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounded retries recover after transient object-store failures.
+
+    :param monkeypatch: Fixture disabling retry sleeps.
+    """
+    attempts = 0
+
+    def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise OSError("transient")
+        return "complete"
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.backfill_sketch_pool.time.sleep", lambda _: None
+    )
+
+    assert _retry("test", operation) == "complete"
+    assert attempts == 3
+
+
+def test_retry_with_persistent_failure_raises_final_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounded retries surface the final object-store failure.
+
+    :param monkeypatch: Fixture disabling retry sleeps.
+    """
+    attempts = 0
+
+    def operation() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise OSError("persistent")
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.backfill_sketch_pool.time.sleep", lambda _: None
+    )
+
+    with pytest.raises(OSError, match="persistent"):
+        _retry("test", operation)
+    assert attempts == 4
+
+
+def test_resume_directory_without_override_is_dataset_keyed() -> None:
+    """Default report caches separate public dataset and branch identities."""
+    first = SketchPoolBackfillConfig(
+        lance_uri="r2://bucket/a.lance",
+        branch="candidate",
+        workers=1,
+        rollback_tag="before",
+    )
+    second = first.model_copy(update={"lance_uri": "r2://bucket/b.lance"})
+
+    assert _resume_directory(first) != _resume_directory(second)
+
+
+def test_ensure_canonical_index_when_disabled_skips_small_dataset(tmp_path: Path) -> None:
+    """An explicit no-index operation does not inspect or mutate vector indexes.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    uri = tmp_path / "no-index.lance"
+    dataset = lance.write_dataset(pa.table({"value": [1]}), uri)
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(uri),
+        workers=1,
+        rollback_tag="before",
+        build_index=False,
+    )
+
+    unchanged, built = _ensure_canonical_index(dataset, config)
+
+    assert unchanged.version == dataset.version
+    assert built is False
+
+
+def test_ensure_rollback_tag_without_existing_tag_rejects_resume(tmp_path: Path) -> None:
+    """A post-rename resume cannot invent a missing rollback snapshot.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    uri = tmp_path / "missing-tag.lance"
+    dataset = lance.write_dataset(pa.table({SKETCH_FULL_STRUCT_FIELD: [1]}), uri)
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(uri),
+        workers=1,
+        rollback_tag="missing",
+        build_index=False,
+    )
+
+    with pytest.raises(ValueError, match="must already exist"):
+        _ensure_rollback_tag(dataset, config, str(uri), None, create=False)
+
+
 def test_ensure_rollback_tag_with_post_rename_snapshot_rejects_tag(tmp_path: Path) -> None:
     """A same-branch tag must still identify the canonical-only pre-migration schema.
 
@@ -185,6 +285,28 @@ def test_ensure_rollback_tag_with_post_rename_snapshot_rejects_tag(tmp_path: Pat
 
     with pytest.raises(ValueError, match="canonical-only pre-migration schema"):
         _ensure_rollback_tag(dataset, config, str(uri), None, create=False)
+
+
+def test_transform_fragment_with_missing_id_rejects_task(tmp_path: Path) -> None:
+    """A worker cannot report a fragment absent from its immutable source version.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    uri = tmp_path / "missing-fragment.lance"
+    dataset = lance.write_dataset(pa.table({SKETCH_FULL_STRUCT_FIELD: [1]}), uri)
+
+    with pytest.raises(ValueError, match="missing fragment 999"):
+        _transform_fragment(
+            _FragmentTask(
+                uri=str(uri),
+                storage_options=None,
+                branch="main",
+                source_version=dataset.version,
+                fragment_id=999,
+                batch_size=1,
+                artifact=_sketch_pool_artifact_identity(""),
+            )
+        )
 
 
 def test_transform_fragment_real_lance_source_returns_merge_metadata(tmp_path: Path) -> None:
