@@ -37,6 +37,8 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 if TYPE_CHECKING:
     from torchsynth.parameter import ModuleParameter
 
+    from synth_setter.data.vst.param_spec import NoteParams
+
 
 class _VoiceOutputShim(torch.nn.Module):
     """Route ``functional_call`` to ``Voice.output()``.
@@ -122,7 +124,7 @@ def render_torchsynth_grad(
     rows = len(params)
     padded = _pad_to_render_size(params, render_batch_size)
     notes = [
-        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        cast("NoteParams", TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1])
         for row in padded.detach().clamp(0, 1).cpu().numpy()
     ]
     column = partial(torch.tensor, dtype=torch.float32, device=params.device)

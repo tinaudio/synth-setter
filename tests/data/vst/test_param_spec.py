@@ -10,16 +10,178 @@ import torch
 
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
+    ContinuousArrayParameter,
     ContinuousParameter,
+    DiscreteArrayParameter,
     DiscreteLiteralParameter,
     NoteDurationParameter,
     ParamSpec,
     decode_model_output,
 )
+from synth_setter.models.components.transformer import LearntProjection
 
 LEVEL_MIN_DB = -70.0
 LEVEL_MID_DB = -15.0
 LEVEL_MAX_DB = 40.0
+
+
+def test_continuous_array_roundtrip_preserves_matrix_shape() -> None:
+    parameter = ContinuousArrayParameter(
+        name="feedback_matrix",
+        shape=(8, 8),
+        min=-1.0,
+        max=1.0,
+    )
+    raw = np.linspace(-1.0, 1.0, 64, dtype=np.float64).reshape(8, 8)
+
+    decoded = parameter.decode(parameter.encode(raw))
+
+    np.testing.assert_allclose(decoded, raw, atol=1e-7)
+    assert decoded.shape == (8, 8)
+
+
+def test_discrete_array_decode_rounds_to_int64() -> None:
+    parameter = DiscreteArrayParameter(name="delays", shape=(8,), min=400, max=1200)
+
+    decoded = parameter.decode(
+        np.array([0.0, 0.1, 0.25, 0.499, 0.501, 0.75, 0.9, 1.0])
+    )
+
+    np.testing.assert_array_equal(
+        decoded,
+        np.array([400, 480, 600, 799, 801, 1000, 1120, 1200], dtype=np.int64),
+    )
+    assert decoded.dtype == np.int64
+
+
+@pytest.mark.parametrize("shape", [(8, 1), (1, 8), (1, 1)])
+def test_continuous_array_roundtrip_preserves_rectangular_shape(
+    shape: tuple[int, ...],
+) -> None:
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=shape,
+        min=-1.0,
+        max=1.0,
+    )
+    raw = np.zeros(shape, dtype=np.float64)
+
+    decoded = parameter.decode(parameter.encode(raw))
+
+    assert decoded.shape == shape
+
+
+def test_continuous_array_encode_returns_flat_float32() -> None:
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 2),
+        min=-1.0,
+        max=1.0,
+    )
+
+    encoded = parameter.encode(np.array([[-1.0, 0.0], [0.5, 1.0]]))
+
+    np.testing.assert_array_equal(
+        encoded,
+        np.array([0.0, 0.5, 0.75, 1.0], dtype=np.float32),
+    )
+    assert encoded.dtype == np.float32
+
+
+def test_continuous_array_decode_returns_float64() -> None:
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    decoded = parameter.decode(np.array([0.5], dtype=np.float32))
+
+    assert decoded.dtype == np.float64
+
+
+def test_continuous_array_encode_rejects_wrong_shape() -> None:
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 2),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match=r"matrix must have shape \(2, 2\)"):
+        parameter.encode(np.zeros((4,), dtype=np.float64))
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_continuous_array_encode_rejects_nonfinite_value(value: float) -> None:
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match="must contain only finite values"):
+        parameter.encode(np.array([[value]]))
+
+
+@pytest.mark.parametrize("value", [-1.1, 1.1])
+def test_continuous_array_encode_rejects_out_of_bounds_value(value: float) -> None:
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match=r"must be within \[-1.0, 1.0\]"):
+        parameter.encode(np.array([[value]]))
+
+
+def test_discrete_array_encode_rejects_fractional_native_value() -> None:
+    parameter = DiscreteArrayParameter(name="delays", shape=(2,), min=400, max=1200)
+
+    with pytest.raises(ValueError, match="must contain only integer values"):
+        parameter.encode(np.array([400.0, 400.5]))
+
+
+def test_array_length_is_product_of_native_shape() -> None:
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 3, 4),
+        min=-1.0,
+        max=1.0,
+    )
+
+    assert len(parameter) == 24
+
+
+def test_discrete_array_roundtrip_preserves_values() -> None:
+    parameter = DiscreteArrayParameter(name="delays", shape=(8,), min=400, max=1200)
+    raw = np.array([400, 401, 500, 600, 700, 800, 1000, 1200], dtype=np.int64)
+
+    decoded = parameter.decode(parameter.encode(raw))
+
+    np.testing.assert_array_equal(decoded, raw)
+
+
+def test_array_encoded_names_follow_c_order_coordinates() -> None:
+    parameter = ContinuousArrayParameter(
+        name="feedback_matrix",
+        shape=(2, 3),
+        min=-1.0,
+        max=1.0,
+    )
+
+    assert parameter.encoded_names() == (
+        "feedback_matrix.0.0",
+        "feedback_matrix.0.1",
+        "feedback_matrix.0.2",
+        "feedback_matrix.1.0",
+        "feedback_matrix.1.1",
+        "feedback_matrix.1.2",
+    )
 
 
 def _tiny_spec() -> ParamSpec:
@@ -157,10 +319,12 @@ def test_param_spec_sampling_roundtrip_preserves_native_domain() -> None:
         spec.encode(synth_params, note_params)
     )
 
-    assert LEVEL_MIN_DB <= synth_params["level_db"] <= LEVEL_MAX_DB
-    assert decoded_synth_params["level_db"] == pytest.approx(
-        synth_params["level_db"], abs=1e-5
-    )
+    sampled_level = synth_params["level_db"]
+    decoded_level = decoded_synth_params["level_db"]
+    assert isinstance(sampled_level, float)
+    assert isinstance(decoded_level, float)
+    assert LEVEL_MIN_DB <= sampled_level <= LEVEL_MAX_DB
+    assert decoded_level == pytest.approx(sampled_level, abs=1e-5)
     assert decoded_note_params["pitch"] == note_params["pitch"]
     assert decoded_note_params["note_start_and_end"] == pytest.approx(
         note_params["note_start_and_end"]
@@ -195,6 +359,175 @@ def test_decode_model_output_maps_to_native_continuous_domain(
     synth_params, _ = decode_model_output(np.array([model_output]), spec)
 
     assert synth_params["level_db"] == pytest.approx(expected)
+
+
+def test_param_spec_encoded_names_match_encoded_width() -> None:
+    spec = ParamSpec(
+        [
+            ContinuousParameter(name="gain"),
+            CategoricalParameter(
+                name="mode",
+                values=["a", "b"],
+                raw_values=[0.0, 1.0],
+                encoding="onehot",
+            ),
+            ContinuousArrayParameter(
+                name="matrix",
+                shape=(1, 2),
+                min=-1.0,
+                max=1.0,
+            ),
+        ],
+        [NoteDurationParameter(name="window", max_note_duration_seconds=4.0)],
+    )
+
+    assert spec.encoded_names == [
+        "gain",
+        "mode.0",
+        "mode.1",
+        "matrix.0.0",
+        "matrix.0.1",
+        "window.0",
+        "window.1",
+    ]
+    assert len(spec.encoded_names) == spec.encoded_width
+
+
+def test_param_spec_names_remain_logical_field_names() -> None:
+    spec = ParamSpec(
+        [
+            ContinuousArrayParameter(
+                name="matrix",
+                shape=(2, 2),
+                min=-1.0,
+                max=1.0,
+            )
+        ],
+        [],
+    )
+
+    assert spec.names == ["matrix"]
+
+
+def test_param_spec_sample_supports_empty_synth_group() -> None:
+    spec = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
+
+    synth_values, _ = spec.sample(np.random.default_rng(0))
+
+    assert synth_values == {}
+
+
+def test_param_spec_sample_supports_empty_note_group() -> None:
+    spec = ParamSpec([ContinuousParameter(name="gain")], [])
+
+    _, note_values = spec.sample(np.random.default_rng(0))
+
+    assert note_values == {}
+
+
+def test_param_spec_decode_supports_both_groups_empty() -> None:
+    spec = ParamSpec([], [])
+
+    synth_values, note_values = spec.decode(np.empty((0,), dtype=np.float32))
+
+    assert synth_values == {}
+    assert note_values == {}
+
+
+def test_param_spec_encode_supports_empty_synth_group() -> None:
+    spec = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
+
+    encoded = spec.encode({}, {"pitch": 60})
+
+    np.testing.assert_array_equal(encoded, np.array([0.5], dtype=np.float32))
+
+
+def test_param_spec_encode_supports_empty_note_group() -> None:
+    spec = ParamSpec([ContinuousParameter(name="gain")], [])
+
+    encoded = spec.encode({"gain": 0.25}, {})
+
+    np.testing.assert_array_equal(encoded, np.array([0.25], dtype=np.float32))
+
+
+def test_param_spec_encode_supports_both_groups_empty() -> None:
+    spec = ParamSpec([], [])
+
+    encoded = spec.encode({}, {})
+
+    assert encoded.shape == (0,)
+    assert encoded.dtype == np.float32
+
+
+def test_scalar_parameter_golden_encoding_remains_unchanged() -> None:
+    parameter = ContinuousParameter(name="gain", min=-1.0, max=1.0)
+
+    encoded = parameter.encode(0.0)
+
+    np.testing.assert_array_equal(encoded, np.array([0.5]))
+    assert parameter.decode(encoded) == 0.0
+
+
+def test_discrete_parameter_golden_encoding_remains_unchanged() -> None:
+    parameter = DiscreteLiteralParameter(name="pitch", min=48, max=72)
+
+    encoded = parameter.encode(60)
+
+    np.testing.assert_array_equal(encoded, np.array([0.5]))
+    assert parameter.decode(encoded) == 60
+
+
+def test_categorical_onehot_golden_encoding_remains_unchanged() -> None:
+    parameter = CategoricalParameter(
+        name="mode",
+        values=["a", "b", "c"],
+        raw_values=[0.0, 0.5, 1.0],
+        encoding="onehot",
+    )
+
+    encoded = parameter.encode(0.5)
+
+    np.testing.assert_array_equal(encoded, np.array([0.0, 1.0, 0.0]))
+    assert parameter.decode(encoded) == 0.5
+
+
+def test_note_duration_golden_encoding_remains_unchanged() -> None:
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+    )
+
+    encoded = parameter.encode((1.0, 3.0))
+
+    np.testing.assert_array_equal(encoded, np.array([0.25, 0.75]))
+    assert parameter.decode(encoded) == (1.0, 3.0)
+
+
+def test_param2tok_projection_accepts_flat_array_parameter_width() -> None:
+    spec = ParamSpec(
+        [
+            ContinuousArrayParameter(
+                name="matrix",
+                shape=(2, 3),
+                min=-1.0,
+                max=1.0,
+            )
+        ],
+        [],
+    )
+    projection = LearntProjection(
+        d_model=4,
+        d_token=4,
+        num_params=spec.encoded_width,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    params = torch.zeros(3, spec.encoded_width)
+
+    reconstructed = projection.token_to_param(projection.param_to_token(params))
+
+    assert reconstructed.shape == (3, 6)
 
 
 def test_encoded_width_counts_onehot_and_note_columns() -> None:
@@ -327,8 +660,10 @@ class TestDecodeModelOutput:
         row = np.array([math.nan, *_ROW[1:]], dtype=np.float32)
 
         synth_params, _ = decode_model_output(row, _tiny_spec())
+        cutoff = synth_params["cutoff"]
 
-        assert math.isnan(synth_params["cutoff"])
+        assert isinstance(cutoff, float)
+        assert math.isnan(cutoff)
 
     def test_over_long_rows_are_silently_truncated(self) -> None:
         """Current contract: extra trailing values are ignored by ParamSpec.decode.
@@ -361,8 +696,10 @@ class TestDecodeModelOutput:
         row = np.array(_ROW[:5], dtype=np.float32)
 
         _, note_params = decode_model_output(row, _tiny_spec())
+        note_window = note_params["note_start_and_end"]
 
-        assert len(note_params["note_start_and_end"]) == 1
+        assert isinstance(note_window, tuple)
+        assert len(note_window) == 1
 
 
 class TestModelSpaceConversion:

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import click
 import mido
@@ -469,7 +469,7 @@ def decode_prediction_row(
     row = pred_tensor[batch_idx].detach().cpu().float().numpy()
     _validate_encoded_row(row, spec, "prediction")
     synth_params, _ = decode_model_output(row, spec)
-    return synth_params
+    return cast(dict[str, float], synth_params)
 
 
 def load_dataset_synth_params(
@@ -505,7 +505,7 @@ def load_dataset_synth_params(
     _validate_encoded_row(row, spec, "dataset row")
 
     synth_params, _ = spec.decode(row)
-    return synth_params
+    return cast(dict[str, float], synth_params)
 
 
 def load_prediction_synth_params(

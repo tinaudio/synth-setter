@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from functools import partial
+from typing import cast
 
 import pytest
 import torch
@@ -380,7 +381,7 @@ def test_ff_cached_embedding_predictions_decode_inside_param_spec_domain(
         out_of_domain = {
             name: value
             for name, value in decoded.items()
-            if name in bounds and not bounds[name][0] <= value <= bounds[name][1]
+            if name in bounds and not bounds[name][0] <= cast(float, value) <= bounds[name][1]
         }
         assert not out_of_domain, f"decoded outside the spec domain: {out_of_domain}"
 

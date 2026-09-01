@@ -39,7 +39,7 @@ from synth_setter.data.vst.shapes import (
 )
 
 if TYPE_CHECKING:
-    from synth_setter.data.vst.param_spec import ParamSpec
+    from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
     from synth_setter.data.vst.renderers import AudioRenderer
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
     from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -164,7 +164,9 @@ def _render_encoded_row(
     :param velocity: MIDI velocity the source dataset was rendered with.
     :returns: Rendered audio shaped ``(channels, samples)``.
     """
-    synth_params, note_params = spec.decode(encoded)
+    synth_values, note_values = spec.decode(encoded)
+    synth_params = cast("dict[str, float]", synth_values)
+    note_params = cast("NoteParams", note_values)
     return renderer.render(
         synth_params,
         note_params["pitch"],

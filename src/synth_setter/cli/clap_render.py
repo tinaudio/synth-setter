@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import click
 import numpy as np
@@ -36,6 +36,9 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SynthSpec
 from synth_setter.workspace import operator_workspace
+
+if TYPE_CHECKING:
+    from synth_setter.data.vst.param_spec import NoteParams
 
 _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 _EXPECTED_CONDITIONING_COLUMN = "clap"
@@ -525,7 +528,9 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     :returns: Channel-first rendered waveform written to ``output``.
     """
     spec = param_specs[render.param_spec_name]
-    synth_params, note_params = decode_model_output(prediction[0].float().numpy(), spec)
+    synth_values, note_values = decode_model_output(prediction[0].float().numpy(), spec)
+    synth_params = cast("dict[str, float]", synth_values)
+    note_params = cast("NoteParams", note_values)
     note_start, note_end = sorted(note_params["note_start_and_end"])
     renderer = make_audio_renderer(render)
     audio = renderer.render(

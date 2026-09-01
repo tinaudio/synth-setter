@@ -20,6 +20,7 @@ import math
 import os
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import click
 import torch
@@ -150,7 +151,8 @@ def decode_and_convert(  # noqa: DOC502 — ValueError propagates from synth_par
     :raises ValueError: when any decoded param is missing from ``format_map``.
     """
     row = prediction[0].detach().cpu().float().numpy()
-    synth_params, _ = decode_model_output(row, spec)
+    synth_values, _ = decode_model_output(row, spec)
+    synth_params = cast("dict[str, float]", synth_values)
     return synth_params_to_clap_rows(synth_params, spec, format_map)
 
 

@@ -40,6 +40,8 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 if TYPE_CHECKING:
     from torchsynth.synth import Voice
 
+    from synth_setter.data.vst.param_spec import NoteParams
+
 TorchSynthItem: TypeAlias = tuple[
     torch.Tensor, torch.Tensor, Callable[[torch.Tensor], torch.Tensor]
 ]
@@ -198,7 +200,7 @@ def render_torchsynth(
     # Decode the padded rows, not just the real ones: the voice holds render_batch_size
     # keyboard entries and every one of them must be set from the row it renders.
     notes = [
-        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        cast("NoteParams", TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1])
         for row in padded.detach().clamp(0, 1).cpu().numpy()
     ]
     column = partial(torch.tensor, dtype=torch.float32, device=params.device)

@@ -1,7 +1,8 @@
 """Synth/note parameter definitions, sampling, and encoding for VST param specs."""
 
+import math
 from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import numpy as np
 
@@ -10,6 +11,9 @@ if TYPE_CHECKING:
 
 # Synth values are renderer-native; semantic values are interpretable; encoded values use [0, 1].
 
+type ParameterValue = float | int | tuple[float, ...] | np.ndarray
+type ParameterValues = dict[str, ParameterValue]
+
 
 class Parameter:
     name: str
@@ -17,11 +21,26 @@ class Parameter:
     def __init__(self, name: str) -> None:
         self.name = name
 
+    def __len__(self) -> int:
+        raise NotImplementedError
+
     def sample(self, rng: np.random.Generator) -> Any:
         raise NotImplementedError
 
     def encode(self, raw_value: Any) -> np.ndarray:
         raise NotImplementedError
+
+    def decode(self, encoded: np.ndarray) -> Any:
+        raise NotImplementedError
+
+    def encoded_names(self) -> tuple[str, ...]:
+        """Return one stable label for each encoded coordinate.
+
+        :returns: Logical name for a scalar or zero-based coordinate names for an expanded field.
+        """
+        if len(self) == 1:
+            return (self.name,)
+        return tuple(f"{self.name}.{index}" for index in range(len(self)))
 
 
 class CategoricalParameter(Parameter):
@@ -29,7 +48,7 @@ class CategoricalParameter(Parameter):
         self,
         name: str,
         values: list[Any],
-        raw_values: list[Any] | None = None,
+        raw_values: list[float] | None = None,
         weights: list[float] | None = None,
         encoding: Literal["scalar", "onehot"] = "scalar",
     ):
@@ -61,10 +80,10 @@ class CategoricalParameter(Parameter):
         else:
             return len(self.raw_values)
 
-    def sample(self, rng: np.random.Generator) -> Any:
+    def sample(self, rng: np.random.Generator) -> float:
         p = np.array(self.weights)
         p /= p.sum()
-        return rng.choice(self.raw_values, p=p)
+        return float(rng.choice(self.raw_values, p=p))
 
     def _encode_onehot(self, raw_value: float) -> np.ndarray:
         # find index of nearest raw value
@@ -195,7 +214,7 @@ class ContinuousParameter(Parameter):
         if self.constant_val_p > 0.0 and rng.random() < self.constant_val_p:
             return self.constant_val
 
-        return rng.uniform(self.min, self.max)
+        return float(rng.uniform(self.min, self.max))
 
     def encode(self, raw_value: float) -> np.ndarray:
         return (np.array([raw_value]) - self.min) / (self.max - self.min)
@@ -205,6 +224,108 @@ class ContinuousParameter(Parameter):
 
     def __repr__(self):
         return f'ContinuousParameter(name="{self.name}", min={self.min}, max={self.max})'
+
+
+class ContinuousArrayParameter(Parameter):
+    """A fixed-shape continuous parameter encoded elementwise into ``[0, 1]``."""
+
+    def __init__(
+        self,
+        name: str,
+        shape: tuple[int, ...],
+        min: float,
+        max: float,
+    ) -> None:
+        """Bind the native shape and finite affine-encoding range.
+
+        :param name: Logical parameter name.
+        :param shape: Non-empty native array shape with positive dimensions.
+        :param min: Inclusive native lower bound.
+        :param max: Inclusive native upper bound.
+        :raises ValueError: The shape or bounds cannot define a finite array domain.
+        """
+        super().__init__(name)
+        if not shape or any(size <= 0 for size in shape):
+            raise ValueError("shape must contain positive dimensions")
+        if not np.isfinite(min) or not np.isfinite(max):
+            raise ValueError("bounds must be finite")
+        if max <= min:
+            raise ValueError("max must be greater than min")
+        if not np.isfinite(max - min):
+            raise ValueError("span must be finite")
+        self.shape = shape
+        self.min = min
+        self.max = max
+
+    def __len__(self) -> int:
+        return math.prod(self.shape)
+
+    def sample(self, rng: np.random.Generator) -> np.ndarray:
+        return rng.uniform(self.min, self.max, size=self.shape)
+
+    def encode(self, raw_value: np.ndarray) -> np.ndarray:
+        raw = np.asarray(raw_value)
+        if raw.shape != self.shape:
+            raise ValueError(f"{self.name} must have shape {self.shape}, got {raw.shape}")
+        if not np.isfinite(raw).all():
+            raise ValueError(f"{self.name} must contain only finite values")
+        if np.any((raw < self.min) | (raw > self.max)):
+            raise ValueError(f"{self.name} values must be within [{self.min}, {self.max}]")
+        encoded = (raw.astype(np.float64) - self.min) / (self.max - self.min)
+        return encoded.reshape(-1, order="C").astype(np.float32)
+
+    def encoded_names(self) -> tuple[str, ...]:
+        return tuple(
+            f"{self.name}.{'.'.join(str(coordinate) for coordinate in index)}"
+            for index in np.ndindex(self.shape)
+        )
+
+    def decode(self, encoded: np.ndarray) -> np.ndarray:
+        values = np.asarray(encoded)
+        expected_shape = (len(self),)
+        if values.shape != expected_shape:
+            raise ValueError(
+                f"encoded {self.name} must have shape {expected_shape}, got {values.shape}"
+            )
+        if not np.isfinite(values).all():
+            raise ValueError(f"encoded {self.name} must contain only finite values")
+        if np.any((values < 0.0) | (values > 1.0)):
+            raise ValueError(f"encoded {self.name} values must be within [0, 1]")
+        raw = self.min + values.astype(np.float64) * (self.max - self.min)
+        return raw.reshape(self.shape, order="C")
+
+
+class DiscreteArrayParameter(ContinuousArrayParameter):
+    """A fixed-shape integer parameter encoded elementwise into ``[0, 1]``."""
+
+    def __init__(
+        self,
+        name: str,
+        shape: tuple[int, ...],
+        min: int,
+        max: int,
+    ) -> None:
+        """Bind the native shape and inclusive integer range.
+
+        :param name: Logical parameter name.
+        :param shape: Non-empty native array shape with positive dimensions.
+        :param min: Inclusive native lower bound.
+        :param max: Inclusive native upper bound.
+        """
+        super().__init__(name=name, shape=shape, min=min, max=max)
+
+    def sample(self, rng: np.random.Generator) -> np.ndarray:
+        return rng.integers(self.min, self.max + 1, size=self.shape, dtype=np.int64)
+
+    def encode(self, raw_value: np.ndarray) -> np.ndarray:
+        encoded = super().encode(raw_value)
+        raw = np.asarray(raw_value)
+        if not np.equal(raw, np.rint(raw)).all():
+            raise ValueError(f"{self.name} must contain only integer values")
+        return encoded
+
+    def decode(self, encoded: np.ndarray) -> np.ndarray:
+        return np.rint(super().decode(encoded)).astype(np.int64)
 
 
 class NoteDurationParameter(Parameter):
@@ -225,17 +346,14 @@ class NoteDurationParameter(Parameter):
     def encode(self, raw_value: tuple[float, float]) -> np.ndarray:
         return np.array(raw_value) / self.max_note_duration_seconds
 
-    def decode(self, encoded: np.ndarray) -> tuple[float, float]:
-        return tuple(encoded * self.max_note_duration_seconds)
+    def decode(self, encoded: np.ndarray) -> tuple[float, ...]:
+        return tuple(float(value) for value in encoded * self.max_note_duration_seconds)
 
 
 # pydoclint check-class-attributes has no sphinx directive for TypedDict fields,
 # so DOC601/DOC603 are unsatisfiable here.
 class NoteParams(TypedDict):  # noqa: DOC601, DOC603
-    """Note-conditioning params consumed by ``render_params``.
-
-    Closed and total: ``ParamSpec.sample`` and ``ParamSpec.decode`` emit exactly these two keys.
-    """
+    """Complete MIDI note mapping required by VST render boundaries."""
 
     pitch: int
     note_start_and_end: tuple[float, float]
@@ -296,33 +414,38 @@ class ParamSpec:
 
     def sample(
         self, rng: np.random.Generator | None = None
-    ) -> tuple[dict[str, float], NoteParams]:
+    ) -> tuple[ParameterValues, ParameterValues]:
         """Draw one synth/note param set, every parameter drawing from ``rng``.
 
         :param rng: Generator all parameters draw from; ``None`` uses a fresh
             non-deterministic one (pass a seeded one for reproducible draws).
-        :returns: ``(synth_param_dict, note_params)``.
+        :returns: Separate renderer-native synth and note value mappings; either may be empty.
         """
         if rng is None:
             rng = np.random.default_rng()
-        synth_param_dict = {p.name: p.sample(rng) for p in self.synth_params}
-        note_param_dict = {p.name: p.sample(rng) for p in self.note_params}
-
-        # Keys come from runtime ``Parameter.name`` values, so the checker can't
-        # prove the NoteParams key->type mapping; assert it at this one source.
-        return synth_param_dict, cast(NoteParams, note_param_dict)
+        synth_param_dict: ParameterValues = {
+            p.name: p.sample(rng) for p in self.synth_params
+        }
+        note_param_dict: ParameterValues = {
+            p.name: p.sample(rng) for p in self.note_params
+        }
+        return synth_param_dict, note_param_dict
 
     def encode(
-        self, synth_param_dict: dict[str, float], note_param_dict: Mapping[str, object]
+        self,
+        synth_param_dict: Mapping[str, object],
+        note_param_dict: Mapping[str, object],
     ) -> np.ndarray:
-        synth_params = np.concatenate(
-            [p.encode(synth_param_dict[p.name]) for p in self.synth_params]
-        ).astype(np.float32)
-        note_params = np.concatenate(
-            [p.encode(note_param_dict[p.name]) for p in self.note_params]
-        ).astype(np.float32)
-
-        return np.concatenate((synth_params, note_params))
+        values = [
+            parameter.encode(synth_param_dict[parameter.name])
+            for parameter in self.synth_params
+        ] + [
+            parameter.encode(note_param_dict[parameter.name])
+            for parameter in self.note_params
+        ]
+        if not values:
+            return np.empty((0,), dtype=np.float32)
+        return np.concatenate(values).astype(np.float32)
 
     def encoded_to_model(self, encoded: np.ndarray) -> np.ndarray:
         """Rescale encoded values onto the ``[-1, 1]`` scale the model predicts in.
@@ -345,7 +468,7 @@ class ParamSpec:
         """
         return ((model + 1) / 2).clip(0, 1)
 
-    def decode(self, params: np.ndarray) -> tuple[dict[str, float], NoteParams]:
+    def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode one encoded row of values in ``[0, 1]``.
 
         Raw model outputs live in ``[-1, 1]`` and must go through
@@ -354,7 +477,7 @@ class ParamSpec:
         raises late (behavior pinned in ``tests/data/vst/test_param_spec.py``).
 
         :param params: Encoded row (output of :meth:`encode`), nominally ``len(self)`` wide.
-        :returns: ``(synth_param_dict, note_params)``.
+        :returns: Separate renderer-native synth and note value mappings; either may be empty.
         """
         # Split positionally, not by name: encoded_slices() yields synth spans first,
         # and a synth and note parameter may legitimately share a name.
@@ -362,12 +485,13 @@ class ParamSpec:
         synth_spans = spans[: len(self.synth_params)]
         note_spans = spans[len(self.synth_params) :]
 
-        synth_params = {param.name: param.decode(params[span]) for param, span in synth_spans}
-        note_params = {param.name: param.decode(params[span]) for param, span in note_spans}
-
-        # Same cast as sample(): keys come from runtime ``Parameter.name`` values,
-        # so the checker can't prove the NoteParams key->type mapping.
-        return synth_params, cast(NoteParams, note_params)
+        synth_params: ParameterValues = {
+            param.name: param.decode(params[span]) for param, span in synth_spans
+        }
+        note_params: ParameterValues = {
+            param.name: param.decode(params[span]) for param, span in note_spans
+        }
+        return synth_params, note_params
 
     @property
     def synth_param_names(self) -> list[str]:
@@ -381,8 +505,22 @@ class ParamSpec:
     def names(self) -> list[str]:
         return self.synth_param_names + self.note_param_names
 
+    @property
+    def encoded_names(self) -> list[str]:
+        """Return labels for every encoded synth and note coordinate.
 
-def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, float], NoteParams]:
+        :returns: Coordinate labels in the same order as :meth:`encode`.
+        """
+        return [
+            name
+            for parameter in (*self.synth_params, *self.note_params)
+            for name in parameter.encoded_names()
+        ]
+
+
+def decode_model_output(
+    row: np.ndarray, spec: ParamSpec
+) -> tuple[ParameterValues, ParameterValues]:
     """Invert the model-output scale and decode one prediction row.
 
     Model prediction rows live in ``[-1, 1]``; the encoded param domain is
@@ -392,8 +530,6 @@ def decode_model_output(row: np.ndarray, spec: ParamSpec) -> tuple[dict[str, flo
     :param row: One prediction row, nominally ``(len(spec),)`` wide, values in
         ``[-1, 1]``; width is not enforced (see :meth:`ParamSpec.decode`).
     :param spec: Spec the model was trained against.
-    :returns: ``(synth_param_dict, note_params)``; synth values are in the
-        selected renderer's native parameter domains, while note params contain
-        pitch as int and start/end seconds.
+    :returns: Renderer-native synth and note value mappings; note values may be empty.
     """
     return spec.decode(spec.model_to_encoded(row))
