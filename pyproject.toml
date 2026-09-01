@@ -60,6 +60,7 @@ synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:fr
 synth-setter-generate-dataset-from-spec-uri = "synth_setter.cli.generate_dataset_from_spec_uri:main"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
+synth-setter-backfill-sketch-pool = "synth_setter.pipeline.data.backfill_sketch_pool:main"
 synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
 synth-setter-clap = "synth_setter.cli.clap_render:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
@@ -178,6 +179,7 @@ data = [
   "pandas",
   "numpy",
   "pylance>=7.0.0",
+  "ray==2.58.0",
 ]
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.

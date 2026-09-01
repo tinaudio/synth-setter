@@ -1168,7 +1168,11 @@ vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
 leaves `num_sub_vectors` null to let each spec's default apply. The migration-only
 `sketch_pool` registry entry reads a renamed `sketch_full_401` struct and writes
-the same canonical pooled `sketch` representation without rerunning PESTO.
+the same canonical pooled `sketch` representation without rerunning PESTO. For
+large existing splits, `synth-setter-backfill-sketch-pool --lance-uri <uri> --workers <n> --rollback-tag <tag>` renames the source, writes fragments through
+recycled Ray workers, publishes one branch-scoped Lance merge commit, and builds
+the canonical `sketch.vec` index. A retry resumes after the rename and exits
+without a new version once both data and index are complete.
 
 `matpac_plus` runs the frozen MATPAC++ encoder through TinyMU's public package
 API, installed from an exact Git commit in the normal heavy runtime. The pinned
