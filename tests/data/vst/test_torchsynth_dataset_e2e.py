@@ -223,10 +223,12 @@ def test_generate_vst_dataset_cli_pyfdn_changes_persisted_audio_and_mel(tmp_path
     assert not np.array_equal(dry_audio, effected_audio)
     assert np.isfinite(effected_audio).all()
     assert np.max(np.abs(effected_audio)) <= 1.0
-    assert not np.array_equal(
-        _read_lance_column(dry_shard, MEL_SPEC_FIELD),
-        _read_lance_column(effected_shard, MEL_SPEC_FIELD),
-    )
+    dry_mel = _read_lance_column(dry_shard, MEL_SPEC_FIELD)
+    effected_mel = _read_lance_column(effected_shard, MEL_SPEC_FIELD)
+    assert effected_mel.shape == dry_mel.shape
+    assert effected_mel.dtype == np.float32
+    assert np.isfinite(effected_mel).all()
+    assert not np.array_equal(dry_mel, effected_mel)
 
 
 def test_make_lance_dataset_compacts_shard_to_one_fragment_and_version(tmp_path: Path) -> None:
