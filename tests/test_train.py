@@ -1159,6 +1159,27 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert datamodule.val_num_workers == 0
 
 
+@pytest.mark.parametrize(
+    "cfg_train_sketch_lance",
+    ["surge/flow_sketch_cfg_ablation"],
+    indirect=True,
+)
+def test_train_flow_sketch_cfg_ablation_returns_finite_loss(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """Consume the ablation config through the real training entrypoint.
+
+    :param cfg_train_sketch_lance: Ablation config over local sketch Lance splits.
+    """
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    assert torch.isfinite(metric_dict["train/loss"])
+    assert object_dict["trainer"].global_step == 1
+    assert object_dict["model"].sketch_tokens is not None
+    assert cfg_train_sketch_lance.consumed_train_config_id == "flow_sketch_prelim"
+
+
 def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     cfg_train_sketch_lance: DictConfig,
 ) -> None:

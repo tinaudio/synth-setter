@@ -2659,13 +2659,17 @@ def _write_sketch_lance_root(dataset_root: Path) -> None:
 
 
 @pytest.fixture
-def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
+def cfg_train_sketch_lance(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> Iterator[DictConfig]:
     """Compose a pooled-sketch training cfg over generated Lance splits.
 
     Mirrors :func:`cfg_train_lance` with the vst_flow model shrunk to a toy so
     a ``fast_dev_run`` step (including two-step RK4 CFG validation sampling)
     stays CPU-cheap.
 
+    :param request: Optional indirect experiment selector.
     :param tmp_path: Per-test tmpdir holding the dataset and output/log dirs.
     :yields: Resolved DictConfig ready for ``train(cfg)``.
     :ytype: DictConfig
@@ -2673,13 +2677,14 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
     dataset_root = tmp_path / "lance-data"
     dataset_root.mkdir()
     _write_sketch_lance_root(dataset_root)
+    experiment = getattr(request, "param", "surge/flow_sketch_prelim")
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/flow_sketch_prelim",
+                f"experiment={experiment}",
                 "datamodule=surge_lance",
                 "synth=surge_4",
                 "conditioning=m2l",
@@ -2702,6 +2707,7 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
             cfg.training.val_audio_probe = False
             cfg.datamodule.dataset_root = str(dataset_root)
             cfg.datamodule.download_dataset_root_uri = None
+            cfg.datamodule.download_dataset_row_limit = None
             cfg.datamodule.batch_size = 2
             cfg.datamodule.num_workers = 0
             cfg.datamodule.persistent_workers = False
