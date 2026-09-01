@@ -135,13 +135,10 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
     assert "test/param_mse" in result.stdout
 
 
-def _compose_sketch_cfg_eval(
-    cfg_train_sketch_lance: DictConfig, full_sketch_lance_root: Path
-) -> DictConfig:
-    """Compose the toy full-resolution sketch evaluation configuration.
+def _compose_sketch_cfg_eval(cfg_train_sketch_lance: DictConfig) -> DictConfig:
+    """Compose the toy pooled-sketch evaluation configuration.
 
-    :param cfg_train_sketch_lance: Fixture providing shared paths and model settings.
-    :param full_sketch_lance_root: Generated full-resolution Lance splits.
+    :param cfg_train_sketch_lance: Fixture providing paths and pooled Lance splits.
     :returns: Evaluation config with sketch guidance disabled initially.
     """
     GlobalHydra.instance().clear()
@@ -165,7 +162,7 @@ def _compose_sketch_cfg_eval(
         cfg.logger = None
         cfg.ckpt_path = None
         cfg.mode = "test"
-        cfg.datamodule.dataset_root = str(full_sketch_lance_root)
+        cfg.datamodule.dataset_root = cfg_train_sketch_lance.datamodule.dataset_root
         cfg.datamodule.download_dataset_root_uri = None
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
@@ -208,14 +205,12 @@ def _save_nonzero_sketch_checkpoint(cfg: DictConfig, checkpoint_path: Path) -> N
 
 def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
     cfg_train_sketch_lance: DictConfig,
-    full_sketch_lance_root: Path,
 ) -> None:
     """The eval entrypoint routes sketch CFG independently into test sampling.
 
-    :param cfg_train_sketch_lance: Fixture providing shared paths and model settings.
-    :param full_sketch_lance_root: Fixture providing legacy full-resolution splits.
+    :param cfg_train_sketch_lance: Fixture providing pooled-sketch Lance splits.
     """
-    cfg = _compose_sketch_cfg_eval(cfg_train_sketch_lance, full_sketch_lance_root)
+    cfg = _compose_sketch_cfg_eval(cfg_train_sketch_lance)
     checkpoint_path = Path(cfg.paths.output_dir) / "sketch-cfg.ckpt"
     _save_nonzero_sketch_checkpoint(cfg, checkpoint_path)
     cfg.ckpt_path = str(checkpoint_path)
@@ -242,7 +237,7 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
     assert sketch_disabled != sketch_guided
     assert objects["model"].sketch_tokens is not None
     assert objects["datamodule"].sketch_controls is not None
-    assert objects["datamodule"].sketch_controls.num_frames == 401
+    assert objects["datamodule"].sketch_controls.num_frames == 32
 
 
 def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:

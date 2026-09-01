@@ -6,7 +6,7 @@
 defaults:
   - /experiment/surge/flow_sketch_prelim_base
   # Quoted: bare `on` is YAML boolean True, not the config-group name.
-  - override /sketch: full
+  - override /sketch: "on"
   - _self_
 
 run_name: flow1k_prelim_sketch

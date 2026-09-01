@@ -1078,7 +1078,7 @@ def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> 
     assert base.datamodule.sketch is None
     assert sketch.run_name == "flow1k_prelim_sketch"
     assert sketch.model.sketch_controls.column == "sketch"
-    assert sketch.model.sketch_controls.num_frames == 401
+    assert sketch.model.sketch_controls.num_frames == 32
     assert sketch.datamodule.sketch == sketch.model.sketch_controls
 
 

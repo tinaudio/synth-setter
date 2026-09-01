@@ -2630,11 +2630,10 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
-def _write_sketch_lance_root(dataset_root: Path, *, num_frames: int) -> None:
-    """Write tiny m2l+sketch train/val/test Lance splits.
+def _write_sketch_lance_root(dataset_root: Path) -> None:
+    """Write tiny pooled m2l+sketch train/val/test Lance splits.
 
     :param dataset_root: Directory receiving the three splits.
-    :param num_frames: Stored sketch-control frames per row.
     """
     # Local import: pulls in pyarrow, which the Docker VST CI images don't
     # install (no `data` dependency group) — module scope would break their
@@ -2643,11 +2642,11 @@ def _write_sketch_lance_root(dataset_root: Path, *, num_frames: int) -> None:
 
     for seed, split in enumerate(("train", "val", "test")):
         rng = np.random.default_rng(seed)
-        pitch = rng.random((4, SKETCH_PITCH_BINS, num_frames)).astype(np.float32)
+        pitch = rng.random((4, SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES)).astype(np.float32)
         tracks = rng.uniform(
             -1.0,
             1.0,
-            (4, NUM_SKETCH_TRACK_ROWS, num_frames),
+            (4, NUM_SKETCH_TRACK_ROWS, SKETCH_STORAGE_FRAMES),
         ).astype(np.float32)
         write_lance_shard_with_sketch(
             dataset_root / f"{split}.lance",
@@ -2657,19 +2656,6 @@ def _write_sketch_lance_root(dataset_root: Path, *, num_frames: int) -> None:
             },
             np.concatenate([tracks, pitch], axis=1),
         )
-
-
-@pytest.fixture
-def full_sketch_lance_root(tmp_path: Path) -> Path:
-    """Write full-resolution sketch splits for legacy-profile integration tests.
-
-    :param tmp_path: Per-test temporary directory.
-    :returns: Root containing full-resolution train, validation, and test splits.
-    """
-    dataset_root = tmp_path / "lance-data-full"
-    dataset_root.mkdir()
-    _write_sketch_lance_root(dataset_root, num_frames=401)
-    return dataset_root
 
 
 @pytest.fixture
@@ -2686,7 +2672,7 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
     """
     dataset_root = tmp_path / "lance-data"
     dataset_root.mkdir()
-    _write_sketch_lance_root(dataset_root, num_frames=SKETCH_STORAGE_FRAMES)
+    _write_sketch_lance_root(dataset_root)
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
