@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import shutil
 import subprocess
 import sys
@@ -245,6 +246,7 @@ def test_backfill_sketch_pool_cli_with_untouched_source_tags_and_renames(
         pa.table({SKETCH_STRUCT_FIELD: sketch_struct_array(controls)}),
         local_uri,
     )
+    result_path = fake_r2_remote / "fresh-result" / "result.json"
     command = [
         str(Path(sys.executable).parent / "synth-setter-backfill-sketch-pool"),
         "--lance-uri",
@@ -256,6 +258,8 @@ def test_backfill_sketch_pool_cli_with_untouched_source_tags_and_renames(
         "--no-build-index",
         "--resume-dir",
         str(fake_r2_remote / "fresh-resume"),
+        "--result",
+        str(result_path),
     ]
 
     completed = subprocess.run(  # noqa: S603 -- test owns the executable and every argument.
@@ -263,7 +267,10 @@ def test_backfill_sketch_pool_cli_with_untouched_source_tags_and_renames(
     )
 
     assert completed.returncode == 0, completed.stderr
+    payload = json.loads(result_path.read_text())
     dataset = lance.dataset(local_uri)
+    assert payload["committed_version"] == dataset.version
+    assert payload["rows"] == rows
     assert dataset.tags.get_version("before-fresh-pool") == 1
     assert {SKETCH_FULL_STRUCT_FIELD, SKETCH_STRUCT_FIELD} <= set(dataset.schema.names)
 

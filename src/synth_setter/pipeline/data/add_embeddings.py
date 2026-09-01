@@ -59,6 +59,7 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_retry import retry_lance_io
 from synth_setter.pipeline.data.matpac_plus import (
     DEFAULT_MATPAC_PLUS_CHECKPOINT,
     MATPAC_PLUS_FRONTEND,
@@ -867,27 +868,13 @@ def _validated_sketch_controls(
     return controls
 
 
-def _encode_sketch_pool_column(
-    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
-) -> pa.Array:
-    """Pool a renamed full-resolution sketch struct to canonical storage.
+def _decode_full_sketch_controls(rows: np.ndarray) -> np.ndarray:
+    """Decode and validate the exact full-resolution nested source layout.
 
-    The source children must be loudness ``(401,)``, centroid ``(401,)``, and
-    row-major pitch ``(384 * 401,)`` per row.
-
-    :param sources: Decoded ``sketch_full_401`` source struct.
-    :param sample_rate: Unused source sample rate.
-    :param encoder: Unused registry placeholder.
-    :returns: Canonically pooled sketch struct and frame-mean vector child.
-    :raises ValueError: A child has the wrong shape, non-finite values, or invalid bounds.
+    :param rows: Decoded ``sketch_full_401`` source rows.
+    :returns: Controls shaped as batch, control, and frame.
+    :raises ValueError: A nested child has the wrong shape or invalid values.
     """
-    import torch
-
-    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
-    from synth_setter.sketch import pool_sketch_controls
-
-    del sample_rate, encoder
-    rows = sources[SKETCH_FULL_STRUCT_FIELD]
     loudness = np.stack([row[SKETCH_LOUDNESS_CHILD] for row in rows])
     centroid = np.stack([row[SKETCH_CENTROID_CHILD] for row in rows])
     pitch_flat = np.stack([row[SKETCH_PITCH_CHILD] for row in rows])
@@ -905,9 +892,28 @@ def _encode_sketch_pool_column(
         )
     pitch = pitch_flat.reshape(len(rows), SKETCH_PITCH_BINS, SKETCH_FULL_FRAMES)
     controls = np.concatenate((loudness[:, None], centroid[:, None], pitch), axis=1)
-    controls = _validated_sketch_controls(
+    return _validated_sketch_controls(
         controls, (len(rows), NUM_SKETCH_CONTROLS, SKETCH_FULL_FRAMES)
     )
+
+
+def _encode_sketch_pool_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> pa.Array:
+    """Pool a validated full-resolution sketch struct to canonical storage.
+
+    :param sources: Decoded ``sketch_full_401`` source struct.
+    :param sample_rate: Unused source sample rate.
+    :param encoder: Unused registry placeholder.
+    :returns: Canonically pooled sketch struct and frame-mean vector child.
+    """
+    import torch
+
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+    from synth_setter.sketch import pool_sketch_controls
+
+    del sample_rate, encoder
+    controls = _decode_full_sketch_controls(sources[SKETCH_FULL_STRUCT_FIELD])
     pooled = pool_sketch_controls(torch.from_numpy(controls)).numpy()
     return sketch_struct_array(pooled)
 
@@ -1530,7 +1536,13 @@ def _write_columns(
         batch_size=config.batch_size,
         source_version=dataset.version,
     )
-    dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+
+    def add_or_recover() -> None:
+        if all(column in dataset.schema.names for column in output_columns):
+            return
+        dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+
+    retry_lance_io("add_embedding_columns", add_or_recover)
     # A zero-batch replay is valid only when the target columns are already committed.
     uncommitted = [column for column in output_columns if column not in dataset.schema.names]
     if uncommitted:
@@ -1580,7 +1592,7 @@ def build_index(
         raise ValueError(
             f"num_sub_vectors={num_sub_vectors} does not divide {column} dim {vector_dim}"
         )
-    rows = dataset.count_rows()
+    rows = retry_lance_io("count_embedding_index_rows", dataset.count_rows)
     if rows < MIN_ROWS_FOR_INDEX:
         logger.warning(
             "embedding_index_skipped_too_few_rows",
@@ -1592,13 +1604,19 @@ def build_index(
     partitions = (
         max(1, round(rows**0.5)) if config.num_partitions is None else config.num_partitions
     )
-    dataset.create_index(
-        column,
-        index_type="IVF_PQ",
-        num_partitions=partitions,
-        num_sub_vectors=num_sub_vectors,
-        metric=metric,
-    )
+
+    def create_or_recover() -> None:
+        if _matching_index_exists(dataset, column, index=index, config=config):
+            return
+        dataset.create_index(
+            column,
+            index_type="IVF_PQ",
+            num_partitions=partitions,
+            num_sub_vectors=num_sub_vectors,
+            metric=metric,
+        )
+
+    retry_lance_io("create_embedding_index", create_or_recover)
     logger.info(
         "embedding_index_built",
         column=column,
@@ -1969,10 +1987,14 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
 
     if r2_io.is_r2_uri(uri):
         uri = r2_io.to_s3_uri(uri)
-    if uri.startswith("s3://"):
-        r2_io.ensure_r2_env_loaded()
-        return lance.dataset(uri, storage_options=r2_io.r2_storage_options())
-    return lance.dataset(uri)
+
+    def open_dataset() -> lance.LanceDataset:
+        if uri.startswith("s3://"):
+            r2_io.ensure_r2_env_loaded()
+            return lance.dataset(uri, storage_options=r2_io.r2_storage_options())
+        return lance.dataset(uri)
+
+    return retry_lance_io("open_embedding_dataset", open_dataset)
 
 
 @hydra.main(

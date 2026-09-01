@@ -1,4 +1,9 @@
-"""Centralized bounded retry policy for Lance object-store operations."""
+"""Centralized bounded retry policy for Lance object-store operations.
+
+Typical usage::
+
+    dataset = retry_lance_io("open_dataset", lambda: lance.dataset(uri))
+"""
 
 from __future__ import annotations
 

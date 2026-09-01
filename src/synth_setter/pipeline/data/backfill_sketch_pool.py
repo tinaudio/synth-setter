@@ -802,35 +802,38 @@ def _ensure_canonical_index(
         return dataset, False
     progress_callback = _index_progress_callback(time.monotonic())
 
-    def create_or_recover() -> lance.LanceDataset:
+    def create_or_recover() -> tuple[lance.LanceDataset, bool]:
         latest = dataset.checkout_version(_branch_reference(config.branch, None))
         recovered = _canonical_indexes(latest)
         if recovered:
             if len(recovered) != 1:
                 raise ValueError(f"multiple indexes target {SKETCH_VEC_COLUMN!r}")
             _validate_index(latest, recovered[0], partitions, metric, sub_vectors)
-            return latest
+            return latest, False
         if latest.version != dataset.version:
             raise ValueError(
                 f"branch advanced from version {dataset.version} to {latest.version} "
                 "before index creation"
             )
-        return latest.create_index(
-            SKETCH_VEC_COLUMN,
-            index_type="IVF_PQ",
-            name=_INDEX_NAME,
-            metric=metric,
-            num_partitions=partitions,
-            num_sub_vectors=sub_vectors,
-            progress_callback=progress_callback,
+        return (
+            latest.create_index(
+                SKETCH_VEC_COLUMN,
+                index_type="IVF_PQ",
+                name=_INDEX_NAME,
+                metric=metric,
+                num_partitions=partitions,
+                num_sub_vectors=sub_vectors,
+                progress_callback=progress_callback,
+            ),
+            True,
         )
 
-    indexed = _retry("create_index", create_or_recover)
+    indexed, index_built = _retry("create_index", create_or_recover)
     created = _canonical_indexes(indexed)
     if len(created) != 1:
         raise ValueError(f"index creation produced {len(created)} canonical indexes")
     _validate_index(indexed, created[0], partitions, metric, sub_vectors)
-    return indexed, True
+    return indexed, index_built
 
 
 def _validate_resume_directory(config: SketchPoolBackfillConfig, cache_dir: Path) -> Path:
@@ -916,6 +919,24 @@ def _hydrate_remote_reports(store: _ReportStore) -> None:
         )
 
 
+def _validate_cache_identity(
+    identity_path: Path,
+    identity: _CacheIdentity,
+) -> None:
+    """Reject reconciliation state owned by another immutable source operation.
+
+    :param identity_path: Existing local or hydrated identity artifact.
+    :param identity: Expected operation identity.
+    :raises ValueError: The artifact identifies another source operation.
+    """
+    cached = _CacheIdentity.model_validate_json(identity_path.read_text(), strict=True)
+    if cached != identity:
+        raise ValueError(
+            f"resume cache {identity_path.parent} identifies a different source operation; "
+            "remove it or pass --resume-dir"
+        )
+
+
 def _load_reports(
     store: _ReportStore, identity: _CacheIdentity, fragment_ids: set[int]
 ) -> dict[int, _FragmentReport]:
@@ -925,21 +946,17 @@ def _load_reports(
     :param identity: Immutable source operation identity.
     :param fragment_ids: Current source fragment IDs.
     :returns: Valid reports keyed by fragment ID.
-    :raises ValueError: Existing cache belongs to a different source operation.
     """
     from synth_setter.pipeline.r2_io import upload_to_uri
 
     cache_dir = store.local_dir
     cache_dir.mkdir(parents=True, exist_ok=True)
-    _hydrate_remote_reports(store)
     identity_path = cache_dir / "identity.json"
     if identity_path.exists():
-        cached = _CacheIdentity.model_validate_json(identity_path.read_text(), strict=True)
-        if cached != identity:
-            raise ValueError(
-                f"resume cache {cache_dir} identifies a different source operation; "
-                "remove it or pass --resume-dir"
-            )
+        _validate_cache_identity(identity_path, identity)
+    _hydrate_remote_reports(store)
+    if identity_path.exists():
+        _validate_cache_identity(identity_path, identity)
     else:
         identity_path.write_text(identity.model_dump_json(indent=2) + "\n")
         if store.remote_uri is not None:
@@ -1140,20 +1157,14 @@ def _commit_reports(
     dataset: lance.LanceDataset,
     reports: Sequence[_FragmentReport],
     config: SketchPoolBackfillConfig,
-    lance_uri: str,
-    storage_options: dict[str, str] | None,
-    source_version: int,
-    artifact: bytes,
+    context: _OperationContext,
 ) -> lance.LanceDataset:
     """Commit worker reports with post-error publication recovery.
 
     :param dataset: Immutable source snapshot.
     :param reports: Complete validated fragment reports.
     :param config: Target branch identity.
-    :param lance_uri: Lance-openable dataset target.
-    :param storage_options: Object-store credentials, when required.
-    :param source_version: Version read by every worker.
-    :param artifact: Expected pooled-field identity.
+    :param context: Immutable target, source version, and artifact identity.
     :returns: Committed or recovered published snapshot.
     """
     import lance
@@ -1161,20 +1172,20 @@ def _commit_reports(
     metadata, schema = _decode_reports(reports)
 
     def commit_or_recover() -> lance.LanceDataset:
-        latest = _open_dataset(lance_uri, storage_options, config.branch, None)
-        if latest.version != source_version:
-            if _is_complete(latest, artifact):
+        latest = _open_dataset(context.lance_uri, context.storage_options, config.branch, None)
+        if latest.version != context.source_version:
+            if _is_complete(latest, context.artifact.encode()):
                 return latest
             raise ValueError(
-                f"branch advanced from source version {source_version} to "
+                f"branch advanced from source version {context.source_version} to "
                 f"incompatible version {latest.version}"
             )
         operation = lance.LanceOperation.Merge(metadata, schema)
         return lance.LanceDataset.commit(
             dataset,
             operation,
-            read_version=source_version,
-            storage_options=storage_options,
+            read_version=context.source_version,
+            storage_options=context.storage_options,
             commit_message="Pool stored full-resolution sketch controls",
         )
 
@@ -1557,15 +1568,7 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
             artifact=artifact,
         )
         reports = _run_fragment_tasks(dataset, config, context, started)
-        committed = _commit_reports(
-            dataset,
-            reports,
-            config,
-            lance_uri,
-            storage_options,
-            source_version,
-            artifact.encode(),
-        )
+        committed = _commit_reports(dataset, reports, config, context)
         _clear_resume_cache(config)
         committed, index_built = _ensure_canonical_index(committed, config)
         return _write_result(
