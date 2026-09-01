@@ -98,7 +98,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
-from synth_setter.sketch import pool_sketch_controls
 from synth_setter.pipeline.data.matpac_plus import (
     MATPAC_PLUS_FRONTEND,
     matpac_plus_num_latent_frames,
@@ -117,6 +116,7 @@ from synth_setter.same import (
     SAME_SAMPLE_RATE,
     resolve_same_checkpoint,
 )
+from synth_setter.sketch import pool_sketch_controls
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard

@@ -843,8 +843,8 @@ def _encode_sketch_column(
     :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param encoder: Sketch extractor over the original audio batch.
-    :returns: Struct array with 32-frame loudness/centroid/pitch children and
-        their frame-mean ``vec`` IVF companion.
+    :returns: Struct array with canonically pooled loudness/centroid/pitch
+        children and their frame-mean ``vec`` IVF companion.
     :raises ValueError: The encoder output is off the frame grid, non-finite,
         or outside the documented control bounds.
     """
