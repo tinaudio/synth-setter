@@ -94,6 +94,39 @@ def _validate_config(
         )
 
 
+def _validate_integer_config(name: str, value: int, *, minimum: int) -> None:
+    """Validate one integer configuration field.
+
+    :param name: Field name used in errors.
+    :param value: Runtime value to validate.
+    :param minimum: Smallest accepted integer.
+    :raises ValueError: The value is not an integer or is below ``minimum``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name}={value!r} must be an integer")
+    if value < minimum:
+        requirement = "positive" if minimum == 1 else "not be negative"
+        raise ValueError(f"{name}={value} must be {requirement}")
+
+
+def _validate_amplitude_scale(amplitude_scale: float) -> None:
+    """Validate that the gain survives the float32 decode path.
+
+    :param amplitude_scale: Runtime gain value.
+    :raises ValueError: The gain is invalid or cannot be represented safely.
+    """
+    if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
+        raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
+    if not math.isfinite(amplitude_scale) or amplitude_scale <= 0:
+        raise ValueError(f"amplitude_scale={amplitude_scale} must be positive and finite")
+    float32 = np.finfo(np.float32)
+    smallest_positive = np.nextafter(np.float32(0), np.float32(1)).item()
+    if amplitude_scale < smallest_positive or amplitude_scale > float32.max:
+        raise ValueError(
+            f"amplitude_scale={amplitude_scale} is not representable as positive float32"
+        )
+
+
 def _validate_numeric_config(
     *,
     sample_rate: int,
@@ -116,35 +149,23 @@ def _validate_numeric_config(
     :returns: Target samples per clip.
     :raises ValueError: A value has the wrong type or lies outside its valid domain.
     """
-    for name, value in (
-        ("sample_rate", sample_rate),
-        ("channels", channels),
-        ("dataset_version", dataset_version),
-        ("batch_size", batch_size),
-        ("num_workers", num_workers),
+    for name, value, minimum in (
+        ("sample_rate", sample_rate, 1),
+        ("channels", channels, 1),
+        ("dataset_version", dataset_version, 1),
+        ("batch_size", batch_size, 1),
+        ("num_workers", num_workers, 0),
     ):
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"{name}={value!r} must be an integer")
+        _validate_integer_config(name, value, minimum=minimum)
     if isinstance(signal_duration_seconds, bool) or not isinstance(
         signal_duration_seconds, (int, float)
     ):
         raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
-    if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
-        raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
-    if dataset_version <= 0:
-        raise ValueError(f"dataset_version={dataset_version} must be positive")
-    if batch_size <= 0:
-        raise ValueError(f"batch_size={batch_size} must be positive")
-    if sample_rate <= 0:
-        raise ValueError(f"sample_rate={sample_rate} must be positive")
     if not math.isfinite(signal_duration_seconds) or signal_duration_seconds <= 0:
         raise ValueError(
             f"signal_duration_seconds={signal_duration_seconds} must be positive and finite"
         )
-    if not math.isfinite(amplitude_scale) or amplitude_scale <= 0:
-        raise ValueError(f"amplitude_scale={amplitude_scale} must be positive and finite")
-    if num_workers < 0:
-        raise ValueError(f"num_workers={num_workers} must not be negative")
+    _validate_amplitude_scale(amplitude_scale)
     num_samples = int(sample_rate * signal_duration_seconds)
     if num_samples <= 0:
         raise ValueError(
@@ -152,8 +173,6 @@ def _validate_numeric_config(
             f"{signal_duration_seconds} yields {num_samples} samples per clip; "
             "the render contract needs a positive sample count"
         )
-    if channels <= 0:
-        raise ValueError(f"channels={channels} must be positive")
     return num_samples
 
 
@@ -403,19 +422,16 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             staged.replace(destination)
         return destination
 
-    def _open_corpus(self) -> tuple[_BlobAudioDataset, int]:
-        """Open the corpus, validate its audio column, and build the predict split.
+    def _open_lance_dataset(
+        self, uri: str, storage_options: dict[str, str] | None
+    ) -> lance.LanceDataset:
+        """Open the configured immutable Lance snapshot.
 
-        :returns: The predict dataset and pinned Lance version.
-        :raises KeyError: The corpus has no configured audio column.
-        :raises ValueError: The audio column is not blob-encoded or the corpus is empty.
+        :param uri: Lance-compatible local or object-store location.
+        :param storage_options: Object-store credentials and endpoint options.
+        :returns: Open Lance dataset handle.
         """
-        uri, storage_options = (
-            r2_io.lance_target(self.dataset_uri)
-            if r2_io.is_r2_uri(self.dataset_uri)
-            else (self.dataset_uri, None)
-        )
-        dataset = _retry_lance_read(
+        return _retry_lance_read(
             "third_party_corpus_open",
             lambda: lance.dataset(
                 uri,
@@ -423,6 +439,15 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 storage_options=storage_options,
             ),
         )
+
+    def _validate_corpus(self, dataset: lance.LanceDataset) -> int:
+        """Validate the configured blob column and return the row count.
+
+        :param dataset: Open corpus snapshot.
+        :returns: Number of rows in the snapshot.
+        :raises KeyError: The corpus has no configured audio column.
+        :raises ValueError: The audio column is not blob-encoded or the corpus is empty.
+        """
         if self.audio_column not in dataset.schema.names:
             raise KeyError(
                 f"corpus {self.dataset_uri} has no {self.audio_column!r} column; "
@@ -439,21 +464,54 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"corpus {self.dataset_uri} has no rows; an empty sweep writes no "
                 "predictions and fails downstream instead of here"
             )
+        return rows
+
+    def _build_predict_dataset(
+        self,
+        uri: str,
+        storage_options: dict[str, str] | None,
+        version: int,
+        rows: int,
+    ) -> _BlobAudioDataset:
+        """Build the worker-safe view of the validated snapshot.
+
+        :param uri: Lance-compatible local or object-store location.
+        :param storage_options: Object-store credentials and endpoint options.
+        :param version: Immutable snapshot version.
+        :param rows: Available row count.
+        :returns: Predict dataset capped by the configured row limit.
+        """
+        return _BlobAudioDataset(
+            uri,
+            storage_options=storage_options,
+            version=version,
+            audio_column=self.audio_column,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            num_samples=self.num_samples,
+            amplitude_scale=self.amplitude_scale,
+            rows=rows if self.row_limit is None else min(rows, self.row_limit),
+        )
+
+    def _open_corpus(self) -> tuple[_BlobAudioDataset, int]:
+        """Open the corpus, validate its audio column, and build the predict split.
+
+        :returns: The predict dataset and pinned Lance version.
+
+        Corpus validation errors propagate from :meth:`_validate_corpus`.
+        """
+        uri, storage_options = (
+            r2_io.lance_target(self.dataset_uri)
+            if r2_io.is_r2_uri(self.dataset_uri)
+            else (self.dataset_uri, None)
+        )
+        dataset = self._open_lance_dataset(uri, storage_options)
+        rows = self._validate_corpus(dataset)
         log.info(
             "third-party corpus %s pinned at version %s", self.dataset_uri, dataset.version
         )
         return (
-            _BlobAudioDataset(
-                uri,
-                storage_options=storage_options,
-                version=dataset.version,
-                audio_column=self.audio_column,
-                sample_rate=self.sample_rate,
-                channels=self.channels,
-                num_samples=self.num_samples,
-                amplitude_scale=self.amplitude_scale,
-                rows=rows if self.row_limit is None else min(rows, self.row_limit),
-            ),
+            self._build_predict_dataset(uri, storage_options, dataset.version, rows),
             dataset.version,
         )
 
