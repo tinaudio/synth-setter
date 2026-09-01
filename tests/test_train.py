@@ -691,6 +691,7 @@ def test_train_row_limited_hydration_evicts_materialized_file_cache(
         cfg_train_lance.datamodule.dataset_root = str(destination)
         cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
         cfg_train_lance.datamodule.download_dataset_row_limit = 2
+        cfg_train_lance.datamodule.high_memory_materialization = True
         cfg_train_lance.datamodule.batch_size = 2
         cfg_train_lance.datamodule.num_workers = 0
 
@@ -698,6 +699,7 @@ def test_train_row_limited_hydration_evicts_materialized_file_cache(
     _, object_dict = train(cfg_train_lance)
 
     assert object_dict["trainer"].global_step > 0
+    assert object_dict["datamodule"].high_memory_materialization is True
     assert advised_fds
 
 

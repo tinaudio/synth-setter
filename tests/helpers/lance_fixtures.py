@@ -1,10 +1,13 @@
 """Shared writers and column builders for Lance shard test fixtures."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
+import lance
 import numpy as np
 import pyarrow as pa
+import pytest
 
 from synth_setter.data.vst.audio_preview import (
     DEFAULT_MP3_BITRATE_KBPS,
@@ -35,6 +38,32 @@ M2L_DIM_2 = 7
 NUM_PARAMS = 11
 
 MEL_SHAPE = (MEL_CHANNELS, MEL_N_MELS, MEL_N_FRAMES)
+
+
+def record_lance_scan_and_write_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Record options while preserving real Lance scanner and writer operations.
+
+    :param monkeypatch: Replaces Lance callables for the duration of one test.
+    :returns: Scanner and writer keyword-argument records.
+    """
+    scanner_calls: list[dict[str, object]] = []
+    writer_calls: list[dict[str, object]] = []
+    real_scanner = cast(Callable[..., object], lance.LanceDataset.scanner)
+    real_write_dataset = cast(Callable[..., lance.LanceDataset], lance.write_dataset)
+
+    def recording_scanner(*args: object, **kwargs: object) -> object:
+        scanner_calls.append(kwargs)
+        return real_scanner(*args, **kwargs)
+
+    def recording_writer(*args: object, **kwargs: object) -> lance.LanceDataset:
+        writer_calls.append(kwargs)
+        return real_write_dataset(*args, **kwargs)
+
+    monkeypatch.setattr(lance.LanceDataset, "scanner", recording_scanner)
+    monkeypatch.setattr(lance, "write_dataset", recording_writer)
+    return scanner_calls, writer_calls
 
 
 def with_preview_columns(
