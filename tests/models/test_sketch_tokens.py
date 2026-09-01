@@ -100,6 +100,11 @@ class TestSketchControlSpec:
         with pytest.raises(ValueError, match="pitch_zero_threshold"):
             SketchControlSpec(num_frames=401, pitch_zero_threshold=threshold)
 
+    def test_pooled_storage_with_different_token_count_rejected(self) -> None:
+        """Stored pooled controls cannot recover a different temporal token budget."""
+        with pytest.raises(ValueError, match="pooled sketch storage requires"):
+            SketchControlSpec(num_frames=32, num_control_tokens=16)
+
     def test_resolve_non_mapping_raises_type_error(self) -> None:
         """Non-mapping junk is rejected with a clear error."""
         with pytest.raises(TypeError, match="sketch"):

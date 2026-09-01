@@ -1165,7 +1165,7 @@ def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     ``sketch_ctrl`` reads, conditioning collation, control-token injection, and
     independent sketch guidance during validation.
 
-    :param cfg_train_sketch_lance: Composed ``sketch=on`` training config over
+    :param cfg_train_sketch_lance: Composed pooled-sketch training config over
         generated m2l+sketch Lance splits.
     """
     with open_dict(cfg_train_sketch_lance):
@@ -1182,6 +1182,7 @@ def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
     assert model.hparams.all_conditioning_dropout_rate == 0.1
     assert object_dict["datamodule"].sketch_controls is not None
     assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.num_frames == 32
     assert torch.isfinite(metric_dict["train/loss"])
 
     torch.manual_seed(11)

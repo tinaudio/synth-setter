@@ -1,0 +1,12 @@
+# @package _global_
+
+# Pre-pool controls at the model token boundary so hydration omits discarded frames.
+model:
+  sketch_controls:
+    column: sketch
+    num_frames: 32
+    num_control_tokens: 32
+    pitch_zero_threshold: 0.1
+
+datamodule:
+  sketch: ${model.sketch_controls}

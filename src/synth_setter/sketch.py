@@ -1,4 +1,9 @@
-"""Shared sketch-control pooling contract."""
+"""Shared sketch-control pooling contract.
+
+Typical usage::
+
+    pooled = pool_sketch_controls(controls)
+"""
 
 import torch
 import torch.nn.functional as F

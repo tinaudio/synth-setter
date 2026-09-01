@@ -2660,7 +2660,7 @@ def _write_sketch_lance_root(dataset_root: Path) -> None:
 
 @pytest.fixture
 def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose a ``conditioning=m2l sketch=on`` training cfg over generated Lance splits.
+    """Compose a pooled-sketch training cfg over generated Lance splits.
 
     Mirrors :func:`cfg_train_lance` with the vst_flow model shrunk to a toy so
     a ``fast_dev_run`` step (including two-step RK4 CFG validation sampling)
@@ -2683,7 +2683,7 @@ def cfg_train_sketch_lance(tmp_path: Path) -> Iterator[DictConfig]:
                 "synth=surge_4",
                 "model=vst_flow",
                 "conditioning=m2l",
-                "sketch=on",
+                "sketch=pooled",
                 "trainer=cpu",
             ],
         )

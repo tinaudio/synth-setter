@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
 
 ConditioningMode = Literal["mel", "m2l", "audio"]
 LEGACY_M2L_INPUT_SHAPE = (128, 42)
@@ -141,6 +141,22 @@ class SketchControlSpec(BaseModel):
     # Bounded to the documented [0, 1] activation range: a negative threshold
     # silently disables binning and one above 1 zeroes the whole pitch block.
     pitch_zero_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def pooled_storage_matches_token_budget(self) -> "SketchControlSpec":
+        """Reject temporal resampling after canonical storage pooling.
+
+        :returns: The validated sketch-control specification.
+        :raises ValueError: Pooled storage and model token counts differ.
+        """
+        if (
+            self.num_frames == SKETCH_STORAGE_FRAMES
+            and self.num_control_tokens != SKETCH_STORAGE_FRAMES
+        ):
+            raise ValueError(
+                f"pooled sketch storage requires num_control_tokens={SKETCH_STORAGE_FRAMES}"
+            )
+        return self
 
 
 type SketchControls = SketchControlSpec | Mapping[str, object] | None
