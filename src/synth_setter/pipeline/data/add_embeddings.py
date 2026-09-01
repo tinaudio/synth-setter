@@ -1537,9 +1537,12 @@ def _write_columns(
         source_version=dataset.version,
     )
 
+    first_attempt = True
+
     def add_or_recover() -> None:
-        nonlocal dataset
-        latest = _open_lance_dataset(config.lance_uri)
+        nonlocal dataset, first_attempt
+        latest = dataset if first_attempt else _open_lance_dataset(config.lance_uri)
+        first_attempt = False
         if all(column in latest.schema.names for column in output_columns):
             dataset = latest
             return
