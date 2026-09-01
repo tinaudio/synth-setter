@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788226905190,
+  "lastUpdate": 1788226908766,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -24917,6 +24917,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.998407276000034,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e7559da31a5cc6c78e8da25e049abc853f894c44",
+          "message": "internal-feat(training): add per-layer slots to cached encoders (#2865)\n\n* internal-feat(training): add per-layer slots to cached encoders\n\nAST encoders already emit one conditioning slot per vector-field layer through\nn_conditioning_outputs, while EmbeddingPool and VectorProjection emitted a\nsingle shared vector. Both now take the same argument, so cached-embedding\nprofiles can supply layer-specific conditioning.\n\nThe default of 1 returns rank 2 and is bitwise identical to the previous pooled\npath, with unchanged parameter shapes and state-dict keys, so existing\ncheckpoints load unadapted and no migration shim is needed.\n\nNeither vector field changes. Both already repeat the time encoding across a\nslot axis and index z[:, i] per layer, and both already broadcast their single\ncfg_dropout_token across slots, which is the null arrangement every\ntrained-from-scratch AST run has used at eight slots.\n\n* internal-feat(training): retrigger PR title check\n\n* internal-fix(training): address cached slot review feedback\n\nIsolate slot tests from global RNG state, prove input dependence,\nand cover negative slot counts.\n\nExercise multi-slot CLAP and SAME conditioning through real train and\neval entrypoints. Clarify the slot-depth and typing contracts.\n\n* docs(training): distinguish layerwise encoder paths",
+          "timestamp": "2026-08-31T19:27:07-04:00",
+          "tree_id": "2f43c904ca08cba91f45d00c78ee6f9c8e450ea6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e7559da31a5cc6c78e8da25e049abc853f894c44"
+        },
+        "date": 1788226908188,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.234088897705078,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.569273158758879,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09690632671117783,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.00939321517944336,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.4396939277648926,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.739253922500007,
             "unit": "seconds"
           }
         ]
