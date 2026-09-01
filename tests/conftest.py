@@ -1691,8 +1691,9 @@ def _apply_smoke_train_paths(
     :param variant: Dataset-format arm selecting the predict-split suffix.
     :param tmp_path: Shared output/log directory (and checkpoint parent for eval).
     """
-    effect = cfg.render.get("pyfdn_effect")
-    profile_sample_rate = cfg.render.sample_rate
+    composed_render = cfg.get("render")
+    effect = None if composed_render is None else composed_render.get("pyfdn_effect")
+    profile_sample_rate = None if composed_render is None else composed_render.sample_rate
     render_values = _surge_smoke_render_config(
         str(cfg.datamodule.param_spec_name), variant.plugin_path
     )
