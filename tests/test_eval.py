@@ -1156,6 +1156,14 @@ def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
         datamodule="surge_lance",
         render_group="vst",
     )
+    repeated_dry_cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path / "dry-repeat",
+        surge_xt_smoke_datasets,
+        mode="predict",
+        param_spec_name=param_spec_name,
+        datamodule="surge_lance",
+        render_group="vst",
+    )
     effected_cfg = _compose_fake_oracle_eval_cfg(
         tmp_path / "effected",
         surge_xt_smoke_datasets,
@@ -1164,22 +1172,27 @@ def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
         datamodule="surge_lance",
         render_group="vst_pyfdn",
     )
-    for cfg in (dry_cfg, effected_cfg):
+    for cfg in (dry_cfg, repeated_dry_cfg, effected_cfg):
         with open_dict(cfg):
             cfg.render.sample_rate = 48000
             cfg.render.gui_toggle_cadence = "never"
             cfg.evaluation.compute_metrics = False
             cfg.evaluation.rerender_target = True
             cfg.trainer.limit_predict_batches = 1
+    with open_dict(effected_cfg):
+        effected_cfg.render.pyfdn_effect.wet_mix = 0.5
 
     HydraConfig().set_config(dry_cfg)
     evaluate(dry_cfg)
+    HydraConfig().set_config(repeated_dry_cfg)
+    evaluate(repeated_dry_cfg)
     HydraConfig().set_config(effected_cfg)
     evaluate(effected_cfg)
 
     effect = RenderConfig.from_cfg_nodes(effected_cfg.render, effected_cfg.synth).pyfdn_effect
     assert effect is not None
     assert effect.preset_name == "colorless_N8_d1"
+    assert effect.wet_mix == 0.5
     dry_pred_params = torch.load(
         Path(dry_cfg.paths.output_dir) / "predictions" / "pred-0.pt",
         weights_only=True,
@@ -1191,13 +1204,17 @@ def test_evaluate_predict_pyfdn_effects_prediction_and_target_audio(
     assert torch.equal(dry_pred_params, effected_target_params)
 
     dry_audio_root = Path(dry_cfg.paths.output_dir) / "audio" / "sample_0"
+    repeated_dry_audio_root = Path(repeated_dry_cfg.paths.output_dir) / "audio" / "sample_0"
     effected_audio_root = Path(effected_cfg.paths.output_dir) / "audio" / "sample_0"
     dry_pred = _read_wav(dry_audio_root / "pred.wav")
+    repeated_dry_pred = _read_wav(repeated_dry_audio_root / "pred.wav")
     dry_target = _read_wav(dry_audio_root / "target.wav")
     effected_pred = _read_wav(effected_audio_root / "pred.wav")
     effected_target = _read_wav(effected_audio_root / "target.wav")
     assert dry_pred.shape == dry_target.shape == effected_pred.shape == effected_target.shape
-    assert not np.array_equal(effected_pred, dry_pred)
+    dry_jitter = float(np.mean(np.abs(repeated_dry_pred - dry_pred)))
+    effect_delta = float(np.mean(np.abs(effected_pred - dry_pred)))
+    assert effect_delta > dry_jitter + 5e-5
     assert not np.array_equal(effected_target, dry_target)
     assert np.isfinite(effected_pred).all()
     assert np.max(np.abs(effected_pred)) <= 1.0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from synth_setter.data.vst.pyfdn_renderer import PyFDNEffectRenderer
 from synth_setter.data.vst.renderers import AudioRenderer
@@ -15,7 +16,7 @@ _NUM_SAMPLES = 4_096
 class _FixedAudioRenderer(AudioRenderer):
     """Return a fixed channel-first waveform through the renderer contract."""
 
-    def __init__(self, audio: np.ndarray) -> None:
+    def __init__(self, audio: np.ndarray):
         """Store channel-first source audio.
 
         :param audio: Fixed waveform returned by every render.
@@ -80,6 +81,20 @@ def _render(renderer: PyFDNEffectRenderer) -> np.ndarray:
     :returns: Effected channel-first waveform.
     """
     return renderer.render({}, 60, 100, (0.0, 0.1))
+
+
+def test_pyfdn_effect_package_version_mismatch_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Renderer construction rejects an installed pyFDN version outside provenance.
+
+    :param monkeypatch: Replaces distribution metadata at the package boundary.
+    """
+    monkeypatch.setattr("synth_setter.data.vst.pyfdn_renderer.version", lambda _name: "9.9.9")
+    audio = np.zeros((1, _NUM_SAMPLES), dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="expected 0.4.2, found 9.9.9"):
+        _effect_renderer(audio)
 
 
 def test_pyfdn_effect_impulse_produces_delayed_wet_audio() -> None:
