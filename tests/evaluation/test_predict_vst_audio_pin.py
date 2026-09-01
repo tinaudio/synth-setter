@@ -49,7 +49,7 @@ class _FakeRenderer:
         del params, midi_note, velocity, note_start_and_end, warmup
         num_samples = int(_SAMPLE_RATE * _SIGNAL_DURATION_SECONDS)
         rng = np.random.default_rng(42)
-        return (0.1 * rng.standard_normal((_CHANNELS, num_samples))).astype(np.float32)
+        return rng.standard_normal((_CHANNELS, num_samples)).astype(np.float32)
 
 
 def _render_config() -> RenderConfig:

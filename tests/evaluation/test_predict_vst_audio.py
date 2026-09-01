@@ -37,7 +37,10 @@ from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     write_spectrograms,
 )
 from synth_setter.param_spec_name import ParamSpecName  # noqa: E402
-from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.pipeline.schemas.spec import (  # noqa: E402
+    PyFDNEffectConfig,
+    RenderConfig,
+)
 from synth_setter.synth_spec import SynthName, SynthSpec  # noqa: E402
 from tests.helpers.audio_utils import noise as _noise  # noqa: E402
 from tests.helpers.audio_utils import sine  # noqa: E402
@@ -329,8 +332,24 @@ def test_main_out_of_range_render_raises_before_writing_audio(
     fake_renderer.render.side_effect = None
     fake_renderer.render.return_value = np.full((_CHANNELS, _SAMPLES), amplitude, dtype=np.float32)
 
+    effect_config = _render_config().model_copy(
+        update={
+            "sample_rate": 48000,
+            "pyfdn_effect": PyFDNEffectConfig(
+                package_version="0.4.2",
+                preset_name="colorless_N8_d1",
+                decay_seconds=0.5,
+                wet_mix=0.1,
+            ),
+        }
+    )
     with pytest.raises(ValueError, match=r"outside \[-1, 1\]"):
-        _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+        _invoke_main(
+            pred_dir,
+            out_dir,
+            ("--no-params", "--skip-spectrogram"),
+            effect_config,
+        )
 
 
 def test_main_no_params_writes_pred_target_csv_and_spectrogram(
