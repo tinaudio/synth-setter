@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import cast
 
@@ -31,14 +32,15 @@ from synth_setter.pipeline.data.backfill_sketch_pool import (
     _CacheIdentity,
     _ColumnRename,
     _ensure_canonical_index,
-    _ensure_rollback_tag,
     _FragmentTask,
     _load_reports,
     _parse_args,
     _persist_report,
+    _result,
     _resume_directory,
     _retry,
     _transform_fragment,
+    _validate_rollback_tag,
     backfill_sketch_pool,
 )
 from synth_setter.pipeline.data.lance_shard import sketch_struct_array
@@ -170,6 +172,43 @@ def test_backfill_sketch_pool_cli_real_lance_round_trip_is_exact(
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_backfill_sketch_pool_cli_with_untouched_source_tags_and_renames(
+    fake_r2_remote: Path,
+) -> None:
+    """The console entrypoint prepares a fresh canonical source before pooling.
+
+    :param fake_r2_remote: Filesystem-backed real rclone remote root.
+    """
+    rows = 2
+    controls = np.zeros((rows, SKETCH_PITCH_BINS + 2, 401), dtype=np.float32)
+    local_uri = fake_r2_remote / "test-bucket" / "fresh-sketches.lance"
+    lance.write_dataset(
+        pa.table({SKETCH_STRUCT_FIELD: sketch_struct_array(controls)}),
+        local_uri,
+    )
+    command = [
+        str(Path(sys.executable).parent / "synth-setter-backfill-sketch-pool"),
+        "--lance-uri",
+        "r2://test-bucket/fresh-sketches.lance",
+        "--workers",
+        "1",
+        "--rollback-tag",
+        "before-fresh-pool",
+        "--no-build-index",
+        "--resume-dir",
+        str(fake_r2_remote / "fresh-resume"),
+    ]
+
+    completed = subprocess.run(  # noqa: S603 -- test owns the executable and every argument.
+        command, check=False, capture_output=True, text=True
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    dataset = lance.dataset(local_uri)
+    assert dataset.tags.get_version("before-fresh-pool") == 1
+    assert {SKETCH_FULL_STRUCT_FIELD, SKETCH_STRUCT_FIELD} <= set(dataset.schema.names)
+
+
 def test_retry_with_transient_failures_returns_eventual_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -183,7 +222,7 @@ def test_retry_with_transient_failures_returns_eventual_result(
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            raise OSError("transient")
+            raise TimeoutError("transient")
         return "complete"
 
     monkeypatch.setattr(
@@ -194,27 +233,18 @@ def test_retry_with_transient_failures_returns_eventual_result(
     assert attempts == 3
 
 
-def test_retry_with_persistent_failure_raises_final_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Bounded retries surface the final object-store failure.
-
-    :param monkeypatch: Fixture disabling retry sleeps.
-    """
+def test_retry_with_permanent_failure_raises_without_retry() -> None:
+    """Permission failures bypass transient transport retries."""
     attempts = 0
 
     def operation() -> None:
         nonlocal attempts
         attempts += 1
-        raise OSError("persistent")
+        raise PermissionError("permanent")
 
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.backfill_sketch_pool.time.sleep", lambda _: None
-    )
-
-    with pytest.raises(OSError, match="persistent"):
+    with pytest.raises(PermissionError, match="permanent"):
         _retry("test", operation)
-    assert attempts == 4
+    assert attempts == 1
 
 
 def test_resume_directory_without_override_is_dataset_keyed() -> None:
@@ -228,6 +258,26 @@ def test_resume_directory_without_override_is_dataset_keyed() -> None:
     second = first.model_copy(update={"lance_uri": "r2://bucket/b.lance"})
 
     assert _resume_directory(first) != _resume_directory(second)
+
+
+def test_result_when_below_index_threshold_records_skip_policy(tmp_path: Path) -> None:
+    """A requested small-dataset index remains distinguishable from opt-out.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    dataset = lance.write_dataset(pa.table({"value": [1]}), tmp_path / "small.lance")
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(dataset.uri),
+        workers=1,
+        rollback_tag="before",
+    )
+
+    result = _result(config, dataset, dataset.version, time.monotonic(), True, False, "run")
+
+    assert result.index_requested is True
+    assert result.index_skip_reason == "below_min_rows"
+    assert result.index_name == "sketch_pool_vec_idx"
+    assert result.index_metric == "cosine"
 
 
 def test_ensure_canonical_index_when_disabled_skips_small_dataset(tmp_path: Path) -> None:
@@ -265,7 +315,37 @@ def test_ensure_rollback_tag_without_existing_tag_rejects_resume(tmp_path: Path)
     )
 
     with pytest.raises(ValueError, match="must already exist"):
-        _ensure_rollback_tag(dataset, config, str(uri), None, create=False)
+        _validate_rollback_tag(dataset, config, str(uri), None, expected_version=None)
+
+
+def test_validate_rollback_tag_after_source_advance_rejects_old_version(tmp_path: Path) -> None:
+    """A schema-compatible source commit cannot reuse an older rollback snapshot.
+
+    :param tmp_path: Temporary directory for the real Lance source.
+    """
+    uri = tmp_path / "advanced-source.lance"
+    dataset = lance.write_dataset(pa.table({SKETCH_STRUCT_FIELD: [1]}), uri)
+    dataset.tags.create("before", dataset.version)
+    dataset = lance.write_dataset(
+        pa.table({SKETCH_STRUCT_FIELD: [2]}),
+        uri,
+        mode="append",
+    )
+    config = SketchPoolBackfillConfig(
+        lance_uri=str(uri),
+        workers=1,
+        rollback_tag="before",
+        build_index=False,
+    )
+
+    with pytest.raises(ValueError, match="not source version"):
+        _validate_rollback_tag(
+            dataset,
+            config,
+            str(uri),
+            None,
+            expected_version=dataset.version,
+        )
 
 
 def test_ensure_rollback_tag_with_post_rename_snapshot_rejects_tag(tmp_path: Path) -> None:
@@ -284,7 +364,7 @@ def test_ensure_rollback_tag_with_post_rename_snapshot_rejects_tag(tmp_path: Pat
     )
 
     with pytest.raises(ValueError, match="canonical-only pre-migration schema"):
-        _ensure_rollback_tag(dataset, config, str(uri), None, create=False)
+        _validate_rollback_tag(dataset, config, str(uri), None, expected_version=None)
 
 
 def test_transform_fragment_with_missing_id_rejects_task(tmp_path: Path) -> None:

@@ -26,11 +26,13 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from synth_setter.data.vst.shapes import SKETCH_STRUCT_FIELD, SKETCH_VEC_CHILD
+from synth_setter.pipeline.data.lance_retry import retry_lance_io as _retry
 from synth_setter.utils.logging_utils import resolve_git_sha
 
 if TYPE_CHECKING:
     import lance
     import pyarrow as pa
+    import ray
     from lance.fragment import FragmentMetadata
     from lance.progress import IndexProgress
 
@@ -84,7 +86,6 @@ class _IndexDescriptor(TypedDict):
 
 logger = structlog.get_logger(__name__)
 _INDEX_NAME = "sketch_pool_vec_idx"
-_RETRY_ATTEMPTS = 4
 _PROGRESS_INTERVAL_SECONDS = 30.0
 
 
@@ -338,6 +339,38 @@ class _CacheIdentity(BaseModel):
 
 
 @dataclass(frozen=True)
+class _DispatchState:
+    """Hold mutable state while the driver collects Ray reports.
+
+    .. attribute :: pending
+
+        Outstanding Ray object references.
+
+    .. attribute :: reports
+
+        Durable reports keyed by fragment ID.
+
+    .. attribute :: fragment_ids
+
+        Complete expected source fragment ID set.
+
+    .. attribute :: total_rows
+
+        Source rows for progress reporting.
+
+    .. attribute :: cache_dir
+
+        Durable report directory.
+    """
+
+    pending: list[ray.ObjectRef]
+    reports: dict[int, _FragmentReport]
+    fragment_ids: set[int]
+    total_rows: int
+    cache_dir: Path
+
+
+@dataclass(frozen=True)
 class SketchPoolBackfillResult:
     """Summarize a committed or already-complete migration.
 
@@ -385,6 +418,14 @@ class SketchPoolBackfillResult:
 
         Whether this invocation built the index.
 
+    .. attribute :: index_requested
+
+        Whether index construction was requested.
+
+    .. attribute :: index_skip_reason
+
+        Why no index exists, or ``None`` when one exists.
+
     .. attribute :: workers
 
         Configured Ray workers.
@@ -425,6 +466,8 @@ class SketchPoolBackfillResult:
     rows_per_second: float
     already_complete: bool
     index_built: bool
+    index_requested: bool
+    index_skip_reason: str | None
     workers: int
     batch_size: int
     tasks_per_worker: int
@@ -432,36 +475,6 @@ class SketchPoolBackfillResult:
     index_metric: str | None
     num_partitions: int | None
     num_sub_vectors: int | None
-
-
-def _retry[ResultT](description: str, operation: Callable[[], ResultT]) -> ResultT:
-    """Retry bounded idempotent Lance and object-store operations.
-
-    :param description: Stable operation name for structured diagnostics.
-    :param operation: Idempotent operation to invoke.
-    :returns: The successful operation result.
-    :raises ConnectionError: The final connection attempt fails.
-    :raises OSError: The final Lance or object-store attempt fails.
-    :raises TimeoutError: The final operation attempt times out.
-    :raises AssertionError: The bounded loop exits unexpectedly.
-    """
-    for attempt in range(1, _RETRY_ATTEMPTS + 1):
-        try:
-            return operation()
-        except (ConnectionError, OSError, TimeoutError):
-            if attempt == _RETRY_ATTEMPTS:
-                raise
-            delay = float(2 ** (attempt - 1))
-            logger.warning(
-                "sketch_pool_io_retry",
-                operation=description,
-                attempt=attempt,
-                max_attempts=_RETRY_ATTEMPTS,
-                delay_seconds=delay,
-                exc_info=True,
-            )
-            time.sleep(delay)
-    raise AssertionError("retry loop exhausted without returning or raising")
 
 
 def _branch_reference(branch: str, version: int | None) -> tuple[str | None, int | None]:
@@ -822,16 +835,15 @@ def _persist_report(cache_dir: Path, report: _FragmentReport) -> None:
     temporary.replace(destination)
 
 
-def _run_fragment_tasks(
+def _prepare_dispatch(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
     lance_uri: str,
     storage_options: dict[str, str] | None,
     source_version: int,
     artifact: str,
-    started: float,
-) -> list[_FragmentReport]:
-    """Run missing fragment tasks and durably record each successful output.
+) -> _DispatchState:
+    """Load durable reports and submit only missing fragment tasks.
 
     :param dataset: Immutable source snapshot.
     :param config: Worker, batch, and recycling controls.
@@ -839,15 +851,11 @@ def _run_fragment_tasks(
     :param storage_options: Object-store credentials, when required.
     :param source_version: Immutable branch-local source version.
     :param artifact: Pooling-policy identity.
-    :param started: Migration start time for progress rates.
-    :returns: One validated report per source fragment.
-    :raises TimeoutError: The configured overall task deadline expires.
-    :raises ValueError: A worker report is duplicate, unknown, or incomplete.
+    :returns: Initialized mutable dispatch state.
     """
     import ray
 
     fragments = _retry("list_fragments", dataset.get_fragments)
-    total_rows = _retry("count_source_rows", dataset.count_rows)
     fragment_ids = {fragment.metadata.id for fragment in fragments}
     cache_dir = _resume_directory(config)
     identity = _CacheIdentity(
@@ -875,19 +883,46 @@ def _run_fragment_tasks(
         )
         for fragment_id in sorted(fragment_ids - reports.keys())
     ]
-    rows_done = sum(report.row_count for report in reports.values())
+    return _DispatchState(
+        pending=pending,
+        reports=reports,
+        fragment_ids=fragment_ids,
+        total_rows=_retry("count_source_rows", dataset.count_rows),
+        cache_dir=cache_dir,
+    )
+
+
+def _poll_dispatch(
+    state: _DispatchState,
+    config: SketchPoolBackfillConfig,
+    started: float,
+) -> None:
+    """Collect, validate, persist, and report one dispatch to completion.
+
+    :param state: Prepared mutable dispatch state.
+    :param config: Overall timeout policy.
+    :param started: Migration start time for progress rates.
+    :raises TimeoutError: The configured deadline expires; pending tasks are cancelled.
+    :raises ValueError: A worker report is duplicate or unknown.
+    """
+    import ray
+
+    pending = state.pending
+    rows_done = sum(report.row_count for report in state.reports.values())
     last_log = started
     while pending:
         ready, pending = ray.wait(pending, num_returns=1, timeout=10)
         if ready:
             report = _FragmentReport.model_validate(ray.get(ready[0]), strict=True)
-            if report.fragment_id not in fragment_ids or report.fragment_id in reports:
+            if report.fragment_id not in state.fragment_ids or report.fragment_id in state.reports:
                 raise ValueError(f"unexpected worker report for fragment {report.fragment_id}")
-            _persist_report(cache_dir, report)
-            reports[report.fragment_id] = report
+            _persist_report(state.cache_dir, report)
+            state.reports[report.fragment_id] = report
             rows_done += report.row_count
         now = time.monotonic()
         if now - started > config.timeout_seconds:
+            for reference in pending:
+                ray.cancel(reference, force=True)
             raise TimeoutError(
                 f"fragment tasks exceeded {config.timeout_seconds} seconds with "
                 f"{len(pending)} pending"
@@ -898,17 +933,49 @@ def _run_fragment_tasks(
             logger.info(
                 "sketch_pool_backfill_progress",
                 rows=rows_done,
-                total_rows=total_rows,
+                total_rows=state.total_rows,
                 rows_per_second=rate,
-                fragments=len(reports),
-                total_fragments=len(fragments),
+                fragments=len(state.reports),
+                total_fragments=len(state.fragment_ids),
                 elapsed_seconds=elapsed,
-                eta_seconds=(total_rows - rows_done) / rate if rate > 0 else None,
+                eta_seconds=(state.total_rows - rows_done) / rate if rate > 0 else None,
             )
             last_log = now
-    if reports.keys() != fragment_ids:
+
+
+def _run_fragment_tasks(
+    dataset: lance.LanceDataset,
+    config: SketchPoolBackfillConfig,
+    lance_uri: str,
+    storage_options: dict[str, str] | None,
+    source_version: int,
+    artifact: str,
+    started: float,
+) -> list[_FragmentReport]:
+    """Run missing fragment tasks and durably record each successful output.
+
+    :param dataset: Immutable source snapshot.
+    :param config: Worker, batch, and recycling controls.
+    :param lance_uri: Lance-openable dataset target.
+    :param storage_options: Object-store credentials, when required.
+    :param source_version: Immutable branch-local source version.
+    :param artifact: Pooling-policy identity.
+    :param started: Migration start time for progress rates.
+    :returns: One validated report per source fragment.
+    :raises ValueError: Worker reports do not cover every source fragment.
+    """
+    state = _prepare_dispatch(
+        dataset,
+        config,
+        lance_uri,
+        storage_options,
+        source_version,
+        artifact,
+    )
+    _poll_dispatch(state, config, started)
+    if state.reports.keys() != state.fragment_ids:
         raise ValueError("worker reports do not cover every source fragment")
-    return [reports[fragment_id] for fragment_id in sorted(fragment_ids)]
+    return [state.reports[fragment_id] for fragment_id in sorted(state.fragment_ids)]
 
 
 def _decode_reports(
@@ -1039,10 +1106,12 @@ def _result(
     metric: str | None = None
     sub_vectors: int | None = None
     index_name: str | None = None
+    index_skip_reason: str | None = "disabled"
     canonical_indices = _canonical_indexes(dataset)
-    if config.build_index and canonical_indices:
+    if config.build_index:
         partitions, metric, sub_vectors = _index_parameters(dataset, config)
         index_name = _INDEX_NAME
+        index_skip_reason = None if canonical_indices else "below_min_rows"
     rows = _retry("count_result_rows", dataset.count_rows)
     return SketchPoolBackfillResult(
         run_id=run_id,
@@ -1056,6 +1125,8 @@ def _result(
         rows_per_second=0.0 if already_complete else rows / elapsed,
         already_complete=already_complete,
         index_built=index_built,
+        index_requested=config.build_index,
+        index_skip_reason=index_skip_reason,
         workers=config.workers,
         batch_size=config.batch_size,
         tasks_per_worker=config.tasks_per_worker,
@@ -1066,47 +1137,63 @@ def _result(
     )
 
 
-def _ensure_rollback_tag(
+def _create_rollback_tag(
+    dataset: lance.LanceDataset,
+    config: SketchPoolBackfillConfig,
+) -> None:
+    """Create the required tag on the current pre-migration snapshot.
+
+    :param dataset: Canonical-only source snapshot.
+    :param config: Required tag and branch identity.
+    :raises ValueError: The tag cannot be observed after publication.
+    """
+    rollback_tag = config.rollback_tag
+
+    def create_or_recover_tag() -> None:
+        if dataset.tags.list().get(rollback_tag) is not None:
+            return
+        dataset.tags.create(
+            rollback_tag,
+            _branch_reference(config.branch, dataset.version),
+        )
+
+    _retry("create_rollback_tag", create_or_recover_tag)
+    if _retry("list_created_tag", dataset.tags.list).get(rollback_tag) is None:
+        raise ValueError(f"rollback tag {rollback_tag!r} was not published")
+
+
+def _validate_rollback_tag(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
     lance_uri: str,
     storage_options: dict[str, str] | None,
-    create: bool,
+    expected_version: int | None,
 ) -> None:
-    """Create or validate the immutable pre-migration rollback snapshot.
+    """Validate an existing immutable pre-migration rollback snapshot.
 
     :param dataset: Current branch snapshot.
     :param config: Required tag and branch identity.
     :param lance_uri: Lance-openable dataset target.
     :param storage_options: Object-store credentials, when required.
-    :param create: Whether a missing tag may identify the current snapshot.
-    :raises ValueError: The tag is missing or does not identify the pre-migration schema.
+    :param expected_version: Exact source version before rename, when known.
+    :raises ValueError: The tag is missing or identifies the wrong branch, version, or schema.
     """
     from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
 
     rollback_tag = config.rollback_tag
     existing = _retry("list_tags", dataset.tags.list).get(rollback_tag)
     if existing is None:
-        if not create:
-            raise ValueError(f"rollback tag {rollback_tag!r} must already exist")
-
-        def create_or_recover_tag() -> None:
-            if dataset.tags.list().get(rollback_tag) is not None:
-                return
-            dataset.tags.create(
-                rollback_tag,
-                _branch_reference(config.branch, dataset.version),
-            )
-
-        _retry("create_rollback_tag", create_or_recover_tag)
-        existing = _retry("list_created_tag", dataset.tags.list).get(rollback_tag)
-        if existing is None:
-            raise ValueError(f"rollback tag {rollback_tag!r} was not published")
+        raise ValueError(f"rollback tag {rollback_tag!r} must already exist")
     allowed_branches = {None, "main"} if config.branch == "main" else {config.branch}
     if existing["branch"] not in allowed_branches:
         raise ValueError(
             f"rollback tag {rollback_tag!r} identifies branch {existing['branch']!r}, "
             f"not {config.branch!r}"
+        )
+    if expected_version is not None and existing["version"] != expected_version:
+        raise ValueError(
+            f"rollback tag {rollback_tag!r} identifies version {existing['version']}, "
+            f"not source version {expected_version}"
         )
     tagged = _open_dataset(
         lance_uri,
@@ -1151,12 +1238,14 @@ def _prepare_source(
         )
     if _retry("count_prepared_rows", dataset.count_rows) == 0:
         raise ValueError("cannot backfill an empty dataset")
-    _ensure_rollback_tag(
+    if has_canonical:
+        _create_rollback_tag(dataset, config)
+    _validate_rollback_tag(
         dataset,
         config,
         lance_uri,
         storage_options,
-        create=has_canonical,
+        expected_version=dataset.version if has_canonical else dataset.version - 1,
     )
     if not has_canonical:
         return dataset
@@ -1196,12 +1285,12 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
         dataset = _open_dataset(lance_uri, storage_options, config.branch, None)
         artifact = _sketch_pool_artifact_identity("")
         if _is_complete(dataset, artifact.encode()):
-            _ensure_rollback_tag(
+            _validate_rollback_tag(
                 dataset,
                 config,
                 lance_uri,
                 storage_options,
-                create=False,
+                expected_version=None,
             )
             source_version = dataset.version
             dataset, index_built = _ensure_canonical_index(dataset, config)

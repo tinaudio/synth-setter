@@ -1675,6 +1675,11 @@ def _missing_embedding_specs(
             for metadata in field_metadata.values()
         )
         if not has_identity:
+            if spec.name == "sketch_pool" and SKETCH_FULL_STRUCT_FIELD not in names:
+                raise ValueError(
+                    "sketch_pool requires the legacy sketch source to be renamed "
+                    f"to {SKETCH_FULL_STRUCT_FIELD!r} before selection"
+                )
             logger.warning("legacy_embedding_identity_missing", embedding=spec.name)
             continue
         artifact_identity = _resolve_artifact_identity(spec, config).encode()

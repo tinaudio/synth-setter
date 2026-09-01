@@ -1175,9 +1175,10 @@ contract, publishes one branch-scoped Lance merge commit, and builds the
 canonical `sketch.vec` index. Each worker report is atomically persisted under
 `--resume-dir` (or a dataset-keyed user cache) before progress is acknowledged,
 so a retry resumes both after the rename and after completed fragments. Lance
-and object-store operations use bounded exponential retries; permanent schema
-and value errors fail immediately. The JSON result records the run and Git IDs,
-worker controls, versions, throughput, and full index configuration. Existing
+and object-store operations use the shared bounded Tenacity policy; permanent
+schema, permission, and value errors fail immediately. The JSON result records
+the run and Git IDs, worker controls, versions, throughput, requested index
+configuration, and an explicit below-threshold or disabled skip reason. Existing
 indexes are accepted only when their identity, IVF-PQ parameters, coverage, and
 ANN query plan match the canonical policy.
 

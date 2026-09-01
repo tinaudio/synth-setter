@@ -1578,6 +1578,32 @@ def test_missing_embedding_specs_with_legacy_metadata_accepts_existing_policy(
     assert any(entry["event"] == "legacy_embedding_identity_missing" for entry in logs)
 
 
+def test_missing_sketch_pool_with_unrenamed_legacy_sketch_rejects_source(
+    tmp_path: Path,
+) -> None:
+    """A metadata-free legacy sketch cannot masquerade as completed pooling.
+
+    :param tmp_path: Scratch directory for the Lance dataset.
+    """
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+
+    uri = tmp_path / "legacy-sketch.lance"
+    controls = np.zeros((1, NUM_SKETCH_CONTROLS, 401), dtype=np.float32)
+    lance.write_dataset(pa.table({SKETCH_STRUCT_FIELD: sketch_struct_array(controls)}), uri)
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri),
+        embeddings=("sketch_pool",),
+        build_index=False,
+    )
+
+    with pytest.raises(ValueError, match="requires the legacy sketch source to be renamed"):
+        _missing_embedding_specs(
+            lance.dataset(uri),
+            [EMBEDDING_REGISTRY["sketch_pool"]],
+            config,
+        )
+
+
 def test_add_embeddings_existing_artifact_identity_mismatch_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
