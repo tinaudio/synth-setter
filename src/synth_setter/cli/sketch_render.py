@@ -80,6 +80,10 @@ class _SketchRenderSettings(BaseModel):
 
         Local path or R2 URI for mel statistics.
 
+    .. attribute :: stats_sha256
+
+        Trusted mel-statistics digest.
+
     .. attribute :: output_dir
 
         Default local artifact directory.
@@ -110,6 +114,7 @@ class _SketchRenderSettings(BaseModel):
     checkpoint: str
     checkpoint_sha256: str
     stats: str
+    stats_sha256: str
     output_dir: Path
     upload_prefix: str
     device: _DeviceSetting
@@ -132,6 +137,23 @@ class _SketchRenderSettings(BaseModel):
             int(value, 16)
         except ValueError as exc:
             raise ValueError("checkpoint_sha256 must be hexadecimal") from exc
+        return value.lower()
+
+    @field_validator("stats_sha256")
+    @classmethod
+    def _validate_stats_sha256(cls, value: str) -> str:
+        """Require a complete hexadecimal statistics digest.
+
+        :param value: Configured digest.
+        :returns: Validated lowercase digest.
+        :raises ValueError: The digest is not 64 hexadecimal characters.
+        """
+        if len(value) != 64:
+            raise ValueError("stats_sha256 must contain 64 hex characters")
+        try:
+            int(value, 16)
+        except ValueError as exc:
+            raise ValueError("stats_sha256 must be hexadecimal") from exc
         return value.lower()
 
     @field_validator("output_dir", mode="before")
@@ -210,27 +232,43 @@ def load_render_config() -> RenderConfig:
     return _workspace_render_config(_load_settings().render)
 
 
-def _resolve_stats(source: str) -> Path:
+def _path_sha256(path: Path) -> str:
+    """Return the SHA-256 digest of one local file.
+
+    :param path: File to hash.
+    :returns: Lowercase hexadecimal digest.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _resolve_stats(source: str, expected_sha256: str) -> Path:
     """Resolve local or R2 mel statistics to a reusable file.
 
     :param source: Local path or exact R2 object URI.
-    :returns: Existing local path or cached R2 object.
+    :param expected_sha256: Required statistics digest.
+    :returns: Verified local path or cached R2 object.
     :raises FileNotFoundError: A local source does not exist.
+    :raises RuntimeError: Local or downloaded bytes have the wrong digest.
     """
     if not r2_io.is_r2_uri(source):
         local = Path(source).expanduser()
         if not local.is_file():
             raise FileNotFoundError(f"mel statistics do not exist: {local}")
+        if _path_sha256(local) != expected_sha256:
+            raise RuntimeError("mel statistics SHA-256 mismatch")
         return local.resolve()
     cache_key = hashlib.sha256(source.encode()).hexdigest()
     cached = synth_setter_cache_dir() / "models" / "mel-stats" / cache_key / "stats.npz"
-    if cached.is_file() and cached.stat().st_size > 0:
+    if cached.is_file() and _path_sha256(cached) == expected_sha256:
         return cached
+    cached.unlink(missing_ok=True)
     cached.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=cached.parent, suffix=".npz", delete=False) as stream:
         staging = Path(stream.name)
     try:
         r2_io.download_to_path(source, staging)
+        if _path_sha256(staging) != expected_sha256:
+            raise RuntimeError("mel statistics SHA-256 mismatch")
         staging.replace(cached)
     finally:
         staging.unlink(missing_ok=True)
@@ -460,6 +498,7 @@ def _run_id(sketch_path: Path, content_path: Path) -> str:
 @click.option("--checkpoint", envvar="SYNTH_SETTER_SKETCH_CHECKPOINT")
 @click.option("--checkpoint-sha256", envvar="SYNTH_SETTER_SKETCH_CHECKPOINT_SHA256")
 @click.option("--stats", "stats_source", envvar="SYNTH_SETTER_SKETCH_MEL_STATS")
+@click.option("--stats-sha256", envvar="SYNTH_SETTER_SKETCH_MEL_STATS_SHA256")
 @click.option("--content-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
 @click.option("--sketch-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
 @click.option("--sample-steps", type=int)
@@ -478,6 +517,7 @@ def main(
     checkpoint: str | None,
     checkpoint_sha256: str | None,
     stats_source: str | None,
+    stats_sha256: str | None,
     content_cfg: tuple[float, ...],
     sketch_cfg: tuple[float, ...],
     sample_steps: int | None,
@@ -496,6 +536,7 @@ def main(
     :param checkpoint: Optional sketch-conditioned checkpoint override.
     :param checkpoint_sha256: Required digest for a checkpoint override.
     :param stats_source: Optional mel-statistics override.
+    :param stats_sha256: Required digest for a statistics override.
     :param content_cfg: Content guidance strengths.
     :param sketch_cfg: Sketch guidance strengths.
     :param sample_steps: Optional integration-step override.
@@ -529,6 +570,17 @@ def main(
     except ValueError as exc:
         raise click.ClickException("--checkpoint-sha256 must be hexadecimal") from exc
     stats = stats_source or settings.stats
+    selected_stats_sha256 = stats_sha256
+    if selected_stats_sha256 is None:
+        if stats_source is not None and stats != settings.stats:
+            raise click.ClickException("--stats-sha256 is required with --stats")
+        selected_stats_sha256 = settings.stats_sha256
+    if len(selected_stats_sha256) != 64:
+        raise click.ClickException("--stats-sha256 must contain 64 hex characters")
+    try:
+        int(selected_stats_sha256, 16)
+    except ValueError as exc:
+        raise click.ClickException("--stats-sha256 must be hexadecimal") from exc
     selected_device = _resolve_device(device or settings.device)
     selected_seed = settings.seed if seed is None else seed
     run_id = _run_id(sketch_wav, content_wav)
@@ -551,7 +603,7 @@ def main(
     batch = _prepare_inputs(
         sketch_audio=sketch_audio,
         content_audio=content_audio,
-        stats_path=_resolve_stats(stats),
+        stats_path=_resolve_stats(stats, selected_stats_sha256.lower()),
         model=model,
         render=render,
         device=selected_device,

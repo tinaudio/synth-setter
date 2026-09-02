@@ -91,6 +91,7 @@ def test_render_pair_fresh_output_explicitly_enables_upload(
         checkpoint="r2://bucket/model.ckpt",
         checkpoint_sha256="a" * 64,
         stats="r2://bucket/stats.npz",
+        stats_sha256="b" * 64,
         content_cfg=(0.0,),
         sketch_cfg=(0.0,),
         sample_steps=2,
@@ -101,6 +102,7 @@ def test_render_pair_fresh_output_explicitly_enables_upload(
     assert command[command.index("--checkpoint") + 1] == "r2://bucket/model.ckpt"
     assert command[command.index("--checkpoint-sha256") + 1] == "a" * 64
     assert command[command.index("--stats") + 1] == "r2://bucket/stats.npz"
+    assert command[command.index("--stats-sha256") + 1] == "b" * 64
     assert "--upload" in command
 
 
@@ -129,6 +131,7 @@ def test_render_pair_existing_output_fails_without_deleting_diagnostics(
             checkpoint="r2://bucket/model.ckpt",
             checkpoint_sha256="a" * 64,
             stats="r2://bucket/stats.npz",
+            stats_sha256="b" * 64,
             content_cfg=(0.0,),
             sketch_cfg=(0.0,),
             sample_steps=2,

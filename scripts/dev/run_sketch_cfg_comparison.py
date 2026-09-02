@@ -40,6 +40,7 @@ DEFAULT_STATS = (
     "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
     "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz"
 )
+DEFAULT_STATS_SHA256 = "c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19"
 VOCAL_DATASET_VERSION = 1
 CONTENT_DATASET_VERSION = 1
 DEFAULT_CFG_STRENGTHS = (0.0, 1.0, 2.0)
@@ -276,6 +277,7 @@ def _render_pair(
     checkpoint: str,
     checkpoint_sha256: str,
     stats: str,
+    stats_sha256: str,
     content_cfg: Sequence[float],
     sketch_cfg: Sequence[float],
     sample_steps: int,
@@ -290,6 +292,7 @@ def _render_pair(
     :param checkpoint: Sketch checkpoint source.
     :param checkpoint_sha256: Trusted checkpoint digest.
     :param stats: Matching content mel-statistics source.
+    :param stats_sha256: Trusted statistics digest.
     :param content_cfg: Content CFG axis.
     :param sketch_cfg: Sketch CFG axis.
     :param sample_steps: Flow integration steps.
@@ -312,6 +315,8 @@ def _render_pair(
         checkpoint_sha256,
         "--stats",
         stats,
+        "--stats-sha256",
+        stats_sha256,
         "--sample-steps",
         str(sample_steps),
         "--seed",
@@ -380,6 +385,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
     parser.add_argument("--checkpoint-sha256", default=DEFAULT_CHECKPOINT_SHA256)
     parser.add_argument("--stats", default=DEFAULT_STATS)
+    parser.add_argument("--stats-sha256", default=DEFAULT_STATS_SHA256)
     parser.add_argument("--content-cfg", type=float, action="append")
     parser.add_argument("--sketch-cfg", type=float, action="append")
     parser.add_argument("--sample-steps", type=int, default=200)
@@ -405,6 +411,12 @@ def main() -> None:
         int(args.checkpoint_sha256, 16)
     except ValueError as exc:
         raise ValueError("checkpoint SHA-256 must be hexadecimal") from exc
+    if len(args.stats_sha256) != 64:
+        raise ValueError("statistics SHA-256 must contain 64 hex characters")
+    try:
+        int(args.stats_sha256, 16)
+    except ValueError as exc:
+        raise ValueError("statistics SHA-256 must be hexadecimal") from exc
     if not r2_io.is_r2_uri(args.stats):
         raise ValueError(f"stats must use r2://, got {args.stats}")
     if not r2_io.is_r2_uri(args.destination):
@@ -432,6 +444,7 @@ def main() -> None:
             checkpoint=args.checkpoint,
             checkpoint_sha256=args.checkpoint_sha256.lower(),
             stats=args.stats,
+            stats_sha256=args.stats_sha256.lower(),
             content_cfg=content_cfg,
             sketch_cfg=sketch_cfg,
             sample_steps=args.sample_steps,
@@ -456,6 +469,7 @@ def main() -> None:
             {"key": "checkpoint", "value": args.checkpoint},
             {"key": "checkpoint_sha256", "value": args.checkpoint_sha256.lower()},
             {"key": "stats", "value": args.stats},
+            {"key": "stats_sha256", "value": args.stats_sha256.lower()},
             {"key": "vocal_dataset", "value": VOCAL_DATASET},
             {"key": "vocal_dataset_version", "value": VOCAL_DATASET_VERSION},
             {"key": "content_dataset", "value": CONTENT_DATASET},

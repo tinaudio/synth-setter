@@ -97,6 +97,35 @@ def test_load_audio_file_unsupported_codec_uses_ffmpeg(
     np.testing.assert_array_equal(audio, np.clip(decoded[:4].T, -1.0, 1.0))
 
 
+def test_load_audio_file_short_ffmpeg_output_pads_zero_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pad a short fallback decode on the time axis.
+
+    :param tmp_path: Isolates the encoded source.
+    :param monkeypatch: Supplies a short decoded FFmpeg stream.
+    """
+    source = tmp_path / "short.wv"
+    source.write_bytes(b"source")
+    decoded = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+    monkeypatch.setattr(
+        sketch_render,
+        "decode_clip",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AudioDecodeError("not supported")),
+    )
+    monkeypatch.setattr(
+        sketch_render.subprocess,
+        "run",
+        lambda *args, **kwargs: CompletedProcess(args[0], 0, decoded.tobytes(), b""),
+    )
+
+    audio = load_audio_file(source, sample_rate=8000, channels=2, num_samples=4)
+
+    assert audio.shape == (2, 4)
+    np.testing.assert_array_equal(audio[:, :2], decoded.T)
+    np.testing.assert_array_equal(audio[:, 2:], np.zeros((2, 2), dtype=np.float32))
+
+
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required for codec fallback")
 def test_load_audio_file_real_wavpack_uses_ffmpeg_fallback() -> None:
     """A real unsupported WavPack fixture decodes through the shipped FFmpeg path."""
@@ -175,7 +204,8 @@ def test_resolve_stats_local_path_returns_existing_file(tmp_path: Path) -> None:
     stats = tmp_path / "stats.npz"
     stats.write_bytes(b"stats")
 
-    assert sketch_render._resolve_stats(str(stats)) == stats.resolve()
+    digest = hashlib.sha256(stats.read_bytes()).hexdigest()
+    assert sketch_render._resolve_stats(str(stats), digest) == stats.resolve()
 
 
 def test_resolve_stats_missing_local_path_raises(tmp_path: Path) -> None:
@@ -184,7 +214,7 @@ def test_resolve_stats_missing_local_path_raises(tmp_path: Path) -> None:
     :param tmp_path: Temporary missing path root.
     """
     with pytest.raises(FileNotFoundError, match="mel statistics"):
-        sketch_render._resolve_stats(str(tmp_path / "missing.npz"))
+        sketch_render._resolve_stats(str(tmp_path / "missing.npz"), "a" * 64)
 
 
 def test_resolve_stats_r2_uri_materializes_cached_bytes(
@@ -200,8 +230,9 @@ def test_resolve_stats_r2_uri_materializes_cached_bytes(
     source.write_bytes(b"mel statistics")
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
-    resolved = sketch_render._resolve_stats("r2://models/stats.npz")
-    cached = sketch_render._resolve_stats("r2://models/stats.npz")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    resolved = sketch_render._resolve_stats("r2://models/stats.npz", digest)
+    cached = sketch_render._resolve_stats("r2://models/stats.npz", digest)
 
     assert cached == resolved
     assert resolved.read_bytes() == b"mel statistics"
@@ -219,6 +250,28 @@ def test_settings_invalid_checkpoint_digest_raises(digest: str) -> None:
 
     with pytest.raises(ValueError, match="checkpoint_sha256"):
         sketch_render._SketchRenderSettings.model_validate(values)
+
+
+def test_resolve_stats_changed_r2_bytes_refreshes_uri_cache(
+    fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new trusted digest replaces stale bytes cached under the same URI.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param monkeypatch: Cache-home override fixture.
+    """
+    source = fake_r2_remote / "models" / "stats.npz"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"old stats")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+    old_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    sketch_render._resolve_stats("r2://models/stats.npz", old_digest)
+    source.write_bytes(b"corrected stats")
+    new_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    refreshed = sketch_render._resolve_stats("r2://models/stats.npz", new_digest)
+
+    assert refreshed.read_bytes() == b"corrected stats"
 
 
 def test_load_model_matching_checkpoint_returns_evaluation_model(
@@ -538,6 +591,8 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
                 hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
                 "--stats",
                 str(stats),
+                "--stats-sha256",
+                hashlib.sha256(stats.read_bytes()).hexdigest(),
                 "--content-cfg",
                 "0",
                 "--content-cfg",
