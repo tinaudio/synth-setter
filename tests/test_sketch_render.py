@@ -17,7 +17,7 @@ from pedalboard.io import AudioFile
 from synth_setter.cli import sketch_render
 from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_file, main
 from synth_setter.conditioning import SketchControlSpec
-from synth_setter.data.third_party_datamodule import AudioDecodeError
+from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_clip
 from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
@@ -81,6 +81,29 @@ def test_load_audio_file_unsupported_codec_uses_ffmpeg(
     assert command[command.index("-t") + 1] == str(4 / 44_100)
     assert audio.shape == (2, 4)
     np.testing.assert_array_equal(audio, np.clip(decoded[:4].T, -1.0, 1.0))
+
+
+def test_load_audio_file_real_wavpack_uses_ffmpeg_fallback() -> None:
+    """A real unsupported WavPack fixture decodes through the shipped FFmpeg path."""
+    source = Path(__file__).parent / "fixtures" / "audio" / "ffmpeg-fallback.wv"
+    expected = (
+        np.array(
+            [
+                (-30000, -20000, -10000, 0, 10000, 20000, 30000, 12345),
+                (30000, 20000, 10000, 0, -10000, -20000, -30000, -12345),
+            ],
+            dtype=np.float32,
+        )
+        / 32768
+    )
+    with pytest.raises(AudioDecodeError):
+        decode_clip(
+            source.read_bytes(), sample_rate=8000, channels=2, num_samples=8, amplitude_scale=1.0
+        )
+
+    audio = load_audio_file(source, sample_rate=8000, channels=2, num_samples=8)
+
+    np.testing.assert_array_equal(audio, expected)
 
 
 def test_load_audio_file_contract_error_does_not_run_ffmpeg(
@@ -164,6 +187,7 @@ def test_load_model_matching_checkpoint_returns_evaluation_model(
         hparams = {
             "conditioning": "mel",
             "sketch_controls": SketchControlSpec(num_frames=32),
+            "param_spec": "surge_simple",
             "num_params": 92,
         }
         device: torch.device | None = None
@@ -189,6 +213,35 @@ def test_load_model_matching_checkpoint_returns_evaluation_model(
     assert loaded is model
     assert model.device == torch.device("cpu")
     assert model.evaluating
+
+
+def test_load_model_matching_width_wrong_param_spec_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Equal vector widths cannot substitute different parameter semantics.
+
+    :param tmp_path: Temporary checkpoint path.
+    :param monkeypatch: Lightning checkpoint loader patch fixture.
+    """
+    checkpoint = tmp_path / "model.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    render = sketch_render._load_settings().render
+    model = SimpleNamespace(
+        hparams={
+            "conditioning": "mel",
+            "sketch_controls": SketchControlSpec(num_frames=32),
+            "param_spec": "surge_4",
+            "num_params": 92,
+        }
+    )
+    monkeypatch.setattr(
+        sketch_render.VSTFlowMatchingModule,
+        "load_from_checkpoint",
+        lambda *args, **kwargs: model,
+    )
+
+    with pytest.raises(ValueError, match="surge_4.*surge_simple"):
+        sketch_render._load_model(checkpoint, render, torch.device("cpu"))
 
 
 def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(

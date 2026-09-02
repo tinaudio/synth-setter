@@ -18,6 +18,7 @@ from sh import Command
 from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_file
 from synth_setter.data.vst.core import write_wav
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
 from synth_setter.utils.logging_utils import resolve_git_sha
 
 VOCAL_DATASET = "r2://experiments/third_party/VocalImitationSet/test.lance"
@@ -26,6 +27,10 @@ DEFAULT_CHECKPOINT = (
     "r2://intermediate-data/checkpoints/flow_sketch_prelim/"
     "flow_sketch_prelim-20260902T044048985Z-"
     "eed5063da1164b1e92ac62a55ffc17b3/last.ckpt"
+)
+DEFAULT_STATS = (
+    "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
+    "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz"
 )
 VOCAL_DATASET_VERSION = 1
 CONTENT_DATASET_VERSION = 1
@@ -113,7 +118,10 @@ def _open_dataset(uri: str, version: int) -> lance.LanceDataset:
     :returns: Open Lance dataset.
     """
     target, storage_options = r2_io.lance_target(uri)
-    return lance.dataset(target, version=version, storage_options=storage_options)
+    return _retry_lance_read(
+        "sketch_suite_open",
+        lambda: lance.dataset(target, version=version, storage_options=storage_options),
+    )
 
 
 def _write_csv(
@@ -174,41 +182,45 @@ def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValu
     """
     vocal = _open_dataset(VOCAL_DATASET, VOCAL_DATASET_VERSION)
     content = _open_dataset(CONTENT_DATASET, CONTENT_DATASET_VERSION)
-    if content.count_rows() < count:
+    if _retry_lance_read("sketch_suite_content_count", content.count_rows) < count:
         raise ValueError(f"content dataset has fewer than {count} rows")
 
-    vocal_metadata = vocal.to_table(
-        columns=[
-            "row_id",
-            "row_type",
-            "included",
-            "audio_decode_status",
-            "audio_sha256",
-            "source_path",
-        ]
-    ).to_pylist()
+    vocal_columns = [
+        "row_id",
+        "row_type",
+        "included",
+        "audio_decode_status",
+        "audio_sha256",
+        "source_path",
+    ]
+    vocal_metadata = _retry_lance_read(
+        "sketch_suite_vocal_metadata",
+        lambda: vocal.to_table(columns=vocal_columns).to_pylist(),
+    )
     vocal_rows = select_vocal_rows(vocal_metadata, count)
-    vocal_blobs = dict(
-        vocal.read_blobs(
-            "audio",
-            indices=[index for index, _ in vocal_rows],
-            preserve_order=True,
-        )
+    vocal_indices = [index for index, _ in vocal_rows]
+    vocal_blobs = _retry_lance_read(
+        "sketch_suite_vocal_audio",
+        lambda: dict(vocal.read_blobs("audio", indices=vocal_indices, preserve_order=True)),
     )
     content_indices = list(range(count))
-    content_metadata = content.take(
-        content_indices,
-        columns=[
-            "instrument_family_str",
-            "instrument_source_str",
-            "note_str",
-            "pitch",
-            "velocity",
-            "sample_rate",
-            "wav_sha256",
-        ],
-    ).to_pylist()
-    content_blobs = dict(content.read_blobs("audio", indices=content_indices, preserve_order=True))
+    content_columns = [
+        "instrument_family_str",
+        "instrument_source_str",
+        "note_str",
+        "pitch",
+        "velocity",
+        "sample_rate",
+        "wav_sha256",
+    ]
+    content_metadata = _retry_lance_read(
+        "sketch_suite_content_metadata",
+        lambda: content.take(content_indices, columns=content_columns).to_pylist(),
+    )
+    content_blobs = _retry_lance_read(
+        "sketch_suite_content_audio",
+        lambda: dict(content.read_blobs("audio", indices=content_indices, preserve_order=True)),
+    )
 
     pairs: list[dict[str, _PairValue]] = []
     for pair_index, ((vocal_index, vocal_row), content_row) in enumerate(
@@ -250,6 +262,7 @@ def _render_pair(
     output_dir: Path,
     destination: str,
     checkpoint: str,
+    stats: str,
     content_cfg: Sequence[float],
     sketch_cfg: Sequence[float],
     sample_steps: int,
@@ -262,6 +275,7 @@ def _render_pair(
     :param output_dir: Suite workspace.
     :param destination: Suite R2 prefix.
     :param checkpoint: Sketch checkpoint source.
+    :param stats: Matching content mel-statistics source.
     :param content_cfg: Content CFG axis.
     :param sketch_cfg: Sketch CFG axis.
     :param sample_steps: Flow integration steps.
@@ -280,6 +294,8 @@ def _render_pair(
         str(pair["content_path"]),
         "--checkpoint",
         checkpoint,
+        "--stats",
+        stats,
         "--sample-steps",
         str(sample_steps),
         "--seed",
@@ -346,6 +362,7 @@ def _parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--stats", default=DEFAULT_STATS)
     parser.add_argument("--content-cfg", type=float, action="append")
     parser.add_argument("--sketch-cfg", type=float, action="append")
     parser.add_argument("--sample-steps", type=int, default=200)
@@ -365,6 +382,8 @@ def main() -> None:
     args = _parse_args()
     if not r2_io.is_r2_uri(args.checkpoint):
         raise ValueError(f"checkpoint must use r2://, got {args.checkpoint}")
+    if not r2_io.is_r2_uri(args.stats):
+        raise ValueError(f"stats must use r2://, got {args.stats}")
     if not r2_io.is_r2_uri(args.destination):
         raise ValueError(f"destination must use r2://, got {args.destination}")
     if args.sample_steps <= 0:
@@ -387,6 +406,7 @@ def main() -> None:
             output_dir=output_dir,
             destination=destination,
             checkpoint=args.checkpoint,
+            stats=args.stats,
             content_cfg=content_cfg,
             sketch_cfg=sketch_cfg,
             sample_steps=args.sample_steps,
@@ -409,6 +429,7 @@ def main() -> None:
             {"key": "run_id", "value": destination.rsplit("/", maxsplit=1)[-1]},
             {"key": "git_commit", "value": resolve_git_sha()},
             {"key": "checkpoint", "value": args.checkpoint},
+            {"key": "stats", "value": args.stats},
             {"key": "vocal_dataset", "value": VOCAL_DATASET},
             {"key": "vocal_dataset_version", "value": VOCAL_DATASET_VERSION},
             {"key": "content_dataset", "value": CONTENT_DATASET},

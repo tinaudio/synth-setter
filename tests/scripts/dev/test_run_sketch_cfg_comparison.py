@@ -89,6 +89,7 @@ def test_render_pair_fresh_output_explicitly_enables_upload(
         output_dir=tmp_path,
         destination="r2://bucket/run",
         checkpoint="r2://bucket/model.ckpt",
+        stats="r2://bucket/stats.npz",
         content_cfg=(0.0,),
         sketch_cfg=(0.0,),
         sample_steps=2,
@@ -96,6 +97,8 @@ def test_render_pair_fresh_output_explicitly_enables_upload(
         device="cpu",
     )
 
+    assert command[command.index("--checkpoint") + 1] == "r2://bucket/model.ckpt"
+    assert command[command.index("--stats") + 1] == "r2://bucket/stats.npz"
     assert "--upload" in command
 
 
@@ -122,6 +125,7 @@ def test_render_pair_existing_output_fails_without_deleting_diagnostics(
             output_dir=tmp_path,
             destination="r2://bucket/run",
             checkpoint="r2://bucket/model.ckpt",
+            stats="r2://bucket/stats.npz",
             content_cfg=(0.0,),
             sketch_cfg=(0.0,),
             sample_steps=2,
@@ -144,6 +148,7 @@ def test_aggregate_metrics_multiple_arms_reports_per_metric_mean() -> None:
 
     assert aggregates[0]["arm"] == "cfg-c0-s0"
     assert aggregates[0]["mss_mean"] == 2.0
+    assert aggregates[0]["mss_std_population"] == 1.0
     assert aggregates[0]["rms_mean"] == pytest.approx(0.3)
     assert aggregates[1]["arm"] == "cfg-c2-s2"
     assert aggregates[1]["mss_mean"] == 8.0

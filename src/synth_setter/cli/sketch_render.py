@@ -347,6 +347,12 @@ def _load_model(
         raise ValueError("checkpoint must use mel content conditioning")
     if resolve_sketch_controls(model.hparams["sketch_controls"]) is None:
         raise ValueError("checkpoint must configure sketch_controls")
+    checkpoint_spec = model.hparams.get("param_spec")
+    if checkpoint_spec != render.param_spec_name:
+        raise ValueError(
+            f"checkpoint parameter spec {checkpoint_spec!r} does not match "
+            f"render parameter spec {render.param_spec_name!r}"
+        )
     expected_width = len(param_specs[render.param_spec_name])
     if model.hparams["num_params"] != expected_width:
         raise ValueError(
