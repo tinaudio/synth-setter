@@ -494,18 +494,20 @@ def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
         is the source audio directory.
     """
     audio_dir_path = Path(audio_dir)
-    os.makedirs(output_dir, exist_ok=True)
     output_dir_path = Path(output_dir)
     resolved_audio_dir = audio_dir_path.resolve()
     resolved_output_dir = output_dir_path.resolve()
-    if (
+    paths_overlap = (
         resolved_output_dir == resolved_audio_dir
         or resolved_output_dir in resolved_audio_dir.parents
-    ):
+        or resolved_audio_dir in resolved_output_dir.parents
+    )
+    if paths_overlap:
         raise ValueError(
-            "output_dir must differ from audio_dir and remain outside audio_dir ancestors "
+            "output_dir must not equal, contain, or be contained by audio_dir "
             "to preserve source artifacts."
         )
+    os.makedirs(output_dir_path, exist_ok=True)
 
     audio_dirs = find_possible_subdirs(audio_dir_path)
     if not audio_dirs:

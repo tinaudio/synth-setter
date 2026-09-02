@@ -65,6 +65,7 @@ from tests.conftest import (
     flatten_lance_embedding_column,
 )
 from tests.helpers.eval_fakes import (
+    COMPUTE_AUDIO_METRICS_FRAGMENT,
     FAKE_METRICS_CSV,
     fake_postprocessing_subprocess,
 )
@@ -1242,9 +1243,23 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
     cfg = _compose_parametrized_fake_oracle_eval_cfg(
         tmp_path, request, dataset_variant, mode="predict"
     )
+    fake_run = fake_postprocessing_subprocess()
+
+    def _write_current_and_unsupported_metrics(
+        args: list[str],
+        **kwargs: object,
+    ) -> None:
+        fake_run(args, **kwargs)
+        if COMPUTE_AUDIO_METRICS_FRAGMENT in args:
+            metrics_dir = Path(args[args.index("-m") + 3])
+            (metrics_dir / "aggregated_metrics_shuffled.csv").write_text(
+                ",mean,std\nmss,1.0,0.2\n"
+            )
+            (metrics_dir / "shuffle_permutation.csv").write_text("dest_idx,src_idx\n0,1\n1,0\n")
+
     monkeypatch.setattr(
         "synth_setter.cli.eval.subprocess.run",
-        fake_postprocessing_subprocess(),
+        _write_current_and_unsupported_metrics,
     )
     monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
     monkeypatch.setattr(
@@ -1264,6 +1279,7 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
         for stat in ("mean", "std"):
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)
+    assert not any("shuffle" in key for key in metric_dict)
 
 
 @pytest.mark.fake_vst

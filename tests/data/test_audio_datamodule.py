@@ -1,8 +1,10 @@
 """Tests for ``AudioFolderDataset`` file discovery."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
+import pytest
 from pedalboard.io import AudioFile
 from torch.utils.data import SequentialSampler
 
@@ -38,13 +40,23 @@ def test_default_glob_discovers_only_wav_files(tmp_path: Path) -> None:
     assert dataset.files == [kept]
 
 
-def test_default_glob_orders_audio_files_by_path(tmp_path: Path) -> None:
+def test_default_glob_orders_audio_files_by_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Prediction order is stable regardless of directory enumeration order.
 
     :param tmp_path: Audio root populated in reverse lexical order.
+    :param monkeypatch: Forces the filesystem glob to return reverse lexical order.
     """
     second = _write_wav(tmp_path / "b.wav")
     first = _write_wav(tmp_path / "a.wav")
+    original_glob = Path.glob
+
+    def _reverse_glob(path: Path, pattern: str) -> Iterator[Path]:
+        return reversed(list(original_glob(path, pattern)))
+
+    monkeypatch.setattr(Path, "glob", _reverse_glob)
 
     dataset = AudioFolderDataset(root=str(tmp_path))
 

@@ -717,8 +717,28 @@ def test_main_output_dir_equal_to_audio_dir_raises(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
-    assert "output_dir must differ from audio_dir" in str(result.exception)
+    assert "must not equal, contain, or be contained" in str(result.exception)
     assert (audio_root / "sample_0" / "pred.wav").is_file()
+
+
+def test_main_output_dir_nested_in_audio_dir_raises_without_mutation(tmp_path: Path) -> None:
+    """Containment validation runs before creating a nested output directory.
+
+    :param tmp_path: Root containing one valid rendered sample.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+    metrics_dir = audio_root / "metrics"
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert not metrics_dir.exists()
 
 
 def test_main_output_dir_ancestor_of_audio_dir_raises(tmp_path: Path) -> None:
@@ -738,7 +758,7 @@ def test_main_output_dir_ancestor_of_audio_dir_raises(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
-    assert "outside audio_dir ancestors" in str(result.exception)
+    assert "must not equal, contain, or be contained" in str(result.exception)
     assert (audio_root / "sample_0" / "pred.wav").is_file()
 
 
