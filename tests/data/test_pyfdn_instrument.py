@@ -2,13 +2,17 @@
 
 import hashlib
 import inspect
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
 import soundfile as sf
 from pyFDN import FDNBuild
+from scipy.signal import sosfreqz
 
+import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.vst.param_spec import ParameterValues
 
@@ -29,13 +33,15 @@ def fdn_params() -> ParameterValues:
         "input_matrix": np.full((8, 1), 0.25, dtype=np.float64),
         "output_matrix": np.full((1, 8), 0.125, dtype=np.float64),
         "direct_matrix": np.array([[0.5]], dtype=np.float64),
+        "post_delay.rt_dc_seconds": 1.0,
+        "post_delay.rt_nyquist_seconds": 0.5,
     }
 
 
 def test_params_to_fdn_build_reconstructs_exact_native_build(
     fdn_params: ParameterValues,
 ) -> None:
-    """The codec maps each native field without projection, repair, or optional hooks.
+    """The codec preserves the base FDN and derives only native delay filters.
 
     :param fdn_params: Valid native patch.
     """
@@ -48,22 +54,249 @@ def test_params_to_fdn_build_reconstructs_exact_native_build(
     assert build.D is fdn_params["direct_matrix"]
     assert build.delays is fdn_params["delays"]
     assert build.fs == 48_000.0
-    assert build.post_delay is None
+    post_delay = build.post_delay
+    assert post_delay is not None
+    assert post_delay.shape == (1, 6, 8)
+    assert post_delay.dtype == np.float64
+    assert np.isfinite(post_delay).all()
     assert build.post_matrix is None
     assert build.post_output is None
 
 
-def test_params_to_fdn_build_nonorthogonal_feedback_matrix_raises(
+def test_params_to_fdn_build_same_controls_reproduce_exact_decay_sos(
     fdn_params: ParameterValues,
 ) -> None:
-    """An unstable model-decoded feedback matrix fails before native processing.
+    """The fixed crossover and RT tuple deterministically define the native SOS.
+
+    :param fdn_params: Valid native patch with unequal endpoint RTs.
+    """
+    first = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+    second = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+    expected_end_lines = np.array(
+        [
+            [
+                [0.9172759353897796, 0.9158909125939455],
+                [0.0131997506097520, 0.0134104340706896],
+                [0.0, 0.0],
+                [1.0, 1.0],
+                [-0.0143901634181029, -0.0146419555934989],
+                [0.0, 0.0],
+            ]
+        ],
+        dtype=np.float64,
+    )
+
+    first_post_delay = first.post_delay
+    second_post_delay = second.post_delay
+    assert first_post_delay is not None
+    assert second_post_delay is not None
+    np.testing.assert_array_equal(second_post_delay, first_post_delay)
+    np.testing.assert_allclose(
+        first_post_delay[:, :, [0, 7]], expected_end_lines, rtol=0.0, atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("delay_line", range(8))
+def test_params_to_fdn_build_unequal_rt_extremes_attenuate_every_delay_line(
+    fdn_params: ParameterValues,
+    delay_line: int,
+) -> None:
+    """The derived shelf has positive sub-unity gain across every delay line.
+
+    :param fdn_params: Valid native patch to move to opposite RT bounds.
+    :param delay_line: Delay-filter index under test.
+    """
+    params = dict(fdn_params)
+    params["post_delay.rt_dc_seconds"] = 0.1
+    params["post_delay.rt_nyquist_seconds"] = 4.0
+
+    build = params_to_fdn_build(params, sample_rate=48_000.0)
+
+    assert build.post_delay is not None
+    _, response = sosfreqz(build.post_delay[:, :, delay_line], worN=512)
+    magnitude = np.abs(response)
+    assert np.all((0.0 < magnitude) & (magnitude < 1.0))
+
+
+def test_params_to_fdn_build_preserves_nonorthogonal_prediction_without_projection(
+    fdn_params: ParameterValues,
+) -> None:
+    """Decoded feedback is passed through unchanged rather than rejected or repaired.
 
     :param fdn_params: Valid patch to perturb.
     """
     params = dict(fdn_params)
-    params["feedback_matrix"] = np.ones((8, 8), dtype=np.float64)
+    feedback = np.ones((8, 8), dtype=np.float64)
+    params["feedback_matrix"] = feedback
 
-    with pytest.raises(ValueError, match="orthogonal"):
+    build = params_to_fdn_build(params, sample_rate=48_000.0)
+
+    assert build.A is feedback
+    assert build.post_delay is not None
+    assert np.isfinite(build.post_delay).all()
+
+
+def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
+    source_file: tuple[Path, str],
+    fdn_params: ParameterValues,
+) -> None:
+    """An unstable model-range prediction fails only at the finite-output boundary.
+
+    :param source_file: Valid fixed source and checksum.
+    :param fdn_params: Valid patch to move to the model-domain extrema.
+    """
+    path, checksum = source_file
+    params = dict(fdn_params)
+    params["feedback_matrix"] = np.ones((8, 8), dtype=np.float64)
+    params["post_delay.rt_dc_seconds"] = 4.0
+    params["post_delay.rt_nyquist_seconds"] = 4.0
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        with pytest.raises(ValueError, match="finite"):
+            PyFDNRenderer(path, checksum).render(params)
+
+
+@pytest.mark.parametrize(
+    ("post_delay", "post_matrix", "post_output", "expected_error", "match"),
+    [
+        (
+            np.zeros((1, 6, 7), dtype=np.float64),
+            None,
+            None,
+            ValueError,
+            "shape",
+        ),
+        (
+            np.zeros((1, 6, 8), dtype=np.float32),
+            None,
+            None,
+            TypeError,
+            "dtype",
+        ),
+        (
+            np.full((1, 6, 8), np.nan, dtype=np.float64),
+            None,
+            None,
+            ValueError,
+            "finite",
+        ),
+        (
+            np.zeros((1, 6, 8), dtype=np.float64),
+            np.eye(8),
+            None,
+            ValueError,
+            "remain disabled",
+        ),
+        (
+            np.zeros((1, 6, 8), dtype=np.float64),
+            None,
+            np.eye(1),
+            ValueError,
+            "remain disabled",
+        ),
+    ],
+)
+def test_params_to_fdn_build_malformed_derived_hooks_raise(
+    fdn_params: ParameterValues,
+    monkeypatch: pytest.MonkeyPatch,
+    post_delay: np.ndarray,
+    post_matrix: np.ndarray | None,
+    post_output: np.ndarray | None,
+    expected_error: type[Exception],
+    match: str,
+) -> None:
+    """Malformed pyFDN-derived hooks fail at the build boundary.
+
+    :param fdn_params: Valid native patch.
+    :param monkeypatch: Scoped malformed pyFDN result injection.
+    :param post_delay: Candidate derived delay SOS.
+    :param post_matrix: Candidate unsupported matrix hook.
+    :param post_output: Candidate unsupported output hook.
+    :param expected_error: Contract error type for this violation.
+    :param match: Diagnostic fragment for this violation.
+    """
+
+    def malformed_decay_build(base: FDNBuild, *args: object, **kwargs: object) -> FDNBuild:
+        del args, kwargs
+        return replace(
+            base,
+            post_delay=post_delay,
+            post_matrix=post_matrix,
+            post_output=post_output,
+        )
+
+    monkeypatch.setattr(pyfdn_instrument, "build_set_decay", malformed_decay_build)
+
+    with pytest.raises(expected_error, match=match):
+        params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["post_delay.rt_dc_seconds", "post_delay.rt_nyquist_seconds"],
+)
+@pytest.mark.parametrize("bad_rt", [-1.0, 0.0, 0.099, 4.001])
+def test_params_to_fdn_build_out_of_bounds_rt_raises(
+    fdn_params: ParameterValues,
+    control: str,
+    bad_rt: float,
+) -> None:
+    """RT controls outside the predicted semantic domain fail before filter design.
+
+    :param fdn_params: Valid native patch.
+    :param control: RT endpoint receiving the invalid value.
+    :param bad_rt: Value outside the inclusive RT bounds.
+    """
+    params = dict(fdn_params)
+    params[control] = bad_rt
+
+    with pytest.raises(ValueError, match="between 0.1 and 4.0"):
+        params_to_fdn_build(params, sample_rate=48_000.0)
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["post_delay.rt_dc_seconds", "post_delay.rt_nyquist_seconds"],
+)
+@pytest.mark.parametrize("bad_rt", [np.nan, np.inf, -np.inf])
+def test_params_to_fdn_build_nonfinite_rt_raises(
+    fdn_params: ParameterValues,
+    control: str,
+    bad_rt: float,
+) -> None:
+    """Non-finite RT controls never reach native filter design.
+
+    :param fdn_params: Valid native patch.
+    :param control: RT endpoint receiving the invalid value.
+    :param bad_rt: NaN or infinity injected into the patch.
+    """
+    params = dict(fdn_params)
+    params[control] = bad_rt
+
+    with pytest.raises(ValueError, match="finite"):
+        params_to_fdn_build(params, sample_rate=48_000.0)
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["post_delay.rt_dc_seconds", "post_delay.rt_nyquist_seconds"],
+)
+@pytest.mark.parametrize("bad_rt", [True, "1.0"])
+def test_params_to_fdn_build_nonreal_rt_raises(
+    fdn_params: ParameterValues,
+    control: str,
+    bad_rt: object,
+) -> None:
+    """Non-real RT controls fail instead of being coerced.
+
+    :param fdn_params: Valid native patch.
+    :param control: RT endpoint receiving the invalid value.
+    :param bad_rt: Boolean or string supplied as an RT control.
+    """
+    params = dict(fdn_params)
+    params[control] = cast(float, bad_rt)
+
+    with pytest.raises(TypeError, match="real scalar"):
         params_to_fdn_build(params, sample_rate=48_000.0)
 
 
@@ -249,8 +482,8 @@ def test_pyfdn_renderer_accepts_lossless_pcm_u8_source(
     assert np.isfinite(audio).all()
 
 
-def test_pyfdn_renderer_feedback_delay_path_changes_impulse_response(tmp_path: Path) -> None:
-    """The real feedback path responds at multiples of its configured delay.
+def test_pyfdn_renderer_post_delay_attenuates_feedback_impulse(tmp_path: Path) -> None:
+    """Positive RT controls produce a finite, progressively attenuated feedback response.
 
     :param tmp_path: Temporary directory owned by pytest.
     """
@@ -268,22 +501,62 @@ def test_pyfdn_renderer_feedback_delay_path_changes_impulse_response(tmp_path: P
         "input_matrix": input_matrix,
         "output_matrix": output_matrix,
         "direct_matrix": np.zeros((1, 1), dtype=np.float64),
+        "post_delay.rt_dc_seconds": 0.1,
+        "post_delay.rt_nyquist_seconds": 0.1,
     }
-    renderer = PyFDNRenderer(path, _sha256(path))
 
-    response = renderer.render(params)
-    shifted_params = dict(params)
-    shifted_params["delays"] = np.full(8, 9, dtype=np.int64)
-    shifted = renderer.render(shifted_params)
+    response = PyFDNRenderer(path, _sha256(path)).render(params)
 
-    expected = np.zeros(40, dtype=np.float32)
-    expected[[8, 16, 24, 32]] = [1.0, -1.0, 1.0, -1.0]
-    shifted_expected = np.zeros(40, dtype=np.float32)
-    shifted_expected[[9, 18, 27, 36]] = [1.0, -1.0, 1.0, -1.0]
-    np.testing.assert_array_equal(response[0, :40], expected)
-    np.testing.assert_array_equal(shifted[0, :40], shifted_expected)
+    first, second, third = np.abs(response[0, [8, 16, 24]])
     assert np.isfinite(response).all()
-    assert not np.array_equal(response, shifted)
+    assert 0.0 < third < second < first < 1.0
+
+
+@pytest.mark.parametrize(
+    ("control", "changed_rt", "response_index"),
+    [
+        ("post_delay.rt_dc_seconds", 2.0, 0),
+        ("post_delay.rt_nyquist_seconds", 2.0, -1),
+    ],
+)
+def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
+    source_file: tuple[Path, str],
+    fdn_params: ParameterValues,
+    control: str,
+    changed_rt: float,
+    response_index: int,
+) -> None:
+    """Changing either predicted RT endpoint changes derived filters and real output.
+
+    :param source_file: Valid fixed source and checksum.
+    :param fdn_params: Valid native patch with unequal endpoint RTs.
+    :param control: RT endpoint changed for this case.
+    :param changed_rt: Replacement reverberation time in seconds.
+    :param response_index: DC or near-Nyquist response index.
+    """
+    path, checksum = source_file
+    changed_params = dict(fdn_params)
+    changed_params[control] = changed_rt
+
+    baseline_build = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+    changed_build = params_to_fdn_build(changed_params, sample_rate=48_000.0)
+    renderer = PyFDNRenderer(path, checksum)
+    baseline_audio = renderer.render(fdn_params)
+    changed_audio = renderer.render(changed_params)
+
+    assert baseline_build.post_delay is not None
+    assert changed_build.post_delay is not None
+    _, baseline_response_raw = sosfreqz(
+        baseline_build.post_delay[:, :, 0], worN=512
+    )
+    _, changed_response_raw = sosfreqz(changed_build.post_delay[:, :, 0], worN=512)
+    baseline_response = cast(np.ndarray, baseline_response_raw)
+    changed_response = cast(np.ndarray, changed_response_raw)
+    assert np.abs(changed_response[response_index]) > np.abs(
+        baseline_response[response_index]
+    )
+    assert not np.array_equal(changed_build.post_delay, baseline_build.post_delay)
+    assert not np.array_equal(changed_audio, baseline_audio)
 
 
 def test_pyfdn_renderer_rejects_source_sample_rate(tmp_path: Path) -> None:

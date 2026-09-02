@@ -61,9 +61,9 @@ def collate_pyfdn_audio_dict(batch: Sequence[PyFDNItem]) -> PyFDNBatch:
     """Collate fixed-shape pyFDN rows into the audio-conditioned flow contract.
 
     :param batch: Non-empty rows with float32 audio shaped ``(1, 192_000)`` and
-        unit-domain encoded patches shaped ``(1, 89)``.
+        unit-domain encoded patches shaped ``(1, 91)``.
     :returns: Native-amplitude ``audio`` shaped ``(batch, 192_000)`` and model-domain
-        ``params`` and ``noise`` shaped ``(batch, 89)``, all float32.
+        ``params`` and ``noise`` shaped ``(batch, 91)``, all float32.
     """
     audio = torch.cat([row[0] for row in batch], dim=0)
     encoded = torch.cat([row[1] for row in batch], dim=0)

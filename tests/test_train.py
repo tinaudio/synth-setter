@@ -208,7 +208,7 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["audio"].shape == (1, 192_000)
-    assert batch["params"].shape == (1, 89)
+    assert batch["params"].shape == (1, 91)
     assert torch.isfinite(batch["audio"]).all()
     assert torch.isfinite(batch["params"]).all()
     assert batch["audio"].abs().max() > 0
@@ -222,7 +222,7 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
         zero_audio_prediction, returned_zero_audio_batch = model.predict_step(
             zero_audio_batch, batch_idx=0
         )
-    assert conditioned_prediction.shape == zero_audio_prediction.shape == (1, 89)
+    assert conditioned_prediction.shape == zero_audio_prediction.shape == (1, 91)
     assert conditioned_prediction.dtype == zero_audio_prediction.dtype == torch.float32
     assert conditioned_batch is batch
     assert returned_zero_audio_batch is zero_audio_batch

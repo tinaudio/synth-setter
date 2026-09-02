@@ -301,6 +301,8 @@ def test_eval_pyfdn_flow_consumes_train_produced_checkpoint(
         "input_matrix",
         "output_matrix",
         "direct_matrix",
+        "post_delay.rt_dc_seconds",
+        "post_delay.rt_nyquist_seconds",
     }
     namespaces = {
         "per_param_mse",

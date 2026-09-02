@@ -93,7 +93,7 @@ def test_pyfdn_dataset_row_has_exact_online_contract(
     audio, encoded = PyFDNDataset(path, checksum, num_samples=1, seed=123)[0]
 
     assert audio.shape == (1, 192_000)
-    assert encoded.shape == (1, 89)
+    assert encoded.shape == (1, 91)
     assert audio.dtype == encoded.dtype == torch.float32
 
 
@@ -112,7 +112,7 @@ def test_pyfdn_dataset_loads_source_once_per_process(
     audio, params = dataset[1]
 
     assert audio.shape == (1, 192_000)
-    assert params.shape == (1, 89)
+    assert params.shape == (1, 91)
 
 
 def test_pyfdn_datasets_share_one_source_load_within_a_process(
@@ -274,7 +274,7 @@ def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract(
 
     assert set(batch) == {"audio", "params", "noise"}
     assert batch["audio"].shape == (2, 192_000)
-    assert batch["params"].shape == batch["noise"].shape == (2, 89)
+    assert batch["params"].shape == batch["noise"].shape == (2, 91)
     assert all(value.dtype == torch.float32 for value in batch.values())
     assert torch.isfinite(batch["audio"]).all()
     assert torch.all((-1.0 <= batch["params"]) & (batch["params"] <= 1.0))
@@ -364,7 +364,12 @@ def test_pyfdn_production_path_source_to_batch_decode_and_real_rerender(
     rerendered = PyFDNRenderer(path, checksum).render(decoded)
 
     assert decoded_notes == {}
-    assert build.post_delay is build.post_matrix is build.post_output is None
+    post_delay = build.post_delay
+    assert post_delay is not None
+    assert post_delay.shape == (1, 6, 8)
+    assert post_delay.dtype == np.float64
+    assert np.isfinite(post_delay).all()
+    assert build.post_matrix is build.post_output is None
     np.testing.assert_array_equal(batch["audio"][0].numpy(), item_audio[0].numpy())
     np.testing.assert_allclose(rerendered, item_audio.numpy(), rtol=1e-4, atol=2e-5)
     np.testing.assert_allclose(item_encoded[0].numpy(), encoded, atol=2e-8)

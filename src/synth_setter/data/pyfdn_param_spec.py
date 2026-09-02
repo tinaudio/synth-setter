@@ -8,12 +8,18 @@ import numpy as np
 
 from synth_setter.data.vst.param_spec import (
     ContinuousArrayParameter,
+    ContinuousParameter,
     DiscreteArrayParameter,
     ParamSpec,
 )
 
 
 PYFDN_ORDER = 8
+PYFDN_RT_CROSSOVER_HZ = 6_000.0
+PYFDN_RT_DC_NAME = "post_delay.rt_dc_seconds"
+PYFDN_RT_MAX_SECONDS = 4.0
+PYFDN_RT_MIN_SECONDS = 0.1
+PYFDN_RT_NYQUIST_NAME = "post_delay.rt_nyquist_seconds"
 
 
 class OrthogonalMatrixParameter(ContinuousArrayParameter):
@@ -71,6 +77,16 @@ PYFDN_N8_MONO_PARAM_SPEC = ParamSpec(
         ),
         ContinuousArrayParameter(
             name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_DC_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_NYQUIST_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
         ),
     ],
     note_params=[],
