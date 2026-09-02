@@ -5,22 +5,23 @@ import pytest
 from scripts.dev.run_sketch_cfg_comparison import aggregate_metrics, select_vocal_rows
 
 
-def test_select_vocal_rows_decoded_rows_returns_first_stored_rows() -> None:
-    """Vocal sketches are the exact stored-order prefix."""
+def test_select_vocal_rows_mixed_corpus_returns_only_included_imitations() -> None:
+    """Freesound originals and excluded imitations cannot enter the sketch suite."""
     rows = [
-        {"row_id": "b", "audio_decode_status": "decoded"},
-        {"row_id": "a", "audio_decode_status": "decoded"},
-        {"row_id": "c", "audio_decode_status": "decoded"},
+        {"row_type": "freesound_original", "included": None, "audio_decode_status": "decoded"},
+        {"row_type": "imitation", "included": False, "audio_decode_status": "decoded"},
+        {"row_type": "imitation", "included": True, "audio_decode_status": "decoded"},
+        {"row_type": "imitation", "included": True, "audio_decode_status": "decoded"},
     ]
 
-    assert select_vocal_rows(rows, 2) == ((0, rows[0]), (1, rows[1]))
+    assert select_vocal_rows(rows, 2) == ((2, rows[2]), (3, rows[3]))
 
 
-def test_select_vocal_rows_failed_prefix_row_raises() -> None:
-    """A decode failure cannot silently substitute a later vocal row."""
+def test_select_vocal_rows_failed_included_imitation_raises() -> None:
+    """A decode failure cannot silently substitute a later curated imitation."""
     rows = [
-        {"row_id": "a", "audio_decode_status": "failed"},
-        {"row_id": "b", "audio_decode_status": "decoded"},
+        {"row_type": "imitation", "included": True, "audio_decode_status": "failed"},
+        {"row_type": "imitation", "included": True, "audio_decode_status": "decoded"},
     ]
 
     with pytest.raises(ValueError, match="row 0"):

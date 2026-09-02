@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import shutil
 import statistics
 import sys
@@ -15,8 +14,6 @@ from pathlib import Path
 
 import click
 import lance
-import numpy as np
-import pyarrow as pa
 from sh import Command
 
 from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_file
@@ -24,17 +21,14 @@ from synth_setter.data.vst.core import write_wav
 from synth_setter.pipeline import r2_io
 
 VOCAL_DATASET = "r2://experiments/third_party/VocalImitationSet/test.lance"
-CONTENT_DATASET = (
-    "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
-    "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/test.lance"
-)
+CONTENT_DATASET = "r2://experiments/third_party/NSynth/test.lance"
 DEFAULT_CHECKPOINT = (
     "r2://intermediate-data/checkpoints/flow_sketch_prelim/"
     "flow_sketch_prelim-20260902T044048985Z-"
     "eed5063da1164b1e92ac62a55ffc17b3/last.ckpt"
 )
 VOCAL_DATASET_VERSION = 1
-CONTENT_DATASET_VERSION = 9
+CONTENT_DATASET_VERSION = 1
 DEFAULT_CFG_STRENGTHS = (0.0, 1.0, 2.0)
 SUITE_SIZE = 50
 SAMPLE_RATE = 44_100
@@ -65,16 +59,21 @@ _AGGREGATE_FIELDS = (
 def select_vocal_rows(
     rows: Sequence[Mapping[str, object]], count: int
 ) -> tuple[tuple[int, Mapping[str, object]], ...]:
-    """Select decoded Vocal Imitation rows in immutable stored order.
+    """Select curated vocal imitations in immutable stored order.
 
     :param rows: Metadata rows in Lance scan order.
     :param count: Number of rows required.
     :returns: Original row indices paired with selected metadata.
-    :raises ValueError: Fewer than ``count`` rows decoded successfully.
+    :raises ValueError: Fewer than ``count`` curated rows decode successfully.
     """
-    if len(rows) < count:
-        raise ValueError(f"requested {count} vocal rows, found {len(rows)}")
-    selected = tuple(enumerate(rows[:count]))
+    eligible = tuple(
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["row_type"] == "imitation" and row["included"] is True
+    )
+    if len(eligible) < count:
+        raise ValueError(f"requested {count} curated vocal imitations, found {len(eligible)}")
+    selected = eligible[:count]
     for index, row in selected:
         if row["audio_decode_status"] != "decoded":
             raise ValueError(f"vocal row {index} is not decoded")
@@ -117,17 +116,6 @@ def _open_dataset(uri: str, version: int) -> lance.LanceDataset:
     return lance.dataset(target, version=version, storage_options=storage_options)
 
 
-def _tensor_column(table: pa.Table, name: str) -> np.ndarray:
-    """Convert one fixed-shape tensor column to a dense array.
-
-    :param table: Source Arrow table.
-    :param name: Tensor column name.
-    :returns: Dense values preserving row order.
-    """
-    chunks = table[name].chunks
-    return np.concatenate([chunk.to_numpy_ndarray() for chunk in chunks], axis=0)
-
-
 def _write_csv(
     path: Path,
     fieldnames: Sequence[str],
@@ -156,8 +144,28 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
+def _write_blob_wav(data: bytes, destination: Path) -> None:
+    """Decode one stored audio blob into the suite render grid.
+
+    :param data: Encoded source audio.
+    :param destination: PCM WAV destination.
+    """
+    encoded_path = destination.with_suffix(".source.wav")
+    encoded_path.write_bytes(data)
+    try:
+        audio = load_audio_file(
+            encoded_path,
+            sample_rate=SAMPLE_RATE,
+            channels=CHANNELS,
+            num_samples=NUM_SAMPLES,
+        )
+    finally:
+        encoded_path.unlink(missing_ok=True)
+    write_wav(audio, str(destination), SAMPLE_RATE, CHANNELS)
+
+
 def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValue]]:
-    """Materialize index-zipped vocal and Surge test rows.
+    """Materialize index-zipped vocal-imitation and NSynth test rows.
 
     :param output_dir: Suite workspace.
     :param count: Number of paired rows.
@@ -170,7 +178,14 @@ def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValu
         raise ValueError(f"content dataset has fewer than {count} rows")
 
     vocal_metadata = vocal.to_table(
-        columns=["row_id", "audio_decode_status", "audio_sha256", "source_path"]
+        columns=[
+            "row_id",
+            "row_type",
+            "included",
+            "audio_decode_status",
+            "audio_sha256",
+            "source_path",
+        ]
     ).to_pylist()
     vocal_rows = select_vocal_rows(vocal_metadata, count)
     vocal_blobs = dict(
@@ -180,43 +195,33 @@ def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValu
             preserve_order=True,
         )
     )
-    content_table = content.take(
-        list(range(count)),
-        columns=["audio", "param_array", "audio_uuid", "debug"],
-    )
-    content_audio = _tensor_column(content_table, "audio").astype(np.float32)
-    content_params = _tensor_column(content_table, "param_array").astype(np.float32)
-    content_uuids = content_table["audio_uuid"].to_pylist()
-    content_debug = [json.loads(value) for value in content_table["debug"].to_pylist()]
+    content_indices = list(range(count))
+    content_metadata = content.take(
+        content_indices,
+        columns=[
+            "instrument_family_str",
+            "instrument_source_str",
+            "note_str",
+            "pitch",
+            "velocity",
+            "sample_rate",
+            "wav_sha256",
+        ],
+    ).to_pylist()
+    content_blobs = dict(content.read_blobs("audio", indices=content_indices, preserve_order=True))
 
     pairs: list[dict[str, _PairValue]] = []
-    for pair_index, ((vocal_index, vocal_row), audio, params, audio_uuid, debug) in enumerate(
-        zip(vocal_rows, content_audio, content_params, content_uuids, content_debug, strict=True)
+    for pair_index, ((vocal_index, vocal_row), content_row) in enumerate(
+        zip(vocal_rows, content_metadata, strict=True)
     ):
         input_dir = output_dir / "inputs" / f"sample_{pair_index:03d}"
         input_dir.mkdir(parents=True, exist_ok=True)
         sketch_path = input_dir / "sketch.wav"
         content_path = input_dir / "content.wav"
-        params_path = input_dir / "content.params.npy"
         if not sketch_path.is_file():
-            encoded_path = input_dir / "sketch-source.wav"
-            encoded_path.write_bytes(vocal_blobs[vocal_index])
-            try:
-                sketch = load_audio_file(
-                    encoded_path,
-                    sample_rate=SAMPLE_RATE,
-                    channels=CHANNELS,
-                    num_samples=NUM_SAMPLES,
-                )
-            finally:
-                encoded_path.unlink(missing_ok=True)
-            write_wav(sketch, str(sketch_path), SAMPLE_RATE, CHANNELS)
+            _write_blob_wav(vocal_blobs[vocal_index], sketch_path)
         if not content_path.is_file():
-            write_wav(
-                np.asarray(audio, dtype=np.float32), str(content_path), SAMPLE_RATE, CHANNELS
-            )
-        if not params_path.is_file():
-            np.save(params_path, params)
+            _write_blob_wav(content_blobs[pair_index], content_path)
         pairs.append(
             {
                 "pair_index": pair_index,
@@ -225,9 +230,13 @@ def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValu
                 "vocal_audio_sha256": str(vocal_row["audio_sha256"]),
                 "vocal_source_path": str(vocal_row["source_path"]),
                 "content_row_index": pair_index,
-                "content_audio_uuid": str(audio_uuid),
-                "content_master_seed": int(debug["master_seed"]),
-                "content_sample_idx": int(debug["sample_idx"]),
+                "content_wav_sha256": str(content_row["wav_sha256"]),
+                "content_instrument_family": str(content_row["instrument_family_str"]),
+                "content_instrument_source": str(content_row["instrument_source_str"]),
+                "content_note": str(content_row["note_str"]),
+                "content_pitch": int(content_row["pitch"]),
+                "content_velocity": int(content_row["velocity"]),
+                "content_sample_rate": int(content_row["sample_rate"]),
                 "sketch_path": str(sketch_path),
                 "content_path": str(content_path),
             }
