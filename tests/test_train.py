@@ -199,6 +199,8 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     :param cfg_pyfdn_flow_train: Tiny production pyFDN flow configuration.
     """
     HydraConfig().set_config(cfg_pyfdn_flow_train)
+    with open_dict(cfg_pyfdn_flow_train):
+        cfg_pyfdn_flow_train.datamodule.num_workers = 2
 
     metric_dict, object_dict = train(cfg_pyfdn_flow_train)
 

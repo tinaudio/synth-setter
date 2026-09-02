@@ -1,6 +1,8 @@
 """Deterministic online data contracts for the fixed-source pyFDN instrument."""
 
 import inspect
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -12,6 +14,15 @@ from synth_setter.data.pyfdn_datamodule import PyFDNDataModule, PyFDNDataset
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.sample_seed import derive_sample_seed
+
+
+def test_pyfdn_datamodule_imports_in_fresh_interpreter() -> None:
+    """Spawned workers can import the datamodule without inherited module state."""
+    subprocess.run(
+        [sys.executable, "-c", "import synth_setter.data.pyfdn_datamodule"],
+        check=True,
+        timeout=60,
+    )
 
 
 def test_pyfdn_dataset_same_index_is_deterministic() -> None:
