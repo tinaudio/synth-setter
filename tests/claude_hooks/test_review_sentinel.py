@@ -84,6 +84,23 @@ def test_make_review_filename_rejects_invalid_sha(helper: ModuleType, bad_sha: s
         helper.make_review_filename(bad_sha)
 
 
+def test_claim_review_attempt_different_branch_starts_fresh(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    """Track the three-attempt budget independently for each branch.
+
+    :param helper: The loaded helper module.
+    :param tmp_path: Temporary directory for attempt state.
+    """
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+
+    attempt = helper.claim_review_attempt("branch-b", str(tmp_path))
+
+    assert attempt == 1
+
+
 def test_make_findings_path_is_unique_per_review(helper: ModuleType, tmp_path: Path) -> None:
     """Concurrent reviews receive different existing JSON paths.
 

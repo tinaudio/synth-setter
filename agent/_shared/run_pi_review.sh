@@ -57,6 +57,10 @@ main() {
       ;;
   esac
 
+  local review_python
+  review_python="$(resolve_review_python)"
+  export PI_REVIEW_PYTHON="${review_python}"
+
   local target_instruction="Resolve the target from the current branch."
   if (( $# == 3 )); then
     if [[ "${2}" != "--target" || ! "${3}" =~ ^[1-9][0-9]*$ ]]; then
@@ -64,6 +68,29 @@ main() {
       return 2
     fi
     target_instruction="Review PR #${3}."
+  fi
+
+  if [[ "${skill}" == "repo-review-full-no-comments" && $# == 1 ]]; then
+    local branch attempt claim_output limit
+    branch="$(git branch --show-current)"
+    if claim_output="$(
+      "${review_python}" agent/_shared/review_sentinel.py claim "${branch}"
+    )"; then
+      read -r attempt limit <<<"${claim_output}"
+      echo "Pre-PR sentinel review attempt ${attempt}/${limit}." >&2
+    else
+      local claim_status=$?
+      if (( claim_status == 3 )); then
+        limit="${claim_output}"
+        echo "Pre-PR sentinel review limit reached after ${limit} attempts." >&2
+        echo \
+          "Refusing another repo-review-full-no-comments run. Open the PR and continue with /repo-review-full so the public GitHub review bot can review subsequent changes." \
+          >&2
+        return 2
+      fi
+      echo "Unable to claim a pre-PR sentinel review attempt." >&2
+      return 2
+    fi
   fi
 
   local prompt
@@ -83,9 +110,6 @@ return only the specified foreground deliverable."
   umask 077
   mkdir -p "${review_root}"
   echo "Live Pi transcript: ${transcript}" >&2
-  local review_python
-  review_python="$(resolve_review_python)"
-  export PI_REVIEW_PYTHON="${review_python}"
   local final_output
   if ! final_output="$(
     pi \
