@@ -330,6 +330,19 @@ def test_flow_matching_validation_seed_reuses_noise_across_cfg_strengths() -> No
     assert torch.equal(cfg_zero_preds, cfg_two_preds)
 
 
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="requires MPS")
+def test_flow_matching_validation_seed_repeats_on_mps() -> None:
+    """Seeded validation produces repeatable initial noise on the supported MPS path."""
+    module = _flow_matching_module(validation_noise_seed=3018)
+    params = torch.zeros(_BATCH, _NUM_PARAMS, device="mps")
+
+    first_noise = module._validation_noise(params, batch_idx=0)
+    second_noise = module._validation_noise(params, batch_idx=0)
+
+    assert first_noise.device.type == "mps"
+    assert torch.equal(first_noise, second_noise)
+
+
 def test_flow_matching_validation_seed_changes_each_batch_stream() -> None:
     """Successive batch indices receive distinct deterministic initial states."""
     module = _zero_velocity_flow_matching_module(validation_noise_seed=3018)

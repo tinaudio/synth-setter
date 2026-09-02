@@ -27,6 +27,22 @@ def test_midi_pitch_residuals_fractional_predictions_reports_decode_counterfactu
     torch.testing.assert_close(residuals["nearest"], torch.tensor([0.0, 1.0]))
 
 
+def test_midi_pitch_residuals_non_midpoint_target_reports_relative_semitones() -> None:
+    """Residuals decode the target note instead of assuming the range midpoint."""
+    spec = ParamSpec(
+        synth_params=[],
+        note_params=[DiscreteLiteralParameter(name="pitch", min=48, max=72)],
+    )
+    predicted = torch.tensor([[0.4375]])
+    target = torch.tensor([[0.3333333333333333]])
+
+    residuals = midi_pitch_residuals(predicted, target, spec)
+
+    torch.testing.assert_close(residuals["continuous"], torch.tensor([1.25]))
+    torch.testing.assert_close(residuals["floor"], torch.tensor([1.0]))
+    torch.testing.assert_close(residuals["nearest"], torch.tensor([1.0]))
+
+
 def test_midi_pitch_residuals_pitch_between_other_coordinates_uses_spec_slice() -> None:
     """Residuals read the ParamSpec pitch slice rather than a fixed coordinate."""
     spec = ParamSpec(

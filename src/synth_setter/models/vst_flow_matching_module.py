@@ -809,7 +809,8 @@ class VSTFlowMatchingModule(LightningModule):
         seed = self.hparams.validation_noise_seed
         if seed is None:
             return torch.randn_like(params)
-        generator = torch.Generator(device=params.device)
+        generator_device = torch.device("cpu") if params.device.type == "mps" else params.device
+        generator = torch.Generator(device=generator_device)
         # Cantor pairing prevents batch/rank collisions without depending on world size.
         pair_sum = batch_idx + self.global_rank
         stream_index = pair_sum * (pair_sum + 1) // 2 + self.global_rank
@@ -822,9 +823,9 @@ class VSTFlowMatchingModule(LightningModule):
         return torch.randn(
             params.shape,
             dtype=params.dtype,
-            device=params.device,
+            device=generator_device,
             generator=generator,
-        )
+        ).to(params.device)
 
     @jaxtyped(typechecker=beartype)
     def _log_validation_pitch_residuals(
