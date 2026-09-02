@@ -10,6 +10,7 @@ import inspect
 import shutil
 from collections import Counter
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -25,7 +26,7 @@ import synth_setter.data.pyfdn_param_spec as pyfdn_param_spec_module
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.pyfdn_source import PYFDN_SOURCE_SAMPLE_RATE_HZ
-from synth_setter.data.vst.param_spec import ParameterValues
+from synth_setter.data.vst.param_spec import ParameterValues, ParamSpec
 from synth_setter.evaluation.compute_audio_metrics import (
     compute_mss,
     compute_rms,
@@ -40,6 +41,7 @@ _AUDIO_METRICS = {
     "sot": compute_sot,
     "wmfcc": compute_wmfcc,
 }
+_FINGERPRINT_DISTRIBUTIONS = ("librosa", "numpy", "pandas", "pyFDN", "scipy", "soundfile")
 _PREDICTION_ERRORS = (TypeError, ValueError, RuntimeError, OverflowError, FloatingPointError)
 type PyFDNRowStatus = Literal["decode_invalid", "build_invalid", "render_invalid", "finite_render"]
 
@@ -519,11 +521,15 @@ def _evaluation_fingerprint() -> str:
         Path(inspect.getfile(compute_mss)),
         Path(inspect.getfile(params_to_fdn_build)),
         Path(inspect.getfile(pyfdn_param_spec_module)),
+        Path(inspect.getfile(ParamSpec)),
     )
     digest = hashlib.sha256()
     for path in paths:
         digest.update(path.name.encode())
         digest.update(path.read_bytes())
+    for distribution in _FINGERPRINT_DISTRIBUTIONS:
+        digest.update(distribution.encode())
+        digest.update(version(distribution).encode())
     return digest.hexdigest()
 
 

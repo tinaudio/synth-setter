@@ -317,9 +317,9 @@ def test_eval_pyfdn_flow_rerenders_train_produced_checkpoint_prediction(
     assert metric_dict["pyfdn/finite_render_rate"] == 1.0
     assert metric_dict["pyfdn/parameter_mse"] < 0.5
     assert 0.0 <= metric_dict["pyfdn/audio/mss_mean"] < 20.0
-    assert metric_dict["pyfdn/audio/wmfcc_mean"] >= 0.0
-    assert metric_dict["pyfdn/audio/sot_mean"] >= 0.0
-    assert 0.0 <= metric_dict["pyfdn/audio/rms_cosine_mean"] <= 1.0
+    assert 0.0 <= metric_dict["pyfdn/audio/wmfcc_mean"] < 12.0
+    assert 0.0 <= metric_dict["pyfdn/audio/sot_mean"] < 0.5
+    assert 0.9 < metric_dict["pyfdn/audio/rms_cosine_mean"] <= 1.0
 
     sample_dir = Path(eval_cfg.paths.output_dir) / "audio" / "sample_0"
     params = pd.read_csv(sample_dir / "params.csv")

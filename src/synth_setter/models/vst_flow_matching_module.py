@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypedDict
 
@@ -509,8 +509,20 @@ class VSTFlowMatchingModule(LightningModule):
         target = self._rectified_vector_field(x0, x1)
         return target
 
-    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return batch[self._conditioning_key]
+    @jaxtyped(typechecker=beartype)
+    def _get_conditioning_from_batch(
+        self, batch: Mapping[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE] | None]
+    ) -> Shaped[torch.Tensor, _BATCH_ANY_SHAPE]:
+        """Return the configured non-null conditioning tensor.
+
+        :param batch: Model batch with optional unused conditioning fields.
+        :returns: Configured conditioning tensor.
+        :raises ValueError: The configured conditioning field is null.
+        """
+        conditioning = batch[self._conditioning_key]
+        if conditioning is None:
+            raise ValueError(f"conditioning field {self._conditioning_key!r} must not be null")
+        return conditioning
 
     @jaxtyped(typechecker=beartype)
     def _sample_conditioning_keep_masks(
@@ -571,7 +583,7 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
-        self, batch: dict[str, Shaped[torch.Tensor, ...] | None]
+        self, batch: Mapping[str, Shaped[torch.Tensor, ...] | None]
     ) -> ControlTokenBranches | None:
         """Build complete full-sketch and PE-only control branches for inference.
 
@@ -910,7 +922,7 @@ class VSTFlowMatchingModule(LightningModule):
     @jaxtyped(typechecker=beartype)
     def _evaluation_flow_loss(
         self,
-        batch: dict[str, Shaped[torch.Tensor, ...]],
+        batch: Mapping[str, Shaped[torch.Tensor, ...] | None],
         conditioning: Shaped[torch.Tensor, _BATCH_ANY_SHAPE],
     ) -> Float[torch.Tensor, ""]:
         """Evaluate the fully conditioned flow objective without training dropout.
@@ -918,8 +930,11 @@ class VSTFlowMatchingModule(LightningModule):
         :param batch: Test batch carrying params, noise, and configured conditioning.
         :param conditioning: Encoded content conditioning shared with terminal sampling.
         :returns: Mean weighted velocity-field error over rows and coordinates.
+        :raises ValueError: The parameter field is null.
         """
         params = batch["params"]
+        if params is None:
+            raise ValueError("flow evaluation params must not be null")
         noise = batch.get("noise")
         if noise is None:
             noise = torch.randn_like(params)
@@ -938,13 +953,23 @@ class VSTFlowMatchingModule(LightningModule):
     @jaxtyped(typechecker=beartype)
     def test_step(
         self,
-        batch: dict[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE]],
+        batch: Mapping[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE] | None],
         batch_idx: int,
     ) -> FlowTestStepOutput:
+        """Sample terminal parameters and return fully conditioned test metrics.
+
+        :param batch: Test batch with parameters, conditioning, and optional fields.
+        :param batch_idx: Unused Lightning batch index.
+        :returns: Scalar flow/parameter losses and terminal model-space predictions.
+        :raises ValueError: The parameter or configured conditioning field is null.
+        """
         conditioning = self.encoder(self._get_conditioning_from_batch(batch))
+        params = batch["params"]
+        if params is None:
+            raise ValueError("flow test params must not be null")
         pred_params = self._sample_encoded(
             conditioning,
-            torch.randn_like(batch["params"]),
+            torch.randn_like(params),
             steps=self.hparams.test_sample_steps,
             cfg_strength=self.hparams.test_cfg_strength,
             sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
@@ -952,11 +977,11 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
         flow_loss = self._evaluation_flow_loss(batch, conditioning)
-        param_mse = (pred_params - batch["params"]).square().mean()
+        param_mse = (pred_params - params).square().mean()
         self.log("test/flow_loss", flow_loss, on_step=False, on_epoch=True)
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
-        self.test_param_mse_best_swap.update(pred_params, batch["params"])
+        self.test_param_mse_best_swap.update(pred_params, params)
         self.log(
             "test/param_mse_best_swap",
             self.test_param_mse_best_swap,
@@ -964,7 +989,7 @@ class VSTFlowMatchingModule(LightningModule):
             on_epoch=True,
         )
         if self.test_param_mse_number_group_swap is not None:
-            self.test_param_mse_number_group_swap.update(pred_params, batch["params"])
+            self.test_param_mse_number_group_swap.update(pred_params, params)
             self.log(
                 "test/param_mse_number_group_swap",
                 self.test_param_mse_number_group_swap,
