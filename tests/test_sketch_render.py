@@ -46,6 +46,12 @@ def test_cfg_grid_duplicate_arm_raises() -> None:
         cfg_grid([1.0, 1.0], [2.0])
 
 
+def test_cfg_grid_empty_axis_raises() -> None:
+    """A Cartesian grid requires both guidance axes."""
+    with pytest.raises(ValueError, match="non-empty"):
+        cfg_grid([], [1.0])
+
+
 def test_cfg_grid_nonfinite_strength_raises() -> None:
     """A non-finite guidance strength cannot identify a valid arm."""
     with pytest.raises(ValueError, match="finite and non-negative"):
@@ -155,6 +161,26 @@ def test_load_audio_file_pcm_uses_primary_decoder(
     assert load_audio_file(source, sample_rate=44_100, channels=2, num_samples=4) is expected
 
 
+def test_resolve_stats_local_path_returns_existing_file(tmp_path: Path) -> None:
+    """A local statistics override is resolved without R2.
+
+    :param tmp_path: Temporary statistics path.
+    """
+    stats = tmp_path / "stats.npz"
+    stats.write_bytes(b"stats")
+
+    assert sketch_render._resolve_stats(str(stats)) == stats.resolve()
+
+
+def test_resolve_stats_missing_local_path_raises(tmp_path: Path) -> None:
+    """A missing local statistics override fails before inference.
+
+    :param tmp_path: Temporary missing path root.
+    """
+    with pytest.raises(FileNotFoundError, match="mel statistics"):
+        sketch_render._resolve_stats(str(tmp_path / "missing.npz"))
+
+
 def test_resolve_stats_r2_uri_materializes_cached_bytes(
     fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -169,9 +195,24 @@ def test_resolve_stats_r2_uri_materializes_cached_bytes(
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
     resolved = sketch_render._resolve_stats("r2://models/stats.npz")
+    cached = sketch_render._resolve_stats("r2://models/stats.npz")
 
+    assert cached == resolved
     assert resolved.read_bytes() == b"mel statistics"
     assert resolved.is_relative_to(fake_r2_remote / "cache" / "synth-setter")
+
+
+@pytest.mark.parametrize("digest", ["short", "z" * 64])
+def test_settings_invalid_checkpoint_digest_raises(digest: str) -> None:
+    """Configured checkpoint trust requires a complete hexadecimal digest.
+
+    :param digest: Invalid digest value.
+    """
+    values = sketch_render._load_settings().model_dump()
+    values["checkpoint_sha256"] = digest
+
+    with pytest.raises(ValueError, match="checkpoint_sha256"):
+        sketch_render._SketchRenderSettings.model_validate(values)
 
 
 def test_load_model_matching_checkpoint_returns_evaluation_model(
@@ -369,6 +410,9 @@ def test_prepare_inputs_broadcastable_mel_statistics_raises(
     [
         (["--sample-steps", "0"], "sample-steps must be positive"),
         (["--upload-prefix", "local/path"], "upload-prefix must use r2://"),
+        (["--checkpoint", "model.ckpt"], "checkpoint-sha256 is required"),
+        (["--checkpoint-sha256", "short"], "must contain 64 hex characters"),
+        (["--checkpoint-sha256", "z" * 64], "must be hexadecimal"),
         (
             ["--upload-prefix", "r2://bucket/path", "--no-upload"],
             "upload-prefix cannot be combined",
