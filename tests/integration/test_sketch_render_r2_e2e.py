@@ -15,7 +15,7 @@ import torch
 from pedalboard.io import AudioFile
 
 from synth_setter.cli._cfg_strength import CfgStrengths
-from synth_setter.cli.clap import (
+from synth_setter.cli.sketch_render import (
     _CACHE_NAMESPACE,
     _CHECKPOINT_SHA256,
     _STATS_SHA256,
@@ -111,14 +111,14 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
     if r2_io.object_size(DEFAULT_CHECKPOINT_URI) is None:
         pytest.skip(f"required immutable checkpoint is absent: {DEFAULT_CHECKPOINT_URI}")
     guide_path, ref_path = _write_inputs(tmp_path)
-    script = Path(sys.executable).parent / "synth-setter-clap"
+    script = Path(sys.executable).parent / "synth-setter-sketch-render"
 
     result = subprocess.run(  # noqa: S603 — fixed installed public entrypoint
         [
             str(script),
-            "--guide_audio",
+            "--guide-audio",
             str(guide_path),
-            "--ref_audio",
+            "--reference-audio",
             str(ref_path),
             "--content-cfg-strength",
             "2",
@@ -136,7 +136,7 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
     )
     stdout_lines = [line for line in result.stdout.splitlines() if line.strip()]
     output_uri = stdout_lines[-1]
-    assert output_uri.startswith("r2://intermediate-data/eval/synth-setter-clap/")
+    assert output_uri.startswith("r2://intermediate-data/eval/synth-setter-sketch-render/")
     local_lines = [
         line for line in result.stderr.splitlines() if line.startswith("Local output: ")
     ]

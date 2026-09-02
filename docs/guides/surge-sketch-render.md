@@ -3,22 +3,22 @@
 Use the installed CLI to infer one Surge Simple patch from two audio files:
 
 ```bash
-synth-setter-clap \
-  --guide_audio path/to/guide.wav \
-  --ref_audio path/to/reference.wav \
+synth-setter-sketch-render \
+  --guide-audio path/to/guide.wav \
+  --reference-audio path/to/reference.wav \
   --content-cfg-strength 2 \
   --sketch-cfg-strength 3
 ```
 
-`--content-cfg-strength` controls reference-mel guidance in audio mode and text-prompt
-guidance in text mode. `--sketch-cfg-strength` controls sketch guidance and is rejected
-in text mode. Both accept finite nonnegative values, including zero. Omit either flag to
-use its checkpoint value; legacy checkpoints without a sketch value use the effective
-content strength.
+`--content-cfg-strength` controls reference-mel guidance, while
+`--sketch-cfg-strength` controls sketch guidance. Both accept finite nonnegative values,
+including zero. Omit either flag to use its checkpoint value; legacy checkpoints without
+a sketch value use the effective content strength.
 
-`ref_audio` supplies the model's normalized mel/timbre conditioning. `guide_audio`
-supplies loudness, spectral-centroid, and pitch sketch controls. Both inputs accept
-mono or stereo audio at any sample rate supported by Pedalboard; the CLI resamples,
+`--reference-audio` supplies the model's normalized mel/timbre conditioning.
+`--guide-audio` supplies loudness, spectral-centroid, and pitch sketch controls.
+
+Both inputs accept mono or stereo audio at any sample rate supported by Pedalboard; the CLI resamples,
 up-mixes, pads or trims, and prepares them on the model's four-second 44.1 kHz grid.
 Input samples must be finite and within `[-1, 1]`; guide loudness remains at source
 amplitude to match the stored training renders.
@@ -29,7 +29,7 @@ cache. On Linux, Surge rendering automatically runs under the packaged headless 
 wrapper. Set `SYNTH_SETTER_PLUGIN_PATH` when Surge XT is not available at the managed
 `plugins/Surge XT.vst3` alias.
 
-Each invocation creates a unique directory under `outputs/synth-setter-clap/` and
+Each invocation creates a unique directory under `outputs/synth-setter-sketch-render/` and
 retains these files locally. Set `SYNTH_SETTER_SKETCH_OUTPUT_ROOT` to use another
 local root.
 
@@ -40,11 +40,11 @@ local root.
 - `manifest.json`: checkpoint, statistics, render, and destination provenance.
 
 The same artifacts upload to a unique prefix under
-`r2://intermediate-data/eval/synth-setter-clap/`. Set
+`r2://intermediate-data/eval/synth-setter-sketch-render/`. Set
 `SYNTH_SETTER_SKETCH_UPLOAD_PREFIX` to use another `r2://` prefix. The command prints
 the local path to stderr and the final R2 URI as the last stdout line. If that upload
 fails after inference, resume it from the retained directory:
 
 ```bash
-synth-setter-clap --retry-upload outputs/synth-setter-clap/<run_id>
+synth-setter-sketch-render --retry-upload outputs/synth-setter-sketch-render/<run_id>
 ```

@@ -16,7 +16,6 @@ from typing import Literal
 import click
 import numpy as np
 import torch
-from click.core import ParameterSource
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -28,7 +27,7 @@ from synth_setter.clap import (
 )
 from synth_setter.cli._cfg_strength import (
     CfgStrengths,
-    apply_cfg_strength_overrides,
+    temporary_cfg_strength_overrides,
     validate_cfg_strength,
 )
 from synth_setter.conditioning import resolve_embedding_conditioning
@@ -51,20 +50,6 @@ _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 _EXPECTED_CONDITIONING_COLUMN = "clap"
 _EXPECTED_CONDITIONING_SHAPE = (512,)
 _DEFAULT_CONFIG_NAME = "clap_render"
-_RETRY_UPLOAD_CONFLICTS = (
-    ("text_prompt", "TEXT_PROMPT"),
-    ("guide_audio", "--guide_audio"),
-    ("ref_audio", "--ref_audio"),
-    ("checkpoint", "--checkpoint"),
-    ("clap_checkpoint", "--clap-checkpoint"),
-    ("output", "--output"),
-    ("upload_uri", "--upload-uri"),
-    ("device", "--device"),
-    ("seed", "--seed"),
-    ("content_cfg_strength", "--content-cfg-strength"),
-    ("sketch_cfg_strength", "--sketch-cfg-strength"),
-    ("upload", "--upload/--no-upload"),
-)
 _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
     "prompt",
     "wav_r2_uri",
@@ -76,6 +61,119 @@ _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
     "cosine_similarity",
     "cosine_distance",
 )
+
+
+@dataclass(frozen=True)
+class _CheckpointSource:
+    """Checkpoint location and optional required digest.
+
+    .. attribute :: location
+
+        Local path or R2 URI.
+
+    .. attribute :: expected_sha256
+
+        Required digest, or ``None`` when identity is not pinned.
+    """
+
+    location: str
+    expected_sha256: str | None
+
+
+@dataclass(frozen=True)
+class _TextDestinations:
+    """Resolved local and optional R2 destinations for one text render.
+
+    .. attribute :: wav
+
+        Local rendered-audio path.
+
+    .. attribute :: metrics
+
+        Local comparison-metrics path.
+
+    .. attribute :: wav_r2_uri
+
+        Rendered-audio upload URI, or an empty string when upload is disabled.
+
+    .. attribute :: metrics_r2_uri
+
+        Comparison-metrics upload URI, or an empty string when upload is disabled.
+
+    .. attribute :: upload
+
+        Whether both local artifacts are uploaded.
+    """
+
+    wav: Path
+    metrics: Path
+    wav_r2_uri: str
+    metrics_r2_uri: str
+    upload: bool
+
+
+@dataclass(frozen=True)
+class _TextRuntime:
+    """Resolved dependencies and settings shared by text-render stages.
+
+    .. attribute :: prompt
+
+        Normalized text condition.
+
+    .. attribute :: inverse_checkpoint
+
+        Inverse-model checkpoint identity.
+
+    .. attribute :: clap_checkpoint
+
+        CLAP encoder checkpoint identity.
+
+    .. attribute :: device
+
+        Torch inference device.
+
+    .. attribute :: seed
+
+        Flow sampling seed.
+
+    .. attribute :: render
+
+        Validated Surge render configuration.
+
+    .. attribute :: destinations
+
+        Local and optional R2 artifact destinations.
+
+    .. attribute :: requested_strengths
+
+        Optional runtime guidance overrides.
+    """
+
+    prompt: str
+    inverse_checkpoint: _CheckpointSource
+    clap_checkpoint: _CheckpointSource
+    device: torch.device
+    seed: int
+    render: RenderConfig
+    destinations: _TextDestinations
+    requested_strengths: CfgStrengths[float | None]
+
+
+@dataclass(frozen=True)
+class _TextInferenceResult:
+    """Metrics and effective guidance produced by text inference.
+
+    .. attribute :: comparison
+
+        CLAP embedding comparison for the rendered audio.
+
+    .. attribute :: effective_strengths
+
+        Guidance strengths used for prediction.
+    """
+
+    comparison: EmbeddingComparison
+    effective_strengths: CfgStrengths[float]
 
 
 @dataclass(frozen=True)
@@ -501,6 +599,7 @@ def _predict_patch(
     :param seed: Flow noise seed.
     :param requested_strengths: Optional content and sketch guidance overrides.
     :returns: CPU prediction and effective guidance strengths.
+    :raises ValueError: The prediction dtype, shape, or values violate the model contract.
     """
     model = VSTFlowMatchingModule.load_from_checkpoint(
         checkpoint,
@@ -508,11 +607,22 @@ def _predict_patch(
         weights_only=False,
     )
     _validate_inverse_model(model, render)
-    effective_strengths = apply_cfg_strength_overrides(model.hparams, requested_strengths)
     model.to(device).eval()
     torch.manual_seed(seed)
-    with torch.inference_mode():
-        prediction, _ = model.predict_step({"conditioning": embedding}, 0)
+    with temporary_cfg_strength_overrides(
+        model.hparams, requested_strengths
+    ) as effective_strengths:
+        with torch.inference_mode():
+            prediction, _ = model.predict_step({"conditioning": embedding}, 0)
+    expected_shape = (1, len(param_specs[render.param_spec_name]))
+    if prediction.dtype is not torch.float32:
+        raise ValueError(f"model prediction dtype must be torch.float32, got {prediction.dtype}")
+    if tuple(prediction.shape) != expected_shape:
+        raise ValueError(
+            f"model prediction shape must be {expected_shape}, got {tuple(prediction.shape)}"
+        )
+    if not torch.isfinite(prediction).all():
+        raise ValueError("model prediction must contain only finite values")
     return prediction.detach().cpu(), effective_strengths
 
 
@@ -596,70 +706,8 @@ def _resolve_output(output: Path | None, settings: _ClapRenderSettings, run_id: 
     return output
 
 
-def _dispatch_audio_mode(
-    audio_paths: tuple[Path | None, Path | None],
-    *,
-    text_prompt: str | None,
-    unsupported_options: tuple[tuple[str, object], ...],
-    cfg_strengths: CfgStrengths[float | None],
-) -> bool:
-    """Validate and dispatch guide/reference audio mode when selected.
-
-    :param audio_paths: Optional guide and reference audio paths.
-    :param text_prompt: Optional text-mode positional argument.
-    :param unsupported_options: Text-only option names and parsed values.
-    :param cfg_strengths: Optional content and sketch guidance overrides.
-    :returns: Whether audio mode was selected and dispatched.
-    :raises click.ClickException: Audio mode inputs or options are invalid.
-    """
-    guide_audio, ref_audio = audio_paths
-    audio_mode = guide_audio is not None or ref_audio is not None
-    if not audio_mode:
-        return False
-    if guide_audio is None or ref_audio is None:
-        raise click.ClickException("--guide_audio and --ref_audio must be provided together")
-    if text_prompt is not None:
-        raise click.ClickException("TEXT_PROMPT cannot be combined with guide/reference audio")
-    for option, value in unsupported_options:
-        is_overridden = value is not None and value is not False
-        if is_overridden:
-            raise click.ClickException(f"{option} is not supported with guide/reference audio")
-    from synth_setter.cli.clap import main as guide_audio_main
-
-    args = ["--guide_audio", str(guide_audio), "--ref_audio", str(ref_audio)]
-    if cfg_strengths.content is not None:
-        args.extend(["--content-cfg-strength", str(cfg_strengths.content)])
-    if cfg_strengths.sketch is not None:
-        args.extend(["--sketch-cfg-strength", str(cfg_strengths.sketch)])
-    guide_audio_main.main(
-        args=args,
-        prog_name="synth-setter-clap",
-        standalone_mode=False,
-    )
-    return True
-
-
-def _dispatch_retry_upload(context: click.Context, retry_upload: Path | None) -> bool:
-    """Validate and dispatch retained-artifact upload recovery when selected.
-
-    :param context: Active Click invocation context.
-    :param retry_upload: Retained sketch-render directory, if requested.
-    :returns: Whether upload recovery was selected and dispatched.
-    :raises click.ClickException: Another command-line option conflicts with recovery.
-    """
-    if retry_upload is None:
-        return False
-    for parameter, option in _RETRY_UPLOAD_CONFLICTS:
-        if context.get_parameter_source(parameter) is ParameterSource.COMMANDLINE:
-            raise click.ClickException(f"{option} cannot be combined with --retry-upload")
-    from synth_setter.cli.clap import retry_output_upload
-
-    click.echo(retry_output_upload(retry_upload))
-    return True
-
-
 def _run_text_mode(
-    text_prompt: str | None,
+    text_prompt: str,
     checkpoint: str | None,
     clap_checkpoint: str | None,
     output: Path | None,
@@ -683,12 +731,6 @@ def _run_text_mode(
     :raises click.ClickException: Text-mode arguments are invalid.
     :raises RuntimeError: The default CLAP checkpoint fails identity validation.
     """
-    if requested_strengths.sketch is not None:
-        raise click.ClickException(
-            "--sketch-cfg-strength is only supported with guide/reference audio"
-        )
-    if text_prompt is None:
-        raise click.ClickException("provide TEXT_PROMPT or guide/reference audio")
     prompt = text_prompt.strip()
     if not prompt:
         raise click.ClickException("prompt must contain text")
@@ -771,17 +813,7 @@ def _run_text_mode(
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("text_prompt", required=False)
-@click.option(
-    "--guide_audio",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Guide audio supplying sketch controls.",
-)
-@click.option(
-    "--ref_audio",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Reference audio supplying mel/timbre conditioning.",
-)
+@click.argument("text_prompt")
 @click.option(
     "--checkpoint",
     envvar="SYNTH_SETTER_CLAP_INVERSE_CHECKPOINT",
@@ -795,11 +827,6 @@ def _run_text_mode(
 @click.option("--output", type=click.Path(dir_okay=False, path_type=Path), help="Local WAV path.")
 @click.option("--upload-uri", help="Exact r2:// destination for the WAV.")
 @click.option(
-    "--retry-upload",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Upload a retained sketch-render directory without rerunning inference.",
-)
-@click.option(
     "--device",
     type=click.Choice(["auto", "cpu", "cuda", "mps"]),
     default=None,
@@ -810,75 +837,34 @@ def _run_text_mode(
     "--content-cfg-strength",
     type=float,
     callback=validate_cfg_strength,
-    help="Content guidance override; omitted uses the checkpoint value.",
-)
-@click.option(
-    "--sketch-cfg-strength",
-    type=float,
-    callback=validate_cfg_strength,
-    help="Sketch guidance override for guide/reference audio mode.",
+    help="Text guidance override; omitted uses the checkpoint value.",
 )
 @click.option("--upload/--no-upload", default=True, show_default=True)
-@click.pass_context
 def main(
-    context: click.Context,
-    text_prompt: str | None,
-    guide_audio: Path | None,
-    ref_audio: Path | None,
+    text_prompt: str,
     checkpoint: str | None,
     clap_checkpoint: str | None,
     output: Path | None,
     upload_uri: str | None,
-    retry_upload: Path | None,
     device: _DeviceSetting | None,
     seed: int | None,
     content_cfg_strength: float | None,
-    sketch_cfg_strength: float | None,
     upload: bool,
 ) -> None:
-    """Render a text prompt or guide/reference audio as a Surge WAV.
+    """Render TEXT_PROMPT as a Surge WAV and upload it to R2.
 
-    Use ``synth-setter-clap "frog croak"`` for text or pass both audio options.
+    Example: synth-setter-clap "frog croak"
 
-    :param context: Active Click invocation context.
-    :param text_prompt: Optional natural-language sound description.
-    :param guide_audio: Optional audio supplying sketch controls.
-    :param ref_audio: Optional audio supplying mel/timbre conditioning.
+    :param text_prompt: Natural-language sound description.
     :param checkpoint: Optional inverse-checkpoint override.
     :param clap_checkpoint: Optional CLAP encoder override.
     :param output: Optional local WAV destination.
     :param upload_uri: Optional exact R2 object destination.
-    :param retry_upload: Optional retained sketch-render directory to upload.
     :param device: Optional torch-device override.
     :param seed: Optional flow sampling seed.
-    :param content_cfg_strength: Optional text or reference-mel guidance override.
-    :param sketch_cfg_strength: Optional sketch-control guidance override.
+    :param content_cfg_strength: Optional text-guidance override.
     :param upload: Whether to upload the rendered WAV.
     """
-    requested_strengths = CfgStrengths(
-        content=content_cfg_strength,
-        sketch=sketch_cfg_strength,
-    )
-    if _dispatch_retry_upload(context, retry_upload):
-        return
-
-    unsupported_audio_options = (
-        ("--checkpoint", checkpoint),
-        ("--clap-checkpoint", clap_checkpoint),
-        ("--output", output),
-        ("--upload-uri", upload_uri),
-        ("--device", device),
-        ("--seed", seed),
-        ("--no-upload", not upload),
-    )
-    if _dispatch_audio_mode(
-        (guide_audio, ref_audio),
-        text_prompt=text_prompt,
-        unsupported_options=unsupported_audio_options,
-        cfg_strengths=requested_strengths,
-    ):
-        return
-
     _run_text_mode(
         text_prompt=text_prompt,
         checkpoint=checkpoint,
@@ -888,7 +874,7 @@ def main(
         device=device,
         seed=seed,
         upload=upload,
-        requested_strengths=requested_strengths,
+        requested_strengths=CfgStrengths(content=content_cfg_strength, sketch=None),
     )
 
 

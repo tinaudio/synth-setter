@@ -1,6 +1,6 @@
 """Render a Surge patch from reference timbre and guide sketch controls.
 
-Run ``synth-setter-clap --guide_audio guide.wav --ref_audio reference.wav``.
+Run ``synth-setter-sketch-render --guide-audio guide.wav --reference-audio reference.wav``.
 Checkpoint rotation requires updating its pinned digest and state-shape contract together.
 """
 
@@ -8,22 +8,25 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from types import MappingProxyType
+from typing import Literal
 from uuid import uuid4
 
 import click
 import numpy as np
 import torch
+from click.core import ParameterSource
 from pedalboard.io import AudioFile
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from synth_setter.cli._cfg_strength import (
     CfgStrengths,
-    apply_cfg_strength_overrides,
+    temporary_cfg_strength_overrides,
     validate_cfg_strength,
 )
 from synth_setter.data.vst.core import extract_renderer_version
@@ -61,10 +64,10 @@ DEFAULT_STATS_URI = (
 )
 _CHECKPOINT_SHA256 = "e6e3d1c702b092718c3d81d634bba5b015d031e211fd6bd005e35a54dea2f89a"
 _STATS_SHA256 = "397415e5f900056256ac6b6047d3601c6c478b9d760c2c45c1599b1e45e31acb"
-_CACHE_NAMESPACE = "surge-sketch-cli"
-_HEADLESS_ENV = "SYNTH_SETTER_CLAP_HEADLESS"
-_OUTPUT_ROOT = Path("outputs/synth-setter-clap")
-_R2_OUTPUT_ROOT = "r2://intermediate-data/eval/synth-setter-clap"
+_CACHE_NAMESPACE = "surge-sketch-render"
+_HEADLESS_ENV = "SYNTH_SETTER_SKETCH_RENDER_HEADLESS"
+_OUTPUT_ROOT = Path("outputs/synth-setter-sketch-render")
+_R2_OUTPUT_ROOT = "r2://intermediate-data/eval/synth-setter-sketch-render"
 _OUTPUT_ROOT_ENV = "SYNTH_SETTER_SKETCH_OUTPUT_ROOT"
 _R2_OUTPUT_ROOT_ENV = "SYNTH_SETTER_SKETCH_UPLOAD_PREFIX"
 _SAMPLE_RATE = 44100
@@ -104,36 +107,152 @@ _RETAINED_ARTIFACT_FILENAMES = (
 )
 
 
-class _RetainedRunManifest(BaseModel):
-    """Validated upload coordinates read from a retained run manifest.
+class _ManifestArtifact(BaseModel):
+    """Immutable R2 artifact identity at the retry-upload trust boundary.
 
     .. attribute :: model_config
 
-        Strict immutable manifest validation.
+        Strict, frozen parsing configuration.
+
+    .. attribute :: uri
+
+        Immutable R2 artifact URI.
+
+    .. attribute :: sha256
+
+        Required artifact SHA-256 digest.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    uri: str
+    sha256: str
+
+    @field_validator("uri")
+    @classmethod
+    def _uri_is_r2(cls, value: str) -> str:
+        if not r2_io.is_r2_uri(value):
+            raise ValueError("manifest artifact URI must use r2://")
+        return value
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256_is_valid(cls, value: str) -> str:
+        if len(value) != 64:
+            raise ValueError("manifest artifact SHA-256 must contain 64 hex characters")
+        try:
+            int(value, 16)
+        except ValueError as exc:
+            raise ValueError("manifest artifact SHA-256 must be hexadecimal") from exc
+        return value
+
+
+class _ManifestRender(BaseModel):
+    """Immutable renderer identity and settings for one retained run.
+
+    .. attribute :: model_config
+
+        Strict, frozen parsing configuration.
+
+    .. attribute :: param_spec
+
+        Parameter specification name.
+
+    .. attribute :: synth_version
+
+        Required synthesizer version.
+
+    .. attribute :: sample_rate
+
+        Render sample rate in hertz.
+
+    .. attribute :: channels
+
+        Render channel count.
+
+    .. attribute :: duration_seconds
+
+        Render duration in seconds.
+
+    .. attribute :: seed
+
+        Inference seed.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    param_spec: str = Field(min_length=1)
+    synth_version: str = Field(min_length=1)
+    sample_rate: int = Field(gt=0)
+    channels: int = Field(gt=0)
+    duration_seconds: float = Field(gt=0, allow_inf_nan=False)
+    seed: int
+
+
+class _RetainedRunManifest(BaseModel):
+    """Complete versioned provenance required for retry upload.
+
+    .. attribute :: model_config
+
+        Strict, frozen parsing configuration.
+
+    .. attribute :: schema_version
+
+        Manifest contract version.
 
     .. attribute :: run_id
 
-        Identifier expected to match the retained directory name.
+        Unique render-run identifier.
 
     .. attribute :: r2_uri
 
-        Recorded R2 upload destination.
+        Destination R2 prefix.
+
+    .. attribute :: code_version
+
+        Installed package version.
+
+    .. attribute :: git_sha
+
+        Source revision identifier.
+
+    .. attribute :: content_cfg_strength
+
+        Effective reference guidance strength.
+
+    .. attribute :: sketch_cfg_strength
+
+        Effective sketch guidance strength.
+
+    .. attribute :: checkpoint
+
+        Inverse checkpoint identity.
+
+    .. attribute :: stats
+
+        Normalization-statistics identity.
+
+    .. attribute :: render
+
+        Renderer identity and settings.
     """
 
-    model_config = ConfigDict(strict=True, frozen=True, extra="ignore")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: str
+    schema_version: Literal[1]
+    run_id: str = Field(min_length=1)
     r2_uri: str
+    code_version: str = Field(min_length=1)
+    git_sha: str = Field(min_length=1)
+    content_cfg_strength: float = Field(ge=0, allow_inf_nan=False)
+    sketch_cfg_strength: float = Field(ge=0, allow_inf_nan=False)
+    checkpoint: _ManifestArtifact
+    stats: _ManifestArtifact
+    render: _ManifestRender
 
     @field_validator("r2_uri")
     @classmethod
     def _r2_uri_is_valid(cls, value: str) -> str:
-        """Require an R2 destination.
-
-        :param value: Recorded artifact destination.
-        :returns: Validated destination unchanged.
-        :raises ValueError: The destination does not use the R2 URI scheme.
-        """
         if not r2_io.is_r2_uri(value):
             raise ValueError("manifest r2_uri must use r2://")
         return value
@@ -147,7 +266,7 @@ class PreparedAudioInputs:
 
         Normalized stereo guide waveform.
 
-    .. attribute :: ref_audio
+    .. attribute :: reference_audio
 
         Normalized stereo reference waveform.
 
@@ -161,7 +280,7 @@ class PreparedAudioInputs:
     """
 
     guide_audio: torch.Tensor
-    ref_audio: torch.Tensor
+    reference_audio: torch.Tensor
     ref_mel: torch.Tensor
     sketch_controls: torch.Tensor
 
@@ -224,39 +343,39 @@ def _load_model_audio(path: Path) -> torch.Tensor:
         return _fit_audio_to_model_grid(audio_file.read(target_samples))
 
 
-def _normalize_reference_mel(ref_audio: torch.Tensor, stats_file: Path) -> torch.Tensor:
+def _normalize_reference_mel(reference_audio: torch.Tensor, stats_file: Path) -> torch.Tensor:
     """Apply the checkpoint's saved statistics to its training mel frontend.
 
-    :param ref_audio: Float32 waveform shaped ``(2, 176400)``.
+    :param reference_audio: Float32 waveform shaped ``(2, 176400)``.
     :param stats_file: Training mel mean and standard deviation.
     :returns: Float32 normalized mel shaped ``(2, 128, 401)``.
     :raises ValueError: Normalization produces a non-finite value.
     """
     mean, std = load_mel_statistics(stats_file)
-    mel = (make_spectrogram(ref_audio.numpy(), _SAMPLE_RATE) - mean) / std
+    mel = (make_spectrogram(reference_audio.numpy(), _SAMPLE_RATE) - mean) / std
     if not np.isfinite(mel).all():
         raise ValueError("reference mel normalization produced non-finite values")
     return torch.from_numpy(mel).to(dtype=torch.float32)
 
 
 def prepare_audio_inputs(
-    guide_audio: Path, ref_audio: Path, stats_file: Path
+    guide_audio: Path, reference_audio: Path, stats_file: Path
 ) -> PreparedAudioInputs:
     """Prepare unshifted guide controls and reference mel on the training grid.
 
     :param guide_audio: Audio supplying sketch controls.
-    :param ref_audio: Audio supplying mel/timbre conditioning.
+    :param reference_audio: Audio supplying mel/timbre conditioning.
     :param stats_file: Training mel mean and standard deviation.
     :returns: Four-second stereo waveforms and features on the 401-frame grid.
     """
     guide_waveform = _load_model_audio(guide_audio)
-    ref_waveform = _load_model_audio(ref_audio)
+    ref_waveform = _load_model_audio(reference_audio)
     sketch_controls = extract_sketch_controls(guide_waveform, _SAMPLE_RATE)
     pitch = sketch_controls[SKETCH_PITCH_SLICE]
     sketch_controls[SKETCH_PITCH_SLICE] = pitch.where(pitch >= _PITCH_ZERO_THRESHOLD, 0.0)
     return PreparedAudioInputs(
         guide_audio=guide_waveform,
-        ref_audio=ref_waveform,
+        reference_audio=ref_waveform,
         ref_mel=_normalize_reference_mel(ref_waveform, stats_file),
         sketch_controls=sketch_controls,
     )
@@ -289,7 +408,7 @@ def write_output_artifacts(
     """
     output_dir.mkdir(parents=True, exist_ok=False)
     _write_wav(output_dir / "guide.wav", prepared.guide_audio)
-    _write_wav(output_dir / "ref.wav", prepared.ref_audio)
+    _write_wav(output_dir / "ref.wav", prepared.reference_audio)
     _write_wav(output_dir / "pred.wav", patch.audio)
     params_to_csv(
         None,
@@ -505,7 +624,6 @@ def _predict_patch(
     :returns: Renderer parameters and effective guidance strengths.
     :raises ValueError: The prediction is non-finite or has the wrong shape.
     """
-    effective_strengths = apply_cfg_strength_overrides(model.hparams, requested_strengths)
     batch = {
         "mel": prepared.ref_mel.unsqueeze(0).to(model.device),
         "sketch_ctrl": prepared.sketch_controls.unsqueeze(0).to(model.device),
@@ -513,8 +631,11 @@ def _predict_patch(
     torch.manual_seed(_SERVING_SEED)
     if model.device.type == "cuda":
         torch.cuda.manual_seed_all(_SERVING_SEED)
-    with torch.no_grad():
-        prediction, _ = model.predict_step(batch, 0)
+    with temporary_cfg_strength_overrides(
+        model.hparams, requested_strengths
+    ) as effective_strengths:
+        with torch.no_grad():
+            prediction, _ = model.predict_step(batch, 0)
     expected_shape = (1, _EXPECTED_PARAM_WIDTH)
     if tuple(prediction.shape) != expected_shape or not torch.isfinite(prediction).all():
         raise ValueError(
@@ -529,13 +650,11 @@ def _predict_patch(
     return synth_params, note_params, effective_strengths
 
 
-def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> RenderedPatch:
-    """Render decoded parameters through the production Surge VST backend.
+def _canonical_note_params(note_params: NoteParams) -> tuple[NoteParams, tuple[float, float]]:
+    """Preserve decoded notes while deriving the renderer-safe interval.
 
-    :param synth_params: Renderer-native Surge parameter values.
     :param note_params: Decoded MIDI pitch and note interval.
-    :returns: Rendered stereo patch and its parameters.
-    :raises ValueError: The installed Surge version differs from the pinned contract.
+    :returns: Raw note parameters and canonical renderer interval.
     """
     decoded_note_window = note_params["note_start_and_end"]
     raw_note_window = (float(decoded_note_window[0]), float(decoded_note_window[1]))
@@ -546,7 +665,16 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
         signal_duration_seconds=_DURATION_SECONDS,
         sample_rate=_SAMPLE_RATE,
     )
+    return raw_note_params, effective_note_window
 
+
+@contextmanager
+def _surge_render_config() -> Iterator[RenderConfig]:
+    """Validate Surge identity and yield its preset-backed render configuration.
+
+    :yields RenderConfig: Preset-backed render configuration.
+    :raises ValueError: The installed Surge version differs from the pinned contract.
+    """
     plugin_path = str(Path(default_plugin_path()).expanduser().resolve())
     synth_identity = SYNTHS[SynthName(_SURGE_PARAM_SPEC_NAME)]
     actual_version = extract_renderer_version(Path(plugin_path))
@@ -562,7 +690,7 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
                 "plugin_state_path": str(preset_path),
             }
         )
-        render_config = RenderConfig(
+        yield RenderConfig(
             synth=synth,
             renderer_backend="pedalboard",
             sample_rate=_SAMPLE_RATE,
@@ -575,6 +703,17 @@ def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> Re
             plugin_reload_cadence="once",
             gui_toggle_cadence="once",
         )
+
+
+def _render_patch(synth_params: dict[str, float], note_params: NoteParams) -> RenderedPatch:
+    """Render decoded parameters through the production Surge VST backend.
+
+    :param synth_params: Renderer-native Surge parameter values.
+    :param note_params: Decoded MIDI pitch and note interval.
+    :returns: Rendered stereo patch and its parameters.
+    """
+    raw_note_params, effective_note_window = _canonical_note_params(note_params)
+    with _surge_render_config() as render_config:
         renderer = make_audio_renderer(render_config)
         audio = renderer.render(
             synth_params,
@@ -606,13 +745,13 @@ def _artifact_roots() -> tuple[Path, str]:
 
 def _run_request(
     guide_audio: Path,
-    ref_audio: Path,
+    reference_audio: Path,
     requested_strengths: CfgStrengths[float | None],
 ) -> tuple[Path, str]:
     """Run one complete local render and R2 upload.
 
     :param guide_audio: Audio supplying sketch controls.
-    :param ref_audio: Audio supplying mel conditioning.
+    :param reference_audio: Audio supplying mel conditioning.
     :param requested_strengths: Optional content and sketch guidance overrides.
     :returns: Retained local output path and uploaded R2 prefix.
     """
@@ -621,7 +760,7 @@ def _run_request(
     stats_path = cache_r2_file(DEFAULT_STATS_URI, _CACHE_NAMESPACE, _STATS_SHA256)
     _validate_stats(stats_path)
 
-    prepared = prepare_audio_inputs(guide_audio, ref_audio, stats_path)
+    prepared = prepare_audio_inputs(guide_audio, reference_audio, stats_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _load_model(checkpoint_path, device)
     synth_params, note_params, effective_strengths = _predict_patch(
@@ -629,7 +768,7 @@ def _run_request(
     )
     patch = _render_patch(synth_params, note_params)
 
-    run_id = f"{make_wandb_run_id('synth-setter-clap')}-{uuid4().hex[:8]}"
+    run_id = f"{make_wandb_run_id('synth-setter-sketch-render')}-{uuid4().hex[:8]}"
     output_root, upload_root = _artifact_roots()
     output_dir = output_root / run_id
     destination_uri = f"{upload_root}/{run_id}"
@@ -643,13 +782,13 @@ def _run_request(
 
 def _run_under_headless_wrapper(
     guide_audio: Path,
-    ref_audio: Path,
+    reference_audio: Path,
     requested_strengths: CfgStrengths[float | None],
 ) -> None:
     """Re-enter the public module under the packaged Linux X11 wrapper.
 
     :param guide_audio: Audio supplying sketch controls.
-    :param ref_audio: Audio supplying mel conditioning.
+    :param reference_audio: Audio supplying mel conditioning.
     :param requested_strengths: Optional content and sketch guidance overrides.
     """
     with as_file(vst_headless_wrapper()) as wrapper:
@@ -658,11 +797,11 @@ def _run_under_headless_wrapper(
             str(wrapper),
             sys.executable,
             "-m",
-            "synth_setter.cli.clap",
-            "--guide_audio",
+            "synth_setter.cli.sketch_render",
+            "--guide-audio",
             str(guide_audio.resolve()),
-            "--ref_audio",
-            str(ref_audio.resolve()),
+            "--reference-audio",
+            str(reference_audio.resolve()),
         ]
         if requested_strengths.content is not None:
             command.extend(["--content-cfg-strength", str(requested_strengths.content)])
@@ -678,14 +817,12 @@ def _run_under_headless_wrapper(
 
 @click.command(help="Infer, render, retain, and upload one Surge patch.")
 @click.option(
-    "--guide_audio",
-    required=True,
+    "--guide-audio",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Guide audio supplying sketch controls.",
 )
 @click.option(
-    "--ref_audio",
-    required=True,
+    "--reference-audio",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Reference audio supplying mel/timbre conditioning.",
 )
@@ -701,28 +838,55 @@ def _run_under_headless_wrapper(
     callback=validate_cfg_strength,
     help="Sketch-control guidance override; omitted uses the checkpoint value.",
 )
+@click.option(
+    "--retry-upload",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Upload a retained sketch-render directory without rerunning inference.",
+)
+@click.pass_context
 def main(
-    guide_audio: Path,
-    ref_audio: Path,
+    context: click.Context,
+    guide_audio: Path | None,
+    reference_audio: Path | None,
     content_cfg_strength: float | None,
     sketch_cfg_strength: float | None,
+    retry_upload: Path | None,
 ) -> None:
     """Infer, render, retain, and upload one Surge patch.
 
-    :param guide_audio: Audio supplying sketch controls.
-    :param ref_audio: Audio supplying mel/timbre conditioning.
+    :param context: Active Click invocation context.
+    :param guide_audio: Optional audio supplying sketch controls.
+    :param reference_audio: Optional audio supplying mel/timbre conditioning.
     :param content_cfg_strength: Optional reference-mel guidance override.
     :param sketch_cfg_strength: Optional sketch-control guidance override.
+    :param retry_upload: Optional retained sketch-render directory to upload.
+    :raises click.ClickException: Retry and render inputs conflict or are incomplete.
     """
+    if retry_upload is not None:
+        retry_conflicts = (
+            ("guide_audio", "--guide-audio"),
+            ("reference_audio", "--reference-audio"),
+            ("content_cfg_strength", "--content-cfg-strength"),
+            ("sketch_cfg_strength", "--sketch-cfg-strength"),
+        )
+        for parameter, option in retry_conflicts:
+            if context.get_parameter_source(parameter) is ParameterSource.COMMANDLINE:
+                raise click.ClickException(f"{option} cannot be combined with --retry-upload")
+        click.echo(retry_output_upload(retry_upload))
+        return
+
+    if guide_audio is None or reference_audio is None:
+        raise click.ClickException("--guide-audio and --reference-audio must be provided together")
+
     requested_strengths = CfgStrengths(
         content=content_cfg_strength,
         sketch=sketch_cfg_strength,
     )
     if sys.platform == "linux" and os.environ.get(_HEADLESS_ENV) != "1":
-        _run_under_headless_wrapper(guide_audio, ref_audio, requested_strengths)
+        _run_under_headless_wrapper(guide_audio, reference_audio, requested_strengths)
         return
 
-    _, destination_uri = _run_request(guide_audio, ref_audio, requested_strengths)
+    _, destination_uri = _run_request(guide_audio, reference_audio, requested_strengths)
     click.echo(destination_uri)
 
 

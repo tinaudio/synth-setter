@@ -1,7 +1,8 @@
 """Shared runtime CFG override handling for CLAP render modes."""
 
 import math
-from collections.abc import MutableMapping
+from collections.abc import Iterator, MutableMapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import click
@@ -42,15 +43,16 @@ def validate_cfg_strength(
     return value
 
 
-def apply_cfg_strength_overrides(
+@contextmanager
+def temporary_cfg_strength_overrides(
     hparams: MutableMapping[str, object],
     requested: CfgStrengths[float | None],
-) -> CfgStrengths[float]:
-    """Apply nullable CLI overrides to prediction-time model hyperparameters.
+) -> Iterator[CfgStrengths[float]]:
+    """Apply CFG overrides only while one prediction is running.
 
+    :yield CfgStrengths[float]: Effective content and sketch strengths.
     :param hparams: Mutable Lightning model hyperparameters.
     :param requested: Optional content and sketch guidance overrides.
-    :returns: Effective content and sketch strengths.
     :raises ValueError: A saved checkpoint strength is invalid.
     """
     saved_content = hparams.get("test_cfg_strength")
@@ -68,11 +70,24 @@ def apply_cfg_strength_overrides(
     else:
         raise ValueError("checkpoint test_sketch_cfg_strength must be numeric or null")
 
-    for name, strength in (
-        ("test_cfg_strength", effective_content),
-        ("test_sketch_cfg_strength", effective_sketch),
-    ):
+    effective = CfgStrengths(content=effective_content, sketch=effective_sketch)
+    names_and_strengths = (
+        ("test_cfg_strength", effective.content),
+        ("test_sketch_cfg_strength", effective.sketch),
+    )
+    for name, strength in names_and_strengths:
         if not math.isfinite(strength) or strength < 0.0:
             raise ValueError(f"checkpoint {name} must be finite and nonnegative")
-        hparams[name] = strength
-    return CfgStrengths(content=effective_content, sketch=effective_sketch)
+
+    original = {name: (name in hparams, hparams.get(name)) for name, _ in names_and_strengths}
+    try:
+        for name, strength in names_and_strengths:
+            hparams[name] = strength
+        yield effective
+    finally:
+        for name, _ in names_and_strengths:
+            was_present, value = original[name]
+            if was_present:
+                hparams[name] = value
+            else:
+                hparams.pop(name, None)

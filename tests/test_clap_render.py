@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -18,12 +17,6 @@ from pedalboard.io import AudioFile
 
 from synth_setter.cli import clap_render
 from synth_setter.cli._cfg_strength import CfgStrengths
-from synth_setter.cli.clap import (
-    PreparedAudioInputs,
-    RenderedPatch,
-    write_output_artifacts,
-    write_run_manifest,
-)
 from synth_setter.cli.clap_render import (
     compare_embeddings,
     main,
@@ -31,416 +24,9 @@ from synth_setter.cli.clap_render import (
     summarize_cosine_distances,
     write_summary_csv,
 )
-from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
-_RETAINED_FILENAMES = ("guide.wav", "manifest.json", "params.csv", "pred.wav", "ref.wav")
-
-
-def _write_retained_run(output_dir: Path, destination: str, run_id: str | None = None) -> None:
-    """Write a retained artifact fixture for upload-validation tests.
-
-    :param output_dir: Retained run directory to populate.
-    :param destination: Manifest R2 destination.
-    :param run_id: Manifest run identifier, defaulting to the directory name.
-    """
-    output_dir.mkdir(parents=True)
-    for filename in _RETAINED_FILENAMES:
-        (output_dir / filename).write_bytes(f"retained {filename}".encode())
-    manifest = {"run_id": run_id or output_dir.name, "r2_uri": destination}
-    (output_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-
-
-def test_cli_retry_upload_real_rclone_publishes_consumable_producer_artifacts(
-    fake_r2_remote: Path,
-    tmp_path: Path,
-) -> None:
-    """Recovery preserves artifacts from production writers through their readers.
-
-    :param fake_r2_remote: Local filesystem backing the real rclone remote.
-    :param tmp_path: Holds the retained producer output.
-    """
-    output_dir = tmp_path / "run-1"
-    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
-    prepared = PreparedAudioInputs(
-        guide_audio=torch.full((2, 176400), 0.125),
-        ref_audio=torch.full((2, 176400), -0.25),
-        ref_mel=torch.zeros(2, 128, 401),
-        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
-    )
-    write_output_artifacts(
-        output_dir,
-        prepared,
-        RenderedPatch(
-            audio=np.full((2, 176400), 0.0625, dtype=np.float32),
-            synth_params={"filter_1_cutoff": 0.5},
-            note_params={"pitch": 60, "note_start_and_end": (3.95, 0.05)},
-            effective_note_window=(0.05, 3.95),
-        ),
-    )
-    write_run_manifest(output_dir, destination, CfgStrengths(content=2.0, sketch=3.0))
-
-    executable = Path(sys.executable).with_name("synth-setter-clap")
-    result = subprocess.run(  # noqa: S603 — fixed installed entrypoint and fixture path.
-        [str(executable), "--retry-upload", str(output_dir)],
-        cwd=fake_r2_remote,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == destination
-    downloaded = tmp_path / "downloaded"
-    r2_io.download_dir_no_overwrite(destination, downloaded)
-    assert sorted(path.name for path in downloaded.iterdir()) == sorted(_RETAINED_FILENAMES)
-    with AudioFile(str(downloaded / "pred.wav"), "r") as audio_file:
-        audio = audio_file.read(audio_file.frames)
-    assert audio.shape == (2, 176400)
-    assert np.isfinite(audio).all()
-    assert np.abs(audio).max() > 0.05
-    with (downloaded / "params.csv").open(newline="", encoding="utf-8") as stream:
-        rows = {row[""]: row for row in csv.DictReader(stream)}
-    assert rows["note_start_and_end"]["pred_effective"] == "(0.05, 3.95)"
-    manifest = json.loads((downloaded / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_id"] == "run-1"
-    assert manifest["r2_uri"] == destination
-    assert manifest["content_cfg_strength"] == 2.0
-    assert manifest["sketch_cfg_strength"] == 3.0
-
-
-def test_cli_retry_upload_non_r2_manifest_rejected_before_upload(
-    fake_r2_remote: Path,
-) -> None:
-    """A retained manifest cannot redirect recovery to a non-R2 destination.
-
-    :param fake_r2_remote: Local remote asserted to remain empty.
-    """
-    output_dir = fake_r2_remote / "retained" / "run-1"
-    _write_retained_run(output_dir, "file:///tmp/not-r2")
-
-    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
-
-    assert result.exit_code != 0
-    assert "manifest r2_uri must use r2://" in result.output
-    assert not (fake_r2_remote / "intermediate-data").exists()
-
-
-def test_cli_retry_upload_mismatched_run_id_rejected_before_upload(
-    fake_r2_remote: Path,
-) -> None:
-    """A manifest from another retained run cannot choose the upload destination.
-
-    :param fake_r2_remote: Local remote asserted to remain empty.
-    """
-    output_dir = fake_r2_remote / "retained" / "run-1"
-    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
-    _write_retained_run(output_dir, destination, run_id="run-2")
-
-    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
-
-    assert result.exit_code != 0
-    assert "manifest run_id must match output directory name" in result.output
-    assert not (fake_r2_remote / "intermediate-data").exists()
-
-
-def test_cli_retry_upload_missing_expected_file_rejected_before_upload(
-    fake_r2_remote: Path,
-) -> None:
-    """Recovery requires the complete retained artifact set before upload.
-
-    :param fake_r2_remote: Local remote asserted to remain empty.
-    """
-    output_dir = fake_r2_remote / "retained" / "run-1"
-    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
-    _write_retained_run(output_dir, destination)
-    (output_dir / "params.csv").unlink()
-
-    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
-
-    assert result.exit_code != 0
-    assert "missing retained artifact: params.csv" in result.output
-    assert not (fake_r2_remote / "intermediate-data").exists()
-
-
-def test_cli_retry_upload_unexpected_file_rejected_before_upload(
-    fake_r2_remote: Path,
-) -> None:
-    """Recovery never uploads files outside the retained artifact contract.
-
-    :param fake_r2_remote: Local remote asserted to remain empty.
-    """
-    output_dir = fake_r2_remote / "retained" / "run-1"
-    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
-    _write_retained_run(output_dir, destination)
-    (output_dir / ".env").write_text("SECRET=do-not-upload", encoding="utf-8")
-
-    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
-
-    assert result.exit_code != 0
-    assert "unexpected retained artifact: .env" in result.output
-    assert not (fake_r2_remote / "intermediate-data").exists()
-
-
-def test_cli_retry_upload_invalid_manifest_encoding_rejected_before_upload(
-    fake_r2_remote: Path,
-) -> None:
-    """A corrupted manifest reports a concise CLI error before upload.
-
-    :param fake_r2_remote: Local remote asserted to remain empty.
-    """
-    output_dir = fake_r2_remote / "retained" / "run-1"
-    destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
-    _write_retained_run(output_dir, destination)
-    (output_dir / "manifest.json").write_bytes(b"\xff")
-
-    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
-
-    assert result.exit_code != 0
-    assert "could not read manifest.json" in result.output
-    assert not (fake_r2_remote / "intermediate-data").exists()
-
-
-def test_cli_retry_upload_text_prompt_rejected_before_upload(tmp_path: Path) -> None:
-    """Upload recovery cannot be combined with a text inference request.
-
-    :param tmp_path: Holds a valid retained run.
-    """
-    output_dir = tmp_path / "run-1"
-    _write_retained_run(output_dir, "r2://bucket/run-1")
-
-    result = CliRunner().invoke(main, ["prompt", "--retry-upload", str(output_dir)])
-
-    assert result.exit_code != 0
-    assert "TEXT_PROMPT cannot be combined with --retry-upload" in result.output
-
-
-def test_cli_retry_upload_audio_options_rejected_before_upload(tmp_path: Path) -> None:
-    """Upload recovery cannot be combined with guide/reference inference inputs.
-
-    :param tmp_path: Holds retained and audio path fixtures.
-    """
-    output_dir = tmp_path / "run-1"
-    _write_retained_run(output_dir, "r2://bucket/run-1")
-    guide = tmp_path / "guide-input.wav"
-    reference = tmp_path / "ref-input.wav"
-    guide.write_bytes(b"path fixture")
-    reference.write_bytes(b"path fixture")
-
-    result = CliRunner().invoke(
-        main,
-        [
-            "--retry-upload",
-            str(output_dir),
-            "--guide_audio",
-            str(guide),
-            "--ref_audio",
-            str(reference),
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert "--guide_audio cannot be combined with --retry-upload" in result.output
-
-
-def test_cli_retry_upload_cfg_option_rejected_before_upload(tmp_path: Path) -> None:
-    """Upload recovery cannot be combined with guidance overrides.
-
-    :param tmp_path: Holds a valid retained run.
-    """
-    output_dir = tmp_path / "run-1"
-    _write_retained_run(output_dir, "r2://bucket/run-1")
-
-    result = CliRunner().invoke(
-        main,
-        ["--retry-upload", str(output_dir), "--sketch-cfg-strength", "0"],
-    )
-
-    assert result.exit_code != 0
-    assert "--sketch-cfg-strength cannot be combined with --retry-upload" in result.output
-
-
-def test_cli_retry_upload_text_only_option_rejected_before_upload(tmp_path: Path) -> None:
-    """Upload recovery cannot be combined with text-render configuration.
-
-    :param tmp_path: Holds a valid retained run.
-    """
-    output_dir = tmp_path / "run-1"
-    _write_retained_run(output_dir, "r2://bucket/run-1")
-
-    result = CliRunner().invoke(
-        main,
-        ["--retry-upload", str(output_dir), "--checkpoint", "model.ckpt"],
-    )
-
-    assert result.exit_code != 0
-    assert "--checkpoint cannot be combined with --retry-upload" in result.output
-
-
-def test_cli_retry_upload_upload_flag_rejected_before_upload(tmp_path: Path) -> None:
-    """Upload recovery cannot be combined with text-mode upload controls.
-
-    :param tmp_path: Holds a valid retained run.
-    """
-    output_dir = tmp_path / "run-1"
-    _write_retained_run(output_dir, "r2://bucket/run-1")
-
-    result = CliRunner().invoke(main, ["--retry-upload", str(output_dir), "--no-upload"])
-
-    assert result.exit_code != 0
-    assert "--upload/--no-upload cannot be combined with --retry-upload" in result.output
-
-
-def test_cli_one_audio_conditioning_input_exits_before_inference(tmp_path: Path) -> None:
-    """Guide and reference audio must be supplied as one mode.
-
-    :param tmp_path: Holds the argument-validation fixture.
-    """
-    guide = tmp_path / "guide.wav"
-    guide.write_bytes(b"not decoded before argument validation")
-
-    result = CliRunner().invoke(main, ["--guide_audio", str(guide)])
-
-    assert result.exit_code != 0
-    assert "must be provided together" in result.output
-
-
-@pytest.mark.parametrize(
-    ("option", "value"),
-    [
-        ("--checkpoint", "checkpoint.ckpt"),
-        ("--clap-checkpoint", "clap.pt"),
-        ("--output", "output.wav"),
-        ("--upload-uri", "r2://intermediate-data/test.wav"),
-        ("--device", "cpu"),
-        ("--seed", "4"),
-    ],
-)
-def test_cli_audio_mode_text_option_exits_before_inference(
-    option: str, value: str, tmp_path: Path
-) -> None:
-    """Text-render options cannot be accepted and then ignored in audio mode.
-
-    :param option: Text-render option rejected by audio mode.
-    :param value: Value belonging to the rejected option.
-    :param tmp_path: Holds the argument-validation fixtures.
-    """
-    guide = tmp_path / "guide.wav"
-    reference = tmp_path / "reference.wav"
-    guide.write_bytes(b"not decoded before argument validation")
-    reference.write_bytes(b"not decoded before argument validation")
-    result = CliRunner().invoke(
-        main,
-        ["--guide_audio", str(guide), "--ref_audio", str(reference), option, value],
-    )
-
-    assert result.exit_code != 0
-    assert f"{option} is not supported with guide/reference audio" in result.output
-
-
-def test_cli_audio_mode_no_upload_exits_before_inference(tmp_path: Path) -> None:
-    """Audio mode rejects the text renderer's no-upload behavior.
-
-    :param tmp_path: Holds the argument-validation fixtures.
-    """
-    guide = tmp_path / "guide.wav"
-    reference = tmp_path / "reference.wav"
-    guide.write_bytes(b"not decoded before argument validation")
-    reference.write_bytes(b"not decoded before argument validation")
-
-    result = CliRunner().invoke(
-        main,
-        ["--guide_audio", str(guide), "--ref_audio", str(reference), "--no-upload"],
-    )
-
-    assert result.exit_code != 0
-    assert "--no-upload is not supported with guide/reference audio" in result.output
-
-
-def test_cli_audio_mode_dispatches_cfg_strengths_to_sketch_renderer(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The installed public command routes both audio inputs to sketch rendering.
-
-    :param monkeypatch: Replaces the expensive request after Click routing.
-    :param tmp_path: Holds argument-validation fixtures.
-    """
-    guide = tmp_path / "guide.wav"
-    reference = tmp_path / "reference.wav"
-    guide.write_bytes(b"validated path")
-    reference.write_bytes(b"validated path")
-    destination = "r2://intermediate-data/eval/synth-setter-clap/test-run"
-    received: list[CfgStrengths[float | None]] = []
-
-    def capture_request(
-        _guide: Path,
-        _reference: Path,
-        strengths: CfgStrengths[float | None],
-    ) -> tuple[Path, str]:
-        received.append(strengths)
-        return tmp_path / "output", destination
-
-    monkeypatch.setenv("SYNTH_SETTER_CLAP_HEADLESS", "1")
-    monkeypatch.setattr("synth_setter.cli.clap._run_request", capture_request)
-
-    result = CliRunner().invoke(
-        main,
-        [
-            "--guide_audio",
-            str(guide),
-            "--ref_audio",
-            str(reference),
-            "--content-cfg-strength",
-            "2",
-            "--sketch-cfg-strength",
-            "3",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert result.output.strip() == destination
-    assert received == [CfgStrengths(content=2.0, sketch=3.0)]
-
-
-def test_cli_text_mode_sketch_cfg_strength_rejected_before_inference() -> None:
-    """Text conditioning cannot accept a sketch-only guidance override."""
-    result = CliRunner().invoke(main, ["soft bell", "--sketch-cfg-strength", "2"])
-
-    assert result.exit_code != 0
-    assert "--sketch-cfg-strength is only supported with guide/reference audio" in result.output
-
-
-@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
-def test_cli_text_content_cfg_strength_invalid_value_rejected(value: str) -> None:
-    """Text guidance rejects negative and non-finite values.
-
-    :param value: Invalid CLI value.
-    """
-    result = CliRunner().invoke(main, ["soft bell", "--content-cfg-strength", value])
-
-    assert result.exit_code != 0
-    assert "finite and greater than or equal to zero" in result.output
-
-
-def test_cli_text_and_audio_modes_together_exit_before_inference(tmp_path: Path) -> None:
-    """Text and audio conditioning modes are mutually exclusive.
-
-    :param tmp_path: Holds the argument-validation fixtures.
-    """
-    guide = tmp_path / "guide.wav"
-    reference = tmp_path / "reference.wav"
-    guide.write_bytes(b"not decoded before argument validation")
-    reference.write_bytes(b"not decoded before argument validation")
-
-    result = CliRunner().invoke(
-        main,
-        ["prompt", "--guide_audio", str(guide), "--ref_audio", str(reference)],
-    )
-
-    assert result.exit_code != 0
-    assert "cannot be combined" in result.output
 
 
 def test_cli_whitespace_prompt_exits_before_creating_output() -> None:
@@ -598,7 +184,7 @@ def test_predict_patch_omitted_content_strength_preserves_checkpoint_default(
         lambda *_args, **_kwargs: model,
     )
 
-    _, effective_strengths = clap_render._predict_patch(
+    prediction, effective_strengths = clap_render._predict_patch(
         torch.zeros(1, 512),
         tmp_path / "model.ckpt",
         clap_render._load_settings().render,
@@ -607,9 +193,11 @@ def test_predict_patch_omitted_content_strength_preserves_checkpoint_default(
         CfgStrengths(content=None, sketch=None),
     )
 
+    assert prediction.dtype is torch.float32
+    assert prediction.device.type == "cpu"
     assert effective_strengths == CfgStrengths(content=5.5, sketch=5.5)
     assert model.hparams["test_cfg_strength"] == 5.5
-    assert model.hparams["test_sketch_cfg_strength"] == 5.5
+    assert model.hparams["test_sketch_cfg_strength"] is None
 
 
 def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorted(
@@ -658,17 +246,17 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
     assert output.is_file()
 
 
-def test_predict_patch_zero_content_cfg_strength_overrides_checkpoint(
+def test_predict_patch_explicit_zero_then_omitted_uses_checkpoint_strengths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Explicit zero reaches text inference without checkpoint fallback.
+    """A reusable text model keeps checkpoint defaults across requests.
 
     :param tmp_path: Holds the checkpoint path fixture.
     :param monkeypatch: Replaces checkpoint loading and model validation.
     """
     model = Mock()
-    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
+    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": 6.0}
     model.to.return_value = model
     model.eval.return_value = model
     model.predict_step.return_value = (torch.zeros(1, 92), None)
@@ -679,17 +267,73 @@ def test_predict_patch_zero_content_cfg_strength_overrides_checkpoint(
     )
     monkeypatch.setattr(clap_render, "_validate_inverse_model", lambda *_: None)
 
-    _, effective_strengths = clap_render._predict_patch(
+    _, explicit_strengths = clap_render._predict_patch(
         torch.zeros(1, 512),
         tmp_path / "model.ckpt",
         clap_render._load_settings().render,
         torch.device("cpu"),
         0,
-        CfgStrengths(content=0.0, sketch=None),
+        CfgStrengths(content=0.0, sketch=0.0),
+    )
+    _, omitted_strengths = clap_render._predict_patch(
+        torch.zeros(1, 512),
+        tmp_path / "model.ckpt",
+        clap_render._load_settings().render,
+        torch.device("cpu"),
+        0,
+        CfgStrengths(content=None, sketch=None),
     )
 
-    assert effective_strengths == CfgStrengths(content=0.0, sketch=0.0)
-    assert model.hparams["test_cfg_strength"] == 0.0
+    assert explicit_strengths == CfgStrengths(content=0.0, sketch=0.0)
+    assert omitted_strengths == CfgStrengths(content=4.0, sketch=6.0)
+    assert model.hparams == {
+        "test_cfg_strength": 4.0,
+        "test_sketch_cfg_strength": 6.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("prediction", "message"),
+    [
+        (torch.zeros(1, 92, dtype=torch.float64), "dtype must be torch.float32"),
+        (torch.zeros(1, 91), r"shape must be \(1, 92\)"),
+        (torch.full((1, 92), float("nan")), "must contain only finite values"),
+    ],
+)
+def test_predict_patch_invalid_prediction_rejected(
+    prediction: torch.Tensor,
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Text prediction rejects one incompatible output contract.
+
+    :param prediction: Invalid model output under test.
+    :param message: Expected contract error.
+    :param tmp_path: Holds the checkpoint path fixture.
+    :param monkeypatch: Replaces checkpoint loading and model validation.
+    """
+    model = Mock()
+    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
+    model.to.return_value = model
+    model.eval.return_value = model
+    model.predict_step.return_value = (prediction, None)
+    monkeypatch.setattr(
+        clap_render.VSTFlowMatchingModule,
+        "load_from_checkpoint",
+        lambda *_args, **_kwargs: model,
+    )
+    monkeypatch.setattr(clap_render, "_validate_inverse_model", lambda *_: None)
+
+    with pytest.raises(ValueError, match=message):
+        clap_render._predict_patch(
+            torch.zeros(1, 512),
+            tmp_path / "model.ckpt",
+            clap_render._load_settings().render,
+            torch.device("cpu"),
+            0,
+            CfgStrengths(content=None, sketch=None),
+        )
 
 
 def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
@@ -758,8 +402,8 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     assert row["csv_r2_uri"] == ""
 
 
-def test_console_script_is_installed_and_callable() -> None:
-    """The documented executable is installed by the package entrypoint."""
+def test_installed_clap_command_exposes_text_only_help() -> None:
+    """The CLAP command resolves to the text-only entrypoint."""
     executable = Path(sys.executable).with_name("synth-setter-clap")
 
     result = subprocess.run(  # noqa: S603 — fixed package entrypoint.
@@ -773,8 +417,22 @@ def test_console_script_is_installed_and_callable() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "TEXT_PROMPT" in result.stdout
-    assert "--retry-upload DIRECTORY" in result.stdout
+    assert "--content-cfg-strength FLOAT" in result.stdout
+    assert "--guide-audio" not in result.stdout
+    assert "--guide_audio" not in result.stdout
+    assert "--reference-audio" not in result.stdout
+    assert "--ref_audio" not in result.stdout
+    assert "--sketch-cfg-strength" not in result.stdout
+    assert "--retry-upload" not in result.stdout
     assert 'synth-setter-clap "frog croak"' in result.stdout
+
+
+def test_clap_command_sketch_flag_fails_as_unknown_option() -> None:
+    """The text command rejects sketch-only options during Click parsing."""
+    result = CliRunner().invoke(main, ["soft bell", "--sketch-cfg-strength", "2"])
+
+    assert result.exit_code != 0
+    assert "No such option: --sketch-cfg-strength" in result.output
 
 
 @pytest.mark.slow
