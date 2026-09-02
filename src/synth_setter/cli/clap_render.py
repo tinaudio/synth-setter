@@ -598,6 +598,7 @@ def _resolve_output(output: Path | None, settings: _ClapRenderSettings, run_id: 
 
 def _dispatch_audio_mode(
     audio_paths: tuple[Path | None, Path | None],
+    *,
     text_prompt: str | None,
     unsupported_options: tuple[tuple[str, object], ...],
     cfg_strengths: CfgStrengths[float | None],
@@ -872,9 +873,9 @@ def main(
     )
     if _dispatch_audio_mode(
         (guide_audio, ref_audio),
-        text_prompt,
-        unsupported_audio_options,
-        requested_strengths,
+        text_prompt=text_prompt,
+        unsupported_options=unsupported_audio_options,
+        cfg_strengths=requested_strengths,
     ):
         return
 

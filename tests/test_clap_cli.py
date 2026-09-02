@@ -16,6 +16,7 @@ from pedalboard.io import AudioFile
 
 from synth_setter.cli._cfg_strength import CfgStrengths
 from synth_setter.cli.clap import (
+    _EXPECTED_AUDIO_SHAPE,
     PreparedAudioInputs,
     RenderedPatch,
     _fit_audio_to_model_grid,
@@ -164,7 +165,7 @@ def test_load_model_audio_short_and_long_inputs_fit_four_second_grid(
 
     prepared = _load_model_audio(source_path)
 
-    assert prepared.shape == (2, 176400)
+    assert prepared.shape == _EXPECTED_AUDIO_SHAPE
     assert torch.all(prepared[:, 0] > 0.2)
     assert prepared[0, -1].item() == pytest.approx(expected_last_sample, abs=1e-5)
 
@@ -175,7 +176,7 @@ def test_fit_audio_to_model_grid_invalid_sample_raises(invalid_sample: float) ->
 
     :param invalid_sample: Value outside the model waveform contract.
     """
-    audio = np.zeros((1, 176400), dtype=np.float32)
+    audio = np.zeros((1, _EXPECTED_AUDIO_SHAPE[1]), dtype=np.float32)
     audio[0, 0] = invalid_sample
 
     with pytest.raises(ValueError, match=r"finite.*\[-1, 1\]"):
@@ -209,8 +210,8 @@ def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_pat
     prepared = prepare_audio_inputs(guide_path, ref_path, stats_path)
     raw_ref_mel = torch.from_numpy(make_spectrogram(prepared.ref_audio.numpy(), 44100.0))
 
-    assert prepared.guide_audio.shape == (2, 176400)
-    assert prepared.ref_audio.shape == (2, 176400)
+    assert prepared.guide_audio.shape == _EXPECTED_AUDIO_SHAPE
+    assert prepared.ref_audio.shape == _EXPECTED_AUDIO_SHAPE
     assert prepared.ref_mel.shape == (2, 128, 401)
     assert prepared.sketch_controls.shape == (NUM_SKETCH_CONTROLS, 401)
     assert torch.any(prepared.guide_audio[:, 1:2205] != 0)
@@ -233,18 +234,18 @@ def test_write_output_artifacts_wrong_render_shape_raises(tmp_path: Path) -> Non
     :param tmp_path: Holds the rejected output directory.
     """
     prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(2, 176400),
-        ref_audio=torch.zeros(2, 176400),
+        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
+        ref_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
 
-    with pytest.raises(ValueError, match=r"shape.*\(2, 176400\)"):
+    with pytest.raises(ValueError, match="output audio shape"):
         write_output_artifacts(
             tmp_path / "output",
             prepared,
             RenderedPatch(
-                audio=np.zeros((2, 88200), dtype=np.float32),
+                audio=np.zeros((2, _EXPECTED_AUDIO_SHAPE[1] // 2), dtype=np.float32),
                 synth_params={"filter_1_cutoff": 0.5},
                 note_params={"pitch": 60, "note_start_and_end": (0.05, 1.95)},
                 effective_note_window=(0.05, 1.95),
@@ -261,11 +262,11 @@ def test_write_output_artifacts_invalid_rendered_audio_raises(
     :param invalid_sample: Value outside the publishable waveform contract.
     :param tmp_path: Holds the rejected output directory.
     """
-    rendered = np.zeros((2, 176400), dtype=np.float32)
+    rendered = np.zeros(_EXPECTED_AUDIO_SHAPE, dtype=np.float32)
     rendered[0, 0] = invalid_sample
     prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(2, 176400),
-        ref_audio=torch.zeros(2, 176400),
+        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
+        ref_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
@@ -293,12 +294,12 @@ def test_output_artifacts_round_trip_through_real_rclone(
     """
     output_dir = tmp_path / "local-output"
     prepared = PreparedAudioInputs(
-        guide_audio=torch.full((2, 176400), 0.125),
-        ref_audio=torch.full((2, 176400), -0.25),
+        guide_audio=torch.full(_EXPECTED_AUDIO_SHAPE, 0.125),
+        ref_audio=torch.full(_EXPECTED_AUDIO_SHAPE, -0.25),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
-    pred_audio = np.full((2, 176400), 0.0625, dtype=np.float32)
+    pred_audio = np.full(_EXPECTED_AUDIO_SHAPE, 0.0625, dtype=np.float32)
 
     write_output_artifacts(
         output_dir,
@@ -331,7 +332,7 @@ def test_output_artifacts_round_trip_through_real_rclone(
     ]
     with AudioFile(str(remote / "pred.wav"), "r") as audio_file:
         round_tripped = audio_file.read(audio_file.frames)
-    assert round_tripped.shape == (2, 176400)
+    assert round_tripped.shape == _EXPECTED_AUDIO_SHAPE
     assert np.isfinite(round_tripped).all()
     assert np.abs(round_tripped).max() > 0.05
     with (remote / "params.csv").open(newline="", encoding="utf-8") as stream:
@@ -434,8 +435,8 @@ def test_validate_stats_nonpositive_std_raises(tmp_path: Path) -> None:
 def test_predict_patch_finite_prediction_decodes_real_param_spec() -> None:
     """A finite model-space prediction reaches the real Surge decoder."""
     prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(2, 176400),
-        ref_audio=torch.zeros(2, 176400),
+        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
+        ref_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
@@ -459,8 +460,8 @@ def test_predict_patch_finite_prediction_decodes_real_param_spec() -> None:
 def test_predict_patch_zero_cfg_strengths_override_checkpoint() -> None:
     """Explicit zero disables both guidance branches without falling back."""
     prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(2, 176400),
-        ref_audio=torch.zeros(2, 176400),
+        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
+        ref_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
@@ -483,8 +484,8 @@ def test_predict_patch_zero_cfg_strengths_override_checkpoint() -> None:
 def test_predict_patch_saved_cfg_strengths_preserved() -> None:
     """Omitted overrides preserve distinct checkpoint guidance strengths."""
     prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(2, 176400),
-        ref_audio=torch.zeros(2, 176400),
+        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
+        ref_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
@@ -513,8 +514,8 @@ def test_predict_patch_legacy_sketch_strength_uses_effective_content(
     :param legacy_sketch_strength: Legacy missing or null checkpoint representation.
     """
     prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(2, 176400),
-        ref_audio=torch.zeros(2, 176400),
+        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
+        ref_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
@@ -539,8 +540,8 @@ def test_predict_patch_legacy_sketch_strength_uses_effective_content(
 def test_predict_patch_wrong_shape_raises() -> None:
     """A checkpoint prediction with the wrong output width fails before decoding."""
     prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(2, 176400),
-        ref_audio=torch.zeros(2, 176400),
+        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
+        ref_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
@@ -566,7 +567,7 @@ def test_render_patch_descending_note_interval_reaches_renderer_ordered(
     monkeypatch.setattr("synth_setter.cli.clap.default_plugin_path", lambda: plugin_path)
     monkeypatch.setattr("synth_setter.cli.clap.extract_renderer_version", lambda _: synth_version)
     renderer = Mock()
-    renderer.render.return_value = np.zeros((2, 176400), dtype=np.float32)
+    renderer.render.return_value = np.zeros(_EXPECTED_AUDIO_SHAPE, dtype=np.float32)
     monkeypatch.setattr("synth_setter.cli.clap.make_audio_renderer", lambda _: renderer)
 
     patch = _render_patch(
@@ -574,7 +575,7 @@ def test_render_patch_descending_note_interval_reaches_renderer_ordered(
         {"pitch": 60, "note_start_and_end": (3.2, 0.8)},
     )
 
-    assert patch.audio.shape == (2, 176400)
+    assert patch.audio.shape == _EXPECTED_AUDIO_SHAPE
     assert patch.note_params["note_start_and_end"] == (3.2, 0.8)
     assert patch.effective_note_window == (0.8, 3.2)
     assert renderer.render.call_args.args[3] == (0.8, 3.2)
@@ -593,7 +594,7 @@ def test_render_patch_note_interval_outside_signal_clipped(
     monkeypatch.setattr("synth_setter.cli.clap.default_plugin_path", lambda: plugin_path)
     monkeypatch.setattr("synth_setter.cli.clap.extract_renderer_version", lambda _: synth_version)
     renderer = Mock()
-    renderer.render.return_value = np.zeros((2, 176400), dtype=np.float32)
+    renderer.render.return_value = np.zeros(_EXPECTED_AUDIO_SHAPE, dtype=np.float32)
     monkeypatch.setattr("synth_setter.cli.clap.make_audio_renderer", lambda _: renderer)
 
     patch = _render_patch(
@@ -619,7 +620,7 @@ def test_render_patch_degenerate_note_interval_expands_one_sample(
     monkeypatch.setattr("synth_setter.cli.clap.default_plugin_path", lambda: plugin_path)
     monkeypatch.setattr("synth_setter.cli.clap.extract_renderer_version", lambda _: synth_version)
     renderer = Mock()
-    renderer.render.return_value = np.zeros((2, 176400), dtype=np.float32)
+    renderer.render.return_value = np.zeros(_EXPECTED_AUDIO_SHAPE, dtype=np.float32)
     monkeypatch.setattr("synth_setter.cli.clap.make_audio_renderer", lambda _: renderer)
 
     patch = _render_patch(
@@ -742,7 +743,7 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     monkeypatch.setattr(
         "synth_setter.cli.clap._render_patch",
         lambda synth_params, note_params: RenderedPatch(
-            audio=np.full((2, 176400), 0.0625, dtype=np.float32),
+            audio=np.full(_EXPECTED_AUDIO_SHAPE, 0.0625, dtype=np.float32),
             synth_params=synth_params,
             note_params=note_params,
             effective_note_window=note_params["note_start_and_end"],
@@ -761,7 +762,7 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     remote = fake_r2_remote / destination.removeprefix("r2://")
     with AudioFile(str(remote / "pred.wav"), "r") as audio_file:
         rendered = audio_file.read(audio_file.frames)
-    assert rendered.shape == (2, 176400)
+    assert rendered.shape == _EXPECTED_AUDIO_SHAPE
     assert np.isfinite(rendered).all()
     assert np.abs(rendered).max() > 0.05
     manifest = json.loads((remote / "manifest.json").read_text())

@@ -27,7 +27,12 @@ from synth_setter.cli._cfg_strength import (
     validate_cfg_strength,
 )
 from synth_setter.data.vst.core import extract_renderer_version
-from synth_setter.data.vst.param_spec import NoteParams, decode_model_output
+from synth_setter.data.vst.param_spec import (
+    NoteParams,
+    decode_model_output,
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, param_specs
 from synth_setter.data.vst.shapes import make_spectrogram
 from synth_setter.data.vst_datamodule import load_mel_statistics
@@ -516,9 +521,11 @@ def _predict_patch(
             f"model prediction must be finite with shape {expected_shape}, "
             f"got {tuple(prediction.shape)}"
         )
-    synth_params, note_params = decode_model_output(
+    synth_values, note_values = decode_model_output(
         prediction[0].detach().cpu().float().numpy(), param_specs[_SURGE_PARAM_SPEC_NAME]
     )
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
     return synth_params, note_params, effective_strengths
 
 
