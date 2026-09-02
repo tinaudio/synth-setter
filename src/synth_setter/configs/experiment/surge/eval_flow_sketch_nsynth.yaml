@@ -15,6 +15,7 @@ run_name: cfg-c8-s8
 mode: predict
 seed: 3407
 
+consumed_train_artifact_alias: v0
 consumed_train_config_id: flow_sketch_prelim
 ckpt_path: r2://intermediate-data/checkpoints/flow_sketch_prelim/flow_sketch_prelim-20260902T044048985Z-eed5063da1164b1e92ac62a55ffc17b3/last.ckpt
 ckpt_sha256: d20cd4c3c86ae062a206f05596072b230c8aa86334920c775c2b4fec04aefc9e

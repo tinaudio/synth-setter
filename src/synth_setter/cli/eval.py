@@ -5,6 +5,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
@@ -312,6 +313,9 @@ def _localize_eval_checkpoint(
     with lock_path.open("a+b") as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         try:
+            if cached.is_file():
+                _verify_checkpoint_sha256(cached, expected_sha256)
+                return str(cached)
             try:
                 r2_io.ensure_r2_env_loaded()
                 remote_size = r2_io.object_size(r2_uri)
@@ -324,16 +328,23 @@ def _localize_eval_checkpoint(
                 raise FileNotFoundError(f"remote eval checkpoint does not exist: {checkpoint}")
             if remote_size == 0:
                 raise RuntimeError(f"remote eval checkpoint is empty: {checkpoint}")
+            with tempfile.NamedTemporaryFile(
+                prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+            ) as temporary:
+                staging = Path(temporary.name)
             try:
-                r2_io.download_to_path(r2_uri, cached)
+                r2_io.download_to_path(r2_uri, staging)
+                if staging.stat().st_size != remote_size:
+                    raise RuntimeError(f"downloaded eval checkpoint is incomplete: {checkpoint}")
+                _verify_checkpoint_sha256(staging, expected_sha256)
+                staging.replace(cached)
             except (FileNotFoundError, subprocess.CalledProcessError) as exc:
                 raise RuntimeError(
                     "rclone R2 credentials are unavailable or cannot download remote "
                     f"eval checkpoint: {checkpoint}"
                 ) from exc
-            if not cached.is_file() or cached.stat().st_size != remote_size:
-                raise RuntimeError(f"downloaded eval checkpoint is incomplete: {checkpoint}")
-            _verify_checkpoint_sha256(cached, expected_sha256)
+            finally:
+                staging.unlink(missing_ok=True)
         finally:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     return str(cached)
@@ -355,7 +366,8 @@ def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], lis
     refs: list[tuple[str, str]] = []
     train_id = cfg.get("consumed_train_config_id")
     if train_id:
-        refs.append((f"model-{train_id}", "latest"))
+        train_alias = cfg.get("consumed_train_artifact_alias", "latest")
+        refs.append((f"model-{train_id}", train_alias))
     dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
     download_uri = OmegaConf.select(cfg, "datamodule.download_dataset_root_uri")
     ref = dataset_artifact_ref(dataset_root, download_uri)

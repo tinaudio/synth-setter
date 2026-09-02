@@ -46,5 +46,7 @@ ckpt_path: ???
 ckpt_sha256: null
 
 # W&B model lineage (storage-provenance-spec §5): the train config ID this eval consumes.
-# Dataset lineage is discovered from ``datamodule.dataset_root/input_spec.json``.
+# Pin an immutable artifact version when the checkpoint itself is immutable.
+consumed_train_artifact_alias: latest
 consumed_train_config_id: null
+# Dataset lineage is discovered from ``datamodule.dataset_root/input_spec.json``.

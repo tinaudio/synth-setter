@@ -76,6 +76,33 @@ def test_eval_checkpoint_r2_uri_refreshes_cache_when_remote_checksum_changes(
     assert Path(second).is_relative_to(cache_home / "synth-setter")
 
 
+def test_eval_checkpoint_cached_digest_is_reused_when_remote_is_unavailable(
+    fake_r2_remote: Path,
+    storage_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified content-addressed cache entry survives an R2 outage.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param storage_credentials: Dummy application credentials for the local backend.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
+    """
+    source = fake_r2_remote / "bucket" / "runs" / "model.ckpt"
+    source.parent.mkdir(parents=True)
+    content = b"cached checkpoint"
+    source.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+
+    first = eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt", digest)
+    source.unlink()
+    second = eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt", digest)
+
+    assert first == second
+    assert first is not None
+    assert Path(first).read_bytes() == content
+
+
 def test_eval_checkpoint_remote_uri_without_digest_raises() -> None:
     """Remote checkpoints require immutable content provenance."""
     with pytest.raises(ValueError, match="requires ckpt_sha256"):
@@ -117,6 +144,16 @@ def test_eval_checkpoint_remote_digest_mismatch_raises(
 
     assert expected in str(exc_info.value)
     assert actual in str(exc_info.value)
+    cached = (
+        fake_r2_remote
+        / "cache"
+        / "synth-setter"
+        / "checkpoints"
+        / "evaluation"
+        / expected
+        / "model.ckpt"
+    )
+    assert not cached.exists()
 
 
 def test_eval_checkpoint_s3_uri_downloads_through_r2_remote(

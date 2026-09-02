@@ -116,6 +116,19 @@ def test_consumed_artifact_refs_model_and_dataset_present_returns_model_then_dat
     )
 
 
+def test_consumed_artifact_refs_uses_configured_immutable_model_alias() -> None:
+    """A pinned checkpoint records its matching immutable W&B artifact version."""
+    cfg = OmegaConf.create(
+        {
+            "consumed_train_config_id": "flow-simple",
+            "consumed_train_artifact_alias": "v7",
+            "datamodule": {"dataset_root": None},
+        }
+    )
+
+    assert _consumed_artifact_refs(cfg) == ([("model-flow-simple", "v7")], [])
+
+
 def test_consumed_artifact_refs_missing_dataset_provenance_returns_model_edge_only() -> None:
     """A model ID without a discoverable local dataset keeps its model edge.
 
