@@ -6,6 +6,7 @@ import hashlib
 import math
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -152,6 +153,59 @@ def test_eval_checkpoint_non_string_digest_raises() -> None:
             "r2://bucket/runs/model.ckpt",
             expected_sha256=cast("str", 123),
         )
+
+
+def test_eval_checkpoint_malformed_string_digest_raises() -> None:
+    """Malformed digest text fails before any remote access."""
+    with pytest.raises(ValueError, match="64 hexadecimal characters"):
+        eval_module._localize_eval_checkpoint("r2://bucket/model.ckpt", "not-a-digest")
+
+
+def test_eval_checkpoint_none_without_digest_uses_in_memory_model() -> None:
+    """An explicitly uncheckpointed evaluation keeps Lightning's in-memory model."""
+    assert eval_module._localize_eval_checkpoint(None) is None
+
+
+def test_eval_checkpoint_incomplete_download_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A truncated remote transfer never enters the content-addressed cache.
+
+    :param tmp_path: Isolated checkpoint cache.
+    :param monkeypatch: Stubs the remote transport at the failure boundary.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(eval_module.r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(eval_module.r2_io, "object_size", lambda _uri: 20)
+    monkeypatch.setattr(
+        eval_module.r2_io,
+        "download_to_path",
+        lambda _uri, path: path.write_bytes(b"short"),
+    )
+
+    with pytest.raises(RuntimeError, match="downloaded eval checkpoint is incomplete"):
+        eval_module._localize_eval_checkpoint("r2://bucket/model.ckpt", "0" * 64)
+
+
+def test_eval_checkpoint_transport_failure_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed remote transfer is translated into checkpoint-specific guidance.
+
+    :param tmp_path: Isolated checkpoint cache.
+    :param monkeypatch: Stubs the remote transport at the failure boundary.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(eval_module.r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(eval_module.r2_io, "object_size", lambda _uri: 20)
+
+    def _fail_download(_uri: str, _path: Path) -> None:
+        raise subprocess.CalledProcessError(1, "rclone")
+
+    monkeypatch.setattr(eval_module.r2_io, "download_to_path", _fail_download)
+
+    with pytest.raises(RuntimeError, match="rclone cannot download eval checkpoint"):
+        eval_module._localize_eval_checkpoint("r2://bucket/model.ckpt", "0" * 64)
 
 
 def test_eval_checkpoint_remote_digest_mismatch_raises(

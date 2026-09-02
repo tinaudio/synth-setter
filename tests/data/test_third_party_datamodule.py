@@ -258,10 +258,20 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     )
     normalized = _first_batch(datamodule)["mel"]
     stats_file.write_bytes(b"replacement statistics")
+    reused = _first_batch(
+        _datamodule(
+            tmp_path / "corpus.lance",
+            use_saved_mean_and_variance=True,
+            mel_stats_uri=str(stats_file),
+            mel_stats_sha256=digest,
+            stats_cache_dir=str(tmp_path / "stats-cache"),
+        )
+    )["mel"]
 
     assert datamodule.cached_stats_path() != stats_file
     assert datamodule.cached_stats_path().read_bytes() == expected_bytes
     assert torch.allclose(normalized, (plain + 40.0) / 4.0, atol=1e-5)
+    assert torch.equal(reused, normalized)
 
 
 def test_mel_statistics_digest_mismatch_raises(tmp_path: Path) -> None:
