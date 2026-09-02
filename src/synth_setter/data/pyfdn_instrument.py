@@ -22,7 +22,7 @@ _SAMPLE_RATE = 48_000.0
 _CHANNELS = 1
 _SIGNAL_DURATION_SECONDS = 4.0
 _SIGNAL_LENGTH = 192_000
-_LOSSLESS_WAV_SUBTYPES = frozenset({"PCM_16", "PCM_24", "PCM_32", "FLOAT", "DOUBLE"})
+_LOSSLESS_WAV_FLOAT_SUBTYPES = frozenset({"FLOAT", "DOUBLE"})
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
     ("input_matrix", (PYFDN_ORDER, _CHANNELS), np.dtype(np.float64)),
@@ -66,12 +66,15 @@ def params_to_fdn_build(
     *,
     sample_rate: float,
 ) -> FDNBuild:
-    """Convert one exact native patch into an order-8 mono pyFDN build.
+    """Build an order-8 mono FDN from an exact native parameter mapping.
 
-    :param params: Exact feedback, input, output, direct, and delay arrays.
-    :param sample_rate: Fixed processing rate; only ``48000.0`` is valid.
+    :param params: Mapping containing ``feedback_matrix`` float64 ``(8, 8)``,
+        ``input_matrix`` float64 ``(8, 1)``, ``output_matrix`` float64 ``(1, 8)``,
+        ``direct_matrix`` float64 ``(1, 1)``, and positive ``delays`` int64 ``(8,)``;
+        every array must contain only finite values.
+    :param sample_rate: Processing rate in Hz; exactly ``48000.0``.
     :returns: Native build with every optional post-processing hook disabled.
-    :raises ValueError: Keys, shapes, values, delays, or sample rate violate the fixed contract.
+    :raises ValueError: Keys, shapes, values, delays, or sample rate violate the contract.
     """
     if set(params) != _REQUIRED_KEYS:
         raise ValueError(f"params must contain exactly {sorted(_REQUIRED_KEYS)}")
@@ -84,6 +87,9 @@ def params_to_fdn_build(
     }
     if np.any(arrays["delays"] <= 0):
         raise ValueError("delays must be positive")
+    feedback_gram = arrays["feedback_matrix"].T @ arrays["feedback_matrix"]
+    if not np.allclose(feedback_gram, np.eye(PYFDN_ORDER), rtol=1e-7, atol=1e-7):
+        raise ValueError("feedback_matrix must be orthogonal")
 
     return FDNBuild(
         A=arrays["feedback_matrix"],
@@ -156,7 +162,10 @@ def _load_source(
         raise ValueError("source audio SHA-256 does not match source_audio_sha256")
 
     info = sf.info(io.BytesIO(source_bytes))
-    if info.format != "WAV" or info.subtype not in _LOSSLESS_WAV_SUBTYPES:
+    is_lossless_wav = info.format == "WAV" and (
+        info.subtype.startswith("PCM_") or info.subtype in _LOSSLESS_WAV_FLOAT_SUBTYPES
+    )
+    if not is_lossless_wav:
         raise ValueError(
             "source audio must use a lossless WAV subtype, "
             f"got {info.format}/{info.subtype}"

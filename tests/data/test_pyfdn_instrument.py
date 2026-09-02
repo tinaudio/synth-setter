@@ -53,6 +53,20 @@ def test_params_to_fdn_build_reconstructs_exact_native_build(
     assert build.post_output is None
 
 
+def test_params_to_fdn_build_nonorthogonal_feedback_matrix_raises(
+    fdn_params: ParameterValues,
+) -> None:
+    """An unstable model-decoded feedback matrix fails before native processing.
+
+    :param fdn_params: Valid patch to perturb.
+    """
+    params = dict(fdn_params)
+    params["feedback_matrix"] = np.ones((8, 8), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="orthogonal"):
+        params_to_fdn_build(params, sample_rate=48_000.0)
+
+
 @pytest.mark.parametrize("bad_keys", ["missing", "extra"])
 def test_params_to_fdn_build_non_exact_keys_raise(
     fdn_params: ParameterValues, bad_keys: str
@@ -214,6 +228,25 @@ def test_pyfdn_renderer_rejects_lossy_source_subtype(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="lossless WAV"):
         PyFDNRenderer(path, _sha256(path))
+
+
+def test_pyfdn_renderer_accepts_lossless_pcm_u8_source(
+    tmp_path: Path,
+    fdn_params: ParameterValues,
+) -> None:
+    """A checksum-pinned PCM_U8 WAV renders through the production processor.
+
+    :param tmp_path: Temporary directory owned by pytest.
+    :param fdn_params: Valid native patch.
+    """
+    path = tmp_path / "pcm-u8.wav"
+    sf.write(path, np.zeros(192_000), 48_000, subtype="PCM_U8")
+
+    audio = PyFDNRenderer(path, _sha256(path)).render(fdn_params)
+
+    assert audio.shape == (1, 192_000)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
 
 
 def test_pyfdn_renderer_rejects_source_sample_rate(tmp_path: Path) -> None:

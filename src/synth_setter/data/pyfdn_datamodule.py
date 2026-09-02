@@ -7,14 +7,13 @@ Example:
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from functools import cache
 from pathlib import Path
 from typing import cast
 
 import numpy as np
 import torch
-from jaxtyping import Float32
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
@@ -22,12 +21,8 @@ from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.sample_seed import derive_sample_seed
-from synth_setter.data.vst.param_spec import ParameterValues
 
-type PyFDNRenderCallable = Callable[
-    [ParameterValues], Float32[np.ndarray, "1 192000"]
-]
-type PyFDNItem = tuple[torch.Tensor, torch.Tensor, PyFDNRenderCallable]
+type PyFDNItem = tuple[torch.Tensor, torch.Tensor]
 type PyFDNBatch = dict[str, torch.Tensor]
 
 
@@ -137,7 +132,7 @@ class PyFDNDataset(Dataset[PyFDNItem]):
         """Sample and render one row from its derived deterministic seed.
 
         :param index: Logical row index.
-        :returns: Float32 audio, unit-domain encoded patch, and native render callable.
+        :returns: Float32 audio and its unit-domain encoded patch.
         :raises IndexError: The index is outside this finite split.
         """
         if not 0 <= index < self.num_samples:
@@ -147,11 +142,7 @@ class PyFDNDataset(Dataset[PyFDNItem]):
         encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, note_params)
         renderer = self._process_renderer()
         audio = renderer.render(params)
-        return (
-            torch.from_numpy(audio),
-            torch.from_numpy(encoded).unsqueeze(0),
-            renderer.render,
-        )
+        return torch.from_numpy(audio), torch.from_numpy(encoded).unsqueeze(0)
 
 
 class PyFDNDataModule(LightningDataModule):

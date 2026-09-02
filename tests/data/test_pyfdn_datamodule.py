@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import RandomSampler, SequentialSampler
 
 from synth_setter.data.pyfdn_datamodule import PyFDNDataModule, PyFDNDataset
-from synth_setter.data.pyfdn_instrument import params_to_fdn_build
+from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.sample_seed import derive_sample_seed
 
@@ -24,8 +24,8 @@ def test_pyfdn_dataset_same_index_is_deterministic(
     path, checksum = source_file
     dataset = PyFDNDataset(path, checksum, num_samples=2, seed=123)
 
-    audio_a, params_a, _ = dataset[0]
-    audio_b, params_b, _ = dataset[0]
+    audio_a, params_a = dataset[0]
+    audio_b, params_b = dataset[0]
 
     assert torch.equal(params_a, params_b)
     assert torch.equal(audio_a, audio_b)
@@ -39,7 +39,7 @@ def test_pyfdn_dataset_row_encodes_the_exact_derived_seed_sample(
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    _, encoded, _ = PyFDNDataset(path, checksum, num_samples=3, seed=123)[2]
+    _, encoded = PyFDNDataset(path, checksum, num_samples=3, seed=123)[2]
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(
         np.random.default_rng(derive_sample_seed(123, 2))
     )
@@ -84,19 +84,16 @@ def test_pyfdn_dataset_different_indices_change_sampled_patch(
 def test_pyfdn_dataset_row_has_exact_online_contract(
     source_file: tuple[Path, str],
 ) -> None:
-    """Rows expose channel-first audio, encoded labels, and the native render callable.
+    """Rows expose only the channel-first audio and encoded labels training consumes.
 
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    audio, encoded, render = PyFDNDataset(path, checksum, num_samples=1, seed=123)[0]
-    params, notes = PYFDN_N8_MONO_PARAM_SPEC.decode(encoded[0].numpy())
+    audio, encoded = PyFDNDataset(path, checksum, num_samples=1, seed=123)[0]
 
     assert audio.shape == (1, 192_000)
     assert encoded.shape == (1, 89)
     assert audio.dtype == encoded.dtype == torch.float32
-    assert notes == {}
-    np.testing.assert_allclose(render(params), audio.numpy(), rtol=1e-4, atol=2e-5)
 
 
 def test_pyfdn_dataset_loads_source_once_per_process(
@@ -111,7 +108,7 @@ def test_pyfdn_dataset_loads_source_once_per_process(
     dataset[0]
     path.unlink()
 
-    audio, params, _ = dataset[1]
+    audio, params = dataset[1]
 
     assert audio.shape == (1, 192_000)
     assert params.shape == (1, 89)
@@ -130,7 +127,7 @@ def test_pyfdn_datasets_share_one_source_load_within_a_process(
     first[0]
     path.unlink()
 
-    audio, _, _ = second[0]
+    audio, _ = second[0]
 
     assert audio.shape == (1, 192_000)
 
@@ -322,13 +319,13 @@ def test_pyfdn_production_path_source_to_batch_decode_and_real_rerender(
         num_workers=0,
     )
     datamodule.setup("test")
-    item_audio, item_encoded, render = datamodule.test[0]
+    item_audio, item_encoded = datamodule.test[0]
 
     batch = next(iter(datamodule.test_dataloader()))
     encoded = PYFDN_N8_MONO_PARAM_SPEC.model_to_encoded(batch["params"][0].numpy())
     decoded, decoded_notes = PYFDN_N8_MONO_PARAM_SPEC.decode(encoded)
     build = params_to_fdn_build(decoded, sample_rate=48_000.0)
-    rerendered = render(decoded)
+    rerendered = PyFDNRenderer(path, checksum).render(decoded)
 
     assert decoded_notes == {}
     assert build.post_delay is build.post_matrix is build.post_output is None
