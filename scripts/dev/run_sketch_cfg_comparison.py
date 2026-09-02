@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import shutil
 import statistics
 import sys
 from collections.abc import Mapping, Sequence
@@ -19,6 +18,7 @@ from sh import Command
 from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_file
 from synth_setter.data.vst.core import write_wav
 from synth_setter.pipeline import r2_io
+from synth_setter.utils.logging_utils import resolve_git_sha
 
 VOCAL_DATASET = "r2://experiments/third_party/VocalImitationSet/test.lance"
 CONTENT_DATASET = "r2://experiments/third_party/NSynth/test.lance"
@@ -267,19 +267,13 @@ def _render_pair(
     :param sample_steps: Flow integration steps.
     :param seed: Pair seed shared across arms.
     :param device: Inference device.
+    :raises FileExistsError: The pair output path already exists.
     """
     pair_index = int(pair["pair_index"])
     pair_name = f"sample_{pair_index:03d}"
     pair_output = output_dir / "audio" / pair_name
-    expected = [
-        pair_output / "arms" / cfg_arm_name(content_strength, sketch_strength) / "metrics.csv"
-        for content_strength, sketch_strength in cfg_grid(content_cfg, sketch_cfg)
-    ]
-    if all(path.is_file() for path in expected):
-        r2_io.upload_dir(pair_output, f"{destination}/audio/{pair_name}")
-        return
     if pair_output.exists():
-        shutil.rmtree(pair_output)
+        raise FileExistsError(f"pair requires a fresh output directory: {pair_output}")
 
     args = [
         str(pair["sketch_path"]),
@@ -296,6 +290,7 @@ def _render_pair(
         f"{destination}/audio/{pair_name}",
         "--device",
         device,
+        "--upload",
     ]
     for strength in content_cfg:
         args.extend(("--content-cfg", str(strength)))
@@ -329,6 +324,19 @@ def _collect_metrics(
                 raise ValueError(f"expected one metrics row in {metrics_path}")
             rows.append({"pair_index": pair_index, "arm": arm, **metrics_rows[0]})
     return rows
+
+
+def _require_fresh_run(output_dir: Path, destination: str) -> None:
+    """Reject local or remote prefixes that could mix two suite runs.
+
+    :param output_dir: Local suite root.
+    :param destination: Exact R2 run prefix.
+    :raises FileExistsError: Either run location already contains artifacts.
+    """
+    if any(output_dir.iterdir()):
+        raise FileExistsError(f"output directory is not empty: {output_dir}")
+    if r2_io.r2_directory_exists(destination):
+        raise FileExistsError(f"R2 destination is not empty: {destination}")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -368,6 +376,7 @@ def main() -> None:
     output_dir: Path = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     r2_io.ensure_r2_env_loaded()
+    _require_fresh_run(output_dir, destination)
 
     pairs = _materialize_pairs(output_dir, args.count)
     pair_manifest = output_dir / "pair_manifest.csv"
@@ -397,6 +406,8 @@ def main() -> None:
         ("key", "value"),
         [
             {"key": "created_at", "value": datetime.now(UTC).isoformat()},
+            {"key": "run_id", "value": destination.rsplit("/", maxsplit=1)[-1]},
+            {"key": "git_commit", "value": resolve_git_sha()},
             {"key": "checkpoint", "value": args.checkpoint},
             {"key": "vocal_dataset", "value": VOCAL_DATASET},
             {"key": "vocal_dataset_version", "value": VOCAL_DATASET_VERSION},

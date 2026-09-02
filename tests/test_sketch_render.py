@@ -15,8 +15,9 @@ from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
 from synth_setter.cli import sketch_render
-from synth_setter.cli.sketch_render import cfg_grid, load_audio_file, main
+from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_file, main
 from synth_setter.conditioning import SketchControlSpec
+from synth_setter.data.third_party_datamodule import AudioDecodeError
 from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
@@ -29,6 +30,18 @@ def test_cfg_grid_repeated_strengths_returns_argument_order_product() -> None:
         (2.0, 1.0),
         (2.0, 3.0),
     )
+
+
+def test_cfg_arm_name_close_strengths_remain_distinct() -> None:
+    """Distinct representable CFG values cannot alias one artifact directory."""
+    assert cfg_arm_name(1.0000001, 1.0) != cfg_arm_name(1.0000002, 1.0)
+    assert cfg_arm_name(1.0, 2.0) == "cfg-c1-s2"
+
+
+def test_cfg_grid_duplicate_arm_raises() -> None:
+    """Repeated identical strengths cannot request the same arm twice."""
+    with pytest.raises(ValueError, match="duplicate"):
+        cfg_grid([1.0, 1.0], [2.0])
 
 
 def test_cfg_grid_nonfinite_strength_raises() -> None:
@@ -52,18 +65,47 @@ def test_load_audio_file_unsupported_codec_uses_ffmpeg(
     monkeypatch.setattr(
         sketch_render,
         "decode_clip",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("not supported")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AudioDecodeError("not supported")),
+    )
+    command: list[str] = []
+
+    def run_ffmpeg(args: list[str], **kwargs: object) -> CompletedProcess[bytes]:
+        del kwargs
+        command.extend(args)
+        return CompletedProcess(args, 0, decoded.tobytes(), b"")
+
+    monkeypatch.setattr(sketch_render.subprocess, "run", run_ffmpeg)
+
+    audio = load_audio_file(source, sample_rate=44_100, channels=2, num_samples=4)
+
+    assert command[command.index("-t") + 1] == str(4 / 44_100)
+    assert audio.shape == (2, 4)
+    np.testing.assert_array_equal(audio, np.clip(decoded[:4].T, -1.0, 1.0))
+
+
+def test_load_audio_file_contract_error_does_not_run_ffmpeg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Render-contract failures are not reinterpreted by another decoder.
+
+    :param tmp_path: Temporary encoded-audio path.
+    :param monkeypatch: Decoder and subprocess patch fixture.
+    """
+    source = tmp_path / "loud.wav"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(
+        sketch_render,
+        "decode_clip",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("outside [-1, 1]")),
     )
     monkeypatch.setattr(
         sketch_render.subprocess,
         "run",
-        lambda *args, **kwargs: CompletedProcess(args[0], 0, decoded.tobytes(), b""),
+        lambda *args, **kwargs: pytest.fail("FFmpeg should not run"),
     )
 
-    audio = load_audio_file(source, sample_rate=44_100, channels=2, num_samples=4)
-
-    assert audio.shape == (2, 4)
-    np.testing.assert_array_equal(audio, np.clip(decoded[:4].T, -1.0, 1.0))
+    with pytest.raises(ValueError, match="outside"):
+        load_audio_file(source, sample_rate=44_100, channels=2, num_samples=4)
 
 
 def test_load_audio_file_pcm_uses_primary_decoder(
@@ -160,9 +202,17 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     render = sketch_render._load_settings().render
     shape = (2, 128, 401)
     stats = tmp_path / "stats.npz"
-    np.savez(stats, mean=np.zeros(shape, dtype=np.float32), std=np.ones(shape, dtype=np.float32))
+    np.savez(
+        stats,
+        mean=np.full(shape, 2.0, dtype=np.float32),
+        std=np.full(shape, 2.0, dtype=np.float32),
+    )
     controls = torch.full((1, 386, 32), 0.05)
-    monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.ones(shape))
+    controls[:, 0] = 0.25
+    controls[:, 1] = 0.5
+    controls[:, 2, 0] = 0.1
+    controls[:, 2, 1] = 0.11
+    monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.full(shape, 4.0))
     monkeypatch.setattr(
         sketch_render,
         "extract_sketch_controls",
@@ -185,9 +235,16 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
         torch.device("cpu"),
     )
 
+    assert batch["mel"].shape == (1, *shape)
+    assert batch["mel"].dtype is torch.float32
     assert torch.equal(batch["mel"], torch.ones((1, *shape)))
-    assert torch.count_nonzero(batch["sketch_ctrl"][:, 2:]) == 0
-    assert torch.count_nonzero(batch["sketch_ctrl"][:, :2]) > 0
+    assert batch["sketch_ctrl"].shape == (1, 386, 32)
+    assert batch["sketch_ctrl"].dtype is torch.float32
+    assert torch.equal(batch["sketch_ctrl"][:, 0], torch.full((1, 32), 0.25))
+    assert torch.equal(batch["sketch_ctrl"][:, 1], torch.full((1, 32), 0.5))
+    assert batch["sketch_ctrl"][0, 2, 0] == pytest.approx(0.1)
+    assert batch["sketch_ctrl"][0, 2, 1] == pytest.approx(0.11)
+    assert torch.count_nonzero(batch["sketch_ctrl"][:, 2:, 2:]) == 0
 
 
 @pytest.mark.parametrize(
@@ -302,7 +359,6 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
             str(output),
             "--device",
             "cpu",
-            "--no-upload",
         ],
     )
 

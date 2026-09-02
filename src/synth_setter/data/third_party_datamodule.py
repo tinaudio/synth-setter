@@ -38,6 +38,10 @@ _MEL_STATS_CACHE_DIR = ".mel-stats"
 _BLOB_EXTENSION_NAME = "lance.blob.v2"
 
 
+class AudioDecodeError(ValueError):
+    """Encoded audio cannot be opened or decoded by pedalboard."""
+
+
 def _is_blob_encoded(field: pa.Field) -> bool:
     """Return whether a column is readable through the blob API.
 
@@ -173,10 +177,14 @@ def decode_clip(
     :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
     :param amplitude_scale: Gain applied after length-pinning.
     :returns: ``(channels, num_samples)`` float32 audio.
+    :raises AudioDecodeError: The encoded container or codec cannot be decoded.
     :raises ValueError: Samples are non-finite, out of range, or have an unsupported channel count.
     """
-    with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
-        audio = handle.read(handle.frames)
+    try:
+        with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
+            audio = handle.read(handle.frames)
+    except (RuntimeError, ValueError) as exc:
+        raise AudioDecodeError("pedalboard could not decode the audio container") from exc
     if audio.shape[0] == 1 < channels:
         audio = np.repeat(audio, channels, axis=0)
     elif audio.shape[0] != channels:

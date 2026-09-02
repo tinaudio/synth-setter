@@ -27,7 +27,7 @@ from synth_setter.cli.clap_render import (
     resolve_inverse_checkpoint,
 )
 from synth_setter.conditioning import conditioning_batch_key, resolve_sketch_controls
-from synth_setter.data.third_party_datamodule import decode_clip
+from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_clip
 from synth_setter.data.vst.core import write_wav
 from synth_setter.data.vst.param_spec import (
     decode_model_output,
@@ -154,7 +154,10 @@ def cfg_grid(
     for strength in (*content_strengths, *sketch_strengths):
         if not math.isfinite(strength) or strength < 0:
             raise ValueError("CFG strengths must be finite and non-negative")
-    return tuple(product(content_strengths, sketch_strengths))
+    grid = tuple(product(content_strengths, sketch_strengths))
+    if len(set(grid)) != len(grid):
+        raise ValueError("duplicate CFG arms are not allowed")
+    return grid
 
 
 def _load_settings() -> _SketchRenderSettings:
@@ -224,7 +227,7 @@ def load_audio_file(
             num_samples=num_samples,
             amplitude_scale=1.0,
         )
-    except ValueError as decode_error:
+    except AudioDecodeError as decode_error:
         result = subprocess.run(  # noqa: S603 — arguments are passed without a shell
             [  # noqa: S607 — FFmpeg resolves from the operator environment
                 "ffmpeg",
@@ -232,6 +235,8 @@ def load_audio_file(
                 "error",
                 "-i",
                 str(path),
+                "-t",
+                str(num_samples / sample_rate),
                 "-f",
                 "f32le",
                 "-acodec",
@@ -351,6 +356,16 @@ def _load_model(
     return model.to(device).eval()
 
 
+def _cfg_value_name(value: float) -> str:
+    """Keep compact common strengths without rounding distinct floats together.
+
+    :param value: Finite CFG strength.
+    :returns: Lossless float name.
+    """
+    compact = f"{value:g}"
+    return compact if float(compact).hex() == value.hex() else repr(value)
+
+
 def cfg_arm_name(content_cfg: float, sketch_cfg: float) -> str:
     """Build a stable filesystem name for one guidance arm.
 
@@ -358,7 +373,7 @@ def cfg_arm_name(content_cfg: float, sketch_cfg: float) -> str:
     :param sketch_cfg: Sketch guidance strength.
     :returns: Arm identifier.
     """
-    return f"cfg-c{content_cfg:g}-s{sketch_cfg:g}"
+    return f"cfg-c{_cfg_value_name(content_cfg)}-s{_cfg_value_name(sketch_cfg)}"
 
 
 def _write_metrics(path: Path, row: dict[str, str | int | float]) -> None:
@@ -404,7 +419,7 @@ def _run_id(sketch_path: Path, content_path: Path) -> str:
     type=click.Choice(["auto", "cpu", "cuda", "mps"]),
     default=None,
 )
-@click.option("--upload/--no-upload", default=True, show_default=True)
+@click.option("--upload/--no-upload", default=False, show_default=True)
 def main(
     sketch_wav: Path,
     content_wav: Path,
