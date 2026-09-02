@@ -942,7 +942,7 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
 
     The loss must come out finite: ``global_step`` advances even past a NaN loss.
     Validation exercises the production param-spec wiring and requires
-    ``val/param_mse_best_swap`` beside ``val/param_mse``.
+    swap and signed pitch diagnostics beside ``val/param_mse``.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
@@ -960,6 +960,9 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
     assert_finite_train_loss(metric_dict)
     assert "val/param_mse" in metric_dict
     assert "val/param_mse_best_swap" in metric_dict
+    assert torch.isfinite(metric_dict["val/pitch_residual_continuous_mean_semitones"])
+    assert torch.isfinite(metric_dict["val/pitch_residual_floor_mean_semitones"])
+    assert torch.isfinite(metric_dict["val/pitch_residual_nearest_mean_semitones"])
 
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedASTEncoder)

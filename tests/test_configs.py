@@ -1057,6 +1057,23 @@ def test_vst_flow_dropout_defaults_match_flash_foley_policy() -> None:
     assert cfg.model.all_conditioning_dropout_rate == 0.1
 
 
+def test_vst_flow_validation_noise_seed_defaults_to_fresh_noise() -> None:
+    """Validation sampling remains stochastic unless a comparison opts into a seed."""
+    cfg = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
+
+    assert cfg.model.validation_noise_seed is None
+
+
+def test_vst_flow_validation_noise_seed_override_composes_as_integer() -> None:
+    """Hydra accepts an integer seed for reproducible validation comparisons."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=surge/flow_sketch_prelim", "model.validation_noise_seed=3018"],
+    )
+
+    assert cfg.model.validation_noise_seed == 3018
+
+
 def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> None:
     """The preliminary A/B arms differ only in sketch conditioning."""
     base = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim_base"])
