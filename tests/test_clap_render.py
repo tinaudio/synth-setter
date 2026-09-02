@@ -203,6 +203,104 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
     assert output.is_file()
 
 
+def test_render_wav_collapsed_note_at_signal_end_expands_one_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Boundary-clipped flow output still produces a renderable note window.
+
+    :param tmp_path: Temporary WAV destination.
+    :param monkeypatch: Renderer-boundary replacement fixture.
+    """
+    render_config = clap_render._load_settings().render
+    spec = clap_render.param_specs[render_config.param_spec_name]
+    synth_params, _ = spec.sample(np.random.default_rng(0))
+    encoded = spec.encode(
+        synth_params,
+        {
+            "pitch": 60,
+            "note_start_and_end": (
+                render_config.signal_duration_seconds,
+                render_config.signal_duration_seconds,
+            ),
+        },
+    )
+    prediction = torch.from_numpy(spec.encoded_to_model(encoded)).unsqueeze(0)
+    captured: list[tuple[float, float]] = []
+
+    class RecordingRenderer:
+        def render(
+            self,
+            params: dict[str, float],
+            midi_note: int,
+            velocity: int,
+            note_start_and_end: tuple[float, float],
+        ) -> np.ndarray:
+            del params, midi_note, velocity
+            captured.append(note_start_and_end)
+            samples = int(render_config.sample_rate * render_config.signal_duration_seconds)
+            return np.zeros((render_config.channels, samples), dtype=np.float32)
+
+    monkeypatch.setattr(clap_render, "make_audio_renderer", lambda _: RecordingRenderer())
+
+    clap_render._render_wav(prediction, render_config, tmp_path / "collapsed-note.wav")
+
+    sample_period = 1.0 / render_config.sample_rate
+    assert captured == [
+        pytest.approx(
+            (
+                render_config.signal_duration_seconds - sample_period,
+                render_config.signal_duration_seconds,
+            )
+        )
+    ]
+
+
+def test_predict_patch_inference_overrides_replace_checkpoint_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Developer inference overrides control prediction without rewriting weights.
+
+    :param tmp_path: Temporary checkpoint location.
+    :param monkeypatch: Boundary patch fixture for the Lightning model loader.
+    """
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.hparams = {"test_sample_steps": 50, "test_cfg_strength": 4.0}
+
+        def to(self, _: torch.device) -> FakeModel:
+            return self
+
+        def eval(self) -> FakeModel:
+            return self
+
+        def predict_step(self, *_: object) -> tuple[torch.Tensor, None]:
+            return torch.zeros(1, 92), None
+
+    model = FakeModel()
+    monkeypatch.setattr(
+        clap_render.VSTFlowMatchingModule,
+        "load_from_checkpoint",
+        lambda *_args, **_kwargs: model,
+    )
+    monkeypatch.setattr(clap_render, "_validate_inverse_model", lambda *_: None)
+
+    clap_render._predict_patch(
+        torch.zeros(1, 512),
+        tmp_path / "model.ckpt",
+        clap_render._load_settings().render,
+        torch.device("cpu"),
+        0,
+        sample_steps=200,
+        cfg_strength=8.0,
+    )
+
+    assert model.hparams["test_sample_steps"] == 200
+    assert model.hparams["test_cfg_strength"] == 8.0
+
+
 def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -225,7 +323,7 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     monkeypatch.setattr(
         clap_render,
         "_predict_patch",
-        lambda *_: torch.zeros(1, 92),
+        lambda *_, **__: torch.zeros(1, 92),
     )
     monkeypatch.setattr(
         clap_render,

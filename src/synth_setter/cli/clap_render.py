@@ -483,6 +483,9 @@ def _predict_patch(
     render: RenderConfig,
     device: torch.device,
     seed: int,
+    *,
+    sample_steps: int | None = None,
+    cfg_strength: float | None = None,
 ) -> torch.Tensor:
     """Sample one model-space Surge parameter row reproducibly.
 
@@ -491,6 +494,8 @@ def _predict_patch(
     :param render: Renderer identity used for compatibility validation.
     :param device: Torch inference device.
     :param seed: Flow noise seed.
+    :param sample_steps: Optional solver-step override for developer experiments.
+    :param cfg_strength: Optional guidance-strength override for developer experiments.
     :returns: CPU prediction shaped ``(1, len(param_spec))``.
     """
     model = VSTFlowMatchingModule.load_from_checkpoint(
@@ -499,6 +504,10 @@ def _predict_patch(
         weights_only=False,
     )
     _validate_inverse_model(model, render)
+    if sample_steps is not None:
+        model.hparams["test_sample_steps"] = sample_steps
+    if cfg_strength is not None:
+        model.hparams["test_cfg_strength"] = cfg_strength
     model.to(device).eval()
     torch.manual_seed(seed)
     with torch.inference_mode():
@@ -533,6 +542,10 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     synth_params = require_scalar_synth_params(synth_values)
     note_params = require_note_params(note_values)
     note_start, note_end = sorted(note_params["note_start_and_end"])
+    if note_start == note_end:
+        sample_period = 1.0 / render.sample_rate
+        note_end = min(render.signal_duration_seconds, note_start + sample_period)
+        note_start = max(0.0, note_end - sample_period)
     renderer = make_audio_renderer(render)
     audio = renderer.render(
         synth_params,
@@ -607,6 +620,8 @@ def _resolve_output(output: Path | None, settings: _ClapRenderSettings, run_id: 
     help="Inference device [default: auto].",
 )
 @click.option("--seed", type=int, default=None, help="Flow sampling seed [default: 0].")
+@click.option("--sample-steps", type=click.IntRange(min=1), default=None, hidden=True)
+@click.option("--cfg-strength", type=click.FloatRange(min=0.0), default=None, hidden=True)
 @click.option("--upload/--no-upload", default=True, show_default=True)
 def main(
     text_prompt: str,
@@ -616,6 +631,8 @@ def main(
     upload_uri: str | None,
     device: _DeviceSetting | None,
     seed: int | None,
+    sample_steps: int | None,
+    cfg_strength: float | None,
     upload: bool,
 ) -> None:
     """Render TEXT_PROMPT as a Surge WAV and upload it to R2.
@@ -629,6 +646,8 @@ def main(
     :param upload_uri: Optional exact R2 object destination.
     :param device: Optional torch-device override.
     :param seed: Optional flow sampling seed.
+    :param sample_steps: Hidden solver-step override for developer experiments.
+    :param cfg_strength: Hidden guidance-strength override for developer experiments.
     :param upload: Whether to upload the rendered WAV.
     :raises click.ClickException: CLI arguments are invalid.
     :raises RuntimeError: The default CLAP checkpoint fails identity validation.
@@ -676,6 +695,8 @@ def main(
         render,
         selected_device,
         selected_seed,
+        sample_steps=sample_steps,
+        cfg_strength=cfg_strength,
     )
     click.echo("Rendering Surge patch...", err=True)
     audio = _render_wav(prediction, render, output_path)

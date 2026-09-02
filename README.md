@@ -159,7 +159,9 @@ unnormalized pre-decode `(B, 20, 125)` latent directly to the inverse checkpoint
 resume refuses artifacts whose generation or checkpoint identity differs. Use
 `--candidate-source meanaudio-s-full-reencoded` to compare the explicit
 VAE-decode → BigVGAN → VAE-encode posterior-mean projection without changing the
-direct experimental path.
+direct experimental path. CLAP candidates accept `--clap-sample-steps` and
+`--clap-cfg-strength` for solver and guidance A/B runs; both settings are part of
+the resume identity and published provenance.
 
 See the project documentation for a full walkthrough.
 

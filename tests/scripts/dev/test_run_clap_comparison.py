@@ -106,8 +106,26 @@ def test_build_candidate_identity_clap_preserves_checkpoint_and_seed_contract() 
         "candidate_source": CANDIDATE_SOURCE_CLAP,
         "candidate_checkpoint": "r2://checkpoints/clap/last.ckpt",
         "candidate_checkpoint_identity": "uri:r2://checkpoints/clap/last.ckpt",
+        "clap_cfg_strength": "checkpoint-default",
+        "clap_sample_steps": "checkpoint-default",
         "seed": 5,
     }
+
+
+def test_build_candidate_identity_clap_records_inference_overrides() -> None:
+    """CLAP cache identity separates solver and guidance experiments."""
+    identity = build_candidate_identity(
+        CANDIDATE_SOURCE_CLAP,
+        "r2://checkpoints/clap/last.ckpt",
+        steps=MEANAUDIO_STEPS,
+        duration_seconds=MEANAUDIO_DURATION_SECONDS,
+        seed=0,
+        clap_sample_steps=200,
+        clap_cfg_strength=8.0,
+    )
+
+    assert identity["clap_sample_steps"] == 200
+    assert identity["clap_cfg_strength"] == 8.0
 
 
 def test_ensure_resume_identity_changed_steps_rejects_cached_candidates(tmp_path: Path) -> None:

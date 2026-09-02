@@ -90,6 +90,8 @@ def build_candidate_identity(
     steps: int,
     duration_seconds: float,
     seed: int,
+    clap_sample_steps: int | None = None,
+    clap_cfg_strength: float | None = None,
 ) -> dict[str, float | int | str]:
     """Build the complete identity that gates local candidate artifact reuse.
 
@@ -98,6 +100,8 @@ def build_candidate_identity(
     :param steps: MeanAudio mean-flow steps; ignored for CLAP candidates.
     :param duration_seconds: MeanAudio target duration; ignored for CLAP candidates.
     :param seed: Candidate generation and inverse-flow seed.
+    :param clap_sample_steps: Optional CLAP inverse solver-step override.
+    :param clap_cfg_strength: Optional CLAP inverse guidance-strength override.
     :returns: Stable source, generation, weight, and inverse identities.
     :raises ValueError: The candidate source is unsupported.
     """
@@ -108,7 +112,14 @@ def build_candidate_identity(
         "seed": seed,
     }
     if candidate_source == CANDIDATE_SOURCE_CLAP:
-        return identity
+        return identity | {
+            "clap_sample_steps": (
+                clap_sample_steps if clap_sample_steps is not None else "checkpoint-default"
+            ),
+            "clap_cfg_strength": (
+                clap_cfg_strength if clap_cfg_strength is not None else "checkpoint-default"
+            ),
+        }
     if candidate_source == CANDIDATE_SOURCE_MEANAUDIO_S_FULL:
         provenance = meanaudio_s_full_provenance()
     elif candidate_source == CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED:
@@ -378,6 +389,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda", choices=("cpu", "cuda", "mps"))
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--clap-sample-steps", type=int)
+    parser.add_argument("--clap-cfg-strength", type=float)
     parser.add_argument("--meanaudio-steps", type=int, default=MEANAUDIO_STEPS)
     return parser.parse_args()
 
@@ -399,6 +412,10 @@ def main() -> None:
 
     if args.meanaudio_steps < 1:
         raise ValueError(f"MeanAudio steps must be positive, got {args.meanaudio_steps}")
+    if args.clap_sample_steps is not None and args.clap_sample_steps < 1:
+        raise ValueError(f"CLAP sample steps must be positive, got {args.clap_sample_steps}")
+    if args.clap_cfg_strength is not None and args.clap_cfg_strength < 0:
+        raise ValueError(f"CLAP CFG strength must be non-negative, got {args.clap_cfg_strength}")
     if (
         args.candidate_source
         in {
@@ -422,6 +439,8 @@ def main() -> None:
         steps=args.meanaudio_steps,
         duration_seconds=MEANAUDIO_DURATION_SECONDS,
         seed=args.seed,
+        clap_sample_steps=args.clap_sample_steps,
+        clap_cfg_strength=args.clap_cfg_strength,
     )
     identity_path = output_dir / "candidate-identity.json"
     ensure_resume_identity(identity_path, candidate_identity)
@@ -504,7 +523,7 @@ def main() -> None:
             candidate_wav.unlink(missing_ok=True)
             candidate_csv.unlink(missing_ok=True)
             if args.candidate_source == CANDIDATE_SOURCE_CLAP:
-                _render_candidate(
+                render_args = [
                     prompt,
                     "--checkpoint",
                     args.candidate_checkpoint,
@@ -516,7 +535,12 @@ def main() -> None:
                     args.device,
                     "--seed",
                     str(args.seed),
-                )
+                ]
+                if args.clap_sample_steps is not None:
+                    render_args.extend(("--sample-steps", str(args.clap_sample_steps)))
+                if args.clap_cfg_strength is not None:
+                    render_args.extend(("--cfg-strength", str(args.clap_cfg_strength)))
+                _render_candidate(*render_args)
             else:
                 latent = np.load(sample_dir / "candidate-conditioning.npy", allow_pickle=False)
                 render_meanaudio_candidate(
