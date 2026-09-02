@@ -33,7 +33,6 @@ _BATCH_SHAPE = "batch"
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
-_MAX_DISTINCT_CPU_SEED = (1 << 32) - 1
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -312,7 +311,6 @@ class VSTFlowMatchingModule(LightningModule):
         cfg_dropout_rate: float = 0.1,
         rectified_sigma_min: float = 0.0,
         validation_sample_steps: int = 50,
-        validation_noise_seed: int | None = None,
         validation_cfg_strength: float = 4.0,
         validation_sketch_cfg_strength: float | None = None,
         test_sample_steps: int = 100,
@@ -344,8 +342,6 @@ class VSTFlowMatchingModule(LightningModule):
             during training (CFG).
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
         :param validation_sample_steps: RK4 integration steps used at validation.
-        :param validation_noise_seed: Fixed stream seed for runs with identical loader order,
-            batch size, and distributed topology.
         :param validation_cfg_strength: Content guidance strength at validation.
         :param validation_sketch_cfg_strength: Sketch guidance strength at validation;
             defaults to ``validation_cfg_strength``.
@@ -354,17 +350,10 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
-        :raises ValueError: The validation seed aliases a CPU stream, or ``audio_loss``
-            is combined with a nonzero ``rectified_sigma_min`` or ``compile=True`` (#2585).
+        :raises ValueError: ``audio_loss`` is combined with a nonzero
+            ``rectified_sigma_min`` or ``compile=True`` (#2585).
         """
         super().__init__()
-        if validation_noise_seed is not None and not (
-            0 <= validation_noise_seed <= _MAX_DISTINCT_CPU_SEED
-        ):
-            raise ValueError(
-                f"validation_noise_seed must be in the distinct CPU seed range "
-                f"[0, {_MAX_DISTINCT_CPU_SEED}], got {validation_noise_seed}"
-            )
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not
@@ -794,40 +783,6 @@ class VSTFlowMatchingModule(LightningModule):
         return sample
 
     @jaxtyped(typechecker=beartype)
-    def _validation_noise(
-        self,
-        params: Float[torch.Tensor, "batch params"],
-        batch_idx: int,
-    ) -> Float[torch.Tensor, "batch params"]:
-        """Draw fresh noise or a batch/rank-stable stream for fixed-topology comparisons.
-
-        :param params: Target parameter vectors defining shape, dtype, and device.
-        :param batch_idx: Validation batch index mixed into the optional seed.
-        :returns: Initial state for flow integration.
-        :raises ValueError: The derived stream aliases another supported CPU stream.
-        """
-        seed = self.hparams.validation_noise_seed
-        if seed is None:
-            return torch.randn_like(params)
-        generator_device = torch.device("cpu") if params.device.type == "mps" else params.device
-        generator = torch.Generator(device=generator_device)
-        # Cantor pairing prevents batch/rank collisions without depending on world size.
-        pair_sum = batch_idx + self.global_rank
-        stream_index = pair_sum * (pair_sum + 1) // 2 + self.global_rank
-        stream_seed = seed + stream_index
-        if stream_seed > _MAX_DISTINCT_CPU_SEED:
-            raise ValueError(
-                f"validation stream seed exceeds the distinct CPU seed range: {stream_seed}"
-            )
-        generator.manual_seed(stream_seed)
-        return torch.randn(
-            params.shape,
-            dtype=params.dtype,
-            device=generator_device,
-            generator=generator,
-        ).to(params.device)
-
-    @jaxtyped(typechecker=beartype)
     def _log_validation_pitch_residuals(
         self,
         predicted: Float[torch.Tensor, "batch params"],
@@ -855,7 +810,7 @@ class VSTFlowMatchingModule(LightningModule):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,
-            self._validation_noise(batch["params"], batch_idx),
+            torch.randn_like(batch["params"]),
             self.hparams.validation_sample_steps,
             self.hparams.validation_cfg_strength,
             sketch_cfg_strength=self.hparams.validation_sketch_cfg_strength,

@@ -16,9 +16,7 @@ import torch
 from lightning import Trainer
 from torch.utils.data import DataLoader, Dataset
 
-from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.param_spec import ContinuousParameter, ParamSpec
-from synth_setter.metrics import midi_pitch_residuals
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
@@ -129,13 +127,11 @@ def _flow_vae_module() -> VSTFlowVAEModule:
 
 def _flow_matching_module(
     *,
-    validation_noise_seed: int | None = None,
     validation_cfg_strength: float = 1.0,
     param_spec: str | None = "surge_4",
 ) -> VSTFlowMatchingModule:
     """Build a tiny real flow-matching module with a 2-step validation sampler.
 
-    :param validation_noise_seed: Optional deterministic validation-noise seed.
     :param validation_cfg_strength: Content guidance scale used by validation.
     :param param_spec: Registered spec used by structured validation metrics.
     :returns: Module wired for the test batch shapes.
@@ -168,26 +164,7 @@ def _flow_matching_module(
         param_spec=param_spec,
         validation_sample_steps=2,
         validation_cfg_strength=validation_cfg_strength,
-        validation_noise_seed=validation_noise_seed,
     )
-
-
-def _zero_velocity_flow_matching_module(
-    *, validation_noise_seed: int, validation_cfg_strength: float = 1.0
-) -> VSTFlowMatchingModule:
-    """Build a flow whose sample equals its initial noise.
-
-    :param validation_noise_seed: Deterministic validation-noise seed.
-    :param validation_cfg_strength: Content guidance scale used by validation.
-    :returns: Module with a zero velocity field.
-    """
-    module = _flow_matching_module(
-        validation_noise_seed=validation_noise_seed,
-        validation_cfg_strength=validation_cfg_strength,
-    )
-    for parameter in module.vector_field.parameters():
-        torch.nn.init.zeros_(parameter)
-    return module
 
 
 class _TinyEncoder(torch.nn.Module):
@@ -314,95 +291,6 @@ def test_flow_matching_validation_preds_vary_with_sampling_noise() -> None:
     assert not torch.equal(preds_a, preds_b)
 
 
-def test_flow_matching_validation_seed_reuses_noise_across_cfg_strengths() -> None:
-    """A validation seed holds initial flow noise fixed across CFG comparisons."""
-    cfg_zero = _zero_velocity_flow_matching_module(
-        validation_noise_seed=3018, validation_cfg_strength=0.0
-    )
-    cfg_two = _zero_velocity_flow_matching_module(
-        validation_noise_seed=3018, validation_cfg_strength=2.0
-    )
-    batch = _batch()
-
-    cfg_zero_preds = cfg_zero.validation_step(batch, batch_idx=0)["preds"]
-    cfg_two_preds = cfg_two.validation_step(batch, batch_idx=0)["preds"]
-
-    assert torch.equal(cfg_zero_preds, cfg_two_preds)
-
-
-@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="requires MPS")
-def test_flow_matching_validation_seed_repeats_on_mps() -> None:
-    """Seeded validation produces repeatable initial noise on the supported MPS path."""
-    module = _flow_matching_module(validation_noise_seed=3018)
-    params = torch.zeros(_BATCH, _NUM_PARAMS, device="mps")
-
-    first_noise = module._validation_noise(params, batch_idx=0)
-    second_noise = module._validation_noise(params, batch_idx=0)
-
-    assert first_noise.device.type == "mps"
-    assert torch.equal(first_noise, second_noise)
-
-
-def test_flow_matching_validation_seed_changes_each_batch_stream() -> None:
-    """Successive batch indices receive distinct deterministic initial states."""
-    module = _zero_velocity_flow_matching_module(validation_noise_seed=3018)
-    batch = _batch()
-
-    first_batch_preds = module.validation_step(batch, batch_idx=0)["preds"]
-    second_batch_preds = module.validation_step(batch, batch_idx=1)["preds"]
-
-    assert not torch.equal(first_batch_preds, second_batch_preds)
-
-
-def test_flow_matching_validation_seed_repeats_within_rank_and_differs_across_ranks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A fixed batch stream repeats locally while each DDP rank receives distinct noise.
-
-    :param monkeypatch: Rank-property replacement scoped to this test.
-    """
-    module = _zero_velocity_flow_matching_module(validation_noise_seed=3018)
-    batch = _batch()
-
-    rank_zero_first = module.validation_step(batch, batch_idx=0)["preds"]
-    rank_zero_second = module.validation_step(batch, batch_idx=0)["preds"]
-    monkeypatch.setattr(
-        VSTFlowMatchingModule,
-        "global_rank",
-        property(lambda _: 1),
-    )
-    rank_one = module.validation_step(batch, batch_idx=0)["preds"]
-
-    assert torch.equal(rank_zero_first, rank_zero_second)
-    assert not torch.equal(rank_zero_first, rank_one)
-
-
-def test_flow_matching_validation_seed_outside_distinct_cpu_range_raises_value_error() -> None:
-    """Seeds that alias a supported CPU stream are rejected at construction."""
-    with pytest.raises(ValueError, match="distinct CPU seed range"):
-        _zero_velocity_flow_matching_module(validation_noise_seed=4294970314)
-
-
-def test_flow_matching_validation_batch_stream_seed_overflow_raises_value_error() -> None:
-    """Derived batch/rank streams fail instead of wrapping onto another CPU stream."""
-    module = _zero_velocity_flow_matching_module(validation_noise_seed=4294967295)
-
-    with pytest.raises(ValueError, match="validation stream seed exceeds"):
-        module.validation_step(_batch(), batch_idx=1)
-
-
-def test_flow_matching_validation_seed_change_changes_predictions() -> None:
-    """Changing the validation seed changes the sampled initial state."""
-    first_module = _zero_velocity_flow_matching_module(validation_noise_seed=3018)
-    second_module = _zero_velocity_flow_matching_module(validation_noise_seed=3019)
-    batch = _batch()
-
-    first_preds = first_module.validation_step(batch, batch_idx=0)["preds"]
-    second_preds = second_module.validation_step(batch, batch_idx=0)["preds"]
-
-    assert not torch.equal(first_preds, second_preds)
-
-
 def test_flow_matching_validation_without_scalar_pitch_skips_pitch_residuals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -438,7 +326,7 @@ def test_flow_matching_validation_loop_logs_signed_pitch_residuals() -> None:
     dataloader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], [_batch()]), batch_size=None)
 
     trainer.validate(
-        _flow_matching_module(validation_noise_seed=3018),
+        _flow_matching_module(),
         dataloaders=dataloader,
     )
 
@@ -447,24 +335,30 @@ def test_flow_matching_validation_loop_logs_signed_pitch_residuals() -> None:
     assert torch.isfinite(trainer.callback_metrics["val/pitch_residual_nearest_mean_semitones"])
 
 
-def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals() -> None:
-    """Lightning averages signed pitch residuals over rows, not over batches."""
-    module = _flow_matching_module(validation_noise_seed=3018)
+def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lightning averages signed pitch residuals over rows, not over batches.
+
+    :param monkeypatch: Residual values isolating Lightning's aggregation contract.
+    """
+    module = _flow_matching_module()
+
+    def fixed_residuals(
+        predicted: torch.Tensor,
+        _target: torch.Tensor,
+        _param_spec: ParamSpec,
+    ) -> dict[str, torch.Tensor]:
+        values = predicted.new_tensor([0.0, 0.0] if predicted.shape[0] == 2 else [6.0])
+        return {"continuous": values, "floor": values, "nearest": values}
+
+    monkeypatch.setattr(
+        "synth_setter.models.vst_flow_matching_module.midi_pitch_residuals",
+        fixed_residuals,
+    )
     full_batch = _batch()
     first_batch = {name: values[:2] for name, values in full_batch.items()}
     second_batch = {name: values[2:] for name, values in full_batch.items()}
-    first_predictions = module.validation_step(first_batch, batch_idx=0)["preds"]
-    second_predictions = module.validation_step(second_batch, batch_idx=1)["preds"]
-    expected = torch.cat(
-        (
-            midi_pitch_residuals(first_predictions, first_batch["params"], param_specs["surge_4"])[
-                "continuous"
-            ],
-            midi_pitch_residuals(
-                second_predictions, second_batch["params"], param_specs["surge_4"]
-            )["continuous"],
-        )
-    ).mean()
     trainer = Trainer(
         accelerator="cpu",
         devices=1,
@@ -480,5 +374,6 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals() -> N
     trainer.validate(module, dataloaders=dataloader)
 
     torch.testing.assert_close(
-        trainer.callback_metrics["val/pitch_residual_continuous_mean_semitones"], expected
+        trainer.callback_metrics["val/pitch_residual_continuous_mean_semitones"],
+        torch.tensor(2.0),
     )
