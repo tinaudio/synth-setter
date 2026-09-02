@@ -15,7 +15,13 @@ from tqdm import tqdm, trange
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import run_with_editor_held_open
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model_output
+from synth_setter.data.vst.param_spec import (
+    NoteParams,
+    ParamSpec,
+    decode_model_output,
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
@@ -287,7 +293,9 @@ def _render_prediction_artifacts(
             os.makedirs(sample_dir, exist_ok=True)
 
             row_params = pred_params[j].float().numpy()
-            synth_params, note_params = decode_model_output(row_params, spec)
+            synth_values, note_values = decode_model_output(row_params, spec)
+            synth_params = require_scalar_synth_params(synth_values)
+            note_params = require_note_params(note_values)
             note_params["note_start_and_end"] = tuple(
                 float(value) for value in note_params["note_start_and_end"]
             )
@@ -312,7 +320,9 @@ def _render_prediction_artifacts(
             if rerender_target and target_params is not None:
                 # .float() aligns the target path with the pred path's float32 contract.
                 target_params_ = target_params[j].float().numpy()
-                target_synth_params, target_note_params = decode_model_output(target_params_, spec)
+                target_synth_values, target_note_values = decode_model_output(target_params_, spec)
+                target_synth_params = require_scalar_synth_params(target_synth_values)
+                target_note_params = require_note_params(target_note_values)
 
                 new_target = render(
                     target_synth_params,

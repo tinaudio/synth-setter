@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from unittest.mock import MagicMock, patch
 
 import lance
@@ -914,8 +914,8 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     note_patches: list[NoteParams] = []
     for i in range(_NUM_SAMPLES):
         decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
-        synth_patches.append(decoded_synth_params)
-        note_patches.append(decoded_note_params)
+        synth_patches.append(cast(dict[str, float], decoded_synth_params))
+        note_patches.append(cast(NoteParams, decoded_note_params))
     log.info("synth_patches: %s", synth_patches)
     log.info("note_patches: %s", note_patches)
 

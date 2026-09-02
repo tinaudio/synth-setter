@@ -27,7 +27,11 @@ from synth_setter.clap import (
 )
 from synth_setter.conditioning import resolve_embedding_conditioning
 from synth_setter.data.vst.core import write_wav
-from synth_setter.data.vst.param_spec import decode_model_output
+from synth_setter.data.vst.param_spec import (
+    decode_model_output,
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -525,7 +529,9 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     :returns: Channel-first rendered waveform written to ``output``.
     """
     spec = param_specs[render.param_spec_name]
-    synth_params, note_params = decode_model_output(prediction[0].float().numpy(), spec)
+    synth_values, note_values = decode_model_output(prediction[0].float().numpy(), spec)
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
     note_start, note_end = sorted(note_params["note_start_and_end"])
     renderer = make_audio_renderer(render)
     audio = renderer.render(
