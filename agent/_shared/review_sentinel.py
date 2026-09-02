@@ -5,8 +5,8 @@ in the review file's name, e.g.::
 
     .agent-reviews/repo-review-full-no-comments.<40-char-sha>.md
 
-The no-comments launcher also claims one of three durable per-branch attempts
-here before starting Pi. The renderer and retained PR gate share the filename
+The no-comments launcher claims a durable per-branch attempt here before
+starting Pi. The renderer and retained PR gate share the filename
 helpers so their sentinel contract has one source of truth.
 
 Stdlib-only so shell entrypoints can call it without project dependencies.

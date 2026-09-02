@@ -74,7 +74,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > Step 1 — use that file's guidance for parsing it.
 >
 > **Local-branch mode.** Use this when no `<N>` was passed and a successful
-> `gh pr list --state open --head "$(git branch --show-current)"` lookup returns
+> open-PR lookup scoped to `<current-repository-owner>:<current-branch>` returns
 > no PR. A lookup failure is a terminal error, not evidence that the branch has
 > no PR. Derive the same fields from local git:
 >

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import io
 import os
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,17 +22,14 @@ class _ReviewResult:
     """Captured launcher result.
 
     .. attribute :: returncode
-        :type: int
 
         Process exit status.
 
     .. attribute :: stderr
-        :type: str
 
         Captured standard error.
 
     .. attribute :: stdout
-        :type: str
 
         Captured standard output.
     """
@@ -48,11 +49,20 @@ def _review_checkout(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     shutil.copytree(_REPO_ROOT / "agent", checkout / "agent")
     sh.Command("git")("init", "-q", "-b", "test-branch", checkout)
 
+    lookup_log = tmp_path / "gh-lookups"
+    lookup_log.touch()
     gh = tmp_path / "gh"
     gh.write_text(
         "#!/bin/bash\n"
+        'if [[ "$1 $2" == "repo view" ]]; then\n'
+        '  printf "test-owner/test-repo\\n"\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf "lookup\\n" >>"${GH_LOOKUP_LOG}"\n'
         'if [[ "${GH_LOOKUP_FAIL:-}" == "1" ]]; then exit 7; fi\n'
-        'printf "%s\\n" "${GH_OPEN_PR_NUMBER:-}"\n'
+        'if [[ " $* " == *" head=test-owner:test-branch "* ]]; then\n'
+        '  printf "%s\\n" "${GH_OPEN_PR_NUMBER:-}"\n'
+        "fi\n"
     )
     gh.chmod(0o755)
 
@@ -71,6 +81,7 @@ def _review_checkout(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     pi.chmod(0o755)
     env = {
         **os.environ,
+        "GH_LOOKUP_LOG": str(lookup_log),
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "PI_INVOCATION_LOG": str(invocation_log),
         "SYNTH_SETTER_PI_REVIEW": "",
@@ -193,6 +204,43 @@ def test_open_pr_lookup_failure_refused_without_consuming_attempt(tmp_path: Path
     assert "Unable to resolve whether the current branch has an open PR." in failed.stderr
     assert "Pre-PR sentinel review attempt 1/3." in local.stderr
     assert invocation_log.read_text().splitlines() == ["invoked"]
+
+
+def test_concurrent_pre_pr_reviews_only_three_reach_pi(tmp_path: Path) -> None:
+    """Serialize concurrent claims so exactly one of four is refused.
+
+    :param tmp_path: Temporary checkout and fake external process directory.
+    :raises AssertionError: If launchers do not reach attempt claiming before timeout.
+    """
+    checkout, env, invocation_log = _review_checkout(tmp_path)
+    review_dir = checkout / ".agent-reviews"
+    review_dir.mkdir()
+    digest = hashlib.sha256(b"test-branch\n").hexdigest()
+    lock_path = review_dir / f"repo-review-full-no-comments-attempts.{digest}.lock"
+    request = ("repo-review-full-no-comments",)
+
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            first = executor.submit(_run_review, checkout, env, request)
+            second = executor.submit(_run_review, checkout, env, request)
+            third = executor.submit(_run_review, checkout, env, request)
+            fourth = executor.submit(_run_review, checkout, env, request)
+            lookup_log = Path(env["GH_LOOKUP_LOG"])
+            deadline = time.monotonic() + 5
+            while len(lookup_log.read_text().splitlines()) < 4:
+                if time.monotonic() >= deadline:
+                    raise AssertionError("concurrent launchers did not reach attempt claiming")
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            results = [
+                first.result(timeout=5),
+                second.result(timeout=5),
+                third.result(timeout=5),
+                fourth.result(timeout=5),
+            ]
+
+    assert sorted(result.returncode for result in results) == [0, 0, 0, 2]
+    assert invocation_log.read_text().splitlines() == ["invoked", "invoked", "invoked"]
 
 
 def test_public_pr_review_available_after_sentinel_limit(tmp_path: Path) -> None:

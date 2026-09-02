@@ -71,10 +71,18 @@ main() {
   fi
 
   if [[ "${skill}" == "repo-review-full-no-comments" && $# == 1 ]]; then
-    local branch open_pr_number
+    local branch open_pr_number repo repo_owner
     branch="$(git branch --show-current)"
+    if ! repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" ||
+      [[ ! "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+      echo "Unable to resolve the current GitHub repository." >&2
+      return 2
+    fi
+    repo_owner="${repo%%/*}"
     if ! open_pr_number="$(
-      gh pr list --state open --head "${branch}" --limit 2 --json number --jq '.[].number'
+      gh api --method GET "repos/${repo}/pulls" \
+        -f state=open -f "head=${repo_owner}:${branch}" -f per_page=2 \
+        --jq '.[].number'
     )"; then
       echo "Unable to resolve whether the current branch has an open PR." >&2
       return 2
