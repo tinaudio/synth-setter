@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -125,6 +126,43 @@ def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
         LogPerParamMSE()  # type: ignore[call-arg]
 
 
+def test_prediction_writer_logs_rate_limited_batch_and_sample_progress(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Prediction persistence reports boundaries without logging every batch.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    :param caplog: Captures durable progress records.
+    """
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[3]))
+    module = cast("LightningModule", None)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+    batch = {"audio": torch.zeros(2, 1)}
+    final_batch = {"audio": torch.zeros(1, 1)}
+    prediction = torch.zeros(2, 3)
+
+    caplog.set_level("INFO", logger="synth_setter.utils.callbacks")
+    writer.on_predict_start(trainer, module)
+    writer.write_on_batch_end(trainer, module, (prediction, batch), None, None, 0, 0)
+    writer.write_on_batch_end(trainer, module, (prediction, batch), None, None, 1, 0)
+    writer.write_on_batch_end(
+        trainer,
+        module,
+        (prediction[:1], final_batch),
+        None,
+        None,
+        2,
+        0,
+    )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2
+    assert "batches=1/3 samples=2 percent=33.3" in messages[0]
+    assert "batches=3/3 samples=5 percent=100.0" in messages[1]
+    assert all("batches_per_second=" in message for message in messages)
+
+
 def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
     tmp_path: Path,
 ) -> None:
@@ -140,9 +178,10 @@ def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
         torch.arange(10, dtype=torch.float32).reshape(2, 5).as_subclass(Signal).requires_grad_()
     )
     writer = PredictionWriter(tmp_path, write_interval="batch")
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[1]))
 
     writer.write_on_batch_end(
-        cast("Trainer", None),
+        trainer,
         cast("LightningModule", None),
         (prediction, {"audio": audio, "params": params}),
         None,
@@ -180,9 +219,10 @@ def test_prediction_writer_serializes_views_without_backing_storage(
     """
     backing = torch.arange(4096, dtype=torch.float32)
     writer = PredictionWriter(tmp_path, write_interval="batch")
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[1]))
 
     writer.write_on_batch_end(
-        cast("Trainer", None),
+        trainer,
         cast("LightningModule", None),
         (backing[:2], {"audio": backing[2:4], "params": backing[4:6]}),
         None,

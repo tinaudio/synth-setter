@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -36,6 +37,7 @@ log = logging.getLogger(__name__)
 # Bound on consecutive failed uploads of one unchanged checkpoint before backing
 # off until the file next changes — caps R2 retries when R2 is down.
 _MAX_UPLOAD_ATTEMPTS = 3
+_PREDICTION_PROGRESS_INTERVAL = 25
 
 # The single mirrored object name; the whole class contract hinges on this basename.
 _LAST_CKPT_NAME = "last.ckpt"
@@ -596,12 +598,61 @@ def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
 
 
 class PredictionWriter(BasePredictionWriter):
-    """Save per-batch and per-epoch predictions plus target tensors to disk."""
+    """Save predictions and report durable, rate-limited batch progress."""
 
     def __init__(self, output_dir, write_interval):
         super().__init__(write_interval)
         self.output_dir = output_dir
+        self._progress_started_at = time.monotonic()
+        self._samples_written = 0
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def on_predict_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Reset progress counters for a prediction pass.
+
+        :param trainer: Active prediction trainer.
+        :param pl_module: Active prediction module.
+        """
+        del trainer, pl_module
+        self._progress_started_at = time.monotonic()
+        self._samples_written = 0
+
+    def _log_progress(
+        self,
+        trainer: Trainer,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        """Log first, interval, and final completed prediction batches.
+
+        :param trainer: Active trainer exposing total prediction batches.
+        :param batch: Persisted model batch.
+        :param batch_idx: Zero-based batch index.
+        :param dataloader_idx: Active prediction dataloader index.
+        """
+        if not trainer.is_global_zero:
+            return
+        self._samples_written += batch_sample_count(batch)
+        totals = trainer.num_predict_batches
+        total = totals if isinstance(totals, int) else totals[dataloader_idx]
+        completed = batch_idx + 1
+        if (
+            completed != 1
+            and completed % _PREDICTION_PROGRESS_INTERVAL != 0
+            and completed != total
+        ):
+            return
+        elapsed = max(time.monotonic() - self._progress_started_at, 1e-9)
+        percent = 100.0 * completed / total
+        log.info(
+            "Prediction progress: batches=%d/%d samples=%d percent=%.1f batches_per_second=%.2f",
+            completed,
+            total,
+            self._samples_written,
+            percent,
+            completed / elapsed,
+        )
 
     def write_on_batch_end(
         self,
@@ -628,6 +679,7 @@ class PredictionWriter(BasePredictionWriter):
                 _plain_cpu_tensor(batch["params"]),
                 os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"),
             )
+        self._log_progress(trainer, batch, batch_idx, dataloader_idx)
 
     def write_on_epoch_end(self, trainer, pl_module, predictions, batch_indices):
         predictions, batch = predictions
