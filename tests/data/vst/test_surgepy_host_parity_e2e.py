@@ -271,7 +271,10 @@ def _sample_random_patches(config: RenderConfig, *, seed: int) -> list[dict[str,
     """
     param_spec = resolve_param_spec(config.param_spec_name)
     rng = np.random.default_rng(seed)
-    return [param_spec.sample(rng)[0] for _ in range(_RANDOM_PATCH_COUNT)]
+    return cast(
+        list[dict[str, float]],
+        [param_spec.sample(rng)[0] for _ in range(_RANDOM_PATCH_COUNT)],
+    )
 
 
 def _render_dataset(

@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.vst.param_spec import require_note_params
 
 # Re-exported for backward compat: training code imports these names from this module.
 from synth_setter.data.vst.torchsynth_param_spec import (
@@ -198,7 +199,7 @@ def render_torchsynth(
     # Decode the padded rows, not just the real ones: the voice holds render_batch_size
     # keyboard entries and every one of them must be set from the row it renders.
     notes = [
-        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        require_note_params(TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1])
         for row in padded.detach().clamp(0, 1).cpu().numpy()
     ]
     column = partial(torch.tensor, dtype=torch.float32, device=params.device)

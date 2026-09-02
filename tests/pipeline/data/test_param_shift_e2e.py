@@ -13,12 +13,14 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import cast
 
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
 
+from synth_setter.data.vst.param_spec import NoteParams
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -266,7 +268,9 @@ def test_param_shift_audio_is_the_patch_the_row_claims(shifted_dataset: Path) ->
         assert committed_names[index] == expected.param_name
         assert committed_amounts[index] == pytest.approx(expected.amount, rel=1e-6)
 
-        synth_params, note_params = spec.decode(expected.encoded)
+        synth_values, note_values = spec.decode(expected.encoded)
+        synth_params = cast(dict[str, float], synth_values)
+        note_params = cast(NoteParams, note_values)
         rendered = renderer.render(
             synth_params, note_params["pitch"], _VELOCITY, note_params["note_start_and_end"]
         )

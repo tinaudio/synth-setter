@@ -37,7 +37,11 @@ from synth_setter.data.vst.core import (
     make_midi_events,
     set_params,
 )
-from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
+from synth_setter.data.vst.param_spec import (
+    ParamSpec,
+    decode_model_output,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_lance_dataset
@@ -469,7 +473,7 @@ def decode_prediction_row(
     row = pred_tensor[batch_idx].detach().cpu().float().numpy()
     _validate_encoded_row(row, spec, "prediction")
     synth_params, _ = decode_model_output(row, spec)
-    return synth_params
+    return require_scalar_synth_params(synth_params)
 
 
 def load_dataset_synth_params(
@@ -505,7 +509,7 @@ def load_dataset_synth_params(
     _validate_encoded_row(row, spec, "dataset row")
 
     synth_params, _ = spec.decode(row)
-    return synth_params
+    return require_scalar_synth_params(synth_params)
 
 
 def load_prediction_synth_params(

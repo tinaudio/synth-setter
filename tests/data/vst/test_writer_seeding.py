@@ -9,6 +9,7 @@ shard size, hence of worker/order/sharding.
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 import lance
 import numpy as np
@@ -296,7 +297,9 @@ def test_writer_marks_external_fixed_parameter_provenance(
     """
     out = tmp_path / "fixed.lance"
     cfg = _fake_render_cfg(num_samples=1, min_loudness=float("-inf"))
-    synth_params, note_params = param_specs[_SPEC_NAME].sample(rng_for_sample(_BASE_SEED, 0))
+    synth_values, note_values = param_specs[_SPEC_NAME].sample(rng_for_sample(_BASE_SEED, 0))
+    synth_params = cast(dict[str, float], synth_values)
+    note_params = cast(NoteParams, note_values)
 
     make_lance_dataset(
         out,
@@ -322,7 +325,8 @@ def test_writer_marks_mixed_parameter_provenance(
     """
     out = tmp_path / "mixed.lance"
     cfg = _fake_render_cfg(num_samples=1, min_loudness=float("-inf"))
-    synth_params, _ = param_specs[_SPEC_NAME].sample(rng_for_sample(_BASE_SEED, 0))
+    synth_values, _ = param_specs[_SPEC_NAME].sample(rng_for_sample(_BASE_SEED, 0))
+    synth_params = cast(dict[str, float], synth_values)
 
     make_lance_dataset(out, cfg, shard_id=7, fixed_synth_params_list=[synth_params])
 

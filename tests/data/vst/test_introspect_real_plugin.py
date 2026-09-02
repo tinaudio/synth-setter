@@ -80,4 +80,7 @@ def test_introspect_cli_surge_xt_emits_usable_spec_and_vstpreset(tmp_path: Path)
     synth_params, note_params = spec.sample()
     encoded = spec.encode(synth_params, note_params)
     assert len(encoded) == len(spec)
-    assert all(0.0 <= v <= 1.0 for v in synth_params.values())
+    assert all(
+        isinstance(value, (float, int)) and 0.0 <= value <= 1.0
+        for value in synth_params.values()
+    )

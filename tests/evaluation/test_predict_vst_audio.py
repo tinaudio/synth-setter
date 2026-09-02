@@ -18,7 +18,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
-from typing import Literal  # noqa: E402
+from typing import Literal, cast  # noqa: E402
 from unittest.mock import MagicMock  # noqa: E402
 
 import matplotlib.pyplot as plt  # noqa: E402
@@ -133,7 +133,8 @@ def _sample_param_dicts(seed: int = 0) -> tuple[dict[str, float], NoteParams]:
     """
     rng = np.random.default_rng(seed)
     encoded = rng.random(len(_PARAM_SPEC)).astype(np.float32)
-    return _PARAM_SPEC.decode(encoded)
+    synth_values, note_values = _PARAM_SPEC.decode(encoded)
+    return cast(dict[str, float], synth_values), cast(NoteParams, note_values)
 
 
 def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:
