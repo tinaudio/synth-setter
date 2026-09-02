@@ -45,6 +45,51 @@ def make_review_filename(sha: str) -> str:
     return f"{SKILL_PREFIX}.{sha}.md"
 
 
+def _read_attempt_count(state_path: Path) -> int:
+    """Read validated attempt state, treating only an absent file as fresh.
+
+    :param state_path: Per-branch attempt state file.
+    :returns: Persisted attempt count or zero when no state exists.
+    :raises ValueError: If persisted state is empty, nonnumeric, or out of range.
+    """
+    if not state_path.exists():
+        return 0
+    raw_count = state_path.read_text().strip()
+    try:
+        count = int(raw_count)
+    except ValueError as exc:
+        raise ValueError(f"invalid review attempt state in {state_path}") from exc
+    if not 0 <= count <= MAX_PRE_PR_REVIEW_ATTEMPTS:
+        raise ValueError(f"invalid review attempt state in {state_path}")
+    return count
+
+
+def _write_attempt_count(state_path: Path, count: int) -> None:
+    """Atomically persist attempt state without exposing a partial value.
+
+    :param state_path: Per-branch attempt state destination.
+    :param count: Valid claimed attempt count.
+    """
+    descriptor, temporary = tempfile.mkstemp(
+        dir=state_path.parent,
+        prefix=f".{state_path.name}.",
+    )
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(f"{count}\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, state_path)
+        directory = os.open(state_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def claim_review_attempt(branch: str, base_dir: str = REVIEW_DIR) -> int | None:
     """Claim one sentinel review attempt for a branch.
 
@@ -58,22 +103,14 @@ def claim_review_attempt(branch: str, base_dir: str = REVIEW_DIR) -> int | None:
     digest = hashlib.sha256(f"{branch}\n".encode()).hexdigest()
     state_path = Path(base_dir) / f"{_ATTEMPT_PREFIX}.{digest}.txt"
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    with state_path.open("a+", encoding="utf-8") as state:
-        fcntl.flock(state, fcntl.LOCK_EX)
-        state.seek(0)
-        raw_count = state.read().strip()
-        try:
-            count = int(raw_count) if raw_count else 0
-        except ValueError as exc:
-            raise ValueError(f"invalid review attempt state in {state_path}") from exc
+    lock_path = state_path.with_suffix(".lock")
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        count = _read_attempt_count(state_path)
         if count >= MAX_PRE_PR_REVIEW_ATTEMPTS:
             return None
         claimed = count + 1
-        state.seek(0)
-        state.truncate()
-        state.write(f"{claimed}\n")
-        state.flush()
-        os.fsync(state.fileno())
+        _write_attempt_count(state_path, claimed)
         return claimed
 
 

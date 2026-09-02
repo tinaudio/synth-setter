@@ -70,19 +70,19 @@ def _review_checkout(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     return checkout, env, invocation_log
 
 
-def _run_review(checkout: Path, env: dict[str, str], skill: str) -> _ReviewResult:
+def _run_review(checkout: Path, env: dict[str, str], request: tuple[str, ...]) -> _ReviewResult:
     """Run the real shared launcher for one review request.
 
     :param checkout: Minimal review checkout.
     :param env: Launcher environment containing the deterministic Pi executable.
-    :param skill: Review skill to request.
+    :param request: Review skill and optional target arguments.
     :returns: Captured launcher process result.
     :raises sh.ErrorReturnCode: If the launcher exits with an unexpected status.
     """
     stderr = io.BytesIO()
     command = sh.Command(str(checkout / "agent/_shared/run_pi_review.sh"))
     try:
-        stdout = str(command(skill, _cwd=checkout, _env=env, _err=stderr))
+        stdout = str(command(*request, _cwd=checkout, _env=env, _err=stderr))
         returncode = 0
     except sh.ErrorReturnCode as exc:
         if exc.exit_code != 2:
@@ -103,10 +103,11 @@ def test_pre_pr_sentinel_review_fourth_attempt_refused_before_pi(tmp_path: Path)
     """
     checkout, env, invocation_log = _review_checkout(tmp_path)
 
-    first = _run_review(checkout, env, "repo-review-full-no-comments")
-    second = _run_review(checkout, env, "repo-review-full-no-comments")
-    third = _run_review(checkout, env, "repo-review-full-no-comments")
-    refused = _run_review(checkout, env, "repo-review-full-no-comments")
+    request = ("repo-review-full-no-comments",)
+    first = _run_review(checkout, env, request)
+    second = _run_review(checkout, env, request)
+    third = _run_review(checkout, env, request)
+    refused = _run_review(checkout, env, request)
 
     assert [first.returncode, second.returncode, third.returncode] == [0, 0, 0]
     assert refused.returncode == 2
@@ -116,18 +117,39 @@ def test_pre_pr_sentinel_review_fourth_attempt_refused_before_pi(tmp_path: Path)
     assert invocation_log.read_text().splitlines() == ["invoked", "invoked", "invoked"]
 
 
+def test_explicit_pr_dry_run_does_not_consume_pre_pr_attempt(tmp_path: Path) -> None:
+    """Exclude explicit PR-mode no-comments reviews from the local budget.
+
+    :param tmp_path: Temporary checkout and fake external process directory.
+    """
+    checkout, env, invocation_log = _review_checkout(tmp_path)
+
+    targeted = _run_review(
+        checkout,
+        env,
+        ("repo-review-full-no-comments", "--target", "3039"),
+    )
+    local = _run_review(checkout, env, ("repo-review-full-no-comments",))
+
+    assert targeted.returncode == 0
+    assert "Pre-PR sentinel review attempt" not in targeted.stderr
+    assert "Pre-PR sentinel review attempt 1/3." in local.stderr
+    assert invocation_log.read_text().splitlines() == ["invoked", "invoked"]
+
+
 def test_public_pr_review_available_after_sentinel_limit(tmp_path: Path) -> None:
     """Keep the public GitHub review path available after sentinel exhaustion.
 
     :param tmp_path: Temporary checkout and fake external process directory.
     """
     checkout, env, invocation_log = _review_checkout(tmp_path)
-    first = _run_review(checkout, env, "repo-review-full-no-comments")
-    second = _run_review(checkout, env, "repo-review-full-no-comments")
-    third = _run_review(checkout, env, "repo-review-full-no-comments")
+    request = ("repo-review-full-no-comments",)
+    first = _run_review(checkout, env, request)
+    second = _run_review(checkout, env, request)
+    third = _run_review(checkout, env, request)
     assert [first.returncode, second.returncode, third.returncode] == [0, 0, 0]
 
-    public_review = _run_review(checkout, env, "repo-review-full")
+    public_review = _run_review(checkout, env, ("repo-review-full",))
 
     assert public_review.returncode == 0
     assert public_review.stdout.strip() == "review-complete"
