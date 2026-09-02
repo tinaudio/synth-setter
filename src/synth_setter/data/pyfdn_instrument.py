@@ -6,6 +6,7 @@ Example:
 
 import hashlib
 import io
+from collections.abc import Mapping
 from importlib.metadata import version
 from numbers import Real
 from pathlib import Path
@@ -119,7 +120,7 @@ def _validate_decay_hooks(build: FDNBuild) -> None:
 
 
 def _build_decay_fdn(
-    arrays: dict[str, np.ndarray],
+    arrays: Mapping[str, np.ndarray],
     rt_seconds: tuple[float, float],
 ) -> FDNBuild:
     """Derive native delay filters from an exact base FDN.
