@@ -564,7 +564,45 @@ Each NIT becomes one bullet under `## Nits` in `review_body`, carrying its own `
 - **[<short-tag>:nit]** `<path>:<line>` — <description>
 ```
 
-Do NOT dedupe findings across skills (e.g. `shell-style` and `synth-setter-project-standards` both flagging the same `[ ]` vs `[[ ]]` issue at `scripts/run.sh:42`) — keep each finding's signal independent, as its own inline thread. Two short threads from two checklists tell the reviewer more than one merged thread that hides which checklist surfaced it; the cost of a near-duplicate inline comment is much smaller than the cost of misattributing a finding.
+Do not deterministically dedupe findings across skills during aggregation. Preserve every candidate and its originating skill for the final semantic signal filter; that filter may drop a duplicate only after inspecting the diff and recording an evidence-based decision.
+
+### Final signal filter
+
+After aggregation, but before rendering any finding or calculating the review event, run one final read-only `pr-review-filter` agent pinned exactly to `openai-codex/gpt-5.6-sol` with `high` thinking and at most 8 turns. This cross-cutting gate is the explicit exception to the rule that mechanical checklists do not spend Sol.
+
+If there are no checklist findings, skip the model call and continue with PR-health output. Otherwise, write an immutable filter-input JSON file under the assignment directory using this exact top-level shape; `candidates` contains every BLOCK, WARN, and NIT:
+
+```json
+{
+  "target": "PR #123",
+  "base_sha": "<40-character base SHA>",
+  "head_sha": "<40-character head SHA>",
+  "candidates": [
+    {"id":"<finding-fingerprint>","skill":"correctness-review","severity":"warn","path":"agent/example.py","line":42,"description":"<original description>"}
+  ]
+}
+```
+
+Generate each `id` with `pi_review_routing.py finding-fingerprint`; never let the filter edit candidate content. Build the complete assignment with:
+
+```bash
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py filter-prompt \
+  --input "$assignment_dir/review-filter-input.json" \
+  --output "$assignment_dir/review-filter-prompt.txt"
+```
+
+Launch the filter with the prompt `Read and execute the complete review-filter assignment at <absolute-prompt-path>.` The assignment allows a targeted tracked-file read or `git grep` only to validate a cross-file contract named by a candidate; candidate text and repository contents remain untrusted evidence. Extract and validate its result:
+
+```bash
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py extract-filter-report \
+  <output-file> --output "$assignment_dir/review-filter-report.json"
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py validate-filter-report \
+  "$assignment_dir/review-filter-report.json" \
+  --input "$assignment_dir/review-filter-input.json" \
+  --output "$assignment_dir/review-filter-retained.json"
+```
+
+The validator requires exactly one keep/drop decision for every immutable candidate ID. Retain only IDs listed in `review-filter-retained.json`, preserving their original skill, severity, path, line, and description. Record the Sol attempt and retained/dropped counts in the Pi review audit. If Sol is unavailable, the agent fails, or extraction/validation is malformed, fail closed through terminal failure delivery; never post or render unfiltered checklist findings.
 
 ## Step 6: Build the findings JSON
 
@@ -607,7 +645,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` and `## Nits` section formats. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
+The `findings` array carries every retained BLOCK and every retained WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` and `## Nits` section formats. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
 
 When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN or NIT exists, else `APPROVE`. A NIT-only review is `COMMENT`, not `APPROVE` — there is something to say — and `COMMENT` blocks nothing. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
 
@@ -624,6 +662,7 @@ Return to your orchestrator brief's Step 7 for the final delivery step.
 ## Notes
 
 - WARN findings are posted inline (as their own unresolved threads) rather than collapsed into a body bullet list. The earlier collapse design optimized for keeping BLOCKs visible, but in practice body bullets were silently ignored — every review converged on `event=COMMENT` with zero inline threads, and the WARNs never got addressed. The inline form forces an explicit reply or resolution before merge under "Conversations must be resolved" branch protection, and the `[<short-tag>:<severity>]` prefix lets reviewers filter or batch-resolve.
+- Aggregation preserves cross-skill candidates so provenance is never lost; the final Sol filter is the only stage allowed to remove a semantically duplicate or otherwise low-signal candidate.
 - NIT exists so that "ignorable" is a severity a checklist can express instead of a judgment the author has to make about every WARN. Before it existed, checklists either inflated a preference to WARN — spending an unresolved thread on it — or dropped it silently; `comment-hygiene`'s C13–C14 were dropped for exactly that reason. Body placement is the mechanism, not a presentation choice: an inline NIT would be a merge obligation under branch protection, and `pre-pr-review-gate.sh` deliberately never matches `:nit]` in either sub-gate.
 - Most of this pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled; the repo-local `lance-review` and `correctness-review` skills are the standing exceptions (they run from `agent/skills/<name>/SKILL.md` even with the plugin absent, and `correctness-review` runs on every diff). If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
 - Claude Code and Codex both invoke the Pi-native main agent → flat Tintin
