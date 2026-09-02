@@ -26,7 +26,7 @@ We compute the following metrics:
 import math
 import multiprocessing
 import os
-import tempfile
+import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -40,11 +40,6 @@ from dtw import dtw
 from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
-
-from synth_setter.evaluation.shuffle_pred_audio import (
-    params_are_uniform,
-    shuffle_pred_audio,
-)
 
 # Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
 # the write sites below still spell them literally.
@@ -433,11 +428,49 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     return pd.concat(metric_dfs)
 
 
+def _is_tool_owned_audio_view(path: Path) -> bool:
+    """Return whether ``path`` matches the generated symlink-view layout.
+
+    :param path: Candidate directory containing sample subdirectories.
+    :returns: ``True`` for a nonempty tree of sample directories containing only
+        ``pred.wav`` and ``target.wav`` symlinks.
+    """
+    if not path.is_dir() or path.is_symlink():
+        return False
+    sample_dirs = list(path.iterdir())
+    if not sample_dirs:
+        return False
+    for sample_dir in sample_dirs:
+        if not sample_dir.name.startswith("sample_") or not sample_dir.is_dir():
+            return False
+        entries = list(sample_dir.iterdir())
+        if {entry.name for entry in entries} != {"pred.wav", "target.wav"}:
+            return False
+        if not all(entry.is_symlink() for entry in entries):
+            return False
+    return True
+
+
+def _remove_deprecated_metric_outputs(output_dir: Path) -> None:
+    """Remove unsupported generated artifacts while preserving unowned content.
+
+    :param output_dir: Metrics directory that may contain unsupported artifacts.
+    """
+    audio_view = output_dir / "shuffled_audio"
+    if not _is_tool_owned_audio_view(audio_view):
+        return
+
+    for name in ("aggregated_metrics_shuffled.csv", "shuffle_permutation.csv"):
+        path = output_dir / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+    shutil.rmtree(audio_view)
+
+
 def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
     """Flatten an aggregated-metrics CSV into ``{"<metric>_<stat>": value}``.
 
-    Reads either ``aggregated_metrics.csv`` or ``aggregated_metrics_shuffled.csv``
-    — both share the layout this module writes: metric names as rows,
+    Reads the layout this module writes: metric names as rows and
     :data:`AGGREGATED_METRICS_STATS` as columns. Keys are returned unprefixed;
     namespacing them is the caller's policy.
 
@@ -469,32 +502,34 @@ def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
 @click.argument("audio_dir", type=str)
 @click.argument("output_dir", type=str, default="metrics")
 @click.option("--num_workers", "-w", type=click.IntRange(min=1), default=8)
-@click.option(
-    "--shuffle_seed",
-    type=int,
-    default=0,
-    help="Seed for the render-order probe permutation. Non-zero implies shuffle is intended.",
-)
-def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -> None:
-    """Score rendered audio under ``audio_dir`` and write aggregated metrics to ``output_dir``.
+def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
+    """Score rendered audio under ``audio_dir`` and write metrics to ``output_dir``.
 
     Runs the parallel per-sample pass writing ``metrics.csv`` and
-    ``aggregated_metrics.csv``. When all sample dirs share identical
-    ``params.csv`` (render-order probe, #489), a second pass with permuted
-    ``pred.wav`` symlinks writes ``aggregated_metrics_shuffled.csv``.
+    ``aggregated_metrics.csv``.
 
     :param audio_dir: Root containing per-sample subdirectories
         (each must have ``pred.wav`` and ``target.wav``).
     :param output_dir: Destination for CSV outputs.
     :param num_workers: Number of parallel worker processes.
-    :param shuffle_seed: Permutation seed for the render-order probe; non-zero
-        implies the probe is intended and raises if params are not uniform.
-    :raises ValueError: when no valid sample dirs are found, or when
-        ``shuffle_seed`` is non-zero but ``params.csv`` files are not uniform.
+    :raises ValueError: when no valid sample dirs are found or the input and output
+        directories overlap.
     """
     audio_dir_path = Path(audio_dir)
-    os.makedirs(output_dir, exist_ok=True)
     output_dir_path = Path(output_dir)
+    resolved_audio_dir = audio_dir_path.resolve()
+    resolved_output_dir = output_dir_path.resolve()
+    paths_overlap = (
+        resolved_output_dir == resolved_audio_dir
+        or resolved_output_dir in resolved_audio_dir.parents
+        or resolved_audio_dir in resolved_output_dir.parents
+    )
+    if paths_overlap:
+        raise ValueError(
+            "output_dir must not equal, contain, or be contained by audio_dir "
+            "to preserve source artifacts."
+        )
+    os.makedirs(output_dir_path, exist_ok=True)
 
     audio_dirs = find_possible_subdirs(audio_dir_path)
     if not audio_dirs:
@@ -502,6 +537,7 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
             f"No valid sample dirs with pred.wav and target.wav found under {audio_dir_path}."
         )
 
+    _remove_deprecated_metric_outputs(output_dir_path)
     df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers)
     df.to_csv(output_dir_path / "metrics.csv")
 
@@ -512,85 +548,6 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
 
     pd.DataFrame({"mean": columnwise_means, "std": columnwise_stds}).to_csv(
         output_dir_path / "aggregated_metrics.csv"
-    )
-
-    # filter to sample_* to match shuffle_pred_audio._sample_dirs glob pattern (#489)
-    probe_dirs = [d for d in audio_dirs if d.name.startswith("sample_")]
-    if shuffle_seed != 0 and len(probe_dirs) < 2:
-        raise ValueError(
-            f"shuffle_seed={shuffle_seed} was set but only {len(probe_dirs)} sample_* dir(s) "
-            "exist; the render-order probe requires at least 2."
-        )
-    uniform = params_are_uniform(probe_dirs)
-    if not uniform and shuffle_seed != 0:
-        raise ValueError(
-            f"shuffle_seed={shuffle_seed} was set but params.csv files are not uniform across "
-            "sample dirs — the render-order probe requires identical params. Either fix the "
-            "dataset or omit --shuffle_seed to silently skip the probe."
-        )
-    if uniform and len(probe_dirs) >= 2:
-        _run_shuffle_probe(audio_dir_path, output_dir_path, shuffle_seed, num_workers)
-
-
-def _run_shuffle_probe(
-    audio_dir_path: Path,
-    output_dir_path: Path,
-    shuffle_seed: int,
-    num_workers: int,
-) -> None:
-    """Run the render-order probe, writing the shuffled-metrics and permutation CSVs.
-
-    Builds a symlink view with permuted ``pred.wav`` files, scores it into
-    ``aggregated_metrics_shuffled.csv``, and records the drawn permutation alongside it to
-    ``shuffle_permutation.csv`` (columns ``dest_idx``, ``src_idx``). Cleans up the
-    intermediate temp dir in all cases.
-
-    :param audio_dir_path: Root audio directory passed to :func:`shuffle_pred_audio`.
-    :param output_dir_path: Destination dir for ``aggregated_metrics_shuffled.csv``.
-    :param shuffle_seed: Permutation seed forwarded to :func:`shuffle_pred_audio`.
-    :param num_workers: Worker count forwarded to :func:`_aggregate_metrics`.
-    :raises ValueError: when ``shuffle_seed`` is non-zero and ``output_dir_path`` is nested
-        inside ``audio_dir_path``.
-    """
-    shuffled_view = output_dir_path / "shuffled_audio"
-    _resolved_audio = audio_dir_path.resolve()
-    _resolved_view = shuffled_view.resolve()
-    _nested = _resolved_audio in _resolved_view.parents or _resolved_view == _resolved_audio
-    if _nested:
-        if shuffle_seed != 0:
-            raise ValueError(
-                f"shuffle_seed={shuffle_seed} was set but output_dir ({output_dir_path}) is "
-                f"inside audio_dir ({audio_dir_path}); the render-order probe cannot build "
-                "a safe symlink view there. Move output_dir outside audio_dir."
-            )
-        logger.warning(
-            "Render-order probe skipped: output_dir ({o}) is inside audio_dir ({a}); "
-            "shuffled_audio would nest inside the source tree.",
-            o=output_dir_path,
-            a=audio_dir_path,
-        )
-        return
-    permutation = shuffle_pred_audio(audio_dir_path, shuffled_view, shuffle_seed)
-    if len(permutation) < 2:
-        return
-    logger.info("Render-order probe: scoring permuted pred audio (seed={s})", s=shuffle_seed)
-    shuffled_dirs = find_possible_subdirs(shuffled_view)
-    if not shuffled_dirs:
-        logger.warning(
-            "Render-order probe: no valid sample dirs found in shuffled view {v}; "
-            "skipping shuffled metrics",
-            v=shuffled_view,
-        )
-        return
-    with tempfile.TemporaryDirectory(dir=output_dir_path) as _tmp:
-        shuffled_df = _aggregate_metrics(shuffled_dirs, Path(_tmp), num_workers)
-        pd.DataFrame({"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}).to_csv(
-            output_dir_path / "aggregated_metrics_shuffled.csv"
-        )
-    # Written only after the shuffled metrics land, so the permutation never
-    # appears without the metrics it explains.
-    pd.DataFrame({"dest_idx": range(len(permutation)), "src_idx": permutation}).to_csv(
-        output_dir_path / "shuffle_permutation.csv", index=False
     )
 
 

@@ -53,8 +53,6 @@ _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
-_AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
-_SHUFFLE_PERMUTATION_FILENAME = "shuffle_permutation.csv"
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -76,21 +74,12 @@ def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 
         CSV; surfaced so the silent-success failure mode is loud.
     :raises ValueError: when the CSV is missing a required stat column.
     """
-    result: dict[str, float] = {
+    return {
         f"audio/{name}": value
         for name, value in load_aggregated_metrics(
             metrics_dir / _AGGREGATED_METRICS_FILENAME
         ).items()
     }
-    shuffled_path = metrics_dir / _AGGREGATED_METRICS_SHUFFLED_FILENAME
-    if shuffled_path.is_file():
-        result.update(
-            {
-                f"shuffled_audio/{name}": value
-                for name, value in load_aggregated_metrics(shuffled_path).items()
-            }
-        )
-    return result
 
 
 def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
@@ -135,41 +124,12 @@ def _log_metrics_csv_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
         )
 
 
-def _log_shuffle_permutation_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
-    """Log the probe permutation to wandb as a Table; no-op when ``wandb.run`` is unset.
-
-    Silently skips when ``shuffle_permutation.csv`` is absent — the probe writes it only
-    for uniform-params (oracle) datasets, so its absence is the common case. Swallows wandb
-    errors so a logging failure never aborts the evaluation run.
-
-    :param metrics_dir: Directory produced by
-        :mod:`synth_setter.evaluation.compute_audio_metrics`; ``shuffle_permutation.csv``
-        is read from it when present.
-    :param prefix: Prepended to the ``shuffle/permutation`` Table key so per-split runs
-        (one wandb run shared across splits) stay distinct.
-    """
-    if wandb.run is None:
-        return
-    csv_path = metrics_dir / _SHUFFLE_PERMUTATION_FILENAME
-    if not csv_path.is_file():
-        return
-    try:
-        df = pd.read_csv(csv_path)
-        wandb.run.log({f"{prefix}shuffle/permutation": wandb.Table(dataframe=df)})
-    except Exception as exc:
-        log.warning(
-            f"shuffle permutation table logging failed with {type(exc).__name__}: {exc}; skipped."
-        )
-
-
 def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
     """Render VST audio, compute audio metrics, and return their aggregated values.
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper. ``--shuffle_seed`` is
-    always forwarded; the render-order probe (#489) runs automatically inside
-    ``compute_audio_metrics`` when all sample dirs have identical params.
+    metrics subprocess is CPU-only and needs no wrapper.
 
     :param cfg: Reads ``cfg.evaluation`` gates and metric settings, the complete
         ``cfg.render`` contract, and ``cfg.paths.output_dir`` for artifact roots.
@@ -245,8 +205,6 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             _COMPUTE_AUDIO_METRICS_MODULE,
             str(audio_dir),
             str(metrics_dir),
-            "--shuffle_seed",
-            str(cfg.evaluation.get("shuffle_seed", 0)),
             "-w",
             str(cfg.evaluation.num_workers),
         ]
@@ -268,14 +226,12 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             ),
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
-        # Namespace every key (audio/* and shuffled_audio/*) per caller — e.g. one
-        # wandb run shared across splits — so passes don't overwrite each other.
+        # Namespace every key per caller so split passes do not overwrite each other.
         prefix = cfg.evaluation.get("metric_prefix", "")
         if prefix:
             audio_metrics = {f"{prefix}{key}": value for key, value in audio_metrics.items()}
         _log_audio_metrics_to_wandb(audio_metrics)
         _log_metrics_csv_to_wandb(metrics_dir, prefix)
-        _log_shuffle_permutation_to_wandb(metrics_dir, prefix)
         return audio_metrics
 
     return {}

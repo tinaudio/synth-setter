@@ -3,5 +3,4 @@ root: /data/EECS-C4DM-Fazekas/benhayes/FSD50K.eval_audio/
 batch_size: 32
 num_workers: 4
 segment_length_seconds: 4.0
-shuffle: true
 stats_file: ???
