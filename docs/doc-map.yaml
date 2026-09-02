@@ -404,7 +404,7 @@ docs:
       - pattern: "src/synth_setter/renderer_factory.py"
         covers: "Shared `RenderConfig` backend dispatch used for predicted and target audio"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
-        covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, and parallel workers"
+        covers: "MSS/wMFCC/SOT/RMS metric computation with parallel workers"
       - pattern: "src/synth_setter/evaluation/audio_probe.py"
         covers: "Training validation-audio probe render, score, and R2-archive chain (run_audio_probe / ProbeRenderSettings)"
       - pattern: "renderscript.sh"

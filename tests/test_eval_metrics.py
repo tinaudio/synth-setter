@@ -64,6 +64,21 @@ def test_load_audio_metrics_flattens_mean_and_std(tmp_path: Path) -> None:
     assert metrics == _EXPECTED_AUDIO_METRICS
 
 
+def test_load_audio_metrics_ignores_legacy_shuffled_csv(tmp_path: Path) -> None:
+    """A stale shuffled CSV cannot reintroduce removed metric namespaces.
+
+    :param tmp_path: Scratch metrics dir seeded with current and legacy CSVs.
+    """
+    (tmp_path / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
+    (tmp_path / "aggregated_metrics_shuffled.csv").write_text(
+        ",mean,std\nmss,1.0,0.2\nwmfcc,0.6,0.1\nsot,0.4,0.04\nrms,0.8,0.02\n"
+    )
+
+    metrics = _load_audio_metrics(tmp_path)
+
+    assert metrics == _EXPECTED_AUDIO_METRICS
+
+
 def test_load_audio_metrics_returns_python_floats(tmp_path: Path) -> None:
     """Values are plain ``float`` — protects downstream wandb / Lightning logs from numpy scalars.
 

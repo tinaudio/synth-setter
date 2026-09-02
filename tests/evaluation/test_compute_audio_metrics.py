@@ -677,6 +677,11 @@ def test_main_uniform_params_writes_only_standard_metric_outputs(tmp_path: Path)
     audio_root = tmp_path / "audio"
     audio_root.mkdir()
     metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    (metrics_dir / "aggregated_metrics_shuffled.csv").write_text("stale")
+    (metrics_dir / "shuffle_permutation.csv").write_text("stale")
+    (metrics_dir / "shuffled_audio").mkdir()
+    (metrics_dir / "shuffled_audio" / "stale.wav").write_text("stale")
     _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
     _make_uniform_sample_dir(
         audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)

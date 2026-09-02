@@ -26,6 +26,7 @@ We compute the following metrics:
 import math
 import multiprocessing
 import os
+import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -427,6 +428,23 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     return pd.concat(metric_dfs)
 
 
+def _remove_deprecated_metric_outputs(output_dir: Path) -> None:
+    """Remove artifacts emitted by the retired render-order probe.
+
+    :param output_dir: Metrics directory that may contain outputs from an older run.
+    """
+    for name in (
+        "aggregated_metrics_shuffled.csv",
+        "shuffle_permutation.csv",
+        "shuffled_audio",
+    ):
+        path = output_dir / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+
 def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
     """Flatten an aggregated-metrics CSV into ``{"<metric>_<stat>": value}``.
 
@@ -484,6 +502,7 @@ def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
             f"No valid sample dirs with pred.wav and target.wav found under {audio_dir_path}."
         )
 
+    _remove_deprecated_metric_outputs(output_dir_path)
     df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers)
     df.to_csv(output_dir_path / "metrics.csv")
 
