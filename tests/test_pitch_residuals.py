@@ -3,7 +3,11 @@
 import pytest
 import torch
 
-from synth_setter.data.vst.param_spec import DiscreteLiteralParameter, ParamSpec
+from synth_setter.data.vst.param_spec import (
+    ContinuousParameter,
+    DiscreteLiteralParameter,
+    ParamSpec,
+)
 from synth_setter.metrics import midi_pitch_residuals
 
 
@@ -21,6 +25,25 @@ def test_midi_pitch_residuals_fractional_predictions_reports_decode_counterfactu
     torch.testing.assert_close(residuals["continuous"], torch.tensor([-0.25, 0.75]))
     torch.testing.assert_close(residuals["floor"], torch.tensor([-1.0, 0.0]))
     torch.testing.assert_close(residuals["nearest"], torch.tensor([0.0, 1.0]))
+
+
+def test_midi_pitch_residuals_pitch_between_other_coordinates_uses_spec_slice() -> None:
+    """Residuals read the ParamSpec pitch slice rather than a fixed coordinate."""
+    spec = ParamSpec(
+        synth_params=[ContinuousParameter(name="before_pitch")],
+        note_params=[
+            DiscreteLiteralParameter(name="pitch", min=48, max=72),
+            ContinuousParameter(name="after_pitch"),
+        ],
+    )
+    predicted = torch.tensor([[1.0, -0.0208333333333333, -1.0]])
+    target = torch.tensor([[-1.0, 0.0, 1.0]])
+
+    residuals = midi_pitch_residuals(predicted, target, spec)
+
+    torch.testing.assert_close(residuals["continuous"], torch.tensor([-0.25]))
+    torch.testing.assert_close(residuals["floor"], torch.tensor([-1.0]))
+    torch.testing.assert_close(residuals["nearest"], torch.tensor([0.0]))
 
 
 def test_midi_pitch_residuals_out_of_range_predictions_clips_to_pitch_bounds() -> None:

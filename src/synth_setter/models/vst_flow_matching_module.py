@@ -34,7 +34,6 @@ _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _TORCH_SEED_MODULUS = 1 << 64
-_VALIDATION_RANK_SEED_STRIDE = 1 << 32
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -803,9 +802,10 @@ class VSTFlowMatchingModule(LightningModule):
         if seed is None:
             return torch.randn_like(params)
         generator = torch.Generator(device=params.device)
-        stream_seed = (
-            seed + batch_idx + self.global_rank * _VALIDATION_RANK_SEED_STRIDE
-        ) % _TORCH_SEED_MODULUS
+        # Cantor pairing prevents batch/rank collisions without depending on world size.
+        pair_sum = batch_idx + self.global_rank
+        stream_index = pair_sum * (pair_sum + 1) // 2 + self.global_rank
+        stream_seed = (seed + stream_index) % _TORCH_SEED_MODULUS
         generator.manual_seed(stream_seed)
         return torch.randn(
             params.shape,

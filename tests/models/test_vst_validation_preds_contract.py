@@ -341,6 +341,29 @@ def test_flow_matching_validation_seed_changes_each_batch_stream() -> None:
     assert not torch.equal(first_batch_preds, second_batch_preds)
 
 
+def test_flow_matching_validation_seed_repeats_within_rank_and_differs_across_ranks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fixed batch stream repeats locally while each DDP rank receives distinct noise.
+
+    :param monkeypatch: Rank-property replacement scoped to this test.
+    """
+    module = _zero_velocity_flow_matching_module(validation_noise_seed=3018)
+    batch = _batch()
+
+    rank_zero_first = module.validation_step(batch, batch_idx=0)["preds"]
+    rank_zero_second = module.validation_step(batch, batch_idx=0)["preds"]
+    monkeypatch.setattr(
+        VSTFlowMatchingModule,
+        "global_rank",
+        property(lambda _: 1),
+    )
+    rank_one = module.validation_step(batch, batch_idx=0)["preds"]
+
+    assert torch.equal(rank_zero_first, rank_zero_second)
+    assert not torch.equal(rank_zero_first, rank_one)
+
+
 def test_flow_matching_validation_seed_wraps_at_torch_seed_boundary() -> None:
     """Batch stream derivation wraps instead of exceeding PyTorch's seed domain."""
     maximum_seed_module = _zero_velocity_flow_matching_module(
