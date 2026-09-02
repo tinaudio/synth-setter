@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -773,6 +774,55 @@ class VSTFlowMatchingModule(LightningModule):
             t = t + dt
 
         return sample
+
+    @jaxtyped(typechecker=beartype)
+    def sample_batch(
+        self,
+        batch: dict[str, Shaped[torch.Tensor, "batch ..."]],
+        *,
+        noise: Float[torch.Tensor, "batch params"],
+        content_cfg_strength: float,
+        sketch_cfg_strength: float,
+        sample_steps: int | None = None,
+    ) -> Float[torch.Tensor, "batch params"]:
+        """Sample model-space parameters from explicit reusable noise.
+
+        :param batch: Model batch carrying content and sketch conditioning.
+        :param noise: Float32 initial state shaped ``(batch, num_params)``.
+        :param content_cfg_strength: Non-negative content guidance scale.
+        :param sketch_cfg_strength: Non-negative sketch guidance scale.
+        :param sample_steps: Positive integration steps, or the checkpoint test default.
+        :returns: Sampled model-space parameter rows.
+        :raises ValueError: Noise, guidance, or integration steps violate the checkpoint contract.
+        """
+        conditioning = self._get_conditioning_from_batch(batch)
+        expected_shape = (conditioning.shape[0], self.hparams.num_params)
+        if tuple(noise.shape) != expected_shape:
+            raise ValueError(f"noise shape must be {expected_shape}, got {tuple(noise.shape)}")
+        if noise.dtype is not torch.float32:
+            raise ValueError(f"noise dtype must be float32, got {noise.dtype}")
+        if noise.device != conditioning.device:
+            raise ValueError(f"noise device must be {conditioning.device}, got {noise.device}")
+        if not torch.isfinite(noise).all():
+            raise ValueError("noise must contain only finite values")
+        for name, strength in (
+            ("content_cfg_strength", content_cfg_strength),
+            ("sketch_cfg_strength", sketch_cfg_strength),
+        ):
+            if not math.isfinite(strength) or strength < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        steps = self.hparams.test_sample_steps if sample_steps is None else sample_steps
+        if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
+            raise ValueError("sample_steps must be a positive integer")
+
+        return self._sample(
+            conditioning,
+            noise,
+            steps,
+            content_cfg_strength,
+            sketch_cfg_strength=sketch_cfg_strength,
+            control_tokens=self._control_token_branches_from_batch(batch),
+        )
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         conditioning = self._get_conditioning_from_batch(batch)

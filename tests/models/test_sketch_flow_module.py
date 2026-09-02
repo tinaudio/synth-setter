@@ -338,6 +338,45 @@ def test_rk4_step_integrates_two_argument_time_field() -> None:
     torch.testing.assert_close(result, torch.tensor([[1.1051708]]))
 
 
+def test_sample_batch_same_explicit_noise_returns_identical_predictions() -> None:
+    """Explicit noise makes repeated sketch sampling deterministic."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+
+    first = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+    second = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert torch.equal(first, second)
+
+
+def test_sample_batch_wrong_noise_shape_raises() -> None:
+    """Explicit noise must provide one parameter vector per input row."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="noise shape"):
+        model.sample_batch(
+            batch,
+            noise=torch.zeros((_BATCH, _NUM_PARAMS + 1)),
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=2,
+        )
+
+
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     """Sketch-configured training consumes ``sketch_ctrl`` and stays finite."""
     module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
