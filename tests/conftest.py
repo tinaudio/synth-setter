@@ -1,6 +1,7 @@
 """Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
+import hashlib
 import importlib.util
 import os
 import shutil
@@ -15,6 +16,7 @@ from typing import Any, Literal, NamedTuple
 
 import numpy as np
 import pytest
+import soundfile as sf
 import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
@@ -56,6 +58,26 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
+_PYFDN_FLOW_SMOKE_OVERRIDES = (
+    "trainer=cpu",
+    "datamodule.train_val_test_sizes=[1,1,1]",
+    "datamodule.batch_size=1",
+    "datamodule.num_workers=0",
+    "datamodule.val_num_workers=0",
+    "model.encoder.frontend.n_mels=16",
+    "model.encoder.backbone.hidden_dim=2",
+    "model.encoder.backbone.out_dim=8",
+    "model.encoder.backbone.num_blocks=1",
+    "model.encoder.backbone.kernel_size=3",
+    "model.vector_field.d_model=8",
+    "model.vector_field.num_heads=2",
+    "model.vector_field.d_ff=8",
+    "model.vector_field.num_layers=1",
+    "model.vector_field.projection.num_tokens=2",
+    "model.validation_sample_steps=1",
+    "model.test_sample_steps=1",
+    "model.cfg_dropout_rate=0.0",
+)
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
@@ -379,6 +401,92 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
     yield cfg
 
     GlobalHydra.instance().clear()
+
+
+@pytest.fixture
+def source_file(tmp_path: Path) -> tuple[Path, str]:
+    """Write a checksum-pinned lossless source with the pyFDN production geometry.
+
+    :param tmp_path: Temporary directory owned by pytest.
+    :returns: Source path and SHA-256 of its exact stored bytes.
+    """
+    path = tmp_path / "source.wav"
+    time_axis = np.arange(192_000, dtype=np.float64) / 48_000.0
+    source = 0.1 * np.sin(2.0 * np.pi * 220.0 * time_axis)
+    sf.write(path, source, 48_000, subtype="PCM_16")
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.fixture
+def cfg_pyfdn_flow_train(tmp_path: Path, source_file: tuple[Path, str]) -> DictConfig:
+    """Compose a one-step production pyFDN flow training configuration.
+
+    :param tmp_path: Parent of the isolated train output directory.
+    :param source_file: Checksum-pinned source audio with production geometry.
+    :returns: CPU-small configuration retaining real rendering and checkpointing.
+    """
+    source_path, source_sha256 = source_file
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=pyfdn/flow",
+                "logger=csv",
+                f"datamodule.source_audio_path={source_path}",
+                f"datamodule.source_audio_sha256={source_sha256}",
+                *_PYFDN_FLOW_SMOKE_OVERRIDES,
+            ],
+        )
+    with open_dict(cfg):
+        _set_workspace_root(cfg)
+        cfg.paths.output_dir = str(tmp_path / "train")
+        cfg.paths.log_dir = str(tmp_path / "train")
+        cfg.seed = 123
+        cfg.test = False
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.max_steps = 1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 1
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.val_check_interval = 1
+        cfg.trainer.log_every_n_steps = 1
+        cfg.callbacks.model_checkpoint.save_top_k = 1
+        cfg.callbacks.model_checkpoint.save_last = True
+    return cfg
+
+
+@pytest.fixture
+def cfg_pyfdn_flow_eval(tmp_path: Path, source_file: tuple[Path, str]) -> DictConfig:
+    """Compose production pyFDN validation for a train-produced checkpoint.
+
+    :param tmp_path: Parent of the isolated evaluation output directory.
+    :param source_file: Checksum-pinned source audio with production geometry.
+    :returns: CPU-small validation configuration with real online rendering.
+    """
+    source_path, source_sha256 = source_file
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=pyfdn/flow",
+                "callbacks=log_per_param_mse",
+                "ckpt_path=null",
+                "mode=validate",
+                f"datamodule.source_audio_path={source_path}",
+                f"datamodule.source_audio_sha256={source_sha256}",
+                *_PYFDN_FLOW_SMOKE_OVERRIDES,
+            ],
+        )
+    with open_dict(cfg):
+        _set_workspace_root(cfg)
+        cfg.paths.output_dir = str(tmp_path / "eval")
+        cfg.paths.log_dir = str(tmp_path / "eval")
+        cfg.seed = 123
+        cfg.trainer.max_steps = 1
+        cfg.trainer.limit_val_batches = 1
+    return cfg
 
 
 @pytest.fixture
@@ -767,6 +875,32 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
     yield cfg
 
     GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
+def cfg_dataset_pyfdn(tmp_path: Path) -> DictConfig:
+    """Compose dataset generation with the online-only pyFDN synth identity.
+
+    :param tmp_path: Per-test output, work, and log root.
+    :returns: pyFDN-selected dataset config for rejection coverage.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/smoke-shard",
+                "synth=pyfdn_n8_mono",
+            ],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.extras.print_config = False
+            cfg.logger = None
+
+    return cfg
 
 
 @pytest.fixture(scope="function")

@@ -1,0 +1,32 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: pyfdn
+  - override /synth: pyfdn_n8_mono
+  - override /model: vst_flow
+  - override /conditioning: log_mel
+  - override /callbacks: [default, log_per_param_mse]
+  - override /trainer: gpu_400k_steps
+  - _self_
+
+experiment_name: pyfdn
+run_name: flow
+tags: [pyfdn, flow]
+
+model:
+  compile: false
+  encoder:
+    frontend:
+      in_dim: 192_000
+
+callbacks:
+  model_checkpoint:
+    monitor: val/param_mse
+  early_stopping: null
+
+trainer:
+  val_check_interval: 2000
+  limit_val_batches: 20
+
+training:
+  val_audio_probe: false

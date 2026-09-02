@@ -54,9 +54,6 @@ jobs:
           - name: evaluation-predict-render-artifacts-150-199
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1[5-9]?
-          - name: evaluation-shuffle
-            patterns:
-              - synth_setter.evaluation.shuffle_pred_audio.*
           - name: tools
             patterns:
               - synth_setter.tools.*

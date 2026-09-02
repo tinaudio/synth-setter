@@ -20,6 +20,7 @@ type RendererBackend = Literal[
 # place of a plugin-bundle path (see ``core.extract_renderer_version``).
 TORCHSYNTH_PLUGIN_NAME = "torchsynth"
 FAUST_PLUGIN_NAME = "faust"
+PYFDN_PLUGIN_NAME = "pyfdn"
 SURGEPY_PLUGIN_NAME = "surgepy"
 
 IN_PROCESS_PLUGIN_NAMES = frozenset(

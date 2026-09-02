@@ -28,16 +28,12 @@ def fake_postprocessing_subprocess(
     *,
     audio_metrics_csv: str = FAKE_AGGREGATED_METRICS_CSV,
     per_sample_metrics_csv: str | None = None,
-    shuffled_metrics_csv: str | None = None,
-    shuffle_permutation_csv: str | None = None,
     render_sample_count: int = 0,
 ) -> Callable[[list[str]], None]:
     """Build a ``subprocess.run`` fake that materializes eval postprocessing outputs.
 
     :param audio_metrics_csv: Body written to ``aggregated_metrics.csv``.
     :param per_sample_metrics_csv: Optional body written to ``metrics.csv``.
-    :param shuffled_metrics_csv: Optional body written to ``aggregated_metrics_shuffled.csv``.
-    :param shuffle_permutation_csv: Optional body written to ``shuffle_permutation.csv``.
     :param render_sample_count: Number of fake ``sample_N`` render directories to create.
     :returns: Callable compatible with ``subprocess.run``.
     """
@@ -47,9 +43,6 @@ def fake_postprocessing_subprocess(
         is_metrics = any(COMPUTE_AUDIO_METRICS_FRAGMENT in arg for arg in args)
         if not (is_render or is_metrics):
             return
-        # Both subprocess timeouts are now sample-count-scaled; assert a positive
-        # float reaches the call so a dropped/None timeout fails here too (exact
-        # values are pinned in tests/test_eval_postprocessing.py).
         assert isinstance(timeout, float) and timeout > 0, timeout
 
         output_dir = Path(args[args.index("-m") + 3])
@@ -61,8 +54,6 @@ def fake_postprocessing_subprocess(
                 output_dir,
                 audio_metrics_csv=audio_metrics_csv,
                 per_sample_metrics_csv=per_sample_metrics_csv,
-                shuffled_metrics_csv=shuffled_metrics_csv,
-                shuffle_permutation_csv=shuffle_permutation_csv,
             )
 
     return _fake_run
@@ -86,21 +77,13 @@ def _write_metrics_outputs(
     *,
     audio_metrics_csv: str,
     per_sample_metrics_csv: str | None,
-    shuffled_metrics_csv: str | None,
-    shuffle_permutation_csv: str | None,
 ) -> None:
     """Write the fake metrics files requested by a test.
 
     :param output_dir: Metrics output directory.
     :param audio_metrics_csv: Body written to ``aggregated_metrics.csv``.
     :param per_sample_metrics_csv: Optional body written to ``metrics.csv``.
-    :param shuffled_metrics_csv: Optional body written to ``aggregated_metrics_shuffled.csv``.
-    :param shuffle_permutation_csv: Optional body written to ``shuffle_permutation.csv``.
     """
     (output_dir / "aggregated_metrics.csv").write_text(audio_metrics_csv)
     if per_sample_metrics_csv is not None:
         (output_dir / "metrics.csv").write_text(per_sample_metrics_csv)
-    if shuffled_metrics_csv is not None:
-        (output_dir / "aggregated_metrics_shuffled.csv").write_text(shuffled_metrics_csv)
-    if shuffle_permutation_csv is not None:
-        (output_dir / "shuffle_permutation.csv").write_text(shuffle_permutation_csv)

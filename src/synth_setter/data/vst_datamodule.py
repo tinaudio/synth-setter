@@ -354,6 +354,8 @@ def load_dataset_statistics(dataset_file: str | Path) -> tuple[np.ndarray, np.nd
     :param dataset_file: Split path whose parent contains ``stats.npz``.
     :returns: Broadcasting ``(mean, std)`` arrays.
     :raises FileNotFoundError: If ``stats.npz`` is missing.
+
+    Invalid values propagate :class:`ValueError` from :func:`load_mel_statistics`.
     """
     stats_file = Path(dataset_file).parent / "stats.npz"
     if not stats_file.exists():

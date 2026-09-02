@@ -1,0 +1,7 @@
+defaults:
+  - third_party/base@_here_
+  - _self_
+
+# The published corpus is read in place.
+dataset_uri: r2://experiments/third_party/NSynth/test.lance
+dataset_version: 1

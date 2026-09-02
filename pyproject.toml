@@ -137,6 +137,7 @@ torch = [
   "torchaudio>=2.0.0",
   "lightning>=2.6.0",
   "torchmetrics>=0.11.4",
+  "torchdata>=0.11.0",
   # Audio-embedding encoders for the add_embeddings CLI (lazy-imported). CLAP
   # rides on transformers (>=5: ClapProcessor takes `audio=`, not `audios=`);
   # music2latent ships its own torch-backed encoder.
@@ -187,6 +188,7 @@ audio = [
   "librosa",
   "mido",
   "pedalboard",
+  "pyFDN==0.4.2",
   "pyloudnorm",
   "scipy>=1.14,<1.15",
   "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",

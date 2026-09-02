@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-import librosa
 import numpy as np
 
 # Re-exported for the writers and validator; canonical home is ``conditioning``.
@@ -174,6 +173,8 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
     :returns: Decibel-scaled mel spectrogram whose rank follows the input's —
         ``(channels, MEL_N_MELS, frames)`` for 2-D audio, ``(MEL_N_MELS, frames)`` for 1-D.
     """
+    import librosa
+
     spec = librosa.feature.melspectrogram(
         y=audio,
         sr=sample_rate,

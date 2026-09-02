@@ -458,6 +458,17 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return self
 
     @model_validator(mode="after")
+    def _reject_online_only_pyfdn(self) -> RenderConfig:
+        """Reject pyFDN from the unsupported offline dataset-rendering path.
+
+        :return: ``self`` unchanged for renderable synth identities.
+        :raises ValueError: The online-only pyFDN identity is selected.
+        """
+        if self.synth.name == "pyfdn_n8_mono":
+            raise ValueError("pyFDN offline generation is unsupported; use online train/eval only")
+        return self
+
+    @model_validator(mode="after")
     def _validate_faust_backend(self) -> RenderConfig:
         """Require registry-only Faust source resolution without external resources.
 
