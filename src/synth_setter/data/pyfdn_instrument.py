@@ -124,7 +124,8 @@ def _build_decay_fdn(
 ) -> FDNBuild:
     """Derive native delay filters from an exact base FDN.
 
-    :param arrays: Validated base A, B, C, D, and delay arrays.
+    :param arrays: Float64 feedback ``(8, 8)``, input ``(8, 1)``, output ``(1, 8)``,
+        and direct ``(1, 1)`` matrices plus int64 delays ``(8,)``.
     :param rt_seconds: DC and Nyquist reverberation times in seconds.
     :returns: Build carrying the validated delay-filter SOS.
     """

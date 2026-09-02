@@ -126,8 +126,7 @@ def test_params_to_fdn_build_preserves_nonorthogonal_prediction_without_projecti
     :param fdn_params: Valid patch to perturb.
     """
     params = dict(fdn_params)
-    feedback = np.eye(8, dtype=np.float64)
-    feedback[0, 0] = 0.9
+    feedback = np.ones((8, 8), dtype=np.float64)
     params["feedback_matrix"] = feedback
 
     build = params_to_fdn_build(params, sample_rate=48_000.0)
@@ -135,6 +134,26 @@ def test_params_to_fdn_build_preserves_nonorthogonal_prediction_without_projecti
     assert build.A is feedback
     assert build.post_delay is not None
     assert np.isfinite(build.post_delay).all()
+
+
+def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
+    source_file: tuple[Path, str],
+    fdn_params: ParameterValues,
+) -> None:
+    """An unstable model-range prediction fails only at the finite-output boundary.
+
+    :param source_file: Valid fixed source and checksum.
+    :param fdn_params: Valid patch to move to the model-domain extrema.
+    """
+    path, checksum = source_file
+    params = dict(fdn_params)
+    params["feedback_matrix"] = np.ones((8, 8), dtype=np.float64)
+    params["post_delay.rt_dc_seconds"] = 4.0
+    params["post_delay.rt_nyquist_seconds"] = 4.0
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        with pytest.raises(ValueError, match="finite"):
+            PyFDNRenderer(path, checksum).render(params)
 
 
 @pytest.mark.parametrize(
