@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 
 import lance
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 import wandb
@@ -39,7 +40,7 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
-from synth_setter.data.vst import plugin_state_paths
+from synth_setter.data.vst import param_specs, plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
@@ -1611,6 +1612,60 @@ def test_eval_synth_group_exposes_postprocessing_keys(synth_group: str) -> None:
         assert cfg.synth.plugin_path
     finally:
         GlobalHydra.instance().clear()
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["cpu"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/ffn_simple"], indirect=True)
+def test_evaluate_predict_rounds_fractional_pitch_to_nearest_midi_note(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+    param_spec_name: str,
+) -> None:
+    """Render a trained model's fractional pitch as its nearest MIDI note.
+
+    :param tmp_path: Shared train, prediction, and rendered-audio directory.
+    :param cfg_surge_xt: One-step real Surge XT training configuration.
+    :param cfg_surge_xt_eval: Matching production predict-mode configuration.
+    :param param_spec_name: Parameter spec locating the scalar pitch output.
+    """
+    for cfg in (cfg_surge_xt, cfg_surge_xt_eval):
+        with open_dict(cfg):
+            cfg.model.net.d_model = 16
+            cfg.model.net.n_heads = 1
+            cfg.model.net.n_layers = 1
+            cfg.model.net.patch_size = 128
+            cfg.model.net.patch_stride = 64
+    HydraConfig().set_config(cfg_surge_xt)
+    train(cfg_surge_xt)
+
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.evaluation.compute_metrics = False
+        cfg_surge_xt_eval.evaluation.rerender_target = False
+        cfg_surge_xt_eval.datamodule.batch_size = 5
+        cfg_surge_xt_eval.render.plugin_reload_cadence = "once"
+        cfg_surge_xt_eval.trainer.limit_predict_batches = 1
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    try:
+        evaluate(cfg_surge_xt_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    spec = param_specs[param_spec_name]
+    pitch_index = spec.encoded_names.index("pitch")
+    prediction = torch.load(tmp_path / "predictions" / "pred-0.pt", weights_only=True)
+    fractional_pitch_outputs = prediction[:, pitch_index].numpy()
+    native_pitches = np.clip((fractional_pitch_outputs + 1.0) * 12.0 + 48.0, 48.0, 72.0)
+    rounds_up = np.flatnonzero(native_pitches - np.floor(native_pitches) >= 0.5)
+
+    assert rounds_up.size > 0
+    sample_index = int(rounds_up[0])
+    rendered_pitch = pd.read_csv(
+        tmp_path / "audio" / f"sample_{sample_index}" / "params.csv", index_col=0
+    ).at["pitch", "pred_effective"]
+    assert int(rendered_pitch) == math.floor(native_pitches[sample_index]) + 1
 
 
 @pytest.mark.requires_vst
