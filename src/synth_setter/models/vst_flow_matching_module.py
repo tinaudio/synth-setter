@@ -616,6 +616,44 @@ class VSTFlowMatchingModule(LightningModule):
                     f"train/audio_grad_norm_t_bucket_{index}", mean, on_step=True, on_epoch=False
                 )
 
+    @jaxtyped(typechecker=beartype)
+    def _flow_path(
+        self,
+        noise: Float[torch.Tensor, "batch params"],
+        params: Float[torch.Tensor, "batch params"],
+        t: Float[torch.Tensor, _BATCH_TIME_SHAPE],
+    ) -> tuple[
+        Float[torch.Tensor, "batch params"],
+        Float[torch.Tensor, "batch params"],
+    ]:
+        """Construct a flow path point and its target velocity.
+
+        :param noise: Prior endpoint shaped ``(batch, params)``.
+        :param params: Data endpoint shaped ``(batch, params)``.
+        :param t: Flow time shaped ``(batch, 1)``.
+        :returns: Path point and target velocity, each shaped ``(batch, params)``.
+        """
+        x_t = self._sample_probability_path(noise, params, t)
+        target = self._evaluate_target_field(noise, params, x_t, t)
+        return x_t, target
+
+    @jaxtyped(typechecker=beartype)
+    def _weighted_flow_loss(
+        self,
+        prediction: Float[torch.Tensor, "batch params"],
+        target: Float[torch.Tensor, "batch params"],
+        t: Float[torch.Tensor, _BATCH_TIME_SHAPE],
+    ) -> Float[torch.Tensor, ""]:
+        """Reduce coordinate errors with the configured flow-time weighting.
+
+        :param prediction: Predicted velocity shaped ``(batch, params)``.
+        :param target: Target velocity shaped ``(batch, params)``.
+        :param t: Flow time shaped ``(batch, 1)``.
+        :returns: Mean weighted velocity error.
+        """
+        row_loss = (prediction - target).square().mean(dim=-1)
+        return (row_loss * self._weight_time(t).squeeze(-1)).mean()
+
     def _train_step(self, batch: dict[str, torch.Tensor]) -> TrainStepOutputs:
         """Run one training forward pass and assemble every term the logger consumes.
 
@@ -629,22 +667,14 @@ class VSTFlowMatchingModule(LightningModule):
 
         with torch.no_grad():
             t = self._sample_time(params.shape[0], params.device)
-            w = self._weight_time(t)
-
-            x0 = noise
-            x1 = params
-
-            x_t = self._sample_probability_path(x0, x1, t)
-            target = self._evaluate_target_field(x0, x1, x_t, t)
+            x_t, target = self._flow_path(noise, params, t)
 
         if control_tokens is None:
             prediction = self.vector_field(x_t, t, z)
         else:
             prediction = self.vector_field(x_t, t, z, control_tokens=control_tokens)
 
-        loss = (prediction - target).square().mean(dim=-1)
-        loss = loss * w
-        loss = loss.mean()
+        loss = self._weighted_flow_loss(prediction, target, t)
 
         audio_term = None
         grad_balance = None
@@ -751,11 +781,41 @@ class VSTFlowMatchingModule(LightningModule):
         sketch_cfg_strength: float | None = None,
         control_tokens: ControlTokenBranches | None = None,
     ) -> torch.Tensor:
+        encoded_conditioning = None
         if conditioning is not None:
-            conditioning = self.encoder(conditioning)
+            encoded_conditioning = self.encoder(conditioning)
+        return self._sample_encoded(
+            encoded_conditioning,
+            noise,
+            steps=steps,
+            cfg_strength=cfg_strength,
+            sketch_cfg_strength=sketch_cfg_strength,
+            control_tokens=control_tokens,
+        )
 
+    @jaxtyped(typechecker=beartype)
+    def _sample_encoded(
+        self,
+        encoded_conditioning: Shaped[torch.Tensor, _BATCH_ANY_SHAPE] | None,
+        noise: Float[torch.Tensor, "batch params"],
+        *,
+        steps: int,
+        cfg_strength: float,
+        sketch_cfg_strength: float | None = None,
+        control_tokens: ControlTokenBranches | None = None,
+    ) -> Float[torch.Tensor, "batch params"]:
+        """Integrate one parameter trajectory from encoded conditioning.
+
+        :param encoded_conditioning: Encoded content conditioning, or ``None``.
+        :param noise: Independent prior sample shaped ``(batch, params)``.
+        :param steps: Number of fixed RK4 integration steps.
+        :param cfg_strength: Content classifier-free guidance strength.
+        :param sketch_cfg_strength: Sketch classifier-free guidance strength.
+        :param control_tokens: Complete sketch control branches, when configured.
+        :returns: Terminal model-space parameters shaped ``(batch, params)``.
+        """
         guided_velocity = self._velocity_field(
-            conditioning,
+            encoded_conditioning,
             cfg_strength,
             control_tokens,
             sketch_cfg_strength=sketch_cfg_strength,
@@ -828,22 +888,23 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def _evaluation_flow_loss(
-        self, batch: dict[str, Shaped[torch.Tensor, ...]]
+        self,
+        batch: dict[str, Shaped[torch.Tensor, ...]],
+        conditioning: Shaped[torch.Tensor, _BATCH_ANY_SHAPE],
     ) -> Float[torch.Tensor, ""]:
         """Evaluate the fully conditioned flow objective without training dropout.
 
         :param batch: Test batch carrying params, noise, and configured conditioning.
+        :param conditioning: Encoded content conditioning shared with terminal sampling.
         :returns: Mean weighted velocity-field error over rows and coordinates.
         """
         params = batch["params"]
         noise = batch.get("noise")
         if noise is None:
             noise = torch.randn_like(params)
-        conditioning = self.encoder(self._get_conditioning_from_batch(batch))
         control_branches = self._control_token_branches_from_batch(batch)
         t = self._sample_time(params.shape[0], params.device)
-        x_t = self._sample_probability_path(noise, params, t)
-        target = self._evaluate_target_field(noise, params, x_t, t)
+        x_t, target = self._flow_path(noise, params, t)
         fully_conditioned = self._velocity_field(
             conditioning,
             1.0,
@@ -851,21 +912,20 @@ class VSTFlowMatchingModule(LightningModule):
             sketch_cfg_strength=1.0,
         )
         prediction = fully_conditioned(x_t, t)
-        row_loss = (prediction - target).square().mean(dim=-1)
-        return (row_loss * self._weight_time(t).squeeze(-1)).mean()
+        return self._weighted_flow_loss(prediction, target, t)
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> dict[str, torch.Tensor]:
-        conditioning = self._get_conditioning_from_batch(batch)
-        pred_params = self._sample(
+        conditioning = self.encoder(self._get_conditioning_from_batch(batch))
+        pred_params = self._sample_encoded(
             conditioning,
             torch.randn_like(batch["params"]),
-            self.hparams.test_sample_steps,
-            self.hparams.test_cfg_strength,
+            steps=self.hparams.test_sample_steps,
+            cfg_strength=self.hparams.test_cfg_strength,
             sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
             control_tokens=self._control_token_branches_from_batch(batch),
         )
 
-        flow_loss = self._evaluation_flow_loss(batch)
+        flow_loss = self._evaluation_flow_loss(batch, conditioning)
         param_mse = (pred_params - batch["params"]).square().mean()
         self.log("test/flow_loss", flow_loss, on_step=False, on_epoch=True)
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)

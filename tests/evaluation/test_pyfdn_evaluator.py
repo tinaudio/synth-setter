@@ -62,14 +62,26 @@ def test_decode_pyfdn_model_output_invalid_row_raises(row: np.ndarray) -> None:
         decode_pyfdn_model_output(row)
 
 
-def test_evaluate_pyfdn_row_exact_target_prediction_has_identity_metrics(
-    source_file: tuple[Path, str],
-) -> None:
-    """One exact prediction traverses real build, filters, render, and 48 kHz metrics.
+def test_parameter_metrics_use_finite_row_and_field_coordinate_denominators() -> None:
+    """Parameter summaries use finite rows, coordinate means, and exact field spans."""
+    squared_error = np.zeros(91, dtype=np.float64)
+    squared_error[8] = 6.0
+    squared_error[88] = 8.0
+    squared_error[89] = 2.0
+    squared_error[90] = 4.0
 
-    :param source_file: Checksum-pinned production-geometry source audio.
-    """
-    path, checksum = source_file
+    metrics, rows = pyfdn_evaluator._parameter_metrics(squared_error, finite_count=2)
+
+    assert metrics["pyfdn/parameter_mse"] == pytest.approx(10.0 / 91.0)
+    assert metrics["pyfdn/parameter_mse/coordinate/direct_matrix.0.0"] == 4.0
+    assert metrics["pyfdn/parameter_mse/field/feedback_matrix"] == pytest.approx(3.0 / 64.0)
+    assert metrics["pyfdn/parameter_mse/field/direct_matrix"] == 4.0
+    assert metrics["pyfdn/parameter_mse/field/post_delay_rt_controls"] == 1.5
+    assert len(rows) == 91
+
+
+def test_evaluate_pyfdn_row_exact_target_prediction_has_identity_metrics() -> None:
+    """One exact prediction traverses real build, filters, render, and 48 kHz metrics."""
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(23))
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
     model_row = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
@@ -77,7 +89,7 @@ def test_evaluate_pyfdn_row_exact_target_prediction_has_identity_metrics(
     result = evaluate_pyfdn_row(
         model_row,
         model_row,
-        renderer=PyFDNRenderer(path, checksum),
+        renderer=PyFDNRenderer(),
     )
 
     assert result.status == "finite_render"
@@ -90,14 +102,12 @@ def test_evaluate_pyfdn_row_exact_target_prediction_has_identity_metrics(
 
 
 def test_evaluate_pyfdn_row_builder_rejection_counts_build_invalid(
-    source_file: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A decoded patch rejected by the real build boundary is classified separately.
 
-    :param source_file: Checksum-pinned production-geometry source audio.
     :param monkeypatch: Scoped build-boundary rejection injection.
     """
-    path, checksum = source_file
     target_params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(27))
     target_encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(target_params, notes)
     target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(target_encoded).astype(np.float32)
@@ -121,21 +131,15 @@ def test_evaluate_pyfdn_row_builder_rejection_counts_build_invalid(
     result = evaluate_pyfdn_row(
         prediction,
         target,
-        renderer=PyFDNRenderer(path, checksum),
+        renderer=PyFDNRenderer(),
     )
 
     assert result.status == "build_invalid"
     assert result.error is not None and "rejected exact prediction" in result.error
 
 
-def test_evaluate_pyfdn_row_unstable_exact_prediction_counts_render_invalid(
-    source_file: tuple[Path, str],
-) -> None:
-    """A finite exact build that overflows is classified at the render boundary.
-
-    :param source_file: Checksum-pinned production-geometry source audio.
-    """
-    path, checksum = source_file
+def test_evaluate_pyfdn_row_unstable_exact_prediction_counts_render_invalid() -> None:
+    """A finite exact build that overflows is classified at the render boundary."""
     target_params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(29))
     target_encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(target_params, notes)
     target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(target_encoded).astype(np.float32)
@@ -145,7 +149,7 @@ def test_evaluate_pyfdn_row_unstable_exact_prediction_counts_render_invalid(
         result = evaluate_pyfdn_row(
             unstable,
             target,
-            renderer=PyFDNRenderer(path, checksum),
+            renderer=PyFDNRenderer(),
         )
 
     assert result.status == "render_invalid"
@@ -154,34 +158,30 @@ def test_evaluate_pyfdn_row_unstable_exact_prediction_counts_render_invalid(
 
 
 def test_pyfdn_evaluation_existing_audio_artifacts_raise_before_evaluation(
-    source_file: tuple[Path, str], tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """A reused output directory cannot mix stale audio with current row metrics.
 
-    :param source_file: Checksum-pinned production-geometry source audio.
     :param tmp_path: Isolated evaluation output directory.
     """
-    path, checksum = source_file
     stale_audio = tmp_path / "audio" / "sample_0"
     stale_audio.mkdir(parents=True)
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(30))
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
     target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
-    evaluator = PyFDNEvaluation(PyFDNRenderer(path, checksum), tmp_path)
+    evaluator = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
 
     with pytest.raises(ValueError, match="already contains pyFDN evaluation artifacts"):
         evaluator.evaluate_batch(target[None, :], target[None, :])
 
 
 def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
-    source_file: tuple[Path, str], tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """Successful and invalid predictions produce complete counts and inspectable artifacts.
 
-    :param source_file: Checksum-pinned production-geometry source audio.
     :param tmp_path: Isolated evaluation output directory.
     """
-    path, checksum = source_file
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(31))
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
     target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
@@ -194,10 +194,10 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
     expected = evaluate_pyfdn_row(
         successful,
         target,
-        renderer=PyFDNRenderer(path, checksum),
+        renderer=PyFDNRenderer(),
     )
     assert expected.status == "finite_render"
-    evaluator = PyFDNEvaluation(PyFDNRenderer(path, checksum), tmp_path)
+    evaluator = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
 
     with np.errstate(over="ignore", invalid="ignore"):
         evaluator.evaluate_batch(predictions, targets)

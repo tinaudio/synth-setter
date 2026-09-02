@@ -1,0 +1,6 @@
+pyfdn_evaluation:
+  _target_: synth_setter.evaluation.pyfdn_evaluator.PyFDNEvaluation
+  renderer:
+    _target_: synth_setter.data.pyfdn_instrument.PyFDNRenderer
+    synth_version: ${synth.synth_version}
+  output_dir: ${paths.output_dir}

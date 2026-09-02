@@ -67,6 +67,26 @@ def test_eval_config(cfg_eval: DictConfig) -> None:
     hydra.utils.instantiate(cfg_eval.trainer)
 
 
+def test_pyfdn_eval_flow_config_injects_canonical_renderer() -> None:
+    """The pyFDN evaluator profile owns no configurable source inputs."""
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="eval.yaml",
+                overrides=["experiment=pyfdn/eval_flow", "ckpt_path=checkpoint.ckpt"],
+            )
+        callback = cfg.callbacks.pyfdn_evaluation
+        renderer = callback.renderer
+
+        assert callback._target_ == ("synth_setter.evaluation.pyfdn_evaluator.PyFDNEvaluation")
+        assert renderer._target_ == ("synth_setter.data.pyfdn_instrument.PyFDNRenderer")
+        assert set(renderer) == {"_target_", "synth_version"}
+        assert "source_audio_path" not in cfg.datamodule
+        assert "source_audio_sha256" not in cfg.datamodule
+    finally:
+        GlobalHydra.instance().clear()
+
+
 def test_cfg_train_trainer_keys_coherent_with_test_mode(cfg_train: DictConfig) -> None:
     """Guard: ``cfg_train`` fixture produces a coherent epoch-based trainer config.
 

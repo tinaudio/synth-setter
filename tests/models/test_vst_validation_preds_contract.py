@@ -164,6 +164,7 @@ class _TinyEncoder(torch.nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
+        self.calls = 0
         self.linear = torch.nn.Linear(_MEL_CHANNELS * _MEL_N_MELS * _MEL_N_FRAMES, 16)
 
     def forward(self, mel: torch.Tensor) -> torch.Tensor:
@@ -172,6 +173,7 @@ class _TinyEncoder(torch.nn.Module):
         :param mel: Batch of mel spectrograms.
         :returns: Conditioning tensor of shape ``(B, 1, 16)``.
         """
+        self.calls += 1
         return self.linear(mel.flatten(start_dim=1)).unsqueeze(1)
 
 
@@ -211,6 +213,33 @@ def test_flow_matching_test_step_returns_predictions_and_flow_loss() -> None:
     assert outputs["preds"].shape == batch["params"].shape
     assert outputs["flow_loss"].ndim == 0
     assert torch.isfinite(outputs["flow_loss"])
+
+
+def test_flow_matching_test_step_encodes_conditioning_once() -> None:
+    """Sampling and flow-loss evaluation share one conditioning encoder result."""
+    module = _flow_matching_module()
+    batch = _batch()
+    batch["noise"] = torch.randn_like(batch["params"])
+
+    module.test_step(batch, batch_idx=0)
+
+    assert isinstance(module.encoder, _TinyEncoder)
+    assert module.encoder.calls == 1
+
+
+def test_flow_matching_test_prediction_ignores_target_matched_batch_noise() -> None:
+    """Terminal inference starts from an independent prior rather than OT noise."""
+    module = _flow_matching_module()
+    first = _batch()
+    second = {**first, "noise": torch.full_like(first["params"], 100.0)}
+    first["noise"] = torch.full_like(first["params"], -100.0)
+
+    torch.manual_seed(41)
+    first_prediction = module.test_step(first, batch_idx=0)["preds"]
+    torch.manual_seed(41)
+    second_prediction = module.test_step(second, batch_idx=0)["preds"]
+
+    torch.testing.assert_close(first_prediction, second_prediction)
 
 
 def test_flow_vae_validation_step_returns_per_param_mse() -> None:

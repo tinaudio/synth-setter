@@ -43,7 +43,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.pyfdn_instrument import params_to_fdn_build
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
-from synth_setter.evaluation.pyfdn_evaluator import decode_pyfdn_model_output
+from synth_setter.evaluation.pyfdn_evaluator import PyFDNEvaluation, decode_pyfdn_model_output
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
@@ -280,81 +280,35 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
 
 @pytest.mark.slow
 def test_eval_pyfdn_flow_rerenders_train_produced_checkpoint_prediction(
-    cfg_pyfdn_flow_train: DictConfig,
-    cfg_pyfdn_flow_eval: DictConfig,
+    cfg_pyfdn_rerender_train: DictConfig,
+    cfg_pyfdn_rerender_eval: DictConfig,
 ) -> None:
     """Train, restore, predict, strictly decode, and real-rerender one pyFDN row.
 
-    :param cfg_pyfdn_flow_train: Tiny production pyFDN training configuration.
-    :param cfg_pyfdn_flow_eval: Matching production evaluation configuration.
+    :param cfg_pyfdn_rerender_train: Calibrated production pyFDN training configuration.
+    :param cfg_pyfdn_rerender_eval: Matching canonical-source evaluation configuration.
     """
-    smoke_overrides = [
-        "trainer=cpu",
-        "model=vst_flowmlp",
-        "datamodule.train_val_test_sizes=[1,1,1]",
-        "datamodule.batch_size=1",
-        "datamodule.num_workers=0",
-        "datamodule.val_num_workers=0",
-        "model.encoder.frontend.n_mels=16",
-        "model.encoder.backbone.hidden_dim=2",
-        "model.encoder.backbone.out_dim=8",
-        "model.encoder.backbone.num_blocks=1",
-        "model.encoder.backbone.kernel_size=3",
-        "model.vector_field.d_model=32",
-        "model.vector_field.d_enc=16",
-        "model.vector_field.num_layers=2",
-        "model.validation_sample_steps=10",
-        "model.test_sample_steps=50",
-        "model.validation_cfg_strength=1.0",
-        "model.test_cfg_strength=1.0",
-        "model.cfg_dropout_rate=0.0",
-    ]
-    GlobalHydra.instance().clear()
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        train_cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=True,
-            overrides=[
-                "experiment=pyfdn/flow",
-                "logger=csv",
-                *smoke_overrides,
-            ],
-        )
-    with open_dict(train_cfg):
-        train_cfg.paths.root_dir = cfg_pyfdn_flow_train.paths.root_dir
-        train_cfg.paths.output_dir = cfg_pyfdn_flow_train.paths.output_dir
-        train_cfg.paths.log_dir = cfg_pyfdn_flow_train.paths.log_dir
-        train_cfg.seed = 123
-        train_cfg.test = False
-        train_cfg.trainer.max_epochs = 200
-        train_cfg.trainer.max_steps = 200
-        train_cfg.trainer.limit_train_batches = 1
-        train_cfg.trainer.limit_val_batches = 1
-        train_cfg.trainer.num_sanity_val_steps = 0
-        train_cfg.trainer.val_check_interval = 200
-        train_cfg.model.optimizer.lr = 3e-3
-        train_cfg.callbacks.fixed_flow_noise = {
-            "_target_": "tests.helpers.fixed_flow_noise.FixedFlowNoise",
-            "seed": 123,
-        }
-        train_cfg.callbacks.model_checkpoint.save_top_k = 1
-        train_cfg.callbacks.model_checkpoint.save_last = True
-    HydraConfig().set_config(train_cfg)
-    _, train_objects = train(train_cfg)
-    checkpoint_path = Path(train_cfg.paths.output_dir) / "checkpoints" / "last.ckpt"
+    HydraConfig().set_config(cfg_pyfdn_rerender_train)
+    _, train_objects = train(cfg_pyfdn_rerender_train)
+    checkpoint_path = Path(cfg_pyfdn_rerender_train.paths.output_dir) / "checkpoints" / "last.ckpt"
     assert checkpoint_path.stat().st_size > 0
 
-    with open_dict(cfg_pyfdn_flow_eval):
-        cfg_pyfdn_flow_eval.ckpt_path = str(checkpoint_path)
-    HydraConfig().set_config(cfg_pyfdn_flow_eval)
-    metric_dict, eval_objects = evaluate(cfg_pyfdn_flow_eval)
+    with open_dict(cfg_pyfdn_rerender_eval):
+        cfg_pyfdn_rerender_eval.ckpt_path = str(checkpoint_path)
+    HydraConfig().set_config(cfg_pyfdn_rerender_eval)
+    metric_dict, eval_objects = evaluate(cfg_pyfdn_rerender_eval)
+    eval_cfg = cfg_pyfdn_rerender_eval
 
-    assert "source_audio_path" not in cfg_pyfdn_flow_eval.datamodule
-    assert "source_audio_sha256" not in cfg_pyfdn_flow_eval.datamodule
+    assert "source_audio_path" not in eval_cfg.datamodule
+    assert "source_audio_sha256" not in eval_cfg.datamodule
     assert (
         eval_objects["datamodule"].source_provenance
         == train_objects["datamodule"].source_provenance
     )
+    evaluator = next(
+        callback for callback in eval_objects["callbacks"] if isinstance(callback, PyFDNEvaluation)
+    )
+    assert evaluator.renderer.source_provenance == eval_objects["datamodule"].source_provenance
 
     assert train_objects["trainer"].global_step == 200
     assert torch.isfinite(metric_dict["test/flow_loss"])
@@ -362,7 +316,7 @@ def test_eval_pyfdn_flow_rerenders_train_produced_checkpoint_prediction(
     assert metric_dict["pyfdn/valid_build_rate"] == 1.0
     assert metric_dict["pyfdn/finite_render_rate"] == 1.0
 
-    sample_dir = Path(cfg_pyfdn_flow_eval.paths.output_dir) / "audio" / "sample_0"
+    sample_dir = Path(eval_cfg.paths.output_dir) / "audio" / "sample_0"
     params = pd.read_csv(sample_dir / "params.csv")
     prediction = params["pred_model"].to_numpy(dtype=np.float32)
     assert prediction.shape == (91,)
@@ -377,7 +331,7 @@ def test_eval_pyfdn_flow_rerenders_train_produced_checkpoint_prediction(
     assert np.isfinite(predicted_audio).all()
     assert np.max(np.abs(predicted_audio)) > 0.0
 
-    metrics_path = Path(cfg_pyfdn_flow_eval.paths.output_dir) / "metrics" / "metrics.json"
+    metrics_path = Path(eval_cfg.paths.output_dir) / "metrics" / "metrics.json"
     persisted_metrics = json.loads(metrics_path.read_text())
     assert persisted_metrics["pyfdn/finite_render_rate"] == 1.0
     assert all(

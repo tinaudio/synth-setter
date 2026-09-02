@@ -76,6 +76,27 @@ _PYFDN_FLOW_SMOKE_OVERRIDES = (
     "model.test_sample_steps=1",
     "model.cfg_dropout_rate=0.0",
 )
+_PYFDN_RERENDER_SMOKE_OVERRIDES = (
+    "trainer=cpu",
+    "model=vst_flowmlp",
+    "datamodule.train_val_test_sizes=[1,1,1]",
+    "datamodule.batch_size=1",
+    "datamodule.num_workers=0",
+    "datamodule.val_num_workers=0",
+    "model.encoder.frontend.n_mels=16",
+    "model.encoder.backbone.hidden_dim=2",
+    "model.encoder.backbone.out_dim=8",
+    "model.encoder.backbone.num_blocks=1",
+    "model.encoder.backbone.kernel_size=3",
+    "model.vector_field.d_model=32",
+    "model.vector_field.d_enc=16",
+    "model.vector_field.num_layers=2",
+    "model.validation_sample_steps=10",
+    "model.test_sample_steps=50",
+    "model.validation_cfg_strength=1.0",
+    "model.test_cfg_strength=1.0",
+    "model.cfg_dropout_rate=0.0",
+)
 
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
@@ -462,6 +483,77 @@ def cfg_pyfdn_flow_eval(tmp_path: Path) -> DictConfig:
         cfg.seed = 123
         cfg.trainer.max_steps = 1
         cfg.trainer.limit_val_batches = 1
+    return cfg
+
+
+@pytest.fixture
+def cfg_pyfdn_rerender_train(tmp_path: Path) -> DictConfig:
+    """Compose the calibrated real-checkpoint pyFDN rerender training run.
+
+    :param tmp_path: Parent of the isolated training output directory.
+    :returns: Deterministic CPU training configuration.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=pyfdn/flow",
+                "logger=csv",
+                *_PYFDN_RERENDER_SMOKE_OVERRIDES,
+            ],
+        )
+    with open_dict(cfg):
+        _set_workspace_root(cfg)
+        cfg.paths.output_dir = str(tmp_path / "rerender-train")
+        cfg.paths.log_dir = str(tmp_path / "rerender-train")
+        cfg.seed = 123
+        cfg.test = False
+        cfg.trainer.max_epochs = 200
+        cfg.trainer.max_steps = 200
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 1
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.val_check_interval = 200
+        cfg.model.optimizer.lr = 3e-3
+        cfg.callbacks.fixed_flow_noise = {
+            "_target_": "tests.helpers.fixed_flow_noise.FixedFlowNoise",
+            "seed": 123,
+        }
+        cfg.callbacks.model_checkpoint.save_top_k = 1
+        cfg.callbacks.model_checkpoint.save_last = True
+    return cfg
+
+
+@pytest.fixture
+def cfg_pyfdn_rerender_eval(tmp_path: Path) -> DictConfig:
+    """Compose canonical-source evaluation for the calibrated checkpoint.
+
+    :param tmp_path: Parent of the isolated evaluation output directory.
+    :returns: Deterministic CPU test configuration with native rerendering.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=pyfdn/eval_flow",
+                "ckpt_path=null",
+                *_PYFDN_RERENDER_SMOKE_OVERRIDES,
+            ],
+        )
+    with open_dict(cfg):
+        _set_workspace_root(cfg)
+        cfg.paths.output_dir = str(tmp_path / "rerender-eval")
+        cfg.paths.log_dir = str(tmp_path / "rerender-eval")
+        cfg.seed = 123
+        cfg.trainer.max_steps = 200
+        cfg.trainer.limit_test_batches = 1
+        cfg.datamodule.train_val_test_seeds = [789, 456, 123]
+        cfg.callbacks.fixed_flow_noise = {
+            "_target_": "tests.helpers.fixed_flow_noise.FixedFlowNoise",
+            "seed": 123,
+        }
     return cfg
 
 

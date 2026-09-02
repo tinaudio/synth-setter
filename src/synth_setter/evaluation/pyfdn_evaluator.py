@@ -14,6 +14,7 @@ from lightning import Callback, LightningModule, Trainer
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.pyfdn_source import PYFDN_SOURCE_SAMPLE_RATE_HZ
 from synth_setter.data.vst.param_spec import ParameterValues
 from synth_setter.evaluation.compute_audio_metrics import (
     compute_mss,
@@ -22,7 +23,13 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_wmfcc,
 )
 
-_PYFDN_SAMPLE_RATE = 48_000.0
+_PYFDN_SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
+_AUDIO_METRICS = {
+    "mss": compute_mss,
+    "rms_cosine": compute_rms,
+    "sot": compute_sot,
+    "wmfcc": compute_wmfcc,
+}
 _PREDICTION_ERRORS = (TypeError, ValueError, RuntimeError, OverflowError, FloatingPointError)
 type PyFDNRowStatus = Literal["decode_invalid", "build_invalid", "render_invalid", "finite_render"]
 
@@ -152,7 +159,7 @@ def evaluate_pyfdn_row(
 
     :param prediction: Predicted model-space coordinates.
     :param target: Ground-truth model-space coordinates.
-    :param renderer: Checksum-pinned fixed-source native renderer.
+    :param renderer: Canonical-source native renderer.
     :returns: Native target audio plus prediction status, audio, and 48 kHz metrics.
     :raises ValueError: Target data, target render, or successful-pair metrics are invalid.
     """
@@ -161,14 +168,21 @@ def evaluate_pyfdn_row(
     target_audio = renderer.render_build(target_build)
     target_peak, target_rms = _peak_and_rms(target_audio)
 
-    try:
-        predicted_params = decode_pyfdn_model_output(prediction)
-    except _PREDICTION_ERRORS as exc:
+    predicted_params: ParameterValues | None = None
+
+    def failed(status: PyFDNRowStatus, stage: str, exc: Exception) -> PyFDNRowEvaluation:
+        """Package a terminal prediction failure.
+
+        :param status: Terminal evaluator status.
+        :param stage: Failing stage name.
+        :param exc: Boundary exception.
+        :returns: Row result retaining all available target and prediction state.
+        """
         return PyFDNRowEvaluation(
-            status="decode_invalid",
-            error=_prediction_error("decode", exc),
+            status=status,
+            error=_prediction_error(stage, exc),
             target_params=target_params,
-            predicted_params=None,
+            predicted_params=predicted_params,
             target_audio=target_audio,
             predicted_audio=None,
             audio_metrics={},
@@ -177,47 +191,26 @@ def evaluate_pyfdn_row(
             predicted_peak=None,
             predicted_rms=None,
         )
+
+    try:
+        predicted_params = decode_pyfdn_model_output(prediction)
+    except _PREDICTION_ERRORS as exc:
+        return failed("decode_invalid", "decode", exc)
 
     try:
         predicted_build = params_to_fdn_build(predicted_params, sample_rate=_PYFDN_SAMPLE_RATE)
     except _PREDICTION_ERRORS as exc:
-        return PyFDNRowEvaluation(
-            status="build_invalid",
-            error=_prediction_error("build", exc),
-            target_params=target_params,
-            predicted_params=predicted_params,
-            target_audio=target_audio,
-            predicted_audio=None,
-            audio_metrics={},
-            target_peak=target_peak,
-            target_rms=target_rms,
-            predicted_peak=None,
-            predicted_rms=None,
-        )
+        return failed("build_invalid", "build", exc)
 
     try:
         predicted_audio = renderer.render_build(predicted_build)
     except _PREDICTION_ERRORS as exc:
-        return PyFDNRowEvaluation(
-            status="render_invalid",
-            error=_prediction_error("render", exc),
-            target_params=target_params,
-            predicted_params=predicted_params,
-            target_audio=target_audio,
-            predicted_audio=None,
-            audio_metrics={},
-            target_peak=target_peak,
-            target_rms=target_rms,
-            predicted_peak=None,
-            predicted_rms=None,
-        )
+        return failed("render_invalid", "render", exc)
 
     predicted_peak, predicted_rms = _peak_and_rms(predicted_audio)
     audio_metrics = {
-        "mss": float(compute_mss(target_audio, predicted_audio, _PYFDN_SAMPLE_RATE)),
-        "wmfcc": float(compute_wmfcc(target_audio, predicted_audio, _PYFDN_SAMPLE_RATE)),
-        "sot": float(compute_sot(target_audio, predicted_audio, _PYFDN_SAMPLE_RATE)),
-        "rms_cosine": float(compute_rms(target_audio, predicted_audio, _PYFDN_SAMPLE_RATE)),
+        name: float(metric(target_audio, predicted_audio, _PYFDN_SAMPLE_RATE))
+        for name, metric in _AUDIO_METRICS.items()
     }
     if not all(np.isfinite(value) for value in audio_metrics.values()):
         raise ValueError("pyFDN audio metrics must contain only finite values")
@@ -248,22 +241,83 @@ def _native_coordinate_values(params: ParameterValues) -> np.ndarray:
     return np.concatenate(values)
 
 
-def _distribution_metrics(
-    name: str, values: list[float]
-) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
-    """Return scalar and tabular population summaries for one nonempty distribution.
+def _distribution_metrics(values: list[float]) -> dict[str, float]:
+    """Return a population summary for one nonempty distribution.
 
-    :param name: Published metric name.
     :param values: Nonempty finite observations.
-    :returns: Namespaced scalar metrics and one aggregated-metrics table row.
+    :returns: Mean and population standard deviation.
     """
     array = np.asarray(values, dtype=np.float64)
-    mean = float(array.mean())
-    std = float(array.std(ddof=0))
-    return (
-        {f"{name}_mean": mean, f"{name}_std": std},
-        {name: {"mean": mean, "std": std}},
+    return {"mean": float(array.mean()), "std": float(array.std(ddof=0))}
+
+
+def _parameter_metrics(
+    squared_error: np.ndarray, finite_count: int
+) -> tuple[dict[str, float], list[dict[str, Any]]]:
+    """Aggregate parameter errors over finite model predictions.
+
+    :param squared_error: Per-coordinate accumulated squared error.
+    :param finite_count: Number of finite prediction rows.
+    :returns: Scalar metrics and per-coordinate CSV rows.
+    """
+    if not finite_count:
+        return {}, []
+
+    coordinate_mse = squared_error / finite_count
+    metrics = {"pyfdn/parameter_mse": float(coordinate_mse.mean())}
+    rows = []
+    for name, value in zip(PYFDN_N8_MONO_PARAM_SPEC.encoded_names, coordinate_mse, strict=True):
+        metrics[f"pyfdn/parameter_mse/coordinate/{name}"] = float(value)
+        rows.append({"coordinate": name, "mse": float(value)})
+
+    spans = {parameter.name: span for parameter, span in PYFDN_N8_MONO_PARAM_SPEC.encoded_slices()}
+    for field in (
+        "delays",
+        "direct_matrix",
+        "feedback_matrix",
+        "input_matrix",
+        "output_matrix",
+    ):
+        metrics[f"pyfdn/parameter_mse/field/{field}"] = float(coordinate_mse[spans[field]].mean())
+    rt_slice = slice(
+        spans["post_delay.rt_dc_seconds"].start,
+        spans["post_delay.rt_nyquist_seconds"].stop,
     )
+    metrics["pyfdn/parameter_mse/field/post_delay_rt_controls"] = float(
+        coordinate_mse[rt_slice].mean()
+    )
+    return metrics, rows
+
+
+def _distribution_aggregates(
+    rows: pd.DataFrame,
+) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+    """Aggregate behavioral and native-amplitude distributions.
+
+    :param rows: Per-prediction evaluator records.
+    :returns: Scalar metrics and rows for ``aggregated_metrics.csv``.
+    """
+    distributions = {
+        "pyfdn/amplitude/pred_peak": rows["pred_peak"].dropna().tolist(),
+        "pyfdn/amplitude/pred_rms": rows["pred_rms"].dropna().tolist(),
+        "pyfdn/amplitude/target_peak": rows["target_peak"].dropna().tolist(),
+        "pyfdn/amplitude/target_rms": rows["target_rms"].dropna().tolist(),
+    }
+    for column in _AUDIO_METRICS:
+        values = rows[column].dropna().tolist() if column in rows else []
+        if values:
+            distributions[f"pyfdn/audio/{column}"] = values
+
+    metrics: dict[str, float] = {}
+    aggregated_rows: dict[str, dict[str, float]] = {}
+    for name, values in distributions.items():
+        if not values:
+            continue
+        summary = _distribution_metrics(values)
+        metrics[f"{name}_mean"] = summary["mean"]
+        metrics[f"{name}_std"] = summary["std"]
+        aggregated_rows[name] = summary
+    return metrics, aggregated_rows
 
 
 class PyFDNEvaluation(Callback):
@@ -302,6 +356,7 @@ class PyFDNEvaluation(Callback):
         del pl_module
         if trainer.world_size != 1:
             raise ValueError("pyFDN evaluation artifacts require trainer.world_size == 1")
+        self._require_fresh_output()
         self._reset()
 
     def _require_fresh_output(self) -> None:
@@ -373,10 +428,16 @@ class PyFDNEvaluation(Callback):
             }
             self.rows.append(row)
             if result.status == "finite_render":
-                self._write_success_artifacts(sample_id, prediction, target, result)
+                self._write_success_artifacts(
+                    sample_id=sample_id,
+                    prediction=prediction,
+                    target=target,
+                    result=result,
+                )
 
     def _write_success_artifacts(
         self,
+        *,
         sample_id: int,
         prediction: np.ndarray,
         target: np.ndarray,
@@ -483,57 +544,16 @@ class PyFDNEvaluation(Callback):
             "pyfdn/parameter_finite_rate": self.parameter_finite_count / total,
         }
 
-        parameter_rows: list[dict[str, Any]] = []
-        if self.parameter_finite_count:
-            coordinate_mse = self.parameter_squared_error / self.parameter_finite_count
-            metrics["pyfdn/parameter_mse"] = float(coordinate_mse.mean())
-            for name, value in zip(
-                PYFDN_N8_MONO_PARAM_SPEC.encoded_names, coordinate_mse, strict=True
-            ):
-                metrics[f"pyfdn/parameter_mse/coordinate/{name}"] = float(value)
-                parameter_rows.append({"coordinate": name, "mse": float(value)})
-            spans = {
-                parameter.name: span
-                for parameter, span in PYFDN_N8_MONO_PARAM_SPEC.encoded_slices()
-            }
-            for field in (
-                "delays",
-                "feedback_matrix",
-                "input_matrix",
-                "output_matrix",
-                "direct_matrix",
-            ):
-                metrics[f"pyfdn/parameter_mse/field/{field}"] = float(
-                    coordinate_mse[spans[field]].mean()
-                )
-            rt_slice = slice(
-                spans["post_delay.rt_dc_seconds"].start,
-                spans["post_delay.rt_nyquist_seconds"].stop,
-            )
-            metrics["pyfdn/parameter_mse/field/post_delay_rt_controls"] = float(
-                coordinate_mse[rt_slice].mean()
-            )
+        parameter_metrics, parameter_rows = _parameter_metrics(
+            self.parameter_squared_error, self.parameter_finite_count
+        )
+        metrics.update(parameter_metrics)
         pd.DataFrame(parameter_rows, columns=["coordinate", "mse"]).to_csv(
             metrics_dir / "parameter_metrics.csv", index=False
         )
 
-        aggregated_rows: dict[str, dict[str, float]] = {}
-        distributions = {
-            "pyfdn/amplitude/target_peak": rows["target_peak"].dropna().tolist(),
-            "pyfdn/amplitude/target_rms": rows["target_rms"].dropna().tolist(),
-            "pyfdn/amplitude/pred_peak": rows["pred_peak"].dropna().tolist(),
-            "pyfdn/amplitude/pred_rms": rows["pred_rms"].dropna().tolist(),
-        }
-        for column in ("mss", "wmfcc", "sot", "rms_cosine"):
-            values = rows[column].dropna().tolist() if column in rows else []
-            if values:
-                distributions[f"pyfdn/audio/{column}"] = values
-        for name, values in distributions.items():
-            if not values:
-                continue
-            scalar_metrics, table_row = _distribution_metrics(name, values)
-            metrics.update(scalar_metrics)
-            aggregated_rows.update(table_row)
+        distribution_metrics, aggregated_rows = _distribution_aggregates(rows)
+        metrics.update(distribution_metrics)
         pd.DataFrame.from_dict(aggregated_rows, orient="index").to_csv(
             metrics_dir / "aggregated_metrics.csv"
         )

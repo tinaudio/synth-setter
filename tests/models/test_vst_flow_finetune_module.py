@@ -709,6 +709,31 @@ def test_controlled_sampling_differs_from_the_frozen_base(tmp_path: Path) -> Non
     assert not torch.equal(controlled, uncontrolled)
 
 
+def test_finetune_test_flow_loss_uses_controlled_velocity(tmp_path: Path) -> None:
+    """Test loss measures the controlled model that produces terminal predictions.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    base = _base_module()
+    module = _finetune(_base_checkpoint(tmp_path, base), overrides={"test_sample_steps": 1})
+    batch = _batch()
+    optimizer = torch.optim.Adam([p for p in module.parameters() if p.requires_grad], lr=1e-2)
+    for _ in range(3):
+        optimizer.zero_grad()
+        module._train_step(batch).loss.backward()
+        optimizer.step()
+
+    module.on_test_batch_start(batch, 0)
+    torch.manual_seed(19)
+    controlled_loss = module.test_step(batch, 0)["flow_loss"]
+    module.on_test_batch_end(None, batch, 0)
+    torch.manual_seed(19)
+    base_loss = base.test_step(batch, 0)["flow_loss"]
+
+    assert torch.isfinite(controlled_loss)
+    assert not torch.equal(controlled_loss, base_loss)
+
+
 def test_controlled_sampling_engages_only_above_t_min(tmp_path: Path) -> None:
     """Raising the threshold must shrink the set of evaluations that score.
 
