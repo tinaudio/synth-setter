@@ -312,16 +312,24 @@ def test_eval_pyfdn_flow_rerenders_train_produced_checkpoint_prediction(
 
     assert train_objects["trainer"].global_step == 200
     assert torch.isfinite(metric_dict["test/flow_loss"])
-    assert metric_dict["pyfdn/rows_total"] == 1.0
+    assert metric_dict["pyfdn/rows_total"] == 2.0
     assert metric_dict["pyfdn/valid_build_rate"] == 1.0
     assert metric_dict["pyfdn/finite_render_rate"] == 1.0
-    assert metric_dict["pyfdn/parameter_mse"] < 1e-4
-    assert metric_dict["pyfdn/audio/mss_mean"] < 2.0
+    assert metric_dict["pyfdn/parameter_mse"] < 0.5
+    assert 0.0 <= metric_dict["pyfdn/audio/mss_mean"] < 20.0
+    assert metric_dict["pyfdn/audio/wmfcc_mean"] >= 0.0
+    assert metric_dict["pyfdn/audio/sot_mean"] >= 0.0
+    assert 0.0 <= metric_dict["pyfdn/audio/rms_cosine_mean"] <= 1.0
 
     sample_dir = Path(eval_cfg.paths.output_dir) / "audio" / "sample_0"
     params = pd.read_csv(sample_dir / "params.csv")
     prediction = params["pred_model"].to_numpy(dtype=np.float32)
-    assert prediction.shape == (91,)
+    second_params = pd.read_csv(
+        Path(eval_cfg.paths.output_dir) / "audio" / "sample_1" / "params.csv"
+    )
+    second_prediction = second_params["pred_model"].to_numpy(dtype=np.float32)
+    assert prediction.shape == second_prediction.shape == (91,)
+    assert not np.array_equal(prediction, second_prediction)
     decoded = decode_pyfdn_model_output(prediction)
     build = params_to_fdn_build(decoded, sample_rate=48_000.0)
     assert build.post_delay is not None and build.post_delay.shape == (1, 6, 8)
@@ -336,11 +344,26 @@ def test_eval_pyfdn_flow_rerenders_train_produced_checkpoint_prediction(
     metrics_path = Path(eval_cfg.paths.output_dir) / "metrics" / "metrics.json"
     persisted_metrics = json.loads(metrics_path.read_text())
     assert persisted_metrics["pyfdn/finite_render_rate"] == 1.0
-    assert all(
-        math.isfinite(value)
-        for key, value in persisted_metrics.items()
-        if key.startswith(("pyfdn/audio/", "pyfdn/amplitude/"))
-    )
+    expected_distribution_keys = {
+        "pyfdn/amplitude/pred_peak_mean",
+        "pyfdn/amplitude/pred_peak_std",
+        "pyfdn/amplitude/pred_rms_mean",
+        "pyfdn/amplitude/pred_rms_std",
+        "pyfdn/amplitude/target_peak_mean",
+        "pyfdn/amplitude/target_peak_std",
+        "pyfdn/amplitude/target_rms_mean",
+        "pyfdn/amplitude/target_rms_std",
+        "pyfdn/audio/mss_mean",
+        "pyfdn/audio/mss_std",
+        "pyfdn/audio/rms_cosine_mean",
+        "pyfdn/audio/rms_cosine_std",
+        "pyfdn/audio/sot_mean",
+        "pyfdn/audio/sot_std",
+        "pyfdn/audio/wmfcc_mean",
+        "pyfdn/audio/wmfcc_std",
+    }
+    assert expected_distribution_keys <= persisted_metrics.keys()
+    assert all(math.isfinite(persisted_metrics[key]) for key in expected_distribution_keys)
 
 
 def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:

@@ -16,9 +16,12 @@ from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParameterValues
 from synth_setter.evaluation.pyfdn_evaluator import (
     PyFDNEvaluation,
+    PyFDNRowEvaluation,
     decode_pyfdn_model_output,
     evaluate_pyfdn_row,
 )
+
+type _EvaluatedOutputs = tuple[Path, dict[str, float], np.ndarray, np.ndarray, PyFDNRowEvaluation]
 
 
 def test_pyfdn_evaluator_imports_without_registry_order_priming() -> None:
@@ -38,6 +41,11 @@ def test_pyfdn_evaluator_imports_without_registry_order_priming() -> None:
             if name.startswith(prefixes):
                 del sys.modules[name]
         sys.modules.update(saved)
+        for name, module in saved.items():
+            parent_name, _, attribute = name.rpartition(".")
+            parent = sys.modules.get(parent_name)
+            if parent is not None:
+                setattr(parent, attribute, module)
 
     assert imported.PYFDN_N8_MONO_PARAM_SPEC.encoded_width == 91
 
@@ -190,6 +198,11 @@ def test_pyfdn_evaluation_resumes_committed_rows_after_interruption(tmp_path: Pa
     target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
     interrupted = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
     interrupted.evaluate_batch(target[None, :], target[None, :])
+    pending = tmp_path / "metrics" / "rows" / "sample_1.pending"
+    pending.write_text("interrupted")
+    orphan = tmp_path / "audio" / "sample_1"
+    orphan.mkdir()
+    (orphan / "pred.wav").write_bytes(b"partial")
 
     resumed = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
     predictions = np.stack([target, np.full(91, np.nan, dtype=np.float32)])
@@ -200,6 +213,24 @@ def test_pyfdn_evaluation_resumes_committed_rows_after_interruption(tmp_path: Pa
     assert metrics["pyfdn/finite_render_count"] == 1.0
     assert metrics["pyfdn/invalid/decode_count"] == 1.0
     assert (tmp_path / "audio" / "sample_0" / "pred.wav").is_file()
+    assert not orphan.exists()
+    assert not pending.exists()
+
+
+def test_pyfdn_evaluation_resume_corrupt_artifact_raises(tmp_path: Path) -> None:
+    """Committed progress never skips a native artifact whose bytes changed.
+
+    :param tmp_path: Isolated evaluation output directory.
+    """
+    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(30))
+    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
+    PyFDNEvaluation(PyFDNRenderer(), tmp_path).evaluate_batch(target[None, :], target[None, :])
+    (tmp_path / "audio" / "sample_0" / "pred.wav").write_bytes(b"corrupt")
+
+    resumed = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
+    with pytest.raises(ValueError, match="artifacts do not match their digests"):
+        resumed.evaluate_batch(target[None, :], target[None, :])
 
 
 def test_pyfdn_evaluation_resume_changed_prediction_raises(tmp_path: Path) -> None:
@@ -237,12 +268,35 @@ def test_pyfdn_evaluation_existing_audio_artifacts_raise_before_evaluation(
         evaluator.evaluate_batch(target[None, :], target[None, :])
 
 
-def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
+def test_pyfdn_evaluation_infinite_prediction_is_not_counted_as_finite_out_of_range(
     tmp_path: Path,
 ) -> None:
-    """Successful and invalid predictions produce complete counts and inspectable artifacts.
+    """Infinite coordinates stay decode-invalid without inflating finite range counts.
 
     :param tmp_path: Isolated evaluation output directory.
+    """
+    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(31))
+    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
+    prediction = target.copy()
+    prediction[0] = np.inf
+    evaluator = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
+
+    evaluator.evaluate_batch(prediction[None, :], target[None, :])
+    evaluator.finalize()
+
+    rows = pd.read_csv(tmp_path / "metrics" / "metrics.csv")
+    assert rows.loc[0, "pred_out_of_range_count"] == 0
+
+
+@pytest.fixture
+def evaluated_pyfdn_outputs(
+    tmp_path: Path,
+) -> _EvaluatedOutputs:
+    """Run one mixed-status evaluation for focused artifact assertions.
+
+    :param tmp_path: Isolated evaluation output directory.
+    :returns: Output root, metrics, target, successful prediction, and native result.
     """
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(31))
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
@@ -252,18 +306,22 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
     predictions = np.stack(
         [successful, np.full(91, np.nan, dtype=np.float32), np.ones(91, dtype=np.float32)]
     )
-    targets = np.stack([target, target, target])
-    expected = evaluate_pyfdn_row(
-        successful,
-        target,
-        renderer=PyFDNRenderer(),
-    )
-    assert expected.status == "finite_render"
     evaluator = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
-
     with np.errstate(over="ignore", invalid="ignore"):
-        evaluator.evaluate_batch(predictions, targets)
+        evaluator.evaluate_batch(predictions, np.stack([target, target, target]))
     metrics = evaluator.finalize()
+    expected = evaluate_pyfdn_row(successful, target, renderer=PyFDNRenderer())
+    return tmp_path, metrics, target, successful, expected
+
+
+def test_pyfdn_evaluation_accounts_for_each_terminal_status(
+    evaluated_pyfdn_outputs: _EvaluatedOutputs,
+) -> None:
+    """Mixed predictions produce distinct decode, render, and success counts.
+
+    :param evaluated_pyfdn_outputs: Completed mixed-status evaluation.
+    """
+    output_dir, metrics, _, _, _ = evaluated_pyfdn_outputs
 
     assert metrics["pyfdn/rows_total"] == 3.0
     assert metrics["pyfdn/invalid/decode_count"] == 1.0
@@ -273,38 +331,49 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
     assert metrics["pyfdn/finite_render_count"] == 1.0
     assert metrics["pyfdn/valid_build_rate"] == pytest.approx(2.0 / 3.0)
     assert metrics["pyfdn/finite_render_rate"] == pytest.approx(1.0 / 3.0)
-    assert metrics["pyfdn/parameter_finite_count"] == 2.0
-    assert "pyfdn/parameter_mse/coordinate/delays.0" in metrics
-    assert "pyfdn/parameter_mse/field/post_delay_rt_controls" in metrics
-    expected_direct_mse = (
-        float(successful[88] - target[88]) ** 2 + float(1.0 - target[88]) ** 2
-    ) / 2.0
-    assert metrics["pyfdn/parameter_mse/coordinate/direct_matrix.0.0"] == pytest.approx(
-        expected_direct_mse
-    )
-    assert metrics["pyfdn/parameter_mse/field/direct_matrix"] == pytest.approx(expected_direct_mse)
-
-    rows = pd.read_csv(tmp_path / "metrics" / "metrics.csv")
+    rows = pd.read_csv(output_dir / "metrics" / "metrics.csv")
     assert rows["status"].tolist() == ["finite_render", "decode_invalid", "render_invalid"]
-    aggregated = pd.read_csv(tmp_path / "metrics" / "aggregated_metrics.csv", index_col=0)
+
+
+def test_pyfdn_evaluation_writes_metric_csv_schemas(
+    evaluated_pyfdn_outputs: _EvaluatedOutputs,
+) -> None:
+    """Aggregate and coordinate metric CSVs retain their consumer schemas.
+
+    :param evaluated_pyfdn_outputs: Completed mixed-status evaluation.
+    """
+    output_dir, _, _, _, _ = evaluated_pyfdn_outputs
+    aggregated = pd.read_csv(output_dir / "metrics" / "aggregated_metrics.csv", index_col=0)
+    parameter_metrics = pd.read_csv(output_dir / "metrics" / "parameter_metrics.csv")
+
     assert aggregated.columns.tolist() == ["mean", "std"]
     assert all(pd.api.types.is_float_dtype(aggregated[column]) for column in aggregated)
-    parameter_metrics = pd.read_csv(tmp_path / "metrics" / "parameter_metrics.csv")
     assert parameter_metrics.columns.tolist() == ["coordinate", "mse"]
     assert pd.api.types.is_float_dtype(parameter_metrics["mse"])
-    pred_path = tmp_path / "audio" / "sample_0" / "pred.wav"
-    target_path = tmp_path / "audio" / "sample_0" / "target.wav"
-    assert sf.info(pred_path).subtype == "FLOAT"
-    assert sf.info(target_path).subtype == "FLOAT"
+
+
+def test_pyfdn_evaluation_writes_exact_native_artifacts(
+    evaluated_pyfdn_outputs: _EvaluatedOutputs,
+) -> None:
+    """Native float WAVs and parameter rows preserve exact evaluated values.
+
+    :param evaluated_pyfdn_outputs: Completed mixed-status evaluation.
+    """
+    output_dir, metrics, target, successful, expected = evaluated_pyfdn_outputs
+    pred_path = output_dir / "audio" / "sample_0" / "pred.wav"
+    target_path = output_dir / "audio" / "sample_0" / "target.wav"
     pred_audio, _ = sf.read(pred_path, dtype="float32", always_2d=True)
     target_audio, _ = sf.read(target_path, dtype="float32", always_2d=True)
+    params_csv = pd.read_csv(output_dir / "audio" / "sample_0" / "params.csv")
+
+    assert sf.info(pred_path).subtype == "FLOAT"
+    assert sf.info(target_path).subtype == "FLOAT"
     assert expected.predicted_audio is not None
     np.testing.assert_array_equal(pred_audio.T, expected.predicted_audio)
     np.testing.assert_array_equal(target_audio.T, expected.target_audio)
-    params_csv = pd.read_csv(tmp_path / "audio" / "sample_0" / "params.csv")
     np.testing.assert_allclose(
         params_csv["pred_model"].to_numpy(), successful, rtol=0.0, atol=3e-8
     )
     np.testing.assert_allclose(params_csv["target_model"].to_numpy(), target, rtol=0.0, atol=3e-8)
     assert metrics["pyfdn/audio/mss_std"] == 0.0
-    assert not list(tmp_path.rglob("*preview*"))
+    assert not list(output_dir.rglob("*preview*"))

@@ -56,7 +56,7 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
-_PYFDN_FLOW_SMOKE_OVERRIDES = (
+_PYFDN_SMOKE_OVERRIDES = (
     "trainer=cpu",
     "datamodule.train_val_test_sizes=[1,1,1]",
     "datamodule.batch_size=1",
@@ -67,6 +67,10 @@ _PYFDN_FLOW_SMOKE_OVERRIDES = (
     "model.encoder.backbone.out_dim=8",
     "model.encoder.backbone.num_blocks=1",
     "model.encoder.backbone.kernel_size=3",
+    "model.cfg_dropout_rate=0.0",
+)
+_PYFDN_FLOW_SMOKE_OVERRIDES = (
+    *_PYFDN_SMOKE_OVERRIDES,
     "model.vector_field.d_model=8",
     "model.vector_field.num_heads=2",
     "model.vector_field.d_ff=8",
@@ -74,20 +78,10 @@ _PYFDN_FLOW_SMOKE_OVERRIDES = (
     "model.vector_field.projection.num_tokens=2",
     "model.validation_sample_steps=1",
     "model.test_sample_steps=1",
-    "model.cfg_dropout_rate=0.0",
 )
 _PYFDN_RERENDER_SMOKE_OVERRIDES = (
-    "trainer=cpu",
     "model=vst_flowmlp",
-    "datamodule.train_val_test_sizes=[1,1,1]",
-    "datamodule.batch_size=1",
-    "datamodule.num_workers=0",
-    "datamodule.val_num_workers=0",
-    "model.encoder.frontend.n_mels=16",
-    "model.encoder.backbone.hidden_dim=2",
-    "model.encoder.backbone.out_dim=8",
-    "model.encoder.backbone.num_blocks=1",
-    "model.encoder.backbone.kernel_size=3",
+    *_PYFDN_SMOKE_OVERRIDES,
     "model.vector_field.d_model=32",
     "model.vector_field.d_enc=16",
     "model.vector_field.num_layers=2",
@@ -95,7 +89,6 @@ _PYFDN_RERENDER_SMOKE_OVERRIDES = (
     "model.test_sample_steps=50",
     "model.validation_cfg_strength=1.0",
     "model.test_cfg_strength=1.0",
-    "model.cfg_dropout_rate=0.0",
 )
 
 NUM_FIXTURE_SAMPLES = 5
@@ -548,8 +541,8 @@ def cfg_pyfdn_rerender_eval(tmp_path: Path) -> DictConfig:
         cfg.paths.log_dir = str(tmp_path / "rerender-eval")
         cfg.seed = 123
         cfg.trainer.max_steps = 200
-        cfg.trainer.limit_test_batches = 1
-        cfg.datamodule.train_val_test_seeds = [789, 456, 123]
+        cfg.trainer.limit_test_batches = 2
+        cfg.datamodule.train_val_test_sizes = [1, 1, 2]
         cfg.callbacks.fixed_flow_noise = {
             "_target_": "tests.helpers.fixed_flow_noise.FixedFlowNoise",
             "seed": 123,

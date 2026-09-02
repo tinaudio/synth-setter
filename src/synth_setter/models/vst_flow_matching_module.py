@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import torch
 from beartype import beartype
@@ -138,6 +138,27 @@ class TrainStepOutputs:
 
 
 type _TimeField = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+
+
+class FlowTestStepOutput(TypedDict):
+    """Flow test outputs consumed by metrics and evaluation callbacks.
+
+    .. attribute :: flow_loss
+
+       Fully conditioned scalar flow objective.
+
+    .. attribute :: param_mse
+
+       Scalar terminal parameter error.
+
+    .. attribute :: preds
+
+       Terminal model-space predictions shaped ``(batch, params)``.
+    """
+
+    flow_loss: Float[torch.Tensor, ""]
+    param_mse: Float[torch.Tensor, ""]
+    preds: Float[torch.Tensor, "batch params"]
 
 
 @jaxtyped(typechecker=beartype)
@@ -914,7 +935,12 @@ class VSTFlowMatchingModule(LightningModule):
         prediction = fully_conditioned(x_t, t)
         return self._weighted_flow_loss(prediction, target, t)
 
-    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> dict[str, torch.Tensor]:
+    @jaxtyped(typechecker=beartype)
+    def test_step(
+        self,
+        batch: dict[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE]],
+        batch_idx: int,
+    ) -> FlowTestStepOutput:
         conditioning = self.encoder(self._get_conditioning_from_batch(batch))
         pred_params = self._sample_encoded(
             conditioning,
