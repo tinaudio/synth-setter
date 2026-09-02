@@ -294,14 +294,36 @@ def test_eval_pyfdn_flow_consumes_train_produced_checkpoint(
     HydraConfig().set_config(cfg_pyfdn_flow_eval)
     metric_dict, _ = evaluate(cfg_pyfdn_flow_eval)
 
+    groups = {
+        "delays",
+        "feedback_matrix",
+        "input_matrix",
+        "output_matrix",
+        "direct_matrix",
+    }
+    namespaces = {
+        "per_param_mse",
+        "per_param_mse_best_swap",
+        "per_param_mse_number_group_swap",
+    }
+    expected_group_metrics = {
+        f"{namespace}/{group}" for namespace in namespaces for group in groups
+    }
+    callback_group_metrics = {key for key in metric_dict if key.split("/", 1)[0] in namespaces}
+
     assert train_objects["trainer"].global_step == 1
     assert torch.isfinite(metric_dict["val/param_mse"])
-    assert torch.isfinite(metric_dict["per_param_mse/delays"])
+    assert callback_group_metrics == expected_group_metrics
+    assert all(torch.isfinite(metric_dict[key]) for key in expected_group_metrics)
 
     metrics_path = Path(cfg_pyfdn_flow_eval.paths.output_dir) / "metrics" / "metrics.json"
     persisted_metrics = json.loads(metrics_path.read_text())
+    persisted_group_metrics = {
+        key for key in persisted_metrics if key.split("/", 1)[0] in namespaces
+    }
     assert math.isfinite(persisted_metrics["val/param_mse"])
-    assert math.isfinite(persisted_metrics["per_param_mse/delays"])
+    assert persisted_group_metrics == expected_group_metrics
+    assert all(math.isfinite(persisted_metrics[key]) for key in expected_group_metrics)
 
 
 def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:

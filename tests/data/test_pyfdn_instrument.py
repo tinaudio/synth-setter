@@ -249,6 +249,43 @@ def test_pyfdn_renderer_accepts_lossless_pcm_u8_source(
     assert np.isfinite(audio).all()
 
 
+def test_pyfdn_renderer_feedback_delay_path_changes_impulse_response(tmp_path: Path) -> None:
+    """The real feedback path responds at multiples of its configured delay.
+
+    :param tmp_path: Temporary directory owned by pytest.
+    """
+    path = tmp_path / "impulse.wav"
+    source = np.zeros(192_000, dtype=np.float32)
+    source[0] = 1.0
+    sf.write(path, source, 48_000, subtype="FLOAT")
+    input_matrix = np.zeros((8, 1), dtype=np.float64)
+    input_matrix[0, 0] = 1.0
+    output_matrix = np.zeros((1, 8), dtype=np.float64)
+    output_matrix[0, 0] = 1.0
+    params: ParameterValues = {
+        "delays": np.full(8, 8, dtype=np.int64),
+        "feedback_matrix": np.diag([-1.0, *([1.0] * 7)]).astype(np.float64),
+        "input_matrix": input_matrix,
+        "output_matrix": output_matrix,
+        "direct_matrix": np.zeros((1, 1), dtype=np.float64),
+    }
+    renderer = PyFDNRenderer(path, _sha256(path))
+
+    response = renderer.render(params)
+    shifted_params = dict(params)
+    shifted_params["delays"] = np.full(8, 9, dtype=np.int64)
+    shifted = renderer.render(shifted_params)
+
+    expected = np.zeros(40, dtype=np.float32)
+    expected[[8, 16, 24, 32]] = [1.0, -1.0, 1.0, -1.0]
+    shifted_expected = np.zeros(40, dtype=np.float32)
+    shifted_expected[[9, 18, 27, 36]] = [1.0, -1.0, 1.0, -1.0]
+    np.testing.assert_array_equal(response[0, :40], expected)
+    np.testing.assert_array_equal(shifted[0, :40], shifted_expected)
+    assert np.isfinite(response).all()
+    assert not np.array_equal(response, shifted)
+
+
 def test_pyfdn_renderer_rejects_source_sample_rate(tmp_path: Path) -> None:
     """A lossless mono source at any rate other than 48 kHz is invalid.
 

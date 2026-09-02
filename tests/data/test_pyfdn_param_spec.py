@@ -175,7 +175,7 @@ def test_pyfdn_spec_sampled_fields_have_exact_native_shapes_and_dtypes() -> None
 
 
 def test_pyfdn_spec_encoding_is_float32_and_round_trips_native_fields() -> None:
-    """The 89-wide encoded row preserves every sampled native field."""
+    """Encoded rows preserve every sampled native field."""
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(123))
 
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)

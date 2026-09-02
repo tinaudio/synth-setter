@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import cast
@@ -15,7 +16,8 @@ from typing import cast
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
@@ -26,34 +28,31 @@ type PyFDNItem = tuple[torch.Tensor, torch.Tensor]
 type PyFDNBatch = dict[str, torch.Tensor]
 
 
+@dataclass(frozen=True, slots=True)
+class _ProcessRendererKey:
+    source_audio_path: Path
+    source_audio_sha256: str
+    synth_version: str
+    sample_rate: int
+    channels: int
+    signal_duration_seconds: float
+    process_id: int
+
+
 @cache
-def _make_process_renderer(
-    source_audio_path: Path,
-    source_audio_sha256: str,
-    synth_version: str,
-    sample_rate: int,
-    channels: int,
-    signal_duration_seconds: float,
-    _process_id: int,
-) -> PyFDNRenderer:
+def _make_process_renderer(key: _ProcessRendererKey) -> PyFDNRenderer:
     """Load one renderer for each source and process identity.
 
-    :param source_audio_path: Path to the fixed lossless source.
-    :param source_audio_sha256: Expected SHA-256 of the source bytes.
-    :param synth_version: Required installed pyFDN version.
-    :param sample_rate: Fixed source and build sample rate in Hz.
-    :param channels: Fixed source channel count.
-    :param signal_duration_seconds: Fixed source duration in seconds.
-    :param _process_id: Process identity isolating worker-local cache entries.
+    :param key: Immutable renderer identity, including the current process.
     :returns: Lazily loaded renderer shared by matching datasets in this process.
     """
     return PyFDNRenderer(
-        source_audio_path,
-        source_audio_sha256,
-        synth_version=synth_version,
-        sample_rate=sample_rate,
-        channels=channels,
-        signal_duration_seconds=signal_duration_seconds,
+        key.source_audio_path,
+        key.source_audio_sha256,
+        synth_version=key.synth_version,
+        sample_rate=key.sample_rate,
+        channels=key.channels,
+        signal_duration_seconds=key.signal_duration_seconds,
     )
 
 
@@ -119,13 +118,15 @@ class PyFDNDataset(Dataset[PyFDNItem]):
         :returns: Lazily loaded process-local renderer.
         """
         return _make_process_renderer(
-            self.source_audio_path,
-            self.source_audio_sha256,
-            self.synth_version,
-            self.sample_rate,
-            self.channels,
-            self.signal_duration_seconds,
-            os.getpid(),
+            _ProcessRendererKey(
+                source_audio_path=self.source_audio_path,
+                source_audio_sha256=self.source_audio_sha256,
+                synth_version=self.synth_version,
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                signal_duration_seconds=self.signal_duration_seconds,
+                process_id=os.getpid(),
+            )
         )
 
     def __getitem__(self, index: int) -> PyFDNItem:
@@ -235,7 +236,7 @@ class PyFDNDataModule(LightningDataModule):
         *,
         num_workers: int,
         shuffle: bool = False,
-    ) -> DataLoader[PyFDNBatch]:
+    ) -> StatefulDataLoader[PyFDNBatch]:
         """Wrap one online split with the fixed flow collator.
 
         :param dataset: Deterministic online split to load.
@@ -244,8 +245,8 @@ class PyFDNDataModule(LightningDataModule):
         :returns: Loader emitting the audio-conditioned flow batch contract.
         """
         return cast(
-            DataLoader[PyFDNBatch],
-            DataLoader(
+            StatefulDataLoader[PyFDNBatch],
+            StatefulDataLoader(
                 dataset,
                 batch_size=self.batch_size,
                 shuffle=shuffle,
@@ -255,7 +256,7 @@ class PyFDNDataModule(LightningDataModule):
             ),
         )
 
-    def train_dataloader(self) -> DataLoader[PyFDNBatch]:
+    def train_dataloader(self) -> StatefulDataLoader[PyFDNBatch]:
         """Return a shuffled loader over the fixed training rows.
 
         :returns: Batched deterministic training data.
@@ -266,14 +267,14 @@ class PyFDNDataModule(LightningDataModule):
             shuffle=True,
         )
 
-    def val_dataloader(self) -> DataLoader[PyFDNBatch]:
+    def val_dataloader(self) -> StatefulDataLoader[PyFDNBatch]:
         """Return the fixed-order validation loader.
 
         :returns: Batched deterministic validation data.
         """
         return self._loader(self.val, num_workers=self.val_num_workers)
 
-    def test_dataloader(self) -> DataLoader[PyFDNBatch]:
+    def test_dataloader(self) -> StatefulDataLoader[PyFDNBatch]:
         """Return the fixed-order test loader.
 
         :returns: Batched deterministic test data.

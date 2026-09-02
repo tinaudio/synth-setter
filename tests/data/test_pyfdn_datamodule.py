@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from torch.utils.data import RandomSampler, SequentialSampler
+from torch.utils.data import SequentialSampler
+from torchdata.stateful_dataloader.sampler import RandomSampler
 
 from synth_setter.data.pyfdn_datamodule import PyFDNDataModule, PyFDNDataset
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
@@ -215,6 +216,41 @@ def test_pyfdn_datamodule_loaders_shuffle_only_training_rows(
     assert isinstance(datamodule.train_dataloader().sampler, RandomSampler)
     assert isinstance(datamodule.val_dataloader().sampler, SequentialSampler)
     assert isinstance(datamodule.test_dataloader().sampler, SequentialSampler)
+
+
+@pytest.mark.parametrize("num_workers", [0, 2])
+def test_pyfdn_training_loader_restores_remaining_shuffled_batches(
+    source_file: tuple[Path, str], num_workers: int
+) -> None:
+    """A checkpointed loader resumes after consumed batches without repeats or skips.
+
+    :param source_file: Valid fixed source and checksum.
+    :param num_workers: Worker count, including the prefetching production path.
+    """
+    path, checksum = source_file
+    datamodule = PyFDNDataModule(
+        path,
+        checksum,
+        train_val_test_sizes=(4, 1, 1),
+        batch_size=1,
+        num_workers=num_workers,
+        persistent_workers=False,
+    )
+    datamodule.setup("fit")
+    loader = datamodule.train_dataloader()
+    iterator = iter(loader)
+    next(iterator)
+    state = loader.state_dict()
+    uninterrupted = [batch["params"] for batch in iterator]
+
+    resumed = datamodule.train_dataloader()
+    resumed.load_state_dict(state)
+
+    assert len(uninterrupted) == 3
+    assert all(
+        torch.equal(actual["params"], expected)
+        for actual, expected in zip(resumed, uninterrupted, strict=True)
+    )
 
 
 def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract(
