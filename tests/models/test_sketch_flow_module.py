@@ -407,8 +407,13 @@ def test_sample_batch_guidance_and_sketch_controls_change_fixed_noise_output() -
         sample_steps=1,
     )
 
-    assert not torch.equal(baseline, content_guided)
-    assert not torch.equal(baseline, sketch_guided)
+    branches = model._control_token_branches_from_batch(  # noqa: SLF001
+        cast(dict[str, torch.Tensor | None], batch)
+    )
+    assert branches is not None
+    sketch_delta = (branches.conditional - branches.unconditional).mean(dim=(1, 2)).unsqueeze(1)
+    torch.testing.assert_close(content_guided, baseline + 10.0)
+    torch.testing.assert_close(sketch_guided, baseline + sketch_delta.expand_as(baseline))
     assert not torch.equal(sketch_guided, changed_controls)
 
 

@@ -257,8 +257,15 @@ def _resolve_stats(source: str, expected_sha256: str) -> Path:
         if _path_sha256(local) != expected_sha256:
             raise RuntimeError("mel statistics SHA-256 mismatch")
         return local.resolve()
-    cache_key = hashlib.sha256(source.encode()).hexdigest()
-    cached = synth_setter_cache_dir() / "models" / "mel-stats" / cache_key / "stats.npz"
+    source_key = hashlib.sha256(source.encode()).hexdigest()
+    cached = (
+        synth_setter_cache_dir()
+        / "models"
+        / "mel-stats"
+        / source_key
+        / expected_sha256
+        / "stats.npz"
+    )
     if cached.is_file() and _path_sha256(cached) == expected_sha256:
         return cached
     cached.unlink(missing_ok=True)
@@ -510,6 +517,9 @@ def _run_id(sketch_path: Path, content_path: Path) -> str:
     type=click.Choice(["auto", "cpu", "cuda", "mps"]),
     default=None,
 )
+@click.option("--sample-rate", type=click.IntRange(min=1), hidden=True)
+@click.option("--channels", type=click.IntRange(min=1), hidden=True)
+@click.option("--duration", type=click.FloatRange(min=0, min_open=True), hidden=True)
 @click.option("--upload/--no-upload", default=False, show_default=True)
 def main(
     sketch_wav: Path,
@@ -525,6 +535,9 @@ def main(
     output_dir: Path | None,
     upload_prefix: str | None,
     device: _DeviceSetting | None,
+    sample_rate: int | None,
+    channels: int | None,
+    duration: float | None,
     upload: bool,
 ) -> None:
     """Render SKETCH_WAV timing and pitch with CONTENT_WAV timbre.
@@ -544,6 +557,9 @@ def main(
     :param output_dir: Local pair output directory.
     :param upload_prefix: Exact R2 pair destination.
     :param device: Optional inference device override.
+    :param sample_rate: Hidden suite-controlled sample-rate override.
+    :param channels: Hidden suite-controlled channel-count override.
+    :param duration: Hidden suite-controlled clip-duration override.
     :param upload: Whether to upload each completed arm.
     :raises click.ClickException: CLI arguments are inconsistent.
     """
@@ -593,6 +609,13 @@ def main(
     if upload or r2_io.is_r2_uri(checkpoint_source) or r2_io.is_r2_uri(stats):
         r2_io.ensure_r2_env_loaded()
     render = load_render_config()
+    render = render.model_copy(
+        update={
+            "sample_rate": sample_rate or render.sample_rate,
+            "channels": channels or render.channels,
+            "signal_duration_seconds": duration or render.signal_duration_seconds,
+        }
+    )
     model = _load_model(
         resolve_inverse_checkpoint(checkpoint_source, selected_checkpoint_sha256.lower()),
         render,

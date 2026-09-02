@@ -387,18 +387,17 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
         mean=np.full(shape, 2.0, dtype=np.float32),
         std=np.full(shape, 2.0, dtype=np.float32),
     )
-    controls = torch.full((1, 386, 32), 0.05)
-    controls[:, 0] = 0.25
-    controls[:, 1] = 0.5
-    controls[:, 2, 0] = 0.1
-    controls[:, 2, 1] = 0.11
+    controls = torch.full((386, 401), 0.05)
+    controls[0] = 0.25
+    controls[1] = 0.5
+    controls[2, 0] = 0.1
+    controls[2, 13] = 0.11
     monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.full(shape, 4.0))
     monkeypatch.setattr(
         sketch_render,
         "extract_sketch_controls",
-        lambda *args: torch.ones((386, 401)),
+        lambda *args: controls,
     )
-    monkeypatch.setattr(sketch_render, "pool_sketch_controls", lambda *args: controls)
     model = cast(
         VSTFlowMatchingModule,
         SimpleNamespace(

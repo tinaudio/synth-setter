@@ -46,6 +46,7 @@ CONTENT_DATASET_VERSION = 1
 DEFAULT_CFG_STRENGTHS = (0.0, 1.0, 2.0)
 SUITE_SIZE = 50
 _METRICS = ("mss", "wmfcc", "sot", "rms")
+_MAX_TORCH_SEED = 2**64 - 1
 _PAIR_FIELDS = (
     "pair_index",
     "arm",
@@ -278,6 +279,7 @@ def _render_pair(
     checkpoint_sha256: str,
     stats: str,
     stats_sha256: str,
+    render: RenderConfig,
     content_cfg: Sequence[float],
     sketch_cfg: Sequence[float],
     sample_steps: int,
@@ -293,6 +295,7 @@ def _render_pair(
     :param checkpoint_sha256: Trusted checkpoint digest.
     :param stats: Matching content mel-statistics source.
     :param stats_sha256: Trusted statistics digest.
+    :param render: Immutable audio grid forwarded to the child CLI.
     :param content_cfg: Content CFG axis.
     :param sketch_cfg: Sketch CFG axis.
     :param sample_steps: Flow integration steps.
@@ -327,6 +330,12 @@ def _render_pair(
         f"{destination}/audio/{pair_name}",
         "--device",
         device,
+        "--sample-rate",
+        str(render.sample_rate),
+        "--channels",
+        str(render.channels),
+        "--duration",
+        str(render.signal_duration_seconds),
         "--upload",
     ]
     for strength in content_cfg:
@@ -361,6 +370,17 @@ def _collect_metrics(
                 raise ValueError(f"expected one metrics row in {metrics_path}")
             rows.append({"pair_index": pair_index, "arm": arm, **metrics_rows[0]})
     return rows
+
+
+def _validate_seed_range(base_seed: int, count: int) -> None:
+    """Require every derived pair seed to fit PyTorch's unsigned seed domain.
+
+    :param base_seed: First pair seed.
+    :param count: Number of sequential pair seeds.
+    :raises ValueError: Any derived seed lies outside the supported domain.
+    """
+    if base_seed < 0 or base_seed + count - 1 > _MAX_TORCH_SEED:
+        raise ValueError("derived pair seeds must be between 0 and 2**64 - 1")
 
 
 def _require_fresh_run(output_dir: Path, destination: str) -> None:
@@ -423,6 +443,7 @@ def main() -> None:
         raise ValueError(f"destination must use r2://, got {args.destination}")
     if args.sample_steps <= 0:
         raise ValueError("sample steps must be positive")
+    _validate_seed_range(args.seed, args.count)
     content_cfg = tuple(args.content_cfg or DEFAULT_CFG_STRENGTHS)
     sketch_cfg = tuple(args.sketch_cfg or DEFAULT_CFG_STRENGTHS)
     grid = cfg_grid(content_cfg, sketch_cfg)
@@ -445,6 +466,7 @@ def main() -> None:
             checkpoint_sha256=args.checkpoint_sha256.lower(),
             stats=args.stats,
             stats_sha256=args.stats_sha256.lower(),
+            render=render,
             content_cfg=content_cfg,
             sketch_cfg=sketch_cfg,
             sample_steps=args.sample_steps,
