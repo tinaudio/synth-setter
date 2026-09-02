@@ -775,6 +775,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         return sample
 
+    @torch.inference_mode()
     @jaxtyped(typechecker=beartype)
     def sample_batch(
         self,

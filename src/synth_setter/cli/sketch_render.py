@@ -408,9 +408,11 @@ def main(
         render,
         selected_device,
     )
+    sketch_audio = _load_audio(sketch_wav, render)
+    content_audio = _load_audio(content_wav, render)
     batch = _prepare_inputs(
-        _load_audio(sketch_wav, render),
-        _load_audio(content_wav, render),
+        sketch_audio,
+        content_audio,
         _resolve_stats(stats),
         model,
         render,
@@ -444,8 +446,6 @@ def main(
             .detach()
             .cpu()
         )
-        sketch_audio = _load_audio(sketch_wav, render)
-        content_audio = _load_audio(content_wav, render)
         write_wav(sketch_audio, str(arm_dir / "sketch.wav"), render.sample_rate, render.channels)
         write_wav(content_audio, str(arm_dir / "target.wav"), render.sample_rate, render.channels)
         _render_wav(prediction, render, arm_dir / "pred.wav")

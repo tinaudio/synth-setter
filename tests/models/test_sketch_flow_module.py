@@ -360,6 +360,7 @@ def test_sample_batch_same_explicit_noise_returns_identical_predictions() -> Non
     )
 
     assert torch.equal(first, second)
+    assert not first.requires_grad
 
 
 def test_sample_batch_wrong_noise_shape_raises() -> None:
