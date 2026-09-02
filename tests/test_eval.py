@@ -328,8 +328,14 @@ def test_eval_pyfdn_flow_rerenders_train_produced_checkpoint_prediction(
         Path(eval_cfg.paths.output_dir) / "audio" / "sample_1" / "params.csv"
     )
     second_prediction = second_params["pred_model"].to_numpy(dtype=np.float32)
+    _, train_encoded = train_objects["datamodule"].train[0]
+    train_target = train_encoded.squeeze(0).numpy() * 2.0 - 1.0
+    first_target = params["target_model"].to_numpy(dtype=np.float32)
+    second_target = second_params["target_model"].to_numpy(dtype=np.float32)
     assert prediction.shape == second_prediction.shape == (91,)
     assert not np.array_equal(prediction, second_prediction)
+    assert not np.array_equal(first_target, train_target)
+    assert not np.array_equal(second_target, train_target)
     decoded = decode_pyfdn_model_output(prediction)
     build = params_to_fdn_build(decoded, sample_rate=48_000.0)
     assert build.post_delay is not None and build.post_delay.shape == (1, 6, 8)

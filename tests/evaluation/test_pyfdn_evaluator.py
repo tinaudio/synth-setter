@@ -82,6 +82,7 @@ def test_decode_pyfdn_model_output_round_trips_all_91_coordinates() -> None:
         np.zeros(91, dtype=np.float64),
         np.full(91, np.nan, dtype=np.float32),
         np.full(91, 1.01, dtype=np.float32),
+        np.full(91, -1.01, dtype=np.float32),
     ],
 )
 def test_decode_pyfdn_model_output_invalid_row_raises(row: np.ndarray) -> None:
@@ -423,13 +424,38 @@ def test_pyfdn_evaluation_writes_exact_model_parameter_rows(
 
     :param evaluated_pyfdn_outputs: Completed mixed-status evaluation.
     """
-    output_dir, _, target, successful, _ = evaluated_pyfdn_outputs
+    output_dir, _, target, successful, expected = evaluated_pyfdn_outputs
     params_csv = pd.read_csv(output_dir / "audio" / "sample_0" / "params.csv")
 
     np.testing.assert_allclose(
         params_csv["pred_model"].to_numpy(), successful, rtol=0.0, atol=3e-8
     )
     np.testing.assert_allclose(params_csv["target_model"].to_numpy(), target, rtol=0.0, atol=3e-8)
+    np.testing.assert_allclose(
+        params_csv["pred_encoded"].to_numpy(),
+        (successful.astype(np.float64) + 1.0) / 2.0,
+        rtol=0.0,
+        atol=3e-8,
+    )
+    np.testing.assert_allclose(
+        params_csv["target_encoded"].to_numpy(),
+        (target.astype(np.float64) + 1.0) / 2.0,
+        rtol=0.0,
+        atol=3e-8,
+    )
+    assert expected.predicted_params is not None
+    np.testing.assert_allclose(
+        params_csv["pred_native"].to_numpy(),
+        pyfdn_evaluator._native_coordinate_values(expected.predicted_params),
+        rtol=0.0,
+        atol=3e-8,
+    )
+    np.testing.assert_allclose(
+        params_csv["target_native"].to_numpy(),
+        pyfdn_evaluator._native_coordinate_values(expected.target_params),
+        rtol=0.0,
+        atol=3e-8,
+    )
 
 
 def test_pyfdn_evaluation_single_pair_has_zero_population_std(
