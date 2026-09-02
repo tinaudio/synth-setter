@@ -1799,6 +1799,8 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
         bounds = ORACLE_AUDIO_METRIC_BOUNDS
         for mf in metrics_files:
             metrics = json.loads(mf.read_text())
+            assert not any("shuffle" in key for key in metrics)
+            assert not any("shuffle" in path.name for path in mf.parent.iterdir())
             # All splits resume one wandb run: test keeps the bare ``audio/*`` key
             # while train/val are namespaced ``<split>/audio/*`` so none overwrites.
             split = mf.parent.parent.parent.name

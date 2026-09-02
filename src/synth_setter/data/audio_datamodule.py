@@ -44,7 +44,7 @@ class AudioFolderDataset(torch.utils.data.Dataset):
         self.root = Path(root)
         # An explicit file list skips the folder glob — single-capture callers
         # (cli/predict_capture.py) must not pay a scan of the whole capture dir.
-        self.files = list(files) if files is not None else list(self.root.glob("*.wav"))
+        self.files = list(files) if files is not None else sorted(self.root.glob("*.wav"))
 
         self.amp_scale = amp_scale
         self.sample_rate = sample_rate

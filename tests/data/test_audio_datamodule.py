@@ -38,6 +38,19 @@ def test_default_glob_discovers_only_wav_files(tmp_path: Path) -> None:
     assert dataset.files == [kept]
 
 
+def test_default_glob_orders_audio_files_by_path(tmp_path: Path) -> None:
+    """Prediction order is stable regardless of directory enumeration order.
+
+    :param tmp_path: Audio root populated in reverse lexical order.
+    """
+    second = _write_wav(tmp_path / "b.wav")
+    first = _write_wav(tmp_path / "a.wav")
+
+    dataset = AudioFolderDataset(root=str(tmp_path))
+
+    assert dataset.files == [first, second]
+
+
 def test_explicit_files_skip_the_root_glob(tmp_path: Path) -> None:
     """An explicit file list is used verbatim, ignoring the root's contents.
 

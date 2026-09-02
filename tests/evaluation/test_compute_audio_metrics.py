@@ -701,6 +701,26 @@ def test_main_uniform_params_writes_only_standard_metric_outputs(tmp_path: Path)
     assert not (metrics_dir / "shuffled_audio").exists()
 
 
+def test_main_output_dir_equal_to_audio_dir_raises(tmp_path: Path) -> None:
+    """Metric outputs cannot overwrite or remove source audio artifacts.
+
+    :param tmp_path: Root containing one valid rendered sample.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(audio_root), "-w", "1"],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "output_dir must differ from audio_dir" in str(result.exception)
+    assert (audio_root / "sample_0" / "pred.wav").is_file()
+
+
 def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
     """``--num_workers 0`` is rejected at the CLI boundary before any IO.
 

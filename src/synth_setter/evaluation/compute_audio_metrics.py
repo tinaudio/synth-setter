@@ -429,9 +429,9 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
 
 
 def _remove_deprecated_metric_outputs(output_dir: Path) -> None:
-    """Remove artifacts emitted by the retired render-order probe.
+    """Ensure the output directory contains only supported metric artifacts.
 
-    :param output_dir: Metrics directory that may contain outputs from an older run.
+    :param output_dir: Metrics directory that may contain unsupported artifacts.
     """
     for name in (
         "aggregated_metrics_shuffled.csv",
@@ -490,11 +490,14 @@ def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
         (each must have ``pred.wav`` and ``target.wav``).
     :param output_dir: Destination for CSV outputs.
     :param num_workers: Number of parallel worker processes.
-    :raises ValueError: when no valid sample dirs are found.
+    :raises ValueError: when no valid sample dirs are found or the output directory
+        is the source audio directory.
     """
     audio_dir_path = Path(audio_dir)
     os.makedirs(output_dir, exist_ok=True)
     output_dir_path = Path(output_dir)
+    if output_dir_path.resolve() == audio_dir_path.resolve():
+        raise ValueError("output_dir must differ from audio_dir to preserve source artifacts.")
 
     audio_dirs = find_possible_subdirs(audio_dir_path)
     if not audio_dirs:

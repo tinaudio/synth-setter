@@ -65,9 +65,9 @@ def test_load_audio_metrics_flattens_mean_and_std(tmp_path: Path) -> None:
 
 
 def test_load_audio_metrics_ignores_legacy_shuffled_csv(tmp_path: Path) -> None:
-    """A stale shuffled CSV cannot reintroduce removed metric namespaces.
+    """Only the supported aggregate contributes returned audio metrics.
 
-    :param tmp_path: Scratch metrics dir seeded with current and legacy CSVs.
+    :param tmp_path: Scratch metrics dir seeded with supported and unsupported CSVs.
     """
     (tmp_path / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
     (tmp_path / "aggregated_metrics_shuffled.csv").write_text(
