@@ -496,8 +496,16 @@ def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
     audio_dir_path = Path(audio_dir)
     os.makedirs(output_dir, exist_ok=True)
     output_dir_path = Path(output_dir)
-    if output_dir_path.resolve() == audio_dir_path.resolve():
-        raise ValueError("output_dir must differ from audio_dir to preserve source artifacts.")
+    resolved_audio_dir = audio_dir_path.resolve()
+    resolved_output_dir = output_dir_path.resolve()
+    if (
+        resolved_output_dir == resolved_audio_dir
+        or resolved_output_dir in resolved_audio_dir.parents
+    ):
+        raise ValueError(
+            "output_dir must differ from audio_dir and remain outside audio_dir ancestors "
+            "to preserve source artifacts."
+        )
 
     audio_dirs = find_possible_subdirs(audio_dir_path)
     if not audio_dirs:

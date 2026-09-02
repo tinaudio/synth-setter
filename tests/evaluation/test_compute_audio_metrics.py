@@ -721,6 +721,27 @@ def test_main_output_dir_equal_to_audio_dir_raises(tmp_path: Path) -> None:
     assert (audio_root / "sample_0" / "pred.wav").is_file()
 
 
+def test_main_output_dir_ancestor_of_audio_dir_raises(tmp_path: Path) -> None:
+    """Metric cleanup cannot remove a nested source audio directory.
+
+    :param tmp_path: Output root containing source audio under a cleanup target name.
+    """
+    output_root = tmp_path / "metrics"
+    audio_root = output_root / "shuffled_audio"
+    audio_root.mkdir(parents=True)
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(output_root), "-w", "1"],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "outside audio_dir ancestors" in str(result.exception)
+    assert (audio_root / "sample_0" / "pred.wav").is_file()
+
+
 def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
     """``--num_workers 0`` is rejected at the CLI boundary before any IO.
 
