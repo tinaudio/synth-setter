@@ -12,9 +12,10 @@ import os
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -600,7 +601,16 @@ def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
 class PredictionWriter(BasePredictionWriter):
     """Save predictions and report durable, rate-limited batch progress."""
 
-    def __init__(self, output_dir, write_interval):
+    def __init__(
+        self,
+        output_dir: str | os.PathLike[str],
+        write_interval: Literal["batch", "epoch", "batch_and_epoch"],
+    ) -> None:
+        """Initialize prediction persistence and progress state.
+
+        :param output_dir: Directory receiving prediction tensors.
+        :param write_interval: Lightning prediction-writer callback interval.
+        """
         super().__init__(write_interval)
         self.output_dir = output_dir
         self._progress_started_at: dict[int, float] = {}
@@ -684,14 +694,14 @@ class PredictionWriter(BasePredictionWriter):
 
     def write_on_batch_end(
         self,
-        trainer,
-        pl_module,
-        prediction,
-        batch_indices,
-        batch,
-        batch_idx,
-        dataloader_idx,
-    ):
+        trainer: Trainer,
+        pl_module: LightningModule,
+        prediction: Any,
+        batch_indices: Sequence[int] | None,
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
         prediction, batch = prediction
         torch.save(
             _plain_cpu_tensor(prediction),
