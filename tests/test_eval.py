@@ -8,6 +8,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 ``synth_setter.cli`` helper is imported here.
 """
 
+import json
 import math
 import os
 import shlex
@@ -271,6 +272,58 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
     assert objects["model"].sketch_tokens is not None
     assert objects["datamodule"].sketch_controls is not None
     assert objects["datamodule"].sketch_controls.num_frames == 32
+
+
+@pytest.mark.slow
+def test_eval_pyfdn_flow_consumes_train_produced_checkpoint(
+    cfg_pyfdn_flow_train: DictConfig,
+    cfg_pyfdn_flow_eval: DictConfig,
+) -> None:
+    """Load a real pyFDN flow checkpoint through validation.
+
+    :param cfg_pyfdn_flow_train: Tiny production pyFDN training configuration.
+    :param cfg_pyfdn_flow_eval: Matching production validation configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_flow_train)
+    _, train_objects = train(cfg_pyfdn_flow_train)
+    checkpoint_path = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.stat().st_size > 0
+
+    with open_dict(cfg_pyfdn_flow_eval):
+        cfg_pyfdn_flow_eval.ckpt_path = str(checkpoint_path)
+    HydraConfig().set_config(cfg_pyfdn_flow_eval)
+    metric_dict, _ = evaluate(cfg_pyfdn_flow_eval)
+
+    groups = {
+        "delays",
+        "feedback_matrix",
+        "input_matrix",
+        "output_matrix",
+        "direct_matrix",
+    }
+    namespaces = {
+        "per_param_mse",
+        "per_param_mse_best_swap",
+        "per_param_mse_number_group_swap",
+    }
+    expected_group_metrics = {
+        f"{namespace}/{group}" for namespace in namespaces for group in groups
+    }
+    callback_group_metrics = {key for key in metric_dict if key.split("/", 1)[0] in namespaces}
+
+    assert train_objects["trainer"].global_step == 1
+    assert torch.isfinite(metric_dict["val/param_mse"])
+    assert callback_group_metrics == expected_group_metrics
+    assert all(torch.isfinite(metric_dict[key]) for key in expected_group_metrics)
+
+    metrics_path = Path(cfg_pyfdn_flow_eval.paths.output_dir) / "metrics" / "metrics.json"
+    persisted_metrics = json.loads(metrics_path.read_text())
+    persisted_group_metrics = {
+        key for key in persisted_metrics if key.split("/", 1)[0] in namespaces
+    }
+    assert math.isfinite(persisted_metrics["val/param_mse"])
+    assert persisted_group_metrics == expected_group_metrics
+    assert all(math.isfinite(persisted_metrics[key]) for key in expected_group_metrics)
 
 
 def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:
