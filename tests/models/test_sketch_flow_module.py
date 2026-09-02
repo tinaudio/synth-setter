@@ -378,6 +378,51 @@ def test_sample_batch_wrong_noise_shape_raises() -> None:
         )
 
 
+def test_sample_batch_nonfinite_noise_raises() -> None:
+    """Explicit noise must contain finite flow states."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+    noise[0, 0] = float("nan")
+
+    with pytest.raises(ValueError, match="finite"):
+        model.sample_batch(
+            batch,
+            noise=noise,
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
+def test_sample_batch_negative_guidance_raises() -> None:
+    """Guidance cannot reverse a conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="sketch_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=-1.0,
+        )
+
+
+def test_sample_batch_nonpositive_steps_raises() -> None:
+    """Sampling requires at least one integration step."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=0,
+        )
+
+
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     """Sketch-configured training consumes ``sketch_ctrl`` and stays finite."""
     module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
