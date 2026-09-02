@@ -23,6 +23,7 @@ from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
 from synth_setter.data.pyfdn_datamodule import PyFDNDataModule
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.utils.logging_utils import (
     LINEAGE_INCOMPLETE_TAG,
     log_hyperparameters,
@@ -89,7 +90,7 @@ def test_log_hyperparameters_records_datamodule_source_provenance() -> None:
     log_hyperparameters(
         {
             "cfg": cfg,
-            "datamodule": PyFDNDataModule(),
+            "datamodule": PyFDNDataModule(param_spec_name=ParamSpecName("pyfdn_n8_mono")),
             "model": torch.nn.Linear(1, 1),
             "trainer": trainer,
         }

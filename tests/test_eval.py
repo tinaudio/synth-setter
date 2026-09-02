@@ -295,6 +295,8 @@ def test_eval_pyfdn_flow_consumes_train_produced_checkpoint(
     HydraConfig().set_config(cfg_pyfdn_flow_eval)
     metric_dict, eval_objects = evaluate(cfg_pyfdn_flow_eval)
 
+    assert cfg_pyfdn_flow_eval.datamodule.param_spec_name == "pyfdn_n8_mono"
+    assert eval_objects["datamodule"].param_spec_name == "pyfdn_n8_mono"
     assert "source_audio_path" not in cfg_pyfdn_flow_eval.datamodule
     assert "source_audio_sha256" not in cfg_pyfdn_flow_eval.datamodule
     assert (

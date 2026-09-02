@@ -1,7 +1,8 @@
 """Deterministic online datasets for the canonical-source pyFDN instrument.
 
 Example:
-    ``PyFDNDataModule().setup("fit")`` builds fixed seeded splits.
+    ``PyFDNDataModule(param_spec_name=ParamSpecName("pyfdn_n8_mono")).setup("fit")``
+    builds fixed seeded splits.
 """
 
 from __future__ import annotations
@@ -20,15 +21,35 @@ from torchdata.stateful_dataloader.sampler import RandomSampler
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.pyfdn_source import (
     PYFDN_SOURCE_SAMPLE_RATE_HZ,
     PyFDNSourceProvenance,
 )
 from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.param_spec_name import ParamSpecName
 
 type PyFDNItem = tuple[torch.Tensor, torch.Tensor]
 type PyFDNBatch = dict[str, torch.Tensor]
+
+_PYFDN_PARAM_SPEC_NAME = ParamSpecName("pyfdn_n8_mono")
+
+
+def _resolve_pyfdn_param_spec(param_spec_name: ParamSpecName) -> ParamSpec:
+    """Resolve and constrain a parameter spec for the fixed pyFDN renderer.
+
+    :param param_spec_name: Registry identity requested by the caller.
+    :returns: The registered canonical pyFDN parameter specification.
+    :raises ValueError: The identity is registered but unsupported by pyFDN.
+    """
+    param_spec = resolve_param_spec(param_spec_name)
+    if param_spec_name != _PYFDN_PARAM_SPEC_NAME:
+        raise ValueError(
+            f"pyFDN data only supports param_spec_name={_PYFDN_PARAM_SPEC_NAME!r}; "
+            f"got {param_spec_name!r}"
+        )
+    return param_spec
 
 
 @cache
@@ -67,16 +88,20 @@ class PyFDNDataset(Dataset[PyFDNItem]):
         *,
         num_samples: int,
         seed: int,
+        param_spec_name: ParamSpecName,
         synth_version: str = "0.4.2",
     ) -> None:
         """Bind one deterministic split to the canonical source.
 
         :param num_samples: Number of logical rows in this split.
         :param seed: Base seed folded with each row index.
+        :param param_spec_name: Registry identity; exactly ``pyfdn_n8_mono``.
         :param synth_version: Required installed pyFDN version.
         """
         self.num_samples = num_samples
         self.seed = seed
+        self.param_spec_name = param_spec_name
+        self.param_spec = _resolve_pyfdn_param_spec(param_spec_name)
         self.synth_version = synth_version
 
     def __len__(self) -> int:
@@ -103,8 +128,8 @@ class PyFDNDataset(Dataset[PyFDNItem]):
         if not 0 <= index < self.num_samples:
             raise IndexError(f"index {index} is outside split of length {self.num_samples}")
         rng = np.random.default_rng(derive_sample_seed(self.seed, index))
-        params, note_params = PYFDN_N8_MONO_PARAM_SPEC.sample(rng)
-        encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, note_params)
+        params, note_params = self.param_spec.sample(rng)
+        encoded = self.param_spec.encode(params, note_params)
         renderer = self._process_renderer()
         audio = renderer.render(params)
         return torch.from_numpy(audio), torch.from_numpy(encoded).unsqueeze(0)
@@ -116,6 +141,7 @@ class PyFDNDataModule(LightningDataModule):
     def __init__(
         self,
         *,
+        param_spec_name: ParamSpecName,
         synth_version: str = "0.4.2",
         sample_rate: int = PYFDN_SOURCE_SAMPLE_RATE_HZ,
         train_val_test_sizes: tuple[int, int, int] = (100_000, 10_000, 10_000),
@@ -128,6 +154,7 @@ class PyFDNDataModule(LightningDataModule):
     ) -> None:
         """Configure deterministic online pyFDN splits and loaders.
 
+        :param param_spec_name: Registry identity; exactly ``pyfdn_n8_mono``.
         :param synth_version: Required installed pyFDN version.
         :param sample_rate: Canonical source sample rate; exactly 48000 Hz.
         :param train_val_test_sizes: Row counts for train, validation, and test.
@@ -137,8 +164,10 @@ class PyFDNDataModule(LightningDataModule):
         :param conditioning: Model-batch modality; pyFDN supports raw audio only.
         :param persistent_workers: Keep positive-count workers alive between epochs.
         :param val_num_workers: Worker processes for the validation loader.
-        :raises ValueError: Sample rate, split seeds, or conditioning violate the contract.
+        :raises ValueError: The identity, sample rate, split seeds, or conditioning violate
+            the contract.
         """
+        param_spec = _resolve_pyfdn_param_spec(param_spec_name)
         if len(set(train_val_test_seeds)) != 3:
             raise ValueError("train, validation, and test seeds must be distinct")
         if sample_rate != PYFDN_SOURCE_SAMPLE_RATE_HZ:
@@ -146,6 +175,8 @@ class PyFDNDataModule(LightningDataModule):
         if conditioning != "audio":
             raise ValueError("pyFDN conditioning must be 'audio'")
         super().__init__()
+        self.param_spec_name = param_spec_name
+        self.param_spec = param_spec
         self.synth_version = synth_version
         self.sample_rate = sample_rate
         self.train_val_test_sizes = train_val_test_sizes
@@ -193,6 +224,7 @@ class PyFDNDataModule(LightningDataModule):
             return PyFDNDataset(
                 num_samples=size,
                 seed=seed,
+                param_spec_name=self.param_spec_name,
                 synth_version=self.synth_version,
             )
 

@@ -1260,6 +1260,21 @@ def test_surge_experiment_resolves_identity_with_audio_datamodule(
     assert OmegaConf.select(cfg, spec_path) == "surge_xt"
 
 
+def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:
+    """The shipped pyFDN identity field exposes CLI-forced skew to ``extras``."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "experiment=pyfdn/flow",
+            "trainer=cpu",
+            "datamodule.param_spec_name=surge_4",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="surge_4"):
+        extras(cfg)
+
+
 def test_extras_rejects_datamodule_spec_skewed_from_synth_selection() -> None:
     """``extras`` fails fast when a forced datamodule spec contradicts ``synth``.
 
