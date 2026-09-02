@@ -1025,6 +1025,18 @@ class TestDecodeModelOutput:
 
         assert synth_params["mode"] == pytest.approx(0.75)
 
+    def test_fractional_pitch_prediction_rounds_to_nearest_midi_note(self) -> None:
+        """Model-space pitch predictions quantize to the closest MIDI note."""
+        spec = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
+
+        _, below_midpoint = decode_model_output(np.array([0.0408333333]), spec)
+        _, midpoint = decode_model_output(np.array([1.0 / 24]), spec)
+        _, above_midpoint = decode_model_output(np.array([0.0425]), spec)
+
+        assert below_midpoint["pitch"] == 60
+        assert midpoint["pitch"] == 61
+        assert above_midpoint["pitch"] == 61
+
     def test_note_params_decode_to_native_domain(self) -> None:
         """Note params come back in their native domains, not the encoded [0, 1]."""
         row = np.array([*_ROW[:3], 1.0, 0.2, 0.2], dtype=np.float32)

@@ -174,7 +174,7 @@ class DiscreteLiteralParameter(Parameter):
 
     def _decode_scalar(self, scalar: np.ndarray) -> int:
         scaled = scalar * (self.max - self.min) + self.min
-        return int(scaled.item())
+        return math.floor(scaled.item() + 0.5)
 
     def decode(self, encoded: np.ndarray) -> int:
         if self.encoding == "scalar":
