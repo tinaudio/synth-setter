@@ -41,6 +41,20 @@ def test_eval_checkpoint_local_path_is_returned_unchanged(tmp_path: Path) -> Non
     assert eval_module._localize_eval_checkpoint(str(checkpoint)) == str(checkpoint)
 
 
+def test_eval_checkpoint_local_digest_is_enforced(tmp_path: Path) -> None:
+    """Local checkpoints accept matching pins and reject mismatched pins.
+
+    :param tmp_path: Temporary checkpoint directory.
+    """
+    checkpoint = tmp_path / "model.ckpt"
+    checkpoint.write_bytes(b"local checkpoint")
+    digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+
+    assert eval_module._localize_eval_checkpoint(str(checkpoint), digest) == str(checkpoint)
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        eval_module._localize_eval_checkpoint(str(checkpoint), "0" * 64)
+
+
 def test_eval_checkpoint_r2_uri_refreshes_cache_when_remote_checksum_changes(
     fake_r2_remote: Path,
     storage_credentials: None,

@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -696,28 +696,28 @@ class PredictionWriter(BasePredictionWriter):
         self,
         trainer: Trainer,
         pl_module: LightningModule,
-        prediction: Any,
+        prediction: tuple[torch.Tensor, Mapping[str, torch.Tensor]],
         batch_indices: Sequence[int] | None,
-        batch: Any,
+        batch: object,
         batch_idx: int,
         dataloader_idx: int,
     ) -> None:
-        prediction, batch = prediction
+        prediction_tensor, persisted_batch = prediction
         torch.save(
-            _plain_cpu_tensor(prediction),
+            _plain_cpu_tensor(prediction_tensor),
             os.path.join(self.output_dir, f"pred-{batch_idx}.pt"),
         )
         torch.save(
-            _plain_cpu_tensor(batch["audio"]),
+            _plain_cpu_tensor(persisted_batch["audio"]),
             os.path.join(self.output_dir, f"target-audio-{batch_idx}.pt"),
         )
 
-        if "params" in batch:
+        if "params" in persisted_batch:
             torch.save(
-                _plain_cpu_tensor(batch["params"]),
+                _plain_cpu_tensor(persisted_batch["params"]),
                 os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"),
             )
-        self._log_progress(trainer, batch, batch_idx, dataloader_idx=dataloader_idx)
+        self._log_progress(trainer, persisted_batch, batch_idx, dataloader_idx=dataloader_idx)
 
     def write_on_epoch_end(self, trainer, pl_module, predictions, batch_indices):
         predictions, batch = predictions

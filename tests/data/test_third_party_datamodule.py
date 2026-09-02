@@ -12,6 +12,7 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import soundfile as sf
 import torch
 from lance.blob import blob_array, blob_field
 from pedalboard.io import AudioFile
@@ -436,6 +437,28 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     )["mel"]
 
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
+
+
+def test_decode_clip_rejects_out_of_range_source_before_resampling() -> None:
+    """Substantive source overflow cannot be hidden by output clipping."""
+    source_rate = 16_000
+    buffer = io.BytesIO()
+    sf.write(
+        buffer,
+        np.full(source_rate, 1.2, dtype=np.float32),
+        source_rate,
+        format="WAV",
+        subtype="FLOAT",
+    )
+
+    with pytest.raises(ValueError, match="source audio leaves"):
+        decode_clip(
+            buffer.getvalue(),
+            sample_rate=44_100,
+            channels=2,
+            num_samples=44_100,
+            amplitude_scale=1.0,
+        )
 
 
 def test_decode_clip_clamps_resampling_ringing_to_storage_range() -> None:

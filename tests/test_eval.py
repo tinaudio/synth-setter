@@ -8,6 +8,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 ``synth_setter.cli`` helper is imported here.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -2285,7 +2286,7 @@ def test_third_party_checkpoint_creation_is_reproducible(tmp_path: Path) -> None
 def _run_third_party_eval(
     *,
     corpus: Path,
-    checkpoint: Path,
+    checkpoint: Path | str,
     output_dir: Path,
     experiment: str = "surge/flow_simple",
     datamodule: str = "third_party/nsynth_test",
@@ -2382,10 +2383,16 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
 
 
 @pytest.mark.slow
-def test_nsynth_sketch_eval_entrypoint_writes_prediction(tmp_path: Path) -> None:
-    """The NSynth preset runs live PESTO controls through a matching sketch model.
+def test_nsynth_sketch_eval_entrypoint_writes_prediction(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The NSynth preset runs an R2 checkpoint and live PESTO through prediction.
 
     :param tmp_path: Isolated corpus, checkpoint, and output directories.
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param monkeypatch: Configures storage credentials inherited by the subprocess.
     """
     sample_rate = _THIRD_PARTY_SOURCE_SAMPLE_RATE
     samples = np.arange(sample_rate, dtype=np.float32)
@@ -2394,16 +2401,24 @@ def test_nsynth_sketch_eval_entrypoint_writes_prediction(tmp_path: Path) -> None
     write_blob_audio_corpus(corpus, [tone], sample_rate=sample_rate)
     checkpoint = tmp_path / "flow_sketch.ckpt"
     _save_third_party_checkpoint(checkpoint, experiment="surge/flow_sketch_prelim")
+    remote_checkpoint = fake_r2_remote / "bucket" / "runs" / "flow_sketch.ckpt"
+    remote_checkpoint.parent.mkdir(parents=True)
+    shutil.copyfile(checkpoint, remote_checkpoint)
+    checkpoint_digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
     output_dir = tmp_path / "output"
 
     result = _run_third_party_eval(
         corpus=corpus,
-        checkpoint=checkpoint,
+        checkpoint="r2://bucket/runs/flow_sketch.ckpt",
         output_dir=output_dir,
         experiment="surge/eval_flow_sketch_nsynth",
         datamodule="third_party/nsynth_sketch",
         extra_overrides=(
-            "ckpt_sha256=null",
+            f"ckpt_sha256={checkpoint_digest}",
             "datamodule.batch_size=1",
             "evaluation.compute_metrics=false",
             "evaluation.render_vst=false",

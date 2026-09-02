@@ -46,6 +46,8 @@ log = logging.getLogger(__name__)
 _PREDICT_STAGES = frozenset({"predict", None})
 _MEL_STATS_CACHE_DIR = ".mel-stats"
 _BLOB_EXTENSION_NAME = "lance.blob.v2"
+# Pedalboard maps PCM16 -32768 to -32768/32767 when decoding.
+_PCM16_DECODE_FULL_SCALE = 32768.0 / 32767.0
 
 
 def _is_blob_encoded(field: pa.Field) -> bool:
@@ -183,8 +185,15 @@ def decode_clip(
     :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
     :param amplitude_scale: Gain applied after length-pinning.
     :returns: ``(channels, num_samples)`` float32 audio.
-    :raises ValueError: Samples are non-finite, gain exceeds full scale, or channels mismatch.
+    :raises ValueError: Source or scaled samples are invalid, or channels mismatch.
     """
+    with AudioFile(io.BytesIO(data)) as source_handle:
+        source = source_handle.read(source_handle.frames)
+    if not np.isfinite(source).all():
+        raise ValueError("source audio contains non-finite samples")
+    if np.abs(source).max(initial=0.0) > _PCM16_DECODE_FULL_SCALE:
+        raise ValueError("source audio leaves [-1, 1]")
+
     with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
         audio = handle.read(handle.frames)
     if audio.shape[0] == 1 < channels:
