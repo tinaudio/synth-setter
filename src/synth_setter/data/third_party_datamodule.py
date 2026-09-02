@@ -12,11 +12,10 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
-import math
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Literal, Self, cast
 
 import lance
 import numpy as np
@@ -24,9 +23,15 @@ import pyarrow as pa
 import torch
 from lightning import LightningDataModule
 from pedalboard.io import AudioFile
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt, model_validator
 from torch.utils.data import DataLoader, Dataset
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD, make_spectrogram
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    MEL_N_MELS,
+    make_spectrogram,
+    mel_n_frames_from_samples,
+)
 from synth_setter.data.vst_datamodule import load_mel_statistics
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
@@ -49,112 +54,118 @@ def _is_blob_encoded(field: pa.Field) -> bool:
     return (field.metadata or {}).get(b"lance-encoding:blob") == b"true"
 
 
-def _validate_config(
-    conditioning: str,
-    *,
-    use_saved_mean_and_variance: bool,
-    mel_stats_uri: str | None,
-    row_limit: int | None,
-) -> None:
-    """Reject a configuration that cannot be served correctly.
+class _ThirdPartyDataModuleConfig(BaseModel):
+    """Validate third-party corpus settings at the Hydra boundary.
 
-    :param conditioning: Conditioning mode; this layer accepts only ``mel``.
-    :param use_saved_mean_and_variance: Whether mel standardization is enabled.
-    :param mel_stats_uri: Configured statistics source, if any.
-    :param row_limit: Configured row cap, if any.
-    :raises ValueError: The conditioning mode or normalization configuration is invalid.
+    .. attribute :: model_config
+
+        Strict frozen-model configuration.
+    .. attribute :: dataset_uri
+
+        Corpus location.
+    .. attribute :: sample_rate
+
+        Target sample rate.
+    .. attribute :: channels
+
+        Target channel count.
+    .. attribute :: signal_duration_seconds
+
+        Target clip duration.
+    .. attribute :: dataset_version
+
+        Pinned Lance version.
+    .. attribute :: audio_column
+
+        Blob-audio column.
+    .. attribute :: amplitude_scale
+
+        Input gain.
+    .. attribute :: batch_size
+
+        Rows per batch.
+    .. attribute :: num_workers
+
+        Dataloader worker count.
+    .. attribute :: row_limit
+
+        Optional first-N row cap.
+    .. attribute :: conditioning
+
+        Supported conditioning mode.
+    .. attribute :: use_saved_mean_and_variance
+
+        Whether saved mel statistics are applied.
+    .. attribute :: mel_stats_uri
+
+        Statistics location.
+    .. attribute :: mel_stats_sha256
+
+        Statistics content identity.
+    .. attribute :: stats_cache_dir
+
+        Download cache location.
     """
-    if conditioning != "mel":
-        raise ValueError(
-            f"ThirdPartyAudioDataModule accepts mel conditioning only, got {conditioning!r}"
-        )
-    if not isinstance(use_saved_mean_and_variance, bool):
-        raise ValueError(
-            "use_saved_mean_and_variance must be a boolean, got "
-            f'{use_saved_mean_and_variance!r}; a quoted "false" would otherwise enable '
-            "normalization"
-        )
-    if row_limit is not None and (not isinstance(row_limit, int) or isinstance(row_limit, bool)):
-        raise ValueError(f"row_limit must be an integer, got {row_limit!r}")
-    if row_limit is not None and row_limit < 1:
-        raise ValueError(
-            f"row_limit must be at least 1, got {row_limit}; an empty sweep writes no "
-            "predictions and fails downstream instead of here"
-        )
-    if use_saved_mean_and_variance and mel_stats_uri is None:
-        raise ValueError(
-            "mel conditioning with use_saved_mean_and_variance=true requires "
-            "mel_stats_uri — point it at the statistics the checkpoint trained "
-            "with, not at this corpus"
-        )
-    if not use_saved_mean_and_variance and mel_stats_uri is not None:
-        raise ValueError(
-            f"mel_stats_uri={mel_stats_uri!r} is set with use_saved_mean_and_variance=false, "
-            "so the statistics would be dropped and the checkpoint fed raw mel"
-        )
 
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-def _validate_numeric_config(
-    *,
-    sample_rate: int,
-    channels: int,
-    signal_duration_seconds: float,
-    amplitude_scale: float,
-    dataset_version: int,
-    batch_size: int,
-    num_workers: int,
-) -> int:
-    """Validate the numeric render contract and return its sample count.
+    dataset_uri: str
+    sample_rate: PositiveInt
+    channels: PositiveInt
+    signal_duration_seconds: float = Field(gt=0, allow_inf_nan=False)
+    dataset_version: PositiveInt
+    audio_column: str
+    amplitude_scale: float = Field(gt=0, allow_inf_nan=False)
+    batch_size: PositiveInt
+    num_workers: NonNegativeInt
+    row_limit: PositiveInt | None
+    conditioning: Literal["mel"]
+    use_saved_mean_and_variance: bool
+    mel_stats_uri: str | None
+    mel_stats_sha256: str | None = Field(pattern=r"^[0-9a-f]{64}$")
+    stats_cache_dir: str | None
 
-    :param sample_rate: Target sample rate in Hz.
-    :param channels: Target channel count.
-    :param signal_duration_seconds: Target clip duration.
-    :param amplitude_scale: Gain applied to decoded audio.
-    :param dataset_version: Immutable Lance snapshot to serve.
-    :param batch_size: Rows per predict batch.
-    :param num_workers: Dataloader workers decoding rows.
-    :returns: Target samples per clip.
-    :raises ValueError: A value has the wrong type or lies outside its valid domain.
-    """
-    for name, value in (
-        ("sample_rate", sample_rate),
-        ("channels", channels),
-        ("dataset_version", dataset_version),
-        ("batch_size", batch_size),
-        ("num_workers", num_workers),
-    ):
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"{name}={value!r} must be an integer")
-    if isinstance(signal_duration_seconds, bool) or not isinstance(
-        signal_duration_seconds, (int, float)
-    ):
-        raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
-    if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
-        raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
-    if dataset_version <= 0:
-        raise ValueError(f"dataset_version={dataset_version} must be positive")
-    if batch_size <= 0:
-        raise ValueError(f"batch_size={batch_size} must be positive")
-    if sample_rate <= 0:
-        raise ValueError(f"sample_rate={sample_rate} must be positive")
-    if not math.isfinite(signal_duration_seconds) or signal_duration_seconds <= 0:
-        raise ValueError(
-            f"signal_duration_seconds={signal_duration_seconds} must be positive and finite"
-        )
-    if not math.isfinite(amplitude_scale) or amplitude_scale <= 0:
-        raise ValueError(f"amplitude_scale={amplitude_scale} must be positive and finite")
-    if num_workers < 0:
-        raise ValueError(f"num_workers={num_workers} must not be negative")
-    num_samples = int(sample_rate * signal_duration_seconds)
-    if num_samples <= 0:
-        raise ValueError(
-            f"sample_rate={sample_rate} x signal_duration_seconds="
-            f"{signal_duration_seconds} yields {num_samples} samples per clip; "
-            "the render contract needs a positive sample count"
-        )
-    if channels <= 0:
-        raise ValueError(f"channels={channels} must be positive")
-    return num_samples
+    @model_validator(mode="after")
+    def validate_statistics_identity(self) -> Self:
+        """Require complete statistics provenance exactly when normalization is enabled.
+
+        :returns: Validated settings.
+        :raises ValueError: Statistics identity is missing or would be ignored.
+        """
+        statistics = (self.mel_stats_uri, self.mel_stats_sha256)
+        if self.use_saved_mean_and_variance and None in statistics:
+            raise ValueError(
+                "use_saved_mean_and_variance=true requires mel_stats_uri and "
+                "mel_stats_sha256 from the checkpoint's training data"
+            )
+        if not self.use_saved_mean_and_variance and statistics != (None, None):
+            raise ValueError(
+                "mel_stats_uri and mel_stats_sha256 must be null when "
+                "use_saved_mean_and_variance=false; otherwise statistics would be dropped"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_sample_grid(self) -> Self:
+        """Reject positive dimensions that truncate to an empty sample grid.
+
+        :returns: Validated settings.
+        :raises ValueError: The render contract yields no samples.
+        """
+        if self.num_samples == 0:
+            raise ValueError(
+                f"sample_rate={self.sample_rate} x signal_duration_seconds="
+                f"{self.signal_duration_seconds} yields no samples"
+            )
+        return self
+
+    @property
+    def num_samples(self) -> int:
+        """Return target samples per clip.
+
+        :returns: Positive sample count derived from the render contract.
+        """
+        return int(self.sample_rate * self.signal_duration_seconds)
 
 
 def decode_clip(
@@ -326,6 +337,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         conditioning: str = "mel",
         use_saved_mean_and_variance: bool = False,
         mel_stats_uri: str | None = None,
+        mel_stats_sha256: str | None = None,
         stats_cache_dir: str | None = None,
     ) -> None:
         """Configure the corpus and render contract it maps onto.
@@ -343,50 +355,53 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param conditioning: Conditioning mode; only ``mel`` is accepted.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
         :param mel_stats_uri: Training mel statistics, local or ``r2://``.
+        :param mel_stats_sha256: Expected SHA-256 digest of the statistics file.
         :param stats_cache_dir: Directory for fetched statistics.
         """
         super().__init__()
-        _validate_config(
-            conditioning,
-            use_saved_mean_and_variance=use_saved_mean_and_variance,
-            mel_stats_uri=mel_stats_uri,
-            row_limit=row_limit,
-        )
-        num_samples = _validate_numeric_config(
+        config = _ThirdPartyDataModuleConfig(
+            dataset_uri=dataset_uri,
             sample_rate=sample_rate,
             channels=channels,
             signal_duration_seconds=signal_duration_seconds,
-            amplitude_scale=amplitude_scale,
             dataset_version=dataset_version,
+            audio_column=audio_column,
+            amplitude_scale=amplitude_scale,
             batch_size=batch_size,
             num_workers=num_workers,
+            row_limit=row_limit,
+            conditioning=cast(Literal["mel"], conditioning),
+            use_saved_mean_and_variance=use_saved_mean_and_variance,
+            mel_stats_uri=mel_stats_uri,
+            mel_stats_sha256=mel_stats_sha256,
+            stats_cache_dir=stats_cache_dir,
         )
-        self.dataset_uri = dataset_uri
-        self.dataset_version = dataset_version
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self.num_samples = num_samples
-        self.audio_column = audio_column
-        self.amplitude_scale = amplitude_scale
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.row_limit = row_limit
-        self.conditioning = conditioning
-        self.mel_stats_uri = mel_stats_uri
-        self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
+        self.dataset_uri = config.dataset_uri
+        self.dataset_version = config.dataset_version
+        self.sample_rate = config.sample_rate
+        self.channels = config.channels
+        self.num_samples = config.num_samples
+        self.audio_column = config.audio_column
+        self.amplitude_scale = config.amplitude_scale
+        self.batch_size = config.batch_size
+        self.num_workers = config.num_workers
+        self.row_limit = config.row_limit
+        self.conditioning = config.conditioning
+        self.mel_stats_uri = config.mel_stats_uri
+        self.mel_stats_sha256 = config.mel_stats_sha256
+        self.stats_cache_dir = Path(config.stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._statistics: tuple[torch.Tensor, torch.Tensor] | None = None
         self._predict_dataset: _BlobAudioDataset | None = None
 
     def cached_stats_path(self) -> Path:
         """Return the local path the configured statistics object resolves to.
 
-        :returns: Local ``.npz`` path, unique per ``r2://`` URI.
+        :returns: Local ``.npz`` path, keyed by the expected content digest.
         """
         uri = cast(str, self.mel_stats_uri)
         if not r2_io.is_r2_uri(uri):
             return Path(uri)
-        digest = hashlib.sha256(uri.encode()).hexdigest()[:16]
-        return self.stats_cache_dir / f"{digest}-{Path(uri).name}"
+        return self.stats_cache_dir / f"{self.mel_stats_sha256}.npz"
 
     def _local_stats_file(self) -> Path:
         """Return a readable local path for the configured statistics object.
@@ -394,14 +409,39 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :returns: Local ``.npz`` path, downloaded once per distinct ``r2://`` URI.
         """
         destination = self.cached_stats_path()
-        if not r2_io.is_r2_uri(cast(str, self.mel_stats_uri)):
+        uri = cast(str, self.mel_stats_uri)
+        if not r2_io.is_r2_uri(uri):
+            self._verify_stats_identity(destination)
             return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not destination.exists():
-            staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
-            r2_io.download_to_path(cast(str, self.mel_stats_uri), staged)
+        if destination.exists():
+            try:
+                self._verify_stats_identity(destination)
+                return destination
+            except ValueError:
+                destination.unlink()
+        staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+        try:
+            r2_io.download_to_path(uri, staged)
+            self._verify_stats_identity(staged)
             staged.replace(destination)
+        finally:
+            staged.unlink(missing_ok=True)
         return destination
+
+    def _verify_stats_identity(self, path: Path) -> None:
+        """Reject statistics that differ from the configured training artifact.
+
+        :param path: Local statistics file to verify.
+        :raises ValueError: The file's SHA-256 digest does not match the configuration.
+        """
+        with path.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != self.mel_stats_sha256:
+            raise ValueError(
+                f"mel statistics from {self.mel_stats_uri} have SHA-256 {actual}, "
+                f"expected {self.mel_stats_sha256}"
+            )
 
     def _open_corpus(self) -> tuple[_BlobAudioDataset, int]:
         """Open the corpus, validate its audio column, and build the predict split.
@@ -468,6 +508,16 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self._predict_dataset, self.dataset_version = self._open_corpus()
         if self.mel_stats_uri is not None and self._statistics is None:
             mean, std = load_mel_statistics(self._local_stats_file())
+            expected_shape = (
+                self.channels,
+                MEL_N_MELS,
+                mel_n_frames_from_samples(self.num_samples, self.sample_rate),
+            )
+            if mean.shape != expected_shape or std.shape != expected_shape:
+                raise ValueError(
+                    f"mel statistics from {self.mel_stats_uri} have mean/std shapes "
+                    f"{mean.shape}/{std.shape}; expected {expected_shape}"
+                )
             mean_f32 = torch.as_tensor(mean, dtype=torch.float32)
             std_f32 = torch.as_tensor(std, dtype=torch.float32)
             if not bool(torch.isfinite(mean_f32).all() and torch.isfinite(std_f32).all()):
