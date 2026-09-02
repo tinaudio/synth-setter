@@ -259,10 +259,17 @@ immutable `datamodule.dataset_version`, so the resolved Hydra config replays the
 snapshot after later corpus commits. Source WAV blobs are read in place through native batched
 reads and mapped onto the checkpoint's render contract per batch: decode, resample, mono
 to stereo, pad or trim, amplitude scale, canonical mel computation, and optional
-normalization with the checkpoint's pinned `datamodule.mel_stats_uri`. That URI is mandatory
-because corpus statistics cannot replace the checkpoint's training statistics. A checkpoint
-trained without normalization must explicitly set both
-`datamodule.use_saved_mean_and_variance=false` and `datamodule.mel_stats_uri=null`. These
+normalization with the checkpoint's pinned `datamodule.mel_stats_uri`. The required
+`datamodule.mel_stats_sha256` verifies the exact training-statistics bytes before loading them,
+so overwriting the URI cannot change a replay. Remote files are cached by this digest and verified
+on every cache hit; invalid cache entries are removed before a fresh download. Local files receive
+the same identity check. Loaded arrays must match the render grid derived by
+`ThirdPartyAudioDataModule.setup()` and the canonical mel shape helpers; broadcastable statistics
+with a different shape are rejected. Corpus statistics cannot replace the checkpoint's training
+statistics. The datamodule strictly validates configuration values and complete URI/digest pairs
+before reading the corpus. A checkpoint trained without normalization must set
+`datamodule.use_saved_mean_and_variance=false`, `datamodule.mel_stats_uri=null`, and
+`datamodule.mel_stats_sha256=null`. These
 corpora carry no ground-truth patch, so runs pair `evaluation.no_params=true` with
 `evaluation.rerender_target=false`.
 

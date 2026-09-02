@@ -2259,6 +2259,69 @@ def test_third_party_checkpoint_creation_is_reproducible(tmp_path: Path) -> None
     torch.testing.assert_close(first["state_dict"], second["state_dict"], rtol=0, atol=0)
 
 
+@pytest.mark.slow
+def test_third_party_prediction_depends_on_corpus_mel(tmp_path: Path) -> None:
+    """Third-party audio changes model output under identical sampling noise.
+
+    :param tmp_path: Isolated corpus and checkpoint directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    write_blob_audio_corpus(
+        corpus,
+        [
+            np.zeros(_THIRD_PARTY_SOURCE_SAMPLE_RATE, dtype=np.float32),
+            np.sin(
+                np.linspace(
+                    0,
+                    2 * np.pi * 440,
+                    _THIRD_PARTY_SOURCE_SAMPLE_RATE,
+                    endpoint=False,
+                    dtype=np.float32,
+                )
+            )
+            * 0.25,
+        ],
+        sample_rate=_THIRD_PARTY_SOURCE_SAMPLE_RATE,
+    )
+    checkpoint = tmp_path / "flow_simple.ckpt"
+    _save_third_party_checkpoint(checkpoint)
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            overrides=[
+                "experiment=surge/flow_simple",
+                "datamodule=third_party/nsynth_test",
+                "render=vst",
+                f"datamodule.dataset_uri={corpus}",
+                "datamodule.use_saved_mean_and_variance=false",
+                "datamodule.mel_stats_uri=null",
+                "datamodule.mel_stats_sha256=null",
+                "datamodule.num_workers=0",
+                "trainer=cpu",
+                f"paths.output_dir={tmp_path / 'output'}",
+                *_THIRD_PARTY_MODEL_OVERRIDES,
+            ],
+        )
+    datamodule = instantiate(cfg.datamodule)
+    datamodule.setup("predict")
+    batch = datamodule.on_before_batch_transfer(next(iter(datamodule.predict_dataloader())), 0)
+    model = instantiate(cfg.model).eval()
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+    model.load_state_dict(state)
+
+    with torch.inference_mode(), torch.random.fork_rng(devices=[]):
+        torch.manual_seed(_THIRD_PARTY_TEST_SEED)
+        silence_prediction, _ = model.predict_step(
+            {key: value[:1] for key, value in batch.items()}, 0
+        )
+        torch.manual_seed(_THIRD_PARTY_TEST_SEED)
+        tone_prediction, _ = model.predict_step(
+            {key: value[1:] for key, value in batch.items()}, 0
+        )
+
+    assert not torch.allclose(silence_prediction, tone_prediction)
+
+
 def _run_third_party_eval(
     *,
     corpus: Path,
@@ -2287,6 +2350,7 @@ def _run_third_party_eval(
             f"datamodule.dataset_uri={corpus}",
             "datamodule.use_saved_mean_and_variance=false",
             "datamodule.mel_stats_uri=null",
+            "datamodule.mel_stats_sha256=null",
             "datamodule.num_workers=0",
             "callbacks=eval_vst",
             "mode=predict",

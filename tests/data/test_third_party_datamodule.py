@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import pickle
 import re
@@ -15,6 +16,7 @@ import pytest
 import torch
 from lance.blob import blob_array, blob_field
 from pedalboard.io import AudioFile
+from pydantic import ValidationError
 
 from synth_setter.data.third_party_datamodule import ThirdPartyAudioDataModule, decode_clip
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
@@ -27,6 +29,39 @@ _DURATION_SECONDS = 0.5
 _TARGET_SAMPLES = 2000
 _MEL_FRAMES = 51
 _SOURCE_SAMPLE_RATE = 8000
+_MEL_STATS_SHAPE = (_TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES)
+
+
+def _sha256(path: Path) -> str:
+    """Return the lowercase SHA-256 digest of a file.
+
+    :param path: File to hash.
+    :returns: Hexadecimal content digest.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_stats(
+    path: Path,
+    *,
+    mean: float = -30.0,
+    std: float = 2.0,
+    dtype: np.dtype = np.dtype(np.float32),
+) -> str:
+    """Write full-grid mel statistics and return their content digest.
+
+    :param path: Destination ``.npz`` file.
+    :param mean: Mean value repeated over the mel grid.
+    :param std: Standard-deviation value repeated over the mel grid.
+    :param dtype: Stored array dtype.
+    :returns: SHA-256 content digest.
+    """
+    np.savez(
+        path,
+        mean=np.full(_MEL_STATS_SHAPE, mean, dtype=dtype),
+        std=np.full(_MEL_STATS_SHAPE, std, dtype=dtype),
+    )
+    return _sha256(path)
 
 
 def _write_corpus(
@@ -80,6 +115,8 @@ def _datamodule(
     num_workers: int = 0,
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
+    mel_stats_sha256: str | None = None,
+    stats_cache_dir: str | None = None,
 ) -> ThirdPartyAudioDataModule:
     """Build a datamodule over a corpus with the tiny render contract.
 
@@ -92,6 +129,8 @@ def _datamodule(
     :param num_workers: Dataloader worker processes.
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
+    :param mel_stats_sha256: Expected statistics content digest.
+    :param stats_cache_dir: Directory for fetched statistics.
     :returns: Configured, un-setup datamodule.
     """
     return ThirdPartyAudioDataModule(
@@ -107,6 +146,8 @@ def _datamodule(
         num_workers=num_workers,
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
+        mel_stats_sha256=mel_stats_sha256,
+        stats_cache_dir=stats_cache_dir,
     )
 
 
@@ -214,6 +255,38 @@ def test_predict_batch_mel_matches_training_front_end_shape(tmp_path: Path) -> N
     assert torch.allclose(batch["mel"][0], torch.from_numpy(expected), atol=1e-5)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dataset_uri", 7),
+        ("audio_column", False),
+        ("conditioning", ["mel"]),
+        ("mel_stats_uri", 9),
+        ("stats_cache_dir", 11),
+    ],
+)
+def test_config_string_field_with_non_string_raises(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    """Hydra boundary values retain strict string types.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param field: String configuration field under test.
+    :param value: Non-string value supplied at the boundary.
+    """
+    kwargs: dict[str, object] = {
+        "dataset_uri": str(tmp_path / "corpus.lance"),
+        "sample_rate": _TARGET_SAMPLE_RATE,
+        "channels": _TARGET_CHANNELS,
+        "signal_duration_seconds": _DURATION_SECONDS,
+        "dataset_version": 1,
+        field: value,
+    }
+
+    with pytest.raises(ValidationError, match=field):
+        ThirdPartyAudioDataModule(**kwargs)  # type: ignore[arg-type]
+
+
 def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     """Configured statistics standardize the mel the corpus would otherwise emit.
 
@@ -221,11 +294,7 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=7)])
     stats_file = tmp_path / "stats.npz"
-    # Per-mel-bin arrays, as a training split stores them: a scalar would hide a
-    # broadcasting mistake across the mel axis.
-    mean = np.full((MEL_N_MELS, 1), -40.0, dtype=np.float32)
-    std = np.full((MEL_N_MELS, 1), 4.0, dtype=np.float32)
-    np.savez(stats_file, mean=mean, std=std)
+    digest = _write_stats(stats_file, mean=-40.0, std=4.0)
 
     plain = _first_batch(_datamodule(tmp_path / "corpus.lance"))["mel"]
     normalized = _first_batch(
@@ -233,10 +302,68 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
             tmp_path / "corpus.lance",
             use_saved_mean_and_variance=True,
             mel_stats_uri=str(stats_file),
+            mel_stats_sha256=digest,
         )
     )["mel"]
 
     assert torch.allclose(normalized, (plain + 40.0) / 4.0, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("mean_shape", "std_shape"),
+    [
+        ((), _MEL_STATS_SHAPE),
+        (_MEL_STATS_SHAPE, (MEL_N_MELS, 1)),
+    ],
+)
+def test_saved_statistics_with_wrong_shape_raise(
+    tmp_path: Path, mean_shape: tuple[int, ...], std_shape: tuple[int, ...]
+) -> None:
+    """Broadcastable statistics cannot silently violate the training mel grid.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param mean_shape: Stored mean shape.
+    :param std_shape: Stored standard-deviation shape.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=8)])
+    stats_file = tmp_path / "stats.npz"
+    np.savez(
+        stats_file,
+        mean=np.full(mean_shape, -30.0, dtype=np.float32),
+        std=np.full(std_shape, 2.0, dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError, match=r"mel statistics.*shape"):
+        _first_batch(
+            _datamodule(
+                corpus,
+                use_saved_mean_and_variance=True,
+                mel_stats_uri=str(stats_file),
+                mel_stats_sha256=_sha256(stats_file),
+            )
+        )
+
+
+def test_saved_statistics_with_wrong_digest_raise(tmp_path: Path) -> None:
+    """Evaluation rejects statistics whose content differs from the configured identity.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=9)])
+    stats_file = tmp_path / "stats.npz"
+    _write_stats(stats_file)
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        _first_batch(
+            _datamodule(
+                corpus,
+                use_saved_mean_and_variance=True,
+                mel_stats_uri=str(stats_file),
+                mel_stats_sha256="0" * 64,
+            )
+        )
 
 
 def test_saved_statistics_without_uri_raises(tmp_path: Path) -> None:
@@ -247,7 +374,40 @@ def test_saved_statistics_without_uri_raises(tmp_path: Path) -> None:
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=8)])
 
     with pytest.raises(ValueError, match="mel_stats_uri"):
-        _datamodule(tmp_path / "corpus.lance", use_saved_mean_and_variance=True)
+        _datamodule(
+            tmp_path / "corpus.lance",
+            use_saved_mean_and_variance=True,
+            mel_stats_sha256="a" * 64,
+        )
+
+
+def test_saved_statistics_without_digest_raises(tmp_path: Path) -> None:
+    """Normalization requires a content identity as well as a location.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    with pytest.raises(ValidationError, match="mel_stats_sha256"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            use_saved_mean_and_variance=True,
+            mel_stats_uri=str(tmp_path / "stats.npz"),
+        )
+
+
+@pytest.mark.parametrize("digest", ["abc", "G" * 64])
+def test_malformed_statistics_digest_raises(tmp_path: Path, digest: str) -> None:
+    """Only canonical lowercase SHA-256 digests identify statistics content.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param digest: Invalid digest syntax.
+    """
+    with pytest.raises(ValidationError, match="mel_stats_sha256"):
+        _datamodule(
+            tmp_path / "corpus.lance",
+            use_saved_mean_and_variance=True,
+            mel_stats_uri=str(tmp_path / "stats.npz"),
+            mel_stats_sha256=digest,
+        )
 
 
 def test_non_mel_conditioning_raises(tmp_path: Path) -> None:
@@ -255,7 +415,7 @@ def test_non_mel_conditioning_raises(tmp_path: Path) -> None:
 
     :param tmp_path: Isolated corpus fixture directory.
     """
-    with pytest.raises(ValueError, match="mel conditioning only"):
+    with pytest.raises(ValidationError, match="conditioning"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=_TARGET_SAMPLE_RATE,
@@ -377,11 +537,11 @@ def test_worker_pickling_drops_the_open_dataset_handle(tmp_path: Path) -> None:
     assert sum(len(batch) for batch in served) == 2
 
 
-def test_distinct_stats_uris_sharing_a_basename_cache_separately(tmp_path: Path) -> None:
-    """Every training split names its statistics ``stats.npz``, so the cache keys on the URI.
+def test_distinct_stats_digests_sharing_a_basename_cache_separately(tmp_path: Path) -> None:
+    """Changed training statistics resolve to distinct content-addressed cache slots.
 
-    Two checkpoints trained on different corpora would otherwise collide in one cache slot, and the
-    second eval would silently normalize with the first run's statistics.
+    Two checkpoints may name their statistics ``stats.npz``; keying by the expected digest keeps
+    their immutable contents separate.
 
     :param tmp_path: Isolated corpus fixture directory.
     """
@@ -390,14 +550,33 @@ def test_distinct_stats_uris_sharing_a_basename_cache_separately(tmp_path: Path)
         tmp_path / "corpus.lance",
         use_saved_mean_and_variance=True,
         mel_stats_uri="r2://experiments/data/corpus-a/train.lance/stats.npz",
+        mel_stats_sha256="a" * 64,
     )
     second = _datamodule(
         tmp_path / "corpus.lance",
         use_saved_mean_and_variance=True,
         mel_stats_uri="r2://experiments/data/corpus-b/train.lance/stats.npz",
+        mel_stats_sha256="b" * 64,
     )
 
     assert first.cached_stats_path() != second.cached_stats_path()
+
+
+def test_long_statistics_uri_uses_fixed_length_cache_name(tmp_path: Path) -> None:
+    """Remote object names cannot exceed the local filesystem's filename limit.
+
+    :param tmp_path: Isolated cache directory.
+    """
+    digest = "a" * 64
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=f"r2://experiments/{'x' * 300}.npz",
+        mel_stats_sha256=digest,
+        stats_cache_dir=str(tmp_path / "cache"),
+    )
+
+    assert datamodule.cached_stats_path().name == f"{digest}.npz"
 
 
 def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Path) -> None:
@@ -413,7 +592,7 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=20)])
     stats_key = fake_r2_remote / "experiments" / "corpus-a"
     stats_key.mkdir(parents=True)
-    np.savez(stats_key / "stats.npz", mean=np.float32(-30.0), std=np.float32(2.0))
+    digest = _write_stats(stats_key / "stats.npz", mean=-30.0, std=2.0)
 
     plain = _first_batch(_datamodule(corpus))["mel"]
     normalized = _first_batch(
@@ -421,10 +600,39 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
             corpus,
             use_saved_mean_and_variance=True,
             mel_stats_uri="r2://experiments/corpus-a/stats.npz",
+            mel_stats_sha256=digest,
         )
     )["mel"]
 
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
+
+
+def test_r2_statistics_overwrite_violating_digest_raises(fake_r2_remote: Path) -> None:
+    """An overwritten statistics URI cannot change normalized evaluation inputs.
+
+    :param fake_r2_remote: Root backing the ``r2:`` remote as a local filesystem.
+    """
+    corpus = fake_r2_remote / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=21)])
+    stats_file = fake_r2_remote / "experiments" / "corpus-a" / "stats.npz"
+    stats_file.parent.mkdir(parents=True)
+    expected_digest = _write_stats(stats_file, mean=-30.0, std=2.0)
+    expected_bytes = stats_file.read_bytes()
+    _write_stats(stats_file, mean=-20.0, std=2.0)
+    datamodule = _datamodule(
+        corpus,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri="r2://experiments/corpus-a/stats.npz",
+        mel_stats_sha256=expected_digest,
+        stats_cache_dir=str(fake_r2_remote / "cache"),
+    )
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        _first_batch(datamodule)
+
+    stats_file.write_bytes(expected_bytes)
+    normalized = _first_batch(datamodule)["mel"]
+    assert torch.isfinite(normalized).all()
 
 
 def test_decode_rejects_audio_outside_the_storage_range(tmp_path: Path) -> None:
@@ -527,7 +735,7 @@ def test_statistics_underflowing_float32_are_rejected(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=30)])
     stats_file = tmp_path / "stats.npz"
-    np.savez(stats_file, mean=np.float64(-30.0), std=np.float64(1e-50))
+    digest = _write_stats(stats_file, std=1e-50, dtype=np.dtype(np.float64))
 
     with pytest.raises(ValueError, match="float32"):
         _first_batch(
@@ -535,6 +743,7 @@ def test_statistics_underflowing_float32_are_rejected(tmp_path: Path) -> None:
                 tmp_path / "corpus.lance",
                 use_saved_mean_and_variance=True,
                 mel_stats_uri=str(stats_file),
+                mel_stats_sha256=digest,
             )
         )
 
@@ -549,7 +758,7 @@ def test_statistics_producing_non_finite_mel_are_rejected(tmp_path: Path) -> Non
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=31)])
     stats_file = tmp_path / "stats.npz"
-    np.savez(stats_file, mean=np.float64(-30.0), std=np.float64(1e-45))
+    digest = _write_stats(stats_file, std=1e-45, dtype=np.dtype(np.float64))
 
     with pytest.raises(ValueError, match="non-finite"):
         _first_batch(
@@ -557,6 +766,7 @@ def test_statistics_producing_non_finite_mel_are_rejected(tmp_path: Path) -> Non
                 tmp_path / "corpus.lance",
                 use_saved_mean_and_variance=True,
                 mel_stats_uri=str(stats_file),
+                mel_stats_sha256=digest,
             )
         )
 
@@ -594,7 +804,7 @@ def test_statistics_overflowing_float32_are_rejected(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=36)])
     stats_file = tmp_path / "stats.npz"
-    np.savez(stats_file, mean=np.float64(0.0), std=np.float64(1e39))
+    digest = _write_stats(stats_file, mean=0.0, std=1e39, dtype=np.dtype(np.float64))
 
     with pytest.raises(ValueError, match="float32"):
         _first_batch(
@@ -602,6 +812,7 @@ def test_statistics_overflowing_float32_are_rejected(tmp_path: Path) -> None:
                 tmp_path / "corpus.lance",
                 use_saved_mean_and_variance=True,
                 mel_stats_uri=str(stats_file),
+                mel_stats_sha256=digest,
             )
         )
 
@@ -613,7 +824,7 @@ def test_non_boolean_use_saved_mean_and_variance_raises(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=37)])
 
-    with pytest.raises(ValueError, match="must be a boolean"):
+    with pytest.raises(ValidationError, match="use_saved_mean_and_variance"):
         _datamodule(
             tmp_path / "corpus.lance",
             use_saved_mean_and_variance="false",  # type: ignore[arg-type]
@@ -675,9 +886,9 @@ def test_empty_corpus_raises(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("sample_rate", "duration", "channels", "message"),
     [
-        (_TARGET_SAMPLE_RATE, -1.0, _TARGET_CHANNELS, "signal_duration_seconds=-1.0"),
-        (_TARGET_SAMPLE_RATE, 0.0, 1, "signal_duration_seconds=0.0"),
-        (100, 0.001, 1, "positive sample count"),
+        (_TARGET_SAMPLE_RATE, -1.0, _TARGET_CHANNELS, "signal_duration_seconds"),
+        (_TARGET_SAMPLE_RATE, 0.0, 1, "signal_duration_seconds"),
+        (100, 0.001, 1, "yields no samples"),
     ],
 )
 def test_render_contract_without_a_positive_sample_grid_raises(
@@ -693,7 +904,7 @@ def test_render_contract_without_a_positive_sample_grid_raises(
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=39)])
 
-    with pytest.raises(ValueError, match=re.escape(message)):
+    with pytest.raises(ValidationError, match=re.escape(message)):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=sample_rate,
@@ -710,7 +921,7 @@ def test_non_positive_channel_count_raises(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=40)])
 
-    with pytest.raises(ValueError, match="channels=0"):
+    with pytest.raises(ValidationError, match="channels"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=_TARGET_SAMPLE_RATE,
@@ -737,7 +948,7 @@ def test_boolean_count_argument_raises(tmp_path: Path, field: str) -> None:
         field: True,
     }
 
-    with pytest.raises(ValueError, match=f"{field}=True"):
+    with pytest.raises(ValidationError, match=field):
         ThirdPartyAudioDataModule(**kwargs)  # type: ignore[arg-type]
 
 
@@ -748,7 +959,7 @@ def test_boolean_amplitude_scale_raises(tmp_path: Path, amplitude_scale: bool) -
     :param tmp_path: Isolated corpus fixture directory.
     :param amplitude_scale: Boolean value supplied where a numeric gain is required.
     """
-    with pytest.raises(ValueError, match=f"amplitude_scale={amplitude_scale}"):
+    with pytest.raises(ValidationError, match="amplitude_scale"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=_TARGET_SAMPLE_RATE,
@@ -770,7 +981,7 @@ def test_amplitude_scale_outside_positive_finite_domain_raises(
     :param tmp_path: Isolated corpus fixture directory.
     :param amplitude_scale: Invalid numeric gain.
     """
-    with pytest.raises(ValueError, match="must be positive and finite"):
+    with pytest.raises(ValidationError, match="amplitude_scale"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=_TARGET_SAMPLE_RATE,
@@ -788,7 +999,7 @@ def test_non_positive_batch_size_raises(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=42)])
 
-    with pytest.raises(ValueError, match="batch_size=0"):
+    with pytest.raises(ValidationError, match="batch_size"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=_TARGET_SAMPLE_RATE,
@@ -808,7 +1019,7 @@ def test_negative_rate_and_duration_cancelling_into_a_positive_grid_raises(
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=43)])
 
-    with pytest.raises(ValueError, match="sample_rate=-4000"):
+    with pytest.raises(ValidationError, match="sample_rate"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=-4000,
@@ -1010,7 +1221,7 @@ def test_non_numeric_duration_raises(tmp_path: Path) -> None:
     """
     _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=48)])
 
-    with pytest.raises(ValueError, match="must be a number"):
+    with pytest.raises(ValidationError, match="signal_duration_seconds"):
         ThirdPartyAudioDataModule(
             dataset_uri=str(tmp_path / "corpus.lance"),
             sample_rate=_TARGET_SAMPLE_RATE,
