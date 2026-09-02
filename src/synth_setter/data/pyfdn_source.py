@@ -17,6 +17,7 @@ _LINEAR = False
 _PHI = None
 _AMPLITUDE = 0.1
 
+
 def generate_canonical_pyfdn_source() -> Float32[np.ndarray, "1 192000"]:
     """Generate the immutable canonical F1 pyFDN excitation.
 

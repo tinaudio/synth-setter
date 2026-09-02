@@ -63,6 +63,29 @@ def test_generate_canonical_pyfdn_source_has_bounded_near_zero_start() -> None:
     assert np.float32(0.09) < peak <= np.float32(0.1)
 
 
+def test_generate_canonical_pyfdn_source_matches_representative_locked_samples() -> None:
+    """Pinned samples detect phase or frequency-law drift without gating on a byte digest."""
+    source = generate_canonical_pyfdn_source()
+
+    np.testing.assert_allclose(
+        source[0, [0, 1, 2, 12_000, 24_000, 36_000, 47_999]],
+        np.array(
+            [
+                6.1232338e-18,
+                2.6181791e-04,
+                5.2367174e-04,
+                6.5586314e-02,
+                -8.5105821e-02,
+                -1.9153437e-02,
+                -9.6530151e-03,
+            ],
+            dtype=np.float32,
+        ),
+        rtol=0.0,
+        atol=1e-7,
+    )
+
+
 def test_generate_canonical_pyfdn_source_repeated_calls_are_deterministic() -> None:
     """Repeated generation yields identical samples and byte fingerprints."""
     first = generate_canonical_pyfdn_source()
