@@ -48,6 +48,7 @@ from synth_setter.models.components.pretrained_encoder import (
     PretrainedConditioningEncoder,
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
+from synth_setter.models.components.transformer import ASTWithProjectionHead
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
@@ -1639,12 +1640,26 @@ def test_evaluate_predict_rounds_fractional_pitch_to_nearest_midi_note(
             cfg.model.net.patch_size = 128
             cfg.model.net.patch_stride = 64
     HydraConfig().set_config(cfg_surge_xt)
-    train(cfg_surge_xt)
+    _, train_objects = train(cfg_surge_xt)
+
+    spec = param_specs[param_spec_name]
+    pitch_index = spec.encoded_names.index("pitch")
+    fractional_pitch_output = 0.0625
+    trained_model = train_objects["model"]
+    trainer = train_objects["trainer"]
+    assert isinstance(trained_model, VSTFeedForwardModule)
+    assert isinstance(trained_model.net, ASTWithProjectionHead)
+    assert isinstance(trainer, Trainer)
+    # Keep every other learned output real while pinning the rounding input to MIDI 60.75.
+    with torch.no_grad():
+        trained_model.net.final_proj.weight[pitch_index].zero_()
+        trained_model.net.final_proj.bias[pitch_index].fill_(fractional_pitch_output)
+    trainer.save_checkpoint(cfg_surge_xt_eval.ckpt_path, weights_only=False)
 
     with open_dict(cfg_surge_xt_eval):
         cfg_surge_xt_eval.evaluation.compute_metrics = False
         cfg_surge_xt_eval.evaluation.rerender_target = False
-        cfg_surge_xt_eval.datamodule.batch_size = 5
+        cfg_surge_xt_eval.datamodule.batch_size = 1
         cfg_surge_xt_eval.render.plugin_reload_cadence = "once"
         cfg_surge_xt_eval.trainer.limit_predict_batches = 1
     HydraConfig().set_config(cfg_surge_xt_eval)
@@ -1653,19 +1668,13 @@ def test_evaluate_predict_rounds_fractional_pitch_to_nearest_midi_note(
     finally:
         GlobalHydra.instance().clear()
 
-    spec = param_specs[param_spec_name]
-    pitch_index = spec.encoded_names.index("pitch")
     prediction = torch.load(tmp_path / "predictions" / "pred-0.pt", weights_only=True)
-    fractional_pitch_outputs = prediction[:, pitch_index].numpy()
-    native_pitches = np.clip((fractional_pitch_outputs + 1.0) * 12.0 + 48.0, 48.0, 72.0)
-    rounds_up = np.flatnonzero(native_pitches - np.floor(native_pitches) >= 0.5)
+    assert prediction[0, pitch_index].item() == fractional_pitch_output
 
-    assert rounds_up.size > 0
-    sample_index = int(rounds_up[0])
-    rendered_pitch = pd.read_csv(
-        tmp_path / "audio" / f"sample_{sample_index}" / "params.csv", index_col=0
-    ).at["pitch", "pred_effective"]
-    assert int(rendered_pitch) == math.floor(native_pitches[sample_index]) + 1
+    rendered_pitch = pd.read_csv(tmp_path / "audio" / "sample_0" / "params.csv", index_col=0).at[
+        "pitch", "pred_effective"
+    ]
+    assert int(rendered_pitch) == 61
 
 
 @pytest.mark.requires_vst
