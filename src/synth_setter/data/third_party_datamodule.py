@@ -15,6 +15,7 @@ import io
 import logging
 import math
 import os
+import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
@@ -430,12 +431,14 @@ class ThirdPartyAudioDataModule(LightningDataModule):
     def cached_stats_path(self) -> Path:
         """Return the local path the configured statistics object resolves to.
 
-        :returns: Local ``.npz`` path, unique per ``r2://`` URI.
+        :returns: Immutable cache path for pinned bytes, otherwise the resolved local path.
         """
         uri = cast(str, self.mel_stats_uri)
+        if self.mel_stats_sha256 is not None:
+            return self.stats_cache_dir / self.mel_stats_sha256 / Path(uri).name
         if not r2_io.is_r2_uri(uri):
             return Path(uri)
-        digest = self.mel_stats_sha256 or hashlib.sha256(uri.encode()).hexdigest()
+        digest = hashlib.sha256(uri.encode()).hexdigest()
         return self.stats_cache_dir / f"{digest[:16]}-{Path(uri).name}"
 
     def _verify_stats_digest(self, path: Path) -> None:
@@ -459,9 +462,10 @@ class ThirdPartyAudioDataModule(LightningDataModule):
 
         :returns: Local ``.npz`` path, downloaded once per distinct ``r2://`` URI.
         """
+        uri = cast(str, self.mel_stats_uri)
         destination = self.cached_stats_path()
-        if not r2_io.is_r2_uri(cast(str, self.mel_stats_uri)):
-            self._verify_stats_digest(destination)
+        is_remote = r2_io.is_r2_uri(uri)
+        if not is_remote and self.mel_stats_sha256 is None:
             return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
@@ -469,7 +473,10 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             return destination
         staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
         try:
-            r2_io.download_to_path(cast(str, self.mel_stats_uri), staged)
+            if is_remote:
+                r2_io.download_to_path(uri, staged)
+            else:
+                shutil.copyfile(uri, staged)
             self._verify_stats_digest(staged)
             staged.replace(destination)
         finally:

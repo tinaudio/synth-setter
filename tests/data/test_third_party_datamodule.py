@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import pickle
 import re
@@ -90,6 +91,7 @@ def _datamodule(
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
     mel_stats_sha256: str | None = None,
+    stats_cache_dir: str | None = None,
     sketch: SketchControls = None,
 ) -> ThirdPartyAudioDataModule:
     """Build a datamodule over a corpus with the tiny render contract.
@@ -104,6 +106,7 @@ def _datamodule(
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
     :param mel_stats_sha256: Optional digest pin for the statistics bytes.
+    :param stats_cache_dir: Optional content-addressed statistics cache root.
     :param sketch: Optional live sketch-control specification.
     :returns: Configured, un-setup datamodule.
     """
@@ -121,6 +124,7 @@ def _datamodule(
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
         mel_stats_sha256=mel_stats_sha256,
+        stats_cache_dir=stats_cache_dir,
         sketch=sketch,
     )
 
@@ -241,16 +245,22 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     mean = np.full((MEL_N_MELS, 1), -40.0, dtype=np.float32)
     std = np.full((MEL_N_MELS, 1), 4.0, dtype=np.float32)
     np.savez(stats_file, mean=mean, std=std)
+    expected_bytes = stats_file.read_bytes()
+    digest = hashlib.sha256(expected_bytes).hexdigest()
 
     plain = _first_batch(_datamodule(tmp_path / "corpus.lance"))["mel"]
-    normalized = _first_batch(
-        _datamodule(
-            tmp_path / "corpus.lance",
-            use_saved_mean_and_variance=True,
-            mel_stats_uri=str(stats_file),
-        )
-    )["mel"]
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        mel_stats_sha256=digest,
+        stats_cache_dir=str(tmp_path / "stats-cache"),
+    )
+    normalized = _first_batch(datamodule)["mel"]
+    stats_file.write_bytes(b"replacement statistics")
 
+    assert datamodule.cached_stats_path() != stats_file
+    assert datamodule.cached_stats_path().read_bytes() == expected_bytes
     assert torch.allclose(normalized, (plain + 40.0) / 4.0, atol=1e-5)
 
 

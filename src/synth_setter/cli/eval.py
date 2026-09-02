@@ -411,6 +411,8 @@ def _localize_eval_checkpoint(
         if expected_sha256 is not None:
             raise ValueError("ckpt_sha256 requires ckpt_path")
         return None
+    if not isinstance(checkpoint, str):
+        raise ValueError("ckpt_path must be a string or null")
     digest = _normalize_checkpoint_sha256(expected_sha256)
     is_remote = checkpoint.startswith(("r2://", "s3://"))
     if not is_remote:

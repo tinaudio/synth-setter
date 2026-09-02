@@ -139,6 +139,12 @@ def test_eval_checkpoint_remote_uri_without_digest_raises() -> None:
         eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
 
 
+def test_eval_checkpoint_non_string_path_raises() -> None:
+    """Malformed checkpoint path types fail as configuration errors."""
+    with pytest.raises(ValueError, match="ckpt_path must be a string"):
+        eval_module._localize_eval_checkpoint(cast("str", 123))
+
+
 def test_eval_checkpoint_non_string_digest_raises() -> None:
     """Malformed digest types fail with the documented configuration error."""
     with pytest.raises(ValueError, match="64 hexadecimal characters"):
