@@ -17,6 +17,8 @@ from synth_setter.data.vst.param_spec import (
     NoteDurationParameter,
     ParamSpec,
     decode_model_output,
+    require_note_params,
+    require_scalar_synth_params,
 )
 from synth_setter.models.components.transformer import LearntProjection
 
@@ -253,6 +255,68 @@ def test_array_parameter_rejects_noninteger_shape_dimension() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("min_value", "max_value"),
+    [(0.0, 1), (0, 1.0), (False, 1), (0, True)],
+)
+def test_discrete_array_rejects_noninteger_bound(
+    min_value: object, max_value: object
+) -> None:
+    """A discrete native domain requires integer, non-boolean bounds.
+
+    :param min_value: Candidate inclusive lower bound.
+    :param max_value: Candidate inclusive upper bound.
+    """
+    with pytest.raises(ValueError, match="bounds must be integers"):
+        DiscreteArrayParameter(
+            name="choice",
+            shape=(1,),
+            min=min_value,  # type: ignore[arg-type]
+            max=max_value,  # type: ignore[arg-type]
+        )
+
+
+def test_discrete_array_normalizes_numpy_integer_bounds_before_sampling() -> None:
+    """Accepted NumPy integer bounds do not overflow while forming the sampling range."""
+    parameter = DiscreteArrayParameter(
+        name="choice",
+        shape=(1,),
+        min=np.int8(126),  # type: ignore[arg-type]
+        max=np.int8(127),  # type: ignore[arg-type]
+    )
+
+    sampled = parameter.sample(np.random.default_rng(0))
+
+    assert sampled.item() in (126, 127)
+
+
+@pytest.mark.parametrize(
+    ("min_value", "max_value", "message"),
+    [
+        (-np.inf, 1.0, "bounds must be finite"),
+        (-1.0, np.inf, "bounds must be finite"),
+        (1.0, 1.0, "max must be greater than min"),
+        (-1e308, 1e308, "span must be finite"),
+    ],
+)
+def test_continuous_array_rejects_invalid_bounds(
+    min_value: float, max_value: float, message: str
+) -> None:
+    """Construction rejects bounds that cannot define a finite affine domain.
+
+    :param min_value: Invalid lower bound under test.
+    :param max_value: Invalid upper bound under test.
+    :param message: Expected validation-error fragment.
+    """
+    with pytest.raises(ValueError, match=message):
+        ContinuousArrayParameter(
+            name="matrix",
+            shape=(1,),
+            min=min_value,
+            max=max_value,
+        )
+
+
 def test_discrete_array_rejects_large_offset_that_float64_cannot_roundtrip() -> None:
     """A discrete domain must remain exact during native float64 arithmetic."""
     with pytest.raises(ValueError, match="bounds exceed exact float64 integer range"):
@@ -322,6 +386,74 @@ def test_array_encoded_names_follow_c_order_coordinates() -> None:
         "feedback_matrix.1.1",
         "feedback_matrix.1.2",
     )
+
+
+def test_require_scalar_synth_params_normalizes_real_values() -> None:
+    """A legacy renderer receives plain floats from scalar synth values."""
+    scalar_params = require_scalar_synth_params({"gain": 0.5, "mode": 1})
+
+    assert scalar_params == {"gain": 0.5, "mode": 1.0}
+
+
+def test_require_scalar_synth_params_rejects_array_value() -> None:
+    """A legacy renderer rejects array-valued synth controls at its boundary."""
+    with pytest.raises(TypeError, match="matrix must be a real scalar"):
+        require_scalar_synth_params({"matrix": np.zeros((2, 2))})
+
+
+def test_require_note_params_normalizes_complete_midi_mapping() -> None:
+    """A renderer receives canonical Python values from a complete MIDI mapping."""
+    note_params = require_note_params(
+        {
+            "pitch": 60,
+            "note_start_and_end": (0.25, 1.5),
+        }
+    )
+
+    assert note_params == {"pitch": 60, "note_start_and_end": (0.25, 1.5)}
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {},
+        {"pitch": 60},
+        {"pitch": 60, "note_start_and_end": (0.0, 1.0), "velocity": 100},
+    ],
+)
+def test_require_note_params_rejects_incomplete_or_extra_keys(
+    values: dict[str, object],
+) -> None:
+    """A renderer boundary requires exactly the complete MIDI mapping.
+
+    :param values: Mapping with missing or extra MIDI fields.
+    """
+    with pytest.raises(ValueError, match="exactly pitch and note_start_and_end"):
+        require_note_params(values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("pitch", [60.0, True])
+def test_require_note_params_rejects_noninteger_pitch(pitch: object) -> None:
+    """A renderer boundary rejects non-integral and boolean MIDI pitches.
+
+    :param pitch: Invalid pitch value under test.
+    """
+    with pytest.raises(TypeError, match="pitch must be an integer"):
+        require_note_params(
+            {"pitch": pitch, "note_start_and_end": (0.0, 1.0)}  # type: ignore[dict-item]
+        )
+
+
+@pytest.mark.parametrize("window", [(0.0,), (0.0, "end")])
+def test_require_note_params_rejects_invalid_note_window(window: object) -> None:
+    """A renderer boundary requires two numeric note-window endpoints.
+
+    :param window: Invalid note window under test.
+    """
+    with pytest.raises(TypeError, match="note_start_and_end must be two numeric endpoints"):
+        require_note_params(
+            {"pitch": 60, "note_start_and_end": window}  # type: ignore[dict-item]
+        )
 
 
 def _tiny_spec() -> ParamSpec:
@@ -648,6 +780,14 @@ def test_scalar_parameter_golden_encoding_remains_unchanged() -> None:
     assert parameter.decode(encoded) == 0.0
 
 
+def test_continuous_parameter_encode_rejects_nonnumeric_value() -> None:
+    """Continuous scalar encoding rejects values outside its numeric domain."""
+    parameter = ContinuousParameter(name="gain", min=-1.0, max=1.0)
+
+    with pytest.raises(TypeError, match="gain must be numeric"):
+        parameter.encode("loud")
+
+
 def test_discrete_parameter_golden_encoding_remains_unchanged() -> None:
     """Discrete scalar encoding retains its established affine values."""
     parameter = DiscreteLiteralParameter(name="pitch", min=48, max=72)
@@ -656,6 +796,37 @@ def test_discrete_parameter_golden_encoding_remains_unchanged() -> None:
 
     np.testing.assert_array_equal(encoded, np.array([0.5]))
     assert parameter.decode(encoded) == 60
+
+
+def test_discrete_onehot_encoding_uses_native_integer_offset() -> None:
+    """Discrete one-hot encoding selects the coordinate for the native integer."""
+    parameter = DiscreteLiteralParameter(name="octave", min=-1, max=1, encoding="onehot")
+
+    encoded = parameter.encode(0)
+
+    np.testing.assert_array_equal(encoded, np.array([0.0, 1.0, 0.0]))
+
+
+def test_discrete_parameter_encode_rejects_noninteger_value() -> None:
+    """Discrete scalar encoding rejects values outside its integer domain."""
+    parameter = DiscreteLiteralParameter(name="pitch", min=48, max=72)
+
+    with pytest.raises(TypeError, match="pitch must be an integer"):
+        parameter.encode(60.5)
+
+
+def test_categorical_sample_returns_renderer_native_float() -> None:
+    """Categorical sampling normalizes NumPy choices to a Python float."""
+    parameter = CategoricalParameter(
+        name="mode",
+        values=["a", "b"],
+        raw_values=[0.25, 0.75],
+    )
+
+    sampled = parameter.sample(np.random.default_rng(0))
+
+    assert sampled == 0.75
+    assert type(sampled) is float
 
 
 def test_categorical_onehot_golden_encoding_remains_unchanged() -> None:
@@ -673,6 +844,28 @@ def test_categorical_onehot_golden_encoding_remains_unchanged() -> None:
     assert parameter.decode(encoded) == 0.5
 
 
+def test_categorical_scalar_encoding_preserves_numeric_value() -> None:
+    """Categorical scalar encoding preserves the renderer-native numeric value."""
+    parameter = CategoricalParameter(
+        name="mode",
+        values=["a", "b"],
+        raw_values=[0.25, 0.75],
+        encoding="scalar",
+    )
+
+    encoded = parameter.encode(0.25)
+
+    np.testing.assert_array_equal(encoded, np.array([0.25]))
+
+
+def test_categorical_parameter_encode_rejects_nonnumeric_value() -> None:
+    """Categorical encoding rejects values outside its numeric raw domain."""
+    parameter = CategoricalParameter(name="mode", values=["a", "b"])
+
+    with pytest.raises(TypeError, match="mode must be numeric"):
+        parameter.encode("a")
+
+
 def test_note_duration_golden_encoding_remains_unchanged() -> None:
     """Preserve legacy note-duration encoding and decoding behavior."""
     parameter = NoteDurationParameter(
@@ -684,6 +877,21 @@ def test_note_duration_golden_encoding_remains_unchanged() -> None:
 
     np.testing.assert_array_equal(encoded, np.array([0.25, 0.75]))
     assert parameter.decode(encoded) == (1.0, 3.0)
+
+
+@pytest.mark.parametrize("value", [[1.0, 3.0], (1.0,), (1.0, "end")])
+def test_note_duration_encode_rejects_invalid_endpoint_pair(value: object) -> None:
+    """Note-duration encoding requires exactly two numeric tuple endpoints.
+
+    :param value: Invalid endpoint container or value under test.
+    """
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+    )
+
+    with pytest.raises(TypeError, match="must be a pair of numeric endpoints"):
+        parameter.encode(value)
 
 
 def test_param2tok_projection_accepts_flat_array_parameter_width() -> None:

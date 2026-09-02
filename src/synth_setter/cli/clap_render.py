@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal
 
 import click
 import numpy as np
@@ -27,7 +27,11 @@ from synth_setter.clap import (
 )
 from synth_setter.conditioning import resolve_embedding_conditioning
 from synth_setter.data.vst.core import write_wav
-from synth_setter.data.vst.param_spec import decode_model_output
+from synth_setter.data.vst.param_spec import (
+    decode_model_output,
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -36,9 +40,6 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SynthSpec
 from synth_setter.workspace import operator_workspace
-
-if TYPE_CHECKING:
-    from synth_setter.data.vst.param_spec import NoteParams
 
 _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 _EXPECTED_CONDITIONING_COLUMN = "clap"
@@ -529,8 +530,8 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     """
     spec = param_specs[render.param_spec_name]
     synth_values, note_values = decode_model_output(prediction[0].float().numpy(), spec)
-    synth_params = cast("dict[str, float]", synth_values)
-    note_params = cast("NoteParams", note_values)
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
     note_start, note_end = sorted(note_params["note_start_and_end"])
     renderer = make_audio_renderer(render)
     audio = renderer.render(

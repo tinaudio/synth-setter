@@ -20,7 +20,6 @@ import math
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
 import click
 import torch
@@ -33,7 +32,11 @@ from synth_setter.data.vst.clap_map import (
     synth_params_to_clap_rows,
 )
 from synth_setter.data.vst.param_map import load_param_map
-from synth_setter.data.vst.param_spec import ParamSpec, decode_model_output
+from synth_setter.data.vst.param_spec import (
+    ParamSpec,
+    decode_model_output,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -152,7 +155,7 @@ def decode_and_convert(  # noqa: DOC502 — ValueError propagates from synth_par
     """
     row = prediction[0].detach().cpu().float().numpy()
     synth_values, _ = decode_model_output(row, spec)
-    synth_params = cast("dict[str, float]", synth_values)
+    synth_params = require_scalar_synth_params(synth_values)
     return synth_params_to_clap_rows(synth_params, spec, format_map)
 
 

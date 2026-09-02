@@ -23,6 +23,10 @@ import numpy as np
 import pyarrow as pa
 import structlog
 
+from synth_setter.data.vst.param_spec import (
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -39,7 +43,7 @@ from synth_setter.data.vst.shapes import (
 )
 
 if TYPE_CHECKING:
-    from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+    from synth_setter.data.vst.param_spec import ParamSpec
     from synth_setter.data.vst.renderers import AudioRenderer
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
     from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -165,8 +169,8 @@ def _render_encoded_row(
     :returns: Rendered audio shaped ``(channels, samples)``.
     """
     synth_values, note_values = spec.decode(encoded)
-    synth_params = cast("dict[str, float]", synth_values)
-    note_params = cast("NoteParams", note_values)
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
     return renderer.render(
         synth_params,
         note_params["pitch"],

@@ -52,7 +52,7 @@ class CategoricalParameter(Parameter):
         raw_values: list[float] | None = None,
         weights: list[float] | None = None,
         encoding: Literal["scalar", "onehot"] = "scalar",
-    ):
+    ) -> None:
         super().__init__(name)
 
         if raw_values is not None:
@@ -344,8 +344,15 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         :param shape: Non-empty native array shape with positive dimensions.
         :param min: Inclusive native lower bound.
         :param max: Inclusive native upper bound.
-        :raises ValueError: The integer range cannot round-trip through float32 encoding.
+        :raises ValueError: The bounds are non-integral or cannot round-trip through float32.
         """
+        if any(
+            not isinstance(bound, Integral) or isinstance(bound, bool)
+            for bound in (min, max)
+        ):
+            raise ValueError("bounds must be integers")
+        min = int(min)
+        max = int(max)
         super().__init__(name=name, shape=shape, min=min, max=max)
         if min < -_MAX_EXACT_FLOAT64_INTEGER or max > _MAX_EXACT_FLOAT64_INTEGER:
             raise ValueError("bounds exceed exact float64 integer range")
@@ -417,6 +424,49 @@ class NoteParams(TypedDict):  # noqa: DOC601, DOC603
 
     pitch: int
     note_start_and_end: tuple[float, float]
+
+
+def require_scalar_synth_params(values: Mapping[str, ParameterValue]) -> dict[str, float]:
+    """Validate and normalize synth values for a scalar-only renderer.
+
+    :param values: Renderer-native synth values decoded by a generic parameter spec.
+    :returns: Plain float values accepted by legacy VST and TorchSynth renderers.
+    :raises TypeError: A synth value is not a real scalar.
+    """
+    result: dict[str, float] = {}
+    for name, value in values.items():
+        if not isinstance(value, Real) or isinstance(value, bool):
+            raise TypeError(f"{name} must be a real scalar")
+        result[name] = float(value)
+    return result
+
+
+def require_note_params(values: Mapping[str, ParameterValue]) -> NoteParams:
+    """Validate and normalize the complete MIDI mapping for a renderer.
+
+    :param values: Renderer-native note values decoded by a generic parameter spec.
+    :returns: Canonical Python pitch and note-window values.
+    :raises TypeError: The pitch or note window has an invalid native type.
+    :raises ValueError: The mapping has missing or extra note fields.
+    """
+    if set(values) != {"pitch", "note_start_and_end"}:
+        raise ValueError("note params must contain exactly pitch and note_start_and_end")
+
+    pitch = values["pitch"]
+    if not isinstance(pitch, Integral) or isinstance(pitch, bool):
+        raise TypeError("pitch must be an integer")
+
+    window = values["note_start_and_end"]
+    if not (
+        isinstance(window, tuple)
+        and len(window) == 2
+        and all(isinstance(endpoint, Real) for endpoint in window)
+    ):
+        raise TypeError("note_start_and_end must be two numeric endpoints")
+    return {
+        "pitch": int(pitch),
+        "note_start_and_end": (float(window[0]), float(window[1])),
+    }
 
 
 class ParamSpec:
