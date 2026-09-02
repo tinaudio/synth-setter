@@ -1,12 +1,10 @@
 """Deterministic online data contracts for the fixed-source pyFDN instrument."""
 
-import hashlib
 import inspect
 from pathlib import Path
 
 import numpy as np
 import pytest
-import soundfile as sf
 import torch
 from torch.utils.data import RandomSampler, SequentialSampler
 
@@ -14,20 +12,6 @@ from synth_setter.data.pyfdn_datamodule import PyFDNDataModule, PyFDNDataset
 from synth_setter.data.pyfdn_instrument import params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.sample_seed import derive_sample_seed
-
-
-@pytest.fixture
-def source_file(tmp_path: Path) -> tuple[Path, str]:
-    """Write a checksum-pinned lossless source with the production geometry.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    :returns: Source path and SHA-256 of its exact stored bytes.
-    """
-    path = tmp_path / "source.wav"
-    time = np.arange(192_000, dtype=np.float64) / 48_000.0
-    source = 0.1 * np.sin(2.0 * np.pi * 220.0 * time)
-    sf.write(path, source, 48_000, subtype="PCM_16")
-    return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_pyfdn_dataset_same_index_is_deterministic(
@@ -173,6 +157,11 @@ def test_pyfdn_datamodule_uses_fixed_default_split_seeds(
         456,
         789,
     )
+    rows = {
+        tuple(split[0][1].flatten().tolist())
+        for split in (datamodule.train, datamodule.val, datamodule.test)
+    }
+    assert len(rows) == 3
 
 
 def test_pyfdn_datamodule_duplicate_split_seeds_raise(
@@ -186,6 +175,12 @@ def test_pyfdn_datamodule_duplicate_split_seeds_raise(
 
     with pytest.raises(ValueError, match="distinct"):
         PyFDNDataModule(path, checksum, train_val_test_seeds=(123, 123, 789))
+
+
+def test_pyfdn_datamodule_non_audio_conditioning_raises() -> None:
+    """The online batch contract rejects unsupported conditioning modes."""
+    with pytest.raises(ValueError, match="conditioning must be 'audio'"):
+        PyFDNDataModule("unused.wav", "0" * 64, conditioning="mel")
 
 
 def test_pyfdn_datamodule_training_rows_remain_fixed_across_epochs(
@@ -258,6 +253,33 @@ def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract(
     assert all(value.dtype == torch.float32 for value in batch.values())
     assert torch.isfinite(batch["audio"]).all()
     assert torch.all((-1.0 <= batch["params"]) & (batch["params"] <= 1.0))
+
+
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
+def test_pyfdn_datamodule_multiprocess_workers_render_finite_batches(
+    source_file: tuple[Path, str],
+) -> None:
+    """Worker processes load and reuse their own fixed-source renderer.
+
+    :param source_file: Valid fixed source and checksum.
+    """
+    path, checksum = source_file
+    datamodule = PyFDNDataModule(
+        path,
+        checksum,
+        train_val_test_sizes=(4, 1, 1),
+        batch_size=2,
+        num_workers=2,
+        persistent_workers=False,
+    )
+    datamodule.setup("fit")
+
+    batches = list(datamodule.train_dataloader())
+
+    assert len(batches) == 2
+    assert all(torch.isfinite(batch["audio"]).all() for batch in batches)
 
 
 def test_pyfdn_public_signatures_omit_unsupported_sampling_modes() -> None:

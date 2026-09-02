@@ -18,20 +18,6 @@ def _sha256(path: Path) -> str:
 
 
 @pytest.fixture
-def source_file(tmp_path: Path) -> tuple[Path, str]:
-    """Write a checksum-pinned lossless source with the fixed audio geometry.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    :returns: Source path and SHA-256 of its exact stored bytes.
-    """
-    path = tmp_path / "source.wav"
-    time = np.arange(192_000, dtype=np.float64) / 48_000.0
-    audio = 0.1 * np.sin(2.0 * np.pi * 220.0 * time)
-    sf.write(path, audio, 48_000, subtype="PCM_16")
-    return path, _sha256(path)
-
-
-@pytest.fixture
 def fdn_params() -> ParameterValues:
     """Return one valid native order-8 mono patch.
 
