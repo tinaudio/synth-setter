@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_EMBEDDING_ARTIFACT_METADATA_KEY = b"synth_setter.embedding.artifact"
+_EMBEDDING_NAME_METADATA_KEY = b"synth_setter.embedding.name"
 _PROGRESS_INTERVAL_SECONDS = 30.0
 _RAY_EXCEPTION_RETRIES = 2
 
@@ -753,8 +755,8 @@ def _transform_batch(
         [encoder],
     )
     field_metadata = {
-        b"synth_setter.embedding.name": task.embedding.encode(),
-        b"synth_setter.embedding.artifact": task.artifact.encode(),
+        _EMBEDDING_NAME_METADATA_KEY: task.embedding.encode(),
+        _EMBEDDING_ARTIFACT_METADATA_KEY: task.artifact.encode(),
     }
     columns = _output_columns(spec)
     schema = pa.schema(
@@ -905,10 +907,12 @@ def _validate_embedding_output_schema(
 
     from synth_setter.pipeline.data.add_embeddings import _output_columns
 
+    if not artifact:
+        raise ValueError(f"dataset {spec.name} artifact bytes must be present")
     columns = _output_columns(spec)
     expected_metadata = {
-        b"synth_setter.embedding.name": spec.name.encode(),
-        b"synth_setter.embedding.artifact": artifact,
+        _EMBEDDING_NAME_METADATA_KEY: spec.name.encode(),
+        _EMBEDDING_ARTIFACT_METADATA_KEY: artifact,
     }
     if any((schema.field(column).metadata or {}) != expected_metadata for column in columns):
         raise ValueError(f"dataset {spec.name} artifact identity does not match")
@@ -916,6 +920,8 @@ def _validate_embedding_output_schema(
         if schema.field(spec.column).type != pa.list_(pa.float32(), 512):
             raise ValueError("clap embedding schema must be a 512-element float32 vector")
         return
+    if spec.name != "meanaudio_16k":
+        raise ValueError(f"unsupported promotion embedding policy {spec.name!r}")
     sequence_type = schema.field(spec.column).type
     vector_column = f"{spec.column}_vec"
     valid_sequence = (
@@ -1218,9 +1224,9 @@ def _prepare_dispatch(
 ) -> _DispatchState:
     """Load durable reports and schedule only missing source fragments.
 
-    :param config: Ray and reconciliation policy.
-    :param context: Immutable source and model context.
-    :returns: Initialized dispatch state.
+    :param config: Worker scheduling and resume policy.
+    :param context: Validated immutable source operation.
+    :returns: Pending tasks and durable report state.
     """
     import ray
 
@@ -1879,6 +1885,36 @@ class _PromotionContext:
     storage_options: dict[str, str] | None
 
 
+def _selected_promotion_specs(columns: Sequence[str]) -> tuple[EmbeddingSpec, ...]:
+    """Resolve complete registry policies selected for promotion.
+
+    :param columns: Requested top-level candidate columns.
+    :returns: Registry policies in registry order.
+    :raises ValueError: A column is unknown or only part of a policy is selected.
+    """
+    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, _output_columns
+
+    selected = set(columns)
+    column_owners = {
+        column: spec
+        for spec in EMBEDDING_REGISTRY.values()
+        for column in _output_columns(spec)
+    }
+    unknown = selected - set(column_owners)
+    if unknown:
+        raise ValueError(f"unknown embedding columns {sorted(unknown)}")
+
+    specs: list[EmbeddingSpec] = []
+    for spec in EMBEDDING_REGISTRY.values():
+        output_columns = set(_output_columns(spec))
+        present = selected & output_columns
+        if present and present != output_columns:
+            raise ValueError(f"partial {spec.name} columns selected: {sorted(present)}")
+        if present:
+            specs.append(spec)
+    return tuple(specs)
+
+
 def _validate_promotion(config: EmbeddingPromotionConfig) -> _PromotionContext:
     """Resolve and validate candidate ancestry and schema isolation.
 
@@ -1887,7 +1923,11 @@ def _validate_promotion(config: EmbeddingPromotionConfig) -> _PromotionContext:
     :raises ValueError: Branch ancestry, rollback identity, or schemas are incompatible.
     """
     import lance
+    import pyarrow as pa
 
+    from synth_setter.pipeline.data.add_embeddings import _output_columns
+
+    specs = _selected_promotion_specs(config.columns)
     storage_options = _storage_options(config.lance_uri)
     root = lance.dataset(config.lance_uri, storage_options=storage_options)
     main = root.checkout_version((None, None))
@@ -1921,6 +1961,13 @@ def _validate_promotion(config: EmbeddingPromotionConfig) -> _PromotionContext:
     )
     if source_schema_changed:
         raise ValueError("candidate changed the rollback source schema")
+    for spec in specs:
+        policy_schema = pa.schema(
+            [candidate.schema.field(column) for column in _output_columns(spec)]
+        )
+        primary_metadata = policy_schema.field(spec.column).metadata or {}
+        artifact = primary_metadata.get(_EMBEDDING_ARTIFACT_METADATA_KEY, b"")
+        _validate_embedding_output_schema(policy_schema, spec, artifact)
     return _PromotionContext(
         main=main,
         candidate=candidate,

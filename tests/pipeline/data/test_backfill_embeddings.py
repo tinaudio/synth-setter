@@ -59,6 +59,89 @@ from synth_setter.pipeline.data.backfill_embeddings import (
 from synth_setter.pipeline.data.lance_shard import tensor_array
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
+_EMBEDDING_ARTIFACT_KEY = b"synth_setter.embedding.artifact"
+_EMBEDDING_NAME_KEY = b"synth_setter.embedding.name"
+_CLAP_ARTIFACT = b"clap:test-artifact"
+_MEANAUDIO_ARTIFACT = b"meanaudio:test-artifact"
+
+
+def _embedding_metadata(name: str, artifact: bytes) -> dict[bytes, bytes]:
+    """Build the exact field metadata written by an embedding worker.
+
+    :param name: Registry policy name.
+    :param artifact: Nonempty artifact identity.
+    :returns: Arrow field metadata.
+    """
+    return {_EMBEDDING_NAME_KEY: name.encode(), _EMBEDDING_ARTIFACT_KEY: artifact}
+
+
+def _clap_promotion_table(
+    row_values: tuple[float, ...] = (1.0, 2.0),
+    *,
+    width: int = 512,
+    value_type: pa.DataType = pa.float32(),
+    metadata: dict[bytes, bytes] | None = None,
+) -> pa.Table:
+    """Build CLAP promotion rows with an explicit schema contract.
+
+    :param row_values: Scalar repeated across each row vector.
+    :param width: Fixed CLAP vector width.
+    :param value_type: Arrow vector element type.
+    :param metadata: Field metadata override.
+    :returns: Promotion table carrying one CLAP field.
+    """
+    vector_type = pa.list_(value_type, width)
+    field = pa.field("clap", vector_type).with_metadata(
+        _embedding_metadata("clap", _CLAP_ARTIFACT) if metadata is None else metadata
+    )
+    rows = [[value] * width for value in row_values]
+    return pa.Table.from_arrays([pa.array(rows, type=vector_type)], schema=pa.schema([field]))
+
+
+def _meanaudio_promotion_table(
+    row_values: tuple[float, ...] = (1.0, 2.0),
+    *,
+    frames: int = 3,
+    vector_artifact: bytes = _MEANAUDIO_ARTIFACT,
+) -> pa.Table:
+    """Build valid MeanAudio sequence and pooled-vector promotion rows.
+
+    :param row_values: Scalar repeated across each row's outputs.
+    :param frames: Positive latent-frame width.
+    :param vector_artifact: Artifact identity on the pooled-vector field.
+    :returns: Promotion table carrying the complete MeanAudio policy.
+    """
+    values = np.asarray(row_values, dtype=np.float32)
+    sequence_values = np.broadcast_to(
+        values[:, None, None], (len(values), 20, frames)
+    ).copy()
+    vector_values = np.broadcast_to(values[:, None], (len(values), 20)).copy()
+    sequence = tensor_array(sequence_values, np.dtype("float32"), (20, frames))
+    vector = pa.array(vector_values.tolist(), type=pa.list_(pa.float32(), 20))
+    sequence_field = pa.field("meanaudio_16k", sequence.type).with_metadata(
+        _embedding_metadata("meanaudio_16k", _MEANAUDIO_ARTIFACT)
+    )
+    vector_field = pa.field("meanaudio_16k_vec", vector.type).with_metadata(
+        _embedding_metadata("meanaudio_16k", vector_artifact)
+    )
+    return pa.Table.from_arrays(
+        [sequence, vector], schema=pa.schema([sequence_field, vector_field])
+    )
+
+
+def _embedding_promotion_table(row_values: tuple[float, ...]) -> pa.Table:
+    """Build complete CLAP and MeanAudio promotion outputs.
+
+    :param row_values: Scalar repeated across each row's policy outputs.
+    :returns: Promotion table carrying both complete policies.
+    """
+    clap = _clap_promotion_table(row_values)
+    meanaudio = _meanaudio_promotion_table(row_values)
+    return pa.Table.from_arrays(
+        [*clap.columns, *meanaudio.columns],
+        schema=pa.schema([*clap.schema, *meanaudio.schema]),
+    )
+
 
 def _summary_context(
     *,
@@ -352,12 +435,7 @@ def test_promote_embedding_candidate_reuses_branch_fragments_in_one_main_commit(
     dataset.tags.create("pre-embeddings-2985", (None, dataset.version))
     candidate = dataset.create_branch("embeddings-2985", (None, dataset.version))
     candidate.add_columns(
-        pa.table(
-            {
-                "clap": pa.array(np.arange(16, dtype=np.float32).reshape(8, 2).tolist()),
-                "meanaudio_16k": pa.array(np.arange(24, dtype=np.float32).reshape(8, 3).tolist()),
-            }
-        )
+        _embedding_promotion_table(tuple(float(value) for value in range(8)))
     )
     candidate_version = candidate.version
 
@@ -366,7 +444,7 @@ def test_promote_embedding_candidate_reuses_branch_fragments_in_one_main_commit(
             lance_uri=str(uri),
             candidate_branch="embeddings-2985",
             rollback_tag="pre-embeddings-2985",
-            columns=("clap", "meanaudio_16k"),
+            columns=("clap", "meanaudio_16k", "meanaudio_16k_vec"),
         )
     )
 
@@ -375,12 +453,22 @@ def test_promote_embedding_candidate_reuses_branch_fragments_in_one_main_commit(
     assert result.candidate_version == candidate_version
     assert result.committed_version == 2
     assert main.version == 2
-    assert main.schema.names == ["row_id", "audio", "clap", "meanaudio_16k"]
+    assert main.schema.names == [
+        "row_id",
+        "audio",
+        "clap",
+        "meanaudio_16k",
+        "meanaudio_16k_vec",
+    ]
     assert main.schema.metadata == source.schema.metadata
     assert main.schema.field("clap") == candidate.schema.field("clap")
     assert main.schema.field("meanaudio_16k") == candidate.schema.field("meanaudio_16k")
-    assert main.take(range(8), columns=["clap", "meanaudio_16k"]).equals(
-        candidate.take(range(8), columns=["clap", "meanaudio_16k"])
+    assert main.schema.field("meanaudio_16k_vec") == candidate.schema.field(
+        "meanaudio_16k_vec"
+    )
+    embedding_columns = ["clap", "meanaudio_16k", "meanaudio_16k_vec"]
+    assert main.take(range(8), columns=embedding_columns).equals(
+        candidate.take(range(8), columns=embedding_columns)
     )
     assert main.take(range(8), columns=["row_id", "audio"]).equals(
         source.select(["row_id", "audio"])
@@ -389,6 +477,166 @@ def test_promote_embedding_candidate_reuses_branch_fragments_in_one_main_commit(
         candidate_version
     )
 
+
+
+def test_validate_promotion_rejects_clap_wrong_vector_width(tmp_path: Path) -> None:
+    """A selected CLAP field must contain exactly 512 values per row.
+
+    :param tmp_path: Holds the malformed real Lance candidate.
+    """
+    uri = tmp_path / "clap-width.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(_clap_promotion_table(width=511))
+
+    with pytest.raises(ValueError, match="512-element float32 vector"):
+        _validate_promotion(
+            EmbeddingPromotionConfig(
+                lance_uri=str(uri),
+                candidate_branch="candidate",
+                rollback_tag="rollback",
+                columns=("clap",),
+            )
+        )
+
+
+def test_validate_promotion_rejects_clap_wrong_element_type(tmp_path: Path) -> None:
+    """A selected CLAP field must contain float32 values.
+
+    :param tmp_path: Holds the malformed real Lance candidate.
+    """
+    uri = tmp_path / "clap-type.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(_clap_promotion_table(value_type=pa.float64()))
+
+    with pytest.raises(ValueError, match="512-element float32 vector"):
+        _validate_promotion(
+            EmbeddingPromotionConfig(
+                lance_uri=str(uri),
+                candidate_branch="candidate",
+                rollback_tag="rollback",
+                columns=("clap",),
+            )
+        )
+
+
+def test_validate_promotion_rejects_clap_wrong_embedding_name(tmp_path: Path) -> None:
+    """A selected CLAP field must identify the CLAP registry policy.
+
+    :param tmp_path: Holds the malformed real Lance candidate.
+    """
+    uri = tmp_path / "clap-name.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(
+        _clap_promotion_table(
+            metadata=_embedding_metadata("meanaudio_16k", _CLAP_ARTIFACT)
+        )
+    )
+
+    with pytest.raises(ValueError, match="artifact identity"):
+        _validate_promotion(
+            EmbeddingPromotionConfig(
+                lance_uri=str(uri),
+                candidate_branch="candidate",
+                rollback_tag="rollback",
+                columns=("clap",),
+            )
+        )
+
+
+def test_validate_promotion_rejects_clap_missing_artifact_bytes(tmp_path: Path) -> None:
+    """A selected CLAP field must carry a nonempty artifact identity.
+
+    :param tmp_path: Holds the malformed real Lance candidate.
+    """
+    uri = tmp_path / "clap-artifact.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(
+        _clap_promotion_table(metadata={_EMBEDDING_NAME_KEY: b"clap"})
+    )
+
+    with pytest.raises(ValueError, match="artifact bytes"):
+        _validate_promotion(
+            EmbeddingPromotionConfig(
+                lance_uri=str(uri),
+                candidate_branch="candidate",
+                rollback_tag="rollback",
+                columns=("clap",),
+            )
+        )
+
+
+def test_validate_promotion_rejects_partial_meanaudio_policy(tmp_path: Path) -> None:
+    """Selecting only one MeanAudio output cannot publish a partial policy.
+
+    :param tmp_path: Holds the incomplete real Lance candidate.
+    """
+    uri = tmp_path / "partial-meanaudio.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(_meanaudio_promotion_table().select(["meanaudio_16k"]))
+
+    with pytest.raises(ValueError, match="partial meanaudio_16k columns"):
+        _validate_promotion(
+            EmbeddingPromotionConfig(
+                lance_uri=str(uri),
+                candidate_branch="candidate",
+                rollback_tag="rollback",
+                columns=("meanaudio_16k",),
+            )
+        )
+
+
+def test_validate_promotion_rejects_inconsistent_meanaudio_artifacts(tmp_path: Path) -> None:
+    """MeanAudio sequence and vector fields must share one artifact identity.
+
+    :param tmp_path: Holds the inconsistent real Lance candidate.
+    """
+    uri = tmp_path / "meanaudio-artifact.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(_meanaudio_promotion_table(vector_artifact=b"other-artifact"))
+
+    with pytest.raises(ValueError, match="artifact identity"):
+        _validate_promotion(
+            EmbeddingPromotionConfig(
+                lance_uri=str(uri),
+                candidate_branch="candidate",
+                rollback_tag="rollback",
+                columns=("meanaudio_16k", "meanaudio_16k_vec"),
+            )
+        )
+
+
+def test_validate_promotion_rejects_unknown_selected_column(tmp_path: Path) -> None:
+    """Promotion columns must belong to a registered embedding policy.
+
+    :param tmp_path: Holds the unknown real Lance candidate.
+    """
+    uri = tmp_path / "unknown-column.lance"
+    dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
+    dataset.tags.create("rollback", (None, dataset.version))
+    candidate = dataset.create_branch("candidate", (None, dataset.version))
+    candidate.add_columns(pa.table({"experimental": [3, 4]}))
+
+    with pytest.raises(ValueError, match="unknown embedding columns"):
+        _validate_promotion(
+            EmbeddingPromotionConfig(
+                lance_uri=str(uri),
+                candidate_branch="candidate",
+                rollback_tag="rollback",
+                columns=("experimental",),
+            )
+        )
 
 
 def test_promote_embedding_candidate_with_file_uri_publishes_candidate(
@@ -402,7 +650,7 @@ def test_promote_embedding_candidate_with_file_uri_publishes_candidate(
     dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
     dataset.tags.create("rollback", (None, dataset.version))
     candidate = dataset.create_branch("candidate", (None, dataset.version))
-    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]]}))
+    candidate.add_columns(_clap_promotion_table())
 
     result = promote_embedding_candidate(
         EmbeddingPromotionConfig(
@@ -414,10 +662,9 @@ def test_promote_embedding_candidate_with_file_uri_publishes_candidate(
     )
 
     assert result.committed_version == 2
-    assert lance.dataset(uri).to_table(columns=["clap"]).to_pylist() == [
-        {"clap": [1.0]},
-        {"clap": [2.0]},
-    ]
+    clap = lance.dataset(uri).to_table(columns=["clap"]).column("clap")
+    assert clap.type == pa.list_(pa.float32(), 512)
+    assert [row.as_py()[0] for row in clap] == [1.0, 2.0]
 
 
 def test_promote_embedding_candidate_rejects_unselected_candidate_column(
@@ -431,7 +678,9 @@ def test_promote_embedding_candidate_rejects_unselected_candidate_column(
     dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
     dataset.tags.create("rollback", (None, dataset.version))
     candidate = dataset.create_branch("candidate", (None, dataset.version))
-    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]], "experimental": [3, 4]}))
+    candidate.add_columns(
+        _clap_promotion_table().append_column("experimental", pa.array([3, 4]))
+    )
 
     with pytest.raises(ValueError, match="unselected columns"):
         promote_embedding_candidate(
@@ -456,7 +705,7 @@ def test_promote_embedding_candidate_rejects_modified_source_files(
     dataset.tags.create("rollback", (None, dataset.version))
     candidate = dataset.create_branch("candidate", (None, dataset.version))
     candidate.update({"row_id": "row_id + 10"})
-    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]]}))
+    candidate.add_columns(_clap_promotion_table())
 
     with pytest.raises(ValueError, match="do not match the rollback source"):
         promote_embedding_candidate(
@@ -480,8 +729,8 @@ def test_promote_embedding_candidate_rejects_same_schema_independent_main_write(
     dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
     dataset.tags.create("rollback", (None, dataset.version))
     candidate = dataset.create_branch("candidate", (None, dataset.version))
-    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]]}))
-    dataset.add_columns(pa.table({"clap": [[9.0], [9.0]]}))
+    candidate.add_columns(_clap_promotion_table())
+    dataset.add_columns(_clap_promotion_table((9.0, 9.0)))
 
     with pytest.raises(ValueError, match="does not contain the validated candidate merge"):
         promote_embedding_candidate(
@@ -505,7 +754,7 @@ def test_promote_embedding_candidate_rejects_later_selected_value_mutation(
     dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
     dataset.tags.create("rollback", (None, dataset.version))
     candidate = dataset.create_branch("candidate", (None, dataset.version))
-    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]]}))
+    candidate.add_columns(_clap_promotion_table())
     config = EmbeddingPromotionConfig(
         lance_uri=str(uri),
         candidate_branch="candidate",
@@ -513,7 +762,7 @@ def test_promote_embedding_candidate_rejects_later_selected_value_mutation(
         columns=("clap",),
     )
     promote_embedding_candidate(config)
-    lance.dataset(uri).update({"clap": "[9.0]"})
+    lance.dataset(uri).update({"clap": str([9.0] * 512)})
 
     with pytest.raises(ValueError, match="validated candidate merge"):
         promote_embedding_candidate(config)
@@ -531,7 +780,7 @@ def _promotion_race_case(
     dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
     dataset.tags.create("rollback", (None, dataset.version))
     candidate = dataset.create_branch("candidate", (None, dataset.version))
-    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]]}))
+    candidate.add_columns(_clap_promotion_table())
     config = EmbeddingPromotionConfig(
         lance_uri=str(uri),
         candidate_branch="candidate",
@@ -597,10 +846,8 @@ def test_publish_candidate_recovers_commit_visible_before_error(
 
     assert already_complete is True
     assert committed.version == 2
-    assert committed.to_table(columns=["clap"]).to_pylist() == [
-        {"clap": [1.0]},
-        {"clap": [2.0]},
-    ]
+    clap = committed.to_table(columns=["clap"]).column("clap")
+    assert [row.as_py()[0] for row in clap] == [1.0, 2.0]
 
 
 def test_publish_candidate_reraises_original_error_after_incompatible_advancement(
@@ -686,7 +933,7 @@ def test_promote_cli_publishes_candidate_and_prints_json(
     dataset = lance.write_dataset(pa.table({"row_id": [1, 2]}), uri)
     dataset.tags.create("rollback", (None, dataset.version))
     candidate = dataset.create_branch("candidate", (None, dataset.version))
-    candidate.add_columns(pa.table({"clap": [[1.0], [2.0]]}))
+    candidate.add_columns(_clap_promotion_table())
 
     monkeypatch.setattr(
         sys,
