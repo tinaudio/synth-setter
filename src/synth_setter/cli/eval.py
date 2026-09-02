@@ -273,6 +273,85 @@ def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> 
         )
 
 
+def _normalize_checkpoint_sha256(expected_sha256: str | None) -> str | None:
+    """Validate and normalize an optional checkpoint digest.
+
+    :param expected_sha256: Configured SHA-256 hex digest.
+    :returns: Lowercase digest, or ``None``.
+    :raises ValueError: The configured digest is not a SHA-256 hex string.
+    """
+    if expected_sha256 is None:
+        return None
+    if not isinstance(expected_sha256, str):
+        raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
+    normalized = expected_sha256.lower()
+    valid = len(normalized) == 64 and all(
+        character in "0123456789abcdef" for character in normalized
+    )
+    if not valid:
+        raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
+    return normalized
+
+
+def _download_verified_checkpoint(r2_uri: str, digest: str, cached: Path) -> None:
+    """Stage and atomically publish one verified remote checkpoint.
+
+    :param r2_uri: R2 object URI to download.
+    :param digest: Expected lowercase SHA-256 digest.
+    :param cached: Content-addressed destination path.
+    :raises FileNotFoundError: The remote object does not exist.
+    :raises RuntimeError: R2 access fails or downloaded bytes violate the pin.
+    """
+    try:
+        r2_io.ensure_r2_env_loaded()
+        remote_size = r2_io.object_size(r2_uri)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            "rclone R2 credentials are unavailable or cannot access remote "
+            f"eval checkpoint: {r2_uri}"
+        ) from exc
+    if remote_size is None:
+        raise FileNotFoundError(f"remote eval checkpoint does not exist: {r2_uri}")
+    if remote_size == 0:
+        raise RuntimeError(f"remote eval checkpoint is empty: {r2_uri}")
+    with tempfile.NamedTemporaryFile(
+        prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+    ) as temporary:
+        staging = Path(temporary.name)
+    try:
+        r2_io.download_to_path(r2_uri, staging)
+        if staging.stat().st_size != remote_size:
+            raise RuntimeError(f"downloaded eval checkpoint is incomplete: {r2_uri}")
+        _verify_checkpoint_sha256(staging, digest)
+        staging.replace(cached)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"rclone cannot download eval checkpoint: {r2_uri}") from exc
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _cached_remote_checkpoint(r2_uri: str, digest: str) -> Path:
+    """Return an immutable content-addressed checkpoint under an interprocess lock.
+
+    :param r2_uri: R2 object URI to localize on a cache miss.
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :returns: Verified local checkpoint path.
+    """
+    cached = synth_setter_cache_dir() / "checkpoints" / "evaluation" / digest / "model.ckpt"
+    lock_path = cached.with_suffix(".ckpt.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            if cached.is_file():
+                _verify_checkpoint_sha256(cached, digest)
+            else:
+                _download_verified_checkpoint(r2_uri, digest, cached)
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return cached
+
+
 def _localize_eval_checkpoint(
     checkpoint: str | None,
     expected_sha256: str | None = None,
@@ -282,72 +361,21 @@ def _localize_eval_checkpoint(
     :param checkpoint: Local path, R2-backed URI, or ``None``.
     :param expected_sha256: SHA-256 pin, required for remote checkpoint bytes.
     :returns: Local checkpoint path for Lightning, or ``None``.
-    :raises FileNotFoundError: The local or remote object does not exist.
-    :raises RuntimeError: R2 access fails or the checkpoint is empty, incomplete, or mismatched.
-    :raises ValueError: The configured digest is malformed.
+    :raises ValueError: Checkpoint provenance is contradictory or malformed.
     """
     if checkpoint is None:
+        if expected_sha256 is not None:
+            raise ValueError("ckpt_sha256 requires ckpt_path")
         return None
+    digest = _normalize_checkpoint_sha256(expected_sha256)
     is_remote = checkpoint.startswith(("r2://", "s3://"))
-    if is_remote and expected_sha256 is None:
-        raise ValueError("remote checkpoint requires ckpt_sha256")
-    if expected_sha256 is not None:
-        if not isinstance(expected_sha256, str):
-            raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
-        expected_sha256 = expected_sha256.lower()
-        valid_sha256 = len(expected_sha256) == 64 and all(
-            character in "0123456789abcdef" for character in expected_sha256
-        )
-        if not valid_sha256:
-            raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
     if not is_remote:
-        _verify_checkpoint_sha256(Path(checkpoint), expected_sha256)
+        _verify_checkpoint_sha256(Path(checkpoint), digest)
         return checkpoint
-
+    if digest is None:
+        raise ValueError("remote checkpoint requires ckpt_sha256")
     r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint
-    assert expected_sha256 is not None
-    cache_key = expected_sha256
-    cached = synth_setter_cache_dir() / "checkpoints" / "evaluation" / cache_key / "model.ckpt"
-    lock_path = cached.with_suffix(".ckpt.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        try:
-            if cached.is_file():
-                _verify_checkpoint_sha256(cached, expected_sha256)
-                return str(cached)
-            try:
-                r2_io.ensure_r2_env_loaded()
-                remote_size = r2_io.object_size(r2_uri)
-            except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-                raise RuntimeError(
-                    "rclone R2 credentials are unavailable or cannot access remote "
-                    f"eval checkpoint: {checkpoint}"
-                ) from exc
-            if remote_size is None:
-                raise FileNotFoundError(f"remote eval checkpoint does not exist: {checkpoint}")
-            if remote_size == 0:
-                raise RuntimeError(f"remote eval checkpoint is empty: {checkpoint}")
-            with tempfile.NamedTemporaryFile(
-                prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
-            ) as temporary:
-                staging = Path(temporary.name)
-            try:
-                r2_io.download_to_path(r2_uri, staging)
-                if staging.stat().st_size != remote_size:
-                    raise RuntimeError(f"downloaded eval checkpoint is incomplete: {checkpoint}")
-                _verify_checkpoint_sha256(staging, expected_sha256)
-                staging.replace(cached)
-            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-                raise RuntimeError(
-                    "rclone R2 credentials are unavailable or cannot download remote "
-                    f"eval checkpoint: {checkpoint}"
-                ) from exc
-            finally:
-                staging.unlink(missing_ok=True)
-        finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-    return str(cached)
+    return str(_cached_remote_checkpoint(r2_uri, digest))
 
 
 def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:

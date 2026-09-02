@@ -348,6 +348,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         sketch: SketchControls = None,
         use_saved_mean_and_variance: bool = False,
         mel_stats_uri: str | None = None,
+        mel_stats_sha256: str | None = None,
         stats_cache_dir: str | None = None,
     ) -> None:
         """Configure the corpus and render contract it maps onto.
@@ -366,6 +367,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param sketch: Optional live sketch-control specification.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
         :param mel_stats_uri: Training mel statistics, local or ``r2://``.
+        :param mel_stats_sha256: Optional SHA-256 pin for the statistics bytes.
         :param stats_cache_dir: Directory for fetched statistics.
         :raises ValueError: A corpus, render, normalization, or sketch contract is invalid.
         """
@@ -406,6 +408,19 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"got {self.sketch_controls.num_frames}"
             )
         self.mel_stats_uri = mel_stats_uri
+        if mel_stats_sha256 is not None:
+            if not isinstance(mel_stats_sha256, str):
+                raise ValueError("mel_stats_sha256 must contain 64 hexadecimal characters")
+            normalized_digest = mel_stats_sha256.lower()
+            valid_digest = len(normalized_digest) == 64 and all(
+                character in "0123456789abcdef" for character in normalized_digest
+            )
+            if not valid_digest:
+                raise ValueError("mel_stats_sha256 must contain 64 hexadecimal characters")
+            if mel_stats_uri is None:
+                raise ValueError("mel_stats_sha256 requires mel_stats_uri")
+            mel_stats_sha256 = normalized_digest
+        self.mel_stats_sha256 = mel_stats_sha256
         self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._statistics: tuple[torch.Tensor, torch.Tensor] | None = None
         self._predict_dataset: _BlobAudioDataset | None = None
@@ -418,8 +433,24 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         uri = cast(str, self.mel_stats_uri)
         if not r2_io.is_r2_uri(uri):
             return Path(uri)
-        digest = hashlib.sha256(uri.encode()).hexdigest()[:16]
-        return self.stats_cache_dir / f"{digest}-{Path(uri).name}"
+        digest = self.mel_stats_sha256 or hashlib.sha256(uri.encode()).hexdigest()
+        return self.stats_cache_dir / f"{digest[:16]}-{Path(uri).name}"
+
+    def _verify_stats_digest(self, path: Path) -> None:
+        """Reject statistics bytes that differ from their optional pin.
+
+        :param path: Local statistics file.
+        :raises ValueError: The file digest differs from ``mel_stats_sha256``.
+        """
+        if self.mel_stats_sha256 is None:
+            return
+        with path.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != self.mel_stats_sha256:
+            raise ValueError(
+                "mel statistics SHA-256 mismatch: "
+                f"expected {self.mel_stats_sha256}, received {actual}"
+            )
 
     def _local_stats_file(self) -> Path:
         """Return a readable local path for the configured statistics object.
@@ -428,12 +459,19 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         """
         destination = self.cached_stats_path()
         if not r2_io.is_r2_uri(cast(str, self.mel_stats_uri)):
+            self._verify_stats_digest(destination)
             return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not destination.exists():
-            staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+        if destination.exists():
+            self._verify_stats_digest(destination)
+            return destination
+        staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+        try:
             r2_io.download_to_path(cast(str, self.mel_stats_uri), staged)
+            self._verify_stats_digest(staged)
             staged.replace(destination)
+        finally:
+            staged.unlink(missing_ok=True)
         return destination
 
     def _open_corpus(self) -> tuple[_BlobAudioDataset, int]:

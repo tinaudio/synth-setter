@@ -117,6 +117,12 @@ def test_eval_checkpoint_cached_digest_is_reused_when_remote_is_unavailable(
     assert Path(first).read_bytes() == content
 
 
+def test_eval_checkpoint_digest_without_checkpoint_raises() -> None:
+    """A digest cannot silently accompany an in-memory model evaluation."""
+    with pytest.raises(ValueError, match="ckpt_sha256 requires ckpt_path"):
+        eval_module._localize_eval_checkpoint(None, "0" * 64)
+
+
 def test_eval_checkpoint_remote_uri_without_digest_raises() -> None:
     """Remote checkpoints require immutable content provenance."""
     with pytest.raises(ValueError, match="requires ckpt_sha256"):

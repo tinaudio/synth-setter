@@ -1512,6 +1512,10 @@ def test_nsynth_sketch_eval_experiment_pins_full_production_run() -> None:
         "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
         "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz"
     )
+    assert (
+        cfg.datamodule.mel_stats_sha256
+        == "c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19"
+    )
     assert cfg.model.sketch_controls.num_frames == 32
     assert cfg.model.test_cfg_strength == 8.0
     assert cfg.model.test_sketch_cfg_strength == 8.0

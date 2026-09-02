@@ -2420,6 +2420,7 @@ def test_nsynth_sketch_eval_entrypoint_writes_prediction(
         extra_overrides=(
             f"ckpt_sha256={checkpoint_digest}",
             "datamodule.batch_size=1",
+            "datamodule.mel_stats_sha256=null",
             "evaluation.compute_metrics=false",
             "evaluation.render_vst=false",
             "~logger",

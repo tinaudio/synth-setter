@@ -89,6 +89,7 @@ def _datamodule(
     num_workers: int = 0,
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
+    mel_stats_sha256: str | None = None,
     sketch: SketchControls = None,
 ) -> ThirdPartyAudioDataModule:
     """Build a datamodule over a corpus with the tiny render contract.
@@ -102,6 +103,7 @@ def _datamodule(
     :param num_workers: Dataloader worker processes.
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
+    :param mel_stats_sha256: Optional digest pin for the statistics bytes.
     :param sketch: Optional live sketch-control specification.
     :returns: Configured, un-setup datamodule.
     """
@@ -118,6 +120,7 @@ def _datamodule(
         num_workers=num_workers,
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
+        mel_stats_sha256=mel_stats_sha256,
         sketch=sketch,
     )
 
@@ -249,6 +252,27 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     )["mel"]
 
     assert torch.allclose(normalized, (plain + 40.0) / 4.0, atol=1e-5)
+
+
+def test_mel_statistics_digest_mismatch_raises(tmp_path: Path) -> None:
+    """Normalization rejects statistics that differ from their provenance pin.
+
+    :param tmp_path: Isolated corpus and statistics directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=38)])
+    stats_file = tmp_path / "stats.npz"
+    np.savez(stats_file, mean=np.float32(0.0), std=np.float32(1.0))
+
+    datamodule = _datamodule(
+        corpus,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        mel_stats_sha256="0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="mel statistics SHA-256 mismatch"):
+        datamodule.setup("predict")
 
 
 def test_saved_statistics_without_uri_raises(tmp_path: Path) -> None:
