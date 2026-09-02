@@ -760,8 +760,11 @@ def test_nsynth_sketch_batch_real_pesto_emits_finite_canonical_controls(tmp_path
     assert torch.isfinite(controls).all()
     assert torch.all((-1.0 <= controls[:, : SKETCH_PITCH_SLICE.start]))
     assert torch.all((controls[:, : SKETCH_PITCH_SLICE.start] <= 1.0))
-    assert torch.all((0.0 <= controls[:, SKETCH_PITCH_SLICE]))
-    assert torch.all((controls[:, SKETCH_PITCH_SLICE] <= 1.0))
+    pitch = controls[0, SKETCH_PITCH_SLICE]
+    assert torch.all((0.0 <= pitch) & (pitch <= 1.0))
+    expected_a4_bin = 69 * 3
+    assert torch.all((pitch.argmax(dim=0) - expected_a4_bin).abs() <= 1)
+    assert torch.all(pitch.amax(dim=0) >= 0.1)
     assert batch[AUDIO_FIELD].shape == (1, _TARGET_CHANNELS, sample_rate // 2)
     assert "params" not in batch
 

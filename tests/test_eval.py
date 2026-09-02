@@ -33,7 +33,7 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import Trainer, seed_everything
 from omegaconf import DictConfig, open_dict
-from omegaconf.errors import InterpolationResolutionError
+from omegaconf.errors import InterpolationResolutionError, MissingMandatoryValue
 from pedalboard.io import AudioFile
 
 from synth_setter.cli.eval import evaluate
@@ -135,6 +135,23 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert "test/param_mse" in result.stdout
+
+
+def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
+    """The evaluation entrypoint rejects a config without checkpoint provenance."""
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth"],
+        )
+    with open_dict(cfg):
+        cfg.ckpt_path = "???"
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(MissingMandatoryValue, match="ckpt_path"):
+        evaluate(cfg)
 
 
 def _compose_sketch_cfg_eval(

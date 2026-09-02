@@ -603,25 +603,26 @@ class PredictionWriter(BasePredictionWriter):
     def __init__(self, output_dir, write_interval):
         super().__init__(write_interval)
         self.output_dir = output_dir
-        self._progress_started_at = time.monotonic()
-        self._samples_written = 0
+        self._progress_started_at: dict[int, float] = {}
+        self._samples_written: dict[int, int] = {}
         os.makedirs(self.output_dir, exist_ok=True)
 
     def on_predict_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Reset progress counters for a prediction pass.
 
-        :param trainer: Active prediction trainer.
-        :param pl_module: Active prediction module.
+        :param trainer: Ignored; required by Lightning's callback contract.
+        :param pl_module: Ignored; required by Lightning's callback contract.
         """
         del trainer, pl_module
-        self._progress_started_at = time.monotonic()
-        self._samples_written = 0
+        self._progress_started_at.clear()
+        self._samples_written.clear()
 
     def _log_progress(
         self,
         trainer: Trainer,
         batch: object,
         batch_idx: int,
+        *,
         dataloader_idx: int,
     ) -> None:
         """Log first, interval, and final completed prediction batches.
@@ -633,7 +634,9 @@ class PredictionWriter(BasePredictionWriter):
         """
         if not trainer.is_global_zero:
             return
-        self._samples_written += batch_sample_count(batch)
+        started_at = self._progress_started_at.setdefault(dataloader_idx, time.monotonic())
+        samples_written = self._samples_written.get(dataloader_idx, 0) + batch_sample_count(batch)
+        self._samples_written[dataloader_idx] = samples_written
         totals = trainer.num_predict_batches
         total = totals if isinstance(totals, int) else totals[dataloader_idx]
         completed = batch_idx + 1
@@ -643,13 +646,15 @@ class PredictionWriter(BasePredictionWriter):
             and completed != total
         ):
             return
-        elapsed = max(time.monotonic() - self._progress_started_at, 1e-9)
+        elapsed = max(time.monotonic() - started_at, 1e-9)
         percent = 100.0 * completed / total
         log.info(
-            "Prediction progress: batches=%d/%d samples=%d percent=%.1f batches_per_second=%.2f",
+            "Prediction progress: dataloader=%d batches=%d/%d samples=%d "
+            "percent=%.1f batches_per_second=%.2f",
+            dataloader_idx,
             completed,
             total,
-            self._samples_written,
+            samples_written,
             percent,
             completed / elapsed,
         )
@@ -679,7 +684,7 @@ class PredictionWriter(BasePredictionWriter):
                 _plain_cpu_tensor(batch["params"]),
                 os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"),
             )
-        self._log_progress(trainer, batch, batch_idx, dataloader_idx)
+        self._log_progress(trainer, batch, batch_idx, dataloader_idx=dataloader_idx)
 
     def write_on_epoch_end(self, trainer, pl_module, predictions, batch_indices):
         predictions, batch = predictions

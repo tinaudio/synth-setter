@@ -67,6 +67,29 @@ def test_eval_checkpoint_r2_uri_refreshes_cache_when_remote_checksum_changes(
     assert Path(second).is_relative_to(cache_home / "synth-setter")
 
 
+def test_eval_checkpoint_remote_digest_mismatch_raises(
+    fake_r2_remote: Path,
+    storage_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remote checkpoint must match its configured content digest.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param storage_credentials: Dummy application credentials for the local backend.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
+    """
+    source = fake_r2_remote / "bucket" / "runs" / "model.ckpt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"unexpected checkpoint")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        eval_module._localize_eval_checkpoint(
+            "r2://bucket/runs/model.ckpt",
+            expected_sha256="0" * 64,
+        )
+
+
 def test_eval_checkpoint_s3_uri_downloads_through_r2_remote(
     fake_r2_remote: Path,
     storage_credentials: None,

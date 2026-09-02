@@ -163,6 +163,29 @@ def test_prediction_writer_logs_rate_limited_batch_and_sample_progress(
     assert all("batches_per_second=" in message for message in messages)
 
 
+def test_prediction_writer_tracks_each_predict_dataloader_independently(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each prediction dataloader reports its own batch and sample progress.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    :param caplog: Captures durable progress records.
+    """
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[1, 1]))
+    module = cast("LightningModule", None)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+
+    caplog.set_level("INFO", logger="synth_setter.utils.callbacks")
+    writer.on_predict_start(trainer, module)
+    writer._log_progress(trainer, {"audio": torch.zeros(2, 1)}, 0, dataloader_idx=0)
+    writer._log_progress(trainer, {"audio": torch.zeros(3, 1)}, 0, dataloader_idx=1)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "dataloader=0 batches=1/1 samples=2 percent=100.0" in messages[0]
+    assert "dataloader=1 batches=1/1 samples=3 percent=100.0" in messages[1]
+
+
 def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
     tmp_path: Path,
 ) -> None:

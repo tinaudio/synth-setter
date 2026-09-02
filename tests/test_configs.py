@@ -1503,6 +1503,7 @@ def test_nsynth_sketch_eval_experiment_pins_full_production_run() -> None:
         "flow_sketch_prelim-20260902T044048985Z-eed5063da1164b1e92ac62a55ffc17b3/"
         "last.ckpt"
     )
+    assert cfg.ckpt_sha256 == "d20cd4c3c86ae062a206f05596072b230c8aa86334920c775c2b4fec04aefc9e"
     assert cfg.datamodule.dataset_uri == "s3://experiments/third_party/NSynth/test.lance"
     assert cfg.datamodule.dataset_version == 1
     assert cfg.datamodule.row_limit is None

@@ -254,18 +254,45 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     return {}
 
 
-def _localize_eval_checkpoint(checkpoint: str | None) -> str | None:
-    """Return the local checkpoint path Lightning should consume.
+def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> None:
+    """Reject checkpoint bytes that do not match their optional provenance pin.
 
-    Remote checkpoints are published into a URI-keyed cache only after rclone
-    completes, while local paths and ``None`` pass through unchanged.
+    :param checkpoint: Local checkpoint file.
+    :param expected_sha256: Validated lowercase SHA-256 hex digest, or ``None``.
+    :raises RuntimeError: The checkpoint digest differs from the pin.
+    """
+    if expected_sha256 is None:
+        return
+    with checkpoint.open("rb") as stream:
+        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+    if actual != expected_sha256:
+        raise RuntimeError(f"checkpoint SHA-256 mismatch: {checkpoint}")
+
+
+def _localize_eval_checkpoint(
+    checkpoint: str | None,
+    expected_sha256: str | None = None,
+) -> str | None:
+    """Return the verified local checkpoint path Lightning should consume.
 
     :param checkpoint: Local path, R2-backed URI, or ``None``.
+    :param expected_sha256: Optional SHA-256 pin for the checkpoint bytes.
     :returns: Local checkpoint path for Lightning, or ``None``.
-    :raises FileNotFoundError: The remote object does not exist.
-    :raises RuntimeError: R2 access is unavailable or the remote object is empty.
+    :raises FileNotFoundError: The local or remote object does not exist.
+    :raises RuntimeError: R2 access fails or the checkpoint is empty, incomplete, or mismatched.
+    :raises ValueError: The configured digest is malformed.
     """
-    if checkpoint is None or not checkpoint.startswith(("r2://", "s3://")):
+    if checkpoint is None:
+        return None
+    if expected_sha256 is not None:
+        expected_sha256 = expected_sha256.lower()
+        valid_sha256 = len(expected_sha256) == 64 and all(
+            character in "0123456789abcdef" for character in expected_sha256
+        )
+        if not valid_sha256:
+            raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
+    if not checkpoint.startswith(("r2://", "s3://")):
+        _verify_checkpoint_sha256(Path(checkpoint), expected_sha256)
         return checkpoint
 
     r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint
@@ -297,6 +324,7 @@ def _localize_eval_checkpoint(checkpoint: str | None) -> str | None:
                 ) from exc
             if not cached.is_file() or cached.stat().st_size != remote_size:
                 raise RuntimeError(f"downloaded eval checkpoint is incomplete: {checkpoint}")
+            _verify_checkpoint_sha256(cached, expected_sha256)
         finally:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     return str(cached)
@@ -347,7 +375,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
     """
-    checkpoint_path = _localize_eval_checkpoint(cfg.get("ckpt_path"))
+    checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
