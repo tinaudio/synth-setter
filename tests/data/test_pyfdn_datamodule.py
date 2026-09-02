@@ -1,7 +1,6 @@
 """Deterministic online data contracts for the fixed-source pyFDN instrument."""
 
 import inspect
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,15 +14,9 @@ from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.sample_seed import derive_sample_seed
 
 
-def test_pyfdn_dataset_same_index_is_deterministic(
-    source_file: tuple[Path, str],
-) -> None:
-    """A split seed and row index fix both the patch and real rendered audio.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-    dataset = PyFDNDataset(path, checksum, num_samples=2, seed=123)
+def test_pyfdn_dataset_same_index_is_deterministic() -> None:
+    """A split seed and row index fix both the patch and real rendered audio."""
+    dataset = PyFDNDataset(num_samples=2, seed=123)
 
     audio_a, params_a = dataset[0]
     audio_b, params_b = dataset[0]
@@ -32,15 +25,9 @@ def test_pyfdn_dataset_same_index_is_deterministic(
     assert torch.equal(audio_a, audio_b)
 
 
-def test_pyfdn_dataset_row_encodes_the_exact_derived_seed_sample(
-    source_file: tuple[Path, str],
-) -> None:
-    """The stored label is exactly the spec sample for the derived row seed.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-    _, encoded = PyFDNDataset(path, checksum, num_samples=3, seed=123)[2]
+def test_pyfdn_dataset_row_encodes_the_exact_derived_seed_sample() -> None:
+    """The stored label is exactly the spec sample for the derived row seed."""
+    _, encoded = PyFDNDataset(num_samples=3, seed=123)[2]
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(
         np.random.default_rng(derive_sample_seed(123, 2))
     )
@@ -51,30 +38,20 @@ def test_pyfdn_dataset_row_encodes_the_exact_derived_seed_sample(
 
 
 @pytest.mark.parametrize("index", [-1, 1])
-def test_pyfdn_dataset_index_outside_split_raises(
-    source_file: tuple[Path, str], index: int
-) -> None:
+def test_pyfdn_dataset_index_outside_split_raises(index: int) -> None:
     """Direct access cannot synthesize rows outside the finite split.
 
-    :param source_file: Valid fixed source and checksum.
     :param index: Negative or upper-bound index outside a one-row split.
     """
-    path, checksum = source_file
-    dataset = PyFDNDataset(path, checksum, num_samples=1, seed=123)
+    dataset = PyFDNDataset(num_samples=1, seed=123)
 
     with pytest.raises(IndexError, match="outside"):
         dataset[index]
 
 
-def test_pyfdn_dataset_different_indices_change_sampled_patch(
-    source_file: tuple[Path, str],
-) -> None:
-    """Distinct derived row seeds produce distinct fixed training patches.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-    dataset = PyFDNDataset(path, checksum, num_samples=2, seed=123)
+def test_pyfdn_dataset_different_indices_change_sampled_patch() -> None:
+    """Distinct derived row seeds produce distinct fixed training patches."""
+    dataset = PyFDNDataset(num_samples=2, seed=123)
 
     first = dataset[0][1]
     second = dataset[1][1]
@@ -82,60 +59,46 @@ def test_pyfdn_dataset_different_indices_change_sampled_patch(
     assert not torch.equal(first, second)
 
 
-def test_pyfdn_dataset_row_has_exact_online_contract(
-    source_file: tuple[Path, str],
-) -> None:
-    """Rows expose only the channel-first audio and encoded labels training consumes.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-    audio, encoded = PyFDNDataset(path, checksum, num_samples=1, seed=123)[0]
+def test_pyfdn_dataset_row_has_exact_online_contract() -> None:
+    """Rows expose only the channel-first audio and encoded labels training consumes."""
+    audio, encoded = PyFDNDataset(num_samples=1, seed=123)[0]
 
     assert audio.shape == (1, 192_000)
     assert encoded.shape == (1, 91)
     assert audio.dtype == encoded.dtype == torch.float32
 
 
-def test_pyfdn_dataset_loads_source_once_per_process(
-    source_file: tuple[Path, str],
-) -> None:
-    """After the first row loads the source, later rows need no filesystem read.
+def test_pyfdn_datasets_share_one_canonical_renderer_per_process() -> None:
+    """Separate splits in one process reuse one immutable canonical renderer."""
+    first = PyFDNDataset(num_samples=1, seed=123)
+    second = PyFDNDataset(num_samples=1, seed=456)
 
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-    dataset = PyFDNDataset(path, checksum, num_samples=2, seed=123)
-    dataset[0]
-    path.unlink()
-
-    audio, params = dataset[1]
-
-    assert audio.shape == (1, 192_000)
-    assert params.shape == (1, 91)
+    assert first._process_renderer() is second._process_renderer()
 
 
-def test_pyfdn_datasets_share_one_source_load_within_a_process(
-    source_file: tuple[Path, str],
-) -> None:
-    """Separate splits in one process reuse the validated decoded source.
+def test_pyfdn_datamodule_checkpoint_state_contains_source_provenance() -> None:
+    """Lightning checkpoints bind online rows to their generated source bytes."""
+    datamodule = PyFDNDataModule()
 
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-    first = PyFDNDataset(path, checksum, num_samples=1, seed=123)
-    second = PyFDNDataset(path, checksum, num_samples=1, seed=456)
-    first[0]
-    path.unlink()
+    state = datamodule.state_dict()
 
-    audio, _ = second[0]
+    assert state == {"source_provenance": datamodule.source_provenance}
 
-    assert audio.shape == (1, 192_000)
+
+def test_pyfdn_datamodule_checkpoint_source_mismatch_raises() -> None:
+    """Resume and evaluation reject checkpoints produced from different source bytes."""
+    datamodule = PyFDNDataModule()
+    state = datamodule.state_dict()
+    provenance = dict(state["source_provenance"])
+    provenance["sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="source provenance"):
+        datamodule.load_state_dict({"source_provenance": provenance})
 
 
 def test_pyfdn_datamodule_default_split_seed_domains_are_disjoint() -> None:
     """Every production-default row derives a unique seed across all splits."""
-    datamodule = PyFDNDataModule("unused.wav", "0" * 64)
+    datamodule = PyFDNDataModule()
     datamodule.setup(None)
 
     assert (datamodule.train.seed, datamodule.val.seed, datamodule.test.seed) == (
@@ -154,36 +117,27 @@ def test_pyfdn_datamodule_default_split_seed_domains_are_disjoint() -> None:
     assert len(set(derived_seeds)) == expected_rows
 
 
-def test_pyfdn_datamodule_duplicate_split_seeds_raise(
-    source_file: tuple[Path, str],
-) -> None:
-    """Matching split seeds cannot leak identical indexed rows into evaluation.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-
+def test_pyfdn_datamodule_duplicate_split_seeds_raise() -> None:
+    """Matching split seeds cannot leak identical indexed rows into evaluation."""
     with pytest.raises(ValueError, match="distinct"):
-        PyFDNDataModule(path, checksum, train_val_test_seeds=(123, 123, 789))
+        PyFDNDataModule(train_val_test_seeds=(123, 123, 789))
+
+
+def test_pyfdn_datamodule_noncanonical_sample_rate_raises() -> None:
+    """Sample-rate metadata cannot diverge from the canonical source."""
+    with pytest.raises(ValueError, match="sample_rate must be exactly 48000"):
+        PyFDNDataModule(sample_rate=44_100)
 
 
 def test_pyfdn_datamodule_non_audio_conditioning_raises() -> None:
     """The online batch contract rejects unsupported conditioning modes."""
     with pytest.raises(ValueError, match="conditioning must be 'audio'"):
-        PyFDNDataModule("unused.wav", "0" * 64, conditioning="mel")
+        PyFDNDataModule(conditioning="mel")
 
 
-def test_pyfdn_datamodule_training_rows_remain_fixed_across_epochs(
-    source_file: tuple[Path, str],
-) -> None:
-    """Training shuffles only indices; its finite row set does not resample by epoch.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
+def test_pyfdn_datamodule_training_rows_remain_fixed_across_epochs() -> None:
+    """Training shuffles only indices; its finite row set does not resample by epoch."""
     datamodule = PyFDNDataModule(
-        path,
-        checksum,
         train_val_test_sizes=(2, 1, 1),
         batch_size=1,
         num_workers=0,
@@ -197,17 +151,9 @@ def test_pyfdn_datamodule_training_rows_remain_fixed_across_epochs(
     assert first_epoch == second_epoch
 
 
-def test_pyfdn_datamodule_loaders_shuffle_only_training_rows(
-    source_file: tuple[Path, str],
-) -> None:
-    """Evaluation preserves row order while training may shuffle its fixed row set.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
+def test_pyfdn_datamodule_loaders_shuffle_only_training_rows() -> None:
+    """Evaluation preserves row order while training may shuffle its fixed row set."""
     datamodule = PyFDNDataModule(
-        path,
-        checksum,
         train_val_test_sizes=(1, 1, 1),
         num_workers=0,
     )
@@ -220,17 +166,13 @@ def test_pyfdn_datamodule_loaders_shuffle_only_training_rows(
 
 @pytest.mark.parametrize("num_workers", [0, 2])
 def test_pyfdn_training_loader_restores_remaining_shuffled_batches(
-    source_file: tuple[Path, str], num_workers: int
+    num_workers: int,
 ) -> None:
     """A checkpointed loader resumes after consumed batches without repeats or skips.
 
-    :param source_file: Valid fixed source and checksum.
     :param num_workers: Worker count, including the prefetching production path.
     """
-    path, checksum = source_file
     datamodule = PyFDNDataModule(
-        path,
-        checksum,
         train_val_test_sizes=(4, 1, 1),
         batch_size=1,
         num_workers=num_workers,
@@ -253,17 +195,9 @@ def test_pyfdn_training_loader_restores_remaining_shuffled_batches(
     )
 
 
-def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract(
-    source_file: tuple[Path, str],
-) -> None:
-    """A real online batch has the keys, model-space labels, and shapes consumed by flow.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
+def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract() -> None:
+    """A real online batch has the keys, model-space labels, and shapes consumed by flow."""
     datamodule = PyFDNDataModule(
-        path,
-        checksum,
         train_val_test_sizes=(2, 1, 1),
         batch_size=2,
         num_workers=0,
@@ -283,17 +217,9 @@ def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract(
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 @pytest.mark.slow
-def test_pyfdn_datamodule_multiprocess_workers_render_finite_batches(
-    source_file: tuple[Path, str],
-) -> None:
-    """Worker processes load and reuse their own fixed-source renderer.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
+def test_pyfdn_datamodule_multiprocess_workers_render_finite_batches() -> None:
+    """Worker processes generate and reuse their own canonical-source renderer."""
     datamodule = PyFDNDataModule(
-        path,
-        checksum,
         train_val_test_sizes=(4, 1, 1),
         batch_size=2,
         num_workers=2,
@@ -315,6 +241,16 @@ def test_pyfdn_public_signatures_omit_unsupported_sampling_modes() -> None:
 
     assert names.isdisjoint(
         {
+            "source",
+            "source_kind",
+            "source_audio",
+            "source_audio_path",
+            "source_audio_sha256",
+            "amplitude",
+            "fmin_hz",
+            "fmax_hz",
+            "linear",
+            "phi",
             "resample_train_per_epoch",
             "coprime",
             "sort",
@@ -327,29 +263,21 @@ def test_pyfdn_public_signatures_omit_unsupported_sampling_modes() -> None:
 
 @pytest.mark.parametrize("factory", [PyFDNDataModule, PyFDNDataset])
 def test_pyfdn_public_optional_configuration_is_keyword_only(factory: type) -> None:
-    """Only the two required source-identity arguments accept positional binding.
+    """Every public online data option requires explicit keyword binding.
 
     :param factory: Public online data constructor under test.
     """
     parameters = inspect.signature(factory).parameters
 
-    assert parameters["source_audio_path"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    assert parameters["source_audio_sha256"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    for name in tuple(parameters)[2:]:
-        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in parameters.values()
+    )
 
 
-def test_pyfdn_production_path_source_to_batch_decode_and_real_rerender(
-    source_file: tuple[Path, str],
-) -> None:
-    """A generated source traverses sampling, real pyFDN, batching, decode, and rerender.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
+def test_pyfdn_production_path_source_to_batch_decode_and_real_rerender() -> None:
+    """The canonical source traverses sampling, pyFDN, batching, decode, and rerender."""
     datamodule = PyFDNDataModule(
-        path,
-        checksum,
         train_val_test_sizes=(1, 1, 1),
         batch_size=1,
         num_workers=0,
@@ -361,7 +289,7 @@ def test_pyfdn_production_path_source_to_batch_decode_and_real_rerender(
     encoded = PYFDN_N8_MONO_PARAM_SPEC.model_to_encoded(batch["params"][0].numpy())
     decoded, decoded_notes = PYFDN_N8_MONO_PARAM_SPEC.decode(encoded)
     build = params_to_fdn_build(decoded, sample_rate=48_000.0)
-    rerendered = PyFDNRenderer(path, checksum).render(decoded)
+    rerendered = PyFDNRenderer().render(decoded)
 
     assert decoded_notes == {}
     post_delay = build.post_delay

@@ -293,7 +293,14 @@ def test_eval_pyfdn_flow_consumes_train_produced_checkpoint(
     with open_dict(cfg_pyfdn_flow_eval):
         cfg_pyfdn_flow_eval.ckpt_path = str(checkpoint_path)
     HydraConfig().set_config(cfg_pyfdn_flow_eval)
-    metric_dict, _ = evaluate(cfg_pyfdn_flow_eval)
+    metric_dict, eval_objects = evaluate(cfg_pyfdn_flow_eval)
+
+    assert "source_audio_path" not in cfg_pyfdn_flow_eval.datamodule
+    assert "source_audio_sha256" not in cfg_pyfdn_flow_eval.datamodule
+    assert (
+        eval_objects["datamodule"].source_provenance
+        == train_objects["datamodule"].source_provenance
+    )
 
     groups = {
         "delays",

@@ -1,7 +1,6 @@
 """Config fixtures and collection-time skip hooks for the test suite."""
 
 import copy
-import hashlib
 import importlib.util
 import os
 import shutil
@@ -16,7 +15,6 @@ from typing import Any, Literal, NamedTuple
 
 import numpy as np
 import pytest
-import soundfile as sf
 import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
@@ -404,28 +402,12 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture
-def source_file(tmp_path: Path) -> tuple[Path, str]:
-    """Write a checksum-pinned lossless source with the pyFDN production geometry.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    :returns: Source path and SHA-256 of its exact stored bytes.
-    """
-    path = tmp_path / "source.wav"
-    time_axis = np.arange(192_000, dtype=np.float64) / 48_000.0
-    source = 0.1 * np.sin(2.0 * np.pi * 220.0 * time_axis)
-    sf.write(path, source, 48_000, subtype="PCM_16")
-    return path, hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-@pytest.fixture
-def cfg_pyfdn_flow_train(tmp_path: Path, source_file: tuple[Path, str]) -> DictConfig:
+def cfg_pyfdn_flow_train(tmp_path: Path) -> DictConfig:
     """Compose a one-step production pyFDN flow training configuration.
 
     :param tmp_path: Parent of the isolated train output directory.
-    :param source_file: Checksum-pinned source audio with production geometry.
     :returns: CPU-small configuration retaining real rendering and checkpointing.
     """
-    source_path, source_sha256 = source_file
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
@@ -433,8 +415,6 @@ def cfg_pyfdn_flow_train(tmp_path: Path, source_file: tuple[Path, str]) -> DictC
             overrides=[
                 "experiment=pyfdn/flow",
                 "logger=csv",
-                f"datamodule.source_audio_path={source_path}",
-                f"datamodule.source_audio_sha256={source_sha256}",
                 *_PYFDN_FLOW_SMOKE_OVERRIDES,
             ],
         )
@@ -457,14 +437,12 @@ def cfg_pyfdn_flow_train(tmp_path: Path, source_file: tuple[Path, str]) -> DictC
 
 
 @pytest.fixture
-def cfg_pyfdn_flow_eval(tmp_path: Path, source_file: tuple[Path, str]) -> DictConfig:
+def cfg_pyfdn_flow_eval(tmp_path: Path) -> DictConfig:
     """Compose production pyFDN validation for a train-produced checkpoint.
 
     :param tmp_path: Parent of the isolated evaluation output directory.
-    :param source_file: Checksum-pinned source audio with production geometry.
     :returns: CPU-small validation configuration with real online rendering.
     """
-    source_path, source_sha256 = source_file
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
@@ -474,8 +452,6 @@ def cfg_pyfdn_flow_eval(tmp_path: Path, source_file: tuple[Path, str]) -> DictCo
                 "callbacks=log_per_param_mse",
                 "ckpt_path=null",
                 "mode=validate",
-                f"datamodule.source_audio_path={source_path}",
-                f"datamodule.source_audio_sha256={source_sha256}",
                 *_PYFDN_FLOW_SMOKE_OVERRIDES,
             ],
         )

@@ -207,6 +207,11 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert torch.isfinite(metric_dict["val/param_mse"])
 
     datamodule = object_dict["datamodule"]
+    assert "source_audio_path" not in cfg_pyfdn_flow_train.datamodule
+    assert "source_audio_sha256" not in cfg_pyfdn_flow_train.datamodule
+    source_provenance = datamodule.source_provenance
+    assert source_provenance["identity"] == "librosa_log_chirp_v1"
+    assert source_provenance["librosa_version"] == "0.11.0"
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["audio"].shape == (1, 192_000)
@@ -231,7 +236,12 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
 
     checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
-    assert (checkpoint_dir / "last.ckpt").stat().st_size > 0
+    checkpoint_path = checkpoint_dir / "last.ckpt"
+    assert checkpoint_path.stat().st_size > 0
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["PyFDNDataModule"] == {
+        "source_provenance": source_provenance,
+    }
 
 
 def test_train_torchsynth_experiment_renders_audio_online(
