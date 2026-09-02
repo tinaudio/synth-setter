@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import math
+import subprocess
 import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -203,6 +204,64 @@ def _resolve_stats(source: str) -> Path:
     return cached
 
 
+def load_audio_file(
+    path: Path, *, sample_rate: int, channels: int, num_samples: int
+) -> np.ndarray:
+    """Decode audio onto a fixed grid, including codecs FFmpeg must transcode.
+
+    :param path: Source audio file.
+    :param sample_rate: Target sample rate in Hz.
+    :param channels: Target channel count.
+    :param num_samples: Target samples per channel.
+    :returns: Channel-first float32 waveform.
+    :raises ValueError: Neither decoder produces finite normalized audio.
+    """
+    try:
+        return decode_clip(
+            path.read_bytes(),
+            sample_rate=sample_rate,
+            channels=channels,
+            num_samples=num_samples,
+            amplitude_scale=1.0,
+        )
+    except ValueError as decode_error:
+        result = subprocess.run(  # noqa: S603 — arguments are passed without a shell
+            [  # noqa: S607 — FFmpeg resolves from the operator environment
+                "ffmpeg",
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-f",
+                "f32le",
+                "-acodec",
+                "pcm_f32le",
+                "-ac",
+                str(channels),
+                "-ar",
+                str(sample_rate),
+                "pipe:1",
+            ],
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.decode(errors="replace").strip()
+            raise ValueError(f"FFmpeg could not decode {path}: {detail}") from decode_error
+        samples = np.frombuffer(result.stdout, dtype="<f4")
+        if samples.size % channels:
+            raise ValueError(f"FFmpeg returned an incomplete audio frame for {path}")
+        audio = samples.reshape(-1, channels).T
+        if audio.shape[1] < num_samples:
+            audio = np.pad(audio, ((0, 0), (0, num_samples - audio.shape[1])))
+        clip = np.ascontiguousarray(audio[:, :num_samples], dtype=np.float32)
+        if not np.isfinite(clip).all():
+            raise ValueError(f"FFmpeg returned non-finite audio for {path}")
+        # Band-limited resampling can overshoot PCM bounds; restore the model's input contract.
+        return np.clip(clip, -1.0, 1.0)
+
+
 def _load_audio(path: Path, render: RenderConfig) -> np.ndarray:
     """Decode one audio file onto the render grid.
 
@@ -210,12 +269,11 @@ def _load_audio(path: Path, render: RenderConfig) -> np.ndarray:
     :param render: Target sample rate, channels, and duration.
     :returns: Channel-first float32 waveform.
     """
-    return decode_clip(
-        path.read_bytes(),
+    return load_audio_file(
+        path,
         sample_rate=render.sample_rate,
         channels=render.channels,
         num_samples=int(render.sample_rate * render.signal_duration_seconds),
-        amplitude_scale=1.0,
     )
 
 

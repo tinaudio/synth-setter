@@ -19,8 +19,7 @@ import numpy as np
 import pyarrow as pa
 from sh import Command
 
-from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid
-from synth_setter.data.third_party_datamodule import decode_clip
+from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_file
 from synth_setter.data.vst.core import write_wav
 from synth_setter.pipeline import r2_io
 
@@ -200,13 +199,17 @@ def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValu
         content_path = input_dir / "content.wav"
         params_path = input_dir / "content.params.npy"
         if not sketch_path.is_file():
-            sketch = decode_clip(
-                vocal_blobs[vocal_index],
-                sample_rate=SAMPLE_RATE,
-                channels=CHANNELS,
-                num_samples=NUM_SAMPLES,
-                amplitude_scale=1.0,
-            )
+            encoded_path = input_dir / "sketch-source.wav"
+            encoded_path.write_bytes(vocal_blobs[vocal_index])
+            try:
+                sketch = load_audio_file(
+                    encoded_path,
+                    sample_rate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    num_samples=NUM_SAMPLES,
+                )
+            finally:
+                encoded_path.unlink(missing_ok=True)
             write_wav(sketch, str(sketch_path), SAMPLE_RATE, CHANNELS)
         if not content_path.is_file():
             write_wav(
