@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import shutil
 from pathlib import Path
+from typing import cast
 
 import pytest
 from hydra.core.hydra_config import HydraConfig
@@ -56,15 +58,36 @@ def test_eval_checkpoint_r2_uri_refreshes_cache_when_remote_checksum_changes(
     cache_home = fake_r2_remote / "cache"
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
 
-    first = eval_module._localize_eval_checkpoint("r2://bucket/runs/last.ckpt")
+    first = eval_module._localize_eval_checkpoint(
+        "r2://bucket/runs/last.ckpt",
+        hashlib.sha256(b"step 99000").hexdigest(),
+    )
     source.write_bytes(b"step final")
-    second = eval_module._localize_eval_checkpoint("r2://bucket/runs/last.ckpt")
+    second = eval_module._localize_eval_checkpoint(
+        "r2://bucket/runs/last.ckpt",
+        hashlib.sha256(b"step final").hexdigest(),
+    )
 
     assert first is not None
     assert second is not None
     assert first == second
     assert Path(second).read_bytes() == b"step final"
     assert Path(second).is_relative_to(cache_home / "synth-setter")
+
+
+def test_eval_checkpoint_remote_uri_without_digest_raises() -> None:
+    """Remote checkpoints require immutable content provenance."""
+    with pytest.raises(ValueError, match="requires ckpt_sha256"):
+        eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
+
+
+def test_eval_checkpoint_non_string_digest_raises() -> None:
+    """Malformed digest types fail with the documented configuration error."""
+    with pytest.raises(ValueError, match="64 hexadecimal characters"):
+        eval_module._localize_eval_checkpoint(
+            "r2://bucket/runs/model.ckpt",
+            expected_sha256=cast("str", 123),
+        )
 
 
 def test_eval_checkpoint_remote_digest_mismatch_raises(
@@ -106,7 +129,10 @@ def test_eval_checkpoint_s3_uri_downloads_through_r2_remote(
     source.write_bytes(b"s3 checkpoint")
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
-    localized = eval_module._localize_eval_checkpoint("s3://bucket/runs/model.ckpt")
+    localized = eval_module._localize_eval_checkpoint(
+        "s3://bucket/runs/model.ckpt",
+        hashlib.sha256(b"s3 checkpoint").hexdigest(),
+    )
 
     assert localized is not None
     assert Path(localized).read_bytes() == b"s3 checkpoint"
@@ -126,7 +152,7 @@ def test_eval_checkpoint_missing_remote_object_raises_clear_error(
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
     with pytest.raises(FileNotFoundError, match="remote eval checkpoint does not exist"):
-        eval_module._localize_eval_checkpoint("r2://bucket/runs/missing.ckpt")
+        eval_module._localize_eval_checkpoint("r2://bucket/runs/missing.ckpt", "0" * 64)
 
 
 def test_eval_checkpoint_empty_remote_object_raises_clear_error(
@@ -146,7 +172,9 @@ def test_eval_checkpoint_empty_remote_object_raises_clear_error(
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
     with pytest.raises(RuntimeError, match="remote eval checkpoint is empty"):
-        eval_module._localize_eval_checkpoint("r2://bucket/runs/empty.ckpt")
+        eval_module._localize_eval_checkpoint(
+            "r2://bucket/runs/empty.ckpt", hashlib.sha256(b"").hexdigest()
+        )
 
 
 def test_eval_checkpoint_unavailable_credentials_raise_clear_error(
@@ -172,7 +200,7 @@ def test_eval_checkpoint_unavailable_credentials_raise_clear_error(
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
     with pytest.raises(RuntimeError, match="rclone R2 credentials are unavailable"):
-        eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
+        eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt", "0" * 64)
 
 
 def test_evaluate_consumes_real_checkpoint_downloaded_from_r2(
@@ -215,6 +243,7 @@ def test_evaluate_consumes_real_checkpoint_downloaded_from_r2(
     original_uri = "r2://bucket/runs/last.ckpt"
     with open_dict(cfg_eval):
         cfg_eval.ckpt_path = original_uri
+        cfg_eval.ckpt_sha256 = hashlib.sha256(local_checkpoint.read_bytes()).hexdigest()
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
     HydraConfig().set_config(cfg_eval)

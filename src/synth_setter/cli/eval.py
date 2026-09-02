@@ -276,7 +276,7 @@ def _localize_eval_checkpoint(
     """Return the verified local checkpoint path Lightning should consume.
 
     :param checkpoint: Local path, R2-backed URI, or ``None``.
-    :param expected_sha256: Optional SHA-256 pin for the checkpoint bytes.
+    :param expected_sha256: SHA-256 pin, required for remote checkpoint bytes.
     :returns: Local checkpoint path for Lightning, or ``None``.
     :raises FileNotFoundError: The local or remote object does not exist.
     :raises RuntimeError: R2 access fails or the checkpoint is empty, incomplete, or mismatched.
@@ -284,14 +284,19 @@ def _localize_eval_checkpoint(
     """
     if checkpoint is None:
         return None
+    is_remote = checkpoint.startswith(("r2://", "s3://"))
+    if is_remote and expected_sha256 is None:
+        raise ValueError("remote checkpoint requires ckpt_sha256")
     if expected_sha256 is not None:
+        if not isinstance(expected_sha256, str):
+            raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
         expected_sha256 = expected_sha256.lower()
         valid_sha256 = len(expected_sha256) == 64 and all(
             character in "0123456789abcdef" for character in expected_sha256
         )
         if not valid_sha256:
             raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
-    if not checkpoint.startswith(("r2://", "s3://")):
+    if not is_remote:
         _verify_checkpoint_sha256(Path(checkpoint), expected_sha256)
         return checkpoint
 

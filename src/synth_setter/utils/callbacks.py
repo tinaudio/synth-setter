@@ -617,6 +617,26 @@ class PredictionWriter(BasePredictionWriter):
         self._progress_started_at.clear()
         self._samples_written.clear()
 
+    def on_predict_batch_start(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Start each dataloader's timer before its first prediction batch.
+
+        :param trainer: Ignored; required by Lightning's callback contract.
+        :param pl_module: Ignored; required by Lightning's callback contract.
+        :param batch: Ignored; required by Lightning's callback contract.
+        :param batch_idx: Zero-based batch index.
+        :param dataloader_idx: Active prediction dataloader index.
+        """
+        del trainer, pl_module, batch
+        if batch_idx == 0:
+            self._progress_started_at[dataloader_idx] = time.monotonic()
+
     def _log_progress(
         self,
         trainer: Trainer,
@@ -634,7 +654,10 @@ class PredictionWriter(BasePredictionWriter):
         """
         if not trainer.is_global_zero:
             return
-        started_at = self._progress_started_at.setdefault(dataloader_idx, time.monotonic())
+        started_at = self._progress_started_at.get(dataloader_idx)
+        if started_at is None:
+            started_at = time.monotonic()
+            self._progress_started_at[dataloader_idx] = started_at
         samples_written = self._samples_written.get(dataloader_idx, 0) + batch_sample_count(batch)
         self._samples_written[dataloader_idx] = samples_written
         totals = trainer.num_predict_batches
