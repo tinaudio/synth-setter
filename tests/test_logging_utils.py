@@ -22,6 +22,7 @@ from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
+from synth_setter.data.pyfdn_datamodule import PyFDNDataModule
 from synth_setter.utils.logging_utils import (
     LINEAGE_INCOMPLETE_TAG,
     log_hyperparameters,
@@ -77,6 +78,27 @@ def test_log_hyperparameters_interpolation_records_resolved_value() -> None:
     log_hyperparameters({"cfg": cfg, "model": torch.nn.Linear(1, 1), "trainer": trainer})
 
     assert logger.experiment.config["model"]["scheduler"]["T_max"] == 400
+
+
+def test_log_hyperparameters_records_datamodule_source_provenance() -> None:
+    """Run metadata includes dynamic provenance exposed by an online datamodule."""
+    cfg = OmegaConf.create({"model": {}, "datamodule": {}, "trainer": {}})
+    logger = RecordingWandbLogger()
+    trainer = SimpleNamespace(logger=logger, loggers=[logger])
+
+    log_hyperparameters(
+        {
+            "cfg": cfg,
+            "datamodule": PyFDNDataModule(),
+            "model": torch.nn.Linear(1, 1),
+            "trainer": trainer,
+        }
+    )
+
+    source_provenance = logger.experiment.config["source_provenance"]
+    assert source_provenance["identity"] == "librosa_log_chirp_v1"
+    assert source_provenance["librosa_version"] == "0.11.0"
+    assert len(source_provenance["sha256"]) == 64
 
 
 def test_log_hyperparameters_missing_logger_skips_config_resolution() -> None:

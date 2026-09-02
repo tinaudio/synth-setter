@@ -21,6 +21,10 @@ from torchdata.stateful_dataloader.sampler import RandomSampler
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.pyfdn_source import (
+    PYFDN_SOURCE_SAMPLE_RATE_HZ,
+    PyFDNSourceProvenance,
+)
 from synth_setter.data.sample_seed import derive_sample_seed
 
 type PyFDNItem = tuple[torch.Tensor, torch.Tensor]
@@ -113,7 +117,7 @@ class PyFDNDataModule(LightningDataModule):
         self,
         *,
         synth_version: str = "0.4.2",
-        sample_rate: int = 48_000,
+        sample_rate: int = PYFDN_SOURCE_SAMPLE_RATE_HZ,
         train_val_test_sizes: tuple[int, int, int] = (100_000, 10_000, 10_000),
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
@@ -137,7 +141,7 @@ class PyFDNDataModule(LightningDataModule):
         """
         if len(set(train_val_test_seeds)) != 3:
             raise ValueError("train, validation, and test seeds must be distinct")
-        if sample_rate != 48_000:
+        if sample_rate != PYFDN_SOURCE_SAMPLE_RATE_HZ:
             raise ValueError("pyFDN sample_rate must be exactly 48000")
         if conditioning != "audio":
             raise ValueError("pyFDN conditioning must be 'audio'")
@@ -151,6 +155,14 @@ class PyFDNDataModule(LightningDataModule):
         self.conditioning = conditioning
         self.persistent_workers = persistent_workers
         self.val_num_workers = val_num_workers
+
+    @property
+    def source_provenance(self) -> PyFDNSourceProvenance:
+        """Return the canonical source identity, implementation version, and digest.
+
+        :returns: Fresh provenance suitable for run or dataset metadata.
+        """
+        return _make_process_renderer(self.synth_version, os.getpid()).source_provenance
 
     def setup(self, stage: str | None = None) -> None:
         """Build only the deterministic splits required by a Lightning stage.

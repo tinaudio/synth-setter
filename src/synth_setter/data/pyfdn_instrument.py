@@ -22,13 +22,20 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_MIN_SECONDS,
     PYFDN_RT_NYQUIST_NAME,
 )
-from synth_setter.data.pyfdn_source import generate_canonical_pyfdn_source
+from synth_setter.data.pyfdn_source import (
+    PYFDN_SOURCE_CHANNELS,
+    PYFDN_SOURCE_SAMPLE_RATE_HZ,
+    PYFDN_SOURCE_TOTAL_FRAMES,
+    PyFDNSourceProvenance,
+    _canonical_pyfdn_source_provenance,
+    generate_canonical_pyfdn_source,
+)
 from synth_setter.data.vst.param_spec import ParameterValue, ParameterValues
 
 _PYFDN_VERSION = "0.4.2"
-_SAMPLE_RATE = 48_000.0
-_CHANNELS = 1
-_SIGNAL_LENGTH = 192_000
+_SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
+_CHANNELS = PYFDN_SOURCE_CHANNELS
+_SIGNAL_LENGTH = PYFDN_SOURCE_TOTAL_FRAMES
 _POST_DELAY_SOS_SHAPE = (1, 6, PYFDN_ORDER)
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
@@ -207,6 +214,15 @@ class PyFDNRenderer:
         """
         _validate_version(synth_version)
         self._source_audio = generate_canonical_pyfdn_source()
+        self._source_provenance = _canonical_pyfdn_source_provenance(self._source_audio)
+
+    @property
+    def source_provenance(self) -> PyFDNSourceProvenance:
+        """Return provenance for the source bytes used by this renderer.
+
+        :returns: Independent provenance metadata safe for caller mutation.
+        """
+        return self._source_provenance.copy()
 
     def render(
         self, params: ParameterValues

@@ -11,6 +11,7 @@ from scipy.signal import sosfreqz
 
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
+from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
 from synth_setter.data.vst.param_spec import ParameterValues
 
 
@@ -430,6 +431,13 @@ def test_pyfdn_renderer_instances_hold_independent_immutable_canonical_bytes() -
     assert not np.shares_memory(first._source_audio, second._source_audio)
     assert not first._source_audio.flags.writeable
     assert not second._source_audio.flags.writeable
+
+
+def test_pyfdn_renderer_exposes_provenance_for_its_canonical_source() -> None:
+    """Renderer provenance identifies the immutable bytes used for processing."""
+    renderer = PyFDNRenderer()
+
+    assert renderer.source_provenance == canonical_pyfdn_source_provenance()
 
 
 def test_pyfdn_renderer_generates_source_once_for_repeated_renders(

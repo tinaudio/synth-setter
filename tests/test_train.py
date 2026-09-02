@@ -207,6 +207,11 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert torch.isfinite(metric_dict["val/param_mse"])
 
     datamodule = object_dict["datamodule"]
+    assert "source_audio_path" not in cfg_pyfdn_flow_train.datamodule
+    assert "source_audio_sha256" not in cfg_pyfdn_flow_train.datamodule
+    source_provenance = datamodule.source_provenance
+    assert source_provenance["identity"] == "librosa_log_chirp_v1"
+    assert source_provenance["librosa_version"] == "0.11.0"
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["audio"].shape == (1, 192_000)
