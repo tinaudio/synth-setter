@@ -808,6 +808,16 @@ def test_discrete_scalar_decode_large_integer_endpoint_remains_exact() -> None:
     assert decoded == minimum
 
 
+def test_discrete_scalar_decode_large_offset_preserves_half_step() -> None:
+    """Quantization retains fractions smaller than the native offset's ULP."""
+    minimum = 1 << 52
+    parameter = DiscreteLiteralParameter(name="index", min=minimum, max=minimum + 2)
+
+    decoded = parameter.decode(np.array([0.25], dtype=np.float64))
+
+    assert decoded == minimum + 1
+
+
 def test_discrete_onehot_encoding_uses_native_integer_offset() -> None:
     """Discrete one-hot encoding selects the coordinate for the native integer."""
     parameter = DiscreteLiteralParameter(name="octave", min=-1, max=1, encoding="onehot")
