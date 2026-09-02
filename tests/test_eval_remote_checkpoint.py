@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import math
 import os
-import shutil
 from pathlib import Path
 
 import pytest
-from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli import eval as eval_module
-from synth_setter.cli.eval import evaluate
-from synth_setter.cli.train import train
 
 
 @pytest.fixture()
@@ -39,12 +33,12 @@ def test_eval_checkpoint_local_path_is_returned_unchanged(tmp_path: Path) -> Non
     assert eval_module._localize_eval_checkpoint(str(checkpoint)) == str(checkpoint)
 
 
-def test_eval_checkpoint_r2_uri_downloads_once_to_deterministic_cache(
+def test_eval_checkpoint_r2_uri_refreshes_deterministic_cache_when_remote_changes(
     fake_r2_remote: Path,
     storage_credentials: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An R2 checkpoint is cached atomically and reused after its source disappears.
+    """An R2 checkpoint refreshes the same cache path when remote bytes change.
 
     :param fake_r2_remote: Local filesystem backing the real rclone remote.
     :param storage_credentials: Dummy application credentials for the local backend.
@@ -57,12 +51,12 @@ def test_eval_checkpoint_r2_uri_downloads_once_to_deterministic_cache(
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
 
     first = eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
-    source.unlink()
+    source.write_bytes(b"updated checkpoint")
     second = eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
 
     assert first is not None
     assert first == second
-    assert Path(first).read_bytes() == b"remote checkpoint"
+    assert Path(first).read_bytes() == b"updated checkpoint"
     assert Path(first).is_relative_to(cache_home / "synth-setter")
 
 
@@ -149,54 +143,3 @@ def test_eval_checkpoint_unavailable_credentials_raise_clear_error(
 
     with pytest.raises(RuntimeError, match="rclone R2 credentials are unavailable"):
         eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
-
-
-def test_evaluate_consumes_real_checkpoint_downloaded_from_r2(
-    cfg_train: DictConfig,
-    cfg_eval: DictConfig,
-    fake_r2_remote: Path,
-    storage_credentials: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Lightning evaluates a real train-produced checkpoint fetched through rclone.
-
-    :param cfg_train: Tiny TorchSynth CPU training configuration.
-    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
-    :param fake_r2_remote: Local filesystem backing the real rclone remote.
-    :param storage_credentials: Dummy application credentials for the local backend.
-    :param monkeypatch: Routes the shared cache into the temporary directory.
-    """
-    for cfg in (cfg_train, cfg_eval):
-        with open_dict(cfg):
-            cfg.datamodule.signal_length = 512
-            cfg.model.net.channels = 2
-            cfg.model.net.encoder_blocks = 1
-            cfg.model.net.hidden_dim = 8
-            cfg.model.net.norm = "ln"
-            cfg.model.net.trunk_blocks = 1
-    with open_dict(cfg_train):
-        cfg_train.test = False
-        cfg_train.trainer.limit_train_batches = 1
-        cfg_train.trainer.limit_val_batches = 1
-    with open_dict(cfg_eval):
-        cfg_eval.trainer.limit_test_batches = 1
-
-    HydraConfig().set_config(cfg_train)
-    train(cfg_train)
-
-    local_checkpoint = Path(cfg_train.paths.output_dir) / "checkpoints" / "last.ckpt"
-    remote_checkpoint = fake_r2_remote / "bucket" / "runs" / "last.ckpt"
-    remote_checkpoint.parent.mkdir(parents=True)
-    shutil.copyfile(local_checkpoint, remote_checkpoint)
-    original_uri = "r2://bucket/runs/last.ckpt"
-    with open_dict(cfg_eval):
-        cfg_eval.ckpt_path = original_uri
-    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
-
-    HydraConfig().set_config(cfg_eval)
-    metrics, objects = evaluate(cfg_eval)
-
-    assert math.isfinite(metrics["test/param_mse"].item())
-    assert cfg_eval.ckpt_path == original_uri
-    assert Path(objects["trainer"].ckpt_path).is_file()
-    assert objects["trainer"].ckpt_path != original_uri

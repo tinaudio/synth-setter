@@ -1093,6 +1093,60 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     )
 
 
+@pytest.mark.slow
+def test_evaluate_consumes_real_checkpoint_downloaded_from_r2(
+    cfg_train: DictConfig,
+    cfg_eval: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lightning evaluates a real train-produced checkpoint fetched through rclone.
+
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param monkeypatch: Configures application credentials and the temporary cache.
+    """
+    for cfg in (cfg_train, cfg_eval):
+        with open_dict(cfg):
+            cfg.datamodule.signal_length = 512
+            cfg.model.net.channels = 2
+            cfg.model.net.encoder_blocks = 1
+            cfg.model.net.hidden_dim = 8
+            cfg.model.net.norm = "ln"
+            cfg.model.net.trunk_blocks = 1
+    with open_dict(cfg_train):
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+    with open_dict(cfg_eval):
+        cfg_eval.trainer.limit_test_batches = 1
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    local_checkpoint = Path(cfg_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    remote_checkpoint = fake_r2_remote / "bucket" / "runs" / "last.ckpt"
+    remote_checkpoint.parent.mkdir(parents=True)
+    shutil.copyfile(local_checkpoint, remote_checkpoint)
+    original_uri = "r2://bucket/runs/last.ckpt"
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = original_uri
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+
+    HydraConfig().set_config(cfg_eval)
+    metrics, objects = evaluate(cfg_eval)
+
+    assert math.isfinite(metrics["test/param_mse"].item())
+    assert cfg_eval.ckpt_path == original_uri
+    assert Path(objects["trainer"].ckpt_path).is_file()
+    assert objects["trainer"].ckpt_path != original_uri
+
+
 def test_evaluate_loads_compiled_cpu_training_checkpoint(
     tmp_path: Path,
     cfg_train: DictConfig,

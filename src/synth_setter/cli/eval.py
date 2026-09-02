@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -277,8 +278,6 @@ def _localize_eval_checkpoint(checkpoint: str | None) -> str | None:
     with lock_path.open("a+b") as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         try:
-            if cached.is_file() and cached.stat().st_size > 0:
-                return str(cached)
             try:
                 r2_io.ensure_r2_env_loaded()
                 remote_size = r2_io.object_size(r2_uri)
@@ -296,6 +295,8 @@ def _localize_eval_checkpoint(checkpoint: str | None) -> str | None:
             ) as temporary:
                 staging = Path(temporary.name)
             try:
+                if cached.is_file() and cached.stat().st_size > 0:
+                    shutil.copyfile(cached, staging)
                 r2_io.download_to_path(r2_uri, staging)
                 if staging.stat().st_size == 0:
                     raise RuntimeError(f"downloaded eval checkpoint is empty: {checkpoint}")
