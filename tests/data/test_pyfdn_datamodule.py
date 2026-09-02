@@ -65,6 +65,22 @@ def test_pyfdn_dataset_row_encodes_the_exact_derived_seed_sample(
     )
 
 
+@pytest.mark.parametrize("index", [-1, 1])
+def test_pyfdn_dataset_index_outside_split_raises(
+    source_file: tuple[Path, str], index: int
+) -> None:
+    """Direct access cannot synthesize rows outside the finite split.
+
+    :param source_file: Valid fixed source and checksum.
+    :param index: Negative or upper-bound index outside a one-row split.
+    """
+    path, checksum = source_file
+    dataset = PyFDNDataset(1, 123, path, checksum)
+
+    with pytest.raises(IndexError, match="outside"):
+        dataset[index]
+
+
 def test_pyfdn_dataset_different_indices_change_sampled_patch(
     source_file: tuple[Path, str],
 ) -> None:
@@ -159,6 +175,19 @@ def test_pyfdn_datamodule_uses_fixed_default_split_seeds(
     )
 
 
+def test_pyfdn_datamodule_duplicate_split_seeds_raise(
+    source_file: tuple[Path, str],
+) -> None:
+    """Matching split seeds cannot leak identical indexed rows into evaluation.
+
+    :param source_file: Valid fixed source and checksum.
+    """
+    path, checksum = source_file
+
+    with pytest.raises(ValueError, match="distinct"):
+        PyFDNDataModule(path, checksum, train_val_test_seeds=(123, 123, 789))
+
+
 def test_pyfdn_datamodule_training_rows_remain_fixed_across_epochs(
     source_file: tuple[Path, str],
 ) -> None:
@@ -232,7 +261,7 @@ def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract(
 
 
 def test_pyfdn_public_signatures_omit_unsupported_sampling_modes() -> None:
-    """Strict F1 APIs expose no sorting, coprime, filter, or epoch-resampling flags."""
+    """Strict F1 APIs expose no sorting, filtering, dropping, or resampling flags."""
     names = set(inspect.signature(PyFDNDataModule).parameters) | set(
         inspect.signature(PyFDNDataset).parameters
     )
@@ -244,8 +273,19 @@ def test_pyfdn_public_signatures_omit_unsupported_sampling_modes() -> None:
             "sort",
             "filter_hooks",
             "sampling_mode",
+            "drop_last",
         }
     )
+
+
+def test_pyfdn_datamodule_optional_configuration_is_keyword_only() -> None:
+    """Only the two required source-identity arguments accept positional binding."""
+    parameters = inspect.signature(PyFDNDataModule).parameters
+
+    assert parameters["source_audio_path"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["source_audio_sha256"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for name in tuple(parameters)[2:]:
+        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_pyfdn_production_path_source_to_batch_decode_and_real_rerender(

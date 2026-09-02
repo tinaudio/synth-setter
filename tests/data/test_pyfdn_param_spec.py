@@ -6,7 +6,7 @@ import numpy as np
 
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 
-_EXPECTED_COORDINATE_NAMES = [
+_EXPECTED_COORDINATE_NAMES = (
     "delays.0",
     "delays.1",
     "delays.2",
@@ -96,7 +96,7 @@ _EXPECTED_COORDINATE_NAMES = [
     "output_matrix.0.6",
     "output_matrix.0.7",
     "direct_matrix.0.0",
-]
+)
 
 
 def test_pyfdn_spec_layout_has_exact_89_columns_and_slices() -> None:
@@ -119,7 +119,7 @@ def test_pyfdn_spec_layout_has_exact_89_columns_and_slices() -> None:
 
 def test_pyfdn_spec_coordinate_names_match_exact_c_order_layout() -> None:
     """Every model coordinate has the stable field-and-index label required by metrics."""
-    assert PYFDN_N8_MONO_PARAM_SPEC.encoded_names == _EXPECTED_COORDINATE_NAMES
+    assert tuple(PYFDN_N8_MONO_PARAM_SPEC.encoded_names) == _EXPECTED_COORDINATE_NAMES
 
 
 def test_pyfdn_spec_same_seed_samples_same_patch() -> None:

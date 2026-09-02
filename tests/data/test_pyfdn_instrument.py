@@ -3,7 +3,6 @@
 import hashlib
 import inspect
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -270,25 +269,67 @@ def test_pyfdn_renderer_rejects_non_finite_decoded_source(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"sample_rate": 44_100},
-        {"channels": 2},
-        {"signal_duration_seconds": 3.0},
-    ],
+    ("sample_rate", "channels", "signal_duration_seconds"),
+    [(44_100, 1, 4.0), (48_000, 2, 4.0), (48_000, 1, 3.0)],
 )
 def test_pyfdn_renderer_rejects_non_fixed_audio_geometry(
-    source_file: tuple[Path, str], kwargs: dict[str, Any]
+    source_file: tuple[Path, str],
+    sample_rate: int,
+    channels: int,
+    signal_duration_seconds: float,
 ) -> None:
     """Public geometry inputs cannot select an unsupported FDN mode.
 
     :param source_file: Valid fixed source and checksum.
-    :param kwargs: One unsupported constructor geometry.
+    :param sample_rate: Candidate fixed source rate.
+    :param channels: Candidate fixed source channel count.
+    :param signal_duration_seconds: Candidate fixed source duration.
     """
     path, checksum = source_file
 
     with pytest.raises(ValueError, match="fixed"):
-        PyFDNRenderer(path, checksum, **kwargs)
+        PyFDNRenderer(
+            path,
+            checksum,
+            sample_rate=sample_rate,
+            channels=channels,
+            signal_duration_seconds=signal_duration_seconds,
+        )
+
+
+def test_pyfdn_renderer_source_replacement_after_checksum_uses_checked_bytes(
+    source_file: tuple[Path, str],
+    fdn_params: ParameterValues,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decoding consumes the exact bytes whose SHA-256 passed validation.
+
+    :param source_file: Valid fixed source and checksum.
+    :param fdn_params: Valid native patch.
+    :param tmp_path: Temporary directory owned by pytest.
+    :param monkeypatch: Scoped replacement-race injection.
+    """
+    path, checksum = source_file
+    checked_source, _ = sf.read(path, dtype="float64")
+    replacement_path = tmp_path / "replacement.wav"
+    sf.write(replacement_path, np.zeros(192_000), 48_000, subtype="PCM_16")
+    original_read_bytes = Path.read_bytes
+
+    def read_then_replace(candidate: Path) -> bytes:
+        checked_bytes = original_read_bytes(candidate)
+        candidate.write_bytes(original_read_bytes(replacement_path))
+        return checked_bytes
+
+    monkeypatch.setattr(Path, "read_bytes", read_then_replace)
+    params = dict(fdn_params)
+    params["input_matrix"] = np.zeros((8, 1), dtype=np.float64)
+    params["output_matrix"] = np.zeros((1, 8), dtype=np.float64)
+    params["direct_matrix"] = np.ones((1, 1), dtype=np.float64)
+
+    audio = PyFDNRenderer(path, checksum).render(params)
+
+    np.testing.assert_array_equal(audio[0], checked_source.astype(np.float32))
 
 
 def test_pyfdn_renderer_real_process_has_exact_output_contract(

@@ -1,4 +1,8 @@
-"""Deterministic online datasets for the fixed-source pyFDN instrument."""
+"""Deterministic online datasets for the fixed-source pyFDN instrument.
+
+Example:
+    ``PyFDNDataModule(source_path, sha256).setup("fit")`` builds fixed seeded splits.
+"""
 
 from __future__ import annotations
 
@@ -62,7 +66,7 @@ def collate_pyfdn_audio_dict(batch: Sequence[PyFDNItem]) -> PyFDNBatch:
     """Collate fixed-source rows into the existing audio-conditioned flow contract.
 
     :param batch: Rows with channel-first audio and unit-domain encoded patches.
-    :returns: Float32 audio plus model-domain params and matching Gaussian noise.
+    :returns: Float32 native-amplitude audio plus model-domain params and matching noise.
     """
     audio = torch.cat([row[0] for row in batch], dim=0)
     encoded = torch.cat([row[1] for row in batch], dim=0)
@@ -79,6 +83,7 @@ class PyFDNDataset(Dataset[PyFDNItem]):
         seed: int,
         source_audio_path: str | Path,
         source_audio_sha256: str,
+        *,
         synth_version: str = "0.4.2",
         sample_rate: int = 48_000,
         channels: int = 1,
@@ -107,7 +112,7 @@ class PyFDNDataset(Dataset[PyFDNItem]):
     def __len__(self) -> int:
         """Return the configured split length.
 
-        :returns: Number of deterministic logical rows.
+        :returns: Split cardinality used to bound valid row indices.
         """
         return self.num_samples
 
@@ -131,7 +136,10 @@ class PyFDNDataset(Dataset[PyFDNItem]):
 
         :param index: Logical row index.
         :returns: Float32 audio, unit-domain encoded patch, and native render callable.
+        :raises IndexError: The index is outside this finite split.
         """
+        if not 0 <= index < self.num_samples:
+            raise IndexError(f"index {index} is outside split of length {self.num_samples}")
         rng = np.random.default_rng(derive_sample_seed(self.seed, index))
         params, note_params = PYFDN_N8_MONO_PARAM_SPEC.sample(rng)
         encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, note_params)
@@ -151,6 +159,7 @@ class PyFDNDataModule(LightningDataModule):
         self,
         source_audio_path: str | Path,
         source_audio_sha256: str,
+        *,
         synth_version: str = "0.4.2",
         sample_rate: int = 48_000,
         channels: int = 1,
@@ -159,10 +168,8 @@ class PyFDNDataModule(LightningDataModule):
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
         num_workers: int = 0,
-        drop_last: bool = False,
         conditioning: ConditioningMode = "audio",
         persistent_workers: bool = True,
-        *,
         val_num_workers: int = 0,
     ) -> None:
         """Configure deterministic online pyFDN splits and loaders.
@@ -177,12 +184,13 @@ class PyFDNDataModule(LightningDataModule):
         :param train_val_test_seeds: Base seeds for train, validation, and test.
         :param batch_size: DataLoader batch size.
         :param num_workers: Worker processes for training and test loaders.
-        :param drop_last: Whether training drops a trailing partial batch.
         :param conditioning: Model-batch modality; pyFDN supports raw audio only.
         :param persistent_workers: Keep positive-count workers alive between epochs.
         :param val_num_workers: Worker processes for the validation loader.
-        :raises ValueError: Conditioning does not select raw audio.
+        :raises ValueError: Split seeds repeat or conditioning does not select raw audio.
         """
+        if len(set(train_val_test_seeds)) != 3:
+            raise ValueError("train, validation, and test seeds must be distinct")
         if conditioning != "audio":
             raise ValueError("pyFDN conditioning must be 'audio'")
         super().__init__()
@@ -196,7 +204,6 @@ class PyFDNDataModule(LightningDataModule):
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.drop_last = drop_last
         self.conditioning = conditioning
         self.persistent_workers = persistent_workers
         self.val_num_workers = val_num_workers
@@ -226,7 +233,7 @@ class PyFDNDataModule(LightningDataModule):
             self.val = dataset(val_size, val_seed)
         elif stage == "validate":
             self.val = dataset(val_size, val_seed)
-        if stage in (None, "test", "predict"):
+        if stage in (None, "test"):
             self.test = dataset(test_size, test_seed)
 
     def _loader(
@@ -235,14 +242,12 @@ class PyFDNDataModule(LightningDataModule):
         *,
         num_workers: int,
         shuffle: bool = False,
-        drop_last: bool = False,
     ) -> DataLoader[PyFDNBatch]:
         """Wrap one online split with the fixed flow collator.
 
         :param dataset: Deterministic online split to load.
         :param num_workers: Worker processes for this split.
         :param shuffle: Whether to shuffle the split's fixed row indices.
-        :param drop_last: Whether to discard a trailing partial batch.
         :returns: Loader emitting the audio-conditioned flow batch contract.
         """
         return cast(
@@ -253,7 +258,6 @@ class PyFDNDataModule(LightningDataModule):
                 shuffle=shuffle,
                 num_workers=num_workers,
                 persistent_workers=self.persistent_workers and num_workers > 0,
-                drop_last=drop_last,
                 collate_fn=collate_pyfdn_audio_dict,
             ),
         )
@@ -263,12 +267,10 @@ class PyFDNDataModule(LightningDataModule):
 
         :returns: Batched deterministic training data.
         """
-        drop_last = self.drop_last and len(self.train) >= self.batch_size
         return self._loader(
             self.train,
             num_workers=self.num_workers,
             shuffle=True,
-            drop_last=drop_last,
         )
 
     def val_dataloader(self) -> DataLoader[PyFDNBatch]:
