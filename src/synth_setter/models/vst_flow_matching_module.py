@@ -345,7 +345,8 @@ class VSTFlowMatchingModule(LightningModule):
             during training (CFG).
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
         :param validation_sample_steps: RK4 integration steps used at validation.
-        :param validation_noise_seed: Fixed initial-noise seed for comparable validation runs.
+        :param validation_noise_seed: Fixed stream seed for runs with identical loader order,
+            batch size, and distributed topology.
         :param validation_cfg_strength: Content guidance strength at validation.
         :param validation_sketch_cfg_strength: Sketch guidance strength at validation;
             defaults to ``validation_cfg_strength``.
@@ -792,7 +793,7 @@ class VSTFlowMatchingModule(LightningModule):
         params: Float[torch.Tensor, "batch params"],
         batch_idx: int,
     ) -> Float[torch.Tensor, "batch params"]:
-        """Draw fresh noise by default or a batch-stable stream when seeded.
+        """Draw fresh noise or a batch/rank-stable stream for fixed-topology comparisons.
 
         :param params: Target parameter vectors defining shape, dtype, and device.
         :param batch_idx: Validation batch index mixed into the optional seed.
