@@ -349,7 +349,7 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
         _target: torch.Tensor,
         _param_spec: ParamSpec,
     ) -> dict[str, torch.Tensor]:
-        values = predicted.new_tensor([0.0, 0.0] if predicted.shape[0] == 2 else [6.0])
+        values = predicted.new_tensor([-6.0, 3.0] if predicted.shape[0] == 2 else [12.0])
         return {"continuous": values, "floor": values, "nearest": values}
 
     monkeypatch.setattr(
@@ -375,5 +375,5 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
 
     torch.testing.assert_close(
         trainer.callback_metrics["val/pitch_residual_continuous_mean_semitones"],
-        torch.tensor(2.0),
+        torch.tensor(3.0),
     )
