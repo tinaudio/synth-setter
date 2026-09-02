@@ -154,8 +154,9 @@ def _diff_dicts(a: dict[Any, Any], b: dict[Any, Any], prefix: str = "") -> list[
     [
         ("surge/fake_oracle", "surge/test-mps-fake-oracle"),
         ("surge/ffn_full", "surge/test-mps-ffn"),
+        ("surge/flow_full", "surge/test-mps-flow"),
     ],
-    ids=["fake_oracle", "ffn_full"],
+    ids=["fake_oracle", "ffn_full", "flow_full"],
 )
 def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yaml: str) -> None:
     """Each ``surge/test-mps-*.yaml`` matches the smoke fixture's MPS cfg for its experiment.
@@ -167,9 +168,9 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     hardware needed — only the cfg shape is compared, not runtime behavior).
 
     :param experiment: Hydra ``experiment=...`` override the fixture is built against
-        (``"surge/fake_oracle"`` or ``"surge/ffn_full"``).
+        (for example, ``"surge/flow_full"``).
     :param test_mps_yaml: Sibling smoke YAML the fixture is compared against
-        (``"surge/test-mps-fake-oracle"`` or ``"surge/test-mps-ffn"``).
+        (for example, ``"surge/test-mps-flow"``).
     """
     fixture_cfg = _build_surge_xt_smoke_cfg(
         accelerator="mps", param_spec_name="surge_4", experiment=experiment
