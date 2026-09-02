@@ -70,7 +70,8 @@ def test_eval_checkpoint_r2_uri_refreshes_cache_when_remote_checksum_changes(
 
     assert first is not None
     assert second is not None
-    assert first == second
+    assert first != second
+    assert Path(first).read_bytes() == b"step 99000"
     assert Path(second).read_bytes() == b"step final"
     assert Path(second).is_relative_to(cache_home / "synth-setter")
 
@@ -106,11 +107,16 @@ def test_eval_checkpoint_remote_digest_mismatch_raises(
     source.write_bytes(b"unexpected checkpoint")
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
-    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+    expected = "0" * 64
+    actual = hashlib.sha256(source.read_bytes()).hexdigest()
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch") as exc_info:
         eval_module._localize_eval_checkpoint(
             "r2://bucket/runs/model.ckpt",
-            expected_sha256="0" * 64,
+            expected_sha256=expected,
         )
+
+    assert expected in str(exc_info.value)
+    assert actual in str(exc_info.value)
 
 
 def test_eval_checkpoint_s3_uri_downloads_through_r2_remote(

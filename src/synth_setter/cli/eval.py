@@ -266,7 +266,10 @@ def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> 
     with checkpoint.open("rb") as stream:
         actual = hashlib.file_digest(stream, "sha256").hexdigest()
     if actual != expected_sha256:
-        raise RuntimeError(f"checkpoint SHA-256 mismatch: {checkpoint}")
+        raise RuntimeError(
+            f"checkpoint SHA-256 mismatch: expected {expected_sha256}, "
+            f"received {actual} for {checkpoint}"
+        )
 
 
 def _localize_eval_checkpoint(
@@ -301,7 +304,8 @@ def _localize_eval_checkpoint(
         return checkpoint
 
     r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint
-    cache_key = hashlib.sha256(r2_uri.encode()).hexdigest()
+    assert expected_sha256 is not None
+    cache_key = expected_sha256
     cached = synth_setter_cache_dir() / "checkpoints" / "evaluation" / cache_key / "model.ckpt"
     lock_path = cached.with_suffix(".ckpt.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
