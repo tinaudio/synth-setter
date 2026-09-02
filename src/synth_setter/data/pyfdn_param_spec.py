@@ -15,6 +15,9 @@ from synth_setter.data.vst.param_spec import (
 
 
 PYFDN_ORDER = 8
+PYFDN_RT_CROSSOVER_HZ = 6_000.0
+PYFDN_RT_MAX_SECONDS = 4.0
+PYFDN_RT_MIN_SECONDS = 0.1
 
 
 class OrthogonalMatrixParameter(ContinuousArrayParameter):
@@ -74,10 +77,14 @@ PYFDN_N8_MONO_PARAM_SPEC = ParamSpec(
             name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0
         ),
         ContinuousParameter(
-            name="post_delay.rt_dc_seconds", min=0.1, max=4.0
+            name="post_delay.rt_dc_seconds",
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
         ),
         ContinuousParameter(
-            name="post_delay.rt_nyquist_seconds", min=0.1, max=4.0
+            name="post_delay.rt_nyquist_seconds",
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
         ),
     ],
     note_params=[],

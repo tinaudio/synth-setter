@@ -17,7 +17,12 @@ from jaxtyping import Float32
 from pyFDN import FDNBuild, build_set_decay, process_fdn
 from pyFDN.td import SOSBank
 
-from synth_setter.data.pyfdn_param_spec import PYFDN_ORDER
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_ORDER,
+    PYFDN_RT_CROSSOVER_HZ,
+    PYFDN_RT_MAX_SECONDS,
+    PYFDN_RT_MIN_SECONDS,
+)
 from synth_setter.data.vst.param_spec import ParameterValue, ParameterValues
 
 _PYFDN_VERSION = "0.4.2"
@@ -26,7 +31,6 @@ _CHANNELS = 1
 _SIGNAL_DURATION_SECONDS = 4.0
 _SIGNAL_LENGTH = 192_000
 _LOSSLESS_WAV_FLOAT_SUBTYPES = frozenset({"FLOAT", "DOUBLE"})
-_RT_CROSSOVER_HZ = 6_000.0
 _POST_DELAY_SOS_SHAPE = (1, 6, PYFDN_ORDER)
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
@@ -70,20 +74,25 @@ def _require_array(
     return value
 
 
-def _require_finite_float(name: str, value: ParameterValue) -> float:
-    """Validate a finite real scalar and return its Python-float representation.
+def _require_rt_seconds(name: str, value: ParameterValue) -> float:
+    """Validate one RT control against the predicted semantic domain.
 
     :param name: Patch field name used in validation errors.
     :param value: Native scalar to validate.
-    :returns: The value as a Python float.
+    :returns: The validated reverberation time in seconds.
     :raises TypeError: The value is not a real scalar.
-    :raises ValueError: The value is non-finite.
+    :raises ValueError: The value is non-finite or outside the RT bounds.
     """
     if not isinstance(value, Real) or isinstance(value, bool):
         raise TypeError(f"{name} must be a real scalar")
     result = float(value)
     if not np.isfinite(result):
         raise ValueError(f"{name} must be finite")
+    if not PYFDN_RT_MIN_SECONDS <= result <= PYFDN_RT_MAX_SECONDS:
+        raise ValueError(
+            f"{name} must be between {PYFDN_RT_MIN_SECONDS} and "
+            f"{PYFDN_RT_MAX_SECONDS} seconds"
+        )
     return result
 
 
@@ -138,8 +147,8 @@ def params_to_fdn_build(
     }
     if np.any(arrays["delays"] <= 0):
         raise ValueError("delays must be positive")
-    rt_dc = _require_finite_float(_RT_DC_NAME, params[_RT_DC_NAME])
-    rt_nyquist = _require_finite_float(_RT_NYQUIST_NAME, params[_RT_NYQUIST_NAME])
+    rt_dc = _require_rt_seconds(_RT_DC_NAME, params[_RT_DC_NAME])
+    rt_nyquist = _require_rt_seconds(_RT_NYQUIST_NAME, params[_RT_NYQUIST_NAME])
 
     base_build = FDNBuild(
         A=arrays["feedback_matrix"],
@@ -155,7 +164,7 @@ def params_to_fdn_build(
     decay_build = build_set_decay(
         base_build,
         rt=(rt_dc, rt_nyquist),
-        rt_crossover=_RT_CROSSOVER_HZ,
+        rt_crossover=PYFDN_RT_CROSSOVER_HZ,
     )
     _require_decay_hooks(decay_build)
     return decay_build

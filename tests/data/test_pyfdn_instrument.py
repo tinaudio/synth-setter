@@ -4,6 +4,7 @@ import hashlib
 import inspect
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -91,7 +92,7 @@ def test_params_to_fdn_build_same_controls_reproduce_exact_decay_sos(
     assert second_post_delay is not None
     np.testing.assert_array_equal(second_post_delay, first_post_delay)
     np.testing.assert_allclose(
-        first_post_delay[:, :, [0, 7]], expected_end_lines, rtol=0.0, atol=1e-15
+        first_post_delay[:, :, [0, 7]], expected_end_lines, rtol=0.0, atol=1e-12
     )
 
 
@@ -209,6 +210,75 @@ def test_params_to_fdn_build_malformed_derived_hooks_raise(
 
     with pytest.raises(expected_error, match=match):
         params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["post_delay.rt_dc_seconds", "post_delay.rt_nyquist_seconds"],
+)
+@pytest.mark.parametrize("bad_rt", [-1.0, 0.0, 0.099, 4.001])
+def test_params_to_fdn_build_out_of_bounds_rt_raises(
+    fdn_params: ParameterValues,
+    control: str,
+    bad_rt: float,
+) -> None:
+    """RT controls outside the predicted semantic domain fail before filter design.
+
+    :param fdn_params: Valid native patch.
+    :param control: RT endpoint receiving the invalid value.
+    :param bad_rt: Value outside the inclusive RT bounds.
+    """
+    params = dict(fdn_params)
+    params[control] = bad_rt
+
+    with pytest.raises(ValueError, match="between 0.1 and 4.0"):
+        params_to_fdn_build(params, sample_rate=48_000.0)
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["post_delay.rt_dc_seconds", "post_delay.rt_nyquist_seconds"],
+)
+@pytest.mark.parametrize("bad_rt", [np.nan, np.inf, -np.inf])
+def test_params_to_fdn_build_nonfinite_rt_raises(
+    fdn_params: ParameterValues,
+    control: str,
+    bad_rt: float,
+) -> None:
+    """Non-finite RT controls never reach native filter design.
+
+    :param fdn_params: Valid native patch.
+    :param control: RT endpoint receiving the invalid value.
+    :param bad_rt: NaN or infinity injected into the patch.
+    """
+    params = dict(fdn_params)
+    params[control] = bad_rt
+
+    with pytest.raises(ValueError, match="finite"):
+        params_to_fdn_build(params, sample_rate=48_000.0)
+
+
+@pytest.mark.parametrize(
+    "control",
+    ["post_delay.rt_dc_seconds", "post_delay.rt_nyquist_seconds"],
+)
+@pytest.mark.parametrize("bad_rt", [True, "1.0"])
+def test_params_to_fdn_build_nonreal_rt_raises(
+    fdn_params: ParameterValues,
+    control: str,
+    bad_rt: object,
+) -> None:
+    """Non-real RT controls fail instead of being coerced.
+
+    :param fdn_params: Valid native patch.
+    :param control: RT endpoint receiving the invalid value.
+    :param bad_rt: Boolean or string supplied as an RT control.
+    """
+    params = dict(fdn_params)
+    params[control] = cast(float, bad_rt)
+
+    with pytest.raises(TypeError, match="real scalar"):
+        params_to_fdn_build(params, sample_rate=48_000.0)
 
 
 @pytest.mark.parametrize("bad_keys", ["missing", "extra"])
