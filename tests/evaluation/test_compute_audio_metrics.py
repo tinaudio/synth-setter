@@ -644,7 +644,6 @@ def test_compute_f0_without_confident_frames_returns_nan() -> None:
 
 
 _UNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.5,0.5\nresonance,0.2,0.2\n"
-_NONUNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.9,0.9\n"
 
 
 def _make_uniform_sample_dir(
@@ -670,8 +669,8 @@ def _make_uniform_sample_dir(
 
 
 @pytest.mark.slow
-def test_main_uniform_params_auto_produces_shuffled_symlink_view(tmp_path: Path) -> None:
-    """Uniform params → ``shuffled_audio/`` symlink view built automatically (no flag needed).
+def test_main_uniform_params_writes_only_standard_metric_outputs(tmp_path: Path) -> None:
+    """Uniform parameters do not trigger an additional shuffled evaluation pass.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -683,232 +682,18 @@ def test_main_uniform_params_auto_produces_shuffled_symlink_view(tmp_path: Path)
         audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
     )
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         compute_audio_metrics_main,
         [str(audio_root), str(metrics_dir), "-w", "1"],
         catch_exceptions=False,
     )
-    assert result.exit_code == 0, result.output
-
-    shuffled_dir = metrics_dir / "shuffled_audio"
-    assert (shuffled_dir / "sample_0" / "pred.wav").is_symlink()
-
-
-@pytest.mark.slow
-def test_main_uniform_params_writes_aggregated_metrics_shuffled_csv(tmp_path: Path) -> None:
-    """Uniform params → ``aggregated_metrics_shuffled.csv`` written alongside normal CSV.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    agg_shuffled = pd.read_csv(metrics_dir / "aggregated_metrics_shuffled.csv", index_col=0)
-    assert {"mean", "std"}.issubset(agg_shuffled.columns)
-    assert {"mss", "wmfcc", "sot", "rms"}.issubset(set(agg_shuffled.index))
-
-
-@pytest.mark.slow
-def test_main_uniform_params_writes_shuffle_permutation_csv(tmp_path: Path) -> None:
-    """Uniform params → ``shuffle_permutation.csv`` round-trips the ``dest_idx -> src_idx`` mapping.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    permutation = pd.read_csv(metrics_dir / "shuffle_permutation.csv")
-    assert list(permutation.columns) == ["dest_idx", "src_idx"]
-    assert permutation["dest_idx"].tolist() == [0, 1]
-    assert sorted(permutation["src_idx"].tolist()) == [0, 1]
-    # _draw_non_identity_permutation guarantees ≥1 pred.wav moves even at the default
-    # seed 0, so for two dirs the only non-identity mapping is the full swap [1, 0].
-    assert permutation["src_idx"].tolist() == [1, 0]
-
-
-def test_run_shuffle_probe_fewer_than_two_sample_dirs_writes_neither_csv(tmp_path: Path) -> None:
-    """A <2 permutation (too few dirs with params) short-circuits before either probe write.
-
-    Pins the ``len(permutation) < 2`` guard, which the CLI cannot reach — its outer
-    ``len(probe_dirs) >= 2`` gate fires first.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    output_dir = tmp_path / "metrics"
-    output_dir.mkdir()
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.05), _sine(seconds=0.05))
-
-    cam._run_shuffle_probe(audio_root, output_dir, shuffle_seed=0, num_workers=1)
-
-    assert not (output_dir / "shuffle_permutation.csv").exists()
-    assert not (output_dir / "aggregated_metrics_shuffled.csv").exists()
-
-
-def test_run_shuffle_probe_aggregation_failure_leaves_no_permutation_csv(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failed shuffled-metric aggregation leaves no orphaned ``shuffle_permutation.csv``.
-
-    Pins the write ordering: the permutation is recorded only after the shuffled metrics
-    land, so an aggregation that raises must not leave a permutation file behind.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    :param monkeypatch: Patches ``_aggregate_metrics`` to raise during the shuffled pass.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    output_dir = tmp_path / "metrics"
-    output_dir.mkdir()
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.05), _sine(seconds=0.05))
-    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.05), _sine(seconds=0.05))
-
-    def _raise(*_args: object, **_kwargs: object) -> pd.DataFrame:
-        raise RuntimeError("metric aggregation failed")
-
-    monkeypatch.setattr(cam, "_aggregate_metrics", _raise)
-
-    with pytest.raises(RuntimeError, match="metric aggregation failed"):
-        cam._run_shuffle_probe(audio_root, output_dir, shuffle_seed=0, num_workers=1)
-
-    assert not (output_dir / "shuffle_permutation.csv").exists()
-
-
-@pytest.mark.slow
-def test_main_auto_shuffle_does_not_mutate_source(tmp_path: Path) -> None:
-    """The original ``audio/`` tree is byte-identical after the auto-shuffle pass.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
-    )
-    before = {
-        p.relative_to(audio_root): p.read_bytes() for p in audio_root.rglob("*") if p.is_file()
-    }
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    after = {
-        p.relative_to(audio_root): p.read_bytes() for p in audio_root.rglob("*") if p.is_file()
-    }
-    assert after == before
-
-
-@pytest.mark.slow
-def test_main_nonuniform_params_default_seed_skips_shuffle_no_shuffled_csv(
-    tmp_path: Path,
-) -> None:
-    """Non-uniform params + default seed → shuffle silently skipped, no shuffled CSV.
-
-    Creates two sample dirs with real wav data but differing params.csv; with the default seed (0)
-    the probe is skipped and no aggregated_metrics_shuffled.csv appears.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2), params_csv=_NONUNIFORM_PARAMS_CSV
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-    )
 
     assert result.exit_code == 0, result.output
+    assert (metrics_dir / "aggregated_metrics.csv").is_file()
+    assert (metrics_dir / "metrics.csv").is_file()
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
     assert not (metrics_dir / "shuffle_permutation.csv").exists()
-
-
-@pytest.mark.slow
-def test_main_nonuniform_params_explicit_seed_raises(tmp_path: Path) -> None:
-    """Non-uniform params + explicit non-zero seed → ``ValueError`` (seed implies intent).
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2), params_csv=_NONUNIFORM_PARAMS_CSV
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
-    )
-
-    assert result.exit_code != 0
-    assert isinstance(result.exception, ValueError)
-
-
-@pytest.mark.slow
-def test_main_explicit_seed_single_sample_dir_raises(tmp_path: Path) -> None:
-    """Explicit non-zero seed with only one sample_* dir → ``ValueError``.
-
-    With fewer than two dirs the probe cannot run; an explicit seed signals intent so it must raise
-    rather than silently skip.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
-    )
-    assert result.exit_code != 0
-    assert isinstance(result.exception, ValueError)
+    assert not (metrics_dir / "shuffled_audio").exists()
 
 
 def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
@@ -922,82 +707,6 @@ def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
         [str(tmp_path / "audio"), str(tmp_path / "metrics"), "-w", "0"],
     )
     assert result.exit_code != 0
-
-
-@pytest.mark.slow
-def test_main_single_sample_dir_no_shuffled_csv(tmp_path: Path) -> None:
-    """Single sample dir cannot be shuffled → no shuffled-metrics or permutation CSV.
-
-    Drives ``main`` with one uniform-params dir; both probe outputs are written only when a
-    real shuffle ran (≥2 dirs), so neither must appear.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
-    assert not (metrics_dir / "shuffle_permutation.csv").exists()
-
-
-@pytest.mark.slow
-def test_main_output_dir_inside_audio_dir_default_seed_skips_shuffle(tmp_path: Path) -> None:
-    """output_dir nested inside audio_dir with default seed → probe skipped, no shuffled CSV.
-
-    When output_dir (and therefore shuffled_audio) would sit inside the source tree,
-    ``shuffle_pred_audio`` would raise. With seed=0 (default, automatic probe) the CLI must
-    warn and skip rather than crash.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = audio_root / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2))
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
-    assert not (metrics_dir / "shuffle_permutation.csv").exists()
-
-
-@pytest.mark.slow
-def test_main_output_dir_inside_audio_dir_explicit_seed_raises(tmp_path: Path) -> None:
-    """output_dir nested inside audio_dir with explicit non-zero seed → ``ValueError``.
-
-    The non-zero seed signals the probe was explicitly intended, so the nested layout is an
-    unrecoverable error rather than a silenced warning.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = audio_root / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2))
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
-    )
-    assert result.exit_code != 0
-    assert isinstance(result.exception, ValueError)
 
 
 # ---------------------------------------------------------------------------

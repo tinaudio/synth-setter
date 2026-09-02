@@ -141,7 +141,6 @@ class AudioDataModule(LightningDataModule):
         segment_length_seconds: float = 4.0,
         batch_size: int = 32,
         num_workers: int = 0,
-        shuffle: bool = True,
         stats_file: str | None = None,
     ):
         super().__init__()
@@ -150,7 +149,6 @@ class AudioDataModule(LightningDataModule):
         self.segment_length_seconds = segment_length_seconds
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.shuffle = shuffle
         self.stats_file = stats_file
 
     def setup(self, stage: str | None = None):
@@ -162,7 +160,6 @@ class AudioDataModule(LightningDataModule):
         return torch.utils.data.DataLoader(
             self.predict_dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
             num_workers=self.num_workers,
             pin_memory=True,
         )

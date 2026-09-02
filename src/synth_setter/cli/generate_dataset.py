@@ -145,9 +145,9 @@ def _run_oracle_eval_subprocess(
         workers pickle the dataset, but the Lance shard handle is not fork-safe.
     :param predict_file: Lance split dataset directory for the datamodule's
         predict dataloader (e.g. ``dataset_root / "train.lance"``).
-    :param metric_prefix: Prepended to every audio metric key the eval logs
-        (both ``audio/*`` and ``shuffled_audio/*``). All splits resume one wandb
-        run, so a bare key is overwritten by the last split; pass ``"<split>/"``
+    :param metric_prefix: Prepended to every audio metric key the eval logs.
+        All splits resume one wandb run, so a bare key is overwritten by the
+        last split; pass ``"<split>/"``
         to namespace it. Empty (the default) leaves keys bare — used for the
         canonical ``test`` split.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split

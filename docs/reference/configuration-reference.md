@@ -108,7 +108,7 @@ Reference: `training-pipeline.md` §4–5
 
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
-  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_seed}
+  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers}
   + synth: {name, param_spec_name, plugin_path, plugin_state_path, synth_version}  # required when render_vst=true
   + render: {backend knobs}                                                       # required when render_vst=true
   → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)

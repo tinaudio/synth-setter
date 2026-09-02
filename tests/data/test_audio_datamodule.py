@@ -4,8 +4,9 @@ from pathlib import Path
 
 import numpy as np
 from pedalboard.io import AudioFile
+from torch.utils.data import SequentialSampler
 
-from synth_setter.data.audio_datamodule import AudioFolderDataset
+from synth_setter.data.audio_datamodule import AudioDataModule, AudioFolderDataset
 
 
 def _write_wav(path: Path, seconds: float = 0.5, sample_rate: int = 44100) -> Path:
@@ -59,3 +60,14 @@ def test_empty_root_yields_empty_dataset(tmp_path: Path) -> None:
     dataset = AudioFolderDataset(root=str(tmp_path))
 
     assert len(dataset) == 0
+
+
+def test_predict_dataloader_preserves_dataset_order(tmp_path: Path) -> None:
+    """Audio prediction iterates sequentially so outputs retain source ordering.
+
+    :param tmp_path: Empty audio root used to initialize the prediction dataset.
+    """
+    datamodule = AudioDataModule(root=str(tmp_path))
+    datamodule.setup("predict")
+
+    assert isinstance(datamodule.predict_dataloader().sampler, SequentialSampler)

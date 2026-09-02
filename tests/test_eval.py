@@ -17,7 +17,7 @@ import sys
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal, NamedTuple, cast
+from typing import Literal, NamedTuple
 from unittest.mock import MagicMock, patch
 
 import lance
@@ -54,7 +54,6 @@ from synth_setter.pipeline.spec_io import write_spec_to_path
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests.conftest import (
-    REAL_VST_VARIANTS,
     _render_smoke_train_subprocess,
     assert_clap_preserves_resampler_output,
     assert_log_per_param_mse_wired,
@@ -431,7 +430,6 @@ def _audio_prediction_cli_args(
         "datamodule.stats_file=null",
         "datamodule.batch_size=1",
         "datamodule.num_workers=0",
-        "datamodule.shuffle=false",
         *case.model_overrides,
         f"paths.output_dir={output_dir}",
         "hydra.job.chdir=false",
@@ -904,40 +902,6 @@ def test_evaluate_flow_simple_test_mode_logs_param_mse_best_swap(
     assert param_mse_best_swap.item() <= metric_dict["test/param_mse"].item() + 1e-6
 
 
-@pytest.mark.requires_vst
-@pytest.mark.slow
-@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
-def test_evaluate_predict_explicit_shuffle_seed_rejects_nonuniform_params_via_subprocess(
-    cfg_surge_real_train: DictConfig,
-    cfg_surge_real_eval: DictConfig,
-) -> None:
-    """Non-zero ``shuffle_seed`` with non-uniform params causes the metrics subprocess to fail, for both dataset formats.
-
-    Drives the real train→eval roundtrip end-to-end with ``shuffle_seed=7``,
-    exercising the ``evaluate()`` → ``_run_predict_postprocessing`` →
-    metrics-subprocess wiring. The smoke dataset renders distinct params per
-    sample, so the uniform-params guard inside ``compute_audio_metrics`` raises
-    ``ValueError`` (non-zero seed + non-uniform = misconfiguration), the
-    subprocess exits non-zero, and ``CalledProcessError`` surfaces at the
-    ``evaluate()`` boundary — confirming the gate is wired through the real
-    entrypoint (#489).
-
-    :param cfg_surge_real_train: Surge XT smoke-test training config (Lance).
-    :param cfg_surge_real_eval: Matching predict-mode eval config (render + metrics on),
-        sharing ``tmp_path`` so eval reads the checkpoint training writes.
-    """
-    HydraConfig().set_config(cfg_surge_real_train)
-    train(cfg_surge_real_train)
-    assert Path(cfg_surge_real_eval.ckpt_path).exists()
-
-    with open_dict(cfg_surge_real_eval):
-        cfg_surge_real_eval.evaluation.shuffle_seed = 7
-
-    HydraConfig().set_config(cfg_surge_real_eval)
-    with pytest.raises(subprocess.CalledProcessError):
-        evaluate(cfg_surge_real_eval)
-
-
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
@@ -1377,81 +1341,6 @@ def test_evaluate_predict_mode_logs_per_sample_metrics_table_to_wandb(
 
 @pytest.mark.fake_vst
 @pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
-def test_evaluate_predict_mode_logs_shuffle_permutation_table_to_wandb(
-    tmp_path: Path,
-    request: pytest.FixtureRequest,
-    dataset_variant: _FakeOracleDataset,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``mode=predict`` uploads the render-order probe permutation as a ``shuffle/permutation`` Table.
-
-    Exercises the ``_log_shuffle_permutation_to_wandb`` call-through via the real
-    ``evaluate`` entrypoint: the fake metrics subprocess writes ``aggregated_metrics.csv``
-    and ``shuffle_permutation.csv``; a spy on ``wandb.run.log`` verifies the permutation
-    Table arrives under ``shuffle/permutation`` (#1669).
-
-    :param tmp_path: Hydra ``output_dir``; the fake subprocess writes CSVs beneath it.
-    :param request: Fetches the parametrized dataset fixture.
-    :param dataset_variant: Dataset fixture and datamodule override under test.
-    :param monkeypatch: Stubs subprocesses, headless wrapper, and ``wandb.run``.
-    """
-    permutation_csv = "dest_idx,src_idx\n0,1\n1,0\n"
-    logged: list[dict[str, object]] = []
-
-    class _Spy:
-        """Stand-in for ``wandb.run`` that records ``log`` payloads; no-ops SDK lifecycle calls.
-
-        ``__getattr__`` absorbs wandb SDK cleanup methods (e.g. ``finish``,
-        ``summary``) that Lightning triggers after predict — they are irrelevant to
-        this test's contract.
-        """
-
-        def log(self, payload: dict[str, object]) -> None:
-            """Record one ``wandb.run.log`` call's argument.
-
-            :param payload: The dict passed to ``wandb.run.log``.
-            """
-            logged.append(payload)
-
-        def __getattr__(self, _name: str) -> object:
-            """Return a no-op callable for any undeclared wandb SDK method.
-
-            :param _name: Unused; any undeclared attribute resolves to the no-op.
-            :returns: A callable accepting any args and returning ``None``.
-            """
-            return lambda *_args, **_kwargs: None
-
-    cfg = _compose_parametrized_fake_oracle_eval_cfg(
-        tmp_path, request, dataset_variant, mode="predict"
-    )
-    monkeypatch.setattr(
-        "synth_setter.cli.eval.subprocess.run",
-        fake_postprocessing_subprocess(shuffle_permutation_csv=permutation_csv),
-    )
-    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
-    monkeypatch.setattr(
-        "synth_setter.cli.eval.as_file",
-        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
-    )
-    monkeypatch.setattr(wandb, "run", _Spy())
-    monkeypatch.setattr(wandb, "finish", lambda *_args, **_kwargs: None)
-
-    HydraConfig().set_config(cfg)
-    try:
-        evaluate(cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    table_payloads = [p for p in logged if "shuffle/permutation" in p]
-    assert len(table_payloads) == 1
-    table = cast(wandb.Table, table_payloads[0]["shuffle/permutation"])
-    assert isinstance(table, wandb.Table)
-    assert table.columns == ["dest_idx", "src_idx"]
-    assert table.data == [[0, 1], [1, 0]]
-
-
-@pytest.mark.fake_vst
-@pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
 def test_evaluate_validate_mode_legacy_val_spelling_runs_oracle(
     tmp_path: Path,
     request: pytest.FixtureRequest,
@@ -1530,57 +1419,6 @@ def test_evaluate_unknown_mode_returns_only_callback_metrics(
         GlobalHydra.instance().clear()
 
     assert metric_dict == {}
-
-
-@pytest.mark.fake_vst
-@pytest.mark.parametrize("dataset_variant", _FAKE_ORACLE_DATASETS)
-def test_evaluate_predict_mode_includes_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv(
-    tmp_path: Path,
-    request: pytest.FixtureRequest,
-    dataset_variant: _FakeOracleDataset,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Merges ``shuffled_audio/*`` keys when the metrics subprocess also writes the shuffled CSV.
-
-    The fake subprocess writes both ``aggregated_metrics.csv`` and
-    ``aggregated_metrics_shuffled.csv``, exercising the ``evaluate()`` →
-    ``_run_predict_postprocessing`` → ``_load_audio_metrics`` path that merges
-    the shuffled probe output into the returned metric dict under the
-    ``shuffled_audio/`` prefix. Pins that the new branch in ``_load_audio_metrics``
-    is wired through the real ``evaluate()`` entrypoint (#489).
-
-    :param tmp_path: Hydra ``output_dir``; output files are derived beneath it.
-    :param request: Fetches the parametrized dataset fixture.
-    :param dataset_variant: Dataset fixture and datamodule override under test.
-    :param monkeypatch: Stubs render/metrics subprocesses; no real VST launches.
-    """
-    _SHUFFLED_CSV = ",mean,std\nmss,0.8,0.05\nwmfcc,0.4,0.03\nsot,0.3,0.02\nrms,0.7,0.01\n"
-
-    cfg = _compose_parametrized_fake_oracle_eval_cfg(
-        tmp_path, request, dataset_variant, mode="predict"
-    )
-    monkeypatch.setattr(
-        "synth_setter.cli.eval.subprocess.run",
-        fake_postprocessing_subprocess(shuffled_metrics_csv=_SHUFFLED_CSV),
-    )
-    monkeypatch.setattr("synth_setter.cli.eval.vst_headless_wrapper", lambda: object())
-    monkeypatch.setattr(
-        "synth_setter.cli.eval.as_file",
-        lambda _traversable: nullcontext(Path("/fake/headless-wrapper")),
-    )
-
-    HydraConfig().set_config(cfg)
-    try:
-        metric_dict, _ = evaluate(cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    assert metric_dict["shuffled_audio/mss_mean"] == pytest.approx(0.8)
-    assert metric_dict["shuffled_audio/rms_std"] == pytest.approx(0.01)
-    for key in ("mss", "wmfcc", "sot", "rms"):
-        for stat in ("mean", "std"):
-            value = metric_dict[f"shuffled_audio/{key}_{stat}"]
-            assert isinstance(value, float) and math.isfinite(value)
 
 
 @pytest.mark.parametrize("synth_group", ["surge_simple", "surge_xt"])
