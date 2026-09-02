@@ -48,6 +48,14 @@ def _review_checkout(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     shutil.copytree(_REPO_ROOT / "agent", checkout / "agent")
     sh.Command("git")("init", "-q", "-b", "test-branch", checkout)
 
+    gh = tmp_path / "gh"
+    gh.write_text(
+        "#!/bin/bash\n"
+        'if [[ "${GH_LOOKUP_FAIL:-}" == "1" ]]; then exit 7; fi\n'
+        'printf "%s\\n" "${GH_OPEN_PR_NUMBER:-}"\n'
+    )
+    gh.chmod(0o755)
+
     invocation_log = tmp_path / "pi-invocations"
     pi = tmp_path / "pi"
     pi.write_text(
@@ -135,6 +143,56 @@ def test_explicit_pr_dry_run_does_not_consume_pre_pr_attempt(tmp_path: Path) -> 
     assert "Pre-PR sentinel review attempt" not in targeted.stderr
     assert "Pre-PR sentinel review attempt 1/3." in local.stderr
     assert invocation_log.read_text().splitlines() == ["invoked", "invoked"]
+
+
+def test_implicit_open_pr_dry_run_does_not_consume_pre_pr_attempt(tmp_path: Path) -> None:
+    """Exclude a resolved open PR from the local pre-PR budget.
+
+    :param tmp_path: Temporary checkout and fake external process directory.
+    """
+    checkout, env, invocation_log = _review_checkout(tmp_path)
+    open_pr_env = {**env, "GH_OPEN_PR_NUMBER": "3039"}
+    request = ("repo-review-full-no-comments",)
+
+    first = _run_review(checkout, open_pr_env, request)
+    second = _run_review(checkout, open_pr_env, request)
+    third = _run_review(checkout, open_pr_env, request)
+    fourth = _run_review(checkout, open_pr_env, request)
+    local = _run_review(checkout, env, request)
+
+    assert [first.returncode, second.returncode, third.returncode, fourth.returncode] == [
+        0,
+        0,
+        0,
+        0,
+    ]
+    assert "Pre-PR sentinel review attempt" not in fourth.stderr
+    assert "Pre-PR sentinel review attempt 1/3." in local.stderr
+    assert invocation_log.read_text().splitlines() == [
+        "invoked",
+        "invoked",
+        "invoked",
+        "invoked",
+        "invoked",
+    ]
+
+
+def test_open_pr_lookup_failure_refused_without_consuming_attempt(tmp_path: Path) -> None:
+    """Fail closed on lookup errors without spending the local budget.
+
+    :param tmp_path: Temporary checkout and fake external process directory.
+    """
+    checkout, env, invocation_log = _review_checkout(tmp_path)
+    failing_env = {**env, "GH_LOOKUP_FAIL": "1"}
+    request = ("repo-review-full-no-comments",)
+
+    failed = _run_review(checkout, failing_env, request)
+    local = _run_review(checkout, env, request)
+
+    assert failed.returncode == 2
+    assert "Unable to resolve whether the current branch has an open PR." in failed.stderr
+    assert "Pre-PR sentinel review attempt 1/3." in local.stderr
+    assert invocation_log.read_text().splitlines() == ["invoked"]
 
 
 def test_public_pr_review_available_after_sentinel_limit(tmp_path: Path) -> None:

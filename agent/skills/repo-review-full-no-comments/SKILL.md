@@ -73,9 +73,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > This is the exact call from `agent/skills/_shared/repo-review-full-analysis.md`
 > Step 1 — use that file's guidance for parsing it.
 >
-> **Local-branch mode.** Use this when no `<N>` was passed AND
-> `gh pr view --json number` fails / returns nothing for the current branch.
-> Derive the same fields from local git:
+> **Local-branch mode.** Use this when no `<N>` was passed and a successful
+> `gh pr list --state open --head "$(git branch --show-current)"` lookup returns
+> no PR. A lookup failure is a terminal error, not evidence that the branch has
+> no PR. Derive the same fields from local git:
 >
 > ```bash
 > base_ref=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)

@@ -71,25 +71,40 @@ main() {
   fi
 
   if [[ "${skill}" == "repo-review-full-no-comments" && $# == 1 ]]; then
-    local branch attempt claim_output limit
+    local branch open_pr_number
     branch="$(git branch --show-current)"
-    if claim_output="$(
-      "${review_python}" agent/_shared/review_sentinel.py claim "${branch}"
+    if ! open_pr_number="$(
+      gh pr list --state open --head "${branch}" --limit 2 --json number --jq '.[].number'
     )"; then
-      read -r attempt limit <<<"${claim_output}"
-      echo "Pre-PR sentinel review attempt ${attempt}/${limit}." >&2
-    else
-      local claim_status=$?
-      if (( claim_status == 3 )); then
-        limit="${claim_output}"
-        echo "Pre-PR sentinel review limit reached after ${limit} attempts." >&2
-        echo \
-          "Refusing another repo-review-full-no-comments run. Open the PR and continue with /repo-review-full so the public GitHub review bot can review subsequent changes." \
-          >&2
+      echo "Unable to resolve whether the current branch has an open PR." >&2
+      return 2
+    fi
+    if [[ -n "${open_pr_number}" ]]; then
+      if [[ ! "${open_pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Open PR lookup returned an ambiguous result." >&2
         return 2
       fi
-      echo "Unable to claim a pre-PR sentinel review attempt." >&2
-      return 2
+      target_instruction="Review PR #${open_pr_number}."
+    else
+      local attempt claim_output limit
+      if claim_output="$(
+        "${review_python}" agent/_shared/review_sentinel.py claim "${branch}"
+      )"; then
+        read -r attempt limit <<<"${claim_output}"
+        echo "Pre-PR sentinel review attempt ${attempt}/${limit}." >&2
+      else
+        local claim_status=$?
+        if (( claim_status == 3 )); then
+          limit="${claim_output}"
+          echo "Pre-PR sentinel review limit reached after ${limit} attempts." >&2
+          echo \
+            "Refusing another repo-review-full-no-comments run. Open the PR and continue with /repo-review-full so the public GitHub review bot can review subsequent changes." \
+            >&2
+          return 2
+        fi
+        echo "Unable to claim a pre-PR sentinel review attempt." >&2
+        return 2
+      fi
     fi
   fi
 
