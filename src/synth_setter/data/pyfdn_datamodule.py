@@ -1,16 +1,14 @@
-"""Deterministic online datasets for the fixed-source pyFDN instrument.
+"""Deterministic online datasets for the canonical-source pyFDN instrument.
 
 Example:
-    ``PyFDNDataModule(source_path, sha256).setup("fit")`` builds fixed seeded splits.
+    ``PyFDNDataModule().setup("fit")`` builds fixed seeded splits.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
 from functools import cache
-from pathlib import Path
 from typing import cast
 
 import numpy as np
@@ -29,32 +27,18 @@ type PyFDNItem = tuple[torch.Tensor, torch.Tensor]
 type PyFDNBatch = dict[str, torch.Tensor]
 
 
-@dataclass(frozen=True, slots=True)
-class _ProcessRendererKey:
-    source_audio_path: Path
-    source_audio_sha256: str
-    synth_version: str
-    sample_rate: int
-    channels: int
-    signal_duration_seconds: float
-    process_id: int
-
-
 @cache
-def _make_process_renderer(key: _ProcessRendererKey) -> PyFDNRenderer:
-    """Load one renderer for each source and process identity.
+def _make_process_renderer(
+    synth_version: str,
+    _process_id: int,
+) -> PyFDNRenderer:
+    """Create one renderer per pyFDN version and process.
 
-    :param key: Immutable renderer identity, including the current process.
-    :returns: Lazily loaded renderer shared by matching datasets in this process.
+    :param synth_version: Required installed pyFDN version.
+    :param _process_id: Process identity that prevents reuse of an inherited fork cache.
+    :returns: Lazily generated renderer shared by datasets in this process.
     """
-    return PyFDNRenderer(
-        key.source_audio_path,
-        key.source_audio_sha256,
-        synth_version=key.synth_version,
-        sample_rate=key.sample_rate,
-        channels=key.channels,
-        signal_duration_seconds=key.signal_duration_seconds,
-    )
+    return PyFDNRenderer(synth_version=synth_version)
 
 
 def collate_pyfdn_audio_dict(batch: Sequence[PyFDNItem]) -> PyFDNBatch:
@@ -72,39 +56,24 @@ def collate_pyfdn_audio_dict(batch: Sequence[PyFDNItem]) -> PyFDNBatch:
 
 
 class PyFDNDataset(Dataset[PyFDNItem]):
-    """Sample deterministic pyFDN patches and render one fixed source on demand."""
+    """Sample deterministic pyFDN patches and render the canonical source on demand."""
 
     def __init__(
         self,
-        source_audio_path: str | Path,
-        source_audio_sha256: str,
         *,
         num_samples: int,
         seed: int,
         synth_version: str = "0.4.2",
-        sample_rate: int = 48_000,
-        channels: int = 1,
-        signal_duration_seconds: float = 4.0,
     ) -> None:
-        """Bind one deterministic split and its checksum-pinned source.
+        """Bind one deterministic split to the canonical source.
 
-        :param source_audio_path: Path to the fixed lossless source.
-        :param source_audio_sha256: Expected SHA-256 of the source bytes.
         :param num_samples: Number of logical rows in this split.
         :param seed: Base seed folded with each row index.
         :param synth_version: Required installed pyFDN version.
-        :param sample_rate: Fixed source and build sample rate in Hz.
-        :param channels: Fixed source channel count.
-        :param signal_duration_seconds: Fixed source duration in seconds.
         """
         self.num_samples = num_samples
         self.seed = seed
-        self.source_audio_path = Path(source_audio_path)
-        self.source_audio_sha256 = source_audio_sha256
         self.synth_version = synth_version
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self.signal_duration_seconds = signal_duration_seconds
 
     def __len__(self) -> int:
         """Return the configured split length.
@@ -118,17 +87,7 @@ class PyFDNDataset(Dataset[PyFDNItem]):
 
         :returns: Lazily loaded process-local renderer.
         """
-        return _make_process_renderer(
-            _ProcessRendererKey(
-                source_audio_path=self.source_audio_path,
-                source_audio_sha256=self.source_audio_sha256,
-                synth_version=self.synth_version,
-                sample_rate=self.sample_rate,
-                channels=self.channels,
-                signal_duration_seconds=self.signal_duration_seconds,
-                process_id=os.getpid(),
-            )
-        )
+        return _make_process_renderer(self.synth_version, os.getpid())
 
     def __getitem__(self, index: int) -> PyFDNItem:
         """Sample and render one row from its derived deterministic seed.
@@ -152,13 +111,9 @@ class PyFDNDataModule(LightningDataModule):
 
     def __init__(
         self,
-        source_audio_path: str | Path,
-        source_audio_sha256: str,
         *,
         synth_version: str = "0.4.2",
         sample_rate: int = 48_000,
-        channels: int = 1,
-        signal_duration_seconds: float = 4.0,
         train_val_test_sizes: tuple[int, int, int] = (100_000, 10_000, 10_000),
         train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
         batch_size: int = 32,
@@ -169,12 +124,8 @@ class PyFDNDataModule(LightningDataModule):
     ) -> None:
         """Configure deterministic online pyFDN splits and loaders.
 
-        :param source_audio_path: Path to the fixed lossless source.
-        :param source_audio_sha256: Expected SHA-256 of the source bytes.
         :param synth_version: Required installed pyFDN version.
-        :param sample_rate: Fixed source and build sample rate in Hz.
-        :param channels: Fixed source channel count.
-        :param signal_duration_seconds: Fixed source duration in seconds.
+        :param sample_rate: Canonical source sample rate; exactly 48000 Hz.
         :param train_val_test_sizes: Row counts for train, validation, and test.
         :param train_val_test_seeds: Base seeds for train, validation, and test.
         :param batch_size: DataLoader batch size.
@@ -182,19 +133,17 @@ class PyFDNDataModule(LightningDataModule):
         :param conditioning: Model-batch modality; pyFDN supports raw audio only.
         :param persistent_workers: Keep positive-count workers alive between epochs.
         :param val_num_workers: Worker processes for the validation loader.
-        :raises ValueError: Split seeds repeat or conditioning does not select raw audio.
+        :raises ValueError: Sample rate, split seeds, or conditioning violate the contract.
         """
         if len(set(train_val_test_seeds)) != 3:
             raise ValueError("train, validation, and test seeds must be distinct")
+        if sample_rate != 48_000:
+            raise ValueError("pyFDN sample_rate must be exactly 48000")
         if conditioning != "audio":
             raise ValueError("pyFDN conditioning must be 'audio'")
         super().__init__()
-        self.source_audio_path = Path(source_audio_path)
-        self.source_audio_sha256 = source_audio_sha256
         self.synth_version = synth_version
         self.sample_rate = sample_rate
-        self.channels = channels
-        self.signal_duration_seconds = signal_duration_seconds
         self.train_val_test_sizes = train_val_test_sizes
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
@@ -211,14 +160,9 @@ class PyFDNDataModule(LightningDataModule):
 
         def dataset(size: int, seed: int) -> PyFDNDataset:
             return PyFDNDataset(
-                self.source_audio_path,
-                self.source_audio_sha256,
                 num_samples=size,
                 seed=seed,
                 synth_version=self.synth_version,
-                sample_rate=self.sample_rate,
-                channels=self.channels,
-                signal_duration_seconds=self.signal_duration_seconds,
             )
 
         train_size, val_size, test_size = self.train_val_test_sizes

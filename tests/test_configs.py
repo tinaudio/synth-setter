@@ -202,6 +202,38 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     )
 
 
+@pytest.mark.parametrize(
+    ("config_name", "overrides"),
+    [
+        pytest.param(
+            "train.yaml",
+            ["datamodule=pyfdn", "synth=pyfdn_n8_mono", "model=vst_flow"],
+            id="datamodule",
+        ),
+        pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
+        pytest.param(
+            "eval.yaml",
+            ["experiment=pyfdn/flow", "ckpt_path=null"],
+            id="eval",
+        ),
+    ],
+)
+def test_pyfdn_configs_compose_without_external_source(
+    config_name: str,
+    overrides: list[str],
+) -> None:
+    """PyFDN datamodule, train, and eval configs need no source path or digest.
+
+    :param config_name: Top-level Hydra config under test.
+    :param overrides: pyFDN selection for the composition case.
+    """
+    cfg = _compose(config_name, overrides)
+
+    assert "source_audio_path" not in cfg.datamodule
+    assert "source_audio_sha256" not in cfg.datamodule
+    hydra.utils.instantiate(cfg.datamodule)
+
+
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
     """Compose a top-level config with overrides, clearing GlobalHydra around it.
 

@@ -5113,7 +5113,7 @@ provides-extras = ["cpu", "cu128"]
 [package.metadata.requires-dev]
 audio = [
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
-    { name = "librosa" },
+    { name = "librosa", specifier = "==0.11.0" },
     { name = "mido" },
     { name = "pedalboard" },
     { name = "pyfdn", specifier = "==0.4.2" },
@@ -5156,7 +5156,7 @@ dev = [
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },
-    { name = "librosa" },
+    { name = "librosa", specifier = "==0.11.0" },
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "loguru", specifier = "==0.7.3" },
     { name = "matplotlib" },
@@ -5244,7 +5244,7 @@ runtime = [
     { name = "jaxtyping", specifier = ">=0.2.36" },
     { name = "kubernetes", specifier = "==35.0.0" },
     { name = "kymatio", specifier = "==0.3.0" },
-    { name = "librosa" },
+    { name = "librosa", specifier = "==0.11.0" },
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "loguru", specifier = "==0.7.3" },
     { name = "matplotlib" },

@@ -1,24 +1,17 @@
 """Native build and fixed-source rendering contracts for the pyFDN instrument."""
 
-import hashlib
 import inspect
 from dataclasses import replace
-from pathlib import Path
 from typing import cast
 
 import numpy as np
 import pytest
-import soundfile as sf
 from pyFDN import FDNBuild
 from scipy.signal import sosfreqz
 
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.vst.param_spec import ParameterValues
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 @pytest.fixture
@@ -137,15 +130,12 @@ def test_params_to_fdn_build_preserves_nonorthogonal_prediction_without_projecti
 
 
 def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
-    source_file: tuple[Path, str],
     fdn_params: ParameterValues,
 ) -> None:
     """An unstable model-range prediction fails only at the finite-output boundary.
 
-    :param source_file: Valid fixed source and checksum.
     :param fdn_params: Valid patch to move to the model-domain extrema.
     """
-    path, checksum = source_file
     params = dict(fdn_params)
     params["feedback_matrix"] = np.ones((8, 8), dtype=np.float64)
     params["post_delay.rt_dc_seconds"] = 4.0
@@ -153,7 +143,7 @@ def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
 
     with np.errstate(over="ignore", invalid="ignore"):
         with pytest.raises(ValueError, match="finite"):
-            PyFDNRenderer(path, checksum).render(params)
+            PyFDNRenderer().render(params)
 
 
 @pytest.mark.parametrize(
@@ -425,91 +415,51 @@ def test_params_to_fdn_build_non_48000_sample_rate_raises(
         params_to_fdn_build(fdn_params, sample_rate=sample_rate)
 
 
-def test_pyfdn_renderer_rejects_installed_version_mismatch(
-    source_file: tuple[Path, str],
-) -> None:
-    """The renderer refuses a requested synth version other than the installed pin.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-
+def test_pyfdn_renderer_rejects_installed_version_mismatch() -> None:
+    """The renderer refuses a requested synth version other than the installed pin."""
     with pytest.raises(ValueError, match="installed pyFDN version"):
-        PyFDNRenderer(path, checksum, synth_version="0.0.0")
+        PyFDNRenderer(synth_version="0.0.0")
 
 
-def test_pyfdn_renderer_rejects_source_checksum_mismatch(
-    source_file: tuple[Path, str],
-) -> None:
-    """Source identity is bound to exact file bytes before decoding.
+def test_pyfdn_renderer_instances_hold_independent_immutable_canonical_bytes() -> None:
+    """Renderer instances use equal source bytes without mutable shared array state."""
+    first = PyFDNRenderer()
+    second = PyFDNRenderer()
 
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, _ = source_file
-
-    with pytest.raises(ValueError, match="SHA-256"):
-        PyFDNRenderer(path, "0" * 64)
+    np.testing.assert_array_equal(first._source_audio, second._source_audio)
+    assert not np.shares_memory(first._source_audio, second._source_audio)
+    assert not first._source_audio.flags.writeable
+    assert not second._source_audio.flags.writeable
 
 
-def test_pyfdn_renderer_rejects_lossy_source_subtype(tmp_path: Path) -> None:
-    """A companded WAV cannot satisfy the fixed lossless source contract.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    """
-    path = tmp_path / "lossy.wav"
-    sf.write(path, np.zeros(192_000), 48_000, subtype="ULAW")
-
-    with pytest.raises(ValueError, match="lossless WAV"):
-        PyFDNRenderer(path, _sha256(path))
-
-
-def test_pyfdn_renderer_accepts_lossless_pcm_u8_source(
-    tmp_path: Path,
+def test_pyfdn_renderer_generates_source_once_for_repeated_renders(
     fdn_params: ParameterValues,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A checksum-pinned PCM_U8 WAV renders through the production processor.
+    """One renderer reuses its immutable source across independent FDN runs.
 
-    :param tmp_path: Temporary directory owned by pytest.
     :param fdn_params: Valid native patch.
+    :param monkeypatch: Scoped source-generation counter.
     """
-    path = tmp_path / "pcm-u8.wav"
-    sf.write(path, np.zeros(192_000), 48_000, subtype="PCM_U8")
+    generated = 0
+    generate = pyfdn_instrument.generate_canonical_pyfdn_source
 
-    audio = PyFDNRenderer(path, _sha256(path)).render(fdn_params)
+    def count_generation() -> np.ndarray:
+        nonlocal generated
+        generated += 1
+        return generate()
 
-    assert audio.shape == (1, 192_000)
-    assert audio.dtype == np.float32
-    assert np.isfinite(audio).all()
+    monkeypatch.setattr(
+        pyfdn_instrument,
+        "generate_canonical_pyfdn_source",
+        count_generation,
+    )
+    renderer = PyFDNRenderer()
 
+    renderer.render(fdn_params)
+    renderer.render(fdn_params)
 
-def test_pyfdn_renderer_post_delay_attenuates_feedback_impulse(tmp_path: Path) -> None:
-    """Positive RT controls produce a finite, progressively attenuated feedback response.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    """
-    path = tmp_path / "impulse.wav"
-    source = np.zeros(192_000, dtype=np.float32)
-    source[0] = 1.0
-    sf.write(path, source, 48_000, subtype="FLOAT")
-    input_matrix = np.zeros((8, 1), dtype=np.float64)
-    input_matrix[0, 0] = 1.0
-    output_matrix = np.zeros((1, 8), dtype=np.float64)
-    output_matrix[0, 0] = 1.0
-    params: ParameterValues = {
-        "delays": np.full(8, 8, dtype=np.int64),
-        "feedback_matrix": np.diag([-1.0, *([1.0] * 7)]).astype(np.float64),
-        "input_matrix": input_matrix,
-        "output_matrix": output_matrix,
-        "direct_matrix": np.zeros((1, 1), dtype=np.float64),
-        "post_delay.rt_dc_seconds": 0.1,
-        "post_delay.rt_nyquist_seconds": 0.1,
-    }
-
-    response = PyFDNRenderer(path, _sha256(path)).render(params)
-
-    first, second, third = np.abs(response[0, [8, 16, 24]])
-    assert np.isfinite(response).all()
-    assert 0.0 < third < second < first < 1.0
+    assert generated == 1
 
 
 @pytest.mark.parametrize(
@@ -520,7 +470,6 @@ def test_pyfdn_renderer_post_delay_attenuates_feedback_impulse(tmp_path: Path) -
     ],
 )
 def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
-    source_file: tuple[Path, str],
     fdn_params: ParameterValues,
     control: str,
     changed_rt: float,
@@ -528,19 +477,17 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
 ) -> None:
     """Changing either predicted RT endpoint changes derived filters and real output.
 
-    :param source_file: Valid fixed source and checksum.
     :param fdn_params: Valid native patch with unequal endpoint RTs.
     :param control: RT endpoint changed for this case.
     :param changed_rt: Replacement reverberation time in seconds.
     :param response_index: DC or near-Nyquist response index.
     """
-    path, checksum = source_file
     changed_params = dict(fdn_params)
     changed_params[control] = changed_rt
 
     baseline_build = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
     changed_build = params_to_fdn_build(changed_params, sample_rate=48_000.0)
-    renderer = PyFDNRenderer(path, checksum)
+    renderer = PyFDNRenderer()
     baseline_audio = renderer.render(fdn_params)
     changed_audio = renderer.render(changed_params)
 
@@ -559,130 +506,14 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
     assert not np.array_equal(changed_audio, baseline_audio)
 
 
-def test_pyfdn_renderer_rejects_source_sample_rate(tmp_path: Path) -> None:
-    """A lossless mono source at any rate other than 48 kHz is invalid.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    """
-    path = tmp_path / "wrong-rate.wav"
-    sf.write(path, np.zeros(192_000), 44_100, subtype="PCM_16")
-
-    with pytest.raises(ValueError, match="sample rate"):
-        PyFDNRenderer(path, _sha256(path))
-
-
-def test_pyfdn_renderer_rejects_source_channels(tmp_path: Path) -> None:
-    """A 48 kHz source with more than one channel is invalid.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    """
-    path = tmp_path / "stereo.wav"
-    sf.write(path, np.zeros((192_000, 2)), 48_000, subtype="PCM_16")
-
-    with pytest.raises(ValueError, match="channels"):
-        PyFDNRenderer(path, _sha256(path))
-
-
-def test_pyfdn_renderer_rejects_source_frame_count(tmp_path: Path) -> None:
-    """The renderer never crops or pads a source that is not exactly four seconds.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    """
-    path = tmp_path / "short.wav"
-    sf.write(path, np.zeros(191_999), 48_000, subtype="PCM_16")
-
-    with pytest.raises(ValueError, match="frames"):
-        PyFDNRenderer(path, _sha256(path))
-
-
-def test_pyfdn_renderer_rejects_non_finite_decoded_source(tmp_path: Path) -> None:
-    """NaN source samples fail instead of entering the recursion.
-
-    :param tmp_path: Temporary directory owned by pytest.
-    """
-    path = tmp_path / "non-finite.wav"
-    audio = np.zeros(192_000, dtype=np.float32)
-    audio[100] = np.nan
-    sf.write(path, audio, 48_000, subtype="FLOAT")
-
-    with pytest.raises(ValueError, match="finite"):
-        PyFDNRenderer(path, _sha256(path))
-
-
-@pytest.mark.parametrize(
-    ("sample_rate", "channels", "signal_duration_seconds"),
-    [(44_100, 1, 4.0), (48_000, 2, 4.0), (48_000, 1, 3.0)],
-)
-def test_pyfdn_renderer_rejects_non_fixed_audio_geometry(
-    source_file: tuple[Path, str],
-    sample_rate: int,
-    channels: int,
-    signal_duration_seconds: float,
-) -> None:
-    """Public geometry inputs cannot select an unsupported FDN mode.
-
-    :param source_file: Valid fixed source and checksum.
-    :param sample_rate: Candidate fixed source rate.
-    :param channels: Candidate fixed source channel count.
-    :param signal_duration_seconds: Candidate fixed source duration.
-    """
-    path, checksum = source_file
-
-    with pytest.raises(ValueError, match="fixed"):
-        PyFDNRenderer(
-            path,
-            checksum,
-            sample_rate=sample_rate,
-            channels=channels,
-            signal_duration_seconds=signal_duration_seconds,
-        )
-
-
-def test_pyfdn_renderer_source_replacement_after_checksum_uses_checked_bytes(
-    source_file: tuple[Path, str],
-    fdn_params: ParameterValues,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Decoding consumes the exact bytes whose SHA-256 passed validation.
-
-    :param source_file: Valid fixed source and checksum.
-    :param fdn_params: Valid native patch.
-    :param tmp_path: Temporary directory owned by pytest.
-    :param monkeypatch: Scoped replacement-race injection.
-    """
-    path, checksum = source_file
-    checked_source, _ = sf.read(path, dtype="float64")
-    replacement_path = tmp_path / "replacement.wav"
-    sf.write(replacement_path, np.zeros(192_000), 48_000, subtype="PCM_16")
-    original_read_bytes = Path.read_bytes
-
-    def read_then_replace(candidate: Path) -> bytes:
-        checked_bytes = original_read_bytes(candidate)
-        candidate.write_bytes(original_read_bytes(replacement_path))
-        return checked_bytes
-
-    monkeypatch.setattr(Path, "read_bytes", read_then_replace)
-    params = dict(fdn_params)
-    params["input_matrix"] = np.zeros((8, 1), dtype=np.float64)
-    params["output_matrix"] = np.zeros((1, 8), dtype=np.float64)
-    params["direct_matrix"] = np.ones((1, 1), dtype=np.float64)
-
-    audio = PyFDNRenderer(path, checksum).render(params)
-
-    np.testing.assert_array_equal(audio[0], checked_source.astype(np.float32))
-
-
 def test_pyfdn_renderer_real_process_has_exact_output_contract(
-    source_file: tuple[Path, str], fdn_params: ParameterValues
+    fdn_params: ParameterValues,
 ) -> None:
     """Real pyFDN processing returns finite contiguous channel-first float32 audio.
 
-    :param source_file: Valid fixed source and checksum.
     :param fdn_params: Valid native patch.
     """
-    path, checksum = source_file
-    renderer = PyFDNRenderer(path, checksum)
+    renderer = PyFDNRenderer()
 
     audio = renderer.render(fdn_params)
 
@@ -693,15 +524,13 @@ def test_pyfdn_renderer_real_process_has_exact_output_contract(
 
 
 def test_pyfdn_renderer_repeated_renders_reset_recursion_state(
-    source_file: tuple[Path, str], fdn_params: ParameterValues
+    fdn_params: ParameterValues,
 ) -> None:
     """Rendering the same patch twice starts from fresh zero recursion state.
 
-    :param source_file: Valid fixed source and checksum.
     :param fdn_params: Valid native patch.
     """
-    path, checksum = source_file
-    renderer = PyFDNRenderer(path, checksum)
+    renderer = PyFDNRenderer()
 
     first = renderer.render(fdn_params)
     second = renderer.render(fdn_params)
@@ -710,18 +539,16 @@ def test_pyfdn_renderer_repeated_renders_reset_recursion_state(
 
 
 def test_pyfdn_renderer_does_not_clip_native_output(
-    source_file: tuple[Path, str], fdn_params: ParameterValues
+    fdn_params: ParameterValues,
 ) -> None:
     """The renderer preserves finite native amplitudes outside the audio unit interval.
 
-    :param source_file: Valid fixed source and checksum.
     :param fdn_params: Valid native patch.
     """
-    path, checksum = source_file
     params = dict(fdn_params)
     params["direct_matrix"] = np.array([[20.0]], dtype=np.float64)
 
-    audio = PyFDNRenderer(path, checksum).render(params)
+    audio = PyFDNRenderer().render(params)
 
     assert np.max(np.abs(audio)) > 1.0
 
@@ -731,12 +558,5 @@ def test_pyfdn_renderer_public_signature_has_no_midi_or_effect_options() -> None
     constructor_names = set(inspect.signature(PyFDNRenderer).parameters)
     render_names = set(inspect.signature(PyFDNRenderer.render).parameters)
 
-    assert constructor_names == {
-        "source_audio_path",
-        "source_audio_sha256",
-        "synth_version",
-        "sample_rate",
-        "channels",
-        "signal_duration_seconds",
-    }
+    assert constructor_names == {"synth_version"}
     assert render_names == {"self", "params"}
