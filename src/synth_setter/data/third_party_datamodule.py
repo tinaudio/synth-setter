@@ -183,7 +183,7 @@ def decode_clip(
     :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
     :param amplitude_scale: Gain applied after length-pinning.
     :returns: ``(channels, num_samples)`` float32 audio.
-    :raises ValueError: Samples are non-finite, out of range, or have an unsupported channel count.
+    :raises ValueError: Samples are non-finite, gain exceeds full scale, or channels mismatch.
     """
     with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
         audio = handle.read(handle.frames)
@@ -197,10 +197,12 @@ def decode_clip(
     if not np.isfinite(clip).all():
         raise ValueError("decoded audio contains non-finite samples")
     if np.abs(clip).max(initial=0.0) > 1.0:
-        raise ValueError(
-            f"decoded audio leaves [-1, 1] after amplitude_scale={amplitude_scale}; "
-            "the mel front-end and model contract assume normalized audio"
-        )
+        if amplitude_scale > 1.0:
+            raise ValueError(
+                f"decoded audio leaves [-1, 1] after amplitude_scale={amplitude_scale}; "
+                "the mel front-end and model contract assume normalized audio"
+            )
+        np.clip(clip, -1.0, 1.0, out=clip)
     return clip
 
 

@@ -438,6 +438,24 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
 
 
+def test_decode_clip_clamps_resampling_ringing_to_storage_range() -> None:
+    """Band-limited resampling cannot leave otherwise normalized audio above full scale."""
+    source_rate = 16_000
+    samples = np.arange(source_rate, dtype=np.float32)
+    square = np.sign(np.sin(2 * np.pi * 3000.0 * samples / source_rate)).astype(np.float32)
+
+    clip = decode_clip(
+        wav_bytes(square, source_rate),
+        sample_rate=44_100,
+        channels=2,
+        num_samples=44_100,
+        amplitude_scale=1.0,
+    )
+
+    assert np.isfinite(clip).all()
+    assert np.abs(clip).max() == 1.0
+
+
 def test_decode_rejects_audio_outside_the_storage_range(tmp_path: Path) -> None:
     """Gain that drives a clip past full scale is rejected, not fed to the mel front-end.
 
