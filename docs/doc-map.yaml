@@ -644,6 +644,10 @@ docs:
     sources:
       - pattern: "src/synth_setter/cli/sketch_render.py"
         covers: "Sketch-conditioned Surge render lifecycle"
+      - pattern: "src/synth_setter/configs/datamodule/third_party/*.yaml"
+        covers: "Public third-party corpus names and immutable dataset identities"
+      - pattern: "src/synth_setter/data/third_party_datamodule.py"
+        covers: "Explicit decoded corpus-row access and snapshot provenance"
       - pattern: "src/synth_setter/model_cache.py"
         covers: "Digest-verified atomic R2 file caching"
       - pattern: "pyproject.toml"

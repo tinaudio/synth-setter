@@ -318,6 +318,50 @@ def test_row_limit_caps_served_rows(tmp_path: Path) -> None:
     assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 3
 
 
+def test_audio_rows_requested_indices_preserve_order_and_report_snapshot(tmp_path: Path) -> None:
+    """Explicit row reads preserve order and expose the served immutable snapshot.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(
+        corpus,
+        [
+            np.full(_SOURCE_SAMPLE_RATE // 2, value, dtype=np.float32)
+            for value in (0.1, 0.2, 0.3)
+        ],
+    )
+    datamodule = _datamodule(corpus)
+    datamodule.setup("predict")
+
+    audio = datamodule.audio_rows([2, 0, 2])
+
+    assert audio.shape == (3, _TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert torch.equal(audio[0], audio[2])
+    assert audio[0].mean().item() == pytest.approx(0.3, abs=1e-4)
+    assert audio[1].mean().item() == pytest.approx(0.1, abs=1e-4)
+    assert datamodule.served_row_count == 3
+    assert datamodule.resolved_dataset_version == 1
+
+
+@pytest.mark.parametrize("indices", [[-1], [3], [True]])
+def test_audio_rows_invalid_index_raises_clear_bounds_error(
+    indices: list[int], tmp_path: Path
+) -> None:
+    """Explicit row reads reject values outside the served snapshot.
+
+    :param indices: Invalid explicit row selection.
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=i) for i in range(3)])
+    datamodule = _datamodule(corpus)
+    datamodule.setup("predict")
+
+    with pytest.raises(IndexError, match=r"row index .*served range \[0, 3\)"):
+        datamodule.audio_rows(indices)
+
+
 def test_multichannel_source_disagreeing_with_contract_raises() -> None:
     """A source that is neither mono nor contract-width is rejected, not silently sliced."""
     stereo = np.stack([_tone(_DURATION_SECONDS), _tone(_DURATION_SECONDS, seed=1)])

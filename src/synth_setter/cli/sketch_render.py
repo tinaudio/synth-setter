@@ -1,29 +1,34 @@
-"""Render a Surge patch from reference timbre and guide sketch controls.
+"""Render a Surge patch from content timbre and sketch controls.
 
-Run ``synth-setter-sketch-render --guide-audio guide.wav --reference-audio reference.wav``.
+Run ``synth-setter-sketch-render --sketch-corpus nsynth_test --content-corpus esc50``.
 Checkpoint rotation requires updating the pinned digest and serving identity together.
 """
 
-import json
+import hashlib
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from importlib.metadata import version
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal, cast
 from uuid import uuid4
 
 import click
 import numpy as np
 import torch
 from click.core import ParameterSource
+from hydra import compose, initialize_config_module
+from hydra.utils import instantiate
+from jaxtyping import Float
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from synth_setter.cli._cfg_strength import validate_cfg_strength
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.data.audio_datamodule import load_audio_file_to_grid
+from synth_setter.data.third_party_datamodule import ThirdPartyAudioDataModule
 from synth_setter.data.vst.core import extract_renderer_version, write_wav
 from synth_setter.data.vst.param_spec_registry import default_plugin_path, param_specs
 from synth_setter.data.vst_datamodule import (
@@ -71,7 +76,7 @@ _SAMPLE_RATE = 44100
 _CHANNELS = 2
 _DURATION_SECONDS = 4.0
 _EXPECTED_AUDIO_SHAPE = (_CHANNELS, int(_SAMPLE_RATE * _DURATION_SECONDS))
-_SERVING_SEED = 0
+_DEFAULT_SEED = 0
 _HEADLESS_TIMEOUT_SECONDS = 1200
 _SURGE_PARAM_SPEC_NAME = "surge_simple"
 _EXPECTED_PARAM_WIDTH = param_specs[_SURGE_PARAM_SPEC_NAME].encoded_width
@@ -84,6 +89,199 @@ _RETAINED_ARTIFACT_FILENAMES = (
     "pred.wav",
     "ref.wav",
 )
+CorpusName = Literal["esc50", "nsynth_test"]
+StreamName = Literal["sketch", "content"]
+_CORPUS_NAMES: tuple[CorpusName, ...] = ("esc50", "nsynth_test")
+
+
+type _InputSource = Path | CorpusName
+
+
+@dataclass(frozen=True, kw_only=True)
+class _RenderRequest:
+    sketch: _InputSource
+    content: _InputSource
+    strengths: CfgStrengths[float | None]
+    seed: int
+
+
+def _compose_corpus_datamodule(config_name: str) -> ThirdPartyAudioDataModule:
+    """Compose one checked-in corpus onto the CLI's fixed audio grid.
+
+    :param config_name: Public corpus config name without its Hydra group prefix.
+    :returns: Configured, un-setup third-party datamodule.
+    :raises ValueError: The config name or composed target is unsupported.
+    """
+    if config_name not in _CORPUS_NAMES:
+        raise ValueError(f"unknown corpus config {config_name!r}")
+    overrides = [
+        f"+datamodule=third_party/{config_name}",
+        f"datamodule.sample_rate={_SAMPLE_RATE}",
+        f"datamodule.channels={_CHANNELS}",
+        f"datamodule.signal_duration_seconds={_DURATION_SECONDS}",
+        "datamodule.use_saved_mean_and_variance=false",
+        "datamodule.mel_stats_uri=null",
+        "datamodule.stats_cache_dir=null",
+        "datamodule.num_workers=0",
+    ]
+    with initialize_config_module(config_module="synth_setter.configs", version_base="1.3"):
+        cfg = compose(overrides=overrides)
+    datamodule = instantiate(cfg.datamodule)
+    if not isinstance(datamodule, ThirdPartyAudioDataModule):
+        raise ValueError(f"corpus config {config_name!r} did not compose a third-party datamodule")
+    return datamodule
+
+
+def _selection_rng(seed: int, domain: str) -> np.random.Generator:
+    """Build a domain-separated local generator for one selection decision.
+
+    :param seed: Public render seed.
+    :param domain: Stable stream and corpus identity.
+    :returns: Local generator that does not mutate process RNG state.
+    """
+    digest = hashlib.sha256(f"{seed}:{domain}".encode()).digest()
+    return np.random.default_rng(int.from_bytes(digest[:8], byteorder="big"))
+
+
+def _select_corpus_rows(
+    request: _RenderRequest, row_counts: Mapping[str, int]
+) -> dict[StreamName, int]:
+    """Select deterministic explicit rows without touching process RNG state.
+
+    :param request: Validated source selectors and effective seed.
+    :param row_counts: Served row count keyed by selected corpus name.
+    :returns: Selected row keyed by input stream.
+    :raises ValueError: A selected corpus is empty or shared with fewer than two rows.
+    """
+    sources: dict[StreamName, _InputSource] = {
+        "sketch": request.sketch,
+        "content": request.content,
+    }
+    if isinstance(request.sketch, str) and request.sketch == request.content:
+        row_count = row_counts[request.sketch]
+        if row_count < 2:
+            raise ValueError(
+                f"corpus {request.sketch!r} needs at least two rows when used for both inputs"
+            )
+        rows = _selection_rng(request.seed, f"shared:{request.sketch}").choice(
+            row_count, size=2, replace=False
+        )
+        return {"sketch": int(rows[0]), "content": int(rows[1])}
+
+    selected: dict[StreamName, int] = {}
+    for stream, source in sources.items():
+        if isinstance(source, Path):
+            continue
+        row_count = row_counts[source]
+        if row_count < 1:
+            raise ValueError(f"corpus {source!r} has no served rows")
+        selected[stream] = int(
+            _selection_rng(request.seed, f"{stream}:{source}").integers(row_count)
+        )
+    return selected
+
+
+class _FileInputProvenance(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    kind: Literal["file"] = "file"
+    path: str = Field(min_length=1)
+    sha256: str
+
+    @field_validator("path")
+    @classmethod
+    def _path_is_absolute(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("file provenance path must be absolute")
+        return value
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256_is_valid(cls, value: str) -> str:
+        if len(value) != 64:
+            raise ValueError("file provenance SHA-256 must contain 64 hex characters")
+        try:
+            int(value, 16)
+        except ValueError as exc:
+            raise ValueError("file provenance SHA-256 must be hexadecimal") from exc
+        return value
+
+
+class _CorpusInputProvenance(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    kind: Literal["corpus"] = "corpus"
+    config_name: CorpusName
+    dataset_uri: str = Field(min_length=1)
+    dataset_version: int = Field(gt=0)
+    row_index: int = Field(ge=0)
+
+
+_InputProvenance = Annotated[
+    _FileInputProvenance | _CorpusInputProvenance,
+    Field(discriminator="kind"),
+]
+
+
+type _ResolvedInputs = dict[
+    StreamName,
+    tuple[Float[torch.Tensor, "channels samples"], _InputProvenance],
+]
+
+
+def _resolve_request_inputs(request: _RenderRequest) -> _ResolvedInputs:
+    """Decode selected files or corpus rows onto the fixed model grid.
+
+    :param request: Validated source selectors and selection seed.
+    :returns: Audio and strict provenance keyed by input stream.
+    """
+    r2_io.ensure_r2_env_loaded()
+    sources: dict[StreamName, _InputSource] = {
+        "sketch": request.sketch,
+        "content": request.content,
+    }
+    corpus_names: list[CorpusName] = sorted(
+        {cast(CorpusName, source) for source in sources.values() if isinstance(source, str)}
+    )
+    datamodules: dict[CorpusName, ThirdPartyAudioDataModule] = {}
+    for config_name in corpus_names:
+        datamodule = _compose_corpus_datamodule(config_name)
+        datamodule.setup("predict")
+        datamodules[config_name] = datamodule
+    selected = _select_corpus_rows(
+        request,
+        {name: datamodule.served_row_count for name, datamodule in datamodules.items()},
+    )
+
+    resolved: _ResolvedInputs = {}
+    for stream_name, source in sources.items():
+        if isinstance(source, Path):
+            resolved_path = source.resolve()
+            with resolved_path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            audio = load_audio_file_to_grid(
+                resolved_path,
+                segment_length_seconds=_DURATION_SECONDS,
+                leading_padding_seconds=0.0,
+                amp_scale=1.0,
+                sample_rate=_SAMPLE_RATE,
+            )
+            provenance: _InputProvenance = _FileInputProvenance(
+                path=str(resolved_path), sha256=digest
+            )
+        else:
+            config_name = cast(CorpusName, source)
+            row_index = selected[stream_name]
+            datamodule = datamodules[config_name]
+            audio = datamodule.audio_rows([row_index])[0]
+            provenance = _CorpusInputProvenance(
+                config_name=config_name,
+                dataset_uri=datamodule.dataset_uri,
+                dataset_version=datamodule.resolved_dataset_version,
+                row_index=row_index,
+            )
+        resolved[stream_name] = (audio, provenance)
+    return resolved
 
 
 class _ManifestArtifact(BaseModel):
@@ -197,7 +395,7 @@ class _RetainedRunManifest(BaseModel):
 
     .. attribute :: content_cfg_strength
 
-        Effective reference guidance strength.
+        Effective content guidance strength.
 
     .. attribute :: sketch_cfg_strength
 
@@ -211,6 +409,14 @@ class _RetainedRunManifest(BaseModel):
 
         Normalization-statistics identity.
 
+    .. attribute :: sketch_input
+
+        Sketch source identity.
+
+    .. attribute :: content_input
+
+        Content source identity.
+
     .. attribute :: render
 
         Renderer identity and settings.
@@ -218,7 +424,7 @@ class _RetainedRunManifest(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     run_id: str = Field(min_length=1)
     r2_uri: str
     code_version: str = Field(min_length=1)
@@ -227,6 +433,8 @@ class _RetainedRunManifest(BaseModel):
     sketch_cfg_strength: float = Field(ge=0, allow_inf_nan=False)
     checkpoint: _ManifestArtifact
     stats: _ManifestArtifact
+    sketch_input: _InputProvenance
+    content_input: _InputProvenance
     render: _ManifestRender
 
     @field_validator("r2_uri")
@@ -243,7 +451,7 @@ def write_output_artifacts(
     """Persist normalized inputs, rendered audio, and decoded patch parameters.
 
     :param output_dir: Retained local output directory.
-    :param prepared: Normalized guide/reference audio and model features.
+    :param prepared: Normalized sketch/content audio and model features.
     :param patch: Rendered prediction and decoded parameters.
     :raises ValueError: An artifact does not match the fixed model audio shape.
     """
@@ -278,36 +486,47 @@ def write_output_artifacts(
 def write_run_manifest(
     output_dir: Path,
     destination_uri: str,
-    cfg_strengths: CfgStrengths[float],
+    *,
+    request: _RenderRequest,
+    provenance: Mapping[StreamName, _InputProvenance],
 ) -> None:
-    """Record immutable model, feature, render, and destination provenance.
+    """Record immutable input, model, render, and destination provenance.
 
     :param output_dir: Retained local output directory.
     :param destination_uri: R2 prefix receiving the run artifacts.
-    :param cfg_strengths: Effective content and sketch guidance strengths.
+    :param request: Source selectors and effective inference policy.
+    :param provenance: Strict source identities keyed by input stream.
+    :raises ValueError: Effective guidance strengths are unavailable.
     """
+    content_strength = request.strengths.content
+    sketch_strength = request.strengths.sketch
+    if content_strength is None or sketch_strength is None:
+        raise ValueError("manifest requires effective content and sketch guidance strengths")
+
     synth_identity = SYNTHS[SynthName(_SURGE_PARAM_SPEC_NAME)]
-    manifest = {
-        "schema_version": 1,
-        "run_id": output_dir.name,
-        "r2_uri": destination_uri,
-        "code_version": version("synth-setter"),
-        "git_sha": resolve_git_sha(),
-        "content_cfg_strength": cfg_strengths.content,
-        "sketch_cfg_strength": cfg_strengths.sketch,
-        "checkpoint": {"uri": DEFAULT_CHECKPOINT_URI, "sha256": _CHECKPOINT_SHA256},
-        "stats": {"uri": DEFAULT_STATS_URI, "sha256": _STATS_SHA256},
-        "render": {
-            "param_spec": _SURGE_PARAM_SPEC_NAME,
-            "synth_version": synth_identity.synth_version,
-            "sample_rate": _SAMPLE_RATE,
-            "channels": _CHANNELS,
-            "duration_seconds": _DURATION_SECONDS,
-            "seed": _SERVING_SEED,
-        },
-    }
+    manifest = _RetainedRunManifest(
+        schema_version=2,
+        run_id=output_dir.name,
+        r2_uri=destination_uri,
+        code_version=version("synth-setter"),
+        git_sha=resolve_git_sha(),
+        content_cfg_strength=content_strength,
+        sketch_cfg_strength=sketch_strength,
+        checkpoint=_ManifestArtifact(uri=DEFAULT_CHECKPOINT_URI, sha256=_CHECKPOINT_SHA256),
+        stats=_ManifestArtifact(uri=DEFAULT_STATS_URI, sha256=_STATS_SHA256),
+        sketch_input=provenance["sketch"],
+        content_input=provenance["content"],
+        render=_ManifestRender(
+            param_spec=_SURGE_PARAM_SPEC_NAME,
+            synth_version=synth_identity.synth_version,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            duration_seconds=_DURATION_SECONDS,
+            seed=request.seed,
+        ),
+    )
     temporary_path = output_dir / ".manifest.json.tmp"
-    temporary_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    temporary_path.write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
     os.replace(temporary_path, output_dir / "manifest.json")
 
 
@@ -400,12 +619,15 @@ def _predict_patch(
     prepared: PreparedAudioInputs,
     model: VSTFlowMatchingModule,
     requested_strengths: CfgStrengths[float | None],
+    *,
+    seed: int,
 ) -> tuple[np.ndarray, CfgStrengths[float]]:
     """Infer one model-space Surge prediction row.
 
-    :param prepared: Reference mel and guide controls.
+    :param prepared: Content mel and sketch controls.
     :param model: Compatible flow model in eval mode.
     :param requested_strengths: Optional content and sketch guidance overrides.
+    :param seed: Local model-sampling seed.
     :returns: CPU model-space row and effective guidance strengths.
     :raises ValueError: The prediction is non-finite or has the wrong shape.
     """
@@ -413,7 +635,7 @@ def _predict_patch(
         "mel": prepared.ref_mel.unsqueeze(0).to(model.device),
         "sketch_ctrl": prepared.sketch_controls.unsqueeze(0).to(model.device),
     }
-    generator = torch.Generator().manual_seed(_SERVING_SEED)
+    generator = torch.Generator(device=model.device).manual_seed(seed)
     with torch.no_grad():
         sampled = model.sample_batch(
             batch,
@@ -483,48 +705,35 @@ def _artifact_roots() -> tuple[Path, str]:
     return output_root, upload_root
 
 
-def _run_request(
-    guide_audio: Path,
-    reference_audio: Path,
-    requested_strengths: CfgStrengths[float | None],
-) -> tuple[Path, str]:
+def _run_request(request: _RenderRequest) -> tuple[Path, str]:
     """Run one complete local render and R2 upload.
 
-    :param guide_audio: Audio supplying sketch controls.
-    :param reference_audio: Audio supplying mel conditioning.
-    :param requested_strengths: Optional content and sketch guidance overrides.
+    :param request: Validated source selectors, guidance strengths, and seed.
     :returns: Retained local output path and uploaded R2 prefix.
     """
-    r2_io.ensure_r2_env_loaded()
+    resolved_inputs = _resolve_request_inputs(request)
+    sketch_audio, sketch_provenance = resolved_inputs["sketch"]
+    content_audio, content_provenance = resolved_inputs["content"]
     checkpoint_path = cache_r2_file(DEFAULT_CHECKPOINT_URI, _CACHE_NAMESPACE, _CHECKPOINT_SHA256)
     stats_path = cache_r2_file(DEFAULT_STATS_URI, _CACHE_NAMESPACE, _STATS_SHA256)
     mean, std = _validate_stats(stats_path)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, sketch_spec = _load_model(checkpoint_path, device)
-    guide_waveform = load_audio_file_to_grid(
-        guide_audio,
-        segment_length_seconds=_DURATION_SECONDS,
-        leading_padding_seconds=0.0,
-        amp_scale=1.0,
-        sample_rate=_SAMPLE_RATE,
-    )
-    reference_waveform = load_audio_file_to_grid(
-        reference_audio,
-        segment_length_seconds=_DURATION_SECONDS,
-        leading_padding_seconds=0.0,
-        amp_scale=1.0,
-        sample_rate=_SAMPLE_RATE,
-    )
     prepared = prepare_paired_audio_inputs(
-        guide_waveform,
-        reference_waveform,
+        sketch_audio,
+        content_audio,
         sample_rate=_SAMPLE_RATE,
         mean=mean,
         std=std,
         sketch_spec=sketch_spec,
     )
-    prediction_row, effective_strengths = _predict_patch(prepared, model, requested_strengths)
+    prediction_row, effective_strengths = _predict_patch(
+        prepared,
+        model,
+        request.strengths,
+        seed=request.seed,
+    )
     with _surge_render_config() as render_config:
         renderer = make_audio_renderer(render_config)
         patch = render_prediction_row(
@@ -540,23 +749,25 @@ def _run_request(
     output_dir = output_root / run_id
     destination_uri = f"{upload_root}/{run_id}"
     write_output_artifacts(output_dir, prepared, patch)
-    write_run_manifest(output_dir, destination_uri, effective_strengths)
+    write_run_manifest(
+        output_dir,
+        destination_uri,
+        request=replace(request, strengths=effective_strengths),
+        provenance={
+            "sketch": sketch_provenance,
+            "content": content_provenance,
+        },
+    )
     resolved_output = output_dir.resolve()
     click.echo(f"Local output: {resolved_output}", err=True)
     upload_output_artifacts(output_dir, destination_uri)
     return resolved_output, destination_uri
 
 
-def _run_under_headless_wrapper(
-    guide_audio: Path,
-    reference_audio: Path,
-    requested_strengths: CfgStrengths[float | None],
-) -> None:
+def _run_under_headless_wrapper(request: _RenderRequest) -> None:
     """Re-enter the public module under the packaged Linux X11 wrapper.
 
-    :param guide_audio: Audio supplying sketch controls.
-    :param reference_audio: Audio supplying mel conditioning.
-    :param requested_strengths: Optional content and sketch guidance overrides.
+    :param request: Validated source selectors, guidance strengths, and seed.
     """
     with as_file(vst_headless_wrapper()) as wrapper:
         command = [
@@ -565,15 +776,17 @@ def _run_under_headless_wrapper(
             sys.executable,
             "-m",
             "synth_setter.cli.sketch_render",
-            "--guide-audio",
-            str(guide_audio.resolve()),
-            "--reference-audio",
-            str(reference_audio.resolve()),
         ]
-        if requested_strengths.content is not None:
-            command.extend(["--content-cfg-strength", str(requested_strengths.content)])
-        if requested_strengths.sketch is not None:
-            command.extend(["--sketch-cfg-strength", str(requested_strengths.sketch)])
+        for name, source in (("sketch", request.sketch), ("content", request.content)):
+            if isinstance(source, Path):
+                command.extend([f"--{name}-audio", str(source.resolve())])
+            else:
+                command.extend([f"--{name}-corpus", source])
+        command.extend(["--seed", str(request.seed)])
+        if request.strengths.content is not None:
+            command.extend(["--content-cfg-strength", str(request.strengths.content)])
+        if request.strengths.sketch is not None:
+            command.extend(["--sketch-cfg-strength", str(request.strengths.sketch)])
         subprocess.run(  # noqa: S603 — fixed package entrypoint and validated paths
             command,
             check=True,
@@ -582,22 +795,59 @@ def _run_under_headless_wrapper(
         )
 
 
+def _require_input_source(
+    stream: StreamName,
+    audio: Path | None,
+    corpus: CorpusName | None,
+) -> _InputSource:
+    """Require exactly one file or corpus source for an input stream.
+
+    :param stream: Input stream used in the CLI error.
+    :param audio: Optional local audio source.
+    :param corpus: Optional checked-in corpus source.
+    :returns: The selected source.
+    :raises click.ClickException: Neither or both source forms were supplied.
+    """
+    if (audio is None) == (corpus is None):
+        raise click.ClickException(
+            f"exactly one of --{stream}-audio or --{stream}-corpus is required"
+        )
+    return audio if audio is not None else cast(CorpusName, corpus)
+
+
 @click.command(help="Infer, render, retain, and upload one Surge patch.")
 @click.option(
-    "--guide-audio",
+    "--sketch-audio",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Guide audio supplying sketch controls.",
+    help="File supplying sketch controls.",
 )
 @click.option(
-    "--reference-audio",
+    "--sketch-corpus",
+    type=click.Choice(_CORPUS_NAMES),
+    help="Checked-in corpus supplying sketch controls.",
+)
+@click.option(
+    "--content-audio",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Reference audio supplying mel/timbre conditioning.",
+    help="File supplying mel/timbre conditioning.",
+)
+@click.option(
+    "--content-corpus",
+    type=click.Choice(_CORPUS_NAMES),
+    help="Checked-in corpus supplying mel/timbre conditioning.",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=_DEFAULT_SEED,
+    show_default=True,
+    help="Corpus selection and model sampling seed.",
 )
 @click.option(
     "--content-cfg-strength",
     type=float,
     callback=validate_cfg_strength,
-    help="Reference-mel guidance override; omitted uses the checkpoint value.",
+    help="Content-mel guidance override; omitted uses the checkpoint value.",
 )
 @click.option(
     "--sketch-cfg-strength",
@@ -613,8 +863,11 @@ def _run_under_headless_wrapper(
 @click.pass_context
 def main(
     context: click.Context,
-    guide_audio: Path | None,
-    reference_audio: Path | None,
+    sketch_audio: Path | None,
+    sketch_corpus: CorpusName | None,
+    content_audio: Path | None,
+    content_corpus: CorpusName | None,
+    seed: int,
     content_cfg_strength: float | None,
     sketch_cfg_strength: float | None,
     retry_upload: Path | None,
@@ -622,18 +875,24 @@ def main(
     """Infer, render, retain, and upload one Surge patch.
 
     :param context: Active Click invocation context.
-    :param guide_audio: Optional audio supplying sketch controls.
-    :param reference_audio: Optional audio supplying mel/timbre conditioning.
-    :param content_cfg_strength: Optional reference-mel guidance override.
+    :param sketch_audio: Optional file supplying sketch controls.
+    :param sketch_corpus: Optional corpus supplying sketch controls.
+    :param content_audio: Optional file supplying mel/timbre conditioning.
+    :param content_corpus: Optional corpus supplying mel/timbre conditioning.
+    :param seed: Corpus selection and model sampling seed.
+    :param content_cfg_strength: Optional content-mel guidance override.
     :param sketch_cfg_strength: Optional sketch-control guidance override.
     :param retry_upload: Optional retained sketch-render directory to upload.
     :raises click.ClickException: Retry and render inputs conflict or are incomplete.
     """
     if retry_upload is not None:
         retry_conflicts = (
-            ("guide_audio", "--guide-audio"),
-            ("reference_audio", "--reference-audio"),
+            ("content_audio", "--content-audio"),
+            ("content_corpus", "--content-corpus"),
             ("content_cfg_strength", "--content-cfg-strength"),
+            ("seed", "--seed"),
+            ("sketch_audio", "--sketch-audio"),
+            ("sketch_corpus", "--sketch-corpus"),
             ("sketch_cfg_strength", "--sketch-cfg-strength"),
         )
         for parameter, option in retry_conflicts:
@@ -642,18 +901,26 @@ def main(
         click.echo(retry_output_upload(retry_upload))
         return
 
-    if guide_audio is None or reference_audio is None:
-        raise click.ClickException("--guide-audio and --reference-audio must be provided together")
-
-    requested_strengths = CfgStrengths(
-        content=content_cfg_strength,
-        sketch=sketch_cfg_strength,
+    request = _RenderRequest(
+        sketch=_require_input_source("sketch", sketch_audio, sketch_corpus),
+        content=_require_input_source("content", content_audio, content_corpus),
+        strengths=CfgStrengths(
+            content=content_cfg_strength,
+            sketch=sketch_cfg_strength,
+        ),
+        seed=seed,
     )
-    if sys.platform == "linux" and os.environ.get(_HEADLESS_ENV) != "1":
-        _run_under_headless_wrapper(guide_audio, reference_audio, requested_strengths)
-        return
+    try:
+        if sys.platform == "linux" and os.environ.get(_HEADLESS_ENV) != "1":
+            _run_under_headless_wrapper(request)
+            return
 
-    _, destination_uri = _run_request(guide_audio, reference_audio, requested_strengths)
+        _, destination_uri = _run_request(request)
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        raise click.ClickException(detail) from exc
     click.echo(destination_uri)
 
 

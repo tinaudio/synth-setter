@@ -119,9 +119,9 @@ def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: 
     )
 
     requested_strengths = CfgStrengths(content=2.0, sketch=3.0)
-    base_row, _ = _predict_patch(base, model, requested_strengths)
-    guide_row, _ = _predict_patch(guide_changed, model, requested_strengths)
-    reference_row, _ = _predict_patch(reference_changed, model, requested_strengths)
+    base_row, _ = _predict_patch(base, model, requested_strengths, seed=0)
+    guide_row, _ = _predict_patch(guide_changed, model, requested_strengths, seed=0)
+    reference_row, _ = _predict_patch(reference_changed, model, requested_strengths, seed=0)
 
     assert not np.array_equal(guide_row, base_row)
     assert not np.array_equal(reference_row, base_row)
@@ -142,9 +142,9 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
     result = subprocess.run(  # noqa: S603 — fixed installed public entrypoint
         [
             str(script),
-            "--guide-audio",
+            "--sketch-audio",
             str(guide_path),
-            "--reference-audio",
+            "--content-audio",
             str(ref_path),
             "--content-cfg-strength",
             "2",
@@ -196,6 +196,67 @@ def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(
         manifest = json.loads((downloaded / "manifest.json").read_text())
         assert manifest["content_cfg_strength"] == 2.0
         assert manifest["sketch_cfg_strength"] == 3.0
+        assert manifest["sketch_input"]["path"] == str(guide_path.resolve())
+        assert manifest["content_input"]["path"] == str(ref_path.resolve())
+        assert manifest["render"]["seed"] == 0
+    finally:
+        prefix = output_uri.removeprefix("r2://intermediate-data/") + "/"
+        r2_io.purge_prefix("intermediate-data", prefix)
+        shutil.rmtree(local_output, ignore_errors=True)
+
+
+def test_installed_cli_public_corpus_command_records_selected_rows(tmp_path: Path) -> None:
+    """The public corpus smoke command resolves real R2 rows through inference and upload.
+
+    :param tmp_path: Holds downloaded output artifacts.
+    """
+    if r2_io.object_size(DEFAULT_CHECKPOINT_URI) is None:
+        pytest.skip(f"required immutable checkpoint is absent: {DEFAULT_CHECKPOINT_URI}")
+    script = Path(sys.executable).parent / "synth-setter-sketch-render"
+
+    result = subprocess.run(  # noqa: S603 — fixed installed public entrypoint
+        [
+            str(script),
+            "--sketch-corpus",
+            "nsynth_test",
+            "--content-corpus",
+            "esc50",
+            "--seed",
+            "0",
+        ],
+        cwd=_CHECKOUT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=1200,
+    )
+    assert result.returncode == 0, (
+        f"stdout tail:\n{result.stdout[-2000:]}\nstderr tail:\n{result.stderr[-4000:]}"
+    )
+    output_uri = [line for line in result.stdout.splitlines() if line.strip()][-1]
+    local_output = Path(
+        [
+            line.removeprefix("Local output: ")
+            for line in result.stderr.splitlines()
+            if line.startswith("Local output: ")
+        ][0]
+    )
+
+    downloaded = tmp_path / "downloaded-corpus"
+    try:
+        r2_io.download_dir_no_overwrite(output_uri, downloaded)
+        pred = _read_wav(downloaded / "pred.wav")
+        assert pred.shape == (2, _EXPECTED_SAMPLES)
+        assert np.isfinite(pred).all()
+        assert np.abs(pred).max() > 1e-5
+        manifest = json.loads((downloaded / "manifest.json").read_text())
+        assert manifest["sketch_input"]["config_name"] == "nsynth_test"
+        assert manifest["sketch_input"]["dataset_version"] == 1
+        assert manifest["sketch_input"]["row_index"] >= 0
+        assert manifest["content_input"]["config_name"] == "esc50"
+        assert manifest["content_input"]["dataset_version"] == 1
+        assert manifest["content_input"]["row_index"] >= 0
+        assert manifest["render"]["seed"] == 0
     finally:
         prefix = output_uri.removeprefix("r2://intermediate-data/") + "/"
         r2_io.purge_prefix("intermediate-data", prefix)

@@ -22,6 +22,8 @@ import lance
 import numpy as np
 import pyarrow as pa
 import torch
+from beartype import beartype
+from jaxtyping import Float, jaxtyped
 from lightning import LightningDataModule
 from pedalboard.io import AudioFile
 from torch.utils.data import DataLoader, Dataset
@@ -376,6 +378,57 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._statistics: tuple[torch.Tensor, torch.Tensor] | None = None
         self._predict_dataset: _BlobAudioDataset | None = None
+        self._resolved_dataset_version: int | None = None
+
+    @property
+    def served_row_count(self) -> int:
+        """Return the number of rows available through explicit prediction reads.
+
+        :returns: Served rows after applying ``row_limit``.
+        :raises RuntimeError: ``setup('predict')`` has not run.
+        """
+        if self._predict_dataset is None:
+            raise RuntimeError("predict split is not built; call setup('predict') first")
+        return len(self._predict_dataset)
+
+    @property
+    def resolved_dataset_version(self) -> int:
+        """Return the immutable Lance version opened during prediction setup.
+
+        :returns: Resolved Lance snapshot version.
+        :raises RuntimeError: ``setup('predict')`` has not run.
+        """
+        if self._resolved_dataset_version is None:
+            raise RuntimeError("predict split is not built; call setup('predict') first")
+        return self._resolved_dataset_version
+
+    @jaxtyped(typechecker=beartype)
+    def audio_rows(
+        self, indices: Sequence[int]
+    ) -> Float[torch.Tensor, "rows channels samples"]:
+        """Decode explicit corpus rows onto this datamodule's model audio grid.
+
+        :param indices: Row indices in the requested output order; duplicates are allowed.
+        :returns: Float32 audio with shape ``(rows, channels, samples)``.
+        :raises RuntimeError: ``setup('predict')`` has not run.
+        :raises IndexError: An index is not an integer in the served row range.
+        """
+        if self._predict_dataset is None:
+            raise RuntimeError("predict split is not built; call setup('predict') first")
+        selected = list(indices)
+        row_count = len(self._predict_dataset)
+        for index in selected:
+            if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < row_count:
+                raise IndexError(
+                    f"row index {index!r} is outside served range [0, {row_count})"
+                )
+        if not selected:
+            return torch.empty(
+                (0, self.channels, self.num_samples),
+                dtype=torch.float32,
+            )
+        samples = self._predict_dataset.__getitems__(selected)
+        return torch.stack([sample["audio"] for sample in samples])
 
     def cached_stats_path(self) -> Path:
         """Return the local path the configured statistics object resolves to.
@@ -465,7 +518,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         """
         if stage not in _PREDICT_STAGES:
             raise ValueError(f"{type(self).__name__} serves prediction only, got stage {stage!r}")
-        self._predict_dataset, self.dataset_version = self._open_corpus()
+        self._predict_dataset, self._resolved_dataset_version = self._open_corpus()
         if self.mel_stats_uri is not None and self._statistics is None:
             mean, std = load_mel_statistics(self._local_stats_file())
             mean_f32 = torch.as_tensor(mean, dtype=torch.float32)

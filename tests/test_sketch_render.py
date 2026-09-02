@@ -2,6 +2,7 @@
 
 import ast
 import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -17,9 +18,16 @@ from pedalboard.io import AudioFile
 
 from synth_setter.cli.sketch_render import (
     _EXPECTED_AUDIO_SHAPE,
+    CorpusName,
+    _compose_corpus_datamodule,
+    _CorpusInputProvenance,
+    _FileInputProvenance,
     _predict_patch,
+    _RenderRequest,
+    _resolve_request_inputs,
     _run_request,
     _run_under_headless_wrapper,
+    _select_corpus_rows,
     _validate_stats,
     main,
     upload_output_artifacts,
@@ -33,6 +41,7 @@ from synth_setter.conditioning import (
     SketchControlSpec,
 )
 from synth_setter.data.audio_datamodule import load_audio_file_to_grid
+from synth_setter.data.third_party_datamodule import ThirdPartyAudioDataModule
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.shapes import make_spectrogram
 from synth_setter.data.vst_datamodule import (
@@ -47,44 +56,248 @@ from synth_setter.models.vst_flow_matching_module import SampleBatchResult
 from synth_setter.pipeline import r2_io
 from synth_setter.resources import surge_simple_preset
 from synth_setter.synth_spec import SYNTHS, SynthName
+from tests.helpers.lance_fixtures import write_blob_audio_corpus
 
 _RETAINED_FILENAMES = ("guide.wav", "manifest.json", "params.csv", "pred.wav", "ref.wav")
 
 
-def test_help_exposes_audio_and_cfg_options() -> None:
-    """Help names the audio inputs and independent guidance overrides."""
+def _write_valid_manifest(
+    output_dir: Path, destination: str, source_root: Path, *, seed: int = 0
+) -> None:
+    """Write strict mixed-source provenance for retained-run tests.
+
+    :param output_dir: Existing retained output directory.
+    :param destination: R2 destination recorded for retry.
+    :param source_root: Parent used to form the file source identity.
+    :param seed: Effective inference seed.
+    """
+    request = _RenderRequest(
+        sketch=source_root / "sketch.wav",
+        content="esc50",
+        strengths=CfgStrengths(content=2.0, sketch=3.0),
+        seed=seed,
+    )
+    write_run_manifest(
+        output_dir,
+        destination,
+        request=request,
+        provenance={
+            "sketch": _FileInputProvenance(
+                path=str((source_root / "sketch.wav").resolve()),
+                sha256="a" * 64,
+            ),
+            "content": _CorpusInputProvenance(
+                config_name="esc50",
+                dataset_uri="r2://experiments/third_party/ESC50/all.lance",
+                dataset_version=1,
+                row_index=42,
+            ),
+        },
+    )
+
+
+def test_help_exposes_source_and_cfg_options() -> None:
+    """Help names file/corpus inputs, seed, and independent guidance overrides."""
     result = CliRunner().invoke(main, ["--help"])
 
     assert result.exit_code == 0
-    assert "--guide-audio FILE" in result.output
-    assert "--reference-audio FILE" in result.output
+    assert "--sketch-audio FILE" in result.output
+    assert "--sketch-corpus [esc50|nsynth_test]" in result.output
+    assert "--content-audio FILE" in result.output
+    assert "--content-corpus [esc50|nsynth_test]" in result.output
+    assert "--seed INTEGER" in result.output
     assert "--content-cfg-strength FLOAT" in result.output
     assert "--sketch-cfg-strength FLOAT" in result.output
     assert "--retry-upload DIRECTORY" in result.output
-    assert "--guide_audio" not in result.output
-    assert "--ref_audio" not in result.output
-    assert "--reference_audio" not in result.output
+    assert "--guide-audio" not in result.output
+    assert "--reference-audio" not in result.output
+    assert "--sketch_audio" not in result.output
+    assert "--content_audio" not in result.output
     assert "--content_cfg_strength" not in result.output
     assert "--sketch_cfg_strength" not in result.output
     assert "--retry_upload" not in result.output
-    assert "Guide audio supplying sketch controls." in result.output
-    assert "Reference audio supplying mel/timbre" in result.output
-    assert "conditioning." in result.output
     assert ":param" not in result.output
 
 
-def test_cli_one_audio_input_exits_before_inference(tmp_path: Path) -> None:
-    """Guide and reference audio must be supplied together.
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--content-corpus", "esc50"], "--sketch-audio or --sketch-corpus"),
+        (
+            [
+                "--sketch-audio",
+                "{audio}",
+                "--sketch-corpus",
+                "nsynth_test",
+                "--content-corpus",
+                "esc50",
+            ],
+            "--sketch-audio or --sketch-corpus",
+        ),
+        (["--sketch-corpus", "nsynth_test"], "--content-audio or --content-corpus"),
+        (
+            [
+                "--sketch-corpus",
+                "nsynth_test",
+                "--content-audio",
+                "{audio}",
+                "--content-corpus",
+                "esc50",
+            ],
+            "--content-audio or --content-corpus",
+        ),
+    ],
+)
+def test_cli_source_xor_violation_exits_before_inference(
+    arguments: list[str], message: str, tmp_path: Path
+) -> None:
+    """Each input stream requires exactly one file or corpus selector.
 
-    :param tmp_path: Holds the validated guide path.
+    :param arguments: Source selectors containing one XOR violation.
+    :param message: Stream-specific validation error.
+    :param tmp_path: Holds a Click-validated audio path.
     """
-    guide = tmp_path / "guide.wav"
-    guide.write_bytes(b"validated path")
+    audio = tmp_path / "input.wav"
+    audio.write_bytes(b"validated path")
 
-    result = CliRunner().invoke(main, ["--guide-audio", str(guide)])
+    result = CliRunner().invoke(main, [value.format(audio=audio) for value in arguments])
 
     assert result.exit_code != 0
-    assert "--guide-audio and --reference-audio must be provided together" in result.output
+    assert f"exactly one of {message} is required" in result.output
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_tail"),
+    [
+        (
+            [
+                "--sketch-audio",
+                "{audio}",
+                "--content-corpus",
+                "esc50",
+                "--seed",
+                "17",
+                "--content-cfg-strength",
+                "2",
+                "--sketch-cfg-strength",
+                "3",
+            ],
+            [
+                "--sketch-audio",
+                "{resolved_audio}",
+                "--content-corpus",
+                "esc50",
+                "--seed",
+                "17",
+                "--content-cfg-strength",
+                "2.0",
+                "--sketch-cfg-strength",
+                "3.0",
+            ],
+        ),
+        (
+            ["--sketch-corpus", "nsynth_test", "--content-audio", "{audio}"],
+            [
+                "--sketch-corpus",
+                "nsynth_test",
+                "--content-audio",
+                "{resolved_audio}",
+                "--seed",
+                "0",
+            ],
+        ),
+    ],
+)
+def test_cli_mixed_sources_survive_headless_forwarding(
+    arguments: list[str],
+    expected_tail: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Each valid mixed source mode survives public Linux re-entry.
+
+    :param arguments: Public source, seed, and guidance options.
+    :param expected_tail: Expected re-entry arguments after Click normalization.
+    :param monkeypatch: Captures the packaged headless process boundary.
+    :param tmp_path: Holds the Click-validated file source.
+    """
+    audio = tmp_path / "input.wav"
+    audio.write_bytes(b"validated path")
+    monkeypatch.delenv("SYNTH_SETTER_SKETCH_RENDER_HEADLESS", raising=False)
+    monkeypatch.setattr(
+        "synth_setter.cli.sketch_render.vst_headless_wrapper", lambda: tmp_path / "wrapper"
+    )
+    monkeypatch.setattr("synth_setter.cli.sketch_render.as_file", nullcontext)
+    run = Mock()
+    monkeypatch.setattr("synth_setter.cli.sketch_render.subprocess.run", run)
+
+    result = CliRunner().invoke(main, [value.format(audio=audio) for value in arguments])
+
+    assert result.exit_code == 0
+    expected = [value.format(resolved_audio=audio.resolve()) for value in expected_tail]
+    assert run.call_args.args[0][-len(expected) :] == expected
+
+
+def test_cli_render_failure_reports_concise_click_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Production render failures are reported without a Python traceback.
+
+    :param monkeypatch: Replaces the expensive render boundary with one production-style error.
+    :param tmp_path: Holds Click-validated source paths.
+    """
+    sketch = tmp_path / "sketch.wav"
+    content = tmp_path / "content.wav"
+    sketch.write_bytes(b"validated path")
+    content.write_bytes(b"validated path")
+    monkeypatch.setenv("SYNTH_SETTER_SKETCH_RENDER_HEADLESS", "1")
+
+    def fail_render(_request: _RenderRequest) -> tuple[Path, str]:
+        raise ValueError("corpus row is outside the served range")
+
+    monkeypatch.setattr("synth_setter.cli.sketch_render._run_request", fail_render)
+
+    result = CliRunner().invoke(
+        main,
+        ["--sketch-audio", str(sketch), "--content-audio", str(content)],
+    )
+
+    assert result.exit_code == 1
+    assert "Error: corpus row is outside the served range" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_seed_omitted_defaults_to_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Omitting the seed selects the documented deterministic default.
+
+    :param monkeypatch: Captures the request boundary without inference.
+    :param tmp_path: Holds the synthetic output path returned by the boundary.
+    """
+    requests: list[_RenderRequest] = []
+
+    def capture_request(request: _RenderRequest) -> tuple[Path, str]:
+        requests.append(request)
+        return tmp_path / "output", "r2://result"
+
+    monkeypatch.setenv("SYNTH_SETTER_SKETCH_RENDER_HEADLESS", "1")
+    monkeypatch.setattr("synth_setter.cli.sketch_render._run_request", capture_request)
+
+    result = CliRunner().invoke(
+        main,
+        ["--sketch-corpus", "nsynth_test", "--content-corpus", "esc50"],
+    )
+
+    assert result.exit_code == 0
+    assert requests == [
+        _RenderRequest(
+            sketch="nsynth_test",
+            content="esc50",
+            strengths=CfgStrengths(content=None, sketch=None),
+            seed=0,
+        )
+    ]
 
 
 @pytest.mark.parametrize("option", ["--content-cfg-strength", "--sketch-cfg-strength"])
@@ -106,11 +319,20 @@ def test_cli_retry_upload_cfg_option_rejected(
     assert f"{option} cannot be combined with --retry-upload" in result.output
 
 
-@pytest.mark.parametrize("option", ["--guide-audio", "--reference-audio"])
-def test_cli_retry_upload_audio_option_rejected(option: str, tmp_path: Path) -> None:
-    """Retry upload rejects either inference input.
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--sketch-audio", "{audio}"),
+        ("--sketch-corpus", "nsynth_test"),
+        ("--content-audio", "{audio}"),
+        ("--content-corpus", "esc50"),
+    ],
+)
+def test_cli_retry_upload_source_option_rejected(option: str, value: str, tmp_path: Path) -> None:
+    """Retry upload rejects every inference source selector.
 
-    :param option: Audio option that conflicts with retry mode.
+    :param option: Source option that conflicts with retry mode.
+    :param value: Corpus name or audio-path placeholder.
     :param tmp_path: Holds retained and audio paths accepted by Click.
     """
     output_dir = tmp_path / "run-1"
@@ -120,7 +342,7 @@ def test_cli_retry_upload_audio_option_rejected(option: str, tmp_path: Path) -> 
 
     result = CliRunner().invoke(
         main,
-        ["--retry-upload", str(output_dir), option, str(audio)],
+        ["--retry-upload", str(output_dir), option, value.format(audio=audio)],
     )
 
     assert result.exit_code != 0
@@ -152,7 +374,7 @@ def test_cli_cfg_strength_invalid_value_rejected(option: str, value: str, tmp_pa
 
     result = CliRunner().invoke(
         main,
-        ["--guide-audio", str(guide), "--reference-audio", str(reference), option, value],
+        ["--sketch-audio", str(guide), "--content-audio", str(reference), option, value],
     )
 
     assert result.exit_code != 0
@@ -171,14 +393,10 @@ def test_cli_cfg_strength_zero_forwarded_to_request(
     reference = tmp_path / "reference.wav"
     guide.write_bytes(b"validated path")
     reference.write_bytes(b"validated path")
-    received: list[CfgStrengths[float | None]] = []
+    received: list[_RenderRequest] = []
 
-    def capture_request(
-        _guide: Path,
-        _reference: Path,
-        strengths: CfgStrengths[float | None],
-    ) -> tuple[Path, str]:
-        received.append(strengths)
+    def capture_request(request: _RenderRequest) -> tuple[Path, str]:
+        received.append(request)
         return tmp_path / "output", "r2://result"
 
     monkeypatch.setenv("SYNTH_SETTER_SKETCH_RENDER_HEADLESS", "1")
@@ -187,9 +405,9 @@ def test_cli_cfg_strength_zero_forwarded_to_request(
     result = CliRunner().invoke(
         main,
         [
-            "--guide-audio",
+            "--sketch-audio",
             str(guide),
-            "--reference-audio",
+            "--content-audio",
             str(reference),
             "--content-cfg-strength",
             "0",
@@ -199,7 +417,139 @@ def test_cli_cfg_strength_zero_forwarded_to_request(
     )
 
     assert result.exit_code == 0
-    assert received == [CfgStrengths(content=0.0, sketch=0.0)]
+    assert [request.strengths for request in received] == [CfgStrengths(content=0.0, sketch=0.0)]
+
+
+@pytest.mark.parametrize(
+    ("config_name", "dataset_uri", "audio_column"),
+    [
+        ("nsynth_test", "r2://experiments/third_party/NSynth/test.lance", "audio"),
+        ("esc50", "r2://experiments/third_party/ESC50/all.lance", "audio_wav"),
+    ],
+)
+def test_corpus_config_composes_fixed_cli_audio_contract(
+    config_name: CorpusName, dataset_uri: str, audio_column: str
+) -> None:
+    """Checked-in corpus selectors compose onto the model audio grid.
+
+    :param config_name: Public corpus selector.
+    :param dataset_uri: Checked-in immutable corpus URI.
+    :param audio_column: Checked-in blob column name.
+    """
+    datamodule = _compose_corpus_datamodule(config_name)
+
+    assert datamodule.dataset_uri == dataset_uri
+    assert datamodule.dataset_version == 1
+    assert datamodule.audio_column == audio_column
+    assert (datamodule.sample_rate, datamodule.channels, datamodule.num_samples) == (
+        44100,
+        2,
+        176400,
+    )
+    assert datamodule.mel_stats_uri is None
+
+
+def _corpus_request(
+    *,
+    sketch: CorpusName = "nsynth_test",
+    content: CorpusName = "esc50",
+    seed: int = 0,
+) -> _RenderRequest:
+    """Build a corpus-only request for selection tests.
+
+    :param sketch: Corpus supplying sketch controls.
+    :param content: Corpus supplying content conditioning.
+    :param seed: Corpus row selection seed.
+    :returns: Named corpus-only render request.
+    """
+    return _RenderRequest(
+        sketch=sketch,
+        content=content,
+        strengths=CfgStrengths(content=None, sketch=None),
+        seed=seed,
+    )
+
+
+def test_corpus_selection_same_seed_is_repeatable() -> None:
+    """The same seed and corpus sizes choose the same source rows."""
+    request = _corpus_request()
+    row_counts = {"nsynth_test": 100, "esc50": 80}
+
+    assert _select_corpus_rows(request, row_counts) == _select_corpus_rows(request, row_counts)
+
+
+def test_corpus_selection_different_corpora_are_domain_separated() -> None:
+    """Changing one corpus size does not perturb the other stream's row."""
+    request = _corpus_request()
+    baseline = _select_corpus_rows(request, {"nsynth_test": 100, "esc50": 80})
+
+    content_changed = _select_corpus_rows(request, {"nsynth_test": 100, "esc50": 81})
+    sketch_changed = _select_corpus_rows(request, {"nsynth_test": 101, "esc50": 80})
+
+    assert content_changed["sketch"] == baseline["sketch"]
+    assert sketch_changed["content"] == baseline["content"]
+
+
+def test_corpus_selection_same_corpus_one_row_raises() -> None:
+    """A shared one-row corpus fails before requesting duplicate audio."""
+    with pytest.raises(ValueError, match="at least two rows"):
+        _select_corpus_rows(
+            _corpus_request(content="nsynth_test"),
+            {"nsynth_test": 1},
+        )
+
+
+def test_corpus_selection_preserves_global_numpy_rng_state() -> None:
+    """Corpus selection uses local RNG state only."""
+    state = repr(np.random.get_state())
+
+    _select_corpus_rows(
+        _corpus_request(),
+        {"nsynth_test": 100, "esc50": 80},
+    )
+
+    assert repr(np.random.get_state()) == state
+
+
+def test_same_corpus_inputs_resolve_distinct_public_datamodule_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A shared corpus resolves distinct rows through the datamodule's public API.
+
+    :param monkeypatch: Routes the checked-in config name to a local real corpus.
+    :param tmp_path: Holds a blob-encoded Lance corpus.
+    """
+    corpus = tmp_path / "corpus.lance"
+    write_blob_audio_corpus(
+        corpus,
+        [np.full(176400, value, dtype=np.float32) for value in (0.1, 0.2, 0.3)],
+        sample_rate=44100,
+    )
+    datamodule = ThirdPartyAudioDataModule(
+        dataset_uri=str(corpus),
+        sample_rate=44100,
+        channels=2,
+        signal_duration_seconds=4.0,
+        dataset_version=1,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.sketch_render._compose_corpus_datamodule", lambda _: datamodule
+    )
+    monkeypatch.setattr("synth_setter.cli.sketch_render.r2_io.ensure_r2_env_loaded", lambda: None)
+
+    resolved = _resolve_request_inputs(_corpus_request(content="nsynth_test"))
+
+    sketch_audio, sketch_provenance = resolved["sketch"]
+    _, content_provenance = resolved["content"]
+    assert isinstance(sketch_provenance, _CorpusInputProvenance)
+    assert isinstance(content_provenance, _CorpusInputProvenance)
+    assert sketch_provenance.row_index != content_provenance.row_index
+    assert sketch_provenance.dataset_version == 1
+    assert sketch_provenance.dataset_uri == str(corpus)
+    assert torch.equal(
+        sketch_audio,
+        datamodule.audio_rows([sketch_provenance.row_index])[0],
+    )
 
 
 def test_installed_console_script_exposes_public_help() -> None:
@@ -211,13 +561,18 @@ def test_installed_console_script_exposes_public_help() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "--guide-audio FILE" in result.stdout
-    assert "--reference-audio FILE" in result.stdout
+    assert "--sketch-audio FILE" in result.stdout
+    assert "--sketch-corpus [esc50|nsynth_test]" in result.stdout
+    assert "--content-audio FILE" in result.stdout
+    assert "--content-corpus [esc50|nsynth_test]" in result.stdout
+    assert "--seed INTEGER" in result.stdout
     assert "--content-cfg-strength FLOAT" in result.stdout
     assert "--sketch-cfg-strength FLOAT" in result.stdout
     assert "--retry-upload DIRECTORY" in result.stdout
-    assert "--guide_audio" not in result.stdout
-    assert "--reference_audio" not in result.stdout
+    assert "--guide-audio" not in result.stdout
+    assert "--reference-audio" not in result.stdout
+    assert "--sketch_audio" not in result.stdout
+    assert "--content_audio" not in result.stdout
 
 
 @pytest.mark.parametrize(("duration_seconds", "expected_last_sample"), [(2, 0.0), (5, 0.25)])
@@ -417,7 +772,7 @@ def test_output_artifacts_round_trip_through_real_rclone(
         ),
     )
     destination = "r2://intermediate-data/eval/synth-setter-sketch-render/test-run"
-    write_run_manifest(output_dir, destination, CfgStrengths(content=2.0, sketch=3.0))
+    _write_valid_manifest(output_dir, destination, tmp_path)
     upload_output_artifacts(output_dir, destination)
 
     assert sorted(path.name for path in output_dir.iterdir()) == [
@@ -454,6 +809,34 @@ def test_output_artifacts_round_trip_through_real_rclone(
     assert manifest["git_sha"]
     assert manifest["content_cfg_strength"] == 2.0
     assert manifest["sketch_cfg_strength"] == 3.0
+
+
+def test_manifest_round_trips_file_and_corpus_input_provenance(tmp_path: Path) -> None:
+    """The retained trust boundary preserves both discriminated source identities.
+
+    :param tmp_path: Holds the retained manifest.
+    """
+    output_dir = tmp_path / "run-1"
+    output_dir.mkdir()
+    destination = "r2://intermediate-data/eval/synth-setter-sketch-render/run-1"
+    _write_valid_manifest(output_dir, destination, tmp_path, seed=17)
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["schema_version"] == 2
+    assert manifest["sketch_input"] == {
+        "kind": "file",
+        "path": str((tmp_path / "sketch.wav").resolve()),
+        "sha256": "a" * 64,
+    }
+    assert manifest["content_input"] == {
+        "kind": "corpus",
+        "config_name": "esc50",
+        "dataset_uri": "r2://experiments/third_party/ESC50/all.lance",
+        "dataset_version": 1,
+        "row_index": 42,
+    }
+    assert manifest["render"]["seed"] == 17
 
 
 def test_validate_stats_expected_arrays_returns_without_error(tmp_path: Path) -> None:
@@ -553,7 +936,42 @@ def test_predict_patch_invalid_prediction_raises(
     )
 
     with pytest.raises(ValueError, match=message):
-        _predict_patch(_prepared_inputs(), model, CfgStrengths(content=None, sketch=None))
+        _predict_patch(
+            _prepared_inputs(),
+            model,
+            CfgStrengths(content=None, sketch=None),
+            seed=0,
+        )
+
+
+def test_predict_patch_seed_uses_local_generator_without_global_rng() -> None:
+    """Inference sampling receives the requested seed without mutating Torch globals."""
+    torch_state = torch.random.get_rng_state()
+    model = Mock()
+    model.device = torch.device("cpu")
+
+    def sample_batch(
+        _batch: dict[str, torch.Tensor],
+        *,
+        generator: torch.Generator,
+        strengths: CfgStrengths[float | None],
+    ) -> SampleBatchResult:
+        return SampleBatchResult(
+            predictions=torch.rand((1, 92), generator=generator),
+            strengths=CfgStrengths(
+                content=2.0 if strengths.content is None else strengths.content,
+                sketch=3.0 if strengths.sketch is None else strengths.sketch,
+            ),
+        )
+
+    model.sample_batch.side_effect = sample_batch
+    strengths: CfgStrengths[float | None] = CfgStrengths(content=None, sketch=None)
+
+    first, _ = _predict_patch(_prepared_inputs(), model, strengths, seed=7)
+    second, _ = _predict_patch(_prepared_inputs(), model, strengths, seed=7)
+
+    assert np.array_equal(first, second)
+    assert torch.equal(torch.random.get_rng_state(), torch_state)
 
 
 def test_headless_wrapper_nonexecutable_script_runs_through_shell(
@@ -571,35 +989,13 @@ def test_headless_wrapper_nonexecutable_script_runs_through_shell(
     monkeypatch.setattr("synth_setter.cli.sketch_render.as_file", nullcontext)
 
     _run_under_headless_wrapper(
-        tmp_path / "guide.wav",
-        tmp_path / "reference.wav",
-        CfgStrengths(content=None, sketch=None),
+        _RenderRequest(
+            sketch=tmp_path / "sketch.wav",
+            content=tmp_path / "content.wav",
+            strengths=CfgStrengths(content=None, sketch=None),
+            seed=0,
+        )
     )
-
-
-def test_headless_wrapper_cfg_strengths_forwarded(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Both guidance overrides survive Linux headless re-entry.
-
-    :param monkeypatch: Captures the subprocess command.
-    :param tmp_path: Holds audio path fixtures.
-    """
-    monkeypatch.setattr(
-        "synth_setter.cli.sketch_render.vst_headless_wrapper", lambda: tmp_path / "wrapper"
-    )
-    monkeypatch.setattr("synth_setter.cli.sketch_render.as_file", nullcontext)
-    run = Mock()
-    monkeypatch.setattr("synth_setter.cli.sketch_render.subprocess.run", run)
-
-    _run_under_headless_wrapper(
-        tmp_path / "guide.wav",
-        tmp_path / "reference.wav",
-        CfgStrengths(content=2.0, sketch=3.0),
-    )
-
-    args = run.call_args.args[0]
-    assert args[-4:] == ["--content-cfg-strength", "2.0", "--sketch-cfg-strength", "3.0"]
 
 
 def test_packaged_surge_simple_preset_is_nonempty() -> None:
@@ -669,7 +1065,7 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     prediction_row = spec.encoded_to_model(encoded)
     monkeypatch.setattr(
         "synth_setter.cli.sketch_render._predict_patch",
-        lambda *_: (prediction_row, CfgStrengths(content=2.0, sketch=3.0)),
+        lambda *_, **__: (prediction_row, CfgStrengths(content=2.0, sketch=3.0)),
     )
     synth_version = SYNTHS[SynthName("surge_simple")].synth_version
     monkeypatch.setattr(
@@ -680,9 +1076,12 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     monkeypatch.setattr("synth_setter.cli.sketch_render.make_audio_renderer", lambda _: renderer)
 
     output_dir, destination = _run_request(
-        guide_path,
-        ref_path,
-        CfgStrengths(content=2.0, sketch=3.0),
+        _RenderRequest(
+            sketch=guide_path,
+            content=ref_path,
+            strengths=CfgStrengths(content=2.0, sketch=3.0),
+            seed=17,
+        )
     )
 
     assert output_dir.parent == output_root
@@ -707,6 +1106,12 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     manifest = json.loads((remote / "manifest.json").read_text())
     assert manifest["content_cfg_strength"] == 2.0
     assert manifest["sketch_cfg_strength"] == 3.0
+    assert manifest["render"]["seed"] == 17
+    assert manifest["sketch_input"]["path"] == str(guide_path.resolve())
+    assert (
+        manifest["sketch_input"]["sha256"] == hashlib.sha256(guide_path.read_bytes()).hexdigest()
+    )
+    assert manifest["content_input"]["path"] == str(ref_path.resolve())
 
 
 def _write_retained_run(output_dir: Path, destination: str, run_id: str | None = None) -> None:
@@ -720,7 +1125,7 @@ def _write_retained_run(output_dir: Path, destination: str, run_id: str | None =
     for filename in _RETAINED_FILENAMES:
         if filename != "manifest.json":
             (output_dir / filename).write_bytes(f"retained {filename}".encode())
-    write_run_manifest(output_dir, destination, CfgStrengths(content=2.0, sketch=3.0))
+    _write_valid_manifest(output_dir, destination, output_dir.parent)
     if run_id is not None:
         manifest_path = output_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -755,7 +1160,7 @@ def test_cli_retry_upload_real_rclone_publishes_consumable_producer_artifacts(
             effective_note_window=(0.05, 3.95),
         ),
     )
-    write_run_manifest(output_dir, destination, CfgStrengths(content=2.0, sketch=3.0))
+    _write_valid_manifest(output_dir, destination, tmp_path)
 
     executable = Path(sys.executable).with_name("synth-setter-sketch-render")
     result = subprocess.run(  # noqa: S603 — fixed installed entrypoint and fixture path.
@@ -795,7 +1200,12 @@ def test_cli_retry_upload_non_r2_manifest_rejected_before_upload(
     :param fake_r2_remote: Local remote asserted to remain empty.
     """
     output_dir = fake_r2_remote / "retained" / "run-1"
-    _write_retained_run(output_dir, "file:///tmp/not-r2")
+    destination = "r2://intermediate-data/eval/synth-setter-sketch-render/run-1"
+    _write_retained_run(output_dir, destination)
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["r2_uri"] = "file:///tmp/not-r2"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
 
@@ -826,11 +1236,14 @@ def test_cli_retry_upload_minimal_manifest_rejected_before_upload(
     assert not (fake_r2_remote / "intermediate-data").exists()
 
 
-def test_cli_retry_upload_missing_checkpoint_provenance_rejected_before_upload(
+@pytest.mark.parametrize("field", ["sketch_input", "checkpoint"])
+def test_cli_retry_upload_missing_provenance_rejected_before_upload(
+    field: str,
     fake_r2_remote: Path,
 ) -> None:
-    """A retained run without checkpoint identity cannot be retried.
+    """A retained run missing required provenance cannot be retried.
 
+    :param field: Required top-level provenance field to remove.
     :param fake_r2_remote: Local remote asserted to remain empty.
     """
     output_dir = fake_r2_remote / "retained" / "run-1"
@@ -838,7 +1251,7 @@ def test_cli_retry_upload_missing_checkpoint_provenance_rejected_before_upload(
     _write_retained_run(output_dir, destination)
     manifest_path = output_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    del manifest["checkpoint"]
+    del manifest[field]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
@@ -848,11 +1261,28 @@ def test_cli_retry_upload_missing_checkpoint_provenance_rejected_before_upload(
     assert not (fake_r2_remote / "intermediate-data").exists()
 
 
-def test_cli_retry_upload_string_render_seed_rejected_before_upload(
+@pytest.mark.parametrize(
+    ("section", "field", "value", "message"),
+    [
+        ("content_input", "row_index", -1, "greater than or equal to 0"),
+        ("content_input", "dataset_version", 0, "greater than 0"),
+        ("sketch_input", "sha256", "bad", "SHA-256 must contain 64 hex characters"),
+        ("render", "seed", "0", "Input should be a valid integer"),
+    ],
+)
+def test_cli_retry_upload_invalid_manifest_value_rejected_before_upload(
+    section: str,
+    field: str,
+    value: object,
+    message: str,
     fake_r2_remote: Path,
 ) -> None:
-    """Manifest scalar types cannot be coerced during retry validation.
+    """Strict provenance values cannot authorize a retry upload.
 
+    :param section: Manifest object containing the invalid value.
+    :param field: Field to overwrite.
+    :param value: Value rejected at the manifest trust boundary.
+    :param message: Expected strict validation error.
     :param fake_r2_remote: Local remote asserted to remain empty.
     """
     output_dir = fake_r2_remote / "retained" / "run-1"
@@ -860,13 +1290,13 @@ def test_cli_retry_upload_string_render_seed_rejected_before_upload(
     _write_retained_run(output_dir, destination)
     manifest_path = output_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["render"]["seed"] = "0"
+    manifest[section][field] = value
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["--retry-upload", str(output_dir)])
 
     assert result.exit_code != 0
-    assert "Input should be a valid integer" in result.output
+    assert message in result.output
     assert not (fake_r2_remote / "intermediate-data").exists()
 
 
