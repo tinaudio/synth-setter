@@ -359,8 +359,57 @@ def test_sample_batch_same_explicit_noise_returns_identical_predictions() -> Non
         sample_steps=2,
     )
 
+    assert first.shape == (_BATCH, _NUM_PARAMS)
+    assert first.dtype is torch.float32
     assert torch.equal(first, second)
     assert not first.requires_grad
+
+
+def test_sample_batch_guidance_and_sketch_controls_change_fixed_noise_output() -> None:
+    """The public sampler consumes both CFG axes and sketch-control values."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    model.vector_field = _BranchField()
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.children():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    noise = torch.zeros_like(batch["noise"])
+    baseline = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    content_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    sketch_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+    changed_batch = dict(batch)
+    changed_batch["sketch_ctrl"] = torch.zeros_like(batch["sketch_ctrl"])
+    changed_controls = model.sample_batch(
+        changed_batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+
+    assert not torch.equal(baseline, content_guided)
+    assert not torch.equal(baseline, sketch_guided)
+    assert not torch.equal(sketch_guided, changed_controls)
 
 
 def test_sample_batch_wrong_noise_shape_raises() -> None:

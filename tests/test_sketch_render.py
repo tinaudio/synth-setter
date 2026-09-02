@@ -1,6 +1,7 @@
 """Behavior tests for sketch-conditioned rendering."""
 
 import csv
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,7 @@ from typing import cast
 import numpy as np
 import pytest
 import torch
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 from pedalboard.io import AudioFile
 
 from synth_setter.cli import sketch_render
@@ -54,10 +55,10 @@ def test_cfg_grid_nonfinite_strength_raises() -> None:
 def test_load_audio_file_unsupported_codec_uses_ffmpeg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A codec unsupported by pedalboard falls back to FFmpeg decoding.
+    """Fall back to FFmpeg when pedalboard rejects an audio codec.
 
-    :param tmp_path: Temporary encoded-audio path.
-    :param monkeypatch: Decoder and subprocess patch fixture.
+    :param tmp_path: Isolates the encoded source from checked-in fixtures.
+    :param monkeypatch: Forces the unsupported-codec boundary and captures FFmpeg argv.
     """
     source = tmp_path / "gsm.wav"
     source.write_bytes(b"source")
@@ -306,12 +307,12 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     )
 
     batch = sketch_render._prepare_inputs(
-        np.zeros((2, 176400), dtype=np.float32),
-        np.zeros((2, 176400), dtype=np.float32),
-        stats,
-        model,
-        render,
-        torch.device("cpu"),
+        sketch_audio=np.zeros((2, 176400), dtype=np.float32),
+        content_audio=np.zeros((2, 176400), dtype=np.float32),
+        stats_path=stats,
+        model=model,
+        render=render,
+        device=torch.device("cpu"),
     )
 
     assert batch["mel"].shape == (1, *shape)
@@ -324,6 +325,43 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     assert batch["sketch_ctrl"][0, 2, 0] == pytest.approx(0.1)
     assert batch["sketch_ctrl"][0, 2, 1] == pytest.approx(0.11)
     assert torch.count_nonzero(batch["sketch_ctrl"][:, 2:, 2:]) == 0
+
+
+@pytest.mark.parametrize("wrong_field", ["mean", "std"])
+def test_prepare_inputs_broadcastable_mel_statistics_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_field: str
+) -> None:
+    """Reject statistics that NumPy could broadcast over the mel grid.
+
+    :param tmp_path: Temporary statistics archive.
+    :param monkeypatch: Mel front-end patch fixture.
+    :param wrong_field: Archive member with a broadcastable wrong shape.
+    """
+    shape = (2, 128, 401)
+    mean: np.ndarray = np.zeros(shape, dtype=np.float32)
+    std: np.ndarray = np.ones(shape, dtype=np.float32)
+    if wrong_field == "mean":
+        mean = mean[:1]
+    else:
+        std = std[:1]
+    stats = tmp_path / "stats.npz"
+    np.savez(stats, mean=mean, std=std)
+    monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.ones(shape))
+    render = sketch_render._load_settings().render
+    model = cast(
+        VSTFlowMatchingModule,
+        SimpleNamespace(hparams={"sketch_controls": SketchControlSpec(num_frames=32)}),
+    )
+
+    with pytest.raises(ValueError, match="mel statistics must match mel shape"):
+        sketch_render._prepare_inputs(
+            sketch_audio=np.zeros((2, 176400), dtype=np.float32),
+            content_audio=np.zeros((2, 176400), dtype=np.float32),
+            stats_path=stats,
+            model=model,
+            render=render,
+            device=torch.device("cpu"),
+        )
 
 
 @pytest.mark.parametrize(
@@ -417,7 +455,7 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
     monkeypatch.setattr(
         sketch_render,
         "_prepare_inputs",
-        lambda *args: {"mel": torch.zeros((1, 2, 128, 401))},
+        lambda **kwargs: {"mel": torch.zeros((1, 2, 128, 401))},
     )
     monkeypatch.setattr(sketch_render, "_resolve_stats", lambda *args: stats)
     monkeypatch.setattr(
@@ -437,38 +475,51 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
         "compute_metrics_on_dir",
         lambda *args: {"mss": 1.0, "wmfcc": 2.0, "sot": 3.0, "rms": 0.5},
     )
-    output = tmp_path / "output"
 
-    result = CliRunner().invoke(
-        main,
-        [
-            str(sketch),
-            str(content),
-            "--checkpoint",
-            str(checkpoint),
-            "--stats",
-            str(stats),
-            "--content-cfg",
-            "0",
-            "--content-cfg",
-            "2",
-            "--sketch-cfg",
-            "1",
-            "--sample-steps",
-            "2",
-            "--output-dir",
-            str(output),
-            "--device",
-            "cpu",
-        ],
-    )
+    def invoke(seed: int, output: Path) -> Result:
+        return CliRunner().invoke(
+            main,
+            [
+                str(sketch),
+                str(content),
+                "--checkpoint",
+                str(checkpoint),
+                "--checkpoint-sha256",
+                hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+                "--stats",
+                str(stats),
+                "--content-cfg",
+                "0",
+                "--content-cfg",
+                "2",
+                "--sketch-cfg",
+                "1",
+                "--sample-steps",
+                "2",
+                "--seed",
+                str(seed),
+                "--output-dir",
+                str(output),
+                "--device",
+                "cpu",
+            ],
+        )
+
+    output = tmp_path / "output"
+    result = invoke(123, output)
+    repeated = invoke(123, tmp_path / "repeated")
+    changed = invoke(124, tmp_path / "changed")
 
     assert result.exit_code == 0, result.output
+    assert repeated.exit_code == 0, repeated.output
+    assert changed.exit_code == 0, changed.output
     assert [(content_cfg, sketch_cfg) for content_cfg, sketch_cfg, _ in model.calls] == [
         (0.0, 1.0),
         (2.0, 1.0),
-    ]
+    ] * 3
     assert torch.equal(model.calls[0][2], model.calls[1][2])
+    assert torch.equal(model.calls[0][2], model.calls[2][2])
+    assert not torch.equal(model.calls[0][2], model.calls[4][2])
     for arm in ("cfg-c0-s1", "cfg-c2-s1"):
         arm_dir = output / "arms" / arm
         assert {path.name for path in arm_dir.iterdir()} == {

@@ -15,10 +15,16 @@ import click
 import lance
 from sh import Command
 
-from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_file
+from synth_setter.cli.sketch_render import (
+    cfg_arm_name,
+    cfg_grid,
+    load_audio_file,
+    load_render_config,
+)
 from synth_setter.data.vst.core import write_wav
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
+from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.utils.logging_utils import resolve_git_sha
 
 VOCAL_DATASET = "r2://experiments/third_party/VocalImitationSet/test.lance"
@@ -28,6 +34,7 @@ DEFAULT_CHECKPOINT = (
     "flow_sketch_prelim-20260902T044048985Z-"
     "eed5063da1164b1e92ac62a55ffc17b3/last.ckpt"
 )
+DEFAULT_CHECKPOINT_SHA256 = "d20cd4c3c86ae062a206f05596072b230c8aa86334920c775c2b4fec04aefc9e"
 DEFAULT_STATS = (
     "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
     "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz"
@@ -36,9 +43,6 @@ VOCAL_DATASET_VERSION = 1
 CONTENT_DATASET_VERSION = 1
 DEFAULT_CFG_STRENGTHS = (0.0, 1.0, 2.0)
 SUITE_SIZE = 50
-SAMPLE_RATE = 44_100
-CHANNELS = 2
-NUM_SAMPLES = 176_400
 _METRICS = ("mss", "wmfcc", "sot", "rms")
 _PAIR_FIELDS = (
     "pair_index",
@@ -152,31 +156,35 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
-def _write_blob_wav(data: bytes, destination: Path) -> None:
+def _write_blob_wav(data: bytes, destination: Path, render: RenderConfig) -> None:
     """Decode one stored audio blob into the suite render grid.
 
     :param data: Encoded source audio.
     :param destination: PCM WAV destination.
+    :param render: Effective sketch CLI audio grid.
     """
     encoded_path = destination.with_suffix(".source.wav")
     encoded_path.write_bytes(data)
     try:
         audio = load_audio_file(
             encoded_path,
-            sample_rate=SAMPLE_RATE,
-            channels=CHANNELS,
-            num_samples=NUM_SAMPLES,
+            sample_rate=render.sample_rate,
+            channels=render.channels,
+            num_samples=int(render.sample_rate * render.signal_duration_seconds),
         )
     finally:
         encoded_path.unlink(missing_ok=True)
-    write_wav(audio, str(destination), SAMPLE_RATE, CHANNELS)
+    write_wav(audio, str(destination), render.sample_rate, render.channels)
 
 
-def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValue]]:
+def _materialize_pairs(
+    output_dir: Path, count: int, render: RenderConfig
+) -> list[dict[str, _PairValue]]:
     """Materialize index-zipped vocal-imitation and NSynth test rows.
 
     :param output_dir: Suite workspace.
     :param count: Number of paired rows.
+    :param render: Effective sketch CLI audio grid.
     :returns: Pair provenance rows with local input paths.
     :raises ValueError: Dataset row counts or decode states violate the suite contract.
     """
@@ -231,9 +239,9 @@ def _materialize_pairs(output_dir: Path, count: int) -> list[dict[str, _PairValu
         sketch_path = input_dir / "sketch.wav"
         content_path = input_dir / "content.wav"
         if not sketch_path.is_file():
-            _write_blob_wav(vocal_blobs[vocal_index], sketch_path)
+            _write_blob_wav(vocal_blobs[vocal_index], sketch_path, render)
         if not content_path.is_file():
-            _write_blob_wav(content_blobs[pair_index], content_path)
+            _write_blob_wav(content_blobs[pair_index], content_path, render)
         pairs.append(
             {
                 "pair_index": pair_index,
@@ -262,6 +270,7 @@ def _render_pair(
     output_dir: Path,
     destination: str,
     checkpoint: str,
+    checkpoint_sha256: str,
     stats: str,
     content_cfg: Sequence[float],
     sketch_cfg: Sequence[float],
@@ -275,6 +284,7 @@ def _render_pair(
     :param output_dir: Suite workspace.
     :param destination: Suite R2 prefix.
     :param checkpoint: Sketch checkpoint source.
+    :param checkpoint_sha256: Trusted checkpoint digest.
     :param stats: Matching content mel-statistics source.
     :param content_cfg: Content CFG axis.
     :param sketch_cfg: Sketch CFG axis.
@@ -294,6 +304,8 @@ def _render_pair(
         str(pair["content_path"]),
         "--checkpoint",
         checkpoint,
+        "--checkpoint-sha256",
+        checkpoint_sha256,
         "--stats",
         stats,
         "--sample-steps",
@@ -362,6 +374,7 @@ def _parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--checkpoint-sha256", default=DEFAULT_CHECKPOINT_SHA256)
     parser.add_argument("--stats", default=DEFAULT_STATS)
     parser.add_argument("--content-cfg", type=float, action="append")
     parser.add_argument("--sketch-cfg", type=float, action="append")
@@ -382,6 +395,12 @@ def main() -> None:
     args = _parse_args()
     if not r2_io.is_r2_uri(args.checkpoint):
         raise ValueError(f"checkpoint must use r2://, got {args.checkpoint}")
+    if len(args.checkpoint_sha256) != 64:
+        raise ValueError("checkpoint SHA-256 must contain 64 hex characters")
+    try:
+        int(args.checkpoint_sha256, 16)
+    except ValueError as exc:
+        raise ValueError("checkpoint SHA-256 must be hexadecimal") from exc
     if not r2_io.is_r2_uri(args.stats):
         raise ValueError(f"stats must use r2://, got {args.stats}")
     if not r2_io.is_r2_uri(args.destination):
@@ -397,7 +416,8 @@ def main() -> None:
     r2_io.ensure_r2_env_loaded()
     _require_fresh_run(output_dir, destination)
 
-    pairs = _materialize_pairs(output_dir, args.count)
+    render = load_render_config()
+    pairs = _materialize_pairs(output_dir, args.count, render)
     pair_manifest = output_dir / "pair_manifest.csv"
     _write_csv(pair_manifest, tuple(pairs[0]), pairs)
     for index, pair in enumerate(pairs, start=1):
@@ -406,6 +426,7 @@ def main() -> None:
             output_dir=output_dir,
             destination=destination,
             checkpoint=args.checkpoint,
+            checkpoint_sha256=args.checkpoint_sha256.lower(),
             stats=args.stats,
             content_cfg=content_cfg,
             sketch_cfg=sketch_cfg,
@@ -429,6 +450,7 @@ def main() -> None:
             {"key": "run_id", "value": destination.rsplit("/", maxsplit=1)[-1]},
             {"key": "git_commit", "value": resolve_git_sha()},
             {"key": "checkpoint", "value": args.checkpoint},
+            {"key": "checkpoint_sha256", "value": args.checkpoint_sha256.lower()},
             {"key": "stats", "value": args.stats},
             {"key": "vocal_dataset", "value": VOCAL_DATASET},
             {"key": "vocal_dataset_version", "value": VOCAL_DATASET_VERSION},
@@ -439,6 +461,16 @@ def main() -> None:
             {"key": "sample_steps", "value": args.sample_steps},
             {"key": "base_seed", "value": args.seed},
             {"key": "pair_count", "value": len(pairs)},
+            {"key": "render_sample_rate_hz", "value": render.sample_rate},
+            {"key": "render_channels", "value": render.channels},
+            {
+                "key": "render_signal_duration_seconds",
+                "value": render.signal_duration_seconds,
+            },
+            {
+                "key": "render_num_samples",
+                "value": int(render.sample_rate * render.signal_duration_seconds),
+            },
             {"key": "destination", "value": destination},
         ],
     )

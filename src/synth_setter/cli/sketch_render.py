@@ -72,6 +72,10 @@ class _SketchRenderSettings(BaseModel):
 
         Local path or R2 URI for the inverse model.
 
+    .. attribute :: checkpoint_sha256
+
+        Trusted inverse-checkpoint digest.
+
     .. attribute :: stats
 
         Local path or R2 URI for mel statistics.
@@ -104,6 +108,7 @@ class _SketchRenderSettings(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     checkpoint: str
+    checkpoint_sha256: str
     stats: str
     output_dir: Path
     upload_prefix: str
@@ -111,6 +116,23 @@ class _SketchRenderSettings(BaseModel):
     seed: int
     sample_steps: int
     render: RenderConfig
+
+    @field_validator("checkpoint_sha256")
+    @classmethod
+    def _validate_checkpoint_sha256(cls, value: str) -> str:
+        """Require a complete hexadecimal checkpoint digest.
+
+        :param value: Configured digest.
+        :returns: Validated lowercase digest.
+        :raises ValueError: The digest is not 64 hexadecimal characters.
+        """
+        if len(value) != 64:
+            raise ValueError("checkpoint_sha256 must contain 64 hex characters")
+        try:
+            int(value, 16)
+        except ValueError as exc:
+            raise ValueError("checkpoint_sha256 must be hexadecimal") from exc
+        return value.lower()
 
     @field_validator("output_dir", mode="before")
     @classmethod
@@ -178,6 +200,14 @@ def _load_settings() -> _SketchRenderSettings:
     render_values["synth"] = synth_values
     values["render"] = RenderConfig.model_validate(render_values)
     return _SketchRenderSettings.model_validate(values)
+
+
+def load_render_config() -> RenderConfig:
+    """Return the effective sketch CLI audio and synthesizer contract.
+
+    :returns: Workspace-resolved render configuration.
+    """
+    return _workspace_render_config(_load_settings().render)
 
 
 def _resolve_stats(source: str) -> Path:
@@ -283,6 +313,7 @@ def _load_audio(path: Path, render: RenderConfig) -> np.ndarray:
 
 
 def _prepare_inputs(
+    *,
     sketch_audio: np.ndarray,
     content_audio: np.ndarray,
     stats_path: Path,
@@ -307,6 +338,11 @@ def _prepare_inputs(
     if not np.isfinite(mean).all() or not np.isfinite(std).all() or np.any(std <= 0):
         raise ValueError("mel statistics must be finite with positive standard deviations")
     mel = make_spectrogram(content_audio, render.sample_rate)
+    if mean.shape != mel.shape or std.shape != mel.shape:
+        raise ValueError(
+            f"mel statistics must match mel shape {mel.shape}; "
+            f"got mean {mean.shape} and std {std.shape}"
+        )
     normalized = np.asarray((mel - mean) / std, dtype=np.float32)
     if not np.isfinite(normalized).all():
         raise ValueError("normalized content mel contains non-finite values")
@@ -413,6 +449,7 @@ def _run_id(sketch_path: Path, content_path: Path) -> str:
 @click.argument("sketch_wav", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("content_wav", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--checkpoint", envvar="SYNTH_SETTER_SKETCH_CHECKPOINT")
+@click.option("--checkpoint-sha256", envvar="SYNTH_SETTER_SKETCH_CHECKPOINT_SHA256")
 @click.option("--stats", "stats_source", envvar="SYNTH_SETTER_SKETCH_MEL_STATS")
 @click.option("--content-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
 @click.option("--sketch-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
@@ -430,6 +467,7 @@ def main(
     sketch_wav: Path,
     content_wav: Path,
     checkpoint: str | None,
+    checkpoint_sha256: str | None,
     stats_source: str | None,
     content_cfg: tuple[float, ...],
     sketch_cfg: tuple[float, ...],
@@ -447,6 +485,7 @@ def main(
     :param sketch_wav: Vocal sketch source audio.
     :param content_wav: Content/timbre reference audio.
     :param checkpoint: Optional sketch-conditioned checkpoint override.
+    :param checkpoint_sha256: Required digest for a checkpoint override.
     :param stats_source: Optional mel-statistics override.
     :param content_cfg: Content guidance strengths.
     :param sketch_cfg: Sketch guidance strengths.
@@ -469,6 +508,17 @@ def main(
         raise click.ClickException("--upload-prefix cannot be combined with --no-upload")
 
     checkpoint_source = checkpoint or settings.checkpoint
+    selected_checkpoint_sha256 = checkpoint_sha256
+    if selected_checkpoint_sha256 is None:
+        if checkpoint is not None and checkpoint_source != settings.checkpoint:
+            raise click.ClickException("--checkpoint-sha256 is required with --checkpoint")
+        selected_checkpoint_sha256 = settings.checkpoint_sha256
+    if len(selected_checkpoint_sha256) != 64:
+        raise click.ClickException("--checkpoint-sha256 must contain 64 hex characters")
+    try:
+        int(selected_checkpoint_sha256, 16)
+    except ValueError as exc:
+        raise click.ClickException("--checkpoint-sha256 must be hexadecimal") from exc
     stats = stats_source or settings.stats
     selected_device = _resolve_device(device or settings.device)
     selected_seed = settings.seed if seed is None else seed
@@ -481,21 +531,21 @@ def main(
 
     if upload or r2_io.is_r2_uri(checkpoint_source) or r2_io.is_r2_uri(stats):
         r2_io.ensure_r2_env_loaded()
-    render = _workspace_render_config(settings.render)
+    render = load_render_config()
     model = _load_model(
-        resolve_inverse_checkpoint(checkpoint_source),
+        resolve_inverse_checkpoint(checkpoint_source, selected_checkpoint_sha256.lower()),
         render,
         selected_device,
     )
     sketch_audio = _load_audio(sketch_wav, render)
     content_audio = _load_audio(content_wav, render)
     batch = _prepare_inputs(
-        sketch_audio,
-        content_audio,
-        _resolve_stats(stats),
-        model,
-        render,
-        selected_device,
+        sketch_audio=sketch_audio,
+        content_audio=content_audio,
+        stats_path=_resolve_stats(stats),
+        model=model,
+        render=render,
+        device=selected_device,
     )
     generator = torch.Generator(device=selected_device).manual_seed(selected_seed)
     noise = torch.randn(
