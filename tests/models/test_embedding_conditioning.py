@@ -1,5 +1,6 @@
 """Behavioral tests for generic embedding encoders and model routing."""
 
+import copy
 from collections.abc import Callable
 from functools import partial
 from typing import cast
@@ -417,6 +418,20 @@ def test_vector_projection_maps_fixed_vectors_to_output_width() -> None:
 
     output = encoder(torch.randn(3, 7))
 
+    assert output.shape == (3, 11)
+
+
+def test_vector_projection_legacy_pickle_restores_single_output_contract() -> None:
+    """Pre-slot projection pickles retain their original rank-two output."""
+    legacy = VectorProjection(input_dim=7, d_model=11)
+    del legacy.d_model
+    del legacy.n_conditioning_outputs
+
+    restored = copy.deepcopy(legacy)
+    output = restored(torch.randn(3, 7))
+
+    assert restored.d_model == 11
+    assert restored.n_conditioning_outputs == 1
     assert output.shape == (3, 11)
 
 

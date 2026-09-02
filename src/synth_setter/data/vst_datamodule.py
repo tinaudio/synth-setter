@@ -1,15 +1,19 @@
 """Shared VST datamodule configuration and model-batch preparation."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NotRequired, Self, TypedDict
 
 import numpy as np
 import torch
+from beartype import beartype
+from jaxtyping import Float, jaxtyped
 from lightning import LightningDataModule
 from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS,
     NUM_SKETCH_TRACK_ROWS,
     SKETCH_CTRL_FIELD,
     SKETCH_PITCH_SLICE,
@@ -21,9 +25,12 @@ from synth_setter.conditioning import (
     resolve_sketch_controls,
 )
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.vst.shapes import MEL_N_MELS, make_spectrogram
+from synth_setter.features.sketch_controls import extract_sketch_controls
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import materialize_splits, subset_dirname
+from synth_setter.sketch import pool_sketch_controls
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 _MATERIALIZE_SPLITS = ("train", "val", "test")
@@ -98,6 +105,144 @@ def _sketch_range_validation_error(sketch: np.ndarray | None) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class PreparedAudioInputs:
+    """Model-ready waveforms and features.
+
+    .. attribute :: guide_audio
+
+        Stereo guide waveform.
+    .. attribute :: reference_audio
+
+        Stereo reference waveform.
+    .. attribute :: ref_mel
+
+        Normalized reference mel.
+    .. attribute :: sketch_controls
+
+        Prepared guide controls.
+    """
+
+    guide_audio: Float[torch.Tensor, "channels samples"]
+    reference_audio: Float[torch.Tensor, "channels samples"]
+    ref_mel: Float[torch.Tensor, "channels mel_bins mel_frames"]
+    sketch_controls: Float[torch.Tensor, f"{NUM_SKETCH_CONTROLS} sketch_frames"]
+
+
+@jaxtyped(typechecker=beartype)
+def normalize_mel(
+    mel: Float[np.ndarray, "*shape"],
+    mean: Float[np.ndarray, "*mean_shape"],
+    std: Float[np.ndarray, "*std_shape"],
+) -> Float[torch.Tensor, "*shape"]:
+    """Normalize a mel array and convert it to finite float32 model input.
+
+    :param mel: Finite mel values with any leading batch dimensions.
+    :param mean: Finite mean broadcastable to ``mel``.
+    :param std: Positive standard deviation broadcastable to ``mel``.
+    :returns: Contiguous normalized float32 tensor with ``mel``'s shape.
+    :raises ValueError: Normalization or float32 conversion is non-finite.
+    """
+    if not np.isfinite(mean).all():
+        raise ValueError("mean must contain only finite values")
+    if not np.isfinite(std).all():
+        raise ValueError("std must contain only finite values")
+    if np.any(std <= 0):
+        raise ValueError("std values must be positive")
+    with np.errstate(over="ignore", invalid="ignore"):
+        normalized = (mel - mean) / std
+    if not np.isfinite(normalized).all():
+        raise ValueError("mel_spec normalization produced non-finite values")
+    prepared = torch.from_numpy(normalized).to(dtype=torch.float32)
+    if not torch.isfinite(prepared).all():
+        raise ValueError("mel_spec float32 conversion produced non-finite values")
+    return prepared.contiguous()
+
+
+@jaxtyped(typechecker=beartype)
+def prepare_sketch_controls(
+    controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
+    spec: SketchControlSpec,
+) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} prepared_frames"]:
+    """Fit extracted controls to a sketch spec and apply its pitch zero-bin.
+
+    :param controls: Float controls with track rows in ``[-1, 1]`` and pitch
+        rows in ``[0, 1]``.
+    :param spec: Resolved storage-frame and pitch-threshold contract.
+    :returns: Float32 controls with ``spec.num_frames`` temporal frames.
+    :raises ValueError: Controls are non-finite, out of range, or cannot be
+        pooled down to the requested frame count.
+    """
+    if not torch.isfinite(controls).all():
+        raise ValueError("sketch_ctrl contains non-finite values")
+    tracks = controls[:, :NUM_SKETCH_TRACK_ROWS]
+    if torch.any((tracks < -1) | (tracks > 1)):
+        raise ValueError("sketch_ctrl loudness/centroid values must be within [-1, 1]")
+    pitch = controls[:, SKETCH_PITCH_SLICE]
+    if torch.any((pitch < 0) | (pitch > 1)):
+        raise ValueError("sketch_ctrl pitch activations must be within [0, 1]")
+    if spec.num_frames > controls.shape[-1]:
+        raise ValueError(
+            f"sketch_ctrl cannot expand from {controls.shape[-1]} to {spec.num_frames} frames"
+        )
+
+    prepared = controls.to(dtype=torch.float32)
+    if prepared.shape[-1] != spec.num_frames:
+        prepared = pool_sketch_controls(prepared, spec.num_frames)
+    prepared = prepared.clone()
+    pitch = prepared[:, SKETCH_PITCH_SLICE]
+    prepared[:, SKETCH_PITCH_SLICE] = pitch.where(
+        pitch >= spec.pitch_zero_threshold, 0.0
+    )
+    return prepared.contiguous()
+
+
+@jaxtyped(typechecker=beartype)
+def prepare_paired_audio_inputs(
+    guide_audio: Float[torch.Tensor, "channels samples"],
+    reference_audio: Float[torch.Tensor, "channels samples"],
+    *,
+    sample_rate: int,
+    mean: Float[np.ndarray, "*mean_shape"],
+    std: Float[np.ndarray, "*std_shape"],
+    sketch_spec: SketchControlSpec,
+) -> PreparedAudioInputs:
+    """Prepare loaded guide/reference waveforms for sketch-conditioned inference.
+
+    :param guide_audio: Stereo float32 guide waveform on the model sample grid.
+    :param reference_audio: Stereo float32 reference waveform on the same grid.
+    :param sample_rate: Waveform and feature sample rate in hertz.
+    :param mean: Reference-mel normalization mean.
+    :param std: Reference-mel normalization standard deviation.
+    :param sketch_spec: Resolved checkpoint sketch contract.
+    :returns: Validated model-ready waveforms, mel, and sketch controls.
+    :raises ValueError: Waveforms or prepared features violate shape, dtype, range, or finiteness
+        contracts.
+    """
+    for name, audio in (("guide_audio", guide_audio), ("reference_audio", reference_audio)):
+        if audio.dtype != torch.float32:
+            raise ValueError(f"{name} must have dtype torch.float32")
+        if audio.shape[0] != 2:
+            raise ValueError(f"{name} must have two channels, got {audio.shape[0]}")
+        if not torch.isfinite(audio).all() or torch.any(audio.abs() > 1):
+            raise ValueError(f"{name} must be finite and within [-1, 1]")
+
+    raw_mel = make_spectrogram(reference_audio.detach().cpu().numpy(), sample_rate)
+    ref_mel = normalize_mel(raw_mel, mean, std)
+    sketch = extract_sketch_controls(guide_audio, sample_rate)
+    sketch_controls = prepare_sketch_controls(sketch.unsqueeze(0), sketch_spec)[0]
+    if ref_mel.shape[0] != 2 or ref_mel.shape[1] != MEL_N_MELS:
+        raise ValueError(
+            f"reference mel must have shape (2, {MEL_N_MELS}, frames), got {ref_mel.shape}"
+        )
+    return PreparedAudioInputs(
+        guide_audio=guide_audio.contiguous(),
+        reference_audio=reference_audio.contiguous(),
+        ref_mel=ref_mel,
+        sketch_controls=sketch_controls,
+    )
+
+
 def prepare_batch(
     raw: RawBatch,
     *,
@@ -106,7 +251,7 @@ def prepare_batch(
     rescale_params: bool,
     ot: bool,
     generator: torch.Generator,
-    sketch_pitch_zero_threshold: float | None = None,
+    sketch_spec: SketchControlSpec | None = None,
 ) -> dict[str, torch.Tensor | None]:
     """Turn one batch of stored columns into model-ready tensors.
 
@@ -116,8 +261,8 @@ def prepare_batch(
     :param rescale_params: Whether to map parameters from ``[0, 1]`` to ``[-1, 1]``.
     :param ot: Whether to Hungarian-match noise to parameters.
     :param generator: RNG for the noise draw.
-    :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
-        activations below this value (#2614), or ``None`` to skip.
+    :param sketch_spec: Resolved sketch preparation contract, or ``None`` to
+        pass stored controls through unchanged.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread
         modalities; the stored ``mel_spec`` column is emitted under the ``mel`` key,
         as ``music2latent`` is under ``m2l``.
@@ -133,13 +278,11 @@ def prepare_batch(
     mel_raw = raw.get("mel_spec")
     if mel_raw is not None:
         if mean is not None and std is not None:
-            with np.errstate(over="ignore", invalid="ignore"):
-                mel_raw = (mel_raw - mean) / std
-            if not np.isfinite(mel_raw).all():
-                raise ValueError("mel_spec normalization produced non-finite values")
-        mel = torch.from_numpy(mel_raw).to(dtype=torch.float32)
-        if not torch.isfinite(mel).all():
-            raise ValueError("mel_spec float32 conversion produced non-finite values")
+            mel = normalize_mel(mel_raw, mean, std)
+        else:
+            mel = torch.from_numpy(mel_raw).to(dtype=torch.float32)
+            if not torch.isfinite(mel).all():
+                raise ValueError("mel_spec float32 conversion produced non-finite values")
     else:
         mel = None
 
@@ -158,14 +301,8 @@ def prepare_batch(
     sketch_raw = raw.get(SKETCH_CTRL_FIELD)
     if sketch_raw is not None:
         sketch = torch.from_numpy(sketch_raw).to(dtype=torch.float32)
-        if sketch_pitch_zero_threshold is not None:
-            # Clone: from_numpy shares storage, and binning must not mutate the
-            # caller's stored batch.
-            sketch = sketch.clone()
-            pitch = sketch[:, SKETCH_PITCH_SLICE]
-            sketch[:, SKETCH_PITCH_SLICE] = pitch.where(
-                pitch >= sketch_pitch_zero_threshold, 0.0
-            )
+        if sketch_spec is not None:
+            sketch = prepare_sketch_controls(sketch, sketch_spec)
     else:
         sketch = None
 

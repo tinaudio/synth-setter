@@ -10,6 +10,7 @@ import subprocess
 import sys
 from functools import partial
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -19,6 +20,7 @@ from lightning import LightningModule, Trainer
 from pedalboard.io import AudioFile
 
 from synth_setter.cli.predict_capture import (
+    _predict_raw_params,
     compute_capture_mel,
     decode_and_convert,
     detect_model_class,
@@ -40,6 +42,7 @@ from synth_setter.data.vst.param_spec import (
     ParamSpec,
 )
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.models.cfg import CfgStrengths
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     ASTWithProjectionHead,
@@ -47,7 +50,10 @@ from synth_setter.models.components.transformer import (
     LearntProjection,
 )
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
-from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_matching_module import (
+    SampleBatchResult,
+    VSTFlowMatchingModule,
+)
 from synth_setter.resources import as_file, param_map
 from tests.data.vst._clap import SURGE_XT_MAPPED_PARAM_COUNT
 
@@ -285,6 +291,63 @@ class TestPackagedMapResolution:
         """A spec without a packaged map is a hard error, not a silent fallback."""
         with pytest.raises(FileNotFoundError, match="obxf"):
             param_map("obxf")
+
+
+def test_predict_raw_params_flow_uses_public_sampler() -> None:
+    """Flow capture prediction returns the public sampler's controlled output."""
+    model = Mock(spec=VSTFlowMatchingModule)
+    model.device = torch.device("cpu")
+    model.sample_batch.return_value = SampleBatchResult(
+        predictions=torch.zeros(1, 6),
+        strengths=CfgStrengths(content=4.0, sketch=4.0),
+    )
+
+    prediction = _predict_raw_params(torch.zeros(2, 128, 401), model, expected_width=6)
+
+    assert prediction.shape == (1, 6)
+    assert prediction.dtype is torch.float32
+    assert torch.isfinite(prediction).all()
+    model.sample_batch.assert_called_once()
+
+
+def test_predict_raw_params_feed_forward_preserves_predict_step() -> None:
+    """Feed-forward capture prediction retains its Lightning prediction path."""
+    model = Mock(spec=VSTFeedForwardModule)
+    model.device = torch.device("cpu")
+    model.predict_step.return_value = (torch.zeros(1, 6), None)
+
+    prediction = _predict_raw_params(torch.zeros(2, 128, 401), model, expected_width=6)
+
+    assert prediction.shape == (1, 6)
+    model.predict_step.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("prediction", "message"),
+    [
+        (torch.zeros(1, 6, dtype=torch.float64), "dtype must be torch.float32"),
+        (torch.zeros(1, 5), "shape"),
+        (torch.full((1, 6), float("nan")), "finite"),
+    ],
+)
+def test_predict_raw_params_invalid_flow_prediction_raises(
+    prediction: torch.Tensor,
+    message: str,
+) -> None:
+    """Capture prediction rejects incompatible dtype, shape, or values.
+
+    :param prediction: Invalid sampler output.
+    :param message: Expected contract failure.
+    """
+    model = Mock(spec=VSTFlowMatchingModule)
+    model.device = torch.device("cpu")
+    model.sample_batch.return_value = SampleBatchResult(
+        predictions=prediction,
+        strengths=CfgStrengths(content=4.0, sketch=4.0),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _predict_raw_params(torch.zeros(2, 128, 401), model, expected_width=6)
 
 
 class TestDecodeAndConvert:

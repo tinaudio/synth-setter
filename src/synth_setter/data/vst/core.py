@@ -6,6 +6,7 @@ from typing import TypeVar
 
 import mido
 import numpy as np
+from jaxtyping import Float
 from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
@@ -187,9 +188,33 @@ def set_params(plugin: VST3Plugin, params: dict[str, float]) -> None:
         plugin.parameters[k].raw_value = v
 
 
-def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -> None:
-    with AudioFile(str(path), "w", sample_rate, channels) as f:
-        f.write(audio.T)
+def write_wav(
+    audio: Float[np.ndarray, "channels samples"],
+    path: str | Path,
+    *,
+    sample_rate: float,
+    channels: int,
+) -> None:
+    """Write validated channel-first floating-point audio to a WAV file.
+
+    :param audio: Finite rank-two waveform in ``[-1, 1]`` with channels first.
+    :param path: Destination WAV path.
+    :param sample_rate: Output sample rate in Hz.
+    :param channels: Required channel count.
+    :raises ValueError: The dtype, rank, channel count, or sample values are invalid.
+    """
+    if not np.issubdtype(audio.dtype, np.floating):
+        raise ValueError("audio must contain floating-point samples")
+    if audio.ndim != 2:
+        raise ValueError(f"audio must have rank 2, got rank {audio.ndim}")
+    if audio.shape[0] != channels:
+        raise ValueError(f"audio must have {channels} channels, got {audio.shape[0]}")
+    if not np.isfinite(audio).all():
+        raise ValueError("audio must contain only finite samples")
+    if np.any(np.abs(audio) > 1.0):
+        raise ValueError("audio samples must be within [-1, 1]")
+    with AudioFile(str(path), "w", sample_rate, channels) as audio_file:
+        audio_file.write(audio)
 
 
 def render_params(

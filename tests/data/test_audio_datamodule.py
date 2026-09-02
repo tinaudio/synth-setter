@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
+import torch
 from pedalboard.io import AudioFile
 
 from synth_setter.data.audio_datamodule import AudioFolderDataset
@@ -49,6 +51,23 @@ def test_explicit_files_skip_the_root_glob(tmp_path: Path) -> None:
 
     assert dataset.files == [target]
     assert dataset[0]["mel"].shape[0] == 2
+
+
+def test_audio_folder_dataset_preserves_leading_pad_and_half_scale(
+    tmp_path: Path,
+) -> None:
+    """Dataset audio retains its 50 ms leading pad and half-amplitude policy.
+
+    :param tmp_path: Holds the source WAV.
+    """
+    source = _write_wav(tmp_path / "source.wav")
+
+    audio = AudioFolderDataset(root=str(tmp_path), files=[source])[0]["audio"]
+
+    assert audio.shape == (2, 176400)
+    assert audio.dtype == torch.float32
+    assert torch.count_nonzero(audio[:, :2205]) == 0
+    assert audio.abs().max().item() == pytest.approx(0.1, abs=1e-4)
 
 
 def test_empty_root_yields_empty_dataset(tmp_path: Path) -> None:

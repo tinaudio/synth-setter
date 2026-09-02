@@ -26,16 +26,18 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 import torch  # noqa: E402
+from pedalboard.io import AudioFile  # noqa: E402
 from pydantic_settings import CliApp  # noqa: E402
 
 from synth_setter.data.vst import param_specs  # noqa: E402
 from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
-    _canonicalize_prediction_note_window,
+    canonicalize_prediction_note_window,
     main,
     make_spectrogram,
     params_to_csv,
+    render_prediction_row,
     write_spectrograms,
 )
 from synth_setter.param_spec_name import ParamSpecName  # noqa: E402
@@ -190,7 +192,7 @@ def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> N
 
 def test_canonicalize_prediction_note_window_clips_start_to_signal() -> None:
     """A negative predicted start clips to the beginning of the signal."""
-    window = _canonicalize_prediction_note_window(
+    window = canonicalize_prediction_note_window(
         (-0.5, 0.05),
         signal_duration_seconds=0.1,
         sample_rate=8000,
@@ -215,7 +217,7 @@ def test_canonicalize_prediction_note_window_degenerate_start_expands_forward(
     :param note_window: Predicted endpoints before canonicalization.
     :param expected: One-sample interval expected after canonicalization.
     """
-    window = _canonicalize_prediction_note_window(
+    window = canonicalize_prediction_note_window(
         note_window,
         signal_duration_seconds=0.1,
         sample_rate=8000,
@@ -226,7 +228,7 @@ def test_canonicalize_prediction_note_window_degenerate_start_expands_forward(
 
 def test_canonicalize_prediction_note_window_clips_end_to_signal() -> None:
     """A predicted end beyond the render clips to the signal duration."""
-    window = _canonicalize_prediction_note_window(
+    window = canonicalize_prediction_note_window(
         (0.02, 2.0),
         signal_duration_seconds=0.1,
         sample_rate=8000,
@@ -242,11 +244,42 @@ def test_canonicalize_prediction_note_window_nonfinite_endpoint_raises(nonfinite
     :param nonfinite: Invalid endpoint under test.
     """
     with pytest.raises(ValueError, match="must be finite"):
-        _canonicalize_prediction_note_window(
+        canonicalize_prediction_note_window(
             (nonfinite, 0.05),
             signal_duration_seconds=0.1,
             sample_rate=8000,
         )
+
+
+def test_render_prediction_row_preserves_raw_window_and_renders_effective_window() -> None:
+    """One decoded row retains descending coordinates while rendering chronologically."""
+    synth_params, _ = _sample_param_dicts(seed=7)
+    encoded = _PARAM_SPEC.encode(
+        synth_params,
+        {"pitch": 60, "note_start_and_end": (0.08, 0.02)},
+    )
+    row = _PARAM_SPEC.encoded_to_model(encoded)
+    received: list[tuple[dict[str, float], int, tuple[float, float]]] = []
+    expected_audio = np.full((_CHANNELS, _SAMPLES), 0.125, dtype=np.float32)
+
+    def render(params: dict[str, float], pitch: int, window: tuple[float, float]) -> np.ndarray:
+        received.append((params, pitch, window))
+        return expected_audio
+
+    result = render_prediction_row(
+        row,
+        _PARAM_SPEC,
+        render,
+        signal_duration_seconds=0.1,
+        sample_rate=8000,
+    )
+
+    np.testing.assert_array_equal(result.audio, expected_audio)
+    assert result.synth_params == pytest.approx(synth_params, rel=1e-5, abs=1e-7)
+    assert result.note_params["pitch"] == 60
+    assert result.note_params["note_start_and_end"] == pytest.approx((0.08, 0.02))
+    assert result.effective_note_window == pytest.approx((0.02, 0.08))
+    assert received == [(result.synth_params, 60, result.effective_note_window)]
 
 
 # ---------- main (process CLI) ----------
@@ -288,7 +321,7 @@ def _fake_render(*_args: object, **_kwargs: object) -> np.ndarray:
     :return: ``(_CHANNELS, _SAMPLES)`` float32 audio array.
     """
     rng = np.random.default_rng(42)
-    return rng.standard_normal((_CHANNELS, _SAMPLES)).astype(np.float32)
+    return rng.uniform(-0.5, 0.5, (_CHANNELS, _SAMPLES)).astype(np.float32)
 
 
 def _render_valid_window(
@@ -339,7 +372,7 @@ def _write_batch(
     torch.save(torch.from_numpy(encoded), pred_dir / f"pred-{index}.pt")
 
     if with_target_audio:
-        target_audio = rng.standard_normal((batch_size, _CHANNELS, _SAMPLES)).astype(np.float32)
+        target_audio = rng.uniform(-0.5, 0.5, (batch_size, _CHANNELS, _SAMPLES)).astype(np.float32)
         torch.save(torch.from_numpy(target_audio), pred_dir / f"target-audio-{index}.pt")
 
     if with_target_params:
@@ -483,6 +516,47 @@ def test_main_reversed_prediction_window_renders_canonical_interval(
     )
     assert raw_start > raw_end
     assert (effective_start, effective_end) == pytest.approx((start, end))
+
+
+def test_main_and_direct_row_render_equivalent_prediction(
+    pred_dir: Path,
+    out_dir: Path,
+    fake_renderer: MagicMock,
+) -> None:
+    """Batch artifacts match the public row operation for the same model-space row.
+
+    :param pred_dir: Directory for the shared staged prediction row.
+    :param out_dir: Destination for batch-rendered artifacts.
+    :param fake_renderer: Renderer returning the same deterministic audio as the direct seam.
+    """
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
+    _set_model_note_window(pred_dir / "pred-0.pt", row=0, window=(-0.96, -0.99))
+    row = torch.load(pred_dir / "pred-0.pt", weights_only=True)[0].float().numpy()
+    expected_audio = np.full((_CHANNELS, _SAMPLES), 0.125, dtype=np.float32)
+    direct = render_prediction_row(
+        row,
+        _PARAM_SPEC,
+        lambda *_: expected_audio,
+        signal_duration_seconds=0.1,
+        sample_rate=8000,
+    )
+    fake_renderer.render.return_value = expected_audio
+    fake_renderer.render.side_effect = None
+
+    _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+
+    params = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert ast.literal_eval(params.loc["note_start_and_end", "pred"]) == pytest.approx(
+        direct.note_params["note_start_and_end"]
+    )
+    assert ast.literal_eval(params.loc["note_start_and_end", "pred_effective"]) == pytest.approx(
+        direct.effective_note_window
+    )
+    for name, value in direct.synth_params.items():
+        assert float(params.loc[name, "pred"]) == pytest.approx(value)
+    with AudioFile(str(out_dir / "sample_0" / "pred.wav"), "r") as audio_file:
+        batch_audio = audio_file.read(audio_file.frames)
+    np.testing.assert_allclose(batch_audio, direct.audio, atol=4e-5)
 
 
 def test_main_equal_prediction_window_renders_one_sample_interval(

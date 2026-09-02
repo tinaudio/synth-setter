@@ -1,32 +1,53 @@
 from pathlib import Path
 
-import librosa
 import numpy as np
 import torch
+from beartype import beartype
+from jaxtyping import Float, jaxtyped
 from lightning import LightningDataModule
 from pedalboard.io import AudioFile
 
+from synth_setter.data.vst.shapes import make_spectrogram
 
-def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Values hardcoded to be roughly like those used by the audio spectrogram transformer.
 
-    i.e. 100 frames per second, 128 mels, ~25ms window, hamming window.
+@jaxtyped(typechecker=beartype)
+def load_audio_file_to_grid(
+    path: str | Path,
+    *,
+    segment_length_seconds: float = 4.0,
+    leading_padding_seconds: float = 0.05,
+    amp_scale: float = 0.5,
+    sample_rate: float | int = 44100.0,
+) -> Float[torch.Tensor, "2 samples"]:
+    """Load a mono/stereo file onto a fixed stereo model grid.
+
+    :param path: Source audio accepted by Pedalboard.
+    :param segment_length_seconds: Output duration in seconds.
+    :param leading_padding_seconds: Silence prepended before source audio.
+    :param amp_scale: Amplitude multiplier applied after fitting.
+    :param sample_rate: Resampling and output sample rate in hertz.
+    :returns: Float32 stereo waveform on the requested sample grid.
+    :raises ValueError: The source has more than two channels.
     """
+    resolved_sample_rate = float(sample_rate)
+    source_length_seconds = max(segment_length_seconds - leading_padding_seconds, 0.0)
+    with AudioFile(str(path), "r").resampled_to(resolved_sample_rate) as audio_file:
+        audio = audio_file.read(int(resolved_sample_rate * source_length_seconds))
 
-    n_fft = int(0.025 * sample_rate)
-    hop_length = int(sample_rate / 100.0)
-    window = "hamming"
+    channels = audio.shape[0]
+    if channels == 1:
+        audio = np.repeat(audio, 2, axis=0)
+    elif channels != 2:
+        raise ValueError(f"Audio must have two or fewer channels. Found {channels}.")
 
-    spec = librosa.feature.melspectrogram(
-        y=audio,
-        sr=sample_rate,
-        n_mels=128,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        window=window,
-    )
-    spec_db = librosa.power_to_db(spec, ref=np.max)
-    return spec_db
+    leading_samples = int(leading_padding_seconds * resolved_sample_rate)
+    target_samples = int(resolved_sample_rate * segment_length_seconds)
+    audio = np.pad(audio, ((0, 0), (leading_samples, 0)), mode="constant")
+    audio = audio[:, :target_samples]
+    if audio.shape[1] < target_samples:
+        audio = np.pad(audio, ((0, 0), (0, target_samples - audio.shape[1])), mode="constant")
+    audio = audio * amp_scale
+    return torch.from_numpy(audio).to(dtype=torch.float32)
 
 
 class AudioFolderDataset(torch.utils.data.Dataset):
@@ -90,42 +111,17 @@ class AudioFolderDataset(torch.utils.data.Dataset):
         return len(self.files)
 
     def __getitem__(self, idx: int):
-        file = self.files[idx]
+        audio = load_audio_file_to_grid(
+            self.files[idx],
+            segment_length_seconds=self.segment_length_seconds,
+            amp_scale=self.amp_scale,
+            sample_rate=self.sample_rate,
+        )
 
-        length_seconds = max(self.segment_length_seconds - 0.05, 0.0)
-
-        with AudioFile(str(file), "r").resampled_to(self.sample_rate) as f:
-            sample_rate = f.samplerate
-            num_frames = int(sample_rate * length_seconds)
-            audio = f.read(num_frames)
-
-        channels, _ = audio.shape
-        if channels == 1:
-            audio = np.concatenate([audio, audio], axis=0)
-        elif channels > 2:
-            raise ValueError(
-                f"Audio must have two or fewer channels. Found {channels}."
-            )
-
-        start_samples = int(0.05 * sample_rate)
-        target_samples = int(sample_rate * self.segment_length_seconds)
-        audio = np.pad(audio, [(0, 0), (start_samples, 0)], mode="constant")
-
-        if audio.shape[1] > target_samples:
-            audio = audio[:, :num_frames]
-
-        elif audio.shape[1] < target_samples:
-            audio = np.pad(
-                audio, [(0, 0), (0, target_samples - audio.shape[1])], mode="constant"
-            )
-
-        audio = audio * self.amp_scale
-
-        spec = make_spectrogram(audio, sample_rate)
+        spec = make_spectrogram(audio.numpy(), self.sample_rate)
         if self.mean is not None:
             spec = (spec - self.mean) / self.std
 
-        audio = torch.from_numpy(audio).to(dtype=torch.float32)
         spec = torch.from_numpy(spec).to(dtype=torch.float32)
 
         return {

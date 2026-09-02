@@ -39,7 +39,10 @@ from synth_setter.data.vst.param_spec import (
 )
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
-from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_matching_module import (
+    InferenceRequirements,
+    VSTFlowMatchingModule,
+)
 from synth_setter.resources import as_file, param_map
 
 # SET ME: deployment checkpoint — use an absolute path (this placeholder is
@@ -195,19 +198,37 @@ def write_params_csv(rows: Sequence[ClapCsvRow], dest: Path) -> None:  # noqa: D
 
 
 def _predict_raw_params(
-    mel: torch.Tensor, model: VSTFlowMatchingModule | VSTFeedForwardModule
+    mel: torch.Tensor,
+    model: VSTFlowMatchingModule | VSTFeedForwardModule,
+    *,
+    expected_width: int,
 ) -> torch.Tensor:
-    """Run one mel through the module's real predict path.
+    """Run one mel through the module's public prediction path.
 
     :param mel: Mel of shape ``(2, 128, frames)``.
     :param model: Loaded module in eval mode.
-    :returns: Raw prediction tensor of shape ``(1, num_params)``, values in ``[-1, 1]``.
+    :param expected_width: Required encoded parameter width.
+    :returns: Finite float32 prediction shaped ``(1, expected_width)``.
+    :raises ValueError: Prediction dtype, shape, or values violate the serving contract.
     """
     batch = {"mel": mel.unsqueeze(0).to(model.device)}
     with torch.no_grad():
-        # The ff module annotates batch as a tuple but reads dict keys; both
-        # modules consume {'mel': ...} at runtime.
-        prediction, _ = model.predict_step(batch, 0)  # pyright: ignore[reportArgumentType]
+        if isinstance(model, VSTFlowMatchingModule):
+            generator = torch.Generator().manual_seed(_SERVING_SEED)
+            prediction = model.sample_batch(batch, generator=generator).predictions
+        else:
+            # The ff module annotates batch as a tuple but reads dict keys at runtime.
+            prediction, _ = model.predict_step(batch, 0)  # pyright: ignore[reportArgumentType]
+
+    expected_shape = (1, expected_width)
+    if prediction.dtype is not torch.float32:
+        raise ValueError(f"model prediction dtype must be torch.float32, got {prediction.dtype}")
+    if tuple(prediction.shape) != expected_shape:
+        raise ValueError(
+            f"model prediction shape must be {expected_shape}, got {tuple(prediction.shape)}"
+        )
+    if not torch.isfinite(prediction).all():
+        raise ValueError("model prediction must contain only finite values")
     return prediction.detach().cpu()
 
 
@@ -368,9 +389,20 @@ def _run(
     _say(logger, f"loading {model_class} checkpoint {checkpoint}")
     # weights_only=False unpickles the module graph; checkpoint provenance is
     # deployment-controlled (same trust stance as train/eval).
-    model = _MODEL_CLASSES[model_class].load_from_checkpoint(
-        checkpoint, map_location=device, weights_only=False
-    )
+    if model_class == "flow":
+        model = VSTFlowMatchingModule.load_for_inference(checkpoint, map_location=device)
+        model.require_inference_capabilities(
+            InferenceRequirements(
+                conditioning="mel",
+                sketch_controls=None,
+                param_spec=param_spec_name,
+                num_params=len(spec),
+            )
+        )
+    else:
+        model = VSTFeedForwardModule.load_from_checkpoint(
+            checkpoint, map_location=device, weights_only=False
+        )
     # map_location only remaps storages; move the module so model.device (and
     # the batch _predict_raw_params sends) actually follow --device.
     model.to(device)
@@ -383,10 +415,7 @@ def _run(
     mel = compute_capture_mel(wav_path, stats_file)
     logger.info("mel computed: shape=%s", tuple(mel.shape))
 
-    # The flow module's predict_step samples noise; without this the same
-    # capture yields a different patch on every spawn.
-    torch.manual_seed(_SERVING_SEED)
-    prediction = _predict_raw_params(mel, model)
+    prediction = _predict_raw_params(mel, model, expected_width=len(spec))
     uuid_dir.mkdir(parents=True, exist_ok=True)
     torch.save(prediction, uuid_dir / "pred-0.pt")
     logger.info("saved raw prediction: %s", uuid_dir / "pred-0.pt")

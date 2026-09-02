@@ -16,7 +16,6 @@ from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
 from synth_setter.cli import clap_render
-from synth_setter.cli._cfg_strength import CfgStrengths
 from synth_setter.cli.clap_render import (
     compare_embeddings,
     main,
@@ -24,6 +23,8 @@ from synth_setter.cli.clap_render import (
     summarize_cosine_distances,
     write_summary_csv,
 )
+from synth_setter.models.cfg import CfgStrengths
+from synth_setter.models.vst_flow_matching_module import SampleBatchResult
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
@@ -159,53 +160,58 @@ def test_write_summary_csv_persists_named_statistics(tmp_path: Path) -> None:
         assert list(csv.DictReader(stream)) == [{"count": "2", "mean": "0.25"}]
 
 
-def test_predict_patch_omitted_content_strength_preserves_checkpoint_default(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_predict_patch_mps_destination_uses_portable_seeded_generator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """Text prediction retains the checkpoint content guidance when omitted.
+    """MPS inference does not require PyTorch's unsupported MPS generator.
 
     :param monkeypatch: Replaces checkpoint loading with a lightweight model.
     :param tmp_path: Supplies a checkpoint path fixture.
     """
     model = Mock()
-    model.hparams = {
-        "conditioning": {"column": "clap", "input_shape": [512]},
-        "num_params": 92,
-        "sketch_controls": None,
-        "test_cfg_strength": 5.5,
-        "test_sketch_cfg_strength": None,
-    }
     model.to.return_value = model
     model.eval.return_value = model
-    model.predict_step.return_value = (torch.zeros(1, 92), None)
+    model.sample_batch.return_value = SampleBatchResult(
+        predictions=torch.zeros(1, 92),
+        strengths=CfgStrengths(content=4.0, sketch=4.0),
+    )
     monkeypatch.setattr(
         clap_render.VSTFlowMatchingModule,
-        "load_from_checkpoint",
+        "load_for_inference",
         lambda *_args, **_kwargs: model,
     )
-
-    prediction, effective_strengths = clap_render._predict_patch(
+    prediction, _ = clap_render._predict_patch(
         torch.zeros(1, 512),
         tmp_path / "model.ckpt",
         clap_render._load_settings().render,
-        torch.device("cpu"),
-        0,
-        CfgStrengths(content=None, sketch=None),
+        device=torch.device("mps"),
+        seed=17,
+        requested_strengths=CfgStrengths(content=None, sketch=None),
     )
 
-    assert prediction.dtype is torch.float32
-    assert prediction.device.type == "cpu"
-    assert effective_strengths == CfgStrengths(content=5.5, sketch=5.5)
-    assert model.hparams["test_cfg_strength"] == 5.5
-    assert model.hparams["test_sketch_cfg_strength"] is None
+    assert prediction.shape == (1, 92)
+    generator = model.sample_batch.call_args.kwargs["generator"]
+    assert generator.device == torch.device("cpu")
 
 
-def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorted(
+@pytest.mark.parametrize(
+    ("raw_window", "effective_window"),
+    [
+        ((3.2, 0.8), (0.8, 3.2)),
+        ((2.0, 2.0), (2.0, 2.0 + 1.0 / 44100)),
+    ],
+)
+def test_render_wav_predicted_note_coordinates_reach_renderer_canonicalized(
+    raw_window: tuple[float, float],
+    effective_window: tuple[float, float],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Descending inverse output is projected onto the sampler's note-window contract.
+    """Inverse output uses a chronological nonempty renderer interval.
 
+    :param raw_window: Decoded model endpoints before canonicalization.
+    :param effective_window: Renderer-safe interval expected by the backend.
     :param tmp_path: Temporary WAV destination.
     :param monkeypatch: Renderer-boundary replacement fixture.
     """
@@ -214,7 +220,7 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
     synth_params, _ = spec.sample(np.random.default_rng(0))
     encoded = spec.encode(
         synth_params,
-        {"pitch": 60, "note_start_and_end": (3.2, 0.8)},
+        {"pitch": 60, "note_start_and_end": raw_window},
     )
     prediction = torch.from_numpy(spec.encoded_to_model(encoded)).unsqueeze(0)
 
@@ -227,8 +233,10 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
             midi_note: int,
             velocity: int,
             note_start_and_end: tuple[float, float],
+            *,
+            warmup: bool = False,
         ) -> np.ndarray:
-            del params, midi_note, velocity
+            del params, midi_note, velocity, warmup
             start, end = note_start_and_end
             if not 0.0 <= start < end <= render_config.signal_duration_seconds:
                 raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
@@ -239,57 +247,11 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
     renderer = StrictRenderer()
     monkeypatch.setattr(clap_render, "make_audio_renderer", lambda _: renderer)
 
-    output = tmp_path / "descending-note.wav"
+    output = tmp_path / "prediction.wav"
     clap_render._render_wav(prediction, render_config, output)
 
-    assert renderer.note_window == pytest.approx((0.8, 3.2))
+    assert renderer.note_window == pytest.approx(effective_window)
     assert output.is_file()
-
-
-def test_predict_patch_explicit_zero_then_omitted_uses_checkpoint_strengths(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A reusable text model keeps checkpoint defaults across requests.
-
-    :param tmp_path: Holds the checkpoint path fixture.
-    :param monkeypatch: Replaces checkpoint loading and model validation.
-    """
-    model = Mock()
-    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": 6.0}
-    model.to.return_value = model
-    model.eval.return_value = model
-    model.predict_step.return_value = (torch.zeros(1, 92), None)
-    monkeypatch.setattr(
-        clap_render.VSTFlowMatchingModule,
-        "load_from_checkpoint",
-        lambda *_args, **_kwargs: model,
-    )
-    monkeypatch.setattr(clap_render, "_validate_inverse_model", lambda *_: None)
-
-    _, explicit_strengths = clap_render._predict_patch(
-        torch.zeros(1, 512),
-        tmp_path / "model.ckpt",
-        clap_render._load_settings().render,
-        torch.device("cpu"),
-        0,
-        CfgStrengths(content=0.0, sketch=0.0),
-    )
-    _, omitted_strengths = clap_render._predict_patch(
-        torch.zeros(1, 512),
-        tmp_path / "model.ckpt",
-        clap_render._load_settings().render,
-        torch.device("cpu"),
-        0,
-        CfgStrengths(content=None, sketch=None),
-    )
-
-    assert explicit_strengths == CfgStrengths(content=0.0, sketch=0.0)
-    assert omitted_strengths == CfgStrengths(content=4.0, sketch=6.0)
-    assert model.hparams == {
-        "test_cfg_strength": 4.0,
-        "test_sketch_cfg_strength": 6.0,
-    }
 
 
 @pytest.mark.parametrize(
@@ -317,22 +279,23 @@ def test_predict_patch_invalid_prediction_rejected(
     model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
     model.to.return_value = model
     model.eval.return_value = model
-    model.predict_step.return_value = (prediction, None)
+    model.sample_batch.return_value = SampleBatchResult(
+        predictions=prediction,
+        strengths=CfgStrengths(content=4.0, sketch=4.0),
+    )
     monkeypatch.setattr(
         clap_render.VSTFlowMatchingModule,
-        "load_from_checkpoint",
+        "load_for_inference",
         lambda *_args, **_kwargs: model,
     )
-    monkeypatch.setattr(clap_render, "_validate_inverse_model", lambda *_: None)
-
     with pytest.raises(ValueError, match=message):
         clap_render._predict_patch(
             torch.zeros(1, 512),
             tmp_path / "model.ckpt",
             clap_render._load_settings().render,
-            torch.device("cpu"),
-            0,
-            CfgStrengths(content=None, sketch=None),
+            device=torch.device("cpu"),
+            seed=0,
+            requested_strengths=CfgStrengths(content=None, sketch=None),
         )
 
 
@@ -349,6 +312,7 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     inverse.write_bytes(b"checkpoint")
     clap_checkpoint = tmp_path / "clap"
     clap_checkpoint.mkdir()
+    (clap_checkpoint / "config.json").write_bytes(b"config")
     output = tmp_path / "render.wav"
     monkeypatch.setattr(
         clap_render,
@@ -358,7 +322,7 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     monkeypatch.setattr(
         clap_render,
         "_predict_patch",
-        lambda *_: (
+        lambda *_args, **_kwargs: (
             torch.zeros(1, 92),
             CfgStrengths(content=0.0, sketch=0.0),
         ),
@@ -397,6 +361,16 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
         row = next(csv.DictReader(stream))
     assert row["prompt"] == "soft bell"
     assert float(row["content_cfg_strength"]) == 0.0
+    assert row["inverse_checkpoint_source"] == str(inverse)
+    assert (
+        row["inverse_checkpoint_sha256"]
+        == "47320987f9a49d5b00119b960f247a956773f57543982b8bfcb6da5bb3afd9ef"
+    )
+    assert row["clap_checkpoint_source"] == str(clap_checkpoint)
+    assert (
+        row["clap_checkpoint_sha256"]
+        == "a32fcd283b0de65c36be4906e573abcb84cd5cad2d01d66ec3c7dbbf9efd3aa1"
+    )
     assert float(row["cosine_distance"]) == pytest.approx(1.0)
     assert row["wav_r2_uri"] == ""
     assert row["csv_r2_uri"] == ""

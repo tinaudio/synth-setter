@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from pedalboard.io import AudioFile
 
 from synth_setter.data.vst import core
 from synth_setter.data.vst.core import (
@@ -19,6 +20,7 @@ from synth_setter.data.vst.core import (
     load_plugin,
     render_params,
     warmup_plugin,
+    write_wav,
 )
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 
@@ -356,6 +358,54 @@ class TestRunWithEditorHeldOpen:
 
         with pytest.raises(RenderWorkerLeaked, match="without producing a result"):
             core.run_with_editor_held_open(fake_plugin_empty, lambda: "ignored")
+
+
+class TestWriteWav:
+    """Channel-first WAV serialization validates publishable float audio."""
+
+    def test_channel_first_float_audio_round_trips(self, tmp_path: Path) -> None:
+        """Stereo sample values survive the real Pedalboard writer and reader.
+
+        :param tmp_path: Holds the round-trip WAV.
+        """
+        audio = np.array([[0.25, -0.25, 0.0], [-0.5, 0.5, 0.125]], dtype=np.float32)
+        path = tmp_path / "audio.wav"
+
+        write_wav(audio, path, sample_rate=8000, channels=2)
+
+        with AudioFile(str(path), "r") as audio_file:
+            decoded = audio_file.read(audio_file.frames)
+        assert decoded.shape == audio.shape
+        np.testing.assert_allclose(decoded, audio, atol=4e-5)
+
+    @pytest.mark.parametrize(
+        ("audio", "message"),
+        [
+            (np.zeros(8, dtype=np.float32), "rank 2"),
+            (np.zeros((1, 8), dtype=np.float32), "2 channels"),
+            (np.full((2, 8), np.nan, dtype=np.float32), "finite"),
+            (np.full((2, 8), 1.01, dtype=np.float32), r"\[-1, 1\]"),
+            (np.zeros((2, 8), dtype=np.int16), "floating-point"),
+        ],
+    )
+    def test_invalid_audio_raises(
+        self,
+        audio: np.ndarray,
+        message: str,
+        tmp_path: Path,
+    ) -> None:
+        """Wrong shape, values, or dtype fail before creating a WAV.
+
+        :param audio: Invalid channel-first candidate.
+        :param message: Expected validation detail.
+        :param tmp_path: Holds the rejected destination.
+        """
+        path = tmp_path / "invalid.wav"
+
+        with pytest.raises(ValueError, match=message):
+            write_wav(audio, path, sample_rate=8000, channels=2)
+
+        assert not path.exists()
 
 
 class TestRenderParamsPreloadedPlugin:

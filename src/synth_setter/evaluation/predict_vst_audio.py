@@ -1,7 +1,10 @@
 """Render predicted-parameter and target audio from a trained model for offline evaluation."""
 
+from __future__ import annotations
+
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import librosa
@@ -9,12 +12,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from pedalboard.io import AudioFile
+from jaxtyping import Float
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from tqdm import tqdm, trange
 
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import run_with_editor_held_open
+from synth_setter.data.vst.core import run_with_editor_held_open, write_wav
 from synth_setter.data.vst.param_spec import (
     NoteParams,
     ParamSpec,
@@ -26,7 +29,34 @@ from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 
-RenderFn = Callable[[dict[str, float], int, tuple[float, float]], np.ndarray]
+RenderFn = Callable[
+    [dict[str, float], int, tuple[float, float]],
+    Float[np.ndarray, "channels samples"],
+]
+
+
+@dataclass(frozen=True)
+class RenderedPrediction:
+    """Decoded prediction and its rendered audio.
+
+    .. attribute :: audio
+
+        Channel-first rendered waveform.
+    .. attribute :: synth_params
+
+        Renderer-native synth parameters.
+    .. attribute :: note_params
+
+        Raw decoded note parameters.
+    .. attribute :: effective_note_window
+
+        Interval passed to the renderer.
+    """
+
+    audio: Float[np.ndarray, "channels samples"]
+    synth_params: dict[str, float]
+    note_params: NoteParams
+    effective_note_window: tuple[float, float]
 
 
 class _PredictAudioCliArgs(RenderConfig, BaseSettings):
@@ -171,7 +201,7 @@ def params_to_csv(
     df.to_csv(save_path)
 
 
-def _canonicalize_prediction_note_window(
+def canonicalize_prediction_note_window(
     note_window: tuple[float, float],
     *,
     signal_duration_seconds: float,
@@ -199,14 +229,48 @@ def _canonicalize_prediction_note_window(
     return signal_duration_seconds - minimum_duration, signal_duration_seconds
 
 
-def _make_render_fn(args: _PredictAudioCliArgs, renderer: AudioRenderer) -> RenderFn:
+def render_prediction_row(
+    row: Float[np.ndarray, "#parameter"],
+    spec: ParamSpec,
+    render: RenderFn,
+    *,
+    signal_duration_seconds: float,
+    sample_rate: int,
+) -> RenderedPrediction:
+    """Decode and render one model-space prediction row.
+
+    :param row: One model-space prediction row on the ``[-1, 1]`` scale.
+    :param spec: Parameter decoding contract used to train the model.
+    :param render: Configured renderer lifecycle call for one decoded patch.
+    :param signal_duration_seconds: Maximum renderable note endpoint in seconds.
+    :param sample_rate: Render sample rate in Hz.
+    :returns: Rendered audio with raw decoded and effective note parameters.
+    """
+    synth_values, note_values = decode_model_output(row, spec)
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
+    effective_note_window = canonicalize_prediction_note_window(
+        note_params["note_start_and_end"],
+        signal_duration_seconds=signal_duration_seconds,
+        sample_rate=sample_rate,
+    )
+    audio = render(synth_params, note_params["pitch"], effective_note_window)
+    return RenderedPrediction(
+        audio=audio,
+        synth_params=synth_params,
+        note_params=note_params,
+        effective_note_window=effective_note_window,
+    )
+
+
+def make_prediction_render_fn(config: RenderConfig, renderer: AudioRenderer) -> RenderFn:
     """Apply capture-time GUI warm-up cadence to one renderer session.
 
-    :param args: Validated renderer lifecycle configuration.
+    :param config: Validated renderer lifecycle configuration.
     :param renderer: Renderer session used for every prediction and target row.
     :returns: Row renderer honoring ``gui_toggle_cadence``.
     """
-    warmup_pending = args.gui_toggle_cadence == "once"
+    warmup_pending = config.gui_toggle_cadence == "once"
 
     def render(
         synth_params: dict[str, float],
@@ -214,11 +278,11 @@ def _make_render_fn(args: _PredictAudioCliArgs, renderer: AudioRenderer) -> Rend
         note_start_and_end: tuple[float, float],
     ) -> np.ndarray:
         nonlocal warmup_pending
-        warmup = args.gui_toggle_cadence == "render" or warmup_pending
+        warmup = config.gui_toggle_cadence == "render" or warmup_pending
         audio = renderer.render(
             synth_params,
             pitch,
-            args.velocity,
+            config.velocity,
             note_start_and_end,
             warmup=warmup,
         )
@@ -292,23 +356,14 @@ def _render_prediction_artifacts(
             sample_dir = os.path.join(output_dir, f"sample_{file_idx}")
             os.makedirs(sample_dir, exist_ok=True)
 
-            row_params = pred_params[j].float().numpy()
-            synth_values, note_values = decode_model_output(row_params, spec)
-            synth_params = require_scalar_synth_params(synth_values)
-            note_params = require_note_params(note_values)
-            note_params["note_start_and_end"] = tuple(
-                float(value) for value in note_params["note_start_and_end"]
-            )
-            render_note_window = _canonicalize_prediction_note_window(
-                note_params["note_start_and_end"],
+            prediction = render_prediction_row(
+                pred_params[j].float().numpy(),
+                spec,
+                render,
                 signal_duration_seconds=args.signal_duration_seconds,
                 sample_rate=args.sample_rate,
             )
-            pred_audio = render(
-                synth_params,
-                int(note_params["pitch"]),
-                render_note_window,
-            )
+            pred_audio = prediction.audio
 
             target_synth_params: dict[str, float] | None = None
             target_note_params: NoteParams | None = None
@@ -329,18 +384,30 @@ def _render_prediction_artifacts(
                     int(target_note_params["pitch"]),
                     target_note_params["note_start_and_end"],
                 )
-                with AudioFile(out_target, "w", sample_rate, channels) as f:
-                    f.write(new_target.T)
+                write_wav(
+                    new_target,
+                    out_target,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                )
                 if target_for_spec is None:
                     target_for_spec = new_target
 
             else:
-                with AudioFile(out_target, "w", sample_rate, channels) as f:
-                    f.write(target_audio[j].T)
+                write_wav(
+                    target_audio[j],
+                    out_target,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                )
 
             out_pred = os.path.join(sample_dir, "pred.wav")
-            with AudioFile(out_pred, "w", sample_rate, channels) as f:
-                f.write(pred_audio.T)
+            write_wav(
+                pred_audio,
+                out_pred,
+                sample_rate=sample_rate,
+                channels=channels,
+            )
 
             if not skip_spectrogram:
                 write_spectrograms(
@@ -353,11 +420,11 @@ def _render_prediction_artifacts(
             params_to_csv(
                 target_synth_params if target_params is not None else None,
                 target_note_params if target_params is not None else None,
-                synth_params,
-                note_params,
+                prediction.synth_params,
+                prediction.note_params,
                 os.path.join(sample_dir, "params.csv"),
                 spec,
-                pred_effective_note_window=render_note_window,
+                pred_effective_note_window=prediction.effective_note_window,
             )
 
         current_offset += pred_params.shape[0]
@@ -372,7 +439,7 @@ def render_prediction_audio(args: _PredictAudioCliArgs) -> None:
     spec = param_specs[args.param_spec_name]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     renderer = make_audio_renderer(args)
-    render = _make_render_fn(args, renderer)
+    render = make_prediction_render_fn(args, renderer)
 
     if args.gui_toggle_cadence != "always_on":
         _render_prediction_artifacts(args, spec, render)

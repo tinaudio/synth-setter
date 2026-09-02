@@ -25,21 +25,19 @@ from synth_setter.clap import (
     clap_checkpoint_sha256,
     resolve_clap_checkpoint,
 )
-from synth_setter.cli._cfg_strength import (
-    CfgStrengths,
-    temporary_cfg_strength_overrides,
-    validate_cfg_strength,
-)
-from synth_setter.conditioning import resolve_embedding_conditioning
+from synth_setter.cli._cfg_strength import validate_cfg_strength
 from synth_setter.data.vst.core import write_wav
-from synth_setter.data.vst.param_spec import (
-    decode_model_output,
-    require_note_params,
-    require_scalar_synth_params,
-)
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.evaluation.predict_vst_audio import (
+    make_prediction_render_fn,
+    render_prediction_row,
+)
 from synth_setter.model_cache import file_sha256, synth_setter_cache_dir
-from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.cfg import CfgStrengths
+from synth_setter.models.vst_flow_matching_module import (
+    InferenceRequirements,
+    VSTFlowMatchingModule,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
@@ -56,6 +54,10 @@ _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
     "csv_r2_uri",
     "seed",
     "content_cfg_strength",
+    "inverse_checkpoint_source",
+    "inverse_checkpoint_sha256",
+    "clap_checkpoint_source",
+    "clap_checkpoint_sha256",
     "text_embedding_norm",
     "audio_embedding_norm",
     "cosine_similarity",
@@ -64,116 +66,71 @@ _COMPARISON_CSV_FIELDS: tuple[str, ...] = (
 
 
 @dataclass(frozen=True)
-class _CheckpointSource:
-    """Checkpoint location and optional required digest.
+class _TextRenderRequest:
+    """Parsed inputs for one text-conditioned render.
 
-    .. attribute :: location
+    .. attribute :: text_prompt
 
-        Local path or R2 URI.
+        Sound description.
+    .. attribute :: checkpoint
 
-    .. attribute :: expected_sha256
+        Inverse-checkpoint override.
+    .. attribute :: clap_checkpoint
 
-        Required digest, or ``None`` when identity is not pinned.
+        CLAP-checkpoint override.
+    .. attribute :: output
+
+        Local WAV override.
+    .. attribute :: upload_uri
+
+        R2 WAV override.
+    .. attribute :: device
+
+        Torch-device override.
+    .. attribute :: seed
+
+        Sampling-seed override.
+    .. attribute :: upload
+
+        Whether to upload artifacts.
+    .. attribute :: requested_strengths
+
+        Guidance overrides.
     """
 
-    location: str
-    expected_sha256: str | None
+    text_prompt: str
+    checkpoint: str | None
+    clap_checkpoint: str | None
+    output: Path | None
+    upload_uri: str | None
+    device: _DeviceSetting | None
+    seed: int | None
+    upload: bool
+    requested_strengths: CfgStrengths[float | None]
 
 
 @dataclass(frozen=True)
 class _TextDestinations:
-    """Resolved local and optional R2 destinations for one text render.
+    """Local and optional R2 destinations for one text render.
 
     .. attribute :: wav
 
-        Local rendered-audio path.
-
+        Local WAV path.
     .. attribute :: metrics
 
-        Local comparison-metrics path.
-
+        Local CSV path.
     .. attribute :: wav_r2_uri
 
-        Rendered-audio upload URI, or an empty string when upload is disabled.
-
+        R2 WAV URI, or empty when disabled.
     .. attribute :: metrics_r2_uri
 
-        Comparison-metrics upload URI, or an empty string when upload is disabled.
-
-    .. attribute :: upload
-
-        Whether both local artifacts are uploaded.
+        R2 CSV URI, or empty when disabled.
     """
 
     wav: Path
     metrics: Path
     wav_r2_uri: str
     metrics_r2_uri: str
-    upload: bool
-
-
-@dataclass(frozen=True)
-class _TextRuntime:
-    """Resolved dependencies and settings shared by text-render stages.
-
-    .. attribute :: prompt
-
-        Normalized text condition.
-
-    .. attribute :: inverse_checkpoint
-
-        Inverse-model checkpoint identity.
-
-    .. attribute :: clap_checkpoint
-
-        CLAP encoder checkpoint identity.
-
-    .. attribute :: device
-
-        Torch inference device.
-
-    .. attribute :: seed
-
-        Flow sampling seed.
-
-    .. attribute :: render
-
-        Validated Surge render configuration.
-
-    .. attribute :: destinations
-
-        Local and optional R2 artifact destinations.
-
-    .. attribute :: requested_strengths
-
-        Optional runtime guidance overrides.
-    """
-
-    prompt: str
-    inverse_checkpoint: _CheckpointSource
-    clap_checkpoint: _CheckpointSource
-    device: torch.device
-    seed: int
-    render: RenderConfig
-    destinations: _TextDestinations
-    requested_strengths: CfgStrengths[float | None]
-
-
-@dataclass(frozen=True)
-class _TextInferenceResult:
-    """Metrics and effective guidance produced by text inference.
-
-    .. attribute :: comparison
-
-        CLAP embedding comparison for the rendered audio.
-
-    .. attribute :: effective_strengths
-
-        Guidance strengths used for prediction.
-    """
-
-    comparison: EmbeddingComparison
-    effective_strengths: CfgStrengths[float]
 
 
 @dataclass(frozen=True)
@@ -351,7 +308,7 @@ class _ClapRenderSettings(BaseModel):
         """Require a complete hexadecimal SHA-256 digest.
 
         :param value: Configured digest.
-        :returns: Validated digest unchanged.
+        :returns: Digest after complete SHA-256 validation.
         :raises ValueError: The digest has the wrong length or non-hexadecimal characters.
         """
         if len(value) != 64:
@@ -555,37 +512,11 @@ def _encode_audio(
     return embedding
 
 
-def _validate_inverse_model(model: VSTFlowMatchingModule, render: RenderConfig) -> None:
-    """Require a text-compatible CLAP checkpoint for the selected Surge spec.
-
-    :param model: Loaded inverse model.
-    :param render: Active Surge renderer identity.
-    :raises ValueError: Conditioning, sketch controls, or output width is incompatible.
-    """
-    conditioning = resolve_embedding_conditioning(model.hparams["conditioning"])
-    if (
-        conditioning is None
-        or conditioning.column != _EXPECTED_CONDITIONING_COLUMN
-        or conditioning.input_shape != _EXPECTED_CONDITIONING_SHAPE
-    ):
-        raise ValueError(
-            "inverse checkpoint must use cached CLAP conditioning with input shape [512]"
-        )
-    if model.hparams["sketch_controls"] is not None:
-        raise ValueError("text-only rendering does not support sketch-conditioned checkpoints")
-    expected_width = len(param_specs[render.param_spec_name])
-    checkpoint_width = model.hparams["num_params"]
-    if checkpoint_width != expected_width:
-        raise ValueError(
-            f"checkpoint output width {checkpoint_width} does not match "
-            f"{render.param_spec_name} width {expected_width}"
-        )
-
-
 def _predict_patch(
     embedding: torch.Tensor,
     checkpoint: Path,
     render: RenderConfig,
+    *,
     device: torch.device,
     seed: int,
     requested_strengths: CfgStrengths[float | None],
@@ -601,19 +532,28 @@ def _predict_patch(
     :returns: CPU prediction and effective guidance strengths.
     :raises ValueError: The prediction dtype, shape, or values violate the model contract.
     """
-    model = VSTFlowMatchingModule.load_from_checkpoint(
-        checkpoint,
-        map_location=device,
-        weights_only=False,
+    model = VSTFlowMatchingModule.load_for_inference(checkpoint, map_location=device)
+    model.require_inference_capabilities(
+        InferenceRequirements(
+            conditioning={
+                "column": _EXPECTED_CONDITIONING_COLUMN,
+                "input_shape": _EXPECTED_CONDITIONING_SHAPE,
+            },
+            sketch_controls=None,
+            param_spec=render.param_spec_name,
+            num_params=len(param_specs[render.param_spec_name]),
+        )
     )
-    _validate_inverse_model(model, render)
     model.to(device).eval()
-    torch.manual_seed(seed)
-    with temporary_cfg_strength_overrides(
-        model.hparams, requested_strengths
-    ) as effective_strengths:
-        with torch.inference_mode():
-            prediction, _ = model.predict_step({"conditioning": embedding}, 0)
+    generator = torch.Generator().manual_seed(seed)
+    with torch.inference_mode():
+        sampled = model.sample_batch(
+            {"conditioning": embedding},
+            generator=generator,
+            strengths=requested_strengths,
+        )
+    prediction = sampled.predictions
+    effective_strengths = sampled.strengths
     expected_shape = (1, len(param_specs[render.param_spec_name]))
     if prediction.dtype is not torch.float32:
         raise ValueError(f"model prediction dtype must be torch.float32, got {prediction.dtype}")
@@ -648,21 +588,22 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     :param output: New WAV destination.
     :returns: Channel-first rendered waveform written to ``output``.
     """
-    spec = param_specs[render.param_spec_name]
-    synth_values, note_values = decode_model_output(prediction[0].float().numpy(), spec)
-    synth_params = require_scalar_synth_params(synth_values)
-    note_params = require_note_params(note_values)
-    note_start, note_end = sorted(note_params["note_start_and_end"])
     renderer = make_audio_renderer(render)
-    audio = renderer.render(
-        synth_params,
-        int(note_params["pitch"]),
-        render.velocity,
-        (note_start, note_end),
+    prediction_row = render_prediction_row(
+        prediction[0].float().numpy(),
+        param_specs[render.param_spec_name],
+        make_prediction_render_fn(render, renderer),
+        signal_duration_seconds=render.signal_duration_seconds,
+        sample_rate=render.sample_rate,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    write_wav(audio, str(output), render.sample_rate, render.channels)
-    return audio
+    write_wav(
+        prediction_row.audio,
+        output,
+        sample_rate=render.sample_rate,
+        channels=render.channels,
+    )
+    return prediction_row.audio
 
 
 def _csv_uri_for_wav(wav_uri: str) -> str:
@@ -706,78 +647,79 @@ def _resolve_output(output: Path | None, settings: _ClapRenderSettings, run_id: 
     return output
 
 
-def _run_text_mode(
-    text_prompt: str,
-    checkpoint: str | None,
-    clap_checkpoint: str | None,
-    output: Path | None,
-    upload_uri: str | None,
-    device: _DeviceSetting | None,
-    seed: int | None,
-    upload: bool,
-    requested_strengths: CfgStrengths[float | None],
-) -> None:
-    """Validate and execute one text-conditioned render request.
+def _resolve_text_destinations(
+    request: _TextRenderRequest,
+    settings: _ClapRenderSettings,
+    run_id: str,
+) -> _TextDestinations:
+    """Resolve local and optional R2 artifact destinations.
 
-    :param text_prompt: Optional natural-language sound description.
-    :param checkpoint: Optional inverse-checkpoint override.
-    :param clap_checkpoint: Optional CLAP encoder override.
-    :param output: Optional local WAV destination.
-    :param upload_uri: Optional exact R2 object destination.
-    :param device: Optional torch-device override.
-    :param seed: Optional flow sampling seed.
-    :param upload: Whether to upload the rendered WAV.
-    :param requested_strengths: Optional guidance overrides.
-    :raises click.ClickException: Text-mode arguments are invalid.
-    :raises RuntimeError: The default CLAP checkpoint fails identity validation.
+    :param request: Parsed text-render CLI inputs.
+    :param settings: Validated text-render defaults.
+    :param run_id: Unique artifact stem.
+    :returns: Local and optional upload destinations.
     """
-    prompt = text_prompt.strip()
-    if not prompt:
-        raise click.ClickException("prompt must contain text")
-    if upload_uri is not None and not upload:
-        raise click.ClickException("--upload-uri cannot be combined with --no-upload")
-    if upload_uri is not None and not r2_io.is_r2_uri(upload_uri):
-        raise click.ClickException("--upload-uri must use r2://")
+    wav = _resolve_output(request.output, settings, run_id)
+    default_wav_r2_uri = f"{settings.upload_prefix}/{run_id}.wav"
+    wav_r2_uri = (request.upload_uri or default_wav_r2_uri) if request.upload else ""
+    return _TextDestinations(
+        wav=wav,
+        metrics=wav.with_suffix(".csv"),
+        wav_r2_uri=wav_r2_uri,
+        metrics_r2_uri=_csv_uri_for_wav(wav_r2_uri) if request.upload else "",
+    )
 
-    settings = _load_settings()
-    inverse_source = checkpoint or settings.inverse_checkpoint
-    clap_source = clap_checkpoint or settings.clap_checkpoint
-    selected_device = _resolve_device(device or settings.device)
-    selected_seed = settings.seed if seed is None else seed
-    run_id = _run_id(prompt)
-    output_path = _resolve_output(output, settings, run_id)
-    metrics_path = output_path.with_suffix(".csv")
-    default_wav_destination = f"{settings.upload_prefix}/{run_id}.wav"
-    wav_destination = (upload_uri or default_wav_destination) if upload else ""
-    csv_destination = _csv_uri_for_wav(wav_destination) if upload else ""
 
-    if upload or r2_io.is_r2_uri(inverse_source) or r2_io.is_r2_uri(clap_source):
+def _execute_local_text_render(
+    request: _TextRenderRequest,
+    settings: _ClapRenderSettings,
+    prompt: str,
+    *,
+    destinations: _TextDestinations,
+) -> EmbeddingComparison:
+    """Run checkpoint resolution, inference, rendering, and local serialization.
+
+    :param request: Parsed text-render CLI inputs.
+    :param settings: Validated text-render defaults.
+    :param prompt: Normalized text condition.
+    :param destinations: Local and optional upload destinations.
+    :returns: Prompt/render embedding comparison written to the local CSV.
+    :raises RuntimeError: A pinned CLAP checkpoint has the wrong digest.
+    """
+    inverse_source = request.checkpoint or settings.inverse_checkpoint
+    clap_source = request.clap_checkpoint or settings.clap_checkpoint
+    selected_device = _resolve_device(request.device or settings.device)
+    selected_seed = settings.seed if request.seed is None else request.seed
+
+    if request.upload or r2_io.is_r2_uri(inverse_source) or r2_io.is_r2_uri(clap_source):
         click.echo("Checking R2 access...", err=True)
         r2_io.ensure_r2_env_loaded()
 
     click.echo(f"Encoding text with CLAP on {selected_device}...", err=True)
     clap_checkpoint_dir = resolve_clap_checkpoint(clap_source)
-    if (
-        clap_checkpoint is None
-        and clap_checkpoint_sha256(Path(clap_checkpoint_dir))
-        != DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256
-    ):
+    clap_sha256 = clap_checkpoint_sha256(Path(clap_checkpoint_dir))
+    if request.clap_checkpoint is None and clap_sha256 != DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256:
         raise RuntimeError("default CLAP checkpoint SHA-256 mismatch")
     embedding = _encode_text(prompt, clap_checkpoint_dir, selected_device)
+
     click.echo("Loading inverse checkpoint...", err=True)
-    expected_inverse_sha256 = settings.inverse_checkpoint_sha256 if checkpoint is None else None
+    expected_inverse_sha256 = (
+        settings.inverse_checkpoint_sha256 if request.checkpoint is None else None
+    )
     inverse_checkpoint = resolve_inverse_checkpoint(inverse_source, expected_inverse_sha256)
+    inverse_sha256 = file_sha256(inverse_checkpoint)
     render = _workspace_render_config(settings.render)
     prediction, effective_strengths = _predict_patch(
         embedding,
         inverse_checkpoint,
         render,
-        selected_device,
-        selected_seed,
-        requested_strengths,
+        device=selected_device,
+        seed=selected_seed,
+        requested_strengths=request.requested_strengths,
     )
+
     click.echo("Rendering Surge patch...", err=True)
-    audio = _render_wav(prediction, render, output_path)
+    audio = _render_wav(prediction, render, destinations.wav)
     click.echo("Encoding rendered audio with CLAP...", err=True)
     audio_embedding = _encode_audio(
         audio,
@@ -786,30 +728,51 @@ def _run_text_mode(
         selected_device,
     )
     comparison = compare_embeddings(embedding.detach().cpu().float().numpy(), audio_embedding)
-    write_comparison_csv(
-        metrics_path,
-        {
-            "prompt": prompt,
-            "wav_r2_uri": wav_destination,
-            "csv_r2_uri": csv_destination,
-            "seed": selected_seed,
-            "content_cfg_strength": effective_strengths.content,
-            "text_embedding_norm": comparison.text_embedding_norm,
-            "audio_embedding_norm": comparison.audio_embedding_norm,
-            "cosine_similarity": comparison.cosine_similarity,
-            "cosine_distance": comparison.cosine_distance,
-        },
-    )
+    row: dict[str, str | int | float] = {
+        "prompt": prompt,
+        "wav_r2_uri": destinations.wav_r2_uri,
+        "csv_r2_uri": destinations.metrics_r2_uri,
+        "seed": selected_seed,
+        "content_cfg_strength": effective_strengths.content,
+        "inverse_checkpoint_source": inverse_source,
+        "inverse_checkpoint_sha256": inverse_sha256,
+        "clap_checkpoint_source": clap_source,
+        "clap_checkpoint_sha256": clap_sha256,
+        "text_embedding_norm": comparison.text_embedding_norm,
+        "audio_embedding_norm": comparison.audio_embedding_norm,
+        "cosine_similarity": comparison.cosine_similarity,
+        "cosine_distance": comparison.cosine_distance,
+    }
+    write_comparison_csv(destinations.metrics, row)
+    return comparison
 
+
+def _run_text_mode(request: _TextRenderRequest) -> None:
+    """Validate and execute one text-conditioned render request.
+
+    :param request: Immutable parsed CLI request.
+    :raises click.ClickException: The prompt or upload options are invalid.
+    """
+    prompt = request.text_prompt.strip()
+    if not prompt:
+        raise click.ClickException("prompt must contain text")
+    if request.upload_uri is not None and not request.upload:
+        raise click.ClickException("--upload-uri cannot be combined with --no-upload")
+    if request.upload_uri is not None and not r2_io.is_r2_uri(request.upload_uri):
+        raise click.ClickException("--upload-uri must use r2://")
+
+    settings = _load_settings()
+    destinations = _resolve_text_destinations(request, settings, _run_id(prompt))
+    comparison = _execute_local_text_render(request, settings, prompt, destinations=destinations)
     click.echo(f"Cosine distance: {comparison.cosine_distance:.9g}")
-    click.echo(f"Local WAV: {output_path}")
-    click.echo(f"Local CSV: {metrics_path}")
-    if upload:
-        click.echo(f"Uploading {wav_destination}...", err=True)
-        r2_io.upload_to_uri(output_path, wav_destination)
-        r2_io.upload_to_uri(metrics_path, csv_destination)
-        click.echo(f"R2 WAV: {wav_destination}")
-        click.echo(f"R2 CSV: {csv_destination}")
+    click.echo(f"Local WAV: {destinations.wav}")
+    click.echo(f"Local CSV: {destinations.metrics}")
+    if request.upload:
+        click.echo(f"Uploading {destinations.wav_r2_uri}...", err=True)
+        r2_io.upload_to_uri(destinations.wav, destinations.wav_r2_uri)
+        r2_io.upload_to_uri(destinations.metrics, destinations.metrics_r2_uri)
+        click.echo(f"R2 WAV: {destinations.wav_r2_uri}")
+        click.echo(f"R2 CSV: {destinations.metrics_r2_uri}")
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -866,15 +829,17 @@ def main(
     :param upload: Whether to upload the rendered WAV.
     """
     _run_text_mode(
-        text_prompt=text_prompt,
-        checkpoint=checkpoint,
-        clap_checkpoint=clap_checkpoint,
-        output=output,
-        upload_uri=upload_uri,
-        device=device,
-        seed=seed,
-        upload=upload,
-        requested_strengths=CfgStrengths(content=content_cfg_strength, sketch=None),
+        _TextRenderRequest(
+            text_prompt=text_prompt,
+            checkpoint=checkpoint,
+            clap_checkpoint=clap_checkpoint,
+            output=output,
+            upload_uri=upload_uri,
+            device=device,
+            seed=seed,
+            upload=upload,
+            requested_strengths=CfgStrengths(content=content_cfg_strength, sketch=None),
+        )
     )
 
 

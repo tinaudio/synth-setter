@@ -21,12 +21,11 @@ _PREDICT_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _PREDICT_SHARDS = {
     "evaluation-predict-misc": [
         f"{_PREDICT_MODULE}.x_[!_r]*",
-        f"{_PREDICT_MODULE}.x__canonicalize_prediction_note_window*",
+        f"{_PREDICT_MODULE}.x_render_prediction_row*",
         f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_1",
         f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_1?*",
         f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[5-9]",
         f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[5-9]?*",
-        f"{_PREDICT_MODULE}.x__make_render_fn*",
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1",
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1?",
     ],
@@ -197,7 +196,7 @@ def test_mutmut_multi_selector_shard_runs_only_matching_mutants(tmp_path: Path) 
     source_dir.mkdir(parents=True)
     (source_dir / "__init__.py").touch()
     (source_dir / "predict_vst_audio.py").write_text(
-        "def _make_render_fn(value):\n"
+        "def make_prediction_render_fn(value):\n"
         "    return value + 1\n\n"
         "def _render_prediction_artifacts(value):\n"
         "    first = value + 1\n"
@@ -211,11 +210,11 @@ def test_mutmut_multi_selector_shard_runs_only_matching_mutants(tmp_path: Path) 
     tests_dir.mkdir()
     (tests_dir / "test_predict.py").write_text(
         "from sandbox.predict_vst_audio import (\n"
-        "    _make_render_fn,\n"
+        "    make_prediction_render_fn,\n"
         "    _render_prediction_artifacts,\n"
         ")\n\n"
         "def test_prediction_helpers():\n"
-        "    assert _make_render_fn(1) == 2\n"
+        "    assert make_prediction_render_fn(1) == 2\n"
         "    assert _render_prediction_artifacts(3) == 1.25\n"
     )
     (tmp_path / "pyproject.toml").write_text(

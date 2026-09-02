@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
@@ -15,7 +16,9 @@ from lightning.pytorch.utilities import grad_norm
 from synth_setter.conditioning import (
     Conditioning,
     SketchControls,
+    SketchControlSpec,
     conditioning_batch_key,
+    resolve_embedding_conditioning,
     resolve_sketch_controls,
 )
 from synth_setter.metrics import (
@@ -24,6 +27,7 @@ from synth_setter.metrics import (
     best_swap_per_param_mse,
     number_group_swap_per_param_mse,
 )
+from synth_setter.models.cfg import CfgStrengths, resolve_cfg_strengths
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
 
@@ -98,6 +102,46 @@ class ControlTokenBranches:
 
     conditional: Float[torch.Tensor, "batch tokens d_model"]
     unconditional: Float[torch.Tensor, "batch tokens d_model"]
+
+
+@dataclass(frozen=True)
+class InferenceRequirements:
+    """Public model capabilities required by an inference caller.
+
+    .. attribute :: conditioning
+
+        Required conditioning mode.
+    .. attribute :: sketch_controls
+
+        Required sketch support.
+    .. attribute :: param_spec
+
+        Required parameter-spec identity.
+    .. attribute :: num_params
+
+        Required output width.
+    """
+
+    conditioning: Conditioning
+    sketch_controls: SketchControls
+    param_spec: str
+    num_params: int
+
+
+@dataclass(frozen=True)
+class SampleBatchResult:
+    """Outputs from one inference sample.
+
+    .. attribute :: predictions
+
+        Model-space parameter rows.
+    .. attribute :: strengths
+
+        Effective guidance values.
+    """
+
+    predictions: Float[torch.Tensor, "batch params"]
+    strengths: CfgStrengths[float]
 
 
 @dataclass(frozen=True)
@@ -263,6 +307,37 @@ def _bind_branch(
 
 
 @jaxtyped(typechecker=beartype)
+def _checkpoint_sketch_controls(payload: object) -> SketchControlSpec | None:
+    """Normalize legacy sketch metadata from a Lightning checkpoint payload.
+
+    :param payload: Deserialized checkpoint root.
+    :returns: Current sketch specification, or ``None`` when unsupported.
+    :raises ValueError: Checkpoint hyperparameters are missing, malformed, or conflicting.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("checkpoint root must be a mapping")
+    hyperparameters = payload.get("hyper_parameters")
+    if not isinstance(hyperparameters, Mapping):
+        raise ValueError("checkpoint has no hyper_parameters mapping")
+
+    sketch = hyperparameters.get("sketch_controls")
+    if sketch is None or isinstance(sketch, SketchControlSpec):
+        return sketch
+    if not isinstance(sketch, Mapping):
+        raise ValueError("checkpoint sketch_controls must be a mapping or null")
+
+    normalized = dict(sketch)
+    legacy_present = "num_ctrl_tokens" in normalized
+    legacy_count = normalized.pop("num_ctrl_tokens", None)
+    current_count = normalized.get("num_control_tokens")
+    if legacy_present and current_count is not None and legacy_count != current_count:
+        raise ValueError("checkpoint sketch token-count fields conflict")
+    if legacy_present and current_count is None:
+        normalized["num_control_tokens"] = legacy_count
+    return resolve_sketch_controls(normalized)
+
+
+@jaxtyped(typechecker=beartype)
 def rk4_step(
     f: _TimeField,
     x: Float[torch.Tensor, "batch params"],
@@ -403,6 +478,80 @@ class VSTFlowMatchingModule(LightningModule):
             NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
         )
 
+    @classmethod
+    @jaxtyped(typechecker=beartype)
+    def load_for_inference(
+        cls,
+        checkpoint_path: str | Path,
+        *,
+        map_location: str | torch.device,
+    ) -> VSTFlowMatchingModule:
+        """Load a strict inference checkpoint after model-owned metadata migration.
+
+        :param checkpoint_path: Trusted Lightning checkpoint path.
+        :param map_location: Device used while deserializing checkpoint tensors.
+        :returns: Strictly loaded flow module with current sketch metadata.
+        """
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        sketch_controls = _checkpoint_sketch_controls(payload)
+        del payload
+        return cls.load_from_checkpoint(
+            checkpoint_path,
+            map_location=map_location,
+            strict=True,
+            weights_only=False,
+            sketch_controls=sketch_controls,
+        )
+
+    @property
+    @jaxtyped(typechecker=beartype)
+    def sketch_control_spec(self) -> SketchControlSpec | None:
+        """Return the resolved sketch-control capability.
+
+        :returns: Immutable sketch specification, or ``None`` without sketch support.
+        """
+        return self._sketch_controls
+
+    @jaxtyped(typechecker=beartype)
+    def require_inference_capabilities(self, required: InferenceRequirements) -> None:
+        """Validate public conditioning and output capabilities for serving.
+
+        A missing legacy parameter-spec name remains compatible when the encoded output width
+        matches; an explicit conflicting identity is rejected.
+
+        :param required: Caller-required public model capabilities.
+        :raises ValueError: Any public capability is incompatible.
+        """
+        actual_conditioning = self.hparams["conditioning"]
+        actual_embedding = resolve_embedding_conditioning(actual_conditioning)
+        required_embedding = resolve_embedding_conditioning(required.conditioning)
+        if actual_embedding != required_embedding or (
+            actual_embedding is None and actual_conditioning != required.conditioning
+        ):
+            raise ValueError(
+                f"checkpoint conditioning {actual_conditioning!r} does not match "
+                f"{required.conditioning!r}"
+            )
+
+        required_sketch = resolve_sketch_controls(required.sketch_controls)
+        if self._sketch_controls != required_sketch:
+            raise ValueError(
+                f"checkpoint sketch controls {self._sketch_controls!r} do not match "
+                f"{required_sketch!r}"
+            )
+
+        checkpoint_param_spec = self.hparams.get("param_spec")
+        if checkpoint_param_spec not in (None, required.param_spec):
+            raise ValueError(
+                f"checkpoint parameter spec {checkpoint_param_spec!r} does not match "
+                f"{required.param_spec!r}"
+            )
+        if self.hparams["num_params"] != required.num_params:
+            raise ValueError(
+                f"checkpoint output width {self.hparams['num_params']} does not match "
+                f"{required.num_params}"
+            )
+
     def on_train_start(self) -> None:
         if self.audio_loss is None:
             return
@@ -488,8 +637,13 @@ class VSTFlowMatchingModule(LightningModule):
         target = self._rectified_vector_field(x0, x1)
         return target
 
-    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return batch[self._conditioning_key]
+    def _get_conditioning_from_batch(
+        self, batch: Mapping[str, Shaped[torch.Tensor, ...] | None]
+    ) -> Shaped[torch.Tensor, "batch ..."]:
+        conditioning = batch[self._conditioning_key]
+        if conditioning is None:
+            raise ValueError(f"batch conditioning {self._conditioning_key!r} cannot be null")
+        return conditioning
 
     @jaxtyped(typechecker=beartype)
     def _sample_conditioning_keep_masks(
@@ -516,7 +670,7 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def _prepare_conditioning(
-        self, batch: dict[str, Shaped[torch.Tensor, ...] | None]
+        self, batch: Mapping[str, Shaped[torch.Tensor, ...] | None]
     ) -> tuple[
         Shaped[torch.Tensor, "batch ..."],
         Float[torch.Tensor, "batch tokens d_model"] | None,
@@ -528,6 +682,7 @@ class VSTFlowMatchingModule(LightningModule):
             whenever a sketch spec is configured.
         :returns: Post-dropout conditioning, sketch control tokens (``None`` without a
             configured spec), and the keep masks that produced both.
+        :raises ValueError: Sketch controls are configured but absent from the batch.
         """
         conditioning = self.encoder(self._get_conditioning_from_batch(batch))
         if (
@@ -544,22 +699,32 @@ class VSTFlowMatchingModule(LightningModule):
             )
             return z, None, ConditioningKeepMasks.content_only(content_keep)
 
+        controls = batch["sketch_ctrl"]
+        if controls is None:
+            raise ValueError(
+                "batch sketch_ctrl cannot be null when sketch controls are configured"
+            )
         keep = self._sample_conditioning_keep_masks(conditioning.shape[0], conditioning.device)
         z, _ = self.vector_field.apply_dropout(conditioning, keep_mask=keep.content)
-        return z, self.sketch_tokens(batch["sketch_ctrl"], keep.sketch_groups), keep
+        return z, self.sketch_tokens(controls, keep.sketch_groups), keep
 
     @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
-        self, batch: dict[str, Shaped[torch.Tensor, ...] | None]
+        self, batch: Mapping[str, Shaped[torch.Tensor, ...] | None]
     ) -> ControlTokenBranches | None:
         """Build complete full-sketch and PE-only control branches for inference.
 
         :param batch: Model batch carrying sketch controls when configured.
         :returns: Both control-token branches, or ``None`` without sketch support.
+        :raises ValueError: Sketch controls are configured but absent from the batch.
         """
         if self.sketch_tokens is None:
             return None
         controls = batch["sketch_ctrl"]
+        if controls is None:
+            raise ValueError(
+                "batch sketch_ctrl cannot be null when sketch controls are configured"
+            )
         keep = torch.ones(
             controls.shape[0], len(CONTROL_GROUPS), dtype=torch.bool, device=controls.device
         )
@@ -774,16 +939,78 @@ class VSTFlowMatchingModule(LightningModule):
 
         return sample
 
-    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+    @jaxtyped(typechecker=beartype)
+    def sample_batch(
+        self,
+        batch: Mapping[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE] | None],
+        *,
+        noise: Float[torch.Tensor, "batch params"] | None = None,
+        generator: torch.Generator | None = None,
+        strengths: CfgStrengths[float | None] | None = None,
+        sample_steps: int | None = None,
+    ) -> SampleBatchResult:
+        """Sample model-space parameters without global RNG or hparam mutation.
+
+        :param batch: Existing model batch carrying content and optional sketch controls.
+        :param noise: Explicit float32 noise shaped ``(batch, num_params)``.
+        :param generator: Caller-owned generator; noise moves to the model device after drawing.
+        :param strengths: Optional content and sketch guidance overrides.
+        :param sample_steps: Integration steps, defaulting to the checkpoint test value.
+        :returns: Predictions and effective guidance values.
+        :raises ValueError: Noise selection, shape, device, steps, or guidance is invalid.
+        """
+        if (noise is None) == (generator is None):
+            raise ValueError("provide exactly one of noise or generator")
+
         conditioning = self._get_conditioning_from_batch(batch)
-        pred_params = self._sample(
+        expected_shape = (conditioning.shape[0], self.hparams.num_params)
+        if noise is None:
+            noise = torch.randn(
+                expected_shape,
+                dtype=torch.float32,
+                device=generator.device,
+                generator=generator,
+            ).to(conditioning.device)
+        elif noise.dtype is not torch.float32:
+            raise ValueError(f"noise dtype must be float32, got {noise.dtype}")
+        elif tuple(noise.shape) != expected_shape:
+            raise ValueError(f"noise shape must be {expected_shape}, got {tuple(noise.shape)}")
+        elif noise.device != conditioning.device:
+            raise ValueError(f"noise device must be {conditioning.device}, got {noise.device}")
+
+        requested = strengths if strengths is not None else CfgStrengths(content=None, sketch=None)
+        effective = resolve_cfg_strengths(
+            requested,
+            default_content=self.hparams.test_cfg_strength,
+            default_sketch=self.hparams.get("test_sketch_cfg_strength"),
+        )
+        steps = self.hparams.test_sample_steps if sample_steps is None else sample_steps
+        if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
+            raise ValueError("sample_steps must be a positive integer")
+
+        predictions = self._sample(
             conditioning,
-            torch.randn_like(batch["params"]),
-            self.hparams.validation_sample_steps,
-            self.hparams.validation_cfg_strength,
-            sketch_cfg_strength=self.hparams.validation_sketch_cfg_strength,
+            noise,
+            steps,
+            effective.content,
+            sketch_cfg_strength=effective.sketch,
             control_tokens=self._control_token_branches_from_batch(batch),
         )
+        return SampleBatchResult(predictions=predictions, strengths=effective)
+
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+        del batch_idx
+        validation_strengths = resolve_cfg_strengths(
+            CfgStrengths(content=None, sketch=None),
+            default_content=self.hparams.validation_cfg_strength,
+            default_sketch=self.hparams.get("validation_sketch_cfg_strength"),
+        )
+        pred_params = self.sample_batch(
+            batch,
+            noise=torch.randn_like(batch["params"]),
+            strengths=validation_strengths,
+            sample_steps=self.hparams.validation_sample_steps,
+        ).predictions
 
         per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
         per_param_mse_best_swap = best_swap_per_param_mse(pred_params, batch["params"])
@@ -827,15 +1054,11 @@ class VSTFlowMatchingModule(LightningModule):
         pass
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
-        pred_params = self._sample(
-            conditioning,
-            torch.randn_like(batch["params"]),
-            self.hparams.test_sample_steps,
-            self.hparams.test_cfg_strength,
-            sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
-            control_tokens=self._control_token_branches_from_batch(batch),
-        )
+        del batch_idx
+        pred_params = self.sample_batch(
+            batch,
+            noise=torch.randn_like(batch["params"]),
+        ).predictions
 
         param_mse = (pred_params - batch["params"]).square().mean()
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
@@ -861,25 +1084,35 @@ class VSTFlowMatchingModule(LightningModule):
     def on_test_epoch_end(self) -> None:
         pass
 
+    @jaxtyped(typechecker=beartype)
     def predict_step(
-        self, batch: dict[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE]], batch_idx: int
-    ):
-        conditioning = self._get_conditioning_from_batch(batch)
-        return (
-            self._sample(
-                conditioning,
-                torch.randn(
-                    conditioning.shape[0],
-                    self.hparams.num_params,
-                    device=conditioning.device,
-                ),
-                self.hparams.test_sample_steps,
-                self.hparams.test_cfg_strength,
-                sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
-                control_tokens=self._control_token_branches_from_batch(batch),
-            ),
-            batch,
-        )
+        self,
+        batch: Mapping[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE] | None],
+        batch_idx: int,
+        *,
+        noise: Float[torch.Tensor, "batch params"] | None = None,
+        generator: torch.Generator | None = None,
+    ) -> tuple[
+        Float[torch.Tensor, "batch params"],
+        Mapping[str, Shaped[torch.Tensor, ...] | None],
+    ]:
+        """Sample a Lightning prediction through :meth:`sample_batch`.
+
+        An omitted source uses an independently seeded local generator, preserving stochastic
+        prediction without changing process-global RNG state.
+
+        :param batch: Existing model batch.
+        :param batch_idx: Lightning batch index, unused by sampling.
+        :param noise: Optional controlled float32 sample noise.
+        :param generator: Optional caller-owned local generator.
+        :returns: Sampled parameters and the original batch.
+        """
+        del batch_idx
+        if noise is None and generator is None:
+            generator = torch.Generator()
+            generator.seed()
+        result = self.sample_batch(batch, noise=noise, generator=generator)
+        return result.predictions, batch
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":

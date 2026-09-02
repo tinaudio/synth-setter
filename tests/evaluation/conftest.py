@@ -98,8 +98,10 @@ def fixture_pred_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     encoded = (rng.random((_PRED_BATCH_SIZE, len(_PARAM_SPEC))) * 2 - 1).astype(np.float32)
     torch.save(torch.from_numpy(encoded), pred_dir / "pred-0.pt")
 
-    target_audio = rng.standard_normal(
-        (_PRED_BATCH_SIZE, _PRED_AUDIO_CHANNELS, _PRED_AUDIO_SAMPLES)
+    target_audio = rng.uniform(
+        -0.5,
+        0.5,
+        (_PRED_BATCH_SIZE, _PRED_AUDIO_CHANNELS, _PRED_AUDIO_SAMPLES),
     ).astype(np.float32)
     torch.save(torch.from_numpy(target_audio), pred_dir / "target-audio-0.pt")
 

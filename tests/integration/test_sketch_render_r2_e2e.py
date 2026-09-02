@@ -14,7 +14,6 @@ import pytest
 import torch
 from pedalboard.io import AudioFile
 
-from synth_setter.cli._cfg_strength import CfgStrengths
 from synth_setter.cli.sketch_render import (
     _CACHE_NAMESPACE,
     _CHECKPOINT_SHA256,
@@ -24,9 +23,11 @@ from synth_setter.cli.sketch_render import (
     _load_model,
     _predict_patch,
     _validate_stats,
-    prepare_audio_inputs,
 )
+from synth_setter.data.audio_datamodule import load_audio_file_to_grid
+from synth_setter.data.vst_datamodule import load_mel_statistics, prepare_paired_audio_inputs
 from synth_setter.model_cache import cache_r2_file
+from synth_setter.models.cfg import CfgStrengths
 from synth_setter.pipeline import r2_io
 
 pytestmark = [
@@ -76,7 +77,8 @@ def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: 
     stats_path = cache_r2_file(DEFAULT_STATS_URI, _CACHE_NAMESPACE, _STATS_SHA256)
     _validate_stats(stats_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = _load_model(checkpoint_path, device)
+    model, sketch_spec = _load_model(checkpoint_path, device)
+    mean, std = load_mel_statistics(stats_path)
 
     base_root = tmp_path / "base"
     guide_root = tmp_path / "guide-change"
@@ -84,21 +86,45 @@ def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: 
     base_root.mkdir()
     guide_root.mkdir()
     reference_root.mkdir()
-    base = prepare_audio_inputs(*_write_inputs(base_root), stats_path)
-    guide_changed = prepare_audio_inputs(
-        *_write_inputs(guide_root, guide_frequency=440.0), stats_path
+    base_guide_path, base_reference_path = _write_inputs(base_root)
+    changed_guide_path, guide_reference_path = _write_inputs(guide_root, guide_frequency=440.0)
+    reference_guide_path, changed_reference_path = _write_inputs(
+        reference_root, reference_frequency=660.0
     )
-    reference_changed = prepare_audio_inputs(
-        *_write_inputs(reference_root, reference_frequency=660.0), stats_path
+    base = prepare_paired_audio_inputs(
+        load_audio_file_to_grid(base_guide_path, leading_padding_seconds=0.0, amp_scale=1.0),
+        load_audio_file_to_grid(base_reference_path, leading_padding_seconds=0.0, amp_scale=1.0),
+        sample_rate=44100,
+        mean=mean,
+        std=std,
+        sketch_spec=sketch_spec,
+    )
+    guide_changed = prepare_paired_audio_inputs(
+        load_audio_file_to_grid(changed_guide_path, leading_padding_seconds=0.0, amp_scale=1.0),
+        load_audio_file_to_grid(guide_reference_path, leading_padding_seconds=0.0, amp_scale=1.0),
+        sample_rate=44100,
+        mean=mean,
+        std=std,
+        sketch_spec=sketch_spec,
+    )
+    reference_changed = prepare_paired_audio_inputs(
+        load_audio_file_to_grid(reference_guide_path, leading_padding_seconds=0.0, amp_scale=1.0),
+        load_audio_file_to_grid(
+            changed_reference_path, leading_padding_seconds=0.0, amp_scale=1.0
+        ),
+        sample_rate=44100,
+        mean=mean,
+        std=std,
+        sketch_spec=sketch_spec,
     )
 
     requested_strengths = CfgStrengths(content=2.0, sketch=3.0)
-    base_params, _, _ = _predict_patch(base, model, requested_strengths)
-    guide_params, _, _ = _predict_patch(guide_changed, model, requested_strengths)
-    reference_params, _, _ = _predict_patch(reference_changed, model, requested_strengths)
+    base_row, _ = _predict_patch(base, model, requested_strengths)
+    guide_row, _ = _predict_patch(guide_changed, model, requested_strengths)
+    reference_row, _ = _predict_patch(reference_changed, model, requested_strengths)
 
-    assert guide_params != base_params
-    assert reference_params != base_params
+    assert not np.array_equal(guide_row, base_row)
+    assert not np.array_equal(reference_row, base_row)
 
 
 def test_installed_cli_real_checkpoint_surge_and_r2_produce_consumable_audio(

@@ -18,7 +18,11 @@ from synth_setter.conditioning import (
     SketchControlSpec,
 )
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
-from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
+from synth_setter.data.vst_datamodule import (
+    RawBatch,
+    prepare_batch,
+    prepare_sketch_controls,
+)
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import sketch_struct_array, write_lance_dataset
 from tests.data.test_embedding_conditioning import _write_embedding_shard
@@ -76,8 +80,49 @@ def _prepare_sketch(
         rescale_params=True,
         ot=ot,
         generator=torch.Generator().manual_seed(0),
-        sketch_pitch_zero_threshold=threshold,
+        sketch_spec=(
+            SketchControlSpec(
+                num_frames=values.shape[-1],
+                pitch_zero_threshold=threshold,
+            )
+            if threshold is not None
+            else None
+        ),
     )
+
+
+def test_prepare_sketch_controls_retains_frames_and_applies_threshold() -> None:
+    """Unpooled controls retain their frame count and zero sub-threshold pitch."""
+    controls = torch.full((1, NUM_SKETCH_CONTROLS, 401), 0.2, dtype=torch.float32)
+    controls[:, SKETCH_PITCH_SLICE.start, -1] = 0.5
+
+    prepared = prepare_sketch_controls(
+        controls,
+        SketchControlSpec(num_frames=401, pitch_zero_threshold=0.25),
+    )
+
+    assert prepared.shape == (1, NUM_SKETCH_CONTROLS, 401)
+    assert prepared.dtype == torch.float32
+    assert prepared[0, SKETCH_PITCH_SLICE.start, 0] == 0.0
+    assert prepared[0, SKETCH_PITCH_SLICE.start, -1] == 0.5
+
+
+def test_prepare_sketch_controls_pools_to_requested_frames() -> None:
+    """Full-grid controls pool to the serving checkpoint's frame count."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 401, dtype=torch.float32)
+    controls[:, 0, 1::2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, 0] = 0.2
+    controls[:, SKETCH_PITCH_SLICE.start, -1] = 0.5
+
+    prepared = prepare_sketch_controls(
+        controls,
+        SketchControlSpec(num_frames=32, pitch_zero_threshold=0.25),
+    )
+
+    assert prepared.shape == (1, NUM_SKETCH_CONTROLS, 32)
+    assert prepared.dtype == torch.float32
+    pitch = prepared[:, SKETCH_PITCH_SLICE]
+    assert torch.all(pitch[pitch > 0] >= 0.25)
 
 
 def test_prepare_batch_pitch_cells_below_threshold_zeroed() -> None:

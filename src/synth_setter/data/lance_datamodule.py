@@ -216,7 +216,7 @@ class PrepareBatchCollate:
         conditioning_column: str | None = None,
         conditioning_shape: tuple[int, ...] | None = None,
         sketch_column: str | None = None,
-        sketch_pitch_zero_threshold: float | None = None,
+        sketch_spec: SketchControlSpec | None = None,
         preserve_legacy_m2l: bool = False,
     ) -> None:
         """Configure model-batch transformation semantics.
@@ -229,8 +229,7 @@ class PrepareBatchCollate:
         :param conditioning_shape: Per-row model shape restored from flattened storage.
         :param sketch_column: Stored sketch struct column whose expanded
             children are reassembled into ``sketch_ctrl``.
-        :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
-            or ``None`` to pass activations through unbinned.
+        :param sketch_spec: Resolved sketch postprocessing contract, or ``None``.
         :param preserve_legacy_m2l: Whether ``music2latent`` also populates ``m2l``.
         """
         self.mean = mean
@@ -240,7 +239,7 @@ class PrepareBatchCollate:
         self.conditioning_column = conditioning_column
         self.conditioning_shape = conditioning_shape
         self.sketch_column = sketch_column
-        self.sketch_pitch_zero_threshold = sketch_pitch_zero_threshold
+        self.sketch_spec = sketch_spec
         self.preserve_legacy_m2l = preserve_legacy_m2l
         self._rank = (
             torch.distributed.get_rank()
@@ -309,7 +308,7 @@ class PrepareBatchCollate:
             rescale_params=self.rescale_params,
             ot=self.ot,
             generator=self._live_generator(),
-            sketch_pitch_zero_threshold=self.sketch_pitch_zero_threshold,
+            sketch_spec=self.sketch_spec,
         )
 
 
@@ -638,9 +637,7 @@ class LanceVSTDataModule(VSTDataModule):
                 conditioning_column=spec.column if spec is not None else None,
                 conditioning_shape=spec.input_shape if spec is not None else None,
                 sketch_column=sketch.column if sketch is not None else None,
-                sketch_pitch_zero_threshold=(
-                    sketch.pitch_zero_threshold if sketch is not None else None
-                ),
+                sketch_spec=sketch,
                 preserve_legacy_m2l=(
                     isinstance(self.conditioning, str) and self.conditioning == "m2l"
                 ),

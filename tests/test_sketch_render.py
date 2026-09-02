@@ -1,5 +1,6 @@
 """Behavior tests for the Surge sketch-render CLI."""
 
+import ast
 import csv
 import json
 import subprocess
@@ -14,22 +15,14 @@ import torch
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
-from synth_setter.cli._cfg_strength import CfgStrengths
 from synth_setter.cli.sketch_render import (
     _EXPECTED_AUDIO_SHAPE,
-    PreparedAudioInputs,
-    RenderedPatch,
-    _fit_audio_to_model_grid,
-    _load_model_audio,
     _predict_patch,
-    _render_patch,
     _run_request,
     _run_under_headless_wrapper,
     _validate_stats,
     main,
-    prepare_audio_inputs,
     upload_output_artifacts,
-    validate_checkpoint_compatibility,
     write_output_artifacts,
     write_run_manifest,
 )
@@ -37,9 +30,20 @@ from synth_setter.conditioning import (
     SKETCH_CENTROID_ROW,
     SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_SLICE,
+    SketchControlSpec,
 )
+from synth_setter.data.audio_datamodule import load_audio_file_to_grid
+from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.shapes import make_spectrogram
+from synth_setter.data.vst_datamodule import (
+    PreparedAudioInputs,
+    load_mel_statistics,
+    prepare_paired_audio_inputs,
+)
+from synth_setter.evaluation.predict_vst_audio import RenderedPrediction
 from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS
+from synth_setter.models.cfg import CfgStrengths
+from synth_setter.models.vst_flow_matching_module import SampleBatchResult
 from synth_setter.pipeline import r2_io
 from synth_setter.resources import surge_simple_preset
 from synth_setter.synth_spec import SYNTHS, SynthName
@@ -217,7 +221,7 @@ def test_installed_console_script_exposes_public_help() -> None:
 
 
 @pytest.mark.parametrize(("duration_seconds", "expected_last_sample"), [(2, 0.0), (5, 0.25)])
-def test_load_model_audio_short_and_long_inputs_fit_four_second_grid(
+def test_shared_loader_short_and_long_inputs_fit_unshifted_unit_scale_grid(
     duration_seconds: int, expected_last_sample: float, tmp_path: Path
 ) -> None:
     """Pad short clips and trim long clips without shifting their onset.
@@ -232,7 +236,11 @@ def test_load_model_audio_short_and_long_inputs_fit_four_second_grid(
     with AudioFile(str(source_path), "w", sample_rate, 1) as audio_file:
         audio_file.write(source)
 
-    prepared = _load_model_audio(source_path)
+    prepared = load_audio_file_to_grid(
+        source_path,
+        leading_padding_seconds=0.0,
+        amp_scale=1.0,
+    )
 
     assert prepared.shape == _EXPECTED_AUDIO_SHAPE
     assert torch.all(prepared[:, 0] > 0.2)
@@ -240,19 +248,28 @@ def test_load_model_audio_short_and_long_inputs_fit_four_second_grid(
 
 
 @pytest.mark.parametrize("invalid_sample", [float("nan"), float("inf"), 1.01, -1.01])
-def test_fit_audio_to_model_grid_invalid_sample_raises(invalid_sample: float) -> None:
-    """Reject non-finite or out-of-range input before feature extraction.
+def test_prepare_paired_audio_inputs_invalid_sample_raises(invalid_sample: float) -> None:
+    """Reject non-finite or out-of-range model-grid input before extraction.
 
     :param invalid_sample: Value outside the model waveform contract.
     """
-    audio = np.zeros((1, _EXPECTED_AUDIO_SHAPE[1]), dtype=np.float32)
-    audio[0, 0] = invalid_sample
+    guide_audio = torch.zeros(_EXPECTED_AUDIO_SHAPE, dtype=torch.float32)
+    guide_audio[0, 0] = invalid_sample
 
     with pytest.raises(ValueError, match=r"finite.*\[-1, 1\]"):
-        _fit_audio_to_model_grid(audio)
+        prepare_paired_audio_inputs(
+            guide_audio,
+            torch.zeros_like(guide_audio),
+            sample_rate=44100,
+            mean=np.array(0.0, dtype=np.float32),
+            std=np.array(1.0, dtype=np.float32),
+            sketch_spec=SketchControlSpec(num_frames=401),
+        )
 
 
-def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_path: Path) -> None:
+def test_prepare_paired_audio_inputs_normalizes_real_wavs_and_extracts_features(
+    tmp_path: Path,
+) -> None:
     """Real audio reaches the training mel path and guide-control extractor.
 
     :param tmp_path: Holds the source WAVs and mel statistics.
@@ -276,7 +293,17 @@ def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_pat
     stats_path = tmp_path / "stats.npz"
     np.savez(stats_path, mean=np.float32(-40.0), std=np.float32(20.0))
 
-    prepared = prepare_audio_inputs(guide_path, ref_path, stats_path)
+    guide_audio = load_audio_file_to_grid(guide_path, leading_padding_seconds=0.0, amp_scale=1.0)
+    reference_audio = load_audio_file_to_grid(ref_path, leading_padding_seconds=0.0, amp_scale=1.0)
+    mean, std = load_mel_statistics(stats_path)
+    prepared = prepare_paired_audio_inputs(
+        guide_audio,
+        reference_audio,
+        sample_rate=44100,
+        mean=mean,
+        std=std,
+        sketch_spec=SketchControlSpec(num_frames=401),
+    )
     raw_ref_mel = torch.from_numpy(make_spectrogram(prepared.reference_audio.numpy(), 44100.0))
 
     assert prepared.guide_audio.shape == _EXPECTED_AUDIO_SHAPE
@@ -322,7 +349,7 @@ def test_write_output_artifacts_wrong_render_shape_raises(tmp_path: Path) -> Non
         write_output_artifacts(
             tmp_path / "output",
             prepared,
-            RenderedPatch(
+            RenderedPrediction(
                 audio=np.zeros((2, _EXPECTED_AUDIO_SHAPE[1] // 2), dtype=np.float32),
                 synth_params={"filter_1_cutoff": 0.5},
                 note_params={"pitch": 60, "note_start_and_end": (0.05, 1.95)},
@@ -349,11 +376,11 @@ def test_write_output_artifacts_invalid_rendered_audio_raises(
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
 
-    with pytest.raises(ValueError, match=r"finite.*\[-1, 1\]"):
+    with pytest.raises(ValueError, match=r"finite|within \[-1, 1\]"):
         write_output_artifacts(
             tmp_path / "output",
             prepared,
-            RenderedPatch(
+            RenderedPrediction(
                 audio=rendered,
                 synth_params={"filter_1_cutoff": 0.5},
                 note_params={"pitch": 60, "note_start_and_end": (0.05, 3.95)},
@@ -382,7 +409,7 @@ def test_output_artifacts_round_trip_through_real_rclone(
     write_output_artifacts(
         output_dir,
         prepared,
-        RenderedPatch(
+        RenderedPrediction(
             audio=pred_audio,
             synth_params={"filter_1_cutoff": 0.5},
             note_params={"pitch": 60, "note_start_and_end": (3.95, 0.05)},
@@ -427,30 +454,6 @@ def test_output_artifacts_round_trip_through_real_rclone(
     assert manifest["git_sha"]
     assert manifest["content_cfg_strength"] == 2.0
     assert manifest["sketch_cfg_strength"] == 3.0
-
-
-def _compatible_checkpoint() -> dict[str, object]:
-    return {
-        "hyper_parameters": {
-            "conditioning": "mel",
-            "num_params": 92,
-            "param_spec": None,
-            "sketch_controls": {
-                "column": "sketch",
-                "num_frames": 401,
-                "num_ctrl_tokens": 32,
-                "pitch_zero_threshold": 0.1,
-            },
-        },
-        "state_dict": {
-            "encoder.patch_embed.projection.weight": torch.empty(512, 2, 16, 16),
-            "sketch_tokens.positional_encoding": torch.empty(1, 32, 512),
-            "sketch_tokens.projections.loudness.weight": torch.empty(512, 1),
-            "sketch_tokens.projections.centroid.weight": torch.empty(512, 1),
-            "sketch_tokens.projections.pitch.weight": torch.empty(512, 384),
-            "vector_field.projection._assignment": torch.empty(128, 92),
-        },
-    }
 
 
 def test_validate_stats_expected_arrays_returns_without_error(tmp_path: Path) -> None:
@@ -512,222 +515,45 @@ def test_validate_stats_nonpositive_std_raises(tmp_path: Path) -> None:
         _validate_stats(stats_path)
 
 
-def test_predict_patch_finite_prediction_decodes_real_param_spec() -> None:
-    """A finite model-space prediction reaches the real Surge decoder."""
-    prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        reference_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        ref_mel=torch.zeros(2, 128, 401),
-        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
-    )
-    model = Mock()
-    model.device = torch.device("cpu")
-    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
-    model.predict_step.return_value = (torch.zeros(1, 92), None)
+def _prepared_inputs() -> PreparedAudioInputs:
+    """Build model-shaped inputs for focused prediction-boundary tests.
 
-    synth_params, note_params, strengths = _predict_patch(
-        prepared,
-        model,
-        CfgStrengths(content=None, sketch=None),
-    )
-
-    assert len(synth_params) > 80
-    assert 0 <= note_params["pitch"] <= 127
-    assert len(note_params["note_start_and_end"]) == 2
-    assert strengths == CfgStrengths(content=4.0, sketch=4.0)
-
-
-def test_predict_patch_explicit_zero_then_omitted_uses_checkpoint_strengths() -> None:
-    """A reusable sketch model keeps checkpoint defaults across requests."""
-    prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        reference_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        ref_mel=torch.zeros(2, 128, 401),
-        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
-    )
-    model = Mock()
-    model.device = torch.device("cpu")
-    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": 6.0}
-    model.predict_step.return_value = (torch.zeros(1, 92), None)
-
-    _, _, explicit_strengths = _predict_patch(
-        prepared,
-        model,
-        CfgStrengths(content=0.0, sketch=0.0),
-    )
-    _, _, omitted_strengths = _predict_patch(
-        prepared,
-        model,
-        CfgStrengths(content=None, sketch=None),
-    )
-
-    assert explicit_strengths == CfgStrengths(content=0.0, sketch=0.0)
-    assert omitted_strengths == CfgStrengths(content=4.0, sketch=6.0)
-    assert model.hparams == {
-        "test_cfg_strength": 4.0,
-        "test_sketch_cfg_strength": 6.0,
-    }
-
-
-def test_predict_patch_saved_cfg_strengths_preserved() -> None:
-    """Omitted overrides preserve distinct checkpoint guidance strengths."""
-    prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        reference_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        ref_mel=torch.zeros(2, 128, 401),
-        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
-    )
-    model = Mock()
-    model.device = torch.device("cpu")
-    model.hparams = {"test_cfg_strength": 2.5, "test_sketch_cfg_strength": 6.5}
-    model.predict_step.return_value = (torch.zeros(1, 92), None)
-
-    _, _, strengths = _predict_patch(
-        prepared,
-        model,
-        CfgStrengths(content=None, sketch=None),
-    )
-
-    assert strengths == CfgStrengths(content=2.5, sketch=6.5)
-    assert model.hparams["test_cfg_strength"] == 2.5
-    assert model.hparams["test_sketch_cfg_strength"] == 6.5
-
-
-@pytest.mark.parametrize("legacy_sketch_strength", [None, pytest.param("missing", id="missing")])
-def test_predict_patch_legacy_sketch_strength_uses_effective_content(
-    legacy_sketch_strength: float | str | None,
-) -> None:
-    """A legacy absent sketch scale follows the effective content override.
-
-    :param legacy_sketch_strength: Legacy missing or null checkpoint representation.
+    :returns: Zero-valued reference and sketch features.
     """
-    prepared = PreparedAudioInputs(
+    return PreparedAudioInputs(
         guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         reference_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
         ref_mel=torch.zeros(2, 128, 401),
         sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
     )
+
+
+@pytest.mark.parametrize(
+    ("prediction", "message"),
+    [
+        (torch.zeros(1, 92, dtype=torch.float64), "dtype must be torch.float32"),
+        (torch.zeros(1, 91), "shape"),
+        (torch.full((1, 92), float("nan")), "finite"),
+    ],
+)
+def test_predict_patch_invalid_prediction_raises(
+    prediction: torch.Tensor,
+    message: str,
+) -> None:
+    """Sketch prediction rejects incompatible dtype, shape, or values.
+
+    :param prediction: Invalid sampler output.
+    :param message: Expected contract failure.
+    """
     model = Mock()
     model.device = torch.device("cpu")
-    model.hparams = {"test_cfg_strength": 4.0}
-    if legacy_sketch_strength is None:
-        model.hparams["test_sketch_cfg_strength"] = None
-    model.predict_step.return_value = (torch.zeros(1, 92), None)
-
-    _, _, strengths = _predict_patch(
-        prepared,
-        model,
-        CfgStrengths(content=1.5, sketch=None),
+    model.sample_batch.return_value = SampleBatchResult(
+        predictions=prediction,
+        strengths=CfgStrengths(content=4.0, sketch=4.0),
     )
 
-    assert strengths == CfgStrengths(content=1.5, sketch=1.5)
-    assert model.hparams["test_cfg_strength"] == 4.0
-    if legacy_sketch_strength is None:
-        assert model.hparams["test_sketch_cfg_strength"] is None
-    else:
-        assert "test_sketch_cfg_strength" not in model.hparams
-
-
-def test_predict_patch_wrong_shape_raises() -> None:
-    """A checkpoint prediction with the wrong output width fails before decoding."""
-    prepared = PreparedAudioInputs(
-        guide_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        reference_audio=torch.zeros(_EXPECTED_AUDIO_SHAPE),
-        ref_mel=torch.zeros(2, 128, 401),
-        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
-    )
-    model = Mock()
-    model.device = torch.device("cpu")
-    model.hparams = {"test_cfg_strength": 4.0, "test_sketch_cfg_strength": None}
-    model.predict_step.return_value = (torch.zeros(1, 91), None)
-
-    with pytest.raises(ValueError, match="shape"):
-        _predict_patch(prepared, model, CfgStrengths(content=None, sketch=None))
-
-
-def test_render_patch_descending_note_interval_reaches_renderer_ordered(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Independently decoded note endpoints reach Surge in ascending order.
-
-    :param monkeypatch: Replaces the installed VST and renderer boundaries.
-    :param tmp_path: Supplies a non-system plugin fixture path.
-    """
-    synth_version = SYNTHS[SynthName("surge_simple")].synth_version
-    plugin_path = str(tmp_path / "Surge.vst3")
-    monkeypatch.setattr("synth_setter.cli.sketch_render.default_plugin_path", lambda: plugin_path)
-    monkeypatch.setattr(
-        "synth_setter.cli.sketch_render.extract_renderer_version", lambda _: synth_version
-    )
-    renderer = Mock()
-    renderer.render.return_value = np.zeros(_EXPECTED_AUDIO_SHAPE, dtype=np.float32)
-    monkeypatch.setattr("synth_setter.cli.sketch_render.make_audio_renderer", lambda _: renderer)
-
-    patch = _render_patch(
-        {"filter_1_cutoff": 0.5},
-        {"pitch": 60, "note_start_and_end": (3.2, 0.8)},
-    )
-
-    assert patch.audio.shape == _EXPECTED_AUDIO_SHAPE
-    assert patch.note_params["note_start_and_end"] == (3.2, 0.8)
-    assert patch.effective_note_window == (0.8, 3.2)
-    assert renderer.render.call_args.args[3] == (0.8, 3.2)
-
-
-def test_render_patch_note_interval_outside_signal_clipped(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Decoded endpoints remain raw while rendering uses the clipped interval.
-
-    :param monkeypatch: Replaces the installed VST and renderer boundaries.
-    :param tmp_path: Supplies a non-system plugin fixture path.
-    """
-    synth_version = SYNTHS[SynthName("surge_simple")].synth_version
-    plugin_path = str(tmp_path / "Surge.vst3")
-    monkeypatch.setattr("synth_setter.cli.sketch_render.default_plugin_path", lambda: plugin_path)
-    monkeypatch.setattr(
-        "synth_setter.cli.sketch_render.extract_renderer_version", lambda _: synth_version
-    )
-    renderer = Mock()
-    renderer.render.return_value = np.zeros(_EXPECTED_AUDIO_SHAPE, dtype=np.float32)
-    monkeypatch.setattr("synth_setter.cli.sketch_render.make_audio_renderer", lambda _: renderer)
-
-    patch = _render_patch(
-        {"filter_1_cutoff": 0.5},
-        {"pitch": 60, "note_start_and_end": (-1.0, 5.0)},
-    )
-
-    assert patch.note_params["note_start_and_end"] == (-1.0, 5.0)
-    assert patch.effective_note_window == (0.0, 4.0)
-    assert renderer.render.call_args.args[3] == (0.0, 4.0)
-
-
-def test_render_patch_degenerate_note_interval_expands_one_sample(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Equal decoded endpoints render through a one-sample effective interval.
-
-    :param monkeypatch: Replaces the installed VST and renderer boundaries.
-    :param tmp_path: Supplies a non-system plugin fixture path.
-    """
-    synth_version = SYNTHS[SynthName("surge_simple")].synth_version
-    plugin_path = str(tmp_path / "Surge.vst3")
-    monkeypatch.setattr("synth_setter.cli.sketch_render.default_plugin_path", lambda: plugin_path)
-    monkeypatch.setattr(
-        "synth_setter.cli.sketch_render.extract_renderer_version", lambda _: synth_version
-    )
-    renderer = Mock()
-    renderer.render.return_value = np.zeros(_EXPECTED_AUDIO_SHAPE, dtype=np.float32)
-    monkeypatch.setattr("synth_setter.cli.sketch_render.make_audio_renderer", lambda _: renderer)
-
-    patch = _render_patch(
-        {"filter_1_cutoff": 0.5},
-        {"pitch": 60, "note_start_and_end": (2.0, 2.0)},
-    )
-
-    assert patch.note_params["note_start_and_end"] == (2.0, 2.0)
-    assert patch.effective_note_window == pytest.approx((2.0, 2.0 + 1.0 / 44100))
-    assert renderer.render.call_args.args[3] == pytest.approx((2.0, 2.0 + 1.0 / 44100))
+    with pytest.raises(ValueError, match=message):
+        _predict_patch(_prepared_inputs(), model, CfgStrengths(content=None, sketch=None))
 
 
 def test_headless_wrapper_nonexecutable_script_runs_through_shell(
@@ -830,24 +656,28 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
         ),
     )
     model = Mock()
-    monkeypatch.setattr("synth_setter.cli.sketch_render._load_model", lambda *_: model)
+    monkeypatch.setattr(
+        "synth_setter.cli.sketch_render._load_model",
+        lambda *_: (model, SketchControlSpec(num_frames=401)),
+    )
+    spec = param_specs["surge_simple"]
+    synth_params, _ = spec.sample(np.random.default_rng(0))
+    encoded = spec.encode(
+        synth_params,
+        {"pitch": 60, "note_start_and_end": (3.95, 0.05)},
+    )
+    prediction_row = spec.encoded_to_model(encoded)
     monkeypatch.setattr(
         "synth_setter.cli.sketch_render._predict_patch",
-        lambda *_: (
-            {"filter_1_cutoff": 0.5},
-            {"pitch": 60, "note_start_and_end": (0.05, 3.95)},
-            CfgStrengths(content=2.0, sketch=3.0),
-        ),
+        lambda *_: (prediction_row, CfgStrengths(content=2.0, sketch=3.0)),
     )
+    synth_version = SYNTHS[SynthName("surge_simple")].synth_version
     monkeypatch.setattr(
-        "synth_setter.cli.sketch_render._render_patch",
-        lambda synth_params, note_params: RenderedPatch(
-            audio=np.full(_EXPECTED_AUDIO_SHAPE, 0.0625, dtype=np.float32),
-            synth_params=synth_params,
-            note_params=note_params,
-            effective_note_window=note_params["note_start_and_end"],
-        ),
+        "synth_setter.cli.sketch_render.extract_renderer_version", lambda _: synth_version
     )
+    renderer = Mock()
+    renderer.render.return_value = np.full(_EXPECTED_AUDIO_SHAPE, 0.0625, dtype=np.float32)
+    monkeypatch.setattr("synth_setter.cli.sketch_render.make_audio_renderer", lambda _: renderer)
 
     output_dir, destination = _run_request(
         guide_path,
@@ -864,78 +694,19 @@ def test_run_request_real_preprocessing_and_rclone_publish_artifacts(
     assert rendered.shape == _EXPECTED_AUDIO_SHAPE
     assert np.isfinite(rendered).all()
     assert np.abs(rendered).max() > 0.05
+    with (remote / "params.csv").open(newline="", encoding="utf-8") as stream:
+        rows = {row[""]: row for row in csv.DictReader(stream)}
+    assert ast.literal_eval(rows["note_start_and_end"]["pred"]) == pytest.approx((3.95, 0.05))
+    assert ast.literal_eval(rows["note_start_and_end"]["pred_effective"]) == pytest.approx(
+        (0.05, 3.95)
+    )
+    render_call = renderer.render.call_args
+    assert render_call.args[1:3] == (60, 100)
+    assert render_call.args[3] == pytest.approx((0.05, 3.95))
+    assert render_call.kwargs == {"warmup": True}
     manifest = json.loads((remote / "manifest.json").read_text())
     assert manifest["content_cfg_strength"] == 2.0
     assert manifest["sketch_cfg_strength"] == 3.0
-
-
-def test_validate_checkpoint_compatibility_accepts_pinned_legacy_sketch_metadata() -> None:
-    """Accept ``num_ctrl_tokens`` when validating sketch metadata."""
-    sketch_config = validate_checkpoint_compatibility(_compatible_checkpoint())
-
-    assert sketch_config == {
-        "column": "sketch",
-        "num_frames": 401,
-        "num_control_tokens": 32,
-        "pitch_zero_threshold": 0.1,
-    }
-
-
-def test_validate_checkpoint_compatibility_ambiguous_token_count_raises() -> None:
-    """Conflicting legacy and current sketch widths cannot be normalized silently."""
-    checkpoint = _compatible_checkpoint()
-    checkpoint["hyper_parameters"]["sketch_controls"]["num_control_tokens"] = 64  # type: ignore[index]
-
-    with pytest.raises(ValueError, match="token"):
-        validate_checkpoint_compatibility(checkpoint)
-
-
-def test_validate_checkpoint_compatibility_conflicting_legacy_token_count_raises() -> None:
-    """Reject a conflicting legacy token count even when the current value is valid."""
-    checkpoint = _compatible_checkpoint()
-    checkpoint["hyper_parameters"]["sketch_controls"]["num_ctrl_tokens"] = 64  # type: ignore[index]
-    checkpoint["hyper_parameters"]["sketch_controls"]["num_control_tokens"] = 32  # type: ignore[index]
-
-    with pytest.raises(ValueError, match="token"):
-        validate_checkpoint_compatibility(checkpoint)
-
-
-def test_validate_checkpoint_compatibility_wrong_param_spec_raises() -> None:
-    """An explicitly foreign synth identity fails before model construction."""
-    checkpoint = _compatible_checkpoint()
-    checkpoint["hyper_parameters"]["param_spec"] = "surge_xt"  # type: ignore[index]
-
-    with pytest.raises(ValueError, match="surge_simple"):
-        validate_checkpoint_compatibility(checkpoint)
-
-
-def test_validate_checkpoint_compatibility_without_sketch_raises() -> None:
-    """A base-arm checkpoint cannot silently ignore the guide audio."""
-    checkpoint = _compatible_checkpoint()
-    checkpoint["hyper_parameters"]["sketch_controls"] = None  # type: ignore[index]
-
-    with pytest.raises(ValueError, match="sketch"):
-        validate_checkpoint_compatibility(checkpoint)
-
-
-def test_validate_checkpoint_compatibility_wrong_output_width_raises() -> None:
-    """A checkpoint targeting another encoded parameter width fails early."""
-    checkpoint = _compatible_checkpoint()
-    checkpoint["hyper_parameters"]["num_params"] = 300  # type: ignore[index]
-
-    with pytest.raises(ValueError, match="92"):
-        validate_checkpoint_compatibility(checkpoint)
-
-
-def test_validate_checkpoint_compatibility_wrong_feature_shape_raises() -> None:
-    """A checkpoint trained for another mel channel shape fails early."""
-    checkpoint = _compatible_checkpoint()
-    checkpoint["state_dict"]["encoder.patch_embed.projection.weight"] = torch.empty(  # type: ignore[index]
-        512, 1, 16, 16
-    )
-
-    with pytest.raises(ValueError, match="encoder.patch_embed"):
-        validate_checkpoint_compatibility(checkpoint)
 
 
 def _write_retained_run(output_dir: Path, destination: str, run_id: str | None = None) -> None:
@@ -977,7 +748,7 @@ def test_cli_retry_upload_real_rclone_publishes_consumable_producer_artifacts(
     write_output_artifacts(
         output_dir,
         prepared,
-        RenderedPatch(
+        RenderedPrediction(
             audio=np.full((2, 176400), 0.0625, dtype=np.float32),
             synth_params={"filter_1_cutoff": 0.5},
             note_params={"pitch": 60, "note_start_and_end": (3.95, 0.05)},

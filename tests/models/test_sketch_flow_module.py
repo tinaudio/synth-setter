@@ -1,14 +1,18 @@
 """Tests for sketch-control conditioning in the flow-matching module."""
 
+import pickle
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 import pytest
 import torch
+from lightning import Trainer
 
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.data.vst.shapes import NUM_SKETCH_CONTROLS
+from synth_setter.models.cfg import CfgStrengths
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
@@ -16,6 +20,7 @@ from synth_setter.models.components.transformer import (
 from synth_setter.models.vst_flow_matching_module import (
     ConditioningKeepMasks,
     ControlTokenBranches,
+    InferenceRequirements,
     VSTFlowMatchingModule,
     build_guided_velocity,
     joint_cfg_velocity,
@@ -93,6 +98,7 @@ def _module(
         cfg_dropout_rate=cfg_dropout_rate,
         audio_loss=cast("AudioFeedbackLoss | None", audio_loss),
         validation_sample_steps=2,
+        test_sample_steps=2,
     )
 
 
@@ -487,6 +493,259 @@ def test_validation_step_with_sketch_runs_cfg_sampling() -> None:
 
     assert torch.isfinite(out["param_mse"])
     assert out["preds"].shape == (_BATCH, _NUM_PARAMS)
+
+
+def test_sample_batch_fixed_local_generator_returns_identical_predictions() -> None:
+    """Equivalent local generator states produce identical model samples."""
+    module = _module(SketchControlSpec(num_frames=_NUM_FRAMES)).eval()
+    batch = _batch(with_sketch=True)
+
+    first = module.sample_batch(batch, generator=torch.Generator().manual_seed(17))
+    second = module.sample_batch(batch, generator=torch.Generator().manual_seed(17))
+
+    torch.testing.assert_close(first.predictions, second.predictions)
+    assert first.strengths == second.strengths
+
+
+def test_sample_batch_distinct_generator_seeds_change_predictions() -> None:
+    """Different local noise streams change a nonconstant flow sample."""
+    module = _module(None).eval()
+    batch = _batch(with_sketch=False)
+
+    first = module.sample_batch(batch, generator=torch.Generator().manual_seed(17))
+    second = module.sample_batch(batch, generator=torch.Generator().manual_seed(18))
+
+    assert not torch.equal(first.predictions, second.predictions)
+
+
+def test_sample_batch_local_generator_preserves_global_rng_states() -> None:
+    """Model sampling does not consume unrelated global CPU or CUDA RNG state."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    module = _module(None).to(device).eval()
+    batch = {name: value.to(device) for name, value in _batch(with_sketch=False).items()}
+    cpu_state = torch.random.get_rng_state().clone()
+    cuda_states = [state.clone() for state in torch.cuda.get_rng_state_all()]
+
+    generator = torch.Generator().manual_seed(17)
+    module.sample_batch(batch, generator=generator)
+
+    assert torch.equal(torch.random.get_rng_state(), cpu_state)
+    assert all(
+        torch.equal(actual, expected)
+        for actual, expected in zip(torch.cuda.get_rng_state_all(), cuda_states, strict=True)
+    )
+
+
+def test_sample_batch_explicit_noise_preserves_hparams() -> None:
+    """Runtime strengths are values and never temporary hparam mutations."""
+    module = _module(SketchControlSpec(num_frames=_NUM_FRAMES)).eval()
+    batch = _batch(with_sketch=True)
+    before = pickle.dumps(dict(module.hparams))
+
+    result = module.sample_batch(
+        batch,
+        noise=torch.zeros(_BATCH, _NUM_PARAMS, dtype=torch.float32),
+        strengths=CfgStrengths(content=0.0, sketch=0.0),
+    )
+
+    assert result.strengths == CfgStrengths(content=0.0, sketch=0.0)
+    assert pickle.dumps(dict(module.hparams)) == before
+
+
+@pytest.mark.parametrize(
+    ("noise", "generator", "message"),
+    [
+        (None, None, "exactly one"),
+        (torch.zeros(_BATCH, _NUM_PARAMS), torch.Generator(), "exactly one"),
+        (torch.zeros(_BATCH, _NUM_PARAMS, dtype=torch.float64), None, "float32"),
+    ],
+)
+def test_sample_batch_invalid_noise_source_raises(
+    noise: torch.Tensor | None,
+    generator: torch.Generator | None,
+    message: str,
+) -> None:
+    """Sampling rejects ambiguous, absent, or non-float32 noise.
+
+    :param noise: Explicit sample noise candidate.
+    :param generator: Local random generator candidate.
+    :param message: Expected validation error.
+    """
+    module = _module(None).eval()
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        module.sample_batch(_batch(with_sketch=False), noise=noise, generator=generator)
+
+
+def test_predict_step_without_noise_remains_stochastic() -> None:
+    """Lightning's default prediction path uses a fresh local noise stream."""
+    module = _module(None).eval()
+    batch = _batch(with_sketch=False)
+
+    first, _ = module.predict_step(batch, 0)
+    second, _ = module.predict_step(batch, 1)
+
+    assert not torch.equal(first, second)
+
+
+def test_predict_step_without_noise_preserves_global_rng_states() -> None:
+    """Lightning's local default generator leaves process RNG streams untouched."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    module = _module(None).to(device).eval()
+    batch = {name: value.to(device) for name, value in _batch(with_sketch=False).items()}
+    cpu_state = torch.random.get_rng_state().clone()
+    cuda_states = [state.clone() for state in torch.cuda.get_rng_state_all()]
+
+    module.predict_step(batch, 0)
+
+    assert torch.equal(torch.random.get_rng_state(), cpu_state)
+    assert all(
+        torch.equal(actual, expected)
+        for actual, expected in zip(torch.cuda.get_rng_state_all(), cuda_states, strict=True)
+    )
+
+
+def test_predict_step_and_sample_batch_match_for_explicit_noise() -> None:
+    """Lightning prediction preserves the public sampler's controlled result."""
+    module = _module(SketchControlSpec(num_frames=_NUM_FRAMES)).eval()
+    batch = _batch(with_sketch=True)
+    noise = torch.zeros(_BATCH, _NUM_PARAMS, dtype=torch.float32)
+
+    direct = module.sample_batch(batch, noise=noise)
+    prediction, returned_batch = module.predict_step(batch, 0, noise=noise)
+
+    torch.testing.assert_close(prediction, direct.predictions)
+    assert returned_batch is batch
+
+
+def _save_checkpoint(module: VSTFlowMatchingModule, path: Path) -> None:
+    """Save a loadable Lightning checkpoint for migration tests.
+
+    :param module: Tiny flow module to persist.
+    :param path: Checkpoint destination.
+    """
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+    )
+    trainer.strategy.connect(module)
+    trainer.save_checkpoint(path)
+
+
+def test_load_for_inference_migrates_legacy_sketch_metadata(tmp_path: Path) -> None:
+    """Legacy token-count metadata is normalized before model construction.
+
+    :param tmp_path: Holds the migrated checkpoint fixture.
+    """
+    checkpoint = tmp_path / "legacy.ckpt"
+    _save_checkpoint(_module(SketchControlSpec(num_frames=_NUM_FRAMES)), checkpoint)
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    sketch = payload["hyper_parameters"]["sketch_controls"].model_dump()
+    sketch["num_ctrl_tokens"] = sketch.pop("num_control_tokens")
+    payload["hyper_parameters"]["sketch_controls"] = sketch
+    torch.save(payload, checkpoint)
+
+    loaded = VSTFlowMatchingModule.load_for_inference(checkpoint, map_location="cpu")
+
+    assert loaded.sketch_control_spec == SketchControlSpec(num_frames=_NUM_FRAMES)
+
+
+def test_load_for_inference_conflicting_sketch_metadata_raises(tmp_path: Path) -> None:
+    """Conflicting legacy and current token counts fail before construction.
+
+    :param tmp_path: Holds the incompatible checkpoint fixture.
+    """
+    checkpoint = tmp_path / "conflict.ckpt"
+    _save_checkpoint(_module(SketchControlSpec(num_frames=_NUM_FRAMES)), checkpoint)
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    sketch = payload["hyper_parameters"]["sketch_controls"].model_dump()
+    sketch["num_ctrl_tokens"] = 64
+    payload["hyper_parameters"]["sketch_controls"] = sketch
+    torch.save(payload, checkpoint)
+
+    with pytest.raises(ValueError, match="token-count fields conflict"):
+        VSTFlowMatchingModule.load_for_inference(checkpoint, map_location="cpu")
+
+
+@pytest.mark.parametrize(
+    ("requirements", "message"),
+    [
+        (
+            InferenceRequirements(
+                conditioning={"column": "clap", "input_shape": [512]},
+                sketch_controls=SketchControlSpec(num_frames=_NUM_FRAMES),
+                param_spec="surge_simple",
+                num_params=_NUM_PARAMS,
+            ),
+            "conditioning",
+        ),
+        (
+            InferenceRequirements(
+                conditioning="mel",
+                sketch_controls=None,
+                param_spec="surge_simple",
+                num_params=_NUM_PARAMS,
+            ),
+            "sketch",
+        ),
+        (
+            InferenceRequirements(
+                conditioning="mel",
+                sketch_controls=SketchControlSpec(num_frames=_NUM_FRAMES),
+                param_spec="surge_simple",
+                num_params=_NUM_PARAMS + 1,
+            ),
+            "output width",
+        ),
+    ],
+)
+def test_require_inference_capabilities_wrong_public_contract_raises(
+    requirements: InferenceRequirements,
+    message: str,
+) -> None:
+    """Serving rejects mismatched public model capabilities.
+
+    :param requirements: Incompatible serving requirements.
+    :param message: Public capability named by the error.
+    """
+    module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+
+    with pytest.raises(ValueError, match=message):
+        module.require_inference_capabilities(requirements)
+
+
+def test_require_inference_capabilities_wrong_param_spec_raises() -> None:
+    """An explicitly foreign checkpoint parameter spec fails serving validation."""
+    module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    module.hparams["param_spec"] = "surge_xt"
+    requirements = InferenceRequirements(
+        conditioning="mel",
+        sketch_controls=SketchControlSpec(num_frames=_NUM_FRAMES),
+        param_spec="surge_simple",
+        num_params=_NUM_PARAMS,
+    )
+
+    with pytest.raises(ValueError, match="parameter spec"):
+        module.require_inference_capabilities(requirements)
+
+
+def test_load_for_inference_private_shape_mismatch_uses_strict_loader(tmp_path: Path) -> None:
+    """Private tensor incompatibility is reported by strict state loading.
+
+    :param tmp_path: Holds the malformed checkpoint fixture.
+    """
+    checkpoint = tmp_path / "shape.ckpt"
+    _save_checkpoint(_module(None), checkpoint)
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    payload["state_dict"]["encoder.proj.weight"] = torch.empty(7, 80)
+    torch.save(payload, checkpoint)
+
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        VSTFlowMatchingModule.load_for_inference(checkpoint, map_location="cpu")
 
 
 @pytest.mark.slow
