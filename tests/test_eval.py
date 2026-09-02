@@ -2234,16 +2234,20 @@ _THIRD_PARTY_MODEL_OVERRIDES = (
 )
 
 
-def _save_third_party_checkpoint(path: Path) -> None:
-    """Save a real surge-simple flow checkpoint from the shipped Hydra config.
+def _save_third_party_checkpoint(
+    path: Path,
+    experiment: str = "surge/flow_simple",
+) -> None:
+    """Save a real surge-simple flow checkpoint from a shipped Hydra config.
 
     :param path: Destination checkpoint path.
+    :param experiment: Experiment whose model architecture is serialized.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             overrides=[
-                "experiment=surge/flow_simple",
+                f"experiment={experiment}",
                 "trainer=cpu",
                 *_THIRD_PARTY_MODEL_OVERRIDES,
             ],
@@ -2283,6 +2287,8 @@ def _run_third_party_eval(
     corpus: Path,
     checkpoint: Path,
     output_dir: Path,
+    experiment: str = "surge/flow_simple",
+    datamodule: str = "third_party/nsynth_test",
     extra_overrides: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run the public eval CLI over a third-party corpus with no ground-truth patch.
@@ -2290,6 +2296,8 @@ def _run_third_party_eval(
     :param corpus: Blob-audio Lance corpus to serve.
     :param checkpoint: Checkpoint to load.
     :param output_dir: Eval output root.
+    :param experiment: Experiment config exercised by the subprocess.
+    :param datamodule: Third-party datamodule config exercised by the subprocess.
     :param extra_overrides: Scenario-specific Hydra overrides.
     :returns: The completed CLI process.
     """
@@ -2299,8 +2307,8 @@ def _run_third_party_eval(
             sys.executable,
             "-m",
             "synth_setter.cli.eval",
-            "experiment=surge/flow_simple",
-            "datamodule=third_party/nsynth_test",
+            f"experiment={experiment}",
+            f"datamodule={datamodule}",
             "render=vst",
             f"seed={_THIRD_PARTY_TEST_SEED}",
             f"datamodule.dataset_uri={corpus}",
@@ -2371,6 +2379,44 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
     # Mean amplitude verifies content, order, padding, and up-mixing.
     served = [float(row.abs().mean()) for row in target_audio]
     assert served == pytest.approx([0.0, 0.025], abs=1e-3)
+
+
+@pytest.mark.slow
+def test_nsynth_sketch_eval_entrypoint_writes_prediction(tmp_path: Path) -> None:
+    """The NSynth preset runs live PESTO controls through a matching sketch model.
+
+    :param tmp_path: Isolated corpus, checkpoint, and output directories.
+    """
+    sample_rate = _THIRD_PARTY_SOURCE_SAMPLE_RATE
+    samples = np.arange(sample_rate, dtype=np.float32)
+    tone = (0.5 * np.sin(2 * np.pi * 440.0 * samples / sample_rate)).astype(np.float32)
+    corpus = tmp_path / "corpus.lance"
+    write_blob_audio_corpus(corpus, [tone], sample_rate=sample_rate)
+    checkpoint = tmp_path / "flow_sketch.ckpt"
+    _save_third_party_checkpoint(checkpoint, experiment="surge/flow_sketch_prelim")
+    output_dir = tmp_path / "output"
+
+    result = _run_third_party_eval(
+        corpus=corpus,
+        checkpoint=checkpoint,
+        output_dir=output_dir,
+        experiment="surge/eval_flow_sketch_nsynth",
+        datamodule="third_party/nsynth_sketch",
+        extra_overrides=(
+            "ckpt_sha256=null",
+            "datamodule.batch_size=1",
+            "evaluation.compute_metrics=false",
+            "evaluation.render_vst=false",
+            "~logger",
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    prediction = torch.load(
+        output_dir / "predictions" / "pred-0.pt", map_location="cpu", weights_only=True
+    )
+    assert prediction.shape == (1, _SURGE_SIMPLE_PREDICTION_WIDTH)
+    assert torch.isfinite(prediction).all()
 
 
 @pytest.mark.requires_vst
