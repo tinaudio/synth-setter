@@ -803,10 +803,11 @@ class PyFDNEvaluation(Callback):
             target = _decode_model_row(checkpoint.target_base64)
             if checkpoint.row.status == "finite_render":
                 sample_dir = self.output_dir / "audio" / f"sample_{sample_id}"
-                if (
-                    checkpoint.artifacts is None
-                    or _artifact_digests(sample_dir) != checkpoint.artifacts
-                ):
+                try:
+                    current_artifacts = _artifact_digests(sample_dir)
+                except OSError:
+                    current_artifacts = None
+                if checkpoint.artifacts is None or current_artifacts != checkpoint.artifacts:
                     raise ValueError(
                         f"pyFDN progress sample_{sample_id} artifacts do not match their digests"
                     )

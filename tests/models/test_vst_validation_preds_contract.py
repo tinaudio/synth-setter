@@ -215,6 +215,18 @@ def test_flow_matching_test_step_returns_predictions_and_flow_loss() -> None:
     assert torch.isfinite(outputs["flow_loss"])
 
 
+def test_flow_matching_weighted_flow_loss_averages_rows_and_coordinates() -> None:
+    """Flow loss uses the mean coordinate error and mean row reduction."""
+    module = _flow_matching_module()
+    prediction = torch.zeros(3, 7)
+    target = torch.tensor([[1.0] * 7, [2.0] * 7, [3.0] * 7])
+    t = torch.tensor([[0.1], [0.5], [0.9]])
+
+    loss = module._weighted_flow_loss(prediction, target, t)
+
+    torch.testing.assert_close(loss, torch.tensor(14.0 / 3.0))
+
+
 def test_flow_matching_test_step_encodes_conditioning_once() -> None:
     """Sampling and flow-loss evaluation share one conditioning encoder result."""
     module = _flow_matching_module()
@@ -235,11 +247,12 @@ def test_flow_matching_test_prediction_ignores_target_matched_batch_noise() -> N
     first["noise"] = torch.full_like(first["params"], -100.0)
 
     torch.manual_seed(41)
-    first_prediction = module.test_step(first, batch_idx=0)["preds"]
+    first_outputs = module.test_step(first, batch_idx=0)
     torch.manual_seed(41)
-    second_prediction = module.test_step(second, batch_idx=0)["preds"]
+    second_outputs = module.test_step(second, batch_idx=0)
 
-    torch.testing.assert_close(first_prediction, second_prediction)
+    torch.testing.assert_close(first_outputs["preds"], second_outputs["preds"])
+    assert not torch.equal(first_outputs["flow_loss"], second_outputs["flow_loss"])
 
 
 def test_flow_vae_validation_step_returns_per_param_mse() -> None:

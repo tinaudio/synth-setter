@@ -93,6 +93,14 @@ def test_decode_pyfdn_model_output_invalid_row_raises(row: np.ndarray) -> None:
         decode_pyfdn_model_output(row)
 
 
+def test_distribution_metrics_use_population_mean_and_standard_deviation() -> None:
+    """Two known observations produce exact population statistics."""
+    assert pyfdn_evaluator._distribution_metrics([1.0, 3.0]) == {
+        "mean": 2.0,
+        "std": 1.0,
+    }
+
+
 def test_parameter_metrics_use_finite_row_and_field_coordinate_denominators() -> None:
     """Parameter summaries use finite rows, coordinate means, and exact field spans."""
     squared_error = np.zeros(91, dtype=np.float64)
@@ -227,6 +235,24 @@ def test_pyfdn_evaluation_resume_corrupt_artifact_raises(tmp_path: Path) -> None
     target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
     PyFDNEvaluation(PyFDNRenderer(), tmp_path).evaluate_batch(target[None, :], target[None, :])
     (tmp_path / "audio" / "sample_0" / "pred.wav").write_bytes(b"corrupt")
+
+    resumed = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
+    with pytest.raises(ValueError, match="artifacts do not match their digests"):
+        resumed.evaluate_batch(target[None, :], target[None, :])
+
+
+def test_pyfdn_evaluation_resume_missing_artifact_raises_value_error(
+    tmp_path: Path,
+) -> None:
+    """Missing committed audio reports a progress contract failure.
+
+    :param tmp_path: Isolated evaluation output directory.
+    """
+    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(30))
+    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
+    PyFDNEvaluation(PyFDNRenderer(), tmp_path).evaluate_batch(target[None, :], target[None, :])
+    (tmp_path / "audio" / "sample_0" / "pred.wav").unlink()
 
     resumed = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
     with pytest.raises(ValueError, match="artifacts do not match their digests"):
