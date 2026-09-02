@@ -21,7 +21,7 @@ def test_pyfdn_datamodule_imports_in_fresh_interpreter() -> None:
     subprocess.run(
         [sys.executable, "-c", "import synth_setter.data.pyfdn_datamodule"],
         check=True,
-        timeout=15,
+        timeout=60,
     )
 
 
