@@ -63,10 +63,12 @@ def _make_process_renderer(
 
 
 def collate_pyfdn_audio_dict(batch: Sequence[PyFDNItem]) -> PyFDNBatch:
-    """Collate fixed-source rows into the existing audio-conditioned flow contract.
+    """Collate fixed-shape pyFDN rows into the audio-conditioned flow contract.
 
-    :param batch: Rows with channel-first audio and unit-domain encoded patches.
-    :returns: Float32 native-amplitude audio plus model-domain params and matching noise.
+    :param batch: Non-empty rows with float32 audio shaped ``(1, 192_000)`` and
+        unit-domain encoded patches shaped ``(1, 89)``.
+    :returns: Native-amplitude ``audio`` shaped ``(batch, 192_000)`` and model-domain
+        ``params`` and ``noise`` shaped ``(batch, 89)``, all float32.
     """
     audio = torch.cat([row[0] for row in batch], dim=0)
     encoded = torch.cat([row[1] for row in batch], dim=0)
@@ -79,11 +81,11 @@ class PyFDNDataset(Dataset[PyFDNItem]):
 
     def __init__(
         self,
-        num_samples: int,
-        seed: int,
         source_audio_path: str | Path,
         source_audio_sha256: str,
         *,
+        num_samples: int,
+        seed: int,
         synth_version: str = "0.4.2",
         sample_rate: int = 48_000,
         channels: int = 1,
@@ -91,10 +93,10 @@ class PyFDNDataset(Dataset[PyFDNItem]):
     ) -> None:
         """Bind one deterministic split and its checksum-pinned source.
 
-        :param num_samples: Number of logical rows in this split.
-        :param seed: Base seed folded with each row index.
         :param source_audio_path: Path to the fixed lossless source.
         :param source_audio_sha256: Expected SHA-256 of the source bytes.
+        :param num_samples: Number of logical rows in this split.
+        :param seed: Base seed folded with each row index.
         :param synth_version: Required installed pyFDN version.
         :param sample_rate: Fixed source and build sample rate in Hz.
         :param channels: Fixed source channel count.
@@ -216,10 +218,10 @@ class PyFDNDataModule(LightningDataModule):
 
         def dataset(size: int, seed: int) -> PyFDNDataset:
             return PyFDNDataset(
-                size,
-                seed,
                 self.source_audio_path,
                 self.source_audio_sha256,
+                num_samples=size,
+                seed=seed,
                 synth_version=self.synth_version,
                 sample_rate=self.sample_rate,
                 channels=self.channels,

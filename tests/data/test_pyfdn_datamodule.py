@@ -22,7 +22,7 @@ def test_pyfdn_dataset_same_index_is_deterministic(
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    dataset = PyFDNDataset(2, 123, path, checksum)
+    dataset = PyFDNDataset(path, checksum, num_samples=2, seed=123)
 
     audio_a, params_a, _ = dataset[0]
     audio_b, params_b, _ = dataset[0]
@@ -39,7 +39,7 @@ def test_pyfdn_dataset_row_encodes_the_exact_derived_seed_sample(
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    _, encoded, _ = PyFDNDataset(3, 123, path, checksum)[2]
+    _, encoded, _ = PyFDNDataset(path, checksum, num_samples=3, seed=123)[2]
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(
         np.random.default_rng(derive_sample_seed(123, 2))
     )
@@ -59,7 +59,7 @@ def test_pyfdn_dataset_index_outside_split_raises(
     :param index: Negative or upper-bound index outside a one-row split.
     """
     path, checksum = source_file
-    dataset = PyFDNDataset(1, 123, path, checksum)
+    dataset = PyFDNDataset(path, checksum, num_samples=1, seed=123)
 
     with pytest.raises(IndexError, match="outside"):
         dataset[index]
@@ -73,7 +73,7 @@ def test_pyfdn_dataset_different_indices_change_sampled_patch(
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    dataset = PyFDNDataset(2, 123, path, checksum)
+    dataset = PyFDNDataset(path, checksum, num_samples=2, seed=123)
 
     first = dataset[0][1]
     second = dataset[1][1]
@@ -89,7 +89,7 @@ def test_pyfdn_dataset_row_has_exact_online_contract(
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    audio, encoded, render = PyFDNDataset(1, 123, path, checksum)[0]
+    audio, encoded, render = PyFDNDataset(path, checksum, num_samples=1, seed=123)[0]
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.decode(encoded[0].numpy())
 
     assert audio.shape == (1, 192_000)
@@ -107,7 +107,7 @@ def test_pyfdn_dataset_loads_source_once_per_process(
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    dataset = PyFDNDataset(2, 123, path, checksum)
+    dataset = PyFDNDataset(path, checksum, num_samples=2, seed=123)
     dataset[0]
     path.unlink()
 
@@ -125,8 +125,8 @@ def test_pyfdn_datasets_share_one_source_load_within_a_process(
     :param source_file: Valid fixed source and checksum.
     """
     path, checksum = source_file
-    first = PyFDNDataset(1, 123, path, checksum)
-    second = PyFDNDataset(1, 456, path, checksum)
+    first = PyFDNDataset(path, checksum, num_samples=1, seed=123)
+    second = PyFDNDataset(path, checksum, num_samples=1, seed=456)
     first[0]
     path.unlink()
 
@@ -135,21 +135,9 @@ def test_pyfdn_datasets_share_one_source_load_within_a_process(
     assert audio.shape == (1, 192_000)
 
 
-def test_pyfdn_datamodule_uses_fixed_default_split_seeds(
-    source_file: tuple[Path, str],
-) -> None:
-    """Train, validation, and test map indices through stable distinct seed domains.
-
-    :param source_file: Valid fixed source and checksum.
-    """
-    path, checksum = source_file
-    datamodule = PyFDNDataModule(
-        path,
-        checksum,
-        train_val_test_sizes=(1, 1, 1),
-        batch_size=1,
-        num_workers=0,
-    )
+def test_pyfdn_datamodule_default_split_seed_domains_are_disjoint() -> None:
+    """Every production-default row derives a unique seed across all splits."""
+    datamodule = PyFDNDataModule("unused.wav", "0" * 64)
     datamodule.setup(None)
 
     assert (datamodule.train.seed, datamodule.val.seed, datamodule.test.seed) == (
@@ -157,11 +145,15 @@ def test_pyfdn_datamodule_uses_fixed_default_split_seeds(
         456,
         789,
     )
-    rows = {
-        tuple(split[0][1].flatten().tolist())
-        for split in (datamodule.train, datamodule.val, datamodule.test)
-    }
-    assert len(rows) == 3
+    splits = (datamodule.train, datamodule.val, datamodule.test)
+    derived_seeds = [
+        derive_sample_seed(split.seed, index)
+        for split in splits
+        for index in range(len(split))
+    ]
+    expected_rows = sum(len(split) for split in splits)
+    assert len(derived_seeds) == expected_rows
+    assert len(set(derived_seeds)) == expected_rows
 
 
 def test_pyfdn_datamodule_duplicate_split_seeds_raise(
@@ -300,9 +292,13 @@ def test_pyfdn_public_signatures_omit_unsupported_sampling_modes() -> None:
     )
 
 
-def test_pyfdn_datamodule_optional_configuration_is_keyword_only() -> None:
-    """Only the two required source-identity arguments accept positional binding."""
-    parameters = inspect.signature(PyFDNDataModule).parameters
+@pytest.mark.parametrize("factory", [PyFDNDataModule, PyFDNDataset])
+def test_pyfdn_public_optional_configuration_is_keyword_only(factory: type) -> None:
+    """Only the two required source-identity arguments accept positional binding.
+
+    :param factory: Public online data constructor under test.
+    """
+    parameters = inspect.signature(factory).parameters
 
     assert parameters["source_audio_path"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert parameters["source_audio_sha256"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
