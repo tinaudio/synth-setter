@@ -33,7 +33,7 @@ _BATCH_SHAPE = "batch"
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
-_TORCH_SEED_MODULUS = 1 << 64
+_MAX_DISTINCT_CPU_SEED = (1 << 32) - 1
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -354,10 +354,17 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
-        :raises ValueError: ``audio_loss`` is combined with a nonzero
-            ``rectified_sigma_min`` or with ``compile=True`` (#2585).
+        :raises ValueError: The validation seed aliases a CPU stream, or ``audio_loss``
+            is combined with a nonzero ``rectified_sigma_min`` or ``compile=True`` (#2585).
         """
         super().__init__()
+        if validation_noise_seed is not None and not (
+            0 <= validation_noise_seed <= _MAX_DISTINCT_CPU_SEED
+        ):
+            raise ValueError(
+                f"validation_noise_seed must be in the distinct CPU seed range "
+                f"[0, {_MAX_DISTINCT_CPU_SEED}], got {validation_noise_seed}"
+            )
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not
@@ -797,6 +804,7 @@ class VSTFlowMatchingModule(LightningModule):
         :param params: Target parameter vectors defining shape, dtype, and device.
         :param batch_idx: Validation batch index mixed into the optional seed.
         :returns: Initial state for flow integration.
+        :raises ValueError: The derived stream aliases another supported CPU stream.
         """
         seed = self.hparams.validation_noise_seed
         if seed is None:
@@ -805,7 +813,11 @@ class VSTFlowMatchingModule(LightningModule):
         # Cantor pairing prevents batch/rank collisions without depending on world size.
         pair_sum = batch_idx + self.global_rank
         stream_index = pair_sum * (pair_sum + 1) // 2 + self.global_rank
-        stream_seed = (seed + stream_index) % _TORCH_SEED_MODULUS
+        stream_seed = seed + stream_index
+        if stream_seed > _MAX_DISTINCT_CPU_SEED:
+            raise ValueError(
+                f"validation stream seed exceeds the distinct CPU seed range: {stream_seed}"
+            )
         generator.manual_seed(stream_seed)
         return torch.randn(
             params.shape,

@@ -364,18 +364,18 @@ def test_flow_matching_validation_seed_repeats_within_rank_and_differs_across_ra
     assert not torch.equal(rank_zero_first, rank_one)
 
 
-def test_flow_matching_validation_seed_wraps_at_torch_seed_boundary() -> None:
-    """Batch stream derivation wraps instead of exceeding PyTorch's seed domain."""
-    maximum_seed_module = _zero_velocity_flow_matching_module(
-        validation_noise_seed=18446744073709551615
-    )
-    zero_seed_module = _zero_velocity_flow_matching_module(validation_noise_seed=0)
-    batch = _batch()
+def test_flow_matching_validation_seed_outside_distinct_cpu_range_raises_value_error() -> None:
+    """Seeds that alias a supported CPU stream are rejected at construction."""
+    with pytest.raises(ValueError, match="distinct CPU seed range"):
+        _zero_velocity_flow_matching_module(validation_noise_seed=4294970314)
 
-    wrapped_preds = maximum_seed_module.validation_step(batch, batch_idx=1)["preds"]
-    zero_seed_preds = zero_seed_module.validation_step(batch, batch_idx=0)["preds"]
 
-    assert torch.equal(wrapped_preds, zero_seed_preds)
+def test_flow_matching_validation_batch_stream_seed_overflow_raises_value_error() -> None:
+    """Derived batch/rank streams fail instead of wrapping onto another CPU stream."""
+    module = _zero_velocity_flow_matching_module(validation_noise_seed=4294967295)
+
+    with pytest.raises(ValueError, match="validation stream seed exceeds"):
+        module.validation_step(_batch(), batch_idx=1)
 
 
 def test_flow_matching_validation_seed_change_changes_predictions() -> None:
