@@ -11,6 +11,7 @@ import pytest
 from scripts.dev.run_clap_comparison import (
     CANDIDATE_SOURCE_CLAP,
     CANDIDATE_SOURCE_MEANAUDIO_S_FULL,
+    CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED,
     build_candidate_identity,
     build_paired_row,
     ensure_resume_identity,
@@ -73,6 +74,22 @@ def test_build_candidate_identity_meanaudio_records_every_reproducibility_input(
     assert identity["meanaudio_model_checkpoint_sha256"] == MEANAUDIO_S_FULL_CHECKPOINT_SHA256
     assert "meanaudio_upstream_revision" in identity
     assert "meanaudio_checkpoint_revision" in identity
+
+
+def test_build_candidate_identity_reencoded_meanaudio_records_projection() -> None:
+    """The aligned arm cannot reuse direct-latent candidate artifacts."""
+    identity = build_candidate_identity(
+        CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED,
+        "r2://checkpoints/candidate/last.ckpt",
+        steps=25,
+        duration_seconds=MEANAUDIO_DURATION_SECONDS,
+        seed=0,
+    )
+
+    assert identity["candidate_source"] == CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED
+    assert identity["meanaudio_projection"] == "vae-decode-vocode-encode-mode"
+    assert "meanaudio_vae_checkpoint_sha256" in identity
+    assert "meanaudio_vocoder_checkpoint_sha256" in identity
 
 
 def test_build_candidate_identity_clap_preserves_checkpoint_and_seed_contract() -> None:

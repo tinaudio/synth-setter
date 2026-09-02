@@ -143,8 +143,11 @@ Generation resolves `meanaudio_s_full.pth` and the upstream CLAP checkpoint from
 `6e072062d4f9af21c647e2bae5aafc1da2c84014`, verifies both SHA-256 digests, and
 pins the Flan-T5-Large and RoBERTa tokenizer revisions. It returns MeanAudio's
 unnormalized state before VAE decode; the comparison runner transposes that state
-to `(B, 20, 125)` and sends it directly to the inverse checkpoint. No MeanAudio
-source is copied into synth-setter.
+to `(B, 20, 125)` and sends it directly to the inverse checkpoint. The explicit
+re-encoded comparison mode additionally verifies `v1-16.pth` and `best_netG.pt`,
+decodes and vocodes the generated latent, then feeds the waveform through the
+same posterior-mean encoder used for inverse training. No MeanAudio source is
+copied into synth-setter.
 
 ## Adding a new extra or dependency group
 

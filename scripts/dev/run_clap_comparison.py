@@ -39,7 +39,9 @@ from synth_setter.pipeline.data.meanaudio_generation import (
     MEANAUDIO_LATENT_SHAPE,
     MEANAUDIO_STEPS,
     load_meanaudio_s_full_generator,
+    load_meanaudio_s_full_reencoded_generator,
     meanaudio_s_full_provenance,
+    meanaudio_s_full_reencoded_provenance,
     validate_meanaudio_s_full_latent,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -57,6 +59,7 @@ DEFAULT_MEANAUDIO_INVERSE_CHECKPOINT = (
 )
 CANDIDATE_SOURCE_CLAP = "clap"
 CANDIDATE_SOURCE_MEANAUDIO_S_FULL = "meanaudio-s-full"
+CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED = "meanaudio-s-full-reencoded"
 type DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 SUMMARY_FIELDS = (
     "count",
@@ -106,10 +109,14 @@ def build_candidate_identity(
     }
     if candidate_source == CANDIDATE_SOURCE_CLAP:
         return identity
-    if candidate_source != CANDIDATE_SOURCE_MEANAUDIO_S_FULL:
+    if candidate_source == CANDIDATE_SOURCE_MEANAUDIO_S_FULL:
+        provenance = meanaudio_s_full_provenance()
+    elif candidate_source == CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED:
+        provenance = meanaudio_s_full_reencoded_provenance()
+    else:
         raise ValueError(f"unsupported candidate source {candidate_source!r}")
     return identity | {
-        **meanaudio_s_full_provenance(),
+        **provenance,
         "meanaudio_steps": steps,
         "meanaudio_duration_seconds": duration_seconds,
     }
@@ -359,7 +366,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--candidate-source",
         default=CANDIDATE_SOURCE_CLAP,
-        choices=(CANDIDATE_SOURCE_CLAP, CANDIDATE_SOURCE_MEANAUDIO_S_FULL),
+        choices=(
+            CANDIDATE_SOURCE_CLAP,
+            CANDIDATE_SOURCE_MEANAUDIO_S_FULL,
+            CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED,
+        ),
     )
     parser.add_argument("--baseline-suite", default=BASELINE_SUITE)
     parser.add_argument("--baseline-checkpoint", default=BASELINE_CHECKPOINT)
@@ -389,7 +400,11 @@ def main() -> None:
     if args.meanaudio_steps < 1:
         raise ValueError(f"MeanAudio steps must be positive, got {args.meanaudio_steps}")
     if (
-        args.candidate_source == CANDIDATE_SOURCE_MEANAUDIO_S_FULL
+        args.candidate_source
+        in {
+            CANDIDATE_SOURCE_MEANAUDIO_S_FULL,
+            CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED,
+        }
         and args.candidate_checkpoint != DEFAULT_MEANAUDIO_INVERSE_CHECKPOINT
     ):
         raise ValueError(
@@ -422,7 +437,10 @@ def main() -> None:
         source_stem = Path(baseline["wav_r2_uri"]).stem
         sample_names.append(f"sample_{index:03d}_{source_stem.partition('-')[2]}")
 
-    if args.candidate_source == CANDIDATE_SOURCE_MEANAUDIO_S_FULL:
+    if args.candidate_source in {
+        CANDIDATE_SOURCE_MEANAUDIO_S_FULL,
+        CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED,
+    }:
         missing_latents = []
         for baseline, sample_name in zip(baseline_rows, sample_names, strict=True):
             sample_dir = output_dir / "audio" / sample_name
@@ -435,7 +453,12 @@ def main() -> None:
             elif latent_path.is_file():
                 validate_meanaudio_s_full_latent(np.load(latent_path, allow_pickle=False))
         if missing_latents:
-            generator = load_meanaudio_s_full_generator(
+            generator_loader = (
+                load_meanaudio_s_full_reencoded_generator
+                if args.candidate_source == CANDIDATE_SOURCE_MEANAUDIO_S_FULL_REENCODED
+                else load_meanaudio_s_full_generator
+            )
+            generator = generator_loader(
                 steps=args.meanaudio_steps,
                 duration_seconds=MEANAUDIO_DURATION_SECONDS,
                 device=args.device,

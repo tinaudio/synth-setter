@@ -156,7 +156,10 @@ uv run python scripts/dev/run_clap_comparison.py \
 
 This path defaults to 25 MeanFlow steps, four seconds, and seed zero. It feeds the
 unnormalized pre-decode `(B, 20, 125)` latent directly to the inverse checkpoint;
-resume refuses artifacts whose generation or checkpoint identity differs.
+resume refuses artifacts whose generation or checkpoint identity differs. Use
+`--candidate-source meanaudio-s-full-reencoded` to compare the explicit
+VAE-decode → BigVGAN → VAE-encode posterior-mean projection without changing the
+direct experimental path.
 
 See the project documentation for a full walkthrough.
 
