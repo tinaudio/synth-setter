@@ -116,7 +116,7 @@ def test_cache_r2_file_transient_download_failure_retries_and_caches_bytes(
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            raise subprocess.CalledProcessError(1, ["rclone", "copyto"])
+            raise subprocess.CalledProcessError(5, ["rclone", "copyto"])
         destination.write_bytes(payload)
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -135,6 +135,41 @@ def test_cache_r2_file_transient_download_failure_retries_and_caches_bytes(
 
     assert cached.read_bytes() == payload
     assert attempts == 2
+
+
+def test_cache_r2_file_permanent_download_failure_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A permanent rclone exit surfaces after the initial transfer attempt.
+
+    :param monkeypatch: Replaces the R2 transfer and removes test-only retry waiting.
+    :param tmp_path: Holds the isolated cache.
+    """
+    attempts = 0
+
+    def rejected_download(_uri: str, _destination: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise subprocess.CalledProcessError(1, ["rclone", "copyto"])
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(model_cache.r2_io, "download_to_path", rejected_download)
+    monkeypatch.setattr(
+        model_cache,
+        "_download_r2_file",
+        model_cache._download_r2_file.retry_with(wait=wait_none()),
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        cache_r2_file(
+            "r2://bucket/models/weights.ckpt",
+            "surge-sketch",
+            hashlib.sha256(b"expected").hexdigest(),
+        )
+
+    assert exc_info.value.returncode == 1
+    assert attempts == 1
 
 
 def test_cache_r2_file_replaces_corrupt_cached_bytes_via_real_rclone(
@@ -197,13 +232,22 @@ def test_cache_r2_file_digest_mismatch_never_publishes_final_file(
     """Reject wrong remote bytes without publishing them under the requested pin.
 
     :param fake_r2_remote: Local filesystem backing the real rclone transport.
-    :param monkeypatch: Isolates the XDG cache root.
+    :param monkeypatch: Isolates the cache and counts real transfer attempts.
     :param tmp_path: Holds the source object and cache.
     """
     source = fake_r2_remote / "bucket" / "models" / "weights.ckpt"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"wrong bytes")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    download_to_path = model_cache.r2_io.download_to_path
+    attempts = 0
+
+    def counting_download(uri: str, destination: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        download_to_path(uri, destination)
+
+    monkeypatch.setattr(model_cache.r2_io, "download_to_path", counting_download)
 
     with pytest.raises(ValueError, match="SHA-256"):
         cache_r2_file(
@@ -213,6 +257,7 @@ def test_cache_r2_file_digest_mismatch_never_publishes_final_file(
         )
 
     cache_root = tmp_path / "cache" / "synth-setter" / "models" / "artifacts"
+    assert attempts == 1
     assert list(cache_root.rglob("weights.ckpt")) == []
 
 

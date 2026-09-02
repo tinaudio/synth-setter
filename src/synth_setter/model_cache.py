@@ -10,32 +10,51 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from filelock import FileLock
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_base,
+    retry_if_exception,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from synth_setter.pipeline import r2_io
 
 _FILE_HASH_CHUNK_BYTES = 1024 * 1024
+_RCLONE_TEMPORARY_ERROR_EXIT_CODE = 5
 _SOURCE_KEY_HEX_DIGITS = 16
 
 
-def retry_external_io[**P, R](
-    *, retry_exceptions: tuple[type[BaseException], ...]
+def _bounded_external_io_retry[**P, R](
+    retry_condition: retry_base,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Build the shared bounded retry policy for transient external I/O.
+    """Apply the shared bounded retry schedule to an exception condition.
 
-    :param retry_exceptions: Transient exception types safe to retry.
-    :returns: Decorator applying three attempts with bounded exponential backoff.
+    :param retry_condition: Tenacity condition selecting transient failures.
+    :returns: Decorator applying bounded exponential backoff.
     """
 
     def decorate(operation: Callable[P, R]) -> Callable[P, R]:
         return retry(
             reraise=True,
-            retry=retry_if_exception_type(retry_exceptions),
+            retry=retry_condition,
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=1, max=4),
         )(operation)
 
     return decorate
+
+
+def retry_external_io[**P, R](
+    *, retry_exceptions: tuple[type[BaseException], ...]
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Build the shared bounded retry policy for transient exception types.
+
+    :param retry_exceptions: Transient exception types safe to retry.
+    :returns: Decorator applying bounded exponential backoff.
+    """
+    return _bounded_external_io_retry(retry_if_exception_type(retry_exceptions))
 
 
 def synth_setter_cache_dir() -> Path:
@@ -100,7 +119,19 @@ def _cache_destination(r2_uri: str, namespace: str, expected_sha256: str) -> Pat
     )
 
 
-@retry_external_io(retry_exceptions=(subprocess.CalledProcessError,))
+def _is_temporary_rclone_error(exception: BaseException) -> bool:
+    """Return whether rclone documented the failure as temporary.
+
+    :param exception: Transfer failure raised by the rclone subprocess.
+    :returns: Whether the failure uses rclone's temporary-error exit code.
+    """
+    return (
+        isinstance(exception, subprocess.CalledProcessError)
+        and exception.returncode == _RCLONE_TEMPORARY_ERROR_EXIT_CODE
+    )
+
+
+@_bounded_external_io_retry(retry_if_exception(_is_temporary_rclone_error))
 def _download_r2_file(r2_uri: str, destination: Path) -> None:
     """Download one R2 object with bounded retries for transient rclone failures.
 

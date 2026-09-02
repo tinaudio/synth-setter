@@ -8,7 +8,7 @@ import click
 
 
 @dataclass(frozen=True)
-class CfgStrengths[T]:
+class CfgStrengths[StrengthValue]:
     """Named content and sketch classifier-free guidance strengths.
 
     .. attribute :: content
@@ -20,8 +20,8 @@ class CfgStrengths[T]:
         Sketch-conditioning strength or requested override.
     """
 
-    content: T
-    sketch: T
+    content: StrengthValue
+    sketch: StrengthValue
 
 
 def validate_cfg_strength(

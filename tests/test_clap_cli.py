@@ -32,8 +32,13 @@ from synth_setter.cli.clap import (
     write_output_artifacts,
     write_run_manifest,
 )
+from synth_setter.conditioning import (
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_SLICE,
+)
 from synth_setter.data.vst.shapes import make_spectrogram
-from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS, SKETCH_PITCH_SLICE
+from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS
 from synth_setter.resources import surge_simple_preset
 from synth_setter.synth_spec import SYNTHS, SynthName
 
@@ -184,7 +189,11 @@ def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_pat
     """
     sample_rate = 48000
     time = np.arange(4 * sample_rate, dtype=np.float32) / sample_rate
-    guide_mono = (0.8 * np.sin(2 * np.pi * 220.0 * time))[None]
+    guide_mono = np.where(
+        time < 2.0,
+        0.2 * np.sin(2 * np.pi * 220.0 * time),
+        0.8 * np.sin(2 * np.pi * 880.0 * time),
+    )[None].astype(np.float32)
     ref_stereo = np.stack(
         [0.4 * np.sin(2 * np.pi * 330.0 * time), 0.2 * np.sin(2 * np.pi * 330.0 * time)]
     ).astype(np.float32)
@@ -210,6 +219,10 @@ def test_prepare_audio_inputs_normalizes_real_wavs_and_extracts_features(tmp_pat
     assert torch.isfinite(prepared.ref_mel).all()
     assert torch.allclose(prepared.ref_mel, (raw_ref_mel + 40.0) / 20.0)
     assert torch.isfinite(prepared.sketch_controls).all()
+    loudness = prepared.sketch_controls[SKETCH_LOUDNESS_ROW]
+    centroid = prepared.sketch_controls[SKETCH_CENTROID_ROW]
+    assert torch.std(loudness) > 0.01
+    assert torch.std(centroid) > 0.01
     nonzero_pitch = prepared.sketch_controls[SKETCH_PITCH_SLICE]
     assert torch.all(nonzero_pitch[nonzero_pitch > 0] >= 0.1)
 

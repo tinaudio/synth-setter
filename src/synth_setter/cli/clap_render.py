@@ -632,123 +632,50 @@ def _dispatch_audio_mode(
     return True
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("text_prompt", required=False)
-@click.option(
-    "--guide_audio",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Guide audio supplying sketch controls.",
-)
-@click.option(
-    "--ref_audio",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Reference audio supplying mel/timbre conditioning.",
-)
-@click.option(
-    "--checkpoint",
-    envvar="SYNTH_SETTER_CLAP_INVERSE_CHECKPOINT",
-    help="CLAP-conditioned inverse checkpoint path or R2 URI.",
-)
-@click.option(
-    "--clap-checkpoint",
-    envvar="SYNTH_SETTER_CLAP_ENCODER_CHECKPOINT",
-    help="LAION-CLAP checkpoint directory, Hugging Face id, or R2 prefix.",
-)
-@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), help="Local WAV path.")
-@click.option("--upload-uri", help="Exact r2:// destination for the WAV.")
-@click.option(
-    "--retry-upload",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Upload a retained sketch-render directory without rerunning inference.",
-)
-@click.option(
-    "--device",
-    type=click.Choice(["auto", "cpu", "cuda", "mps"]),
-    default=None,
-    help="Inference device [default: auto].",
-)
-@click.option("--seed", type=int, default=None, help="Flow sampling seed [default: 0].")
-@click.option(
-    "--content-cfg-strength",
-    type=float,
-    callback=validate_cfg_strength,
-    help="Content guidance override; omitted uses the checkpoint value.",
-)
-@click.option(
-    "--sketch-cfg-strength",
-    type=float,
-    callback=validate_cfg_strength,
-    help="Sketch guidance override for guide/reference audio mode.",
-)
-@click.option("--upload/--no-upload", default=True, show_default=True)
-@click.pass_context
-def main(
-    context: click.Context,
+def _dispatch_retry_upload(context: click.Context, retry_upload: Path | None) -> bool:
+    """Validate and dispatch retained-artifact upload recovery when selected.
+
+    :param context: Active Click invocation context.
+    :param retry_upload: Retained sketch-render directory, if requested.
+    :returns: Whether upload recovery was selected and dispatched.
+    :raises click.ClickException: Another command-line option conflicts with recovery.
+    """
+    if retry_upload is None:
+        return False
+    for parameter, option in _RETRY_UPLOAD_CONFLICTS:
+        if context.get_parameter_source(parameter) is ParameterSource.COMMANDLINE:
+            raise click.ClickException(f"{option} cannot be combined with --retry-upload")
+    from synth_setter.cli.clap import retry_output_upload
+
+    click.echo(retry_output_upload(retry_upload))
+    return True
+
+
+def _run_text_mode(
     text_prompt: str | None,
-    guide_audio: Path | None,
-    ref_audio: Path | None,
     checkpoint: str | None,
     clap_checkpoint: str | None,
     output: Path | None,
     upload_uri: str | None,
-    retry_upload: Path | None,
     device: _DeviceSetting | None,
     seed: int | None,
-    content_cfg_strength: float | None,
-    sketch_cfg_strength: float | None,
     upload: bool,
+    requested_strengths: CfgStrengths[float | None],
 ) -> None:
-    """Render a text prompt or guide/reference audio as a Surge WAV.
+    """Validate and execute one text-conditioned render request.
 
-    Use ``synth-setter-clap "frog croak"`` for text or pass both audio options.
-
-    :param context: Active Click invocation context.
     :param text_prompt: Optional natural-language sound description.
-    :param guide_audio: Optional audio supplying sketch controls.
-    :param ref_audio: Optional audio supplying mel/timbre conditioning.
     :param checkpoint: Optional inverse-checkpoint override.
     :param clap_checkpoint: Optional CLAP encoder override.
     :param output: Optional local WAV destination.
     :param upload_uri: Optional exact R2 object destination.
-    :param retry_upload: Optional retained sketch-render directory to upload.
     :param device: Optional torch-device override.
     :param seed: Optional flow sampling seed.
-    :param content_cfg_strength: Optional text or reference-mel guidance override.
-    :param sketch_cfg_strength: Optional sketch-control guidance override.
     :param upload: Whether to upload the rendered WAV.
-    :raises click.ClickException: CLI arguments are invalid.
+    :param requested_strengths: Optional guidance overrides.
+    :raises click.ClickException: Text-mode arguments are invalid.
     :raises RuntimeError: The default CLAP checkpoint fails identity validation.
     """
-    requested_strengths = CfgStrengths(
-        content=content_cfg_strength,
-        sketch=sketch_cfg_strength,
-    )
-    if retry_upload is not None:
-        for parameter, option in _RETRY_UPLOAD_CONFLICTS:
-            if context.get_parameter_source(parameter) is ParameterSource.COMMANDLINE:
-                raise click.ClickException(f"{option} cannot be combined with --retry-upload")
-        from synth_setter.cli.clap import retry_output_upload
-
-        click.echo(retry_output_upload(retry_upload))
-        return
-
-    unsupported_audio_options = (
-        ("--checkpoint", checkpoint),
-        ("--clap-checkpoint", clap_checkpoint),
-        ("--output", output),
-        ("--upload-uri", upload_uri),
-        ("--device", device),
-        ("--seed", seed),
-        ("--no-upload", not upload),
-    )
-    if _dispatch_audio_mode(
-        (guide_audio, ref_audio),
-        text_prompt,
-        unsupported_audio_options,
-        requested_strengths,
-    ):
-        return
-
     if requested_strengths.sketch is not None:
         raise click.ClickException(
             "--sketch-cfg-strength is only supported with guide/reference audio"
@@ -834,6 +761,128 @@ def main(
         r2_io.upload_to_uri(metrics_path, csv_destination)
         click.echo(f"R2 WAV: {wav_destination}")
         click.echo(f"R2 CSV: {csv_destination}")
+
+
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.argument("text_prompt", required=False)
+@click.option(
+    "--guide_audio",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Guide audio supplying sketch controls.",
+)
+@click.option(
+    "--ref_audio",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Reference audio supplying mel/timbre conditioning.",
+)
+@click.option(
+    "--checkpoint",
+    envvar="SYNTH_SETTER_CLAP_INVERSE_CHECKPOINT",
+    help="CLAP-conditioned inverse checkpoint path or R2 URI.",
+)
+@click.option(
+    "--clap-checkpoint",
+    envvar="SYNTH_SETTER_CLAP_ENCODER_CHECKPOINT",
+    help="LAION-CLAP checkpoint directory, Hugging Face id, or R2 prefix.",
+)
+@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), help="Local WAV path.")
+@click.option("--upload-uri", help="Exact r2:// destination for the WAV.")
+@click.option(
+    "--retry-upload",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Upload a retained sketch-render directory without rerunning inference.",
+)
+@click.option(
+    "--device",
+    type=click.Choice(["auto", "cpu", "cuda", "mps"]),
+    default=None,
+    help="Inference device [default: auto].",
+)
+@click.option("--seed", type=int, default=None, help="Flow sampling seed [default: 0].")
+@click.option(
+    "--content-cfg-strength",
+    type=float,
+    callback=validate_cfg_strength,
+    help="Content guidance override; omitted uses the checkpoint value.",
+)
+@click.option(
+    "--sketch-cfg-strength",
+    type=float,
+    callback=validate_cfg_strength,
+    help="Sketch guidance override for guide/reference audio mode.",
+)
+@click.option("--upload/--no-upload", default=True, show_default=True)
+@click.pass_context
+def main(
+    context: click.Context,
+    text_prompt: str | None,
+    guide_audio: Path | None,
+    ref_audio: Path | None,
+    checkpoint: str | None,
+    clap_checkpoint: str | None,
+    output: Path | None,
+    upload_uri: str | None,
+    retry_upload: Path | None,
+    device: _DeviceSetting | None,
+    seed: int | None,
+    content_cfg_strength: float | None,
+    sketch_cfg_strength: float | None,
+    upload: bool,
+) -> None:
+    """Render a text prompt or guide/reference audio as a Surge WAV.
+
+    Use ``synth-setter-clap "frog croak"`` for text or pass both audio options.
+
+    :param context: Active Click invocation context.
+    :param text_prompt: Optional natural-language sound description.
+    :param guide_audio: Optional audio supplying sketch controls.
+    :param ref_audio: Optional audio supplying mel/timbre conditioning.
+    :param checkpoint: Optional inverse-checkpoint override.
+    :param clap_checkpoint: Optional CLAP encoder override.
+    :param output: Optional local WAV destination.
+    :param upload_uri: Optional exact R2 object destination.
+    :param retry_upload: Optional retained sketch-render directory to upload.
+    :param device: Optional torch-device override.
+    :param seed: Optional flow sampling seed.
+    :param content_cfg_strength: Optional text or reference-mel guidance override.
+    :param sketch_cfg_strength: Optional sketch-control guidance override.
+    :param upload: Whether to upload the rendered WAV.
+    """
+    requested_strengths = CfgStrengths(
+        content=content_cfg_strength,
+        sketch=sketch_cfg_strength,
+    )
+    if _dispatch_retry_upload(context, retry_upload):
+        return
+
+    unsupported_audio_options = (
+        ("--checkpoint", checkpoint),
+        ("--clap-checkpoint", clap_checkpoint),
+        ("--output", output),
+        ("--upload-uri", upload_uri),
+        ("--device", device),
+        ("--seed", seed),
+        ("--no-upload", not upload),
+    )
+    if _dispatch_audio_mode(
+        (guide_audio, ref_audio),
+        text_prompt,
+        unsupported_audio_options,
+        requested_strengths,
+    ):
+        return
+
+    _run_text_mode(
+        text_prompt=text_prompt,
+        checkpoint=checkpoint,
+        clap_checkpoint=clap_checkpoint,
+        output=output,
+        upload_uri=upload_uri,
+        device=device,
+        seed=seed,
+        upload=upload,
+        requested_strengths=requested_strengths,
+    )
 
 
 if __name__ == "__main__":

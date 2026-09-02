@@ -70,7 +70,7 @@ def _read_wav(path: Path) -> np.ndarray:
 def test_real_checkpoint_guide_and_reference_changes_alter_prediction(tmp_path: Path) -> None:
     """The pinned model prediction depends on both conditioning audio inputs.
 
-    :param tmp_path: Holds three controlled guide/reference input pairs.
+    :param tmp_path: Holds guide/reference input pairs with isolated changes.
     """
     checkpoint_path = cache_r2_file(DEFAULT_CHECKPOINT_URI, _CACHE_NAMESPACE, _CHECKPOINT_SHA256)
     stats_path = cache_r2_file(DEFAULT_STATS_URI, _CACHE_NAMESPACE, _STATS_SHA256)

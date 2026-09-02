@@ -18,6 +18,12 @@ from pedalboard.io import AudioFile
 
 from synth_setter.cli import clap_render
 from synth_setter.cli._cfg_strength import CfgStrengths
+from synth_setter.cli.clap import (
+    PreparedAudioInputs,
+    RenderedPatch,
+    write_output_artifacts,
+    write_run_manifest,
+)
 from synth_setter.cli.clap_render import (
     compare_embeddings,
     main,
@@ -25,6 +31,7 @@ from synth_setter.cli.clap_render import (
     summarize_cosine_distances,
     write_summary_csv,
 )
+from synth_setter.features.sketch_controls import NUM_SKETCH_CONTROLS
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +39,7 @@ _RETAINED_FILENAMES = ("guide.wav", "manifest.json", "params.csv", "pred.wav", "
 
 
 def _write_retained_run(output_dir: Path, destination: str, run_id: str | None = None) -> None:
-    """Write the five retained artifacts needed by upload recovery.
+    """Write a retained artifact fixture for upload-validation tests.
 
     :param output_dir: Retained run directory to populate.
     :param destination: Manifest R2 destination.
@@ -45,16 +52,34 @@ def _write_retained_run(output_dir: Path, destination: str, run_id: str | None =
     (output_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def test_cli_retry_upload_real_rclone_publishes_retained_artifacts_without_inference(
+def test_cli_retry_upload_real_rclone_publishes_consumable_producer_artifacts(
     fake_r2_remote: Path,
+    tmp_path: Path,
 ) -> None:
-    """The installed command uploads an existing run through real rclone only.
+    """Recovery preserves artifacts from production writers through their readers.
 
     :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param tmp_path: Holds the retained producer output.
     """
-    output_dir = fake_r2_remote / "retained" / "run-1"
+    output_dir = tmp_path / "run-1"
     destination = "r2://intermediate-data/eval/synth-setter-clap/run-1"
-    _write_retained_run(output_dir, destination)
+    prepared = PreparedAudioInputs(
+        guide_audio=torch.full((2, 176400), 0.125),
+        ref_audio=torch.full((2, 176400), -0.25),
+        ref_mel=torch.zeros(2, 128, 401),
+        sketch_controls=torch.zeros(NUM_SKETCH_CONTROLS, 401),
+    )
+    write_output_artifacts(
+        output_dir,
+        prepared,
+        RenderedPatch(
+            audio=np.full((2, 176400), 0.0625, dtype=np.float32),
+            synth_params={"filter_1_cutoff": 0.5},
+            note_params={"pitch": 60, "note_start_and_end": (3.95, 0.05)},
+            effective_note_window=(0.05, 3.95),
+        ),
+    )
+    write_run_manifest(output_dir, destination, CfgStrengths(content=2.0, sketch=3.0))
 
     executable = Path(sys.executable).with_name("synth-setter-clap")
     result = subprocess.run(  # noqa: S603 — fixed installed entrypoint and fixture path.
@@ -68,9 +93,22 @@ def test_cli_retry_upload_real_rclone_publishes_retained_artifacts_without_infer
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == destination
-    remote = fake_r2_remote / destination.removeprefix("r2://")
-    assert sorted(path.name for path in remote.iterdir()) == sorted(_RETAINED_FILENAMES)
-    assert (remote / "pred.wav").read_bytes() == b"retained pred.wav"
+    downloaded = tmp_path / "downloaded"
+    r2_io.download_dir_no_overwrite(destination, downloaded)
+    assert sorted(path.name for path in downloaded.iterdir()) == sorted(_RETAINED_FILENAMES)
+    with AudioFile(str(downloaded / "pred.wav"), "r") as audio_file:
+        audio = audio_file.read(audio_file.frames)
+    assert audio.shape == (2, 176400)
+    assert np.isfinite(audio).all()
+    assert np.abs(audio).max() > 0.05
+    with (downloaded / "params.csv").open(newline="", encoding="utf-8") as stream:
+        rows = {row[""]: row for row in csv.DictReader(stream)}
+    assert rows["note_start_and_end"]["pred_effective"] == "(0.05, 3.95)"
+    manifest = json.loads((downloaded / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["run_id"] == "run-1"
+    assert manifest["r2_uri"] == destination
+    assert manifest["content_cfg_strength"] == 2.0
+    assert manifest["sketch_cfg_strength"] == 3.0
 
 
 def test_cli_retry_upload_non_r2_manifest_rejected_before_upload(
