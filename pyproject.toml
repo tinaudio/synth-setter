@@ -147,8 +147,11 @@ torch = [
   "timm==1.0.28",
   # Commit-pinned until TinyMU publishes a package release.
   "tinymu @ git+https://github.com/ktinubu/TinyMU@fef8564593fceb5625c10f56a46b256216e7173d",
-  # Commit-pinned; package metadata below limits installation to the 16 kHz VAE closure.
+  # Commit-pinned; package metadata below limits installation to the used MeanAudio closure.
   "meanaudio @ git+https://github.com/xiquan-li/MeanAudio.git@8740a3e8df4c891a8d9deee1f820d051584d2671",
+  # MeanAudio-S-Full uses this exact upstream CLAP implementation for global text features.
+  "laion-clap @ git+https://github.com/hkchengrex/CLAP.git@590b52df03a5e480634b8714135d3534313be860",
+  "torchdiffeq>=0.2.5",
   # Commit-pinned: upstream has no PyPI release or Git tags. Package-scoped metadata
   # below relaxes its torch pins without changing cpu/cu128 wheel routing.
   "stable-audio-3 @ git+https://github.com/Stability-AI/stable-audio-3@124e8a799f57a1f665495ecb72e547d0a62867f1",
@@ -300,8 +303,8 @@ requires-dist = [
   "transformers>=5.8.0",
 ]
 
-# Upstream ships full text-to-audio app metadata, including numpy<2.1 and timm>=1.0.12.
-# The adapter imports only this package-scoped mel/VAE closure.
+# Upstream ships full app metadata; synth-setter declares the generation-only additions above.
+# This package-scoped closure serves the mel/VAE adapter and latent-flow network imports.
 [[tool.uv.dependency-metadata]]
 name = "meanaudio"
 version = "1.0.0"

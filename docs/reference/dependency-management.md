@@ -131,13 +131,20 @@ floor and backend index routing.
 
 MeanAudio is installed directly from commit
 `8740a3e8df4c891a8d9deee1f820d051584d2671`. Its upstream metadata describes the
-full generation app and requires `numpy<2.1` and `timm>=1.0.12`, which conflict
-with this runtime even though the VAE adapter imports no timm or generation app
-modules and needs no numpy upper bound. The
-package-scoped `[tool.uv.dependency-metadata]` entry replaces that metadata only
-for `meanaudio==1.0.0` with the measured mel/VAE import closure: torch, numpy,
-einops, librosa, OmegaConf, and Hugging Face Hub. This remains a direct upstream
-installation; no MeanAudio source is copied into synth-setter.
+full generation app and requires `numpy<2.1`; the package-scoped
+`[tool.uv.dependency-metadata]` entry replaces that metadata for
+`meanaudio==1.0.0` with the measured mel/VAE and latent-network import closure:
+torch, numpy, einops, librosa, OmegaConf, and Hugging Face Hub. S-Full generation
+adds the commit-pinned `hkchengrex/CLAP` text encoder and `torchdiffeq` explicitly
+in the `torch` group.
+
+Generation resolves `meanaudio_s_full.pth` and the upstream CLAP checkpoint from
+`AndreasXi/MeanAudio` revision
+`6e072062d4f9af21c647e2bae5aafc1da2c84014`, verifies both SHA-256 digests, and
+pins the Flan-T5-Large and RoBERTa tokenizer revisions. It returns MeanAudio's
+unnormalized state before VAE decode; the comparison runner transposes that state
+to `(B, 20, 125)` and sends it directly to the inverse checkpoint. No MeanAudio
+source is copied into synth-setter.
 
 ## Adding a new extra or dependency group
 
