@@ -349,8 +349,17 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
         _target: torch.Tensor,
         _param_spec: ParamSpec,
     ) -> dict[str, torch.Tensor]:
-        values = predicted.new_tensor([-6.0, 3.0] if predicted.shape[0] == 2 else [12.0])
-        return {"continuous": values, "floor": values, "nearest": values}
+        if predicted.shape[0] == 2:
+            return {
+                "continuous": predicted.new_tensor([-6.0, 3.0]),
+                "floor": predicted.new_tensor([8.0, -2.0]),
+                "nearest": predicted.new_tensor([-4.0, 10.0]),
+            }
+        return {
+            "continuous": predicted.new_tensor([12.0]),
+            "floor": predicted.new_tensor([-9.0]),
+            "nearest": predicted.new_tensor([-15.0]),
+        }
 
     monkeypatch.setattr(
         "synth_setter.models.vst_flow_matching_module.midi_pitch_residuals",
@@ -376,4 +385,12 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
     torch.testing.assert_close(
         trainer.callback_metrics["val/pitch_residual_continuous_mean_semitones"],
         torch.tensor(3.0),
+    )
+    torch.testing.assert_close(
+        trainer.callback_metrics["val/pitch_residual_floor_mean_semitones"],
+        torch.tensor(-1.0),
+    )
+    torch.testing.assert_close(
+        trainer.callback_metrics["val/pitch_residual_nearest_mean_semitones"],
+        torch.tensor(-3.0),
     )
