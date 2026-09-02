@@ -428,21 +428,42 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     return pd.concat(metric_dfs)
 
 
+def _is_tool_owned_audio_view(path: Path) -> bool:
+    """Return whether ``path`` matches the generated symlink-view layout.
+
+    :param path: Candidate directory containing sample subdirectories.
+    :returns: ``True`` for a nonempty tree of sample directories containing only
+        ``pred.wav`` and ``target.wav`` symlinks.
+    """
+    if not path.is_dir() or path.is_symlink():
+        return False
+    sample_dirs = list(path.iterdir())
+    if not sample_dirs:
+        return False
+    for sample_dir in sample_dirs:
+        if not sample_dir.name.startswith("sample_") or not sample_dir.is_dir():
+            return False
+        entries = list(sample_dir.iterdir())
+        if {entry.name for entry in entries} != {"pred.wav", "target.wav"}:
+            return False
+        if not all(entry.is_symlink() for entry in entries):
+            return False
+    return True
+
+
 def _remove_deprecated_metric_outputs(output_dir: Path) -> None:
-    """Ensure the output directory contains only supported metric artifacts.
+    """Remove unsupported generated artifacts while preserving unowned content.
 
     :param output_dir: Metrics directory that may contain unsupported artifacts.
     """
-    for name in (
-        "aggregated_metrics_shuffled.csv",
-        "shuffle_permutation.csv",
-        "shuffled_audio",
-    ):
+    for name in ("aggregated_metrics_shuffled.csv", "shuffle_permutation.csv"):
         path = output_dir / name
         if path.is_symlink() or path.is_file():
             path.unlink()
-        elif path.is_dir():
-            shutil.rmtree(path)
+
+    audio_view = output_dir / "shuffled_audio"
+    if _is_tool_owned_audio_view(audio_view):
+        shutil.rmtree(audio_view)
 
 
 def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
@@ -490,8 +511,8 @@ def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
         (each must have ``pred.wav`` and ``target.wav``).
     :param output_dir: Destination for CSV outputs.
     :param num_workers: Number of parallel worker processes.
-    :raises ValueError: when no valid sample dirs are found or the output directory
-        is the source audio directory.
+    :raises ValueError: when no valid sample dirs are found or the input and output
+        directories overlap.
     """
     audio_dir_path = Path(audio_dir)
     output_dir_path = Path(output_dir)

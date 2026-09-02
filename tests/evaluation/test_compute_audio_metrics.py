@@ -680,12 +680,14 @@ def test_main_uniform_params_writes_only_standard_metric_outputs(tmp_path: Path)
     metrics_dir.mkdir()
     (metrics_dir / "aggregated_metrics_shuffled.csv").write_text("stale")
     (metrics_dir / "shuffle_permutation.csv").write_text("stale")
-    (metrics_dir / "shuffled_audio").mkdir()
-    (metrics_dir / "shuffled_audio" / "stale.wav").write_text("stale")
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    sample_0 = _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
     _make_uniform_sample_dir(
         audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
     )
+    legacy_sample = metrics_dir / "shuffled_audio" / "sample_0"
+    legacy_sample.mkdir(parents=True)
+    (legacy_sample / "pred.wav").symlink_to(sample_0 / "pred.wav")
+    (legacy_sample / "target.wav").symlink_to(sample_0 / "target.wav")
 
     result = CliRunner().invoke(
         compute_audio_metrics_main,
@@ -699,6 +701,30 @@ def test_main_uniform_params_writes_only_standard_metric_outputs(tmp_path: Path)
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
     assert not (metrics_dir / "shuffle_permutation.csv").exists()
     assert not (metrics_dir / "shuffled_audio").exists()
+
+
+@pytest.mark.slow
+def test_main_preserves_unowned_legacy_named_directory(tmp_path: Path) -> None:
+    """Metric cleanup does not recursively delete an unowned output directory.
+
+    :param tmp_path: Root containing rendered audio and a user-owned metrics artifact.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+    metrics_dir = tmp_path / "metrics"
+    retained_file = metrics_dir / "shuffled_audio" / "notes.txt"
+    retained_file.parent.mkdir(parents=True)
+    retained_file.write_text("keep")
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert retained_file.read_text() == "keep"
 
 
 def test_main_output_dir_equal_to_audio_dir_raises(tmp_path: Path) -> None:

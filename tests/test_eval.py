@@ -1250,7 +1250,7 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
         **kwargs: object,
     ) -> None:
         fake_run(args, **kwargs)
-        if COMPUTE_AUDIO_METRICS_FRAGMENT in args:
+        if any(COMPUTE_AUDIO_METRICS_FRAGMENT in arg for arg in args):
             metrics_dir = Path(args[args.index("-m") + 3])
             (metrics_dir / "aggregated_metrics_shuffled.csv").write_text(
                 ",mean,std\nmss,1.0,0.2\n"
