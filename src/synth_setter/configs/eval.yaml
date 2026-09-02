@@ -40,7 +40,7 @@ evaluation:
   # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
   upload_output_dir_uri: null
 
-# passing checkpoint path is necessary for evaluation
+# Local path or R2-backed r2:// / s3:// object URI.
 ckpt_path: ???
 
 # W&B model lineage (storage-provenance-spec §5): the train config ID this eval consumes.
