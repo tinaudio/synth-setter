@@ -6,9 +6,12 @@ import numpy as np
 import pandas as pd
 import pytest
 import soundfile as sf
+from pyFDN import FDNBuild
 
-from synth_setter.data.pyfdn_instrument import PyFDNRenderer
+import synth_setter.evaluation.pyfdn_evaluator as pyfdn_evaluator
+from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.vst.param_spec import ParameterValues
 from synth_setter.evaluation.pyfdn_evaluator import (
     PyFDNEvaluation,
     decode_pyfdn_model_output,
@@ -86,6 +89,45 @@ def test_evaluate_pyfdn_row_exact_target_prediction_has_identity_metrics(
     )
 
 
+def test_evaluate_pyfdn_row_builder_rejection_counts_build_invalid(
+    source_file: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decoded patch rejected by the real build boundary is classified separately.
+
+    :param source_file: Checksum-pinned production-geometry source audio.
+    :param monkeypatch: Scoped build-boundary rejection injection.
+    """
+    path, checksum = source_file
+    target_params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(27))
+    target_encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(target_params, notes)
+    target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(target_encoded).astype(np.float32)
+    prediction = np.zeros(91, dtype=np.float32)
+    real_build = params_to_fdn_build
+
+    def reject_zero_feedback(params: ParameterValues, *, sample_rate: float) -> FDNBuild:
+        """Reject the finite patch chosen for the build-invalid case.
+
+        :param params: Decoded target or predicted patch.
+        :param sample_rate: Fixed renderer sample rate.
+        :returns: Real target build.
+        :raises ValueError: The prediction carries zero feedback.
+        """
+        if not np.asarray(params["feedback_matrix"]).any():
+            raise ValueError("rejected exact prediction")
+        return real_build(params, sample_rate=sample_rate)
+
+    monkeypatch.setattr(pyfdn_evaluator, "params_to_fdn_build", reject_zero_feedback)
+
+    result = evaluate_pyfdn_row(
+        prediction,
+        target,
+        renderer=PyFDNRenderer(path, checksum),
+    )
+
+    assert result.status == "build_invalid"
+    assert result.error is not None and "rejected exact prediction" in result.error
+
+
 def test_evaluate_pyfdn_row_unstable_exact_prediction_counts_render_invalid(
     source_file: tuple[Path, str],
 ) -> None:
@@ -127,7 +169,7 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
         [target, np.full(91, np.nan, dtype=np.float32), np.ones(91, dtype=np.float32)]
     )
     targets = np.stack([target, target, target])
-    evaluator = PyFDNEvaluation(path, checksum, tmp_path)
+    evaluator = PyFDNEvaluation(PyFDNRenderer(path, checksum), tmp_path)
 
     with np.errstate(over="ignore", invalid="ignore"):
         evaluator.evaluate_batch(predictions, targets)

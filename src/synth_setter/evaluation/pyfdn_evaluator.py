@@ -271,32 +271,17 @@ class PyFDNEvaluation(Callback):
 
     def __init__(
         self,
-        source_audio_path: str | Path,
-        source_audio_sha256: str,
+        renderer: PyFDNRenderer,
         output_dir: str | Path,
-        *,
-        synth_version: str = "0.4.2",
-        sample_rate: int = 48_000,
     ) -> None:
-        """Bind the fixed source and output root.
+        """Bind an injected fixed-source renderer and output root.
 
-        :param source_audio_path: Checksum-pinned lossless mono source.
-        :param source_audio_sha256: Expected SHA-256 of the source bytes.
+        :param renderer: Native renderer whose source is owned by instrument configuration.
         :param output_dir: Evaluation run directory.
-        :param synth_version: Required installed pyFDN version.
-        :param sample_rate: Fixed source and metric rate in Hz.
-        :raises ValueError: The sample rate differs from the fixed 48 kHz contract.
         """
         super().__init__()
-        if sample_rate != int(_PYFDN_SAMPLE_RATE):
-            raise ValueError("pyFDN evaluation sample_rate must be 48000")
         self.output_dir = Path(output_dir)
-        self.renderer = PyFDNRenderer(
-            source_audio_path,
-            source_audio_sha256,
-            synth_version=synth_version,
-            sample_rate=sample_rate,
-        )
+        self.renderer = renderer
         self._reset()
 
     def _reset(self) -> None:
@@ -440,8 +425,8 @@ class PyFDNEvaluation(Callback):
         if not isinstance(outputs, dict) or "preds" not in outputs:
             raise ValueError("pyFDN evaluation requires test_step outputs['preds']")
         self.evaluate_batch(
-            outputs["preds"].detach().to(device="cpu", dtype=torch.float32).numpy(),
-            batch["params"].detach().to(device="cpu", dtype=torch.float32).numpy(),
+            outputs["preds"].detach().cpu().numpy(),
+            batch["params"].detach().cpu().numpy(),
         )
 
     def finalize(self) -> dict[str, float]:

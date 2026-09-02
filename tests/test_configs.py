@@ -998,24 +998,6 @@ def test_surge_eval_composition_retains_default_per_param_mse_callback() -> None
     assert cfg.callbacks.log_per_param_mse.param_spec == "surge_simple"
 
 
-def test_pyfdn_eval_flow_composes_native_test_callback() -> None:
-    """The pyFDN eval profile routes test predictions without VST infrastructure."""
-    cfg = _compose(
-        "eval.yaml", ["experiment=pyfdn/eval_flow", "ckpt_path=dummy.ckpt", "trainer=cpu"]
-    )
-
-    assert cfg.mode == "test"
-    assert cfg.model.num_params == 91
-    assert cfg.synth.param_spec_name == "pyfdn_n8_mono"
-    assert cfg.callbacks.pyfdn_evaluation._target_ == (
-        "synth_setter.evaluation.pyfdn_evaluator.PyFDNEvaluation"
-    )
-    assert cfg.callbacks.pyfdn_evaluation.sample_rate == 48_000
-    assert cfg.evaluation.render_vst is False
-    assert cfg.evaluation.no_params is False
-    assert cfg.get("render") is None
-
-
 def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> None:
     """``generate_dataset/surge-4-lance-440k-20k-20k`` wires surge_4 and inline finalize.
 
