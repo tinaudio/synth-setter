@@ -39,7 +39,9 @@ def test_cfg_strengths_legacy_sketch_default_uses_effective_content(
     ("requested", "default_content", "default_sketch", "message"),
     [
         (CfgStrengths(content=None, sketch=None), "bad", None, "content"),
+        (CfgStrengths(content=None, sketch=None), float("nan"), None, "content"),
         (CfgStrengths(content=None, sketch=None), 4.0, "bad", "sketch"),
+        (CfgStrengths(content=None, sketch=None), 4.0, -1.0, "sketch"),
         (CfgStrengths(content=-1.0, sketch=None), 4.0, None, "content"),
         (CfgStrengths(content=None, sketch=float("inf")), 4.0, None, "sketch"),
     ],
