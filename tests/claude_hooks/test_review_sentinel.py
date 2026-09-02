@@ -84,6 +84,64 @@ def test_make_review_filename_rejects_invalid_sha(helper: ModuleType, bad_sha: s
         helper.make_review_filename(bad_sha)
 
 
+def test_claim_review_attempt_negative_state_raises_without_overwrite(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    """Reject a negative persisted count without resetting its state.
+
+    :param helper: The loaded helper module.
+    :param tmp_path: Temporary directory for attempt state.
+    """
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+    state_path = next(tmp_path.glob("*-attempts.*.txt"))
+    state_path.write_text("-1\n")
+
+    with pytest.raises(ValueError, match="invalid review attempt state"):
+        helper.claim_review_attempt("branch-a", str(tmp_path))
+
+    assert state_path.read_text() == "-1\n"
+
+
+def test_claim_review_attempt_replace_failure_preserves_prior_count(
+    helper: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the previous durable count when atomic replacement fails.
+
+    :param helper: The loaded helper module.
+    :param tmp_path: Temporary directory for attempt state.
+    :param monkeypatch: Replaces the atomic filesystem operation.
+    """
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+    state_path = next(tmp_path.glob("*-attempts.*.txt"))
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("injected replacement failure")
+
+    monkeypatch.setattr(helper.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="injected replacement failure"):
+        helper.claim_review_attempt("branch-a", str(tmp_path))
+
+    assert state_path.read_text() == "1\n"
+
+
+def test_claim_review_attempt_different_branch_starts_fresh(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    """Track the three-attempt budget independently for each branch.
+
+    :param helper: The loaded helper module.
+    :param tmp_path: Temporary directory for attempt state.
+    """
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+    helper.claim_review_attempt("branch-a", str(tmp_path))
+
+    attempt = helper.claim_review_attempt("branch-b", str(tmp_path))
+
+    assert attempt == 1
+
+
 def test_make_findings_path_is_unique_per_review(helper: ModuleType, tmp_path: Path) -> None:
     """Concurrent reviews receive different existing JSON paths.
 

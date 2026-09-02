@@ -1,32 +1,35 @@
-"""Shared helpers for the pre-PR review-gate sentinel filename.
+"""Manage pre-PR review attempts and the review-gate sentinel filename.
 
 The sentinel encodes the commit SHA the review was performed against directly
 in the review file's name, e.g.::
 
     .agent-reviews/repo-review-full-no-comments.<40-char-sha>.md
 
-Both ``/repo-review-full-no-comments`` (when writing the rendered report) and
-``agent/hooks/pre-pr-review-gate.sh`` (when validating the path supplied via
-``REVIEW_FULL=<path>`` on ``gh pr create``) call into this module so the file
-name format has exactly one source of truth.
+The no-comments launcher claims a durable per-branch attempt here before
+starting Pi. The renderer and retained PR gate share the filename
+helpers so their sentinel contract has one source of truth.
 
-Stdlib-only so the bash gate can ``python3 review_sentinel.py parse <path>``
-without project deps on PATH.
+Stdlib-only so shell entrypoints can call it without project dependencies.
 """
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import re
 import sys
 import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 
+MAX_PRE_PR_REVIEW_ATTEMPTS = 3
 REVIEW_DIR = ".agent-reviews"
 SKILL_PREFIX = "repo-review-full-no-comments"
+_ATTEMPT_PREFIX = f"{SKILL_PREFIX}-attempts"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FILENAME_RE = re.compile(rf"^{re.escape(SKILL_PREFIX)}\.([0-9a-f]{{40}})\.md$")
-_SUBCOMMANDS = frozenset({"findings", "make", "parse", "path"})
+_SUBCOMMANDS = frozenset({"claim", "findings", "make", "parse", "path"})
 _USAGE = f"usage: review_sentinel.py {{{'|'.join(sorted(_SUBCOMMANDS))}}} <arg>"
 
 
@@ -40,6 +43,75 @@ def make_review_filename(sha: str) -> str:
     if not _SHA_RE.match(sha):
         raise ValueError(f"expected 40-char lowercase hex SHA, got {sha!r}")
     return f"{SKILL_PREFIX}.{sha}.md"
+
+
+def _read_attempt_count(state_path: Path) -> int:
+    """Read validated attempt state, treating only an absent file as fresh.
+
+    :param state_path: Per-branch attempt state file.
+    :returns: Persisted attempt count or zero when no state exists.
+    :raises ValueError: If persisted state is empty, nonnumeric, or out of range.
+    """
+    if not state_path.exists():
+        return 0
+    raw_count = state_path.read_text().strip()
+    try:
+        count = int(raw_count)
+    except ValueError as exc:
+        raise ValueError(f"invalid review attempt state in {state_path}") from exc
+    if not 0 <= count <= MAX_PRE_PR_REVIEW_ATTEMPTS:
+        raise ValueError(f"invalid review attempt state in {state_path}")
+    return count
+
+
+def _write_attempt_count(state_path: Path, count: int) -> None:
+    """Atomically persist attempt state without exposing a partial value.
+
+    :param state_path: Per-branch attempt state destination.
+    :param count: Valid claimed attempt count.
+    """
+    descriptor, temporary = tempfile.mkstemp(
+        dir=state_path.parent,
+        prefix=f".{state_path.name}.",
+    )
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(f"{count}\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, state_path)
+        directory = os.open(state_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def claim_review_attempt(branch: str, base_dir: str = REVIEW_DIR) -> int | None:
+    """Claim one sentinel review attempt for a branch.
+
+    :param branch: Non-empty Git branch name.
+    :param base_dir: Directory holding local review state.
+    :returns: Claimed one-based attempt number, or ``None`` after the limit.
+    :raises ValueError: If the branch or prior state is invalid.
+    """
+    if not branch:
+        raise ValueError("cannot track review attempts without a branch")
+    digest = hashlib.sha256(f"{branch}\n".encode()).hexdigest()
+    state_path = Path(base_dir) / f"{_ATTEMPT_PREFIX}.{digest}.txt"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.with_suffix(".lock")
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        count = _read_attempt_count(state_path)
+        if count >= MAX_PRE_PR_REVIEW_ATTEMPTS:
+            return None
+        claimed = count + 1
+        _write_attempt_count(state_path, claimed)
+        return claimed
 
 
 def make_findings_path(base_dir: str | None = None) -> str:
@@ -89,10 +161,11 @@ def make_review_path(sha: str, base_dir: str = REVIEW_DIR) -> str:  # noqa: DOC5
 def _main(argv: Sequence[str]) -> int:
     """Tiny CLI so the bash gate can parse/format filenames without Python imports.
 
-    Subcommands: ``make <sha>`` prints the filename; ``parse <path>`` prints
-    the encoded SHA (or exits 1 if the path is not a sentinel); ``path <sha>``
-    prints ``<REVIEW_DIR>/<filename>``; ``findings <dir>`` creates and prints a
-    unique findings JSON path.
+    Subcommands: ``claim <branch>`` persists and prints an allowed sentinel
+    review attempt (or exits 3 at the limit); ``make <sha>`` prints the
+    filename; ``parse <path>`` prints the encoded SHA (or exits 1 if the path
+    is not a sentinel); ``path <sha>`` prints ``<REVIEW_DIR>/<filename>``;
+    ``findings <dir>`` creates and prints a unique findings JSON path.
 
     :param argv: Argument list, normally ``sys.argv``.
     :returns: Process exit code (0 success; 1 parse no-match; 2 invalid input).
@@ -102,7 +175,13 @@ def _main(argv: Sequence[str]) -> int:
         return 2
     command, arg = argv[1], argv[2]
     try:
-        if command == "findings":
+        if command == "claim":
+            attempt = claim_review_attempt(arg)
+            if attempt is None:
+                sys.stdout.write(f"{MAX_PRE_PR_REVIEW_ATTEMPTS}\n")
+                return 3
+            sys.stdout.write(f"{attempt} {MAX_PRE_PR_REVIEW_ATTEMPTS}\n")
+        elif command == "findings":
             sys.stdout.write(make_findings_path(arg) + "\n")
         elif command == "make":
             sys.stdout.write(make_review_filename(arg) + "\n")
