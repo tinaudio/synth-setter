@@ -854,7 +854,7 @@ class VSTFlowMatchingModule(LightningModule):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,
-            torch.randn_like(batch["params"]),
+            batch["noise"],
             self.hparams.test_sample_steps,
             self.hparams.test_cfg_strength,
             sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
