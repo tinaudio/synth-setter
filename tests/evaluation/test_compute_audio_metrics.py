@@ -716,6 +716,12 @@ def test_main_preserves_unowned_legacy_named_directory(tmp_path: Path) -> None:
     retained_file = metrics_dir / "shuffled_audio" / "notes.txt"
     retained_file.parent.mkdir(parents=True)
     retained_file.write_text("keep")
+    retained_csvs = [
+        metrics_dir / "aggregated_metrics_shuffled.csv",
+        metrics_dir / "shuffle_permutation.csv",
+    ]
+    for path in retained_csvs:
+        path.write_text("keep")
 
     result = CliRunner().invoke(
         compute_audio_metrics_main,
@@ -725,6 +731,7 @@ def test_main_preserves_unowned_legacy_named_directory(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert retained_file.read_text() == "keep"
+    assert all(path.read_text() == "keep" for path in retained_csvs)
 
 
 def test_main_output_dir_equal_to_audio_dir_raises(tmp_path: Path) -> None:

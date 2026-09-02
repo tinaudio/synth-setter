@@ -456,14 +456,15 @@ def _remove_deprecated_metric_outputs(output_dir: Path) -> None:
 
     :param output_dir: Metrics directory that may contain unsupported artifacts.
     """
+    audio_view = output_dir / "shuffled_audio"
+    if not _is_tool_owned_audio_view(audio_view):
+        return
+
     for name in ("aggregated_metrics_shuffled.csv", "shuffle_permutation.csv"):
         path = output_dir / name
         if path.is_symlink() or path.is_file():
             path.unlink()
-
-    audio_view = output_dir / "shuffled_audio"
-    if _is_tool_owned_audio_view(audio_view):
-        shutil.rmtree(audio_view)
+    shutil.rmtree(audio_view)
 
 
 def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
