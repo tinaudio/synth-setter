@@ -1,6 +1,7 @@
 """Behavior tests for sketch-conditioned rendering."""
 
 import csv
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -83,6 +84,7 @@ def test_load_audio_file_unsupported_codec_uses_ffmpeg(
     np.testing.assert_array_equal(audio, np.clip(decoded[:4].T, -1.0, 1.0))
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required for codec fallback")
 def test_load_audio_file_real_wavpack_uses_ffmpeg_fallback() -> None:
     """A real unsupported WavPack fixture decodes through the shipped FFmpeg path."""
     source = Path(__file__).parent / "fixtures" / "audio" / "ffmpeg-fallback.wv"
@@ -184,6 +186,21 @@ def test_load_model_matching_checkpoint_returns_evaluation_model(
     render = sketch_render._load_settings().render
 
     class CompatibleModel:
+        """Minimal device/evaluation interface returned by the patched loader.
+
+        .. attribute :: hparams
+
+            Compatible checkpoint metadata.
+
+        .. attribute :: device
+
+            Device selected by the loader.
+
+        .. attribute :: evaluating
+
+            Whether evaluation mode was selected.
+        """
+
         hparams = {
             "conditioning": "mel",
             "sketch_controls": SketchControlSpec(num_frames=32),
@@ -194,10 +211,19 @@ def test_load_model_matching_checkpoint_returns_evaluation_model(
         evaluating = False
 
         def to(self, device: torch.device) -> "CompatibleModel":
+            """Record the requested device.
+
+            :param device: Inference device.
+            :returns: This test model.
+            """
             self.device = device
             return self
 
         def eval(self) -> "CompatibleModel":
+            """Record evaluation-mode selection.
+
+            :returns: This test model.
+            """
             self.evaluating = True
             return self
 
@@ -350,18 +376,40 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
     write_wav(silence, str(content), 44_100, 2)
 
     class RecordingModel:
+        """Capture guidance and noise supplied by the CLI.
+
+        .. attribute :: hparams
+
+            Parameter width consumed by the CLI.
+
+        .. attribute :: calls
+
+            Guidance strengths and noise recorded for each arm.
+        """
+
         hparams = {"num_params": 92}
         calls: list[tuple[float, float, torch.Tensor]] = []
 
-        def sample_batch(self, batch: object, **kwargs: object) -> torch.Tensor:
-            del batch
-            noise = kwargs["noise"]
-            assert isinstance(noise, torch.Tensor)
-            content_strength = kwargs["content_cfg_strength"]
-            sketch_strength = kwargs["sketch_cfg_strength"]
-            assert isinstance(content_strength, float)
-            assert isinstance(sketch_strength, float)
-            self.calls.append((content_strength, sketch_strength, noise.clone()))
+        def sample_batch(
+            self,
+            batch: object,
+            *,
+            noise: torch.Tensor,
+            content_cfg_strength: float,
+            sketch_cfg_strength: float,
+            sample_steps: int,
+        ) -> torch.Tensor:
+            """Record one arm and return a valid parameter row.
+
+            :param batch: Prepared model input.
+            :param noise: Shared initial flow state.
+            :param content_cfg_strength: Content guidance scale.
+            :param sketch_cfg_strength: Sketch guidance scale.
+            :param sample_steps: Flow integration steps.
+            :returns: One zero-valued model output row.
+            """
+            del batch, sample_steps
+            self.calls.append((content_cfg_strength, sketch_cfg_strength, noise.clone()))
             return torch.zeros((1, 92))
 
     model = RecordingModel()
