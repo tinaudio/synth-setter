@@ -1351,3 +1351,59 @@ def test_torchsynth_finetune_without_base_checkpoint_raises() -> None:
 
     with pytest.raises(MissingMandatoryValue):
         _ = cfg.model.base_checkpoint
+
+
+@pytest.mark.parametrize(
+    ("corpus", "audio_column"),
+    [
+        pytest.param("nsynth_test", "audio", id="nsynth"),
+        pytest.param("esc50", "audio_wav", id="esc50"),
+    ],
+)
+def test_third_party_eval_config_resolves_per_corpus(corpus: str, audio_column: str) -> None:
+    """Each published corpus is servable through config alone, on the render contract.
+
+    :param corpus: Corpus config under ``datamodule/third_party``.
+    :param audio_column: Blob column that corpus stores its audio in.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        [
+            f"datamodule=third_party/{corpus}",
+            "synth=surge_simple",
+            "render=vst",
+            "model=vst_flow",
+            "trainer=cpu",
+            "mode=predict",
+            "callbacks=eval_vst",
+            "ckpt_path=/tmp/none.ckpt",
+            "datamodule.mel_stats_uri=/tmp/training-stats.npz",
+        ],
+    )
+
+    assert cfg.datamodule.audio_column == audio_column
+    assert cfg.datamodule.dataset_version == 1
+    assert cfg.datamodule.sample_rate == cfg.render.sample_rate
+    assert cfg.datamodule.signal_duration_seconds == cfg.render.signal_duration_seconds
+    assert cfg.datamodule.conditioning == "mel"
+
+
+def test_third_party_eval_config_requires_checkpoint_mel_statistics() -> None:
+    """Normalized third-party evaluation requires checkpoint-training statistics."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "datamodule=third_party/nsynth_test",
+            "synth=surge_simple",
+            "render=vst",
+            "model=vst_flow",
+            "trainer=cpu",
+            "mode=predict",
+            "callbacks=eval_vst",
+            "ckpt_path=/tmp/none.ckpt",
+        ],
+    )
+
+    assert OmegaConf.is_missing(cfg.datamodule, "mel_stats_uri")
+    with pytest.raises(MissingMandatoryValue):
+        _ = cfg.datamodule.mel_stats_uri
