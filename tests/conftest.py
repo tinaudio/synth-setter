@@ -878,6 +878,32 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_pyfdn(tmp_path: Path) -> DictConfig:
+    """Compose dataset generation with the online-only pyFDN synth identity.
+
+    :param tmp_path: Per-test output, work, and log root.
+    :returns: pyFDN-selected dataset config for rejection coverage.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/smoke-shard",
+                "synth=pyfdn_n8_mono",
+            ],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.extras.print_config = False
+            cfg.logger = None
+
+    return cfg
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose the torchsynth smoke experiment with temporary local paths.
 

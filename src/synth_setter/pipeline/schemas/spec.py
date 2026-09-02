@@ -41,6 +41,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
+    PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
     RendererBackend,
@@ -455,6 +456,17 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 'DawDreamer requires gui_toggle_cadence="never": its open_editor() '
                 "call blocks the main thread and exposes no close-event API"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_online_only_pyfdn(self) -> RenderConfig:
+        """Reject pyFDN from the unsupported offline dataset-rendering path.
+
+        :return: ``self`` unchanged for renderable synth identities.
+        :raises ValueError: The online-only pyFDN identity is selected.
+        """
+        if self.plugin_path == PYFDN_PLUGIN_NAME:
+            raise ValueError("pyFDN offline generation is unsupported; use online train/eval only")
         return self
 
     @model_validator(mode="after")

@@ -995,6 +995,17 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     assert validate_all_shards_from_r2(spec) == []
 
 
+def test_from_hydra_rejects_online_only_pyfdn_before_generation(
+    cfg_dataset_pyfdn: DictConfig,
+) -> None:
+    """The dataset operator rejects pyFDN before offline renderer dispatch.
+
+    :param cfg_dataset_pyfdn: Real Hydra composition selecting the pyFDN synth identity.
+    """
+    with pytest.raises(ValueError, match="pyFDN.*online train/eval only"):
+        from_hydra(cfg_dataset_pyfdn)
+
+
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
     cfg_dataset_torchsynth: DictConfig,
     fake_r2_remote: Path,

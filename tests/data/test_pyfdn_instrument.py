@@ -204,6 +204,18 @@ def test_pyfdn_renderer_rejects_source_checksum_mismatch(
         PyFDNRenderer(path, "0" * 64)
 
 
+def test_pyfdn_renderer_rejects_lossy_source_subtype(tmp_path: Path) -> None:
+    """A companded WAV cannot satisfy the fixed lossless source contract.
+
+    :param tmp_path: Temporary directory owned by pytest.
+    """
+    path = tmp_path / "lossy.wav"
+    sf.write(path, np.zeros(192_000), 48_000, subtype="ULAW")
+
+    with pytest.raises(ValueError, match="lossless WAV"):
+        PyFDNRenderer(path, _sha256(path))
+
+
 def test_pyfdn_renderer_rejects_source_sample_rate(tmp_path: Path) -> None:
     """A lossless mono source at any rate other than 48 kHz is invalid.
 

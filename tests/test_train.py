@@ -213,6 +213,15 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert torch.isfinite(batch["params"]).all()
     assert batch["audio"].abs().max() > 0
 
+    model = object_dict["model"].eval()
+    zero_audio_batch = {**batch, "audio": torch.zeros_like(batch["audio"])}
+    with torch.inference_mode(), torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        conditioned_prediction, _ = model.predict_step(batch, batch_idx=0)
+        torch.manual_seed(0)
+        zero_audio_prediction, _ = model.predict_step(zero_audio_batch, batch_idx=0)
+    assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
+
     checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
     assert (checkpoint_dir / "last.ckpt").stat().st_size > 0
 

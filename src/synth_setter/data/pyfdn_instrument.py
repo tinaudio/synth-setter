@@ -22,6 +22,7 @@ _SAMPLE_RATE = 48_000.0
 _CHANNELS = 1
 _SIGNAL_DURATION_SECONDS = 4.0
 _SIGNAL_LENGTH = 192_000
+_LOSSLESS_WAV_SUBTYPES = frozenset({"PCM_16", "PCM_24", "PCM_32", "FLOAT", "DOUBLE"})
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
     ("input_matrix", (PYFDN_ORDER, _CHANNELS), np.dtype(np.float64)),
@@ -155,6 +156,11 @@ def _load_source(
         raise ValueError("source audio SHA-256 does not match source_audio_sha256")
 
     info = sf.info(io.BytesIO(source_bytes))
+    if info.format != "WAV" or info.subtype not in _LOSSLESS_WAV_SUBTYPES:
+        raise ValueError(
+            "source audio must use a lossless WAV subtype, "
+            f"got {info.format}/{info.subtype}"
+        )
     if info.samplerate != sample_rate:
         raise ValueError(f"source sample rate must be {sample_rate}, got {info.samplerate}")
     if info.channels != channels:
