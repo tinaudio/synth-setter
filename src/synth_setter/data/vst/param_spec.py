@@ -173,8 +173,7 @@ class DiscreteLiteralParameter(Parameter):
         return idx + self.min
 
     def _decode_scalar(self, scalar: np.ndarray) -> int:
-        scaled_offset = scalar * (self.max - self.min)
-        offset = scaled_offset.item()
+        offset = float(scalar.item()) * (self.max - self.min)
         lower_offset = math.floor(offset)
         return self.min + lower_offset + int(offset - lower_offset >= 0.5)
 

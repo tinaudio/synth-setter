@@ -798,6 +798,15 @@ def test_discrete_parameter_golden_encoding_remains_unchanged() -> None:
     assert parameter.decode(encoded) == 60
 
 
+def test_discrete_scalar_decode_float32_below_midpoint_rounds_down() -> None:
+    """Scaling promotes float32 inputs before testing the half-step boundary."""
+    parameter = DiscreteLiteralParameter(name="pitch", min=48, max=72)
+
+    decoded = parameter.decode(np.array([0.5208333134651184], dtype=np.float32))
+
+    assert decoded == 60
+
+
 def test_discrete_scalar_decode_large_integer_endpoint_remains_exact() -> None:
     """Half-up quantization does not increment an exactly represented large integer."""
     minimum = (1 << 52) + 1
