@@ -1,0 +1,286 @@
+"""Deterministic online datasets for the fixed-source pyFDN instrument."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Sequence
+from functools import cache
+from pathlib import Path
+from typing import cast
+
+import numpy as np
+import torch
+from jaxtyping import Float32
+from lightning import LightningDataModule
+from torch.utils.data import DataLoader, Dataset
+
+from synth_setter.conditioning import ConditioningMode
+from synth_setter.data.pyfdn_instrument import PyFDNRenderer
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.vst.param_spec import ParameterValues
+
+type PyFDNRenderCallable = Callable[
+    [ParameterValues], Float32[np.ndarray, "1 192000"]
+]
+type PyFDNItem = tuple[torch.Tensor, torch.Tensor, PyFDNRenderCallable]
+type PyFDNBatch = dict[str, torch.Tensor]
+
+
+@cache
+def _make_process_renderer(
+    source_audio_path: Path,
+    source_audio_sha256: str,
+    synth_version: str,
+    sample_rate: int,
+    channels: int,
+    signal_duration_seconds: float,
+    _process_id: int,
+) -> PyFDNRenderer:
+    """Load one renderer for each source and process identity.
+
+    :param source_audio_path: Path to the fixed lossless source.
+    :param source_audio_sha256: Expected SHA-256 of the source bytes.
+    :param synth_version: Required installed pyFDN version.
+    :param sample_rate: Fixed source and build sample rate in Hz.
+    :param channels: Fixed source channel count.
+    :param signal_duration_seconds: Fixed source duration in seconds.
+    :param _process_id: Process identity isolating worker-local cache entries.
+    :returns: Lazily loaded renderer shared by matching datasets in this process.
+    """
+    return PyFDNRenderer(
+        source_audio_path,
+        source_audio_sha256,
+        synth_version=synth_version,
+        sample_rate=sample_rate,
+        channels=channels,
+        signal_duration_seconds=signal_duration_seconds,
+    )
+
+
+def collate_pyfdn_audio_dict(batch: Sequence[PyFDNItem]) -> PyFDNBatch:
+    """Collate fixed-source rows into the existing audio-conditioned flow contract.
+
+    :param batch: Rows with channel-first audio and unit-domain encoded patches.
+    :returns: Float32 audio plus model-domain params and matching Gaussian noise.
+    """
+    audio = torch.cat([row[0] for row in batch], dim=0)
+    encoded = torch.cat([row[1] for row in batch], dim=0)
+    params = encoded * 2.0 - 1.0
+    return {"audio": audio, "params": params, "noise": torch.randn_like(params)}
+
+
+class PyFDNDataset(Dataset[PyFDNItem]):
+    """Sample deterministic pyFDN patches and render one fixed source on demand."""
+
+    def __init__(
+        self,
+        num_samples: int,
+        seed: int,
+        source_audio_path: str | Path,
+        source_audio_sha256: str,
+        synth_version: str = "0.4.2",
+        sample_rate: int = 48_000,
+        channels: int = 1,
+        signal_duration_seconds: float = 4.0,
+    ) -> None:
+        """Bind one deterministic split and its checksum-pinned source.
+
+        :param num_samples: Number of logical rows in this split.
+        :param seed: Base seed folded with each row index.
+        :param source_audio_path: Path to the fixed lossless source.
+        :param source_audio_sha256: Expected SHA-256 of the source bytes.
+        :param synth_version: Required installed pyFDN version.
+        :param sample_rate: Fixed source and build sample rate in Hz.
+        :param channels: Fixed source channel count.
+        :param signal_duration_seconds: Fixed source duration in seconds.
+        """
+        self.num_samples = num_samples
+        self.seed = seed
+        self.source_audio_path = Path(source_audio_path)
+        self.source_audio_sha256 = source_audio_sha256
+        self.synth_version = synth_version
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.signal_duration_seconds = signal_duration_seconds
+
+    def __len__(self) -> int:
+        """Return the configured split length.
+
+        :returns: Number of deterministic logical rows.
+        """
+        return self.num_samples
+
+    def _process_renderer(self) -> PyFDNRenderer:
+        """Return the source renderer shared by datasets in this process.
+
+        :returns: Lazily loaded process-local renderer.
+        """
+        return _make_process_renderer(
+            self.source_audio_path,
+            self.source_audio_sha256,
+            self.synth_version,
+            self.sample_rate,
+            self.channels,
+            self.signal_duration_seconds,
+            os.getpid(),
+        )
+
+    def __getitem__(self, index: int) -> PyFDNItem:
+        """Sample and render one row from its derived deterministic seed.
+
+        :param index: Logical row index.
+        :returns: Float32 audio, unit-domain encoded patch, and native render callable.
+        """
+        rng = np.random.default_rng(derive_sample_seed(self.seed, index))
+        params, note_params = PYFDN_N8_MONO_PARAM_SPEC.sample(rng)
+        encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, note_params)
+        renderer = self._process_renderer()
+        audio = renderer.render(params)
+        return (
+            torch.from_numpy(audio),
+            torch.from_numpy(encoded).unsqueeze(0),
+            renderer.render,
+        )
+
+
+class PyFDNDataModule(LightningDataModule):
+    """Serve fixed deterministic train, validation, and test pyFDN rows."""
+
+    def __init__(
+        self,
+        source_audio_path: str | Path,
+        source_audio_sha256: str,
+        synth_version: str = "0.4.2",
+        sample_rate: int = 48_000,
+        channels: int = 1,
+        signal_duration_seconds: float = 4.0,
+        train_val_test_sizes: tuple[int, int, int] = (100_000, 10_000, 10_000),
+        train_val_test_seeds: tuple[int, int, int] = (123, 456, 789),
+        batch_size: int = 32,
+        num_workers: int = 0,
+        drop_last: bool = False,
+        conditioning: ConditioningMode = "audio",
+        persistent_workers: bool = True,
+        *,
+        val_num_workers: int = 0,
+    ) -> None:
+        """Configure deterministic online pyFDN splits and loaders.
+
+        :param source_audio_path: Path to the fixed lossless source.
+        :param source_audio_sha256: Expected SHA-256 of the source bytes.
+        :param synth_version: Required installed pyFDN version.
+        :param sample_rate: Fixed source and build sample rate in Hz.
+        :param channels: Fixed source channel count.
+        :param signal_duration_seconds: Fixed source duration in seconds.
+        :param train_val_test_sizes: Row counts for train, validation, and test.
+        :param train_val_test_seeds: Base seeds for train, validation, and test.
+        :param batch_size: DataLoader batch size.
+        :param num_workers: Worker processes for training and test loaders.
+        :param drop_last: Whether training drops a trailing partial batch.
+        :param conditioning: Model-batch modality; pyFDN supports raw audio only.
+        :param persistent_workers: Keep positive-count workers alive between epochs.
+        :param val_num_workers: Worker processes for the validation loader.
+        :raises ValueError: Conditioning does not select raw audio.
+        """
+        if conditioning != "audio":
+            raise ValueError("pyFDN conditioning must be 'audio'")
+        super().__init__()
+        self.source_audio_path = Path(source_audio_path)
+        self.source_audio_sha256 = source_audio_sha256
+        self.synth_version = synth_version
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.signal_duration_seconds = signal_duration_seconds
+        self.train_val_test_sizes = train_val_test_sizes
+        self.train_val_test_seeds = train_val_test_seeds
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.drop_last = drop_last
+        self.conditioning = conditioning
+        self.persistent_workers = persistent_workers
+        self.val_num_workers = val_num_workers
+
+    def setup(self, stage: str | None = None) -> None:
+        """Build only the deterministic splits required by a Lightning stage.
+
+        :param stage: Lightning stage name, or ``None`` to build every split.
+        """
+
+        def dataset(size: int, seed: int) -> PyFDNDataset:
+            return PyFDNDataset(
+                size,
+                seed,
+                self.source_audio_path,
+                self.source_audio_sha256,
+                synth_version=self.synth_version,
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                signal_duration_seconds=self.signal_duration_seconds,
+            )
+
+        train_size, val_size, test_size = self.train_val_test_sizes
+        train_seed, val_seed, test_seed = self.train_val_test_seeds
+        if stage in (None, "fit"):
+            self.train = dataset(train_size, train_seed)
+            self.val = dataset(val_size, val_seed)
+        elif stage == "validate":
+            self.val = dataset(val_size, val_seed)
+        if stage in (None, "test", "predict"):
+            self.test = dataset(test_size, test_seed)
+
+    def _loader(
+        self,
+        dataset: Dataset[PyFDNItem],
+        *,
+        num_workers: int,
+        shuffle: bool = False,
+        drop_last: bool = False,
+    ) -> DataLoader[PyFDNBatch]:
+        """Wrap one online split with the fixed flow collator.
+
+        :param dataset: Deterministic online split to load.
+        :param num_workers: Worker processes for this split.
+        :param shuffle: Whether to shuffle the split's fixed row indices.
+        :param drop_last: Whether to discard a trailing partial batch.
+        :returns: Loader emitting the audio-conditioned flow batch contract.
+        """
+        return cast(
+            DataLoader[PyFDNBatch],
+            DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle=shuffle,
+                num_workers=num_workers,
+                persistent_workers=self.persistent_workers and num_workers > 0,
+                drop_last=drop_last,
+                collate_fn=collate_pyfdn_audio_dict,
+            ),
+        )
+
+    def train_dataloader(self) -> DataLoader[PyFDNBatch]:
+        """Return a shuffled loader over the fixed training rows.
+
+        :returns: Batched deterministic training data.
+        """
+        drop_last = self.drop_last and len(self.train) >= self.batch_size
+        return self._loader(
+            self.train,
+            num_workers=self.num_workers,
+            shuffle=True,
+            drop_last=drop_last,
+        )
+
+    def val_dataloader(self) -> DataLoader[PyFDNBatch]:
+        """Return the fixed-order validation loader.
+
+        :returns: Batched deterministic validation data.
+        """
+        return self._loader(self.val, num_workers=self.val_num_workers)
+
+    def test_dataloader(self) -> DataLoader[PyFDNBatch]:
+        """Return the fixed-order test loader.
+
+        :returns: Batched deterministic test data.
+        """
+        return self._loader(self.test, num_workers=self.num_workers)

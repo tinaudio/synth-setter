@@ -186,6 +186,7 @@ audio = [
   "librosa",
   "mido",
   "pedalboard",
+  "pyFDN==0.4.2",
   "pyloudnorm",
   "scipy>=1.14,<1.15",
   "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",
