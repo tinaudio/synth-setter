@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -330,12 +331,31 @@ def _download_verified_checkpoint(r2_uri: str, digest: str, cached: Path) -> Non
         staging.unlink(missing_ok=True)
 
 
-def _cached_remote_checkpoint(r2_uri: str, digest: str) -> Path:
-    """Return an immutable content-addressed checkpoint under an interprocess lock.
+def _copy_verified_checkpoint(source: Path, digest: str, cached: Path) -> None:
+    """Atomically publish a verified copy of a local checkpoint.
 
-    :param r2_uri: R2 object URI to localize on a cache miss.
+    :param source: Mutable local checkpoint path.
+    :param digest: Expected lowercase SHA-256 digest.
+    :param cached: Content-addressed destination path.
+    """
+    with tempfile.NamedTemporaryFile(
+        prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+    ) as temporary:
+        staging = Path(temporary.name)
+    try:
+        shutil.copyfile(source, staging)
+        _verify_checkpoint_sha256(staging, digest)
+        staging.replace(cached)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _cached_checkpoint(digest: str, publish: Callable[[Path], None]) -> Path:
+    """Return a verified content-addressed checkpoint under an interprocess lock.
+
     :param digest: Expected lowercase SHA-256 digest and cache identity.
-    :returns: Verified local checkpoint path.
+    :param publish: Cache-miss operation that atomically publishes verified bytes.
+    :returns: Verified immutable checkpoint path.
     """
     cached = synth_setter_cache_dir() / "checkpoints" / "evaluation" / digest / "model.ckpt"
     lock_path = cached.with_suffix(".ckpt.lock")
@@ -346,10 +366,34 @@ def _cached_remote_checkpoint(r2_uri: str, digest: str) -> Path:
             if cached.is_file():
                 _verify_checkpoint_sha256(cached, digest)
             else:
-                _download_verified_checkpoint(r2_uri, digest, cached)
+                publish(cached)
         finally:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     return cached
+
+
+def _cached_remote_checkpoint(r2_uri: str, digest: str) -> Path:
+    """Return an immutable content-addressed remote checkpoint.
+
+    :param r2_uri: R2 object URI to localize on a cache miss.
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :returns: Verified local checkpoint path.
+    """
+    return _cached_checkpoint(
+        digest, lambda cached: _download_verified_checkpoint(r2_uri, digest, cached)
+    )
+
+
+def _cached_local_checkpoint(source: Path, digest: str) -> Path:
+    """Return an immutable content-addressed copy of a local checkpoint.
+
+    :param source: Mutable local checkpoint path.
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :returns: Verified immutable checkpoint path.
+    """
+    return _cached_checkpoint(
+        digest, lambda cached: _copy_verified_checkpoint(source, digest, cached)
+    )
 
 
 def _localize_eval_checkpoint(
@@ -370,8 +414,9 @@ def _localize_eval_checkpoint(
     digest = _normalize_checkpoint_sha256(expected_sha256)
     is_remote = checkpoint.startswith(("r2://", "s3://"))
     if not is_remote:
-        _verify_checkpoint_sha256(Path(checkpoint), digest)
-        return checkpoint
+        if digest is None:
+            return checkpoint
+        return str(_cached_local_checkpoint(Path(checkpoint), digest))
     if digest is None:
         raise ValueError("remote checkpoint requires ckpt_sha256")
     r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint

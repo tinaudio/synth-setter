@@ -41,16 +41,26 @@ def test_eval_checkpoint_local_path_is_returned_unchanged(tmp_path: Path) -> Non
     assert eval_module._localize_eval_checkpoint(str(checkpoint)) == str(checkpoint)
 
 
-def test_eval_checkpoint_local_digest_is_enforced(tmp_path: Path) -> None:
-    """Local checkpoints accept matching pins and reject mismatched pins.
+def test_eval_checkpoint_local_digest_is_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A digest-pinned local checkpoint is consumed from an immutable verified copy.
 
-    :param tmp_path: Temporary checkpoint directory.
+    :param tmp_path: Temporary checkpoint and cache directory.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
     """
     checkpoint = tmp_path / "model.ckpt"
-    checkpoint.write_bytes(b"local checkpoint")
-    digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    content = b"local checkpoint"
+    checkpoint.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
-    assert eval_module._localize_eval_checkpoint(str(checkpoint), digest) == str(checkpoint)
+    localized = eval_module._localize_eval_checkpoint(str(checkpoint), digest)
+    checkpoint.write_bytes(b"replacement checkpoint")
+
+    assert localized != str(checkpoint)
+    assert localized is not None
+    assert Path(localized).read_bytes() == content
     with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
         eval_module._localize_eval_checkpoint(str(checkpoint), "0" * 64)
 

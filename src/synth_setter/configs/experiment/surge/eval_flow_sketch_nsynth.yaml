@@ -13,6 +13,7 @@ defaults:
 experiment_name: flow-sketch-nsynth
 run_name: cfg-c8-s8
 mode: predict
+evaluation_only: true
 seed: 3407
 
 consumed_train_artifact_alias: v0

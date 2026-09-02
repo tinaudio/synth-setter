@@ -485,6 +485,28 @@ def test_decode_clip_rejects_out_of_range_source_before_resampling() -> None:
         )
 
 
+def test_decode_clip_rejects_positive_pcm16_tolerance_as_source_overflow() -> None:
+    """PCM16's negative endpoint tolerance does not admit positive overflow."""
+    source_rate = 16_000
+    buffer = io.BytesIO()
+    sf.write(
+        buffer,
+        np.full(source_rate, 1.00002, dtype=np.float32),
+        source_rate,
+        format="WAV",
+        subtype="FLOAT",
+    )
+
+    with pytest.raises(ValueError, match="source audio leaves"):
+        decode_clip(
+            buffer.getvalue(),
+            sample_rate=44_100,
+            channels=2,
+            num_samples=44_100,
+            amplitude_scale=1.0,
+        )
+
+
 def test_decode_clip_clamps_resampling_ringing_to_storage_range() -> None:
     """Band-limited resampling cannot leave otherwise normalized audio above full scale."""
     source_rate = 16_000

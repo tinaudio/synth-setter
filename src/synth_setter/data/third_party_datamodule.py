@@ -191,7 +191,9 @@ def decode_clip(
         source = source_handle.read(source_handle.frames)
     if not np.isfinite(source).all():
         raise ValueError("source audio contains non-finite samples")
-    if np.abs(source).max(initial=0.0) > _PCM16_DECODE_FULL_SCALE:
+    source_min = source.min(initial=0.0)
+    source_max = source.max(initial=0.0)
+    if source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0:
         raise ValueError("source audio leaves [-1, 1]")
 
     with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:

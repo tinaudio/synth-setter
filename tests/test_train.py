@@ -151,7 +151,7 @@ def test_train_eval_only_experiment_raises_before_instantiation() -> None:
         )
     HydraConfig().set_config(cfg)
 
-    with pytest.raises(ValueError, match="training entrypoint requires mode=train"):
+    with pytest.raises(ValueError, match="evaluation-only experiment"):
         train(cfg)
 
 
