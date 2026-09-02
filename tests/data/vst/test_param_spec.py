@@ -798,6 +798,16 @@ def test_discrete_parameter_golden_encoding_remains_unchanged() -> None:
     assert parameter.decode(encoded) == 60
 
 
+def test_discrete_scalar_decode_large_integer_endpoint_remains_exact() -> None:
+    """Half-up quantization does not increment an exactly represented large integer."""
+    minimum = (1 << 52) + 1
+    parameter = DiscreteLiteralParameter(name="index", min=minimum, max=minimum + 1)
+
+    decoded = parameter.decode(np.array([0.0], dtype=np.float64))
+
+    assert decoded == minimum
+
+
 def test_discrete_onehot_encoding_uses_native_integer_offset() -> None:
     """Discrete one-hot encoding selects the coordinate for the native integer."""
     parameter = DiscreteLiteralParameter(name="octave", min=-1, max=1, encoding="onehot")
