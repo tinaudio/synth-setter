@@ -440,6 +440,16 @@ def test_pyfdn_renderer_exposes_provenance_for_its_canonical_source() -> None:
     assert renderer.source_provenance == canonical_pyfdn_source_provenance()
 
 
+def test_pyfdn_renderer_source_provenance_caller_mutation_is_isolated() -> None:
+    """Caller annotations cannot alter provenance retained by the renderer."""
+    renderer = PyFDNRenderer()
+    provenance = renderer.source_provenance
+
+    provenance["identity"] = "caller-annotation"
+
+    assert renderer.source_provenance["identity"] == "librosa_log_chirp_v1"
+
+
 def test_pyfdn_renderer_generates_source_once_for_repeated_renders(
     fdn_params: ParameterValues,
     monkeypatch: pytest.MonkeyPatch,

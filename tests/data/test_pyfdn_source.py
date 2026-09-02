@@ -54,6 +54,35 @@ def test_generate_canonical_pyfdn_source_uses_exact_librosa_chirp_call(
     np.testing.assert_array_equal(source[0, :48_000], np.full(48_000, 0.1, np.float32))
 
 
+def test_generate_canonical_pyfdn_source_nonfinite_chirp_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-finite library output cannot become canonical source bytes.
+
+    :param monkeypatch: Scoped invalid librosa chirp replacement.
+    """
+    invalid = np.zeros(48_000, dtype=np.float64)
+    invalid[1] = np.nan
+    monkeypatch.setattr(pyfdn_source.librosa, "chirp", lambda **_: invalid)
+
+    with pytest.raises(ValueError, match="finite"):
+        generate_canonical_pyfdn_source()
+
+
+def test_generate_canonical_pyfdn_source_out_of_range_chirp_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Library output above unit amplitude cannot violate the 0.1 source bound.
+
+    :param monkeypatch: Scoped out-of-range librosa chirp replacement.
+    """
+    invalid = np.full(48_000, 1.01, dtype=np.float64)
+    monkeypatch.setattr(pyfdn_source.librosa, "chirp", lambda **_: invalid)
+
+    with pytest.raises(ValueError, match="amplitude"):
+        generate_canonical_pyfdn_source()
+
+
 def test_generate_canonical_pyfdn_source_has_bounded_near_zero_start() -> None:
     """Default librosa phase starts near zero and the excitation never exceeds 0.1."""
     excitation = generate_canonical_pyfdn_source()[0, :48_000]

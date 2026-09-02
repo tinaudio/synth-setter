@@ -76,6 +76,26 @@ def test_pyfdn_datasets_share_one_canonical_renderer_per_process() -> None:
     assert first._process_renderer() is second._process_renderer()
 
 
+def test_pyfdn_datamodule_checkpoint_state_contains_source_provenance() -> None:
+    """Lightning checkpoints bind online rows to their generated source bytes."""
+    datamodule = PyFDNDataModule()
+
+    state = datamodule.state_dict()
+
+    assert state == {"source_provenance": datamodule.source_provenance}
+
+
+def test_pyfdn_datamodule_checkpoint_source_mismatch_raises() -> None:
+    """Resume and evaluation reject checkpoints produced from different source bytes."""
+    datamodule = PyFDNDataModule()
+    state = datamodule.state_dict()
+    provenance = dict(state["source_provenance"])
+    provenance["sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="source provenance"):
+        datamodule.load_state_dict({"source_provenance": provenance})
+
+
 def test_pyfdn_datamodule_default_split_seed_domains_are_disjoint() -> None:
     """Every production-default row derives a unique seed across all splits."""
     datamodule = PyFDNDataModule()

@@ -236,7 +236,12 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
 
     checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
-    assert (checkpoint_dir / "last.ckpt").stat().st_size > 0
+    checkpoint_path = checkpoint_dir / "last.ckpt"
+    assert checkpoint_path.stat().st_size > 0
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["PyFDNDataModule"] == {
+        "source_provenance": source_provenance,
+    }
 
 
 def test_train_torchsynth_experiment_renders_audio_online(

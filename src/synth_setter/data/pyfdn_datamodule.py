@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from functools import cache
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -163,6 +163,25 @@ class PyFDNDataModule(LightningDataModule):
         :returns: Fresh provenance suitable for run or dataset metadata.
         """
         return _make_process_renderer(self.synth_version, os.getpid()).source_provenance
+
+    def state_dict(self) -> dict[str, PyFDNSourceProvenance]:
+        """Bind Lightning checkpoints to the canonical source used by this process.
+
+        :returns: Canonical source provenance for checkpoint persistence.
+        """
+        return {"source_provenance": self.source_provenance}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Require checkpoint source provenance to match the current canonical source.
+
+        :param state_dict: Datamodule state restored by Lightning.
+        :raises ValueError: Source provenance is absent, malformed, or mismatched.
+        """
+        checkpoint_provenance = state_dict.get("source_provenance")
+        if not isinstance(checkpoint_provenance, dict):
+            raise ValueError("checkpoint source provenance is missing or malformed")
+        if checkpoint_provenance != self.source_provenance:
+            raise ValueError("checkpoint source provenance does not match the canonical source")
 
     def setup(self, stage: str | None = None) -> None:
         """Build only the deterministic splits required by a Lightning stage.

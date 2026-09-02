@@ -29,6 +29,7 @@ def generate_canonical_pyfdn_source() -> Float32[np.ndarray, "1 192000"]:
     """Generate the immutable canonical F1 pyFDN excitation.
 
     :returns: Read-only contiguous float32 audio shaped ``(1, 192000)``.
+    :raises ValueError: Librosa returns wrong-shape, non-finite, or out-of-range samples.
     """
     chirp = librosa.chirp(
         fmin=_FMIN_HZ,
@@ -37,10 +38,20 @@ def generate_canonical_pyfdn_source() -> Float32[np.ndarray, "1 192000"]:
         length=_CHIRP_FRAMES,
         linear=_LINEAR,
     )
+    chirp_array = np.asarray(chirp)
+    if chirp_array.shape != (_CHIRP_FRAMES,):
+        raise ValueError(
+            f"librosa chirp must have shape {(_CHIRP_FRAMES,)}, got {chirp_array.shape}"
+        )
+    if not np.isfinite(chirp_array).all():
+        raise ValueError("librosa chirp must contain only finite values")
+    if np.max(np.abs(chirp_array)) > 1.0:
+        raise ValueError("librosa chirp amplitude must not exceed 1.0")
+
     source = np.zeros(
         (PYFDN_SOURCE_CHANNELS, PYFDN_SOURCE_TOTAL_FRAMES), dtype=np.float32
     )
-    source[0, :_CHIRP_FRAMES] = _AMPLITUDE * chirp
+    source[0, :_CHIRP_FRAMES] = _AMPLITUDE * chirp_array
     immutable_bytes = source.tobytes(order="C")
     return np.frombuffer(immutable_bytes, dtype=np.float32).reshape(
         PYFDN_SOURCE_CHANNELS, PYFDN_SOURCE_TOTAL_FRAMES
