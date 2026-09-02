@@ -1,8 +1,11 @@
 """Hydra entrypoint for evaluating a trained model on a datamodule's test split."""
 
+import fcntl
+import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
@@ -25,6 +28,7 @@ from synth_setter.evaluation.audio_probe import (
     RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
 )
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
+from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
@@ -251,6 +255,63 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     return {}
 
 
+def _localize_eval_checkpoint(checkpoint: str | None) -> str | None:
+    """Return the local checkpoint path Lightning should consume.
+
+    Remote checkpoints are published into a URI-keyed cache only after rclone
+    completes, while local paths and ``None`` pass through unchanged.
+
+    :param checkpoint: Local path, R2-backed URI, or ``None``.
+    :returns: Local checkpoint path for Lightning, or ``None``.
+    :raises FileNotFoundError: The remote object does not exist.
+    :raises RuntimeError: R2 access is unavailable or the remote object is empty.
+    """
+    if checkpoint is None or not checkpoint.startswith(("r2://", "s3://")):
+        return checkpoint
+
+    r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint
+    cache_key = hashlib.sha256(r2_uri.encode()).hexdigest()
+    cached = synth_setter_cache_dir() / "checkpoints" / "evaluation" / cache_key / "model.ckpt"
+    lock_path = cached.with_suffix(".ckpt.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            if cached.is_file() and cached.stat().st_size > 0:
+                return str(cached)
+            try:
+                r2_io.ensure_r2_env_loaded()
+                remote_size = r2_io.object_size(r2_uri)
+            except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+                raise RuntimeError(
+                    "rclone R2 credentials are unavailable or cannot access remote "
+                    f"eval checkpoint: {checkpoint}"
+                ) from exc
+            if remote_size is None:
+                raise FileNotFoundError(f"remote eval checkpoint does not exist: {checkpoint}")
+            if remote_size == 0:
+                raise RuntimeError(f"remote eval checkpoint is empty: {checkpoint}")
+            with tempfile.NamedTemporaryFile(
+                prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+            ) as temporary:
+                staging = Path(temporary.name)
+            try:
+                r2_io.download_to_path(r2_uri, staging)
+                if staging.stat().st_size == 0:
+                    raise RuntimeError(f"downloaded eval checkpoint is empty: {checkpoint}")
+                staging.replace(cached)
+            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+                raise RuntimeError(
+                    "rclone R2 credentials are unavailable or cannot download remote "
+                    f"eval checkpoint: {checkpoint}"
+                ) from exc
+            finally:
+                staging.unlink(missing_ok=True)
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return str(cached)
+
+
 def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
     """Build the consumed-artifact lineage edges for an eval run (spec §5).
 
@@ -288,13 +349,16 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     Wrapped in ``@task_wrapper`` so crashes still flush the run dir.
 
-    :param cfg: Hydra-composed cfg; ``cfg.ckpt_path=None`` is allowed and
-        evaluates the in-memory model (Lightning's documented no-op).
+    :param cfg: Hydra-composed cfg; ``ckpt_path`` accepts a local path or an
+        R2-backed ``r2://`` / ``s3://`` URI. ``None`` evaluates the in-memory
+        model (Lightning's documented no-op).
     :return: ``(metric_dict, object_dict)``. ``metric_dict`` merges
         ``trainer.callback_metrics`` (``torch.Tensor`` values) with audio
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
     """
+    checkpoint_path = _localize_eval_checkpoint(cfg.get("ckpt_path"))
+
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
@@ -334,29 +398,29 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     audio_metrics: dict[str, float] = {}
     if mode == "test":
         log.info("Starting testing!")
-        with checkpoint_migration_hint(cfg.ckpt_path):
+        with checkpoint_migration_hint(checkpoint_path):
             trainer.test(
                 model=model,
                 datamodule=datamodule,
-                ckpt_path=cfg.ckpt_path,
+                ckpt_path=checkpoint_path,
                 weights_only=False,
             )
     # Accept both spellings for backwards compatibility with older configs.
     elif mode == "val" or mode == "validate":
         log.info("Starting validating!")
-        with checkpoint_migration_hint(cfg.ckpt_path):
+        with checkpoint_migration_hint(checkpoint_path):
             trainer.validate(
                 model=model,
                 datamodule=datamodule,
-                ckpt_path=cfg.ckpt_path,
+                ckpt_path=checkpoint_path,
                 weights_only=False,
             )
     elif mode == "predict":
-        with checkpoint_migration_hint(cfg.ckpt_path):
+        with checkpoint_migration_hint(checkpoint_path):
             trainer.predict(
                 model=model,
                 dataloaders=datamodule,
-                ckpt_path=cfg.ckpt_path,
+                ckpt_path=checkpoint_path,
                 return_predictions=False,
                 weights_only=False,
             )
