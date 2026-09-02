@@ -498,19 +498,20 @@ def test_corpus_audio_column_without_blob_encoding_raises(tmp_path: Path) -> Non
         _datamodule(tmp_path / "corpus.lance").setup("predict")
 
 
-def test_corpus_served_from_an_r2_uri(fake_r2_remote: Path) -> None:
-    """The shipped configs name ``r2://`` corpora, so that resolution is served too.
-
-    Exercises the ``lance_target`` translation and storage-options wiring the
-    published configs depend on, which a local-path corpus never reaches.
+@pytest.mark.parametrize("scheme", ["r2", "s3"])
+def test_corpus_served_from_an_r2_backed_uri(fake_r2_remote: Path, scheme: str) -> None:
+    """Both accepted URI spellings resolve through the configured R2 remote.
 
     :param fake_r2_remote: Root backing the ``r2:`` remote as a local filesystem.
+    :param scheme: Public URI scheme used by the caller.
     """
     corpus = fake_r2_remote / "experiments" / "third_party" / "Tiny" / "test.lance"
     corpus.parent.mkdir(parents=True)
     _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=26)])
 
-    batch = _first_batch(_datamodule("r2://experiments/third_party/Tiny/test.lance"))
+    batch = _first_batch(
+        _datamodule(f"{scheme}://experiments/third_party/Tiny/test.lance")
+    )
 
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
 

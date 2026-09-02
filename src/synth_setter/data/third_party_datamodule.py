@@ -341,7 +341,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
     ) -> None:
         """Configure the corpus and render contract it maps onto.
 
-        :param dataset_uri: Corpus Lance dataset; local path or ``r2://`` URI.
+        :param dataset_uri: Corpus Lance dataset; local path or R2-backed URI.
         :param sample_rate: Target sample rate in Hz.
         :param channels: Target channel count.
         :param signal_duration_seconds: Target clip duration.
@@ -432,10 +432,15 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :raises KeyError: The corpus has no configured audio column.
         :raises ValueError: The audio column is not blob-encoded or the corpus is empty.
         """
+        corpus_uri = (
+            r2_io.from_s3_uri(self.dataset_uri)
+            if self.dataset_uri.startswith("s3://")
+            else self.dataset_uri
+        )
         uri, storage_options = (
-            r2_io.lance_target(self.dataset_uri)
-            if r2_io.is_r2_uri(self.dataset_uri)
-            else (self.dataset_uri, None)
+            r2_io.lance_target(corpus_uri)
+            if r2_io.is_r2_uri(corpus_uri)
+            else (corpus_uri, None)
         )
         dataset = _retry_lance_read(
             "third_party_corpus_open",

@@ -1454,7 +1454,7 @@ def test_nsynth_sketch_eval_config_pins_corpus_controls_and_training_statistics(
         ],
     )
 
-    assert cfg.datamodule.dataset_uri == "r2://experiments/third_party/NSynth/test.lance"
+    assert cfg.datamodule.dataset_uri == "s3://experiments/third_party/NSynth/test.lance"
     assert cfg.datamodule.dataset_version == 1
     assert cfg.datamodule.audio_column == "audio"
     assert cfg.datamodule.row_limit is None
@@ -1491,3 +1491,32 @@ def test_third_party_eval_config_requires_checkpoint_mel_statistics() -> None:
     assert OmegaConf.is_missing(cfg.datamodule, "mel_stats_uri")
     with pytest.raises(MissingMandatoryValue):
         _ = cfg.datamodule.mel_stats_uri
+
+
+def test_nsynth_sketch_eval_experiment_pins_full_production_run() -> None:
+    """One experiment selector pins the complete NSynth sketch evaluation."""
+    cfg = _compose("eval.yaml", ["experiment=surge/eval_flow_sketch_nsynth"])
+
+    assert cfg.mode == "predict"
+    assert cfg.ckpt_path == (
+        "r2://intermediate-data/checkpoints/flow_sketch_prelim/"
+        "flow_sketch_prelim-20260902T044048985Z-eed5063da1164b1e92ac62a55ffc17b3/"
+        "last.ckpt"
+    )
+    assert cfg.datamodule.dataset_uri == "s3://experiments/third_party/NSynth/test.lance"
+    assert cfg.datamodule.dataset_version == 1
+    assert cfg.datamodule.row_limit is None
+    assert cfg.datamodule.mel_stats_uri == (
+        "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
+        "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz"
+    )
+    assert cfg.model.sketch_controls.num_frames == 32
+    assert cfg.model.test_cfg_strength == 8.0
+    assert cfg.model.test_sketch_cfg_strength == 8.0
+    assert cfg.model.test_sample_steps == 200
+    assert cfg.evaluation.render_vst is True
+    assert cfg.evaluation.compute_metrics is True
+    assert cfg.evaluation.no_params is True
+    assert cfg.evaluation.rerender_target is False
+    assert cfg.render.renderer_backend == "surgepy"
+    assert cfg.logger.wandb.offline is False

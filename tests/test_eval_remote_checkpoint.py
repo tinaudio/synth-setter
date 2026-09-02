@@ -39,31 +39,32 @@ def test_eval_checkpoint_local_path_is_returned_unchanged(tmp_path: Path) -> Non
     assert eval_module._localize_eval_checkpoint(str(checkpoint)) == str(checkpoint)
 
 
-def test_eval_checkpoint_r2_uri_downloads_once_to_deterministic_cache(
+def test_eval_checkpoint_r2_uri_refreshes_cache_when_remote_checksum_changes(
     fake_r2_remote: Path,
     storage_credentials: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An R2 checkpoint is cached atomically and reused after its source disappears.
+    """A mutable recovery URI refreshes when same-size remote bytes change.
 
     :param fake_r2_remote: Local filesystem backing the real rclone remote.
     :param storage_credentials: Dummy application credentials for the local backend.
     :param monkeypatch: Routes the shared cache into the temporary directory.
     """
-    source = fake_r2_remote / "bucket" / "runs" / "model.ckpt"
+    source = fake_r2_remote / "bucket" / "runs" / "last.ckpt"
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"remote checkpoint")
+    source.write_bytes(b"step 99000")
     cache_home = fake_r2_remote / "cache"
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
 
-    first = eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
-    source.unlink()
-    second = eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
+    first = eval_module._localize_eval_checkpoint("r2://bucket/runs/last.ckpt")
+    source.write_bytes(b"step final")
+    second = eval_module._localize_eval_checkpoint("r2://bucket/runs/last.ckpt")
 
     assert first is not None
+    assert second is not None
     assert first == second
-    assert Path(first).read_bytes() == b"remote checkpoint"
-    assert Path(first).is_relative_to(cache_home / "synth-setter")
+    assert Path(second).read_bytes() == b"step final"
+    assert Path(second).is_relative_to(cache_home / "synth-setter")
 
 
 def test_eval_checkpoint_s3_uri_downloads_through_r2_remote(

@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 # The published corpus is read in place at its immutable Lance snapshot.
-dataset_uri: r2://experiments/third_party/NSynth/test.lance
+dataset_uri: s3://experiments/third_party/NSynth/test.lance
 dataset_version: 1
 
 # Live PESTO extraction is batch-oriented and substantially heavier than mel decoding.
