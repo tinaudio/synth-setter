@@ -23,6 +23,10 @@ import numpy as np
 import pyarrow as pa
 import structlog
 
+from synth_setter.data.vst.param_spec import (
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -164,7 +168,9 @@ def _render_encoded_row(
     :param velocity: MIDI velocity the source dataset was rendered with.
     :returns: Rendered audio shaped ``(channels, samples)``.
     """
-    synth_params, note_params = spec.decode(encoded)
+    synth_values, note_values = spec.decode(encoded)
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
     return renderer.render(
         synth_params,
         note_params["pitch"],

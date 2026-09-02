@@ -10,19 +10,457 @@ import torch
 
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
+    ContinuousArrayParameter,
     ContinuousParameter,
+    DiscreteArrayParameter,
     DiscreteLiteralParameter,
     NoteDurationParameter,
     ParamSpec,
     decode_model_output,
+    require_note_params,
+    require_scalar_synth_params,
 )
+from synth_setter.models.components.transformer import LearntProjection
 
 LEVEL_MIN_DB = -70.0
 LEVEL_MID_DB = -15.0
 LEVEL_MAX_DB = 40.0
 
 
+def test_continuous_array_roundtrip_preserves_matrix_shape() -> None:
+    """A square matrix survives the complete native-to-encoded round trip."""
+    parameter = ContinuousArrayParameter(
+        name="feedback_matrix",
+        shape=(8, 8),
+        min=-1.0,
+        max=1.0,
+    )
+    raw = np.linspace(-1.0, 1.0, 64, dtype=np.float64).reshape(8, 8)
+
+    decoded = parameter.decode(parameter.encode(raw))
+
+    np.testing.assert_allclose(decoded, raw, atol=1e-7)
+    assert decoded.shape == (8, 8)
+
+
+def test_continuous_array_sample_uses_seeded_native_shape_and_float64() -> None:
+    """Continuous sampling follows the seeded float64 native-shape contract."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 2),
+        min=-1.0,
+        max=1.0,
+    )
+
+    sampled = parameter.sample(np.random.default_rng(7))
+
+    np.testing.assert_allclose(
+        sampled,
+        np.array(
+            [
+                [0.25019093320933394, 0.794427601939151],
+                [0.551371380490387, -0.5495856200188163],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    assert sampled.shape == (2, 2)
+    assert sampled.dtype == np.float64
+
+
+def test_discrete_array_sample_includes_upper_bound_with_int64_shape() -> None:
+    """Discrete sampling includes its upper bound and returns native int64 shape."""
+    parameter = DiscreteArrayParameter(name="choice", shape=(2, 3), min=0, max=1)
+
+    sampled = parameter.sample(np.random.default_rng(0))
+
+    np.testing.assert_array_equal(
+        sampled,
+        np.array([[1, 1, 1], [0, 0, 0]], dtype=np.int64),
+    )
+    assert sampled.shape == (2, 3)
+    assert sampled.dtype == np.int64
+
+
+def test_discrete_array_decode_rounds_to_int64() -> None:
+    """Discrete decoding rounds affine values before converting to int64."""
+    parameter = DiscreteArrayParameter(name="delays", shape=(8,), min=400, max=1200)
+
+    decoded = parameter.decode(
+        np.array([0.0, 0.1, 0.25, 0.499, 0.501, 0.75, 0.9, 1.0])
+    )
+
+    np.testing.assert_array_equal(
+        decoded,
+        np.array([400, 480, 600, 799, 801, 1000, 1120, 1200], dtype=np.int64),
+    )
+    assert decoded.dtype == np.int64
+
+
+@pytest.mark.parametrize("shape", [(8, 1), (1, 8), (1, 1)])
+def test_continuous_array_roundtrip_preserves_rectangular_shape(
+    shape: tuple[int, ...],
+) -> None:
+    """Each required rectangular shape survives an array round trip.
+
+    :param shape: Native shape under test.
+    """
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=shape,
+        min=-1.0,
+        max=1.0,
+    )
+    raw = np.zeros(shape, dtype=np.float64)
+
+    decoded = parameter.decode(parameter.encode(raw))
+
+    assert decoded.shape == shape
+
+
+def test_continuous_array_encode_returns_flat_float32() -> None:
+    """Array encoding emits flat C-order float32 coordinates."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 2),
+        min=-1.0,
+        max=1.0,
+    )
+
+    encoded = parameter.encode(np.array([[-1.0, 0.0], [0.5, 1.0]]))
+
+    np.testing.assert_array_equal(
+        encoded,
+        np.array([0.0, 0.5, 0.75, 1.0], dtype=np.float32),
+    )
+    assert encoded.dtype == np.float32
+
+
+def test_continuous_array_decode_rejects_wrong_encoded_width() -> None:
+    """Decoding rejects rows that cannot fill the native shape."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 2),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match=r"encoded matrix must have shape \(4,\)"):
+        parameter.decode(np.zeros((3,), dtype=np.float32))
+
+
+def test_continuous_array_decode_rejects_nonfinite_value() -> None:
+    """Decoding rejects non-finite encoded coordinates."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match="must contain only finite values"):
+        parameter.decode(np.array([np.nan], dtype=np.float32))
+
+
+def test_continuous_array_decode_rejects_out_of_bounds_value() -> None:
+    """Decoding rejects coordinates outside the encoded unit interval."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match=r"must be within \[0, 1\]"):
+        parameter.decode(np.array([1.1], dtype=np.float32))
+
+
+def test_discrete_array_decode_rejects_invalid_encoded_value() -> None:
+    """Discrete decoding retains inherited encoded-domain validation."""
+    parameter = DiscreteArrayParameter(name="delays", shape=(1,), min=400, max=1200)
+
+    with pytest.raises(ValueError, match=r"must be within \[0, 1\]"):
+        parameter.decode(np.array([-0.1], dtype=np.float32))
+
+
+def test_continuous_array_decode_returns_float64() -> None:
+    """Continuous decoding restores the renderer-native float64 dtype."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    decoded = parameter.decode(np.array([0.5], dtype=np.float32))
+
+    assert decoded.dtype == np.float64
+
+
+def test_continuous_array_encode_rejects_wrong_shape() -> None:
+    """Encoding rejects a flat value for a matrix-shaped parameter."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 2),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match=r"matrix must have shape \(2, 2\)"):
+        parameter.encode(np.zeros((4,), dtype=np.float64))
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_continuous_array_encode_rejects_nonfinite_value(value: float) -> None:
+    """Encoding rejects each non-finite native value.
+
+    :param value: Non-finite value under test.
+    """
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match="must contain only finite values"):
+        parameter.encode(np.array([[value]]))
+
+
+@pytest.mark.parametrize("value", [-1.1, 1.1])
+def test_continuous_array_encode_rejects_out_of_bounds_value(value: float) -> None:
+    """Encoding rejects native values outside either range boundary.
+
+    :param value: Out-of-range value under test.
+    """
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(1, 1),
+        min=-1.0,
+        max=1.0,
+    )
+
+    with pytest.raises(ValueError, match=r"must be within \[-1.0, 1.0\]"):
+        parameter.encode(np.array([[value]]))
+
+
+def test_array_parameter_rejects_noninteger_shape_dimension() -> None:
+    """Construction rejects shapes that NumPy cannot allocate."""
+    with pytest.raises(ValueError, match="shape must contain positive integer dimensions"):
+        ContinuousArrayParameter(
+            name="matrix",
+            shape=(1.5,),  # type: ignore[arg-type]
+            min=-1.0,
+            max=1.0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("min_value", "max_value"),
+    [(0.0, 1), (0, 1.0), (False, 1), (0, True)],
+)
+def test_discrete_array_rejects_noninteger_bound(
+    min_value: object, max_value: object
+) -> None:
+    """A discrete native domain requires integer, non-boolean bounds.
+
+    :param min_value: Candidate inclusive lower bound.
+    :param max_value: Candidate inclusive upper bound.
+    """
+    with pytest.raises(ValueError, match="bounds must be integers"):
+        DiscreteArrayParameter(
+            name="choice",
+            shape=(1,),
+            min=min_value,  # type: ignore[arg-type]
+            max=max_value,  # type: ignore[arg-type]
+        )
+
+
+def test_discrete_array_normalizes_numpy_integer_bounds_before_sampling() -> None:
+    """Accepted NumPy integer bounds do not overflow while forming the sampling range."""
+    parameter = DiscreteArrayParameter(
+        name="choice",
+        shape=(1,),
+        min=np.int8(126),  # type: ignore[arg-type]
+        max=np.int8(127),  # type: ignore[arg-type]
+    )
+
+    sampled = parameter.sample(np.random.default_rng(0))
+
+    assert sampled.item() in (126, 127)
+
+
+@pytest.mark.parametrize(
+    ("min_value", "max_value", "message"),
+    [
+        (-np.inf, 1.0, "bounds must be finite"),
+        (-1.0, np.inf, "bounds must be finite"),
+        (1.0, 1.0, "max must be greater than min"),
+        (-1e308, 1e308, "span must be finite"),
+    ],
+)
+def test_continuous_array_rejects_invalid_bounds(
+    min_value: float, max_value: float, message: str
+) -> None:
+    """Construction rejects bounds that cannot define a finite affine domain.
+
+    :param min_value: Invalid lower bound under test.
+    :param max_value: Invalid upper bound under test.
+    :param message: Expected validation-error fragment.
+    """
+    with pytest.raises(ValueError, match=message):
+        ContinuousArrayParameter(
+            name="matrix",
+            shape=(1,),
+            min=min_value,
+            max=max_value,
+        )
+
+
+def test_discrete_array_rejects_large_offset_that_float64_cannot_roundtrip() -> None:
+    """A discrete domain must remain exact during native float64 arithmetic."""
+    with pytest.raises(ValueError, match="bounds exceed exact float64 integer range"):
+        DiscreteArrayParameter(
+            name="offset",
+            shape=(1,),
+            min=2**53,
+            max=2**53 + 1,
+        )
+
+
+def test_discrete_array_rejects_range_that_float32_cannot_roundtrip() -> None:
+    """A discrete domain must remain distinguishable after float32 encoding."""
+    with pytest.raises(ValueError, match="range is too wide for exact float32 encoding"):
+        DiscreteArrayParameter(
+            name="wide",
+            shape=(1,),
+            min=0,
+            max=2**32,
+        )
+
+
+def test_discrete_array_encode_rejects_fractional_native_value() -> None:
+    """A discrete native array cannot contain fractional values."""
+    parameter = DiscreteArrayParameter(name="delays", shape=(2,), min=400, max=1200)
+
+    with pytest.raises(ValueError, match="must contain only integer values"):
+        parameter.encode(np.array([400.0, 400.5]))
+
+
+def test_array_length_is_product_of_native_shape() -> None:
+    """Array encoded width is the product of every native dimension."""
+    parameter = ContinuousArrayParameter(
+        name="matrix",
+        shape=(2, 3, 4),
+        min=-1.0,
+        max=1.0,
+    )
+
+    assert len(parameter) == 24
+
+
+def test_discrete_array_roundtrip_preserves_values() -> None:
+    """Valid native integers survive the encoded round trip exactly."""
+    parameter = DiscreteArrayParameter(name="delays", shape=(8,), min=400, max=1200)
+    raw = np.array([400, 401, 500, 600, 700, 800, 1000, 1200], dtype=np.int64)
+
+    decoded = parameter.decode(parameter.encode(raw))
+
+    np.testing.assert_array_equal(decoded, raw)
+
+
+def test_array_encoded_names_follow_c_order_coordinates() -> None:
+    """Array coordinate labels follow NumPy C-order traversal."""
+    parameter = ContinuousArrayParameter(
+        name="feedback_matrix",
+        shape=(2, 3),
+        min=-1.0,
+        max=1.0,
+    )
+
+    assert parameter.encoded_names() == (
+        "feedback_matrix.0.0",
+        "feedback_matrix.0.1",
+        "feedback_matrix.0.2",
+        "feedback_matrix.1.0",
+        "feedback_matrix.1.1",
+        "feedback_matrix.1.2",
+    )
+
+
+def test_require_scalar_synth_params_normalizes_real_values() -> None:
+    """A legacy renderer receives plain floats from scalar synth values."""
+    scalar_params = require_scalar_synth_params({"gain": 0.5, "mode": 1})
+
+    assert scalar_params == {"gain": 0.5, "mode": 1.0}
+
+
+def test_require_scalar_synth_params_rejects_array_value() -> None:
+    """A legacy renderer rejects array-valued synth controls at its boundary."""
+    with pytest.raises(TypeError, match="matrix must be a real scalar"):
+        require_scalar_synth_params({"matrix": np.zeros((2, 2))})
+
+
+def test_require_note_params_normalizes_complete_midi_mapping() -> None:
+    """A renderer receives canonical Python values from a complete MIDI mapping."""
+    note_params = require_note_params(
+        {
+            "pitch": 60,
+            "note_start_and_end": (0.25, 1.5),
+        }
+    )
+
+    assert note_params == {"pitch": 60, "note_start_and_end": (0.25, 1.5)}
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {},
+        {"pitch": 60},
+        {"pitch": 60, "note_start_and_end": (0.0, 1.0), "velocity": 100},
+    ],
+)
+def test_require_note_params_rejects_incomplete_or_extra_keys(
+    values: dict[str, object],
+) -> None:
+    """A renderer boundary requires exactly the complete MIDI mapping.
+
+    :param values: Mapping with missing or extra MIDI fields.
+    """
+    with pytest.raises(ValueError, match="exactly pitch and note_start_and_end"):
+        require_note_params(values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("pitch", [60.0, True])
+def test_require_note_params_rejects_noninteger_pitch(pitch: object) -> None:
+    """A renderer boundary rejects non-integral and boolean MIDI pitches.
+
+    :param pitch: Invalid pitch value under test.
+    """
+    with pytest.raises(TypeError, match="pitch must be an integer"):
+        require_note_params(
+            {"pitch": pitch, "note_start_and_end": (0.0, 1.0)}  # type: ignore[dict-item]
+        )
+
+
+@pytest.mark.parametrize("window", [(0.0,), (0.0, "end")])
+def test_require_note_params_rejects_invalid_note_window(window: object) -> None:
+    """A renderer boundary requires two numeric note-window endpoints.
+
+    :param window: Invalid note window under test.
+    """
+    with pytest.raises(TypeError, match="note_start_and_end must be two numeric endpoints"):
+        require_note_params(
+            {"pitch": 60, "note_start_and_end": window}  # type: ignore[dict-item]
+        )
+
+
 def _tiny_spec() -> ParamSpec:
+    """Build the scalar and expanded spec shared by legacy contract tests.
+
+    :returns: A fresh mixed synth/note parameter specification.
+    """
     return ParamSpec(
         [
             ContinuousParameter(name="cutoff"),
@@ -157,10 +595,12 @@ def test_param_spec_sampling_roundtrip_preserves_native_domain() -> None:
         spec.encode(synth_params, note_params)
     )
 
-    assert LEVEL_MIN_DB <= synth_params["level_db"] <= LEVEL_MAX_DB
-    assert decoded_synth_params["level_db"] == pytest.approx(
-        synth_params["level_db"], abs=1e-5
-    )
+    sampled_level = synth_params["level_db"]
+    decoded_level = decoded_synth_params["level_db"]
+    assert isinstance(sampled_level, float)
+    assert isinstance(decoded_level, float)
+    assert LEVEL_MIN_DB <= sampled_level <= LEVEL_MAX_DB
+    assert decoded_level == pytest.approx(sampled_level, abs=1e-5)
     assert decoded_note_params["pitch"] == note_params["pitch"]
     assert decoded_note_params["note_start_and_end"] == pytest.approx(
         note_params["note_start_and_end"]
@@ -195,6 +635,291 @@ def test_decode_model_output_maps_to_native_continuous_domain(
     synth_params, _ = decode_model_output(np.array([model_output]), spec)
 
     assert synth_params["level_db"] == pytest.approx(expected)
+
+
+def test_param_spec_roundtrip_preserves_mixed_array_scalar_and_note_values() -> None:
+    """ParamSpec slices preserve mixed logical fields through one round trip."""
+    spec = ParamSpec(
+        [
+            ContinuousParameter(name="gain", min=0.0, max=2.0),
+            ContinuousArrayParameter(
+                name="matrix",
+                shape=(2, 2),
+                min=-1.0,
+                max=1.0,
+            ),
+        ],
+        [NoteDurationParameter(name="window", max_note_duration_seconds=4.0)],
+    )
+    synth_values = {
+        "gain": 1.0,
+        "matrix": np.array([[-1.0, -0.5], [0.5, 1.0]], dtype=np.float64),
+    }
+    note_values = {"window": (1.0, 3.0)}
+
+    decoded_synth, decoded_note = spec.decode(spec.encode(synth_values, note_values))
+
+    assert decoded_synth["gain"] == 1.0
+    np.testing.assert_array_equal(decoded_synth["matrix"], synth_values["matrix"])
+    assert decoded_note["window"] == note_values["window"]
+
+
+def test_param_spec_encoded_names_match_encoded_width() -> None:
+    """Every encoded scalar, expanded field, and array coordinate has one name."""
+    spec = ParamSpec(
+        [
+            ContinuousParameter(name="gain"),
+            CategoricalParameter(
+                name="mode",
+                values=["a", "b"],
+                raw_values=[0.0, 1.0],
+                encoding="onehot",
+            ),
+            ContinuousArrayParameter(
+                name="matrix",
+                shape=(1, 2),
+                min=-1.0,
+                max=1.0,
+            ),
+        ],
+        [NoteDurationParameter(name="window", max_note_duration_seconds=4.0)],
+    )
+
+    assert spec.encoded_names == [
+        "gain",
+        "mode.0",
+        "mode.1",
+        "matrix.0.0",
+        "matrix.0.1",
+        "window.0",
+        "window.1",
+    ]
+    assert len(spec.encoded_names) == spec.encoded_width
+
+
+def test_param_spec_names_remain_logical_field_names() -> None:
+    """Logical names do not expand with array coordinates."""
+    spec = ParamSpec(
+        [
+            ContinuousArrayParameter(
+                name="matrix",
+                shape=(2, 2),
+                min=-1.0,
+                max=1.0,
+            )
+        ],
+        [],
+    )
+
+    assert spec.names == ["matrix"]
+
+
+def test_param_spec_sample_supports_empty_synth_group() -> None:
+    """Sampling a note-only spec returns an empty synth mapping."""
+    spec = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
+
+    synth_values, _ = spec.sample(np.random.default_rng(0))
+
+    assert synth_values == {}
+
+
+def test_param_spec_sample_supports_empty_note_group() -> None:
+    """Sampling a synth-only spec returns an empty note mapping."""
+    spec = ParamSpec([ContinuousParameter(name="gain")], [])
+
+    _, note_values = spec.sample(np.random.default_rng(0))
+
+    assert note_values == {}
+
+
+def test_param_spec_decode_supports_both_groups_empty() -> None:
+    """Decoding an empty row returns two empty mappings."""
+    spec = ParamSpec([], [])
+
+    synth_values, note_values = spec.decode(np.empty((0,), dtype=np.float32))
+
+    assert synth_values == {}
+    assert note_values == {}
+
+
+def test_param_spec_encode_supports_empty_synth_group() -> None:
+    """Encoding a note-only spec emits only its note coordinates."""
+    spec = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
+
+    encoded = spec.encode({}, {"pitch": 60})
+
+    np.testing.assert_array_equal(encoded, np.array([0.5], dtype=np.float32))
+
+
+def test_param_spec_encode_supports_empty_note_group() -> None:
+    """Encoding a synth-only spec emits only its synth coordinates."""
+    spec = ParamSpec([ContinuousParameter(name="gain")], [])
+
+    encoded = spec.encode({"gain": 0.25}, {})
+
+    np.testing.assert_array_equal(encoded, np.array([0.25], dtype=np.float32))
+
+
+def test_param_spec_encode_supports_both_groups_empty() -> None:
+    """Encoding a fully empty spec returns an empty float32 vector."""
+    spec = ParamSpec([], [])
+
+    encoded = spec.encode({}, {})
+
+    assert encoded.shape == (0,)
+    assert encoded.dtype == np.float32
+
+
+def test_scalar_parameter_golden_encoding_remains_unchanged() -> None:
+    """Continuous scalar encoding retains its established affine values."""
+    parameter = ContinuousParameter(name="gain", min=-1.0, max=1.0)
+
+    encoded = parameter.encode(0.0)
+
+    np.testing.assert_array_equal(encoded, np.array([0.5]))
+    assert parameter.decode(encoded) == 0.0
+
+
+def test_continuous_parameter_encode_rejects_nonnumeric_value() -> None:
+    """Continuous scalar encoding rejects values outside its numeric domain."""
+    parameter = ContinuousParameter(name="gain", min=-1.0, max=1.0)
+
+    with pytest.raises(TypeError, match="gain must be numeric"):
+        parameter.encode("loud")
+
+
+def test_discrete_parameter_golden_encoding_remains_unchanged() -> None:
+    """Discrete scalar encoding retains its established affine values."""
+    parameter = DiscreteLiteralParameter(name="pitch", min=48, max=72)
+
+    encoded = parameter.encode(60)
+
+    np.testing.assert_array_equal(encoded, np.array([0.5]))
+    assert parameter.decode(encoded) == 60
+
+
+def test_discrete_onehot_encoding_uses_native_integer_offset() -> None:
+    """Discrete one-hot encoding selects the coordinate for the native integer."""
+    parameter = DiscreteLiteralParameter(name="octave", min=-1, max=1, encoding="onehot")
+
+    encoded = parameter.encode(0)
+
+    np.testing.assert_array_equal(encoded, np.array([0.0, 1.0, 0.0]))
+
+
+def test_discrete_parameter_encode_rejects_noninteger_value() -> None:
+    """Discrete scalar encoding rejects values outside its integer domain."""
+    parameter = DiscreteLiteralParameter(name="pitch", min=48, max=72)
+
+    with pytest.raises(TypeError, match="pitch must be an integer"):
+        parameter.encode(60.5)
+
+
+def test_categorical_sample_returns_renderer_native_float() -> None:
+    """Categorical sampling normalizes NumPy choices to a Python float."""
+    parameter = CategoricalParameter(
+        name="mode",
+        values=["a", "b"],
+        raw_values=[0.25, 0.75],
+    )
+
+    sampled = parameter.sample(np.random.default_rng(0))
+
+    assert sampled == 0.75
+    assert type(sampled) is float
+
+
+def test_categorical_onehot_golden_encoding_remains_unchanged() -> None:
+    """Categorical one-hot encoding retains its established coordinate values."""
+    parameter = CategoricalParameter(
+        name="mode",
+        values=["a", "b", "c"],
+        raw_values=[0.0, 0.5, 1.0],
+        encoding="onehot",
+    )
+
+    encoded = parameter.encode(0.5)
+
+    np.testing.assert_array_equal(encoded, np.array([0.0, 1.0, 0.0]))
+    assert parameter.decode(encoded) == 0.5
+
+
+def test_categorical_scalar_encoding_preserves_numeric_value() -> None:
+    """Categorical scalar encoding preserves the renderer-native numeric value."""
+    parameter = CategoricalParameter(
+        name="mode",
+        values=["a", "b"],
+        raw_values=[0.25, 0.75],
+        encoding="scalar",
+    )
+
+    encoded = parameter.encode(0.25)
+
+    np.testing.assert_array_equal(encoded, np.array([0.25]))
+
+
+def test_categorical_parameter_encode_rejects_nonnumeric_value() -> None:
+    """Categorical encoding rejects values outside its numeric raw domain."""
+    parameter = CategoricalParameter(name="mode", values=["a", "b"])
+
+    with pytest.raises(TypeError, match="mode must be numeric"):
+        parameter.encode("a")
+
+
+def test_note_duration_golden_encoding_remains_unchanged() -> None:
+    """Preserve legacy note-duration encoding and decoding behavior."""
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+    )
+
+    encoded = parameter.encode((1.0, 3.0))
+
+    np.testing.assert_array_equal(encoded, np.array([0.25, 0.75]))
+    assert parameter.decode(encoded) == (1.0, 3.0)
+
+
+@pytest.mark.parametrize("value", [[1.0, 3.0], (1.0,), (1.0, "end")])
+def test_note_duration_encode_rejects_invalid_endpoint_pair(value: object) -> None:
+    """Note-duration encoding requires exactly two numeric tuple endpoints.
+
+    :param value: Invalid endpoint container or value under test.
+    """
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+    )
+
+    with pytest.raises(TypeError, match="must be a pair of numeric endpoints"):
+        parameter.encode(value)
+
+
+def test_param2tok_projection_accepts_flat_array_parameter_width() -> None:
+    """Existing Param2Tok projection consumes the array spec's flat width."""
+    spec = ParamSpec(
+        [
+            ContinuousArrayParameter(
+                name="matrix",
+                shape=(2, 3),
+                min=-1.0,
+                max=1.0,
+            )
+        ],
+        [],
+    )
+    projection = LearntProjection(
+        d_model=4,
+        d_token=4,
+        num_params=spec.encoded_width,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    params = torch.zeros(3, spec.encoded_width)
+
+    reconstructed = projection.token_to_param(projection.param_to_token(params))
+
+    assert reconstructed.shape == (3, 6)
 
 
 def test_encoded_width_counts_onehot_and_note_columns() -> None:
@@ -327,8 +1052,10 @@ class TestDecodeModelOutput:
         row = np.array([math.nan, *_ROW[1:]], dtype=np.float32)
 
         synth_params, _ = decode_model_output(row, _tiny_spec())
+        cutoff = synth_params["cutoff"]
 
-        assert math.isnan(synth_params["cutoff"])
+        assert isinstance(cutoff, float)
+        assert math.isnan(cutoff)
 
     def test_over_long_rows_are_silently_truncated(self) -> None:
         """Current contract: extra trailing values are ignored by ParamSpec.decode.
@@ -361,8 +1088,10 @@ class TestDecodeModelOutput:
         row = np.array(_ROW[:5], dtype=np.float32)
 
         _, note_params = decode_model_output(row, _tiny_spec())
+        note_window = note_params["note_start_and_end"]
 
-        assert len(note_params["note_start_and_end"]) == 1
+        assert isinstance(note_window, tuple)
+        assert len(note_window) == 1
 
 
 class TestModelSpaceConversion:

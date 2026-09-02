@@ -188,6 +188,50 @@ def test_train_fit_system_exit_uses_signal_status_only_for_sigterm(
     assert exc_info.value.code == expected_exit_code
 
 
+@pytest.mark.slow
+def test_train_pyfdn_flow_advances_on_real_online_batch(
+    cfg_pyfdn_flow_train: DictConfig,
+) -> None:
+    """Train one flow step on a real pyFDN-rendered batch.
+
+    :param cfg_pyfdn_flow_train: Tiny production pyFDN flow configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_flow_train)
+
+    metric_dict, object_dict = train(cfg_pyfdn_flow_train)
+
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
+    assert torch.isfinite(metric_dict["val/param_mse"])
+
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["audio"].shape == (1, 192_000)
+    assert batch["params"].shape == (1, 89)
+    assert torch.isfinite(batch["audio"]).all()
+    assert torch.isfinite(batch["params"]).all()
+    assert batch["audio"].abs().max() > 0
+
+    model = object_dict["model"].eval()
+    zero_audio_batch = {**batch, "audio": torch.zeros_like(batch["audio"])}
+    with torch.inference_mode(), torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        conditioned_prediction, conditioned_batch = model.predict_step(batch, batch_idx=0)
+        torch.manual_seed(0)
+        zero_audio_prediction, returned_zero_audio_batch = model.predict_step(
+            zero_audio_batch, batch_idx=0
+        )
+    assert conditioned_prediction.shape == zero_audio_prediction.shape == (1, 89)
+    assert conditioned_prediction.dtype == zero_audio_prediction.dtype == torch.float32
+    assert conditioned_batch is batch
+    assert returned_zero_audio_batch is zero_audio_batch
+    assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
+
+    checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
+    assert (checkpoint_dir / "last.ckpt").stat().st_size > 0
+
+
 def test_train_torchsynth_experiment_renders_audio_online(
     cfg_torchsynth_train: DictConfig,
 ) -> None:
@@ -1157,6 +1201,27 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert train_split.is_dir()
     assert datamodule.num_workers == 1
     assert datamodule.val_num_workers == 0
+
+
+@pytest.mark.parametrize(
+    "cfg_train_sketch_lance",
+    ["surge/flow_sketch_cfg_ablation"],
+    indirect=True,
+)
+def test_train_flow_sketch_cfg_ablation_returns_finite_loss(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """Consume the ablation config through the real training entrypoint.
+
+    :param cfg_train_sketch_lance: Ablation config over local sketch Lance splits.
+    """
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    assert torch.isfinite(metric_dict["train/loss"])
+    assert object_dict["trainer"].global_step == 1
+    assert object_dict["model"].sketch_tokens is not None
+    assert cfg_train_sketch_lance.consumed_train_config_id == "flow_sketch_prelim"
 
 
 def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(

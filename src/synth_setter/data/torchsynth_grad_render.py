@@ -28,6 +28,7 @@ from synth_setter.data.torchsynth_datamodule import (
     _make_renderer,
     _pad_to_render_size,
 )
+from synth_setter.data.vst.param_spec import require_note_params
 from synth_setter.data.vst.torchsynth_param_spec import (
     INFERABLE_SPEC,
     TORCHSYNTH_FULL_PARAM_SPEC,
@@ -122,7 +123,7 @@ def render_torchsynth_grad(
     rows = len(params)
     padded = _pad_to_render_size(params, render_batch_size)
     notes = [
-        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        require_note_params(TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1])
         for row in padded.detach().clamp(0, 1).cpu().numpy()
     ]
     column = partial(torch.tensor, dtype=torch.float32, device=params.device)

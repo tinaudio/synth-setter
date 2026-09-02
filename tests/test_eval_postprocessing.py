@@ -22,17 +22,12 @@ from synth_setter.cli.eval import (
     _PREDICT_VST_AUDIO_MODULE,
     _log_audio_metrics_to_wandb,
     _log_metrics_csv_to_wandb,
-    _log_shuffle_permutation_to_wandb,
     _run_predict_postprocessing,
 )
 
 _FAKE_WRAPPER = "/fake/vst-headless-wrapper"
 
 _AGGREGATED_METRICS_CSV = ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
-_AGGREGATED_METRICS_SHUFFLED_CSV = (
-    ",mean,std\nmss,0.6,0.12\nwmfcc,0.35,0.06\nsot,0.25,0.025\nrms,0.85,0.015\n"
-)
-
 _EXPECTED_AUDIO_METRICS = {
     "audio/mss_mean": pytest.approx(0.5),
     "audio/mss_std": pytest.approx(0.1),
@@ -53,7 +48,6 @@ def _build_postprocess_cfg(
     rerender_target: bool = True,
     no_params: bool = False,
     num_workers: int = 1,
-    shuffle_seed: int = 0,
     metric_prefix: str = "",
     render: dict[str, Any] | None = None,
     batch_size: int = 1,
@@ -67,7 +61,6 @@ def _build_postprocess_cfg(
     :param rerender_target: Drives ``cfg.evaluation.rerender_target``.
     :param no_params: Drives ``cfg.evaluation.no_params``.
     :param num_workers: Drives ``cfg.evaluation.num_workers``.
-    :param shuffle_seed: Drives ``cfg.evaluation.shuffle_seed``.
     :param metric_prefix: Drives ``cfg.evaluation.metric_prefix``; prepended to
         every returned audio metric key.
     :param render: Drives ``cfg.render`` and, for identity keys, the root
@@ -112,7 +105,6 @@ def _build_postprocess_cfg(
                 "rerender_target": rerender_target,
                 "no_params": no_params,
                 "num_workers": num_workers,
-                "shuffle_seed": shuffle_seed,
                 "metric_prefix": metric_prefix,
             },
             "datamodule": {"batch_size": batch_size},
@@ -419,53 +411,22 @@ def test_postprocessing_metrics_argv_includes_num_workers(
     assert metrics_argv[w_idx + 1] == "4"
 
 
-def test_postprocessing_always_forwards_shuffle_seed_to_metrics_subprocess(
-    monkeypatch: pytest.MonkeyPatch,
-    predictions_tree: Path,
+def test_postprocessing_metrics_argv_has_only_metric_options(
+    tmp_path: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``--shuffle_seed`` is always forwarded so callers control the permutation seed.
+    """Metrics postprocessing exposes no shuffle control to the evaluation subprocess.
 
-    :param monkeypatch: Pins ``sys.platform`` to ``darwin`` so the metrics-only argv is asserted.
-    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
-    :param captured_argv: Captured argv list populated by the fixture.
+    :param tmp_path: Hydra output root containing the required audio directory.
+    :param captured_argv: Captured subprocess argument vectors.
     """
-    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
-    cfg = _build_postprocess_cfg(
-        predictions_tree,
-        render_vst=False,
-        compute_metrics=True,
-        shuffle_seed=7,
-    )
+    (tmp_path / "audio").mkdir()
+    cfg = _build_postprocess_cfg(tmp_path, render_vst=False)
 
     _run_predict_postprocessing(cfg)
 
-    metrics_argv = captured_argv[0]
-    assert "--shuffle_seed" in metrics_argv
-    seed_idx = metrics_argv.index("--shuffle_seed")
-    assert metrics_argv[seed_idx + 1] == "7"
-
-
-def test_postprocessing_forwards_default_shuffle_seed_zero(
-    monkeypatch: pytest.MonkeyPatch,
-    predictions_tree: Path,
-    captured_argv: list[list[str]],
-) -> None:
-    """Default ``shuffle_seed=0`` is forwarded so the probe is reproducible without config.
-
-    :param monkeypatch: Pins ``sys.platform`` to ``darwin``.
-    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
-    :param captured_argv: Captured argv list populated by the fixture.
-    """
-    monkeypatch.setattr(eval_mod.sys, "platform", "darwin")
-    cfg = _build_postprocess_cfg(predictions_tree, render_vst=False, compute_metrics=True)
-
-    _run_predict_postprocessing(cfg)
-
-    metrics_argv = captured_argv[0]
-    assert "--shuffle_seed" in metrics_argv
-    seed_idx = metrics_argv.index("--shuffle_seed")
-    assert metrics_argv[seed_idx + 1] == "0"
+    metrics_argv = next(args for args in captured_argv if _COMPUTE_AUDIO_METRICS_MODULE in args)
+    assert "--shuffle_seed" not in metrics_argv
 
 
 def test_postprocessing_compute_metrics_off_fires_no_subprocess(
@@ -587,42 +548,6 @@ def test_postprocessing_returns_loaded_audio_metrics(
     assert result == _EXPECTED_AUDIO_METRICS
 
 
-def test_postprocessing_returns_shuffled_audio_metrics_when_subprocess_writes_shuffled_csv(
-    monkeypatch: pytest.MonkeyPatch,
-    predictions_tree: Path,
-) -> None:
-    """``shuffled_audio/*`` keys are returned when the metrics subprocess writes both CSVs.
-
-    Verifies the ``_load_audio_metrics`` shuffled-CSV branch is wired through
-    ``_run_predict_postprocessing``; deleting that branch would cause this test to fail.
-
-    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes both
-        ``aggregated_metrics.csv`` and ``aggregated_metrics_shuffled.csv``.
-    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
-    """
-    metrics_dir = predictions_tree / "metrics"
-
-    def _writes_both_csvs(args: list[str], **_kwargs: object) -> None:
-        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
-            return
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
-        (metrics_dir / "aggregated_metrics_shuffled.csv").write_text(
-            _AGGREGATED_METRICS_SHUFFLED_CSV
-        )
-
-    monkeypatch.setattr(eval_mod.subprocess, "run", _writes_both_csvs)
-    cfg = _build_postprocess_cfg(predictions_tree, render_vst=False, compute_metrics=True)
-
-    result = _run_predict_postprocessing(cfg)
-
-    assert "shuffled_audio/mss_mean" in result
-    assert result["shuffled_audio/mss_mean"] == pytest.approx(0.6)
-    assert result["shuffled_audio/mss_std"] == pytest.approx(0.12)
-    assert "audio/mss_mean" in result
-    assert result["audio/mss_mean"] == pytest.approx(0.5)
-
-
 def test_postprocessing_prefixes_audio_metric_keys_when_metric_prefix_set(
     monkeypatch: pytest.MonkeyPatch,
     predictions_tree: Path,
@@ -631,25 +556,19 @@ def test_postprocessing_prefixes_audio_metric_keys_when_metric_prefix_set(
 
     The inline oracle eval resumes one wandb run for all splits; without a
     prefix the bare ``audio/<name>_<stat>`` summary key is overwritten by the
-    last split. A non-empty prefix namespaces every key (both ``audio/*`` and
-    ``shuffled_audio/*``), e.g. ``train/``.
+    last split. A non-empty prefix namespaces every key, e.g. ``train/``.
 
-    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes both
-        aggregated CSVs before returning.
+    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes the
+        aggregated CSV before returning.
     :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
     """
     metrics_dir = predictions_tree / "metrics"
 
-    def _writes_both_csvs(args: list[str], **_kwargs: Any) -> None:
-        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
-            return
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
-        (metrics_dir / "aggregated_metrics_shuffled.csv").write_text(
-            _AGGREGATED_METRICS_SHUFFLED_CSV
-        )
-
-    monkeypatch.setattr(eval_mod.subprocess, "run", _writes_both_csvs)
+    monkeypatch.setattr(
+        eval_mod.subprocess,
+        "run",
+        _writes_metrics_csv(metrics_dir, _AGGREGATED_METRICS_CSV),
+    )
     cfg = _build_postprocess_cfg(
         predictions_tree,
         render_vst=False,
@@ -659,12 +578,8 @@ def test_postprocessing_prefixes_audio_metric_keys_when_metric_prefix_set(
 
     result = _run_predict_postprocessing(cfg)
 
-    # Both groups are namespaced — the prefix applies to every loaded key.
     assert result["train/audio/mss_mean"] == pytest.approx(0.5)
-    assert result["train/shuffled_audio/mss_mean"] == pytest.approx(0.6)
-    # The bare keys must be gone: that is exactly the cross-split collision the prefix fixes.
     assert "audio/mss_mean" not in result
-    assert "shuffled_audio/mss_mean" not in result
 
 
 def test_postprocessing_render_subprocess_nonzero_exit_raises(
@@ -961,9 +876,6 @@ def test_log_metrics_csv_to_wandb_log_exception_is_swallowed(
     assert any("RuntimeError" in r.message for r in caplog.records)
 
 
-_SHUFFLE_PERMUTATION_CSV = "dest_idx,src_idx\n0,1\n1,0\n"
-
-
 class _RecordingWandbRun:
     """Spy stand-in for ``wandb.run`` that appends every ``log`` payload to ``payloads``."""
 
@@ -988,152 +900,6 @@ def wandb_log_spy(monkeypatch: pytest.MonkeyPatch) -> _RecordingWandbRun:
     spy = _RecordingWandbRun()
     monkeypatch.setattr(eval_mod.wandb, "run", spy)
     return spy
-
-
-def test_log_shuffle_permutation_to_wandb_logs_table_to_active_run(
-    wandb_log_spy: _RecordingWandbRun,
-    tmp_path: Path,
-) -> None:
-    """An active run plus a present ``shuffle_permutation.csv`` logs exactly one Table.
-
-    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
-    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
-    """
-    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
-
-    _log_shuffle_permutation_to_wandb(tmp_path)
-
-    assert len(wandb_log_spy.payloads) == 1
-    table = wandb_log_spy.payloads[0]["shuffle/permutation"]
-    assert isinstance(table, wandb.Table)
-    assert table.columns == ["dest_idx", "src_idx"]
-    # Rows must round-trip the CSV verbatim, not just carry the right header.
-    assert table.data == [[0, 1], [1, 0]]
-
-
-def test_log_shuffle_permutation_to_wandb_prepends_prefix_to_table_key(
-    wandb_log_spy: _RecordingWandbRun,
-    tmp_path: Path,
-) -> None:
-    """A non-empty ``prefix`` namespaces the Table key so per-split runs stay distinct.
-
-    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
-    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
-    """
-    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
-
-    _log_shuffle_permutation_to_wandb(tmp_path, prefix="train/")
-
-    assert len(wandb_log_spy.payloads) == 1
-    assert isinstance(wandb_log_spy.payloads[0]["train/shuffle/permutation"], wandb.Table)
-
-
-def test_log_shuffle_permutation_to_wandb_noop_when_no_run(
-    wandb_log_spy: _RecordingWandbRun,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """``wandb.run is None`` → returns without raising or logging, even with the CSV present.
-
-    Overriding the spy with ``None`` exercises the early-exit guard: removing it would
-    dereference ``None.log`` and raise instead of logging nothing.
-
-    :param wandb_log_spy: Recording spy whose ``payloads`` must stay empty.
-    :param monkeypatch: Overrides ``wandb.run`` with ``None`` after the fixture installs the spy.
-    :param tmp_path: Scratch dir — ``shuffle_permutation.csv`` is present but must not be read.
-    """
-    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
-    monkeypatch.setattr(eval_mod.wandb, "run", None)
-
-    _log_shuffle_permutation_to_wandb(tmp_path)
-
-    assert wandb_log_spy.payloads == []
-
-
-def test_log_shuffle_permutation_to_wandb_missing_file_is_silent(
-    wandb_log_spy: _RecordingWandbRun,
-    tmp_path: Path,
-) -> None:
-    """A missing ``shuffle_permutation.csv`` is skipped; nothing is logged.
-
-    The probe writes the file only for uniform-params datasets, so its absence is the
-    common non-oracle case and must not raise.
-
-    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
-    :param tmp_path: Empty scratch dir — no ``shuffle_permutation.csv`` present.
-    """
-    _log_shuffle_permutation_to_wandb(tmp_path)
-
-    assert wandb_log_spy.payloads == []
-
-
-def test_log_shuffle_permutation_to_wandb_log_exception_is_swallowed(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """An exception from ``wandb.run.log`` is swallowed and a warning is emitted.
-
-    :param monkeypatch: Pins ``wandb.run`` to a fake whose ``.log`` raises ``RuntimeError``.
-    :param tmp_path: Scratch metrics dir seeded with a minimal ``shuffle_permutation.csv``.
-    :param caplog: Captures log output to verify the warning is emitted.
-    """
-    (tmp_path / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
-
-    class _RaisingRun:
-        """Stand-in for ``wandb.run`` whose ``log`` always raises to simulate a backend failure."""
-
-        def log(self, _payload: object) -> None:
-            """Simulate a failing wandb backend.
-
-            :param _payload: The would-be log dict; discarded before raising.
-            :raises RuntimeError: Always, to simulate a wandb backend failure.
-            """
-            raise RuntimeError("wandb backend unavailable")
-
-    monkeypatch.setattr(eval_mod.wandb, "run", _RaisingRun())
-
-    with caplog.at_level(logging.WARNING):
-        _log_shuffle_permutation_to_wandb(tmp_path)
-
-    assert any("RuntimeError" in r.message for r in caplog.records)
-
-
-def test_postprocessing_logs_shuffle_permutation_table_when_subprocess_writes_csv(
-    wandb_log_spy: _RecordingWandbRun,
-    predictions_tree: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The probe permutation Table reaches ``wandb.run.log`` end-to-end through postprocessing.
-
-    Wires the producer→consumer contract: when the metrics subprocess writes
-    ``shuffle_permutation.csv``, ``_run_predict_postprocessing`` logs it as a Table under
-    the ``shuffle/permutation`` key. Deleting the log call would fail this test.
-
-    :param wandb_log_spy: Recording spy pinned to ``wandb.run``.
-    :param predictions_tree: ``tmp_path`` with ``predictions/`` + ``audio/`` pre-created.
-    :param monkeypatch: Replaces ``subprocess.run`` with a fake that writes the aggregated
-        metrics CSV and the permutation CSV.
-    """
-    metrics_dir = predictions_tree / "metrics"
-
-    def _writes_metrics_and_permutation(args: list[str], **_kwargs: object) -> None:
-        if _COMPUTE_AUDIO_METRICS_MODULE not in args:
-            return
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        (metrics_dir / "aggregated_metrics.csv").write_text(_AGGREGATED_METRICS_CSV)
-        (metrics_dir / "shuffle_permutation.csv").write_text(_SHUFFLE_PERMUTATION_CSV)
-
-    monkeypatch.setattr(eval_mod.subprocess, "run", _writes_metrics_and_permutation)
-    cfg = _build_postprocess_cfg(predictions_tree, render_vst=False, compute_metrics=True)
-
-    _run_predict_postprocessing(cfg)
-
-    permutation_payloads = [p for p in wandb_log_spy.payloads if "shuffle/permutation" in p]
-    assert len(permutation_payloads) == 1
-    table = permutation_payloads[0]["shuffle/permutation"]
-    assert isinstance(table, wandb.Table)
-    assert table.columns == ["dest_idx", "src_idx"]
 
 
 @pytest.fixture
