@@ -209,6 +209,8 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert torch.isfinite(metric_dict["val/param_mse"])
 
     datamodule = object_dict["datamodule"]
+    assert cfg_pyfdn_flow_train.datamodule.param_spec_name == "pyfdn_n8_mono"
+    assert datamodule.param_spec_name == "pyfdn_n8_mono"
     assert "source_audio_path" not in cfg_pyfdn_flow_train.datamodule
     assert "source_audio_sha256" not in cfg_pyfdn_flow_train.datamodule
     source_provenance = datamodule.source_provenance

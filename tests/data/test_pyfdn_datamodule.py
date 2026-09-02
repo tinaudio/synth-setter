@@ -14,6 +14,11 @@ from synth_setter.data.pyfdn_datamodule import PyFDNDataModule, PyFDNDataset
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.param_spec_name import ParamSpecName
+
+
+_PYFDN_PARAM_SPEC_NAME = ParamSpecName("pyfdn_n8_mono")
 
 
 def test_pyfdn_datamodule_imports_in_fresh_interpreter() -> None:
@@ -25,9 +30,50 @@ def test_pyfdn_datamodule_imports_in_fresh_interpreter() -> None:
     )
 
 
+def test_pyfdn_dataset_supported_identity_resolves_registered_spec() -> None:
+    """The supported identity binds the canonical registry object."""
+    dataset = PyFDNDataset(
+        num_samples=1,
+        seed=123,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )
+
+    assert dataset.param_spec is resolve_param_spec(_PYFDN_PARAM_SPEC_NAME)
+
+
+def test_pyfdn_datamodule_supported_identity_resolves_registered_spec() -> None:
+    """The datamodule validates against the same canonical registry object."""
+    datamodule = PyFDNDataModule(param_spec_name=_PYFDN_PARAM_SPEC_NAME)
+
+    assert datamodule.param_spec is resolve_param_spec(_PYFDN_PARAM_SPEC_NAME)
+
+
+def test_pyfdn_dataset_unknown_identity_raises_registry_error() -> None:
+    """An unknown identity fails through the shared parameter-spec registry."""
+    with pytest.raises(KeyError, match="not_registered"):
+        PyFDNDataset(
+            num_samples=1,
+            seed=123,
+            param_spec_name=ParamSpecName("not_registered"),
+        )
+
+
+def test_pyfdn_datamodule_registered_non_pyfdn_identity_raises_directed_error() -> None:
+    """A registered synth spec cannot silently label pyFDN-rendered rows."""
+    with pytest.raises(
+        ValueError,
+        match="pyFDN data only supports param_spec_name='pyfdn_n8_mono'.*surge_4",
+    ):
+        PyFDNDataModule(param_spec_name=ParamSpecName("surge_4"))
+
+
 def test_pyfdn_dataset_same_index_is_deterministic() -> None:
     """A split seed and row index fix both the patch and real rendered audio."""
-    dataset = PyFDNDataset(num_samples=2, seed=123)
+    dataset = PyFDNDataset(
+        num_samples=2,
+        seed=123,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )
 
     audio_a, params_a = dataset[0]
     audio_b, params_b = dataset[0]
@@ -38,7 +84,11 @@ def test_pyfdn_dataset_same_index_is_deterministic() -> None:
 
 def test_pyfdn_dataset_row_encodes_the_exact_derived_seed_sample() -> None:
     """The stored label is exactly the spec sample for the derived row seed."""
-    _, encoded = PyFDNDataset(num_samples=3, seed=123)[2]
+    _, encoded = PyFDNDataset(
+        num_samples=3,
+        seed=123,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )[2]
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(
         np.random.default_rng(derive_sample_seed(123, 2))
     )
@@ -54,7 +104,11 @@ def test_pyfdn_dataset_index_outside_split_raises(index: int) -> None:
 
     :param index: Negative or upper-bound index outside a one-row split.
     """
-    dataset = PyFDNDataset(num_samples=1, seed=123)
+    dataset = PyFDNDataset(
+        num_samples=1,
+        seed=123,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )
 
     with pytest.raises(IndexError, match="outside"):
         dataset[index]
@@ -62,7 +116,11 @@ def test_pyfdn_dataset_index_outside_split_raises(index: int) -> None:
 
 def test_pyfdn_dataset_different_indices_change_sampled_patch() -> None:
     """Distinct derived row seeds produce distinct fixed training patches."""
-    dataset = PyFDNDataset(num_samples=2, seed=123)
+    dataset = PyFDNDataset(
+        num_samples=2,
+        seed=123,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )
 
     first = dataset[0][1]
     second = dataset[1][1]
@@ -72,7 +130,11 @@ def test_pyfdn_dataset_different_indices_change_sampled_patch() -> None:
 
 def test_pyfdn_dataset_row_has_exact_online_contract() -> None:
     """Rows expose only the channel-first audio and encoded labels training consumes."""
-    audio, encoded = PyFDNDataset(num_samples=1, seed=123)[0]
+    audio, encoded = PyFDNDataset(
+        num_samples=1,
+        seed=123,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )[0]
 
     assert audio.shape == (1, 192_000)
     assert encoded.shape == (1, 91)
@@ -81,15 +143,23 @@ def test_pyfdn_dataset_row_has_exact_online_contract() -> None:
 
 def test_pyfdn_datasets_share_one_canonical_renderer_per_process() -> None:
     """Separate splits in one process reuse one immutable canonical renderer."""
-    first = PyFDNDataset(num_samples=1, seed=123)
-    second = PyFDNDataset(num_samples=1, seed=456)
+    first = PyFDNDataset(
+        num_samples=1,
+        seed=123,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )
+    second = PyFDNDataset(
+        num_samples=1,
+        seed=456,
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+    )
 
     assert first._process_renderer() is second._process_renderer()
 
 
 def test_pyfdn_datamodule_checkpoint_state_contains_source_provenance() -> None:
     """Lightning checkpoints bind online rows to their generated source bytes."""
-    datamodule = PyFDNDataModule()
+    datamodule = PyFDNDataModule(param_spec_name=_PYFDN_PARAM_SPEC_NAME)
 
     state = datamodule.state_dict()
 
@@ -98,7 +168,7 @@ def test_pyfdn_datamodule_checkpoint_state_contains_source_provenance() -> None:
 
 def test_pyfdn_datamodule_checkpoint_source_mismatch_raises() -> None:
     """Resume and evaluation reject checkpoints produced from different source bytes."""
-    datamodule = PyFDNDataModule()
+    datamodule = PyFDNDataModule(param_spec_name=_PYFDN_PARAM_SPEC_NAME)
     state = datamodule.state_dict()
     provenance = dict(state["source_provenance"])
     provenance["sha256"] = "0" * 64
@@ -109,7 +179,7 @@ def test_pyfdn_datamodule_checkpoint_source_mismatch_raises() -> None:
 
 def test_pyfdn_datamodule_default_split_seed_domains_are_disjoint() -> None:
     """Every production-default row derives a unique seed across all splits."""
-    datamodule = PyFDNDataModule()
+    datamodule = PyFDNDataModule(param_spec_name=_PYFDN_PARAM_SPEC_NAME)
     datamodule.setup(None)
 
     assert (datamodule.train.seed, datamodule.val.seed, datamodule.test.seed) == (
@@ -131,24 +201,34 @@ def test_pyfdn_datamodule_default_split_seed_domains_are_disjoint() -> None:
 def test_pyfdn_datamodule_duplicate_split_seeds_raise() -> None:
     """Matching split seeds cannot leak identical indexed rows into evaluation."""
     with pytest.raises(ValueError, match="distinct"):
-        PyFDNDataModule(train_val_test_seeds=(123, 123, 789))
+        PyFDNDataModule(
+            param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+            train_val_test_seeds=(123, 123, 789),
+        )
 
 
 def test_pyfdn_datamodule_noncanonical_sample_rate_raises() -> None:
     """Sample-rate metadata cannot diverge from the canonical source."""
     with pytest.raises(ValueError, match="sample_rate must be exactly 48000"):
-        PyFDNDataModule(sample_rate=44_100)
+        PyFDNDataModule(
+            param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+            sample_rate=44_100,
+        )
 
 
 def test_pyfdn_datamodule_non_audio_conditioning_raises() -> None:
     """The online batch contract rejects unsupported conditioning modes."""
     with pytest.raises(ValueError, match="conditioning must be 'audio'"):
-        PyFDNDataModule(conditioning="mel")
+        PyFDNDataModule(
+            param_spec_name=_PYFDN_PARAM_SPEC_NAME,
+            conditioning="mel",
+        )
 
 
 def test_pyfdn_datamodule_training_rows_remain_fixed_across_epochs() -> None:
     """Training shuffles only indices; its finite row set does not resample by epoch."""
     datamodule = PyFDNDataModule(
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
         train_val_test_sizes=(2, 1, 1),
         batch_size=1,
         num_workers=0,
@@ -165,6 +245,7 @@ def test_pyfdn_datamodule_training_rows_remain_fixed_across_epochs() -> None:
 def test_pyfdn_datamodule_loaders_shuffle_only_training_rows() -> None:
     """Evaluation preserves row order while training may shuffle its fixed row set."""
     datamodule = PyFDNDataModule(
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
         train_val_test_sizes=(1, 1, 1),
         num_workers=0,
     )
@@ -184,6 +265,7 @@ def test_pyfdn_training_loader_restores_remaining_shuffled_batches(
     :param num_workers: Worker count, including the prefetching production path.
     """
     datamodule = PyFDNDataModule(
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
         train_val_test_sizes=(4, 1, 1),
         batch_size=1,
         num_workers=num_workers,
@@ -209,6 +291,7 @@ def test_pyfdn_training_loader_restores_remaining_shuffled_batches(
 def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract() -> None:
     """A real online batch has the keys, model-space labels, and shapes consumed by flow."""
     datamodule = PyFDNDataModule(
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
         train_val_test_sizes=(2, 1, 1),
         batch_size=2,
         num_workers=0,
@@ -231,6 +314,7 @@ def test_pyfdn_datamodule_batch_matches_audio_conditioned_flow_contract() -> Non
 def test_pyfdn_datamodule_multiprocess_workers_render_finite_batches() -> None:
     """Worker processes generate and reuse their own canonical-source renderer."""
     datamodule = PyFDNDataModule(
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
         train_val_test_sizes=(4, 1, 1),
         batch_size=2,
         num_workers=2,
@@ -273,7 +357,18 @@ def test_pyfdn_public_signatures_omit_unsupported_sampling_modes() -> None:
 
 
 @pytest.mark.parametrize("factory", [PyFDNDataModule, PyFDNDataset])
-def test_pyfdn_public_optional_configuration_is_keyword_only(factory: type) -> None:
+def test_pyfdn_public_param_spec_name_is_required(factory: type) -> None:
+    """Neither public constructor can infer a parameter-spec identity.
+
+    :param factory: Public online data constructor under test.
+    """
+    parameter = inspect.signature(factory).parameters["param_spec_name"]
+
+    assert parameter.default is inspect.Parameter.empty
+
+
+@pytest.mark.parametrize("factory", [PyFDNDataModule, PyFDNDataset])
+def test_pyfdn_public_configuration_is_keyword_only(factory: type) -> None:
     """Every public online data option requires explicit keyword binding.
 
     :param factory: Public online data constructor under test.
@@ -289,6 +384,7 @@ def test_pyfdn_public_optional_configuration_is_keyword_only(factory: type) -> N
 def test_pyfdn_production_path_source_to_batch_decode_and_real_rerender() -> None:
     """The canonical source traverses sampling, pyFDN, batching, decode, and rerender."""
     datamodule = PyFDNDataModule(
+        param_spec_name=_PYFDN_PARAM_SPEC_NAME,
         train_val_test_sizes=(1, 1, 1),
         batch_size=1,
         num_workers=0,
