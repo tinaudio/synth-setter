@@ -494,10 +494,10 @@ def test_pyfdn_renderer_post_delay_attenuates_feedback_impulse(tmp_path: Path) -
 
 
 @pytest.mark.parametrize(
-    ("control", "changed_rt"),
+    ("control", "changed_rt", "response_index"),
     [
-        ("post_delay.rt_dc_seconds", 2.0),
-        ("post_delay.rt_nyquist_seconds", 2.0),
+        ("post_delay.rt_dc_seconds", 2.0, 0),
+        ("post_delay.rt_nyquist_seconds", 2.0, -1),
     ],
 )
 def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
@@ -505,6 +505,7 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
     fdn_params: ParameterValues,
     control: str,
     changed_rt: float,
+    response_index: int,
 ) -> None:
     """Changing either predicted RT endpoint changes derived filters and real output.
 
@@ -512,6 +513,7 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
     :param fdn_params: Valid native patch with unequal endpoint RTs.
     :param control: RT endpoint changed for this case.
     :param changed_rt: Replacement reverberation time in seconds.
+    :param response_index: DC or near-Nyquist response index.
     """
     path, checksum = source_file
     changed_params = dict(fdn_params)
@@ -525,6 +527,15 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
 
     assert baseline_build.post_delay is not None
     assert changed_build.post_delay is not None
+    _, baseline_response_raw = sosfreqz(
+        baseline_build.post_delay[:, :, 0], worN=512
+    )
+    _, changed_response_raw = sosfreqz(changed_build.post_delay[:, :, 0], worN=512)
+    baseline_response = cast(np.ndarray, baseline_response_raw)
+    changed_response = cast(np.ndarray, changed_response_raw)
+    assert np.abs(changed_response[response_index]) > np.abs(
+        baseline_response[response_index]
+    )
     assert not np.array_equal(changed_build.post_delay, baseline_build.post_delay)
     assert not np.array_equal(changed_audio, baseline_audio)
 

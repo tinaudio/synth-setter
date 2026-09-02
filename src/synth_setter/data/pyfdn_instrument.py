@@ -20,8 +20,10 @@ from pyFDN.td import SOSBank
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_ORDER,
     PYFDN_RT_CROSSOVER_HZ,
+    PYFDN_RT_DC_NAME,
     PYFDN_RT_MAX_SECONDS,
     PYFDN_RT_MIN_SECONDS,
+    PYFDN_RT_NYQUIST_NAME,
 )
 from synth_setter.data.vst.param_spec import ParameterValue, ParameterValues
 
@@ -39,10 +41,8 @@ _ARRAY_CONTRACTS = (
     ("direct_matrix", (_CHANNELS, _CHANNELS), np.dtype(np.float64)),
     ("delays", (PYFDN_ORDER,), np.dtype(np.int64)),
 )
-_RT_DC_NAME = "post_delay.rt_dc_seconds"
-_RT_NYQUIST_NAME = "post_delay.rt_nyquist_seconds"
 _REQUIRED_KEYS = frozenset(name for name, _, _ in _ARRAY_CONTRACTS).union(
-    {_RT_DC_NAME, _RT_NYQUIST_NAME}
+    {PYFDN_RT_DC_NAME, PYFDN_RT_NYQUIST_NAME}
 )
 
 
@@ -96,11 +96,10 @@ def _require_rt_seconds(name: str, value: ParameterValue) -> float:
     return result
 
 
-def _require_decay_hooks(build: FDNBuild) -> np.ndarray:
+def _validate_decay_hooks(build: FDNBuild) -> None:
     """Validate pyFDN's derived delay-filter build contract.
 
     :param build: Result returned by ``build_set_decay``.
-    :returns: The validated ``post_delay`` SOS array.
     :raises TypeError: ``post_delay`` is not a float64 NumPy array.
     :raises ValueError: Hook shape, values, or unsupported hooks violate the contract.
     """
@@ -117,7 +116,36 @@ def _require_decay_hooks(build: FDNBuild) -> np.ndarray:
         raise ValueError("post_delay must contain only finite values")
     if build.post_matrix is not None or build.post_output is not None:
         raise ValueError("post_matrix and post_output must remain disabled")
-    return post_delay
+
+
+def _build_decay_fdn(
+    arrays: dict[str, np.ndarray],
+    rt_seconds: tuple[float, float],
+) -> FDNBuild:
+    """Derive native delay filters from an exact base FDN.
+
+    :param arrays: Validated base A, B, C, D, and delay arrays.
+    :param rt_seconds: DC and Nyquist reverberation times in seconds.
+    :returns: Build carrying the validated delay-filter SOS.
+    """
+    base_build = FDNBuild(
+        A=arrays["feedback_matrix"],
+        B=arrays["input_matrix"],
+        C=arrays["output_matrix"],
+        D=arrays["direct_matrix"],
+        delays=arrays["delays"],
+        fs=_SAMPLE_RATE,
+        post_delay=None,
+        post_matrix=None,
+        post_output=None,
+    )
+    decay_build = build_set_decay(
+        base_build,
+        rt=rt_seconds,
+        rt_crossover=PYFDN_RT_CROSSOVER_HZ,
+    )
+    _validate_decay_hooks(decay_build)
+    return decay_build
 
 
 def params_to_fdn_build(
@@ -147,27 +175,11 @@ def params_to_fdn_build(
     }
     if np.any(arrays["delays"] <= 0):
         raise ValueError("delays must be positive")
-    rt_dc = _require_rt_seconds(_RT_DC_NAME, params[_RT_DC_NAME])
-    rt_nyquist = _require_rt_seconds(_RT_NYQUIST_NAME, params[_RT_NYQUIST_NAME])
-
-    base_build = FDNBuild(
-        A=arrays["feedback_matrix"],
-        B=arrays["input_matrix"],
-        C=arrays["output_matrix"],
-        D=arrays["direct_matrix"],
-        delays=arrays["delays"],
-        fs=_SAMPLE_RATE,
-        post_delay=None,
-        post_matrix=None,
-        post_output=None,
+    rt_seconds = (
+        _require_rt_seconds(PYFDN_RT_DC_NAME, params[PYFDN_RT_DC_NAME]),
+        _require_rt_seconds(PYFDN_RT_NYQUIST_NAME, params[PYFDN_RT_NYQUIST_NAME]),
     )
-    decay_build = build_set_decay(
-        base_build,
-        rt=(rt_dc, rt_nyquist),
-        rt_crossover=PYFDN_RT_CROSSOVER_HZ,
-    )
-    _require_decay_hooks(decay_build)
-    return decay_build
+    return _build_decay_fdn(arrays, rt_seconds)
 
 
 def _validate_version(synth_version: str) -> None:
