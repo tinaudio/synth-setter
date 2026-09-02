@@ -16,8 +16,9 @@ from typing import cast
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from torchdata.stateful_dataloader import StatefulDataLoader
+from torchdata.stateful_dataloader.sampler import RandomSampler
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
@@ -235,13 +236,13 @@ class PyFDNDataModule(LightningDataModule):
         dataset: Dataset[PyFDNItem],
         *,
         num_workers: int,
-        shuffle: bool = False,
+        sampler: Sampler[int] | None = None,
     ) -> StatefulDataLoader[PyFDNBatch]:
         """Wrap one online split with the fixed flow collator.
 
         :param dataset: Deterministic online split to load.
         :param num_workers: Worker processes for this split.
-        :param shuffle: Whether to shuffle the split's fixed row indices.
+        :param sampler: Optional stateful training index order; evaluation defaults to sequential.
         :returns: Loader emitting the audio-conditioned flow batch contract.
         """
         return cast(
@@ -249,7 +250,7 @@ class PyFDNDataModule(LightningDataModule):
             StatefulDataLoader(
                 dataset,
                 batch_size=self.batch_size,
-                shuffle=shuffle,
+                sampler=sampler,
                 num_workers=num_workers,
                 persistent_workers=self.persistent_workers and num_workers > 0,
                 collate_fn=collate_pyfdn_audio_dict,
@@ -264,7 +265,7 @@ class PyFDNDataModule(LightningDataModule):
         return self._loader(
             self.train,
             num_workers=self.num_workers,
-            shuffle=True,
+            sampler=RandomSampler(self.train),
         )
 
     def val_dataloader(self) -> StatefulDataLoader[PyFDNBatch]:

@@ -41,7 +41,6 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
-    PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
     RendererBackend,
@@ -465,7 +464,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :return: ``self`` unchanged for renderable synth identities.
         :raises ValueError: The online-only pyFDN identity is selected.
         """
-        if self.plugin_path == PYFDN_PLUGIN_NAME:
+        if self.synth.name == "pyfdn_n8_mono":
             raise ValueError("pyFDN offline generation is unsupported; use online train/eval only")
         return self
 

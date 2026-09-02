@@ -1002,6 +1002,9 @@ def test_from_hydra_rejects_online_only_pyfdn_before_generation(
 
     :param cfg_dataset_pyfdn: Real Hydra composition selecting the pyFDN synth identity.
     """
+    with open_dict(cfg_dataset_pyfdn):
+        cfg_dataset_pyfdn.synth.plugin_path = "plugins/Surge XT.vst3"
+
     with pytest.raises(ValueError, match="pyFDN.*online train/eval only"):
         from_hydra(cfg_dataset_pyfdn)
 

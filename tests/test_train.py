@@ -217,9 +217,15 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     zero_audio_batch = {**batch, "audio": torch.zeros_like(batch["audio"])}
     with torch.inference_mode(), torch.random.fork_rng(devices=[]):
         torch.manual_seed(0)
-        conditioned_prediction, _ = model.predict_step(batch, batch_idx=0)
+        conditioned_prediction, conditioned_batch = model.predict_step(batch, batch_idx=0)
         torch.manual_seed(0)
-        zero_audio_prediction, _ = model.predict_step(zero_audio_batch, batch_idx=0)
+        zero_audio_prediction, returned_zero_audio_batch = model.predict_step(
+            zero_audio_batch, batch_idx=0
+        )
+    assert conditioned_prediction.shape == zero_audio_prediction.shape == (1, 89)
+    assert conditioned_prediction.dtype == zero_audio_prediction.dtype == torch.float32
+    assert conditioned_batch is batch
+    assert returned_zero_audio_batch is zero_audio_batch
     assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
 
     checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
