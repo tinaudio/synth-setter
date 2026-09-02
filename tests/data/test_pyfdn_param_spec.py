@@ -5,6 +5,7 @@ from typing import cast
 import numpy as np
 
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.vst.param_spec import ContinuousParameter
 
 _EXPECTED_COORDINATE_NAMES = (
     "delays.0",
@@ -96,23 +97,27 @@ _EXPECTED_COORDINATE_NAMES = (
     "output_matrix.0.6",
     "output_matrix.0.7",
     "direct_matrix.0.0",
+    "post_delay.rt_dc_seconds",
+    "post_delay.rt_nyquist_seconds",
 )
 
 
-def test_pyfdn_spec_layout_has_exact_89_columns_and_slices() -> None:
+def test_pyfdn_spec_layout_has_exact_91_columns_and_slices() -> None:
     """The model boundary preserves the issue-defined field order and widths."""
     layout = [
         (parameter.name, span.start, span.stop)
         for parameter, span in PYFDN_N8_MONO_PARAM_SPEC.encoded_slices()
     ]
 
-    assert PYFDN_N8_MONO_PARAM_SPEC.encoded_width == 89
+    assert PYFDN_N8_MONO_PARAM_SPEC.encoded_width == 91
     assert layout == [
         ("delays", 0, 8),
         ("feedback_matrix", 8, 72),
         ("input_matrix", 72, 80),
         ("output_matrix", 80, 88),
         ("direct_matrix", 88, 89),
+        ("post_delay.rt_dc_seconds", 89, 90),
+        ("post_delay.rt_nyquist_seconds", 90, 91),
     ]
     assert PYFDN_N8_MONO_PARAM_SPEC.note_params == []
 
@@ -120,6 +125,24 @@ def test_pyfdn_spec_layout_has_exact_89_columns_and_slices() -> None:
 def test_pyfdn_spec_coordinate_names_match_exact_c_order_layout() -> None:
     """Every model coordinate has the stable field-and-index label required by metrics."""
     assert tuple(PYFDN_N8_MONO_PARAM_SPEC.encoded_names) == _EXPECTED_COORDINATE_NAMES
+
+
+def test_pyfdn_spec_rt_controls_have_exact_positive_bounds() -> None:
+    """Both predicted decay controls use the approved reverberation-time domain."""
+    rt_dc, rt_nyquist = PYFDN_N8_MONO_PARAM_SPEC.synth_params[-2:]
+
+    assert isinstance(rt_dc, ContinuousParameter)
+    assert (rt_dc.name, rt_dc.min, rt_dc.max) == (
+        "post_delay.rt_dc_seconds",
+        0.1,
+        4.0,
+    )
+    assert isinstance(rt_nyquist, ContinuousParameter)
+    assert (rt_nyquist.name, rt_nyquist.min, rt_nyquist.max) == (
+        "post_delay.rt_nyquist_seconds",
+        0.1,
+        4.0,
+    )
 
 
 def test_pyfdn_spec_same_seed_samples_same_patch() -> None:
@@ -174,6 +197,18 @@ def test_pyfdn_spec_sampled_fields_have_exact_native_shapes_and_dtypes() -> None
     assert (direct.shape, direct.dtype) == ((1, 1), np.dtype(np.float64))
 
 
+def test_pyfdn_spec_sampled_rt_controls_are_bounded_python_floats() -> None:
+    """Sampled reverberation times stay positive and inside the model contract."""
+    params, _ = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(123))
+    rt_dc = params["post_delay.rt_dc_seconds"]
+    rt_nyquist = params["post_delay.rt_nyquist_seconds"]
+
+    assert isinstance(rt_dc, float)
+    assert 0.1 <= rt_dc <= 4.0
+    assert isinstance(rt_nyquist, float)
+    assert 0.1 <= rt_nyquist <= 4.0
+
+
 def test_pyfdn_spec_encoding_is_float32_and_round_trips_native_fields() -> None:
     """Encoded rows preserve every sampled native field."""
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(123))
@@ -181,9 +216,16 @@ def test_pyfdn_spec_encoding_is_float32_and_round_trips_native_fields() -> None:
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
     decoded, decoded_notes = PYFDN_N8_MONO_PARAM_SPEC.decode(encoded)
 
-    assert encoded.shape == (89,)
+    assert encoded.shape == (91,)
     assert encoded.dtype == np.float32
     assert decoded_notes == {}
     np.testing.assert_array_equal(decoded["delays"], params["delays"])
-    for name in ("feedback_matrix", "input_matrix", "output_matrix", "direct_matrix"):
+    for name in (
+        "feedback_matrix",
+        "input_matrix",
+        "output_matrix",
+        "direct_matrix",
+        "post_delay.rt_dc_seconds",
+        "post_delay.rt_nyquist_seconds",
+    ):
         np.testing.assert_allclose(decoded[name], params[name], atol=1.2e-7)

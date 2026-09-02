@@ -8,6 +8,7 @@ import numpy as np
 
 from synth_setter.data.vst.param_spec import (
     ContinuousArrayParameter,
+    ContinuousParameter,
     DiscreteArrayParameter,
     ParamSpec,
 )
@@ -71,6 +72,12 @@ PYFDN_N8_MONO_PARAM_SPEC = ParamSpec(
         ),
         ContinuousArrayParameter(
             name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0
+        ),
+        ContinuousParameter(
+            name="post_delay.rt_dc_seconds", min=0.1, max=4.0
+        ),
+        ContinuousParameter(
+            name="post_delay.rt_nyquist_seconds", min=0.1, max=4.0
         ),
     ],
     note_params=[],
