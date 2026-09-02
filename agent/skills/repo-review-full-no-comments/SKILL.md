@@ -289,5 +289,6 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 - Like `/repo-review-full`, this skill depends on the
   `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill
   invocation fails, surface the error — don't silently skip.
-- Do not dedupe findings across skills. Keep each skill's signal independent,
-  same as `/repo-review-full`.
+- Preserve every skill's candidate through aggregation. The final Sol signal
+  filter may drop a semantic duplicate before delivery while retaining the
+  original skill attribution for each kept finding.
