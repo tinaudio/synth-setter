@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import sys
 from collections.abc import Mapping, Sequence
@@ -94,6 +95,7 @@ def aggregate_metrics(rows: Sequence[Mapping[str, _Scalar]]) -> list[dict[str, _
 
     :param rows: Long-form pair/arm metric rows.
     :returns: Arm rows sorted by arm name with population statistics.
+    :raises ValueError: A per-pair metric is non-finite.
     """
     arm_names = sorted({str(row["arm"]) for row in rows})
     aggregates: list[dict[str, _Scalar]] = []
@@ -108,6 +110,8 @@ def aggregate_metrics(rows: Sequence[Mapping[str, _Scalar]]) -> list[dict[str, _
         }
         for metric in _METRICS:
             values = [float(row[metric]) for row in arm_rows]
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError(f"finite {metric} values are required for arm {arm}")
             aggregate[f"{metric}_mean"] = statistics.fmean(values)
             aggregate[f"{metric}_std_population"] = statistics.pstdev(values)
         aggregates.append(aggregate)

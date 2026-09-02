@@ -139,6 +139,14 @@ def test_render_pair_existing_output_fails_without_deleting_diagnostics(
     assert diagnostic.read_text(encoding="utf-8") == "trace"
 
 
+def test_aggregate_metrics_nonfinite_value_raises() -> None:
+    """A non-finite per-pair metric cannot publish aggregate completion."""
+    rows = [{"arm": "cfg-c0-s0", "mss": float("nan"), "wmfcc": 2.0, "sot": 3.0, "rms": 0.2}]
+
+    with pytest.raises(ValueError, match="finite.*mss"):
+        aggregate_metrics(rows)
+
+
 def test_aggregate_metrics_multiple_arms_reports_per_metric_mean() -> None:
     """Each CFG arm receives independent aggregate audio statistics."""
     rows = [

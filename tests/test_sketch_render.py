@@ -24,6 +24,12 @@ from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 
+def test_noise_source_device_mps_uses_supported_cpu_generator() -> None:
+    """MPS sampling draws seeded noise on CPU before device transfer."""
+    assert sketch_render._noise_source_device(torch.device("mps")) == torch.device("cpu")
+    assert sketch_render._noise_source_device(torch.device("cuda")) == torch.device("cuda")
+
+
 def test_cfg_grid_repeated_strengths_returns_argument_order_product() -> None:
     """Repeated strengths expand content-major into every requested arm."""
     assert cfg_grid([0.0, 2.0], [1.0, 3.0]) == (

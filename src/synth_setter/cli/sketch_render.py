@@ -431,6 +431,15 @@ def _write_metrics(path: Path, row: dict[str, str | int | float]) -> None:
         writer.writerow(row)
 
 
+def _noise_source_device(device: torch.device) -> torch.device:
+    """Select a generator-capable device for deterministic sampling noise.
+
+    :param device: Inference destination.
+    :returns: CPU for MPS, otherwise ``device``.
+    """
+    return torch.device("cpu") if device.type == "mps" else device
+
+
 def _run_id(sketch_path: Path, content_path: Path) -> str:
     """Build a unique identifier carrying pair identity.
 
@@ -547,13 +556,14 @@ def main(
         render=render,
         device=selected_device,
     )
-    generator = torch.Generator(device=selected_device).manual_seed(selected_seed)
+    noise_source_device = _noise_source_device(selected_device)
+    generator = torch.Generator(device=noise_source_device).manual_seed(selected_seed)
     noise = torch.randn(
         (1, model.hparams["num_params"]),
         generator=generator,
-        device=selected_device,
+        device=noise_source_device,
         dtype=torch.float32,
-    )
+    ).to(selected_device)
 
     spec = param_specs[render.param_spec_name]
     target_params_path = content_wav.with_suffix(".params.npy")
