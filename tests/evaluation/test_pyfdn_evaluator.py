@@ -1,5 +1,7 @@
 """Behavior tests for native pyFDN prediction evaluation."""
 
+import importlib
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +19,27 @@ from synth_setter.evaluation.pyfdn_evaluator import (
     decode_pyfdn_model_output,
     evaluate_pyfdn_row,
 )
+
+
+def test_pyfdn_evaluator_imports_without_registry_order_priming() -> None:
+    """Hydra can resolve the evaluator target before the VST registry is imported."""
+    prefixes = (
+        "synth_setter.data.pyfdn",
+        "synth_setter.data.vst",
+        "synth_setter.evaluation.pyfdn_evaluator",
+    )
+    saved = {name: module for name, module in sys.modules.items() if name.startswith(prefixes)}
+    for name in saved:
+        del sys.modules[name]
+    try:
+        imported = importlib.import_module("synth_setter.evaluation.pyfdn_evaluator")
+    finally:
+        for name in tuple(sys.modules):
+            if name.startswith(prefixes):
+                del sys.modules[name]
+        sys.modules.update(saved)
+
+    assert imported.PYFDN_N8_MONO_PARAM_SPEC.encoded_width == 91
 
 
 def test_decode_pyfdn_model_output_round_trips_all_91_coordinates() -> None:
@@ -157,6 +180,45 @@ def test_evaluate_pyfdn_row_unstable_exact_prediction_counts_render_invalid() ->
     assert result.error is not None and "finite" in result.error
 
 
+def test_pyfdn_evaluation_resumes_committed_rows_after_interruption(tmp_path: Path) -> None:
+    """A restarted evaluator skips matching committed rows and continues aggregation.
+
+    :param tmp_path: Isolated evaluation output directory.
+    """
+    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(30))
+    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
+    interrupted = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
+    interrupted.evaluate_batch(target[None, :], target[None, :])
+
+    resumed = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
+    predictions = np.stack([target, np.full(91, np.nan, dtype=np.float32)])
+    resumed.evaluate_batch(predictions, np.stack([target, target]))
+    metrics = resumed.finalize()
+
+    assert metrics["pyfdn/rows_total"] == 2.0
+    assert metrics["pyfdn/finite_render_count"] == 1.0
+    assert metrics["pyfdn/invalid/decode_count"] == 1.0
+    assert (tmp_path / "audio" / "sample_0" / "pred.wav").is_file()
+
+
+def test_pyfdn_evaluation_resume_changed_prediction_raises(tmp_path: Path) -> None:
+    """Progress from another prediction stream fails instead of mixing artifacts.
+
+    :param tmp_path: Isolated evaluation output directory.
+    """
+    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(30))
+    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
+    PyFDNEvaluation(PyFDNRenderer(), tmp_path).evaluate_batch(target[None, :], target[None, :])
+    changed = target.copy()
+    changed[0] = np.float32(0.123456)
+
+    resumed = PyFDNEvaluation(PyFDNRenderer(), tmp_path)
+    with pytest.raises(ValueError, match="does not match committed sample_0"):
+        resumed.evaluate_batch(changed[None, :], target[None, :])
+
+
 def test_pyfdn_evaluation_existing_audio_artifacts_raise_before_evaluation(
     tmp_path: Path,
 ) -> None:
@@ -224,8 +286,12 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
 
     rows = pd.read_csv(tmp_path / "metrics" / "metrics.csv")
     assert rows["status"].tolist() == ["finite_render", "decode_invalid", "render_invalid"]
-    assert (tmp_path / "metrics" / "aggregated_metrics.csv").is_file()
-    assert (tmp_path / "metrics" / "parameter_metrics.csv").is_file()
+    aggregated = pd.read_csv(tmp_path / "metrics" / "aggregated_metrics.csv", index_col=0)
+    assert aggregated.columns.tolist() == ["mean", "std"]
+    assert all(pd.api.types.is_float_dtype(aggregated[column]) for column in aggregated)
+    parameter_metrics = pd.read_csv(tmp_path / "metrics" / "parameter_metrics.csv")
+    assert parameter_metrics.columns.tolist() == ["coordinate", "mse"]
+    assert pd.api.types.is_float_dtype(parameter_metrics["mse"])
     pred_path = tmp_path / "audio" / "sample_0" / "pred.wav"
     target_path = tmp_path / "audio" / "sample_0" / "target.wav"
     assert sf.info(pred_path).subtype == "FLOAT"

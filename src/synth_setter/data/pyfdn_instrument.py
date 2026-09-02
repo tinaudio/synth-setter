@@ -229,6 +229,9 @@ class PyFDNRenderer:
     ) -> Float32[np.ndarray, "1 192000"]:
         """Process the fixed source through one exact patch with fresh recursion state.
 
+        Invalid patch types and values propagate ``TypeError`` or ``ValueError`` from the build
+        boundary; invalid rendered audio propagates ``ValueError`` from :meth:`render_build`.
+
         :param params: Native order-8 mono pyFDN arrays.
         :returns: Contiguous finite channel-first float32 audio shaped ``(1, 192000)``; native
             amplitude is preserved without clipping or normalization.

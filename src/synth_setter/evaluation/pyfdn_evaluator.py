@@ -1,9 +1,10 @@
 """Native predicted-patch evaluation for the fixed-source pyFDN instrument."""
 
+import base64
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ import soundfile as sf
 import torch
 from jaxtyping import Float32
 from lightning import Callback, LightningModule, Trainer
+from pydantic import BaseModel, ConfigDict
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
@@ -32,6 +34,136 @@ _AUDIO_METRICS = {
 }
 _PREDICTION_ERRORS = (TypeError, ValueError, RuntimeError, OverflowError, FloatingPointError)
 type PyFDNRowStatus = Literal["decode_invalid", "build_invalid", "render_invalid", "finite_render"]
+
+
+class _EvaluationRow(BaseModel):
+    """Strict per-prediction record persisted to ``metrics.csv``.
+
+    .. attribute :: model_config
+
+       Strict extra-forbidding Pydantic boundary configuration.
+
+    .. attribute :: sample_id
+
+       Sequential row identity.
+
+    .. attribute :: status
+
+       Terminal prediction stage.
+
+    .. attribute :: error
+
+       Stage-qualified failure detail.
+
+    .. attribute :: pred_min
+
+       Minimum finite model prediction.
+
+    .. attribute :: pred_max
+
+       Maximum finite model prediction.
+
+    .. attribute :: pred_out_of_range_count
+
+       Number of finite coordinates outside ``[-1, 1]``.
+
+    .. attribute :: target_peak
+
+       Native target peak magnitude.
+
+    .. attribute :: target_rms
+
+       Native target RMS amplitude.
+
+    .. attribute :: pred_peak
+
+       Native prediction peak magnitude.
+
+    .. attribute :: pred_rms
+
+       Native prediction RMS amplitude.
+
+    .. attribute :: mss
+
+       Multi-scale spectral distance.
+
+    .. attribute :: rms_cosine
+
+       RMS-envelope cosine similarity.
+
+    .. attribute :: sot
+
+       Spectral-over-time distance.
+
+    .. attribute :: wmfcc
+
+       Weighted MFCC distance.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    sample_id: int
+    status: PyFDNRowStatus
+    error: str | None
+    pred_min: float | None
+    pred_max: float | None
+    pred_out_of_range_count: int
+    target_peak: float
+    target_rms: float
+    pred_peak: float | None
+    pred_rms: float | None
+    mss: float | None
+    rms_cosine: float | None
+    sot: float | None
+    wmfcc: float | None
+
+
+class _RowCheckpoint(BaseModel):
+    """Durable row commit used to resume interrupted evaluation.
+
+    .. attribute :: model_config
+
+       Strict extra-forbidding Pydantic boundary configuration.
+
+    .. attribute :: source_provenance
+
+       Canonical source identity used for this row.
+
+    .. attribute :: prediction_base64
+
+       Exact prediction float32 bytes.
+
+    .. attribute :: target_base64
+
+       Exact target float32 bytes.
+
+    .. attribute :: row
+
+       Validated row result and metrics.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    source_provenance: dict[str, str | float | int | bool | None]
+    prediction_base64: str
+    target_base64: str
+    row: _EvaluationRow
+
+
+class _ParameterMetricRow(TypedDict):
+    """Typed coordinate-error record persisted to ``parameter_metrics.csv``.
+
+    .. attribute :: coordinate
+
+       ParamSpec coordinate name.
+
+    .. attribute :: mse
+
+       Mean squared model-space error.
+    """
+
+    coordinate: str
+    mse: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,7 +385,7 @@ def _distribution_metrics(values: list[float]) -> dict[str, float]:
 
 def _parameter_metrics(
     squared_error: np.ndarray, finite_count: int
-) -> tuple[dict[str, float], list[dict[str, Any]]]:
+) -> tuple[dict[str, float], list[_ParameterMetricRow]]:
     """Aggregate parameter errors over finite model predictions.
 
     :param squared_error: Per-coordinate accumulated squared error.
@@ -265,7 +397,7 @@ def _parameter_metrics(
 
     coordinate_mse = squared_error / finite_count
     metrics = {"pyfdn/parameter_mse": float(coordinate_mse.mean())}
-    rows = []
+    rows: list[_ParameterMetricRow] = []
     for name, value in zip(PYFDN_N8_MONO_PARAM_SPEC.encoded_names, coordinate_mse, strict=True):
         metrics[f"pyfdn/parameter_mse/coordinate/{name}"] = float(value)
         rows.append({"coordinate": name, "mse": float(value)})
@@ -320,8 +452,35 @@ def _distribution_aggregates(
     return metrics, aggregated_rows
 
 
+def _encode_model_row(row: np.ndarray) -> str:
+    """Encode one float32 model row without losing non-finite bit patterns.
+
+    :param row: Model-space row shaped ``(91,)``.
+    :returns: Base64-encoded raw float32 bytes.
+    """
+    return base64.b64encode(row.tobytes()).decode("ascii")
+
+
+def _decode_model_row(encoded: str) -> np.ndarray:
+    """Decode one checkpointed float32 model row.
+
+    :param encoded: Base64-encoded raw float32 bytes.
+    :returns: Independent model-space row shaped ``(91,)``.
+    :raises ValueError: The payload is malformed or has the wrong width.
+    """
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except ValueError as exc:
+        raise ValueError("pyFDN progress row is not valid base64") from exc
+    row = np.frombuffer(raw, dtype=np.float32).copy()
+    expected_width = PYFDN_N8_MONO_PARAM_SPEC.encoded_width
+    if row.shape != (expected_width,):
+        raise ValueError(f"pyFDN progress row must have shape ({expected_width},)")
+    return row
+
+
 class PyFDNEvaluation(Callback):
-    """Evaluate test predictions through native pyFDN and persist row artifacts."""
+    """Evaluate pyFDN predictions with durable per-row progress and native artifacts."""
 
     def __init__(
         self,
@@ -339,30 +498,33 @@ class PyFDNEvaluation(Callback):
         self._reset()
 
     def _reset(self) -> None:
-        """Reset all row and parameter accumulators for one test epoch."""
-        self.rows: list[dict[str, Any]] = []
+        """Reset row progress and parameter accumulators for one test epoch."""
+        self.rows: list[_EvaluationRow] = []
         self.parameter_squared_error = np.zeros(
             PYFDN_N8_MONO_PARAM_SPEC.encoded_width, dtype=np.float64
         )
         self.parameter_finite_count = 0
+        self._committed_inputs: list[tuple[np.ndarray, np.ndarray]] = []
+        self._input_row_index = 0
+        self._progress_loaded = False
 
     def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        """Reset state and reject colliding distributed artifact writers.
+        """Restore durable progress and reject colliding distributed writers.
 
         :param trainer: Active Lightning trainer.
         :param pl_module: Unused model hook argument.
-        :raises ValueError: Test evaluation uses more than one process.
+        :raises ValueError: Test evaluation uses more than one process or progress is invalid.
         """
         del pl_module
         if trainer.world_size != 1:
             raise ValueError("pyFDN evaluation artifacts require trainer.world_size == 1")
-        self._require_fresh_output()
         self._reset()
+        self._restore_progress()
 
-    def _require_fresh_output(self) -> None:
-        """Reject artifacts owned by a prior evaluator run.
+    def _require_tracked_output(self) -> None:
+        """Reject evaluator artifacts that have no resumable row commits.
 
-        :raises ValueError: Native audio or metric outputs already exist.
+        :raises ValueError: Native audio or aggregate outputs exist without progress metadata.
         """
         owned_paths = (
             self.output_dir / "audio",
@@ -373,20 +535,100 @@ class PyFDNEvaluation(Callback):
         existing = [path for path in owned_paths if path.exists()]
         if existing:
             raise ValueError(
-                "output directory already contains pyFDN evaluation artifacts: "
-                + ", ".join(str(path) for path in existing)
+                "output directory already contains pyFDN evaluation artifacts without "
+                "resumable progress: " + ", ".join(str(path) for path in existing)
             )
 
+    def _restore_progress(self) -> None:
+        """Restore consecutive source-matched row commits from disk.
+
+        :raises ValueError: Progress is malformed, nonconsecutive, or source-mismatched.
+        """
+        if self._progress_loaded:
+            return
+        progress_dir = self.output_dir / "metrics" / "rows"
+        paths = list(progress_dir.glob("sample_*.json"))
+        if not paths:
+            self._require_tracked_output()
+            self._progress_loaded = True
+            return
+
+        def row_index(path: Path) -> int:
+            try:
+                return int(path.stem.removeprefix("sample_"))
+            except ValueError as exc:
+                raise ValueError(f"invalid pyFDN progress filename: {path.name}") from exc
+
+        paths.sort(key=row_index)
+        indices = [row_index(path) for path in paths]
+        if indices != list(range(len(paths))):
+            raise ValueError("pyFDN progress rows must be consecutive from sample_0")
+
+        for sample_id, path in enumerate(paths):
+            checkpoint = _RowCheckpoint.model_validate_json(path.read_text())
+            if checkpoint.source_provenance != self.renderer.source_provenance:
+                raise ValueError("pyFDN progress source provenance does not match the renderer")
+            if checkpoint.row.sample_id != sample_id:
+                raise ValueError("pyFDN progress sample identity does not match its filename")
+            prediction = _decode_model_row(checkpoint.prediction_base64)
+            target = _decode_model_row(checkpoint.target_base64)
+            if checkpoint.row.status == "finite_render":
+                sample_dir = self.output_dir / "audio" / f"sample_{sample_id}"
+                required = ("params.csv", "pred.wav", "target.wav")
+                if not all((sample_dir / name).is_file() for name in required):
+                    raise ValueError(f"pyFDN progress sample_{sample_id} lacks native artifacts")
+            self.rows.append(checkpoint.row)
+            self._committed_inputs.append((prediction, target))
+            self._accumulate_parameter_error(prediction, target)
+        self._progress_loaded = True
+
+    def _accumulate_parameter_error(self, prediction: np.ndarray, target: np.ndarray) -> None:
+        """Accumulate one finite prediction's model-space error.
+
+        :param prediction: Float32 prediction row.
+        :param target: Float32 target row.
+        """
+        if not np.isfinite(prediction).all():
+            return
+        self.parameter_squared_error += np.square(
+            prediction.astype(np.float64) - target.astype(np.float64)
+        )
+        self.parameter_finite_count += 1
+
+    def _commit_row(
+        self,
+        prediction: np.ndarray,
+        target: np.ndarray,
+        row: _EvaluationRow,
+    ) -> None:
+        """Atomically commit one completed evaluator row.
+
+        :param prediction: Exact float32 prediction input.
+        :param target: Exact float32 target input.
+        :param row: Completed per-row metrics and terminal status.
+        """
+        progress_dir = self.output_dir / "metrics" / "rows"
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        path = progress_dir / f"sample_{row.sample_id}.json"
+        temporary = path.with_suffix(".json.tmp")
+        checkpoint = _RowCheckpoint(
+            source_provenance=self.renderer.source_provenance,
+            prediction_base64=_encode_model_row(prediction),
+            target_base64=_encode_model_row(target),
+            row=row,
+        )
+        temporary.write_text(checkpoint.model_dump_json())
+        temporary.replace(path)
+
     def evaluate_batch(self, predictions: np.ndarray, targets: np.ndarray) -> None:
-        """Evaluate and persist one ordered batch of model-space rows.
+        """Evaluate, resume, and persist one ordered batch of model-space rows.
 
         :param predictions: Float32 prediction matrix shaped ``(batch, 91)``.
         :param targets: Float32 target matrix with the same shape.
         :raises TypeError: Either matrix is not float32.
-        :raises ValueError: Batch shapes violate the width-91 contract or outputs already exist.
+        :raises ValueError: Batch shapes or persisted row identities violate the contract.
         """
-        if not self.rows:
-            self._require_fresh_output()
+        self._restore_progress()
         expected_width = PYFDN_N8_MONO_PARAM_SPEC.encoded_width
         if predictions.dtype != np.float32 or targets.dtype != np.float32:
             raise TypeError("pyFDN prediction and target batches must be float32")
@@ -401,32 +643,42 @@ class PyFDNEvaluation(Callback):
             )
 
         for prediction, target in zip(predictions, targets, strict=True):
-            sample_id = len(self.rows)
-            if np.isfinite(prediction).all():
-                self.parameter_squared_error += np.square(
-                    prediction.astype(np.float64) - target.astype(np.float64)
+            sample_id = self._input_row_index
+            if sample_id < len(self._committed_inputs):
+                committed_prediction, committed_target = self._committed_inputs[sample_id]
+                prediction_matches = np.array_equal(
+                    prediction, committed_prediction, equal_nan=True
                 )
-                self.parameter_finite_count += 1
+                target_matches = np.array_equal(target, committed_target, equal_nan=True)
+                if not prediction_matches or not target_matches:
+                    raise ValueError(
+                        f"pyFDN resumed input does not match committed sample_{sample_id}"
+                    )
+                self._input_row_index += 1
+                continue
+
             result = evaluate_pyfdn_row(prediction, target, renderer=self.renderer)
             finite_prediction = prediction[np.isfinite(prediction)]
             pred_min = float(finite_prediction.min()) if finite_prediction.size else None
             pred_max = float(finite_prediction.max()) if finite_prediction.size else None
-            row: dict[str, Any] = {
-                "sample_id": sample_id,
-                "status": result.status,
-                "error": result.error,
-                "pred_min": pred_min,
-                "pred_max": pred_max,
-                "pred_out_of_range_count": int(
+            row = _EvaluationRow(
+                sample_id=sample_id,
+                status=result.status,
+                error=result.error,
+                pred_min=pred_min,
+                pred_max=pred_max,
+                pred_out_of_range_count=int(
                     np.count_nonzero((prediction < -1.0) | (prediction > 1.0))
                 ),
-                "target_peak": result.target_peak,
-                "target_rms": result.target_rms,
-                "pred_peak": result.predicted_peak,
-                "pred_rms": result.predicted_rms,
-                **result.audio_metrics,
-            }
-            self.rows.append(row)
+                target_peak=result.target_peak,
+                target_rms=result.target_rms,
+                pred_peak=result.predicted_peak,
+                pred_rms=result.predicted_rms,
+                mss=result.audio_metrics.get("mss"),
+                rms_cosine=result.audio_metrics.get("rms_cosine"),
+                sot=result.audio_metrics.get("sot"),
+                wmfcc=result.audio_metrics.get("wmfcc"),
+            )
             if result.status == "finite_render":
                 self._write_success_artifacts(
                     sample_id=sample_id,
@@ -434,6 +686,11 @@ class PyFDNEvaluation(Callback):
                     target=target,
                     result=result,
                 )
+            self._commit_row(prediction, target, row)
+            self.rows.append(row)
+            self._committed_inputs.append((prediction.copy(), target.copy()))
+            self._accumulate_parameter_error(prediction, target)
+            self._input_row_index += 1
 
     def _write_success_artifacts(
         self,
@@ -516,15 +773,18 @@ class PyFDNEvaluation(Callback):
         :returns: Counts, rates, parameter errors, audio metrics, and amplitude summaries.
         :raises ValueError: No test rows were evaluated.
         """
+        self._restore_progress()
         if not self.rows:
             raise ValueError("pyFDN evaluation received no test rows")
+        if self._input_row_index != len(self.rows):
+            raise ValueError("pyFDN resumed evaluation did not replay every committed row")
         metrics_dir = self.output_dir / "metrics"
         metrics_dir.mkdir(parents=True, exist_ok=True)
-        rows = pd.DataFrame(self.rows)
+        rows = pd.DataFrame([row.model_dump() for row in self.rows])
         rows.to_csv(metrics_dir / "metrics.csv", index=False)
 
         total = len(self.rows)
-        status_counts = Counter(row["status"] for row in self.rows)
+        status_counts = Counter(row.status for row in self.rows)
         decode_invalid = status_counts["decode_invalid"]
         build_invalid = status_counts["build_invalid"]
         render_invalid = status_counts["render_invalid"]
