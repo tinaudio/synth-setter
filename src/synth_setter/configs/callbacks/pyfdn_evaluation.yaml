@@ -1,0 +1,7 @@
+pyfdn_evaluation:
+  _target_: synth_setter.evaluation.pyfdn_evaluator.PyFDNEvaluation
+  source_audio_path: ${datamodule.source_audio_path}
+  source_audio_sha256: ${datamodule.source_audio_sha256}
+  output_dir: ${paths.output_dir}
+  synth_version: ${synth.synth_version}
+  sample_rate: ${datamodule.sample_rate}

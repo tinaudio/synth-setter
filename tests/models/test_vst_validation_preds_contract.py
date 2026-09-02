@@ -200,6 +200,19 @@ def test_validation_step_returns_callback_metrics_shaped_like_target_params(
     assert torch.isfinite(outputs["preds"]).all()
 
 
+def test_flow_matching_test_step_returns_predictions_and_flow_loss() -> None:
+    """Flow test output carries the terminal patch and fully conditioned flow loss."""
+    module = _flow_matching_module()
+    batch = _batch()
+    batch["noise"] = torch.randn_like(batch["params"])
+
+    outputs = module.test_step(batch, batch_idx=0)
+
+    assert outputs["preds"].shape == batch["params"].shape
+    assert outputs["flow_loss"].ndim == 0
+    assert torch.isfinite(outputs["flow_loss"])
+
+
 def test_flow_vae_validation_step_returns_per_param_mse() -> None:
     """Flow-VAE validation exposes the per-parameter metric consumed by callbacks."""
     module = _flow_vae_module()

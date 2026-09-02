@@ -826,7 +826,31 @@ class VSTFlowMatchingModule(LightningModule):
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
+    @jaxtyped(typechecker=beartype)
+    def _evaluation_flow_loss(
+        self, batch: dict[str, Shaped[torch.Tensor, ...]]
+    ) -> Float[torch.Tensor, ""]:
+        """Evaluate the fully conditioned flow objective without training dropout.
+
+        :param batch: Test batch carrying params, noise, and configured conditioning.
+        :returns: Mean weighted velocity-field error over rows and coordinates.
+        """
+        params = batch["params"]
+        noise = batch["noise"]
+        conditioning = self.encoder(self._get_conditioning_from_batch(batch))
+        control_branches = self._control_token_branches_from_batch(batch)
+        control_tokens = None if control_branches is None else control_branches.conditional
+        t = self._sample_time(params.shape[0], params.device)
+        x_t = self._sample_probability_path(noise, params, t)
+        target = self._evaluate_target_field(noise, params, x_t, t)
+        if control_tokens is None:
+            prediction = self.vector_field(x_t, t, conditioning)
+        else:
+            prediction = self.vector_field(x_t, t, conditioning, control_tokens=control_tokens)
+        row_loss = (prediction - target).square().mean(dim=-1)
+        return (row_loss * self._weight_time(t).squeeze(-1)).mean()
+
+    def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> dict[str, torch.Tensor]:
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,
@@ -837,7 +861,9 @@ class VSTFlowMatchingModule(LightningModule):
             control_tokens=self._control_token_branches_from_batch(batch),
         )
 
+        flow_loss = self._evaluation_flow_loss(batch)
         param_mse = (pred_params - batch["params"]).square().mean()
+        self.log("test/flow_loss", flow_loss, on_step=False, on_epoch=True)
         self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
         self.test_param_mse_best_swap.update(pred_params, batch["params"])
@@ -856,7 +882,7 @@ class VSTFlowMatchingModule(LightningModule):
                 on_epoch=True,
             )
 
-        return param_mse
+        return {"flow_loss": flow_loss, "param_mse": param_mse, "preds": pred_params}
 
     def on_test_epoch_end(self) -> None:
         pass

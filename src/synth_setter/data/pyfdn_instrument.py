@@ -232,9 +232,19 @@ class PyFDNRenderer:
         :param params: Native order-8 mono pyFDN arrays.
         :returns: Contiguous finite channel-first float32 audio shaped ``(1, 192000)``; native
             amplitude is preserved without clipping or normalization.
-        :raises ValueError: The patch or rendered audio violates the fixed contract.
         """
-        build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
+        return self.render_build(params_to_fdn_build(params, sample_rate=_SAMPLE_RATE))
+
+    def render_build(
+        self, build: FDNBuild
+    ) -> Float32[np.ndarray, "1 192000"]:
+        """Process the fixed source through one validated build with fresh recursion state.
+
+        :param build: Exact order-8 mono build produced by :func:`params_to_fdn_build`.
+        :returns: Contiguous finite channel-first float32 audio shaped ``(1, 192000)``; native
+            amplitude is preserved without clipping or normalization.
+        :raises ValueError: The rendered audio violates the fixed contract.
+        """
         post_delay = cast(np.ndarray, build.post_delay)
         output = process_fdn(
             self._source_audio[0],

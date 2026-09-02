@@ -524,6 +524,22 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
     assert not np.array_equal(changed_audio, baseline_audio)
 
 
+def test_pyfdn_renderer_render_build_matches_parameter_render(
+    fdn_params: ParameterValues,
+) -> None:
+    """A prevalidated build reaches the same processor without reconstruction.
+
+    :param fdn_params: Valid native patch.
+    """
+    renderer = PyFDNRenderer()
+    build = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+
+    from_params = renderer.render(fdn_params)
+    from_build = renderer.render_build(build)
+
+    np.testing.assert_array_equal(from_build, from_params)
+
+
 def test_pyfdn_renderer_real_process_has_exact_output_contract(
     fdn_params: ParameterValues,
 ) -> None:

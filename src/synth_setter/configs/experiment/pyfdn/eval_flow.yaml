@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - /experiment/pyfdn/flow
+  - override /callbacks: pyfdn_evaluation
+  - _self_
+
+run_name: flow_eval
+mode: test
+ckpt_path: ???
