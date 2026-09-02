@@ -70,6 +70,25 @@ def test_require_fresh_run_nonempty_local_output_raises(
         suite._require_fresh_run(tmp_path, "r2://bucket/new")
 
 
+def test_claim_destination_uses_immutable_checksum_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reserve the run prefix with an atomic immutable R2 object.
+
+    :param monkeypatch: Captures the rclone invocation.
+    """
+    command: list[str] = []
+
+    def run(args: list[str], **kwargs: object) -> None:
+        del kwargs
+        command.extend(args)
+
+    monkeypatch.setattr(suite.subprocess, "run", run)
+
+    suite._claim_destination("r2://bucket/run")
+
+    assert command[:4] == ["rclone", "copyto", "--checksum", "--immutable"]
+    assert command[-1] == "r2:bucket/run/.run-claim"
+
+
 def test_render_pair_fresh_output_explicitly_enables_upload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -104,6 +123,7 @@ def test_render_pair_fresh_output_explicitly_enables_upload(
         sample_steps=2,
         seed=0,
         device="cpu",
+        timeout_seconds=60,
     )
 
     assert command[command.index("--checkpoint") + 1] == "r2://bucket/model.ckpt"
@@ -148,6 +168,7 @@ def test_render_pair_existing_output_fails_without_deleting_diagnostics(
             sample_steps=2,
             seed=0,
             device="cpu",
+            timeout_seconds=60,
         )
 
     assert diagnostic.read_text(encoding="utf-8") == "trace"

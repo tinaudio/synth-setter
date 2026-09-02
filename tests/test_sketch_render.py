@@ -471,6 +471,7 @@ def test_prepare_inputs_broadcastable_mel_statistics_raises(
         (["--checkpoint", "model.ckpt"], "checkpoint-sha256 is required"),
         (["--checkpoint-sha256", "short"], "must contain 64 hex characters"),
         (["--checkpoint-sha256", "z" * 64], "must be hexadecimal"),
+        (["--duration", "nan"], "duration must be finite"),
         (
             ["--upload-prefix", "r2://bucket/path", "--no-upload"],
             "upload-prefix cannot be combined",

@@ -564,6 +564,8 @@ def main(
     :raises click.ClickException: CLI arguments are inconsistent.
     """
     settings = _load_settings()
+    if duration is not None and not math.isfinite(duration):
+        raise click.ClickException("--duration must be finite")
     grid = cfg_grid(content_cfg, sketch_cfg)
     selected_steps = settings.sample_steps if sample_steps is None else sample_steps
     if selected_steps <= 0:

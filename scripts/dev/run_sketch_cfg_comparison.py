@@ -7,13 +7,17 @@ import argparse
 import csv
 import math
 import statistics
+import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import click
 import lance
+from pydantic import BaseModel, ConfigDict, field_validator
 from sh import Command
 
 from synth_setter.cli.sketch_render import (
@@ -58,6 +62,98 @@ _PAIR_FIELDS = (
 )
 _Scalar = str | int | float
 _PairValue = str | int
+
+
+class _ArmMetrics(BaseModel):
+    """Strict child-process metrics report.
+
+    .. attribute :: model_config
+
+        Strict Pydantic boundary validation.
+
+    .. attribute :: content_cfg
+
+        Content guidance strength.
+
+    .. attribute :: sketch_cfg
+
+        Sketch guidance strength.
+
+    .. attribute :: seed
+
+        Pair sampling seed.
+
+    .. attribute :: mss
+
+        Multi-scale spectrogram distance.
+
+    .. attribute :: wmfcc
+
+        Warped MFCC distance.
+
+    .. attribute :: sot
+
+        Spectral optimal-transport score.
+
+    .. attribute :: rms
+
+        RMS-envelope similarity.
+
+    .. attribute :: r2_uri
+
+        Published arm prefix.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    content_cfg: float
+    sketch_cfg: float
+    seed: int
+    mss: float
+    wmfcc: float
+    sot: float
+    rms: float
+    r2_uri: str
+
+    @field_validator("content_cfg", "sketch_cfg", "mss", "wmfcc", "sot", "rms")
+    @classmethod
+    def _finite_float(cls, value: float) -> float:
+        """Require finite numeric report values.
+
+        :param value: Parsed report value.
+        :returns: Finite value.
+        :raises ValueError: The value is non-finite.
+        """
+        if not math.isfinite(value):
+            raise ValueError("metric report values must be finite")
+        return value
+
+    @field_validator("seed")
+    @classmethod
+    def _nonnegative_seed(cls, value: int) -> int:
+        """Require a nonnegative pair seed.
+
+        :param value: Parsed seed.
+        :returns: Nonnegative seed.
+        :raises ValueError: The seed is negative.
+        """
+        if value < 0:
+            raise ValueError("metric report seed must be nonnegative")
+        return value
+
+    @field_validator("r2_uri")
+    @classmethod
+    def _r2_provenance(cls, value: str) -> str:
+        """Require uploaded-arm provenance.
+
+        :param value: Parsed arm URI.
+        :returns: R2 URI.
+        :raises ValueError: The report lacks an R2 URI.
+        """
+        if not r2_io.is_r2_uri(value):
+            raise ValueError("metric report r2_uri must use r2://")
+        return value
+
 
 _AGGREGATE_FIELDS = (
     "arm",
@@ -285,6 +381,7 @@ def _render_pair(
     sample_steps: int,
     seed: int,
     device: str,
+    timeout_seconds: int,
 ) -> None:
     """Render and upload every CFG arm for one input pair.
 
@@ -301,6 +398,7 @@ def _render_pair(
     :param sample_steps: Flow integration steps.
     :param seed: Pair seed shared across arms.
     :param device: Inference device.
+    :param timeout_seconds: Per-pair subprocess wall-clock limit.
     :raises FileExistsError: The pair output path already exists.
     """
     pair_index = int(pair["pair_index"])
@@ -342,19 +440,26 @@ def _render_pair(
         args.extend(("--content-cfg", str(strength)))
     for strength in sketch_cfg:
         args.extend(("--sketch-cfg", str(strength)))
-    Command("synth-setter-sketch")(*args, _out=sys.stdout, _err=sys.stderr)
+    Command("synth-setter-sketch")(
+        *args,
+        _out=sys.stdout,
+        _err=sys.stderr,
+        _timeout=timeout_seconds,
+    )
 
 
 def _collect_metrics(
     output_dir: Path,
     pair_count: int,
     grid: Sequence[tuple[float, float]],
+    base_seed: int,
 ) -> list[dict[str, _Scalar]]:
     """Collect every pair/arm metrics row.
 
     :param output_dir: Suite workspace.
     :param pair_count: Number of rendered pairs.
     :param grid: Ordered CFG arms.
+    :param base_seed: First pair seed.
     :returns: Long-form metric rows.
     :raises ValueError: An arm has no unique metrics row.
     """
@@ -368,7 +473,12 @@ def _collect_metrics(
             metrics_rows = _read_csv(metrics_path)
             if len(metrics_rows) != 1:
                 raise ValueError(f"expected one metrics row in {metrics_path}")
-            rows.append({"pair_index": pair_index, "arm": arm, **metrics_rows[0]})
+            metrics = _ArmMetrics.model_validate_strings(metrics_rows[0], strict=True)
+            if metrics.content_cfg != content_strength or metrics.sketch_cfg != sketch_strength:
+                raise ValueError(f"CFG provenance mismatch in {metrics_path}")
+            if metrics.seed != base_seed + pair_index:
+                raise ValueError(f"seed provenance mismatch in {metrics_path}")
+            rows.append({"pair_index": pair_index, "arm": arm, **metrics.model_dump()})
     return rows
 
 
@@ -396,6 +506,28 @@ def _require_fresh_run(output_dir: Path, destination: str) -> None:
         raise FileExistsError(f"R2 destination is not empty: {destination}")
 
 
+def _claim_destination(destination: str) -> None:
+    """Atomically reserve an empty R2 run prefix with an immutable token.
+
+    :param destination: Exact R2 run prefix.
+    """
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as claim:
+        claim.write(f"{uuid4()}\n")
+        claim.flush()
+        subprocess.run(  # noqa: S603 — fixed rclone command without a shell
+            [  # noqa: S607 — rclone resolves from the operator environment
+                "rclone",
+                "copyto",
+                "--checksum",
+                "--immutable",
+                claim.name,
+                r2_io.to_rclone_path(f"{destination}/.run-claim"),
+            ],
+            check=True,
+            timeout=60,
+        )
+
+
 def _parse_args() -> argparse.Namespace:
     """Parse suite inputs and publication destination.
 
@@ -410,6 +542,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--sketch-cfg", type=float, action="append")
     parser.add_argument("--sample-steps", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--pair-timeout-seconds", type=int, default=3600)
     parser.add_argument("--count", type=int, default=SUITE_SIZE, choices=range(1, SUITE_SIZE + 1))
     parser.add_argument("--destination", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -443,6 +576,8 @@ def main() -> None:
         raise ValueError(f"destination must use r2://, got {args.destination}")
     if args.sample_steps <= 0:
         raise ValueError("sample steps must be positive")
+    if args.pair_timeout_seconds <= 0:
+        raise ValueError("pair timeout must be positive")
     _validate_seed_range(args.seed, args.count)
     content_cfg = tuple(args.content_cfg or DEFAULT_CFG_STRENGTHS)
     sketch_cfg = tuple(args.sketch_cfg or DEFAULT_CFG_STRENGTHS)
@@ -452,6 +587,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     r2_io.ensure_r2_env_loaded()
     _require_fresh_run(output_dir, destination)
+    _claim_destination(destination)
 
     render = load_render_config()
     pairs = _materialize_pairs(output_dir, args.count, render)
@@ -472,10 +608,11 @@ def main() -> None:
             sample_steps=args.sample_steps,
             seed=args.seed + int(pair["pair_index"]),
             device=args.device,
+            timeout_seconds=args.pair_timeout_seconds,
         )
         click.echo(f"[{index:03d}/{len(pairs):03d}] pair {int(pair['pair_index']):03d}")
 
-    paired_rows = _collect_metrics(output_dir, len(pairs), grid)
+    paired_rows = _collect_metrics(output_dir, len(pairs), grid, args.seed)
     paired_path = output_dir / "paired_results.csv"
     aggregate_path = output_dir / "aggregate_comparison.csv"
     manifest_path = output_dir / "comparison_manifest.csv"

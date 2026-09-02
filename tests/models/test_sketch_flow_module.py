@@ -462,6 +462,20 @@ def test_sample_batch_negative_guidance_raises() -> None:
         )
 
 
+def test_sample_batch_negative_content_guidance_raises() -> None:
+    """Content guidance cannot reverse its conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="content_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=-1.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
 def test_sample_batch_nonpositive_steps_raises() -> None:
     """Sampling requires at least one integration step."""
     model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
