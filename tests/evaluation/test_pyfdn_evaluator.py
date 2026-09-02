@@ -153,6 +153,26 @@ def test_evaluate_pyfdn_row_unstable_exact_prediction_counts_render_invalid(
     assert result.error is not None and "finite" in result.error
 
 
+def test_pyfdn_evaluation_existing_audio_artifacts_raise_before_evaluation(
+    source_file: tuple[Path, str], tmp_path: Path
+) -> None:
+    """A reused output directory cannot mix stale audio with current row metrics.
+
+    :param source_file: Checksum-pinned production-geometry source audio.
+    :param tmp_path: Isolated evaluation output directory.
+    """
+    path, checksum = source_file
+    stale_audio = tmp_path / "audio" / "sample_0"
+    stale_audio.mkdir(parents=True)
+    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(30))
+    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
+    evaluator = PyFDNEvaluation(PyFDNRenderer(path, checksum), tmp_path)
+
+    with pytest.raises(ValueError, match="already contains pyFDN evaluation artifacts"):
+        evaluator.evaluate_batch(target[None, :], target[None, :])
+
+
 def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
     source_file: tuple[Path, str], tmp_path: Path
 ) -> None:
@@ -165,10 +185,18 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(31))
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
     target = PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(encoded).astype(np.float32)
+    successful = target.copy()
+    successful[88] *= 0.5
     predictions = np.stack(
-        [target, np.full(91, np.nan, dtype=np.float32), np.ones(91, dtype=np.float32)]
+        [successful, np.full(91, np.nan, dtype=np.float32), np.ones(91, dtype=np.float32)]
     )
     targets = np.stack([target, target, target])
+    expected = evaluate_pyfdn_row(
+        successful,
+        target,
+        renderer=PyFDNRenderer(path, checksum),
+    )
+    assert expected.status == "finite_render"
     evaluator = PyFDNEvaluation(PyFDNRenderer(path, checksum), tmp_path)
 
     with np.errstate(over="ignore", invalid="ignore"):
@@ -186,6 +214,13 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
     assert metrics["pyfdn/parameter_finite_count"] == 2.0
     assert "pyfdn/parameter_mse/coordinate/delays.0" in metrics
     assert "pyfdn/parameter_mse/field/post_delay_rt_controls" in metrics
+    expected_direct_mse = (
+        float(successful[88] - target[88]) ** 2 + float(1.0 - target[88]) ** 2
+    ) / 2.0
+    assert metrics["pyfdn/parameter_mse/coordinate/direct_matrix.0.0"] == pytest.approx(
+        expected_direct_mse
+    )
+    assert metrics["pyfdn/parameter_mse/field/direct_matrix"] == pytest.approx(expected_direct_mse)
 
     rows = pd.read_csv(tmp_path / "metrics" / "metrics.csv")
     assert rows["status"].tolist() == ["finite_render", "decode_invalid", "render_invalid"]
@@ -195,4 +230,15 @@ def test_pyfdn_evaluation_accounts_rows_and_writes_native_artifacts(
     target_path = tmp_path / "audio" / "sample_0" / "target.wav"
     assert sf.info(pred_path).subtype == "FLOAT"
     assert sf.info(target_path).subtype == "FLOAT"
+    pred_audio, _ = sf.read(pred_path, dtype="float32", always_2d=True)
+    target_audio, _ = sf.read(target_path, dtype="float32", always_2d=True)
+    assert expected.predicted_audio is not None
+    np.testing.assert_array_equal(pred_audio.T, expected.predicted_audio)
+    np.testing.assert_array_equal(target_audio.T, expected.target_audio)
+    params_csv = pd.read_csv(tmp_path / "audio" / "sample_0" / "params.csv")
+    np.testing.assert_allclose(
+        params_csv["pred_model"].to_numpy(), successful, rtol=0.0, atol=3e-8
+    )
+    np.testing.assert_allclose(params_csv["target_model"].to_numpy(), target, rtol=0.0, atol=3e-8)
+    assert metrics["pyfdn/audio/mss_std"] == 0.0
     assert not list(tmp_path.rglob("*preview*"))

@@ -63,3 +63,4 @@ class FixedFlowNoise(Callback):
         """
         del trainer, pl_module, batch_idx, dataloader_idx
         self._set_batch_noise(batch)
+        torch.manual_seed(self.seed)

@@ -304,14 +304,34 @@ class PyFDNEvaluation(Callback):
             raise ValueError("pyFDN evaluation artifacts require trainer.world_size == 1")
         self._reset()
 
+    def _require_fresh_output(self) -> None:
+        """Reject artifacts owned by a prior evaluator run.
+
+        :raises ValueError: Native audio or metric outputs already exist.
+        """
+        owned_paths = (
+            self.output_dir / "audio",
+            self.output_dir / "metrics" / "metrics.csv",
+            self.output_dir / "metrics" / "aggregated_metrics.csv",
+            self.output_dir / "metrics" / "parameter_metrics.csv",
+        )
+        existing = [path for path in owned_paths if path.exists()]
+        if existing:
+            raise ValueError(
+                "output directory already contains pyFDN evaluation artifacts: "
+                + ", ".join(str(path) for path in existing)
+            )
+
     def evaluate_batch(self, predictions: np.ndarray, targets: np.ndarray) -> None:
         """Evaluate and persist one ordered batch of model-space rows.
 
         :param predictions: Float32 prediction matrix shaped ``(batch, 91)``.
         :param targets: Float32 target matrix with the same shape.
         :raises TypeError: Either matrix is not float32.
-        :raises ValueError: Batch shapes violate the width-91 contract.
+        :raises ValueError: Batch shapes violate the width-91 contract or outputs already exist.
         """
+        if not self.rows:
+            self._require_fresh_output()
         expected_width = PYFDN_N8_MONO_PARAM_SPEC.encoded_width
         if predictions.dtype != np.float32 or targets.dtype != np.float32:
             raise TypeError("pyFDN prediction and target batches must be float32")

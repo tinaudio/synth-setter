@@ -836,17 +836,21 @@ class VSTFlowMatchingModule(LightningModule):
         :returns: Mean weighted velocity-field error over rows and coordinates.
         """
         params = batch["params"]
-        noise = batch["noise"]
+        noise = batch.get("noise")
+        if noise is None:
+            noise = torch.randn_like(params)
         conditioning = self.encoder(self._get_conditioning_from_batch(batch))
         control_branches = self._control_token_branches_from_batch(batch)
-        control_tokens = None if control_branches is None else control_branches.conditional
         t = self._sample_time(params.shape[0], params.device)
         x_t = self._sample_probability_path(noise, params, t)
         target = self._evaluate_target_field(noise, params, x_t, t)
-        if control_tokens is None:
-            prediction = self.vector_field(x_t, t, conditioning)
-        else:
-            prediction = self.vector_field(x_t, t, conditioning, control_tokens=control_tokens)
+        fully_conditioned = self._velocity_field(
+            conditioning,
+            1.0,
+            control_branches,
+            sketch_cfg_strength=1.0,
+        )
+        prediction = fully_conditioned(x_t, t)
         row_loss = (prediction - target).square().mean(dim=-1)
         return (row_loss * self._weight_time(t).squeeze(-1)).mean()
 
@@ -854,7 +858,7 @@ class VSTFlowMatchingModule(LightningModule):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,
-            batch["noise"],
+            torch.randn_like(batch["params"]),
             self.hparams.test_sample_steps,
             self.hparams.test_cfg_strength,
             sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,

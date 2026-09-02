@@ -32,6 +32,9 @@ jobs:
           - name: evaluation-metrics
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*
+          - name: evaluation-pyfdn
+            patterns:
+              - synth_setter.evaluation.pyfdn_evaluator.*
           - name: evaluation-predict-misc
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x_[!_r]*
