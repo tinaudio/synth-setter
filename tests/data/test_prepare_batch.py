@@ -560,14 +560,48 @@ def test_prepare_batch_normalizes_mel_only_when_mean_and_std_set(
     assert torch.allclose(out, torch.full_like(out, expected))
 
 
-def test_prepare_batch_param_jitter_draws_bounded_uniform_offsets() -> None:
-    """Parameter jitter adds seeded uniform offsets and clips to the encoded domain."""
+def test_prepare_batch_param_jitter_draws_bounded_clipped_offsets() -> None:
+    """Parameter jitter stays within its offset and encoded-domain bounds."""
     raw = _make_raw(read_mel=False)
-    raw["param_array"] = np.array(
-        [[0.0, 0.5, 1.0], [0.25, 0.75, 0.9]], dtype=np.float32
+    raw["param_array"] = np.tile(
+        np.array([[0.0, 0.5, 1.0]], dtype=np.float32), (32, 1)
     )
+    source = torch.from_numpy(raw["param_array"])
 
     params = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=1.0,
+        )["params"]
+    )
+
+    assert torch.any(params != source)
+    assert torch.all(torch.abs(params - source) <= 1.0)
+    assert params.min() == 0.0
+    assert params.max() == 1.0
+
+
+def test_prepare_batch_param_jitter_same_seed_repeats_offsets() -> None:
+    """The injected generator controls the jitter stream reproducibly."""
+    raw = _make_raw(read_mel=False)
+    generator = torch.Generator().manual_seed(17)
+    first = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=generator,
+            param_jitter_amount=0.01,
+        )["params"]
+    )
+    second = _unwrap(
         prepare_batch(
             raw,
             mean=None,
@@ -579,22 +613,26 @@ def test_prepare_batch_param_jitter_draws_bounded_uniform_offsets() -> None:
         )["params"]
     )
 
-    expected = torch.tensor(
-        [
-            [0.0, 0.5007022023200989, 1.0],
-            [0.24247726798057556, 0.7405864000320435, 0.9009879231452942],
-        ],
-        dtype=torch.float32,
-    )
-    torch.testing.assert_close(params, expected, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(first, second, atol=0.0, rtol=0.0)
 
 
 def test_prepare_batch_param_jitter_rescales_after_clipping() -> None:
-    """Jittered encoded values remain within the model's signed-unit domain."""
+    """Rescaling maps the same clipped jitter sample into the signed domain."""
     raw = _make_raw(read_mel=False)
     raw["param_array"] = np.array([[0.0, 0.5, 1.0]], dtype=np.float32)
+    encoded = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=0.01,
+        )["params"]
+    )
 
-    params = _unwrap(
+    rescaled = _unwrap(
         prepare_batch(
             raw,
             mean=None,
@@ -606,8 +644,7 @@ def test_prepare_batch_param_jitter_rescales_after_clipping() -> None:
         )["params"]
     )
 
-    expected = torch.tensor([[-1.0, 0.0014044046401978, 1.0]])
-    torch.testing.assert_close(params, expected, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(rescaled, encoded * 2 - 1, atol=0.0, rtol=0.0)
 
 
 def test_prepare_batch_rescale_toggle() -> None:

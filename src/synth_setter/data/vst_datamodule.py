@@ -100,13 +100,13 @@ def _sketch_range_validation_error(sketch: np.ndarray | None) -> str | None:
 
 
 def _validate_param_jitter_amount(amount: float) -> None:
-    """Validate jitter as a nonnegative finite encoded-domain distance.
+    """Validate jitter as a finite encoded-domain fraction.
 
     :param amount: Maximum absolute offset in the normalized ``[0, 1]`` domain.
-    :raises ValueError: If ``amount`` is negative or non-finite.
+    :raises ValueError: If ``amount`` is outside ``[0, 1]``.
     """
-    if not isfinite(amount) or amount < 0:
-        raise ValueError("param_jitter_amount must be finite and nonnegative")
+    if not isfinite(amount) or not 0 <= amount <= 1:
+        raise ValueError("param_jitter_amount must be within [0, 1]")
 
 
 def prepare_batch(

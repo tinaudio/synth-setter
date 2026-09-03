@@ -83,6 +83,7 @@ from tests.helpers.eval_fakes import (
 )
 from tests.helpers.generic_launcher import run_generic_launcher_command
 from tests.helpers.noise_capture import NoiseCaptureCallback
+from tests.helpers.param_capture import ParamCaptureCallback
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
@@ -1418,6 +1419,36 @@ def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
     assert logger.used_artifacts == [
         "data-surge-simple-lance-440k-20k-20k:surge-simple-lance-440k-20k-20k-20260706T005448315Z"
     ]
+
+
+def test_train_param_jitter_changes_composed_training_targets(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """A Hydra-configured jitter override changes targets consumed by ``train``.
+
+    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    """
+    HydraConfig().set_config(cfg_train_lance)
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.seed = 1234
+        cfg_train_lance.callbacks.param_capture = {
+            "_target_": "tests.helpers.param_capture.ParamCaptureCallback"
+        }
+
+    runs: list[torch.Tensor] = []
+    for amount in (0.0, 0.1):
+        with open_dict(cfg_train_lance):
+            cfg_train_lance.datamodule.param_jitter_amount = amount
+        ParamCaptureCallback.captured.clear()
+        train(cfg_train_lance)
+        assert ParamCaptureCallback.captured, "callback captured no training batches"
+        runs.append(ParamCaptureCallback.captured[0])
+
+    baseline, jittered = runs
+    assert torch.any(jittered != baseline)
+    assert torch.all(torch.abs(jittered - baseline) <= 0.2)
+    assert jittered.min() >= -1.0
+    assert jittered.max() <= 1.0
 
 
 def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:

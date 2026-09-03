@@ -845,7 +845,7 @@ class TestLanceMapDataModuleFlows:
         assert not np.array_equal(train_epoch[train_order], train_source[source_order])
         np.testing.assert_array_equal(val_epoch, val_source)
 
-    @pytest.mark.parametrize("amount", [-0.001, float("inf"), float("nan")])
+    @pytest.mark.parametrize("amount", [-0.001, 1.001, 1e100, float("inf"), float("nan")])
     def test_param_jitter_invalid_amount_raises_value_error(
         self, dataset_root: Path, amount: float
     ) -> None:
