@@ -3,18 +3,68 @@ name: Pi Repo Review (Full)
 "on":
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
 
 concurrency:
-  group: pi-repo-review-full-${{ github.event.pull_request.number }}
+  group: >-
+    pi-repo-review-full-${{ github.event.pull_request.number ||
+    github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
-  repo-review-full:
+  authorize-review:
     if: >-
-      ${{ github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login == 'ktinubu' &&
-      github.actor == 'ktinubu' &&
-      github.triggering_actor == 'ktinubu' }}
+      ${{
+        (github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login == 'ktinubu' &&
+          github.actor == 'ktinubu' &&
+          github.triggering_actor == 'ktinubu') ||
+        (github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          github.event.issue.state == 'open' &&
+          github.event.comment.user.login == 'ktinubu' &&
+          github.actor == 'ktinubu' &&
+          github.triggering_actor == 'ktinubu' &&
+          contains(github.event.comment.body, '@github-actions review'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_review: ${{ steps.limit.outputs.should_review }}
+    steps:
+      - name: Checkout authorization policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Enforce automatic review limit
+        id: limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_MANUAL: ${{ github.event_name == 'issue_comment' }}
+          PR_NUMBER: >-
+            ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          if [[ "${IS_MANUAL}" == "true" ]]; then
+            should_review=true
+          else
+            reviews=$(gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+              | jq 'add')
+            should_review=$(python agent/_shared/should_run_pi_review.py <<< "${reviews}")
+          fi
+          echo "should_review=${should_review}" >> "${GITHUB_OUTPUT}"
+
+  repo-review-full:
+    needs: authorize-review
+    if: ${{ needs.authorize-review.outputs.should_review == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
@@ -78,7 +128,8 @@ jobs:
           PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
           PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS: "900"
           PI_REVIEW_SKILLS_ROOT: ${{ github.workspace }}/.review-skills/codex/synth-setter-skills
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: >-
+            ${{ github.event.pull_request.number || github.event.issue.number }}
         run: bash agent/_shared/run_pi_review.sh repo-review-full --target "${PR_NUMBER}"
 
       - name: Upload Pi review audit
