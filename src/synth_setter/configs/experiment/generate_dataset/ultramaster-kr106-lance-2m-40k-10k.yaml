@@ -1,9 +1,5 @@
 # @package _global_
 
-# Full-scale Ultramaster KR-106 Lance dataset: 2.05M total samples → 820 shards
-# at samples_per_shard=2500, written to the experiments bucket.
-# Inherited split masters keep rows stable across dataset sizes and shard layouts.
-
 defaults:
   - override /datamodule: vst
   - override /synth: ultramaster_kr106
