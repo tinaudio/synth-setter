@@ -423,26 +423,28 @@ def test_pyfdn_renderer_rejects_installed_version_mismatch() -> None:
 
 
 def test_pyfdn_renderer_instances_hold_independent_immutable_canonical_bytes() -> None:
-    """Renderer instances use equal source bytes without mutable shared array state."""
-    first = PyFDNRenderer()
-    second = PyFDNRenderer()
+    """Chirp renderer instances do not share mutable source array state."""
+    first = PyFDNRenderer(excitation="chirp")
+    second = PyFDNRenderer(excitation="chirp")
 
+    assert first._source_audio is not None
+    assert second._source_audio is not None
     np.testing.assert_array_equal(first._source_audio, second._source_audio)
     assert not np.shares_memory(first._source_audio, second._source_audio)
     assert not first._source_audio.flags.writeable
     assert not second._source_audio.flags.writeable
 
 
-def test_pyfdn_renderer_exposes_provenance_for_its_canonical_source() -> None:
-    """Renderer provenance identifies the immutable bytes used for processing."""
-    renderer = PyFDNRenderer()
+def test_pyfdn_renderer_exposes_provenance_for_custom_chirp() -> None:
+    """Chirp provenance identifies the immutable bytes used for processing."""
+    renderer = PyFDNRenderer(excitation="chirp")
 
     assert renderer.source_provenance == canonical_pyfdn_source_provenance()
 
 
 def test_pyfdn_renderer_source_provenance_caller_mutation_is_isolated() -> None:
     """Caller annotations cannot alter provenance retained by the renderer."""
-    renderer = PyFDNRenderer()
+    renderer = PyFDNRenderer(excitation="chirp")
     provenance = renderer.source_provenance
 
     provenance["identity"] = "caller-annotation"
@@ -472,7 +474,7 @@ def test_pyfdn_renderer_generates_source_once_for_repeated_renders(
         "generate_canonical_pyfdn_source",
         count_generation,
     )
-    renderer = PyFDNRenderer()
+    renderer = PyFDNRenderer(excitation="chirp")
 
     renderer.render(fdn_params)
     renderer.render(fdn_params)
@@ -524,6 +526,32 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
     assert not np.array_equal(changed_audio, baseline_audio)
 
 
+def test_pyfdn_renderer_default_returns_impulse_response(
+    fdn_params: ParameterValues,
+) -> None:
+    """Default rendering exposes the FDN response to a unit impulse.
+
+    :param fdn_params: Valid native patch whose first delayed output starts at frame 400.
+    """
+    audio = PyFDNRenderer().render(fdn_params)
+
+    assert audio[0, 0] == pytest.approx(0.5)
+    np.testing.assert_array_equal(audio[0, 1:400], np.zeros(399, dtype=np.float32))
+
+
+def test_pyfdn_renderer_custom_chirp_changes_excitation(
+    fdn_params: ParameterValues,
+) -> None:
+    """The historical chirp render remains available only by explicit selection.
+
+    :param fdn_params: Valid native patch.
+    """
+    impulse_response = PyFDNRenderer().render(fdn_params)
+    chirp_response = PyFDNRenderer(excitation="chirp").render(fdn_params)
+
+    assert not np.array_equal(chirp_response, impulse_response)
+
+
 def test_pyfdn_renderer_real_process_has_exact_output_contract(
     fdn_params: ParameterValues,
 ) -> None:
@@ -531,9 +559,7 @@ def test_pyfdn_renderer_real_process_has_exact_output_contract(
 
     :param fdn_params: Valid native patch.
     """
-    renderer = PyFDNRenderer()
-
-    audio = renderer.render(fdn_params)
+    audio = PyFDNRenderer().render(fdn_params)
 
     assert audio.shape == (1, 176_400)
     assert audio.dtype == np.float32

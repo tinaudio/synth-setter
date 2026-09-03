@@ -1336,9 +1336,10 @@ exact compiled address. Faust render groups recompile per row so DSP and voice
 state cannot cross sample boundaries. External Faust files and URIs are not
 supported. `pyfdn` uses the same `AudioRenderer` and accepted-sample path with
 fixed zero-valued MIDI compatibility inputs. It samples complete 91-coordinate
-patches and renders a pinned canonical 44.1 kHz mono chirp whose byte digest
-participates in the shard render-contract digest. Training reads finalized
-Lance shards; the former on-demand pyFDN datamodule is removed.
+patches and renders native four-second, 44.1 kHz mono impulse responses by
+default. `pyfdn_excitation: chirp` opts into the canonical chirp, whose byte
+digest participates in the shard render-contract digest. Training reads
+finalized Lance shards; the former on-demand pyFDN datamodule is removed.
 
 **Seed derivation:** `DatasetSpec.train_val_test_seeds` supplies independent
 split masters. Each `ShardSpec` pairs its split master with a split-local

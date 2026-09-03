@@ -44,6 +44,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(tmp_path: Path) -> No
             synth_version="0.4.2",
         ),
         renderer_backend="pyfdn",
+        pyfdn_excitation="impulse",
         sample_rate=44_100,
         channels=1,
         velocity=0,

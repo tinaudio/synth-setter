@@ -1331,6 +1331,15 @@ def test_surge_experiment_resolves_identity_with_audio_datamodule(
     assert OmegaConf.select(cfg, spec_path) == "surge_xt"
 
 
+def test_pyfdn_flow_resolves_lance_audio_geometry() -> None:
+    """The offline pyFDN recipe fully resolves its waveform frontend geometry."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow"])
+
+    assert cfg.datamodule._target_.endswith("LanceVSTDataModule")
+    assert cfg.model.encoder.frontend.in_dim == 176_400
+    assert cfg.model.encoder.frontend.sample_rate == 44_100
+
+
 def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:
     """The shipped pyFDN identity field exposes CLI-forced skew to ``extras``."""
     cfg = _compose(

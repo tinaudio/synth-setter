@@ -47,6 +47,7 @@ from synth_setter.renderer_backend import (
     PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
+    PyFDNExcitation,
     RendererBackend,
 )
 from synth_setter.synth_spec import SynthSpec
@@ -254,6 +255,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         description=(
             "Audio host used to render each sample; Faust compiles checked-in source "
             "through DawDreamer and torchsynth renders in-process."
+        ),
+    )
+    pyfdn_excitation: PyFDNExcitation | None = Field(
+        default=None,
+        description=(
+            "Input used by pyFDN: its impulse response by default, or the canonical "
+            "chirp when explicitly selected."
         ),
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
@@ -475,6 +483,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         if self.renderer_backend != "pyfdn":
             if pyfdn_identity or self.plugin_path == PYFDN_PLUGIN_NAME:
                 raise ValueError("pyfdn_n8_mono requires renderer_backend='pyfdn'")
+            if self.pyfdn_excitation is not None:
+                raise ValueError("pyfdn_excitation requires renderer_backend='pyfdn'")
             return self
         if self.synth.name != "pyfdn_n8_mono" or self.param_spec_name != "pyfdn_n8_mono":
             raise ValueError("pyfdn requires the registered pyfdn_n8_mono identity")
@@ -618,11 +628,15 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         contract = self.model_dump(
             mode="json",
             exclude={"base_seed", "retain_local_shards", "sample_offset"},
+            exclude_none=True,
         )
         if self.renderer_backend == "pyfdn":
-            contract["canonical_source_sha256"] = (
-                renderer_backend_contract.PYFDN_CANONICAL_SOURCE_SHA256
-            )
+            excitation = self.pyfdn_excitation or "impulse"
+            contract["pyfdn_excitation"] = excitation
+            if excitation == "chirp":
+                contract["canonical_source_sha256"] = (
+                    renderer_backend_contract.PYFDN_CANONICAL_SOURCE_SHA256
+                )
         canonical_contract = json.dumps(contract, sort_keys=True, separators=(",", ":"))
         return ShardMetadata(
             velocity=self.velocity,

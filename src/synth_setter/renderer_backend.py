@@ -8,6 +8,7 @@ without pulling ``synth_setter.data.vst`` at import time.
 from pathlib import Path
 from typing import Literal
 
+type PyFDNExcitation = Literal["chirp", "impulse"]
 type RendererBackend = Literal[
     "pedalboard",
     "pyfdn",

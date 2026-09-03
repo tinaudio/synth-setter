@@ -67,7 +67,8 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    backend, producing Lance shards uploaded to R2. Each shard contains audio
    waveforms, mel spectrograms, and ground-truth parameter arrays. Offline pyFDN
    rows deterministically retry complete patches after clipped or quiet renders;
-   the canonical chirp is generated in-process, so R2 is destination-only.
+   native impulse responses are the default, with an in-process canonical chirp
+   available by explicit configuration, so R2 is destination-only.
    Workers are fully parallel with no shared state.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
