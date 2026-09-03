@@ -1,0 +1,178 @@
+"""Contracts for the full Ultramaster KR-106 parameter surface."""
+
+from __future__ import annotations
+
+import platform
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from synth_setter.data.vst.param_spec import CategoricalParameter
+from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_PLUGIN_PATH = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
+_EXPECTED_SYNTH_PARAMS = (
+    "program",
+    "adsr_mode",
+    "bender_dco",
+    "bender_vcf",
+    "bender_lfo",
+    "arp_rate",
+    "lfo_rate",
+    "lfo_delay",
+    "dco_lfo",
+    "dco_pwm",
+    "dco_sub",
+    "dco_noise",
+    "hpf",
+    "vcf_freq",
+    "vcf_res",
+    "vcf_env",
+    "vcf_lfo",
+    "vcf_kbd",
+    "volume",
+    "attack",
+    "decay",
+    "sustain",
+    "release",
+    "transpose",
+    "hold",
+    "arpeggio",
+    "pulse",
+    "saw",
+    "sub_sw",
+    "chorus_off",
+    "chorus_i",
+    "chorus_ii",
+    "octave",
+    "arp_mode",
+    "arp_range",
+    "lfo_mode",
+    "pwm_mode",
+    "vcf_env_inv",
+    "vca_mode",
+    "bender",
+    "tuning",
+    "power",
+    "porta_mode",
+    "porta_rate",
+    "transpose_offset",
+    "master_volume",
+    "voices",
+    "vcf_oversample",
+    "ignore_velocity",
+    "arp_limit_kbd",
+    "arp_sync_host",
+    "lfo_sync_host",
+    "mono_retrigger",
+    "send_midi_sysex",
+    "arp_quantize",
+    "lfo_quantize",
+    "oscillator_mode",
+    "bypass",
+)
+
+
+def test_ultramaster_kr106_spec_covers_every_host_parameter() -> None:
+    """The registered spec exposes the complete v2.5.13 automatable surface."""
+    assert tuple(param_specs["ultramaster_kr106"].synth_param_names) == _EXPECTED_SYNTH_PARAMS
+
+
+def test_ultramaster_kr106_spec_has_expected_full_width() -> None:
+    """All controls plus note conditioning occupy the expected vector width."""
+    spec = param_specs["ultramaster_kr106"]
+
+    assert len(spec.synth_params) == 58
+    assert spec.synth_param_length == 243
+    assert spec.note_param_length == 3
+    assert spec.encoded_width == 246
+
+
+def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
+    """A deterministic sample survives encoding and decoding."""
+    spec = param_specs["ultramaster_kr106"]
+    synth, note = spec.sample(np.random.default_rng(106))
+
+    encoded = spec.encode(synth, note)
+    decoded_synth, decoded_note = spec.decode(encoded)
+
+    assert encoded.dtype == np.float32
+    assert encoded.shape == (spec.encoded_width,)
+    assert np.isfinite(encoded).all()
+    assert ((0.0 <= encoded) & (encoded <= 1.0)).all()
+    assert decoded_synth == pytest.approx(synth, abs=1e-6)
+    assert decoded_note["pitch"] == note["pitch"]
+    assert decoded_note["note_start_and_end"] == pytest.approx(
+        note["note_start_and_end"], abs=1e-6
+    )
+
+
+def test_ultramaster_kr106_command_and_silence_states_are_not_sampled() -> None:
+    """Dataset sampling excludes modes that cannot produce valid single-note audio."""
+    categorical_params = {
+        param.name: param
+        for param in param_specs["ultramaster_kr106"].synth_params
+        if isinstance(param, CategoricalParameter)
+    }
+
+    assert categorical_params["transpose"].weights == [1.0, 0.0]
+    assert categorical_params["power"].weights == [0.0, 1.0]
+    assert categorical_params["bypass"].weights == [1.0, 0.0]
+
+
+def test_ultramaster_kr106_preset_is_committed() -> None:
+    """The registered baseline resolves to a captured plugin state."""
+    preset = _REPO_ROOT / plugin_state_paths["ultramaster_kr106"]
+    assert preset.is_file()
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_ultramaster_kr106_live_plugin_matches_registered_surface() -> None:
+    """The real bundled VST and committed specification expose identical names."""
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _PLUGIN_PATH.is_dir(), f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}"
+
+    from synth_setter.data.vst.core import load_plugin, load_preset
+
+    plugin = load_plugin(str(_PLUGIN_PATH))
+    load_preset(plugin, str(_REPO_ROOT / plugin_state_paths["ultramaster_kr106"]))
+
+    assert len(plugin.parameters) == len(_EXPECTED_SYNTH_PARAMS)  # type: ignore[attr-defined]
+    assert set(plugin.parameters) == set(_EXPECTED_SYNTH_PARAMS)  # type: ignore[attr-defined]
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_ultramaster_kr106_categorical_params_cover_every_host_setting() -> None:
+    """Every discrete host value has an exact renderer-native value in the spec."""
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _PLUGIN_PATH.is_dir(), f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}"
+
+    from synth_setter.data.vst.core import load_plugin
+
+    plugin = load_plugin(str(_PLUGIN_PATH))
+    spec = param_specs["ultramaster_kr106"]
+    categorical_params = {
+        param.name: param
+        for param in spec.synth_params
+        if isinstance(param, CategoricalParameter)
+    }
+
+    for name, param in categorical_params.items():
+        host_param = plugin.parameters[name]  # type: ignore[attr-defined]
+        expected_labels = set()
+        for value in host_param.valid_values:
+            host_param.raw_value = host_param.get_raw_value_for(value)
+            expected_labels.add(host_param.string_value)
+
+        reached_labels = set()
+        for raw_value in param.raw_values:
+            host_param.raw_value = raw_value
+            reached_labels.add(host_param.string_value)
+
+        assert reached_labels == expected_labels, name

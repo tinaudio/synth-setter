@@ -1,0 +1,6 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "ultramaster_kr106"
+param_spec_name: "ultramaster_kr106"
+plugin_path: "plugins/Ultramaster KR-106.vst3"
+plugin_state_path: "presets/ultramaster_kr106-base.vstpreset"
+synth_version: "2.5.13"
