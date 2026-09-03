@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- Default cached flow encoders to one conditioning output per vector-field layer; models without a
-  vector field retain pooled output, and existing pooled checkpoints can opt out with
-  `model.encoder.n_conditioning_outputs=1`.
+- Default cached and online embedding-conditioning encoders to one output per vector-field layer;
+  models without a vector field retain pooled output, and existing pooled checkpoints can opt out
+  by setting their encoder or encoder-head `n_conditioning_outputs` to `1`.
 - Add per-field-layer conditioning slots to `EmbeddingPool` and `VectorProjection`, matching the
   slot count AST encoders already emit.
 

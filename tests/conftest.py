@@ -687,7 +687,6 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.encoder.backbone.checkpoint_sha256 = None
         cfg.model.encoder.backbone.backbone_config = tiny_clap_config
         cfg.model.encoder.head.input_dim = 8
-        cfg.model.encoder.head.n_conditioning_outputs = 2
         cfg.model.vector_field.num_layers = 2
     return cfg
 
@@ -725,7 +724,6 @@ def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.encoder.head.embed_dim = TINY_SAME_LATENT_DIM
         cfg.model.encoder.head.max_seq_len = 8
         cfg.model.encoder.head.num_heads = 1
-        cfg.model.encoder.head.n_conditioning_outputs = 2
         cfg.model.vector_field.num_layers = 2
     return cfg
 
