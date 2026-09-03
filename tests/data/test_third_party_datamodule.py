@@ -26,7 +26,11 @@ from synth_setter.conditioning import (
     SKETCH_PITCH_SLICE,
     SketchControls,
 )
-from synth_setter.data.third_party_datamodule import ThirdPartyAudioDataModule, decode_clip
+from synth_setter.data.third_party_datamodule import (
+    AudioDecodeError,
+    ThirdPartyAudioDataModule,
+    decode_clip,
+)
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
 from tests.helpers.lance_fixtures import wav_bytes, write_blob_audio_corpus
 
@@ -903,6 +907,18 @@ def _wav(clip: np.ndarray, sample_rate: int = _SOURCE_SAMPLE_RATE) -> bytes:
     :returns: WAV container bytes.
     """
     return wav_bytes(clip, sample_rate)
+
+
+def test_decode_clip_unsupported_container_raises_audio_decode_error() -> None:
+    """Container failures remain distinguishable from render-contract failures."""
+    with pytest.raises(AudioDecodeError):
+        decode_clip(
+            b"not audio",
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            num_samples=_TARGET_SAMPLES,
+            amplitude_scale=1.0,
+        )
 
 
 def test_decode_clip_pads_short_audio_and_upmixes() -> None:

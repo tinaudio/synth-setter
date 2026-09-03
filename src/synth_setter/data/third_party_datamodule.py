@@ -51,6 +51,10 @@ _BLOB_EXTENSION_NAME = "lance.blob.v2"
 _PCM16_DECODE_FULL_SCALE = 32768.0 / 32767.0
 
 
+class AudioDecodeError(ValueError):
+    """Encoded audio cannot be opened or decoded by pedalboard."""
+
+
 def _is_blob_encoded(field: pa.Field) -> bool:
     """Return whether a column is readable through the blob API.
 
@@ -186,10 +190,14 @@ def decode_clip(
     :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
     :param amplitude_scale: Gain applied after length-pinning.
     :returns: ``(channels, num_samples)`` float32 audio.
+    :raises AudioDecodeError: The encoded container or codec cannot be decoded.
     :raises ValueError: Source or scaled samples are invalid, or channels mismatch.
     """
-    with AudioFile(io.BytesIO(data)) as source_handle:
-        source = source_handle.read(source_handle.frames)
+    try:
+        with AudioFile(io.BytesIO(data)) as source_handle:
+            source = source_handle.read(source_handle.frames)
+    except (RuntimeError, ValueError) as exc:
+        raise AudioDecodeError("pedalboard could not decode the audio container") from exc
     if not np.isfinite(source).all():
         raise ValueError("source audio contains non-finite samples")
     source_min = source.min(initial=0.0)
@@ -197,8 +205,11 @@ def decode_clip(
     if source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0:
         raise ValueError("source audio leaves [-1, 1]")
 
-    with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
-        audio = handle.read(handle.frames)
+    try:
+        with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
+            audio = handle.read(handle.frames)
+    except (RuntimeError, ValueError) as exc:
+        raise AudioDecodeError("pedalboard could not decode the audio container") from exc
     if audio.shape[0] == 1 < channels:
         audio = np.repeat(audio, channels, axis=0)
     elif audio.shape[0] != channels:

@@ -338,6 +338,159 @@ def test_rk4_step_integrates_two_argument_time_field() -> None:
     torch.testing.assert_close(result, torch.tensor([[1.1051708]]))
 
 
+def test_sample_batch_same_explicit_noise_returns_identical_predictions() -> None:
+    """Explicit noise makes repeated sketch sampling deterministic."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+
+    first = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+    second = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert first.shape == (_BATCH, _NUM_PARAMS)
+    assert first.dtype is torch.float32
+    assert torch.equal(first, second)
+    assert not first.requires_grad
+
+
+def test_sample_batch_guidance_and_sketch_controls_change_fixed_noise_output() -> None:
+    """The public sampler consumes both CFG axes and sketch-control values."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    model.vector_field = _BranchField()
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.children():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    noise = torch.zeros_like(batch["noise"])
+    baseline = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    content_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    sketch_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+    changed_batch = dict(batch)
+    changed_batch["sketch_ctrl"] = torch.zeros_like(batch["sketch_ctrl"])
+    changed_controls = model.sample_batch(
+        changed_batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+
+    branches = model._control_token_branches_from_batch(  # noqa: SLF001
+        cast(dict[str, torch.Tensor | None], batch)
+    )
+    assert branches is not None
+    sketch_delta = (branches.conditional - branches.unconditional).mean(dim=(1, 2)).unsqueeze(1)
+    torch.testing.assert_close(content_guided, baseline + 10.0)
+    torch.testing.assert_close(sketch_guided, baseline + sketch_delta.expand_as(baseline))
+    assert not torch.equal(sketch_guided, changed_controls)
+
+
+def test_sample_batch_wrong_noise_shape_raises() -> None:
+    """Explicit noise must provide one parameter vector per input row."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="noise shape"):
+        model.sample_batch(
+            batch,
+            noise=torch.zeros((_BATCH, _NUM_PARAMS + 1)),
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=2,
+        )
+
+
+def test_sample_batch_nonfinite_noise_raises() -> None:
+    """Explicit noise must contain finite flow states."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+    noise[0, 0] = float("nan")
+
+    with pytest.raises(ValueError, match="finite"):
+        model.sample_batch(
+            batch,
+            noise=noise,
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
+def test_sample_batch_negative_guidance_raises() -> None:
+    """Guidance cannot reverse a conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="sketch_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=-1.0,
+        )
+
+
+def test_sample_batch_negative_content_guidance_raises() -> None:
+    """Content guidance cannot reverse its conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="content_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=-1.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
+def test_sample_batch_nonpositive_steps_raises() -> None:
+    """Sampling requires at least one integration step."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=0,
+        )
+
+
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     """Sketch-configured training consumes ``sketch_ctrl`` and stays finite."""
     module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
