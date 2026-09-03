@@ -100,7 +100,7 @@ def test_param_spec_widths_match_known_values() -> None:
     assert param_specs["surge_simple"].encoded_width == 92
     assert param_specs["surge_4"].encoded_width == 7
     assert param_specs["obxf"].encoded_width == 187
-    assert param_specs["pyfdn_n8_mono_hadamard"].encoded_width == 27
+    assert param_specs["pyfdn_n8_mono_householder"].encoded_width == 27
 
 
 def test_resolve_param_spec_width_returns_encoded_width() -> None:

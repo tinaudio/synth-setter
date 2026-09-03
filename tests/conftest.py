@@ -790,8 +790,8 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_pyfdn_hadamard(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the fixed-Hadamard pyFDN dataset with temporary local paths.
+def cfg_dataset_pyfdn_householder(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the fixed-Householder pyFDN dataset with temporary local paths.
 
     :param tmp_path: Per-test output/work/log root.
     :yields DictConfig: PyFDN cfg with ``tmp_path``-pinned paths.
@@ -801,7 +801,7 @@ def cfg_dataset_pyfdn_hadamard(tmp_path: Path) -> Iterator[DictConfig]:
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
-                "synth=pyfdn_n8_mono_hadamard",
+                "synth=pyfdn_n8_mono_householder",
                 "render=pyfdn",
                 "render.gui_toggle_cadence=never",
             ],

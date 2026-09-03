@@ -259,30 +259,30 @@ def test_cfg_dataset_faust_resolves_production_renderer_contract(
 
 
 @pytest.mark.slow
-def test_from_hydra_pyfdn_hadamard_writes_consumable_shard(
-    cfg_dataset_pyfdn_hadamard: DictConfig,
+def test_from_hydra_pyfdn_householder_writes_consumable_shard(
+    cfg_dataset_pyfdn_householder: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The public entrypoint materializes the fixed-Hadamard 27-coordinate patch.
+    """The public entrypoint materializes the fixed-Householder 27-coordinate patch.
 
-    :param cfg_dataset_pyfdn_hadamard: Composed fixed-Hadamard pyFDN dataset config.
+    :param cfg_dataset_pyfdn_householder: Composed fixed-Householder pyFDN dataset config.
     :param fake_r2_remote: Local filesystem backing the real rclone transport.
     :param monkeypatch: Configures the single local worker process.
     :param tmp_path: Finalize workspace.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    with open_dict(cfg_dataset_pyfdn_hadamard):
-        cfg_dataset_pyfdn_hadamard.train_val_test_sizes = [2, 0, 0]
-        cfg_dataset_pyfdn_hadamard.render.samples_per_shard = 2
-        cfg_dataset_pyfdn_hadamard.render.min_loudness = -100.0
-        cfg_dataset_pyfdn_hadamard.r2.prefix = "fake-r2/pyfdn-hadamard-run/"
-        cfg_dataset_pyfdn_hadamard.logger = None
+    with open_dict(cfg_dataset_pyfdn_householder):
+        cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
+        cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
+        cfg_dataset_pyfdn_householder.r2.prefix = "fake-r2/pyfdn-householder-run/"
+        cfg_dataset_pyfdn_householder.logger = None
 
-    spec = spec_from_cfg(cfg_dataset_pyfdn_hadamard)
-    from_hydra(cfg_dataset_pyfdn_hadamard)
+    spec = spec_from_cfg(cfg_dataset_pyfdn_householder)
+    from_hydra(cfg_dataset_pyfdn_householder)
 
     assert spec.num_params == 27
     shard = spec.shards[0]

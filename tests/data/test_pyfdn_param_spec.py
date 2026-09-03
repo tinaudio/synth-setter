@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from synth_setter.data.pyfdn_param_spec import (
-    PYFDN_N8_MONO_HADAMARD_PARAM_SPEC,
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_PARAM_SPEC,
     OrthogonalMatrixParameter,
 )
@@ -107,19 +107,19 @@ _EXPECTED_COORDINATE_NAMES = (
 )
 
 
-_EXPECTED_HADAMARD_FEEDBACK = np.array(
+_EXPECTED_HOUSEHOLDER_FEEDBACK = np.array(
     [
-        [1, 1, 1, 1, 1, 1, 1, 1],
-        [1, -1, 1, -1, 1, -1, 1, -1],
-        [1, 1, -1, -1, 1, 1, -1, -1],
-        [1, -1, -1, 1, 1, -1, -1, 1],
-        [1, 1, 1, 1, -1, -1, -1, -1],
-        [1, -1, 1, -1, -1, 1, -1, 1],
-        [1, 1, -1, -1, -1, -1, 1, 1],
-        [1, -1, -1, 1, -1, 1, 1, -1],
+        [0.75, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25],
+        [-0.25, 0.75, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25],
+        [-0.25, -0.25, 0.75, -0.25, -0.25, -0.25, -0.25, -0.25],
+        [-0.25, -0.25, -0.25, 0.75, -0.25, -0.25, -0.25, -0.25],
+        [-0.25, -0.25, -0.25, -0.25, 0.75, -0.25, -0.25, -0.25],
+        [-0.25, -0.25, -0.25, -0.25, -0.25, 0.75, -0.25, -0.25],
+        [-0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0.75, -0.25],
+        [-0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0.75],
     ],
     dtype=np.float64,
-) / np.sqrt(8.0)
+)
 
 
 def test_orthogonal_matrix_parameter_nonsquare_shape_raises() -> None:
@@ -244,40 +244,44 @@ def test_pyfdn_spec_sampled_rt_controls_are_bounded_python_floats() -> None:
     assert 0.1 <= rt_nyquist <= 4.0
 
 
-def test_pyfdn_hadamard_spec_omits_feedback_from_model_coordinates() -> None:
+def test_pyfdn_householder_spec_omits_feedback_from_model_coordinates() -> None:
     """The fixed feedback matrix consumes no learned target coordinates."""
-    assert PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.encoded_width == 27
-    assert "feedback_matrix" not in PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.synth_param_names
+    assert PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_width == 27
+    assert "feedback_matrix" not in PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.synth_param_names
     assert all(
         not name.startswith("feedback_matrix.")
-        for name in PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.encoded_names
+        for name in PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_names
     )
 
 
-def test_pyfdn_hadamard_spec_samples_normalized_hadamard_feedback() -> None:
-    """Every patch uses the common orthogonal order-8 Hadamard feedback matrix."""
-    params, _ = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.sample(np.random.default_rng(123))
+def test_pyfdn_householder_spec_samples_all_ones_reflection() -> None:
+    """Every patch uses pyFDN's order-8 Householder reflection of the all-ones vector."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
 
-    np.testing.assert_array_equal(params["feedback_matrix"], _EXPECTED_HADAMARD_FEEDBACK)
+    np.testing.assert_allclose(
+        params["feedback_matrix"], _EXPECTED_HOUSEHOLDER_FEEDBACK, rtol=0.0, atol=1e-15
+    )
 
 
-def test_pyfdn_hadamard_spec_decode_restores_fixed_feedback() -> None:
+def test_pyfdn_householder_spec_decode_restores_fixed_feedback() -> None:
     """A learned row decodes to a complete renderer-native FDN patch."""
-    params, notes = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.sample(np.random.default_rng(123))
+    params, notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
 
-    decoded, _ = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.decode(
-        PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.encode(params, notes)
+    decoded, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.decode(
+        PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(params, notes)
     )
 
-    np.testing.assert_array_equal(decoded["feedback_matrix"], _EXPECTED_HADAMARD_FEEDBACK)
+    np.testing.assert_allclose(
+        decoded["feedback_matrix"], _EXPECTED_HOUSEHOLDER_FEEDBACK, rtol=0.0, atol=1e-15
+    )
 
 
-def test_pyfdn_hadamard_spec_encoding_round_trips_learned_fields() -> None:
+def test_pyfdn_householder_spec_encoding_round_trips_learned_fields() -> None:
     """Encoding and decoding preserve every non-feedback native field."""
-    params, notes = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.sample(np.random.default_rng(123))
+    params, notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
 
-    encoded = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.encode(params, notes)
-    decoded, _ = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.decode(encoded)
+    encoded = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(params, notes)
+    decoded, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.decode(encoded)
 
     assert (encoded.shape, encoded.dtype) == ((27,), np.dtype(np.float32))
     np.testing.assert_array_equal(decoded["delays"], params["delays"])
@@ -291,15 +295,17 @@ def test_pyfdn_hadamard_spec_encoding_round_trips_learned_fields() -> None:
         np.testing.assert_allclose(decoded[name], params[name], atol=1.2e-7)
 
 
-def test_pyfdn_hadamard_spec_samples_return_independent_feedback_arrays() -> None:
+def test_pyfdn_householder_spec_samples_return_independent_feedback_arrays() -> None:
     """Mutating one sampled patch cannot alter the fixed matrix in later patches."""
-    first, _ = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.sample(np.random.default_rng(123))
+    first, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
     first_feedback = cast(np.ndarray, first["feedback_matrix"])
     first_feedback[0, 0] = 0.0
 
-    second, _ = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.sample(np.random.default_rng(123))
+    second, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
 
-    np.testing.assert_array_equal(second["feedback_matrix"], _EXPECTED_HADAMARD_FEEDBACK)
+    np.testing.assert_allclose(
+        second["feedback_matrix"], _EXPECTED_HOUSEHOLDER_FEEDBACK, rtol=0.0, atol=1e-15
+    )
 
 
 def test_pyfdn_spec_encoding_is_float32_and_round_trips_native_fields() -> None:

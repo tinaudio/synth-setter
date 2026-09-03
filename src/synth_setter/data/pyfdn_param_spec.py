@@ -5,6 +5,7 @@ Example:
 """
 
 import numpy as np
+from pyFDN import householder_matrix
 
 from synth_setter.data.vst.param_spec import (
     ContinuousArrayParameter,
@@ -182,21 +183,11 @@ PYFDN_N8_MONO_PARAM_SPEC = PyFDNParamSpec(
     note_params=[],
 )
 
-_PYFDN_N8_HADAMARD_FEEDBACK = np.array(
-    [
-        [1, 1, 1, 1, 1, 1, 1, 1],
-        [1, -1, 1, -1, 1, -1, 1, -1],
-        [1, 1, -1, -1, 1, 1, -1, -1],
-        [1, -1, -1, 1, 1, -1, -1, 1],
-        [1, 1, 1, 1, -1, -1, -1, -1],
-        [1, -1, 1, -1, -1, 1, -1, 1],
-        [1, 1, -1, -1, -1, -1, 1, 1],
-        [1, -1, -1, 1, -1, 1, 1, -1],
-    ],
-    dtype=np.float64,
-) / np.sqrt(PYFDN_ORDER)
+_PYFDN_N8_HOUSEHOLDER_FEEDBACK = householder_matrix(
+    np.ones(PYFDN_ORDER, dtype=np.float64)
+)
 
-PYFDN_N8_MONO_HADAMARD_PARAM_SPEC = _FixedFeedbackPyFDNParamSpec(
+PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = _FixedFeedbackPyFDNParamSpec(
     synth_params=_pyfdn_n8_mono_synth_params(feedback_parameter=None),
-    feedback_matrix=_PYFDN_N8_HADAMARD_FEEDBACK,
+    feedback_matrix=_PYFDN_N8_HOUSEHOLDER_FEEDBACK,
 )

@@ -127,8 +127,8 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
     ),
     "obxf": ("obxf", "plugins/OB-Xf.vst3", "presets/obxf-base.vstpreset", "1.0.3"),
     "pyfdn_n8_mono": ("pyfdn_n8_mono", "pyfdn", "", "0.4.2"),
-    "pyfdn_n8_mono_hadamard": (
-        "pyfdn_n8_mono_hadamard",
+    "pyfdn_n8_mono_householder": (
+        "pyfdn_n8_mono_householder",
         "pyfdn",
         "",
         "0.4.2",
