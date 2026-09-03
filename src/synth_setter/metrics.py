@@ -69,8 +69,8 @@ def midi_pitch_residuals(
     calculation_device = (
         torch.device("cpu") if predicted.device.type == "mps" else predicted.device
     )
-    predicted_model = predicted[:, span].squeeze(1).to(calculation_device, torch.float64)
-    target_model = target[:, span].squeeze(1).to(calculation_device, torch.float64)
+    predicted_model = predicted[:, span].squeeze(1).to(calculation_device).to(torch.float64)
+    target_model = target[:, span].squeeze(1).to(calculation_device).to(torch.float64)
     predicted_encoded = ((predicted_model + 1) / 2).clamp(0, 1)
     target_encoded = (target_model + 1) / 2
     pitch_span = pitch.max - pitch.min
