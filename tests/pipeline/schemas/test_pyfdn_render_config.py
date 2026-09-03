@@ -152,7 +152,9 @@ def test_pyfdn_param_spec_with_hosted_synth_rejects_hosted_backend() -> None:
         "synth_version": "1.3.4",
     }
 
-    with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):
+    with pytest.raises(
+        ValidationError, match="all pyFDN identities require renderer_backend='pyfdn'"
+    ):
         RenderConfig.model_validate(
             _pyfdn_render_kwargs(
                 synth=synth,
@@ -172,7 +174,9 @@ def test_pyfdn_plugin_path_with_unregistered_name_rejects_hosted_backend() -> No
         "synth_version": "0.4.2",
     }
 
-    with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):
+    with pytest.raises(
+        ValidationError, match="all pyFDN identities require renderer_backend='pyfdn'"
+    ):
         RenderConfig.model_validate(
             _pyfdn_render_kwargs(
                 synth=synth,
@@ -206,7 +210,9 @@ def test_pyfdn_name_with_mismatched_spec_rejects_hosted_backend() -> None:
         "synth_version": "1.3.4",
     }
 
-    with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):
+    with pytest.raises(
+        ValidationError, match="all pyFDN identities require renderer_backend='pyfdn'"
+    ):
         RenderConfig.model_validate(
             _pyfdn_render_kwargs(
                 synth=synth,
@@ -218,5 +224,28 @@ def test_pyfdn_name_with_mismatched_spec_rejects_hosted_backend() -> None:
 
 def test_pyfdn_identity_rejects_hosted_backend() -> None:
     """The pyFDN identity cannot route through an external plugin host."""
-    with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):
+    with pytest.raises(
+        ValidationError,
+        match="all pyFDN identities require renderer_backend='pyfdn'",
+    ):
         RenderConfig.model_validate(_pyfdn_render_kwargs(renderer_backend="pedalboard"))
+
+
+def test_pyfdn_pitchshift_identity_hosted_backend_error_names_family() -> None:
+    """Pitch-shift backend errors describe the pyFDN family without naming plain FDN."""
+    identity = "pyfdn_pitchshift_n8_mono_householder"
+    synth = {
+        "name": identity,
+        "param_spec_name": identity,
+        "plugin_path": "pyfdn",
+        "plugin_state_path": "",
+        "synth_version": "0.4.2",
+    }
+
+    with pytest.raises(
+        ValidationError,
+        match="all pyFDN identities require renderer_backend='pyfdn'",
+    ):
+        RenderConfig.model_validate(
+            _pyfdn_render_kwargs(synth=synth, renderer_backend="pedalboard")
+        )

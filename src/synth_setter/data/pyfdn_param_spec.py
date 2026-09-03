@@ -1,4 +1,4 @@
-"""Fixed parameter distribution for the order-8 mono pyFDN instrument.
+"""Fixed parameter distributions for order-8 mono pyFDN instruments.
 
 Example:
     ``PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(seed))`` draws one native patch.
@@ -11,6 +11,7 @@ from synth_setter.data.vst.param_spec import (
     ContinuousArrayParameter,
     ContinuousParameter,
     DiscreteArrayParameter,
+    DiscreteLiteralParameter,
     Parameter,
     ParameterValues,
     ParamSpec,
@@ -23,6 +24,15 @@ PYFDN_RT_DC_NAME = "post_delay.rt_dc_seconds"
 PYFDN_RT_MAX_SECONDS = 4.0
 PYFDN_RT_MIN_SECONDS = 0.1
 PYFDN_RT_NYQUIST_NAME = "post_delay.rt_nyquist_seconds"
+PYFDN_RT_GEQ_SECONDS_NAME = "post_delay.geq.rt_seconds"
+PYFDN_GEQ_RT_MAX_SECONDS = 5.0
+PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME = "post_delay.pitch_shift.transpose_cents"
+PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN = -1200.0
+PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX = 1200.0
+PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME = "post_delay.pitch_shift.window_size"
+PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN = 256
+PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX = 4096
+PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME = "post_delay.pitch_shift.active_channels"
 
 
 class OrthogonalMatrixParameter(ContinuousArrayParameter):
@@ -130,18 +140,21 @@ class _FixedFeedbackPyFDNParamSpec(PyFDNParamSpec):
         return synth_params, note_params
 
 
-def _pyfdn_n8_mono_synth_params(
+def _fdn_matrix_parameters(
+    *,
+    delay_min: int,
+    delay_max: int,
     feedback_parameter: Parameter | None,
 ) -> list[Parameter]:
-    """Build the shared order-8 mono parameter sequence.
+    """Build independent common FDN parameters for one instrument identity.
 
+    :param delay_min: Inclusive delay-line lower bound in samples.
+    :param delay_max: Inclusive delay-line upper bound in samples.
     :param feedback_parameter: Learned feedback parameter, or ``None`` when fixed.
-    :returns: Fresh parameter definitions in renderer encoding order.
+    :returns: Fresh delay and A/B/C/D parameter definitions.
     """
     params: list[Parameter] = [
-        DiscreteArrayParameter(
-            name="delays", shape=(PYFDN_ORDER,), min=400, max=1200
-        )
+        DiscreteArrayParameter(name="delays", shape=(PYFDN_ORDER,), min=delay_min, max=delay_max)
     ]
     if feedback_parameter is not None:
         params.append(feedback_parameter)
@@ -153,41 +166,90 @@ def _pyfdn_n8_mono_synth_params(
             ContinuousArrayParameter(
                 name="output_matrix", shape=(1, PYFDN_ORDER), min=-1.0, max=1.0
             ),
-            ContinuousArrayParameter(
-                name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0
-            ),
-            ContinuousParameter(
-                name=PYFDN_RT_DC_NAME,
-                min=PYFDN_RT_MIN_SECONDS,
-                max=PYFDN_RT_MAX_SECONDS,
-            ),
-            ContinuousParameter(
-                name=PYFDN_RT_NYQUIST_NAME,
-                min=PYFDN_RT_MIN_SECONDS,
-                max=PYFDN_RT_MAX_SECONDS,
-            ),
+            ContinuousArrayParameter(name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0),
         ]
     )
     return params
 
 
 PYFDN_N8_MONO_PARAM_SPEC = PyFDNParamSpec(
-    synth_params=_pyfdn_n8_mono_synth_params(
-        OrthogonalMatrixParameter(
-            name="feedback_matrix",
-            shape=(PYFDN_ORDER, PYFDN_ORDER),
-            min=-1.0,
-            max=1.0,
-        )
-    ),
+    synth_params=[
+        *_fdn_matrix_parameters(
+            delay_min=400,
+            delay_max=1200,
+            feedback_parameter=OrthogonalMatrixParameter(
+                name="feedback_matrix",
+                shape=(PYFDN_ORDER, PYFDN_ORDER),
+                min=-1.0,
+                max=1.0,
+            ),
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_DC_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_NYQUIST_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+    ],
     note_params=[],
 )
 
-_PYFDN_N8_HOUSEHOLDER_FEEDBACK = householder_matrix(
-    np.ones(PYFDN_ORDER, dtype=np.float64)
-)
+_PYFDN_N8_HOUSEHOLDER_FEEDBACK = householder_matrix(np.ones(PYFDN_ORDER, dtype=np.float64))
 
 PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = _FixedFeedbackPyFDNParamSpec(
-    synth_params=_pyfdn_n8_mono_synth_params(feedback_parameter=None),
+    synth_params=[
+        *_fdn_matrix_parameters(
+            delay_min=400,
+            delay_max=1200,
+            feedback_parameter=None,
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_DC_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_NYQUIST_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+    ],
+    feedback_matrix=_PYFDN_N8_HOUSEHOLDER_FEEDBACK,
+)
+
+PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC = _FixedFeedbackPyFDNParamSpec(
+    synth_params=[
+        *_fdn_matrix_parameters(
+            delay_min=1000,
+            delay_max=6000,
+            feedback_parameter=None,
+        ),
+        ContinuousArrayParameter(
+            name=PYFDN_RT_GEQ_SECONDS_NAME,
+            shape=(10,),
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_GEQ_RT_MAX_SECONDS,
+        ),
+        ContinuousParameter(
+            name=PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME,
+            min=PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN,
+            max=PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX,
+        ),
+        DiscreteLiteralParameter(
+            name=PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME,
+            min=PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN,
+            max=PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX,
+        ),
+        DiscreteArrayParameter(
+            name=PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
+            shape=(PYFDN_ORDER,),
+            min=0,
+            max=1,
+        ),
+    ],
     feedback_matrix=_PYFDN_N8_HOUSEHOLDER_FEEDBACK,
 )
