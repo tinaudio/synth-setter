@@ -1,7 +1,7 @@
-"""Native pyFDN build conversion and canonical-source instrument rendering.
+"""Native pyFDN build conversion and instrument rendering.
 
 Example:
-    ``PyFDNRenderer().render(native_params)`` returns channel-first audio.
+    ``PyFDNRenderer().render(native_params)`` returns a channel-first impulse response.
 """
 
 from collections.abc import Mapping
@@ -11,7 +11,7 @@ from typing import cast
 
 import numpy as np
 from jaxtyping import Float32
-from pyFDN import FDNBuild, build_set_decay, process_fdn
+from pyFDN import FDNBuild, build_set_decay, build_to_impz, process_fdn
 from pyFDN.td import SOSBank
 
 from synth_setter.data.pyfdn_param_spec import (
@@ -32,6 +32,7 @@ from synth_setter.data.pyfdn_source import (
 )
 from synth_setter.data.vst.param_spec import ParameterValue
 from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.renderer_backend import PyFDNExcitation
 
 _PYFDN_VERSION = "0.4.2"
 _SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
@@ -206,11 +207,12 @@ def _validate_version(synth_version: str) -> None:
 
 
 class PyFDNRenderer(AudioRenderer):
-    """Render the canonical procedural source through the common audio contract."""
+    """Render an FDN impulse response or an explicitly selected custom source."""
 
     def __init__(
         self,
         *,
+        excitation: PyFDNExcitation = "impulse",
         synth_version: str = _PYFDN_VERSION,
         plugin_path: str = "pyfdn",
         sample_rate: float = _SAMPLE_RATE,
@@ -218,17 +220,20 @@ class PyFDNRenderer(AudioRenderer):
         signal_duration_seconds: float = _SIGNAL_LENGTH / _SAMPLE_RATE,
         plugin_state_path: str | None = None,
     ) -> None:
-        """Generate the immutable source for this process-local renderer.
+        """Configure impulse-response rendering or the optional canonical chirp.
 
+        :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the custom source.
         :param synth_version: Required installed pyFDN version.
         :param plugin_path: Required in-process backend sentinel.
-        :param sample_rate: Required canonical source sample rate.
+        :param sample_rate: Required sample rate.
         :param channels: Required mono output channel count.
-        :param signal_duration_seconds: Required canonical source duration.
+        :param signal_duration_seconds: Required render duration.
         :param plugin_state_path: Required empty preset path.
-        :raises ValueError: The requested render geometry or artifact identity drifts.
+        :raises ValueError: The excitation, geometry, or artifact identity drifts.
         """
         _validate_version(synth_version)
+        if excitation not in ("chirp", "impulse"):
+            raise ValueError("pyFDN excitation must be 'impulse' or 'chirp'")
         if (
             plugin_path != "pyfdn"
             or sample_rate != _SAMPLE_RATE
@@ -236,7 +241,7 @@ class PyFDNRenderer(AudioRenderer):
             or signal_duration_seconds != _SIGNAL_LENGTH / _SAMPLE_RATE
             or plugin_state_path not in (None, "")
         ):
-            raise ValueError("pyFDN renderer requires its canonical source contract")
+            raise ValueError("pyFDN renderer requires its fixed render contract")
         super().__init__(
             plugin_path=plugin_path,
             sample_rate=sample_rate,
@@ -244,12 +249,27 @@ class PyFDNRenderer(AudioRenderer):
             signal_duration_seconds=signal_duration_seconds,
             plugin_state_path=plugin_state_path,
         )
-        self._source_audio = generate_canonical_pyfdn_source()
-        self._source_provenance = _canonical_pyfdn_source_provenance(self._source_audio)
+        self._excitation = excitation
+        self._source_audio = (
+            generate_canonical_pyfdn_source() if excitation == "chirp" else None
+        )
+        self._source_provenance = (
+            _canonical_pyfdn_source_provenance(self._source_audio)
+            if self._source_audio is not None
+            else {
+                "identity": "unit_impulse_v1",
+                "implementation": "pyFDN.build_to_impz",
+                "sample_rate_hz": PYFDN_SOURCE_SAMPLE_RATE_HZ,
+                "total_frames": PYFDN_SOURCE_TOTAL_FRAMES,
+                "channels": PYFDN_SOURCE_CHANNELS,
+                "dtype": "float32",
+                "layout": "channel_first",
+            }
+        )
 
     @property
     def source_provenance(self) -> PyFDNSourceProvenance:
-        """Return provenance for the source bytes used by this renderer.
+        """Return provenance for the configured excitation.
 
         :returns: Independent provenance metadata safe for caller mutation.
         """
@@ -264,7 +284,7 @@ class PyFDNRenderer(AudioRenderer):
         *,
         warmup: bool = False,
     ) -> Float32[np.ndarray, "1 176400"]:
-        """Process the fixed source through one exact patch with fresh recursion state.
+        """Render the configured excitation through one patch with fresh recursion state.
 
         :param params: Native order-8 mono pyFDN arrays.
         :param midi_note: Ignored compatibility stub.
@@ -277,23 +297,36 @@ class PyFDNRenderer(AudioRenderer):
         """
         del midi_note, velocity, note_start_and_end, warmup
         build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
-        post_delay = cast(np.ndarray, build.post_delay)
-        output = process_fdn(
-            self._source_audio[0],
-            build.delays,
-            build.A,
-            build.B,
-            build.C,
-            build.D,
-            post_delay=SOSBank(post_delay),
-            post_matrix=build.post_matrix,
-            post_output=build.post_output,
-        )
-        output_array = np.asarray(output)
-        if output_array.shape != (_SIGNAL_LENGTH,):
-            raise ValueError(
-                f"pyFDN output must have shape {(_SIGNAL_LENGTH,)}, got {output_array.shape}"
+        if self._excitation == "impulse":
+            impulse_response = np.asarray(build_to_impz(build, ir_len=_SIGNAL_LENGTH))
+            expected_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
+            if impulse_response.shape != expected_shape:
+                raise ValueError(
+                    f"pyFDN impulse response must have shape {expected_shape}, "
+                    f"got {impulse_response.shape}"
+                )
+            output_array = impulse_response[:, 0, 0]
+        else:
+            post_delay = cast(np.ndarray, build.post_delay)
+            source_audio = cast(np.ndarray, self._source_audio)
+            output_array = np.asarray(
+                process_fdn(
+                    source_audio[0],
+                    build.delays,
+                    build.A,
+                    build.B,
+                    build.C,
+                    build.D,
+                    post_delay=SOSBank(post_delay),
+                    post_matrix=build.post_matrix,
+                    post_output=build.post_output,
+                )
             )
+            if output_array.shape != (_SIGNAL_LENGTH,):
+                raise ValueError(
+                    f"pyFDN output must have shape {(_SIGNAL_LENGTH,)}, "
+                    f"got {output_array.shape}"
+                )
         if not np.isfinite(output_array).all():
             raise ValueError("pyFDN output must contain only finite values")
         with np.errstate(over="ignore"):

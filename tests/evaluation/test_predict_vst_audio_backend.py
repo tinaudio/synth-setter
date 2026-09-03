@@ -133,6 +133,7 @@ def test_main_pyfdn_renders_prediction_target_and_flattened_params(tmp_path: Pat
             synth_version="0.4.2",
         ),
         renderer_backend="pyfdn",
+        pyfdn_excitation="impulse",
         sample_rate=44_100,
         channels=1,
         velocity=0,

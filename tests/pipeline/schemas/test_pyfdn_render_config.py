@@ -19,6 +19,7 @@ def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
             "synth_version": "0.4.2",
         },
         "renderer_backend": "pyfdn",
+        "pyfdn_excitation": "impulse",
         "sample_rate": 44_100,
         "channels": 1,
         "velocity": 0,
@@ -41,8 +42,23 @@ def test_pyfdn_render_config_uses_existing_renderer_stubs() -> None:
     render = RenderConfig.model_validate(_pyfdn_render_kwargs())
 
     assert render.velocity == 0
+    assert render.pyfdn_excitation == "impulse"
     assert render.plugin_reload_cadence == "render"
     assert render.gui_toggle_cadence == "never"
+
+
+def test_pyfdn_render_config_omitted_excitation_defaults_digest_to_impulse() -> None:
+    """Specs predating the field retain the new impulse-response default."""
+    explicit = RenderConfig.model_validate(_pyfdn_render_kwargs())
+    legacy_kwargs = _pyfdn_render_kwargs()
+    del legacy_kwargs["pyfdn_excitation"]
+    omitted = RenderConfig.model_validate(legacy_kwargs)
+
+    assert omitted.pyfdn_excitation is None
+    assert (
+        omitted.shard_metadata().render_contract_digest
+        == explicit.shard_metadata().render_contract_digest
+    )
 
 
 def test_pyfdn_render_contract_digest_includes_source_identity(
@@ -52,11 +68,22 @@ def test_pyfdn_render_contract_digest_includes_source_identity(
 
     :param monkeypatch: Temporary canonical source digest replacement.
     """
-    render = RenderConfig.model_validate(_pyfdn_render_kwargs())
+    render = RenderConfig.model_validate(_pyfdn_render_kwargs(pyfdn_excitation="chirp"))
     original = render.shard_metadata().render_contract_digest
     monkeypatch.setattr(renderer_backend_contract, "PYFDN_CANONICAL_SOURCE_SHA256", "0" * 64)
 
     assert render.shard_metadata().render_contract_digest != original
+
+
+def test_pyfdn_render_contract_digest_distinguishes_excitation() -> None:
+    """Impulse-response and chirp datasets cannot finalize into one dataset."""
+    impulse = RenderConfig.model_validate(_pyfdn_render_kwargs())
+    chirp = RenderConfig.model_validate(_pyfdn_render_kwargs(pyfdn_excitation="chirp"))
+
+    assert (
+        chirp.shard_metadata().render_contract_digest
+        != impulse.shard_metadata().render_contract_digest
+    )
 
 
 def test_render_contract_digest_ignores_shard_seed_position() -> None:
