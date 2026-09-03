@@ -3,6 +3,7 @@
 defaults:
   - override /datamodule: pyfdn
   - override /synth: pyfdn_n8_mono
+  - override /render: pyfdn
   - override /model: vst_flow
   - override /conditioning: log_mel
   - override /callbacks: [default, log_per_param_mse]
@@ -17,7 +18,7 @@ model:
   compile: false
   encoder:
     frontend:
-      in_dim: 192_000
+      in_dim: 176_400
 
 callbacks:
   model_checkpoint:
@@ -29,4 +30,4 @@ trainer:
   limit_val_batches: 20
 
 training:
-  val_audio_probe: false
+  val_audio_probe: true

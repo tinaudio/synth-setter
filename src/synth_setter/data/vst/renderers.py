@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Mapping
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from importlib import import_module
@@ -25,6 +26,7 @@ import numpy as np
 
 from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import SynthParamMap
+from synth_setter.data.vst.param_spec import ParameterValue, require_scalar_synth_params
 from synth_setter.data.vst.torchsynth_param_spec import (
     DEFAULT_NORMALIZED_PATCH,
     TORCHSYNTH_FULL_PARAM_SPEC,
@@ -275,7 +277,7 @@ class AudioRenderer(ABC):
     @abstractmethod
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -306,7 +308,7 @@ class PedalboardRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -324,10 +326,11 @@ class PedalboardRenderer(AudioRenderer):
         """
         from synth_setter.data.vst.core import render_params
 
+        scalar_params = require_scalar_synth_params(params)
         return _validate_rendered_audio(
             render_params(
                 self.plugin_path,
-                params,
+                scalar_params,
                 midi_note,
                 velocity,
                 note_start_and_end,
@@ -557,7 +560,7 @@ class SurgePyRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -576,8 +579,9 @@ class SurgePyRenderer(AudioRenderer):
         :raises ValueError: If note timing is invalid.
         """
         del warmup
+        scalar_params = require_scalar_synth_params(params)
         self._initialize_synth()
-        self._apply_parameters(params)
+        self._apply_parameters(scalar_params)
         start, end = note_start_and_end
         if not 0.0 <= start < end <= self.signal_duration_seconds:
             raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
@@ -658,7 +662,7 @@ class TorchSynthRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -679,6 +683,7 @@ class TorchSynthRenderer(AudioRenderer):
         :raises KeyError: A requested key has no matching voice parameter.
         """
         del velocity, warmup
+        params = require_scalar_synth_params(params)
         # Lazy: pulls torch + lightning, which this module must not import eagerly.
         import torch
 
@@ -779,7 +784,7 @@ class DawDreamerFaustRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -796,6 +801,7 @@ class DawDreamerFaustRenderer(AudioRenderer):
         :returns: Rendered audio with channels on the first axis.
         """
         del warmup
+        params = require_scalar_synth_params(params)
         self._validate_parameter_addresses(params)
         if self.reload_processor_each_render and self._has_rendered:
             self._initialize_graph()
@@ -942,7 +948,7 @@ class DawDreamerRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -959,6 +965,7 @@ class DawDreamerRenderer(AudioRenderer):
         :returns: Rendered audio with channels on the first axis.
         """
         del warmup
+        params = require_scalar_synth_params(params)
         self._validate_parameter_dispatch(params)
         if self.reload_plugin_each_render and self._has_rendered:
             self._initialize_graph()

@@ -26,6 +26,17 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
     :returns: Renderer whose native-host lifetime follows the configured reload cadence.
     """
     backend = render_config.renderer_backend
+    if backend == "pyfdn":
+        from synth_setter.data.pyfdn_instrument import PyFDNRenderer
+
+        return PyFDNRenderer(
+            synth_version=render_config.synth.synth_version,
+            plugin_path=render_config.plugin_path,
+            sample_rate=render_config.sample_rate,
+            channels=render_config.channels,
+            signal_duration_seconds=render_config.signal_duration_seconds,
+            plugin_state_path=render_config.plugin_state_path,
+        )
     if backend == "dawdreamer_faust":
         from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 

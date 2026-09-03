@@ -841,7 +841,7 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 The pipeline's output format is **Lance**. The renderer CLI dispatches on the shard's filename suffix (`.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
 
-Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows carry three Arrow fixed-shape-tensor columns plus two preview columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, `param_array` stays float32, `audio_mp3` is non-null binary tagged `audio/mpeg` and encoded at the format's fixed 128 kbps setting, and `audio_uuid` is a non-null UUIDv5 string derived from the persisted audio bytes. VST generation accepts the MP3-supported rates 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, and 48 kHz. The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
+Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows carry three Arrow fixed-shape-tensor columns plus two preview columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, `param_array` stays float32, `audio_mp3` is non-null binary tagged `audio/mpeg` and encoded at the format's fixed 128 kbps setting, and `audio_uuid` is a non-null UUIDv5 string derived from the persisted audio bytes. VST generation accepts the MP3-supported rates 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, and 48 kHz. pyFDN fixes tensors to float32 audio `(1, 176400)`, float32 mel `(1, 128, 401)`, and float32 parameters `(91,)`. The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
 
 **Why Lance:** the columnar layout gives per-column projection (train on `mel_spec` + `param_array` without decoding `audio`), the dataset streams natively from object storage for both random-access and sequential loaders, and fragment-based finalize commits winning fragment metadata instead of rewriting rows — so finalize decodes zero audio rows and never becomes a single-machine bottleneck ([§12](#12-open-questions-risks--limitations)). One format serves both the local single-GPU random-access case and the multi-GPU streaming case.
 
@@ -1334,7 +1334,11 @@ the Faust sentinel and an empty plugin-state path; the worker resolves checked-i
 source by `param_spec_name`, compiles it, and dispatches renderer-native values by
 exact compiled address. Faust render groups recompile per row so DSP and voice
 state cannot cross sample boundaries. External Faust files and URIs are not
-supported.
+supported. `pyfdn` uses the same `AudioRenderer` and accepted-sample path with
+fixed zero-valued MIDI compatibility inputs. It samples complete 91-coordinate
+patches and renders a pinned canonical 44.1 kHz mono chirp whose byte digest
+participates in the shard render-contract digest. Training reads finalized
+Lance shards; the former on-demand pyFDN datamodule is removed.
 
 **Seed derivation:** `DatasetSpec.train_val_test_seeds` supplies independent
 split masters. Each `ShardSpec` pairs its split master with a split-local

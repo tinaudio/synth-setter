@@ -10,6 +10,7 @@ from synth_setter.data.vst.param_spec import (
     ContinuousArrayParameter,
     ContinuousParameter,
     DiscreteArrayParameter,
+    ParameterValues,
     ParamSpec,
 )
 
@@ -58,7 +59,37 @@ class OrthogonalMatrixParameter(ContinuousArrayParameter):
         return orthogonal * signs
 
 
-PYFDN_N8_MONO_PARAM_SPEC = ParamSpec(
+_PYFDN_MIDI_STUBS: ParameterValues = {
+    "pitch": 0,
+    "note_start_and_end": (0.0, 0.0),
+}
+
+
+class PyFDNParamSpec(ParamSpec):
+    """Expose fixed MIDI stubs without adding model coordinates."""
+
+    def sample(
+        self, rng: np.random.Generator | None = None
+    ) -> tuple[ParameterValues, ParameterValues]:
+        """Sample an FDN patch and return the common renderer's MIDI stubs.
+
+        :param rng: Optional caller-owned random generator.
+        :returns: Native FDN values and fixed MIDI compatibility values.
+        """
+        synth_params, _ = super().sample(rng)
+        return synth_params, _PYFDN_MIDI_STUBS.copy()
+
+    def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
+        """Decode an FDN patch and restore the unencoded MIDI stubs.
+
+        :param params: Encoded FDN parameter row.
+        :returns: Native FDN values and fixed MIDI compatibility values.
+        """
+        synth_params, _ = super().decode(params)
+        return synth_params, _PYFDN_MIDI_STUBS.copy()
+
+
+PYFDN_N8_MONO_PARAM_SPEC = PyFDNParamSpec(
     synth_params=[
         DiscreteArrayParameter(
             name="delays", shape=(PYFDN_ORDER,), min=400, max=1200

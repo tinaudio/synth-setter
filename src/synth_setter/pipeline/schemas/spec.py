@@ -11,6 +11,8 @@ when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -27,6 +29,7 @@ from pydantic import (
     model_validator,
 )
 
+import synth_setter.renderer_backend as renderer_backend_contract
 from synth_setter.param_spec_name import ValidatedParamSpecName
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
@@ -41,6 +44,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
+    PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
     RendererBackend,
@@ -459,14 +463,45 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return self
 
     @model_validator(mode="after")
-    def _reject_online_only_pyfdn(self) -> RenderConfig:
-        """Reject pyFDN from the unsupported offline dataset-rendering path.
+    def _validate_pyfdn_backend(self) -> RenderConfig:
+        """Require canonical pyFDN geometry and fixed compatibility stubs.
 
-        :return: ``self`` unchanged for renderable synth identities.
-        :raises ValueError: The online-only pyFDN identity is selected.
+        :returns: ``self`` unchanged for other backends or valid pyFDN configuration.
+        :raises ValueError: The pyFDN identity or fixed render contract drifts.
         """
-        if self.synth.name == "pyfdn_n8_mono":
-            raise ValueError("pyFDN offline generation is unsupported; use online train/eval only")
+        pyfdn_identity = (
+            self.synth.name == "pyfdn_n8_mono" or self.param_spec_name == "pyfdn_n8_mono"
+        )
+        if self.renderer_backend != "pyfdn":
+            if pyfdn_identity or self.plugin_path == PYFDN_PLUGIN_NAME:
+                raise ValueError("pyfdn_n8_mono requires renderer_backend='pyfdn'")
+            return self
+        if self.synth.name != "pyfdn_n8_mono" or self.param_spec_name != "pyfdn_n8_mono":
+            raise ValueError("pyfdn requires the registered pyfdn_n8_mono identity")
+        if self.plugin_path != PYFDN_PLUGIN_NAME or self.plugin_state_path:
+            raise ValueError('pyfdn requires plugin_path="pyfdn" and no plugin_state_path')
+        expected_rate = renderer_backend_contract.PYFDN_SOURCE_SAMPLE_RATE_HZ
+        expected_channels = renderer_backend_contract.PYFDN_SOURCE_CHANNELS
+        expected_duration = renderer_backend_contract.PYFDN_SOURCE_TOTAL_FRAMES / expected_rate
+        if (self.sample_rate, self.channels, self.signal_duration_seconds) != (
+            expected_rate,
+            expected_channels,
+            expected_duration,
+        ):
+            raise ValueError(
+                f"pyfdn requires sample_rate={expected_rate}, channels={expected_channels}, "
+                f"and signal_duration_seconds={expected_duration}"
+            )
+        if self.velocity != 0:
+            raise ValueError("pyfdn requires velocity=0")
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('pyfdn requires plugin_reload_cadence="render"')
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('pyfdn requires gui_toggle_cadence="never"')
+        if self.audio_dtype != "float32" or self.mel_spec_dtype != "float32":
+            raise ValueError("pyfdn requires audio_dtype=float32 and mel_spec_dtype=float32")
+        if self.param_sample_cadence != "sample":
+            raise ValueError('pyfdn requires param_sample_cadence="sample"')
         return self
 
     @model_validator(mode="after")
@@ -580,6 +615,15 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
         :returns: Strict ``ShardMetadata`` with every render-derived field filled.
         """
+        contract = self.model_dump(
+            mode="json",
+            exclude={"base_seed", "retain_local_shards", "sample_offset"},
+        )
+        if self.renderer_backend == "pyfdn":
+            contract["canonical_source_sha256"] = (
+                renderer_backend_contract.PYFDN_CANONICAL_SOURCE_SHA256
+            )
+        canonical_contract = json.dumps(contract, sort_keys=True, separators=(",", ":"))
         return ShardMetadata(
             velocity=self.velocity,
             signal_duration_seconds=self.signal_duration_seconds,
@@ -589,6 +633,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             base_seed=self.base_seed,
             sample_offset=self.sample_offset,
             attempts_per_sample=self.attempts_per_sample,
+            render_contract_digest=hashlib.sha256(canonical_contract.encode()).hexdigest(),
         )
 
 

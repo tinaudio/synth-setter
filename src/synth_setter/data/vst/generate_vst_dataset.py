@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from synth_setter.data.vst.audio_preview import (
     encode_audio_to_mp3,
 )
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec import ParameterValue, ParamSpec, require_note_params
 from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import make_spectrogram as make_spectrogram
@@ -52,8 +53,8 @@ class SampleSeed:
 
 @dataclass
 class VSTDataSample:
-    synth_params: dict[str, float]
-    note_params: NoteParams
+    synth_params: Mapping[str, ParameterValue]
+    note_params: Mapping[str, object]
 
     sample_rate: float
     channels: int
@@ -104,8 +105,8 @@ def generate_sample(
     velocity: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    fixed_synth_params: dict[str, float] | None = None,
-    fixed_note_params: NoteParams | None = None,
+    fixed_synth_params: Mapping[str, ParameterValue] | None = None,
+    fixed_note_params: Mapping[str, object] | None = None,
     *,
     warmup: bool = False,
     seed: SampleSeed | None = None,
@@ -169,12 +170,13 @@ def generate_sample(
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
+        midi_params = require_note_params(note_params)
         try:
             output = renderer.render(
                 synth_params,
-                note_params["pitch"],
+                midi_params["pitch"],
                 velocity,
-                note_params["note_start_and_end"],
+                midi_params["note_start_and_end"],
                 warmup=warmup,
             )
             _reject_clipped_audio(output)
