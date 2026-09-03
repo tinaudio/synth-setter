@@ -91,7 +91,9 @@ def test_pi_review_workflow_secrets_are_restricted_to_allowlisted_same_repo_prs(
     assert "github.event.pull_request.head.repo.full_name == github.repository" in str(
         authorization_job["if"]
     )
-    assert "should_run_pi_review.py" in str(authorization_job["steps"])
+    authorization_steps = str(authorization_job["steps"])
+    assert "is_trusted_pi_review_pr.py" in authorization_steps
+    assert "should_run_pi_review.py" in authorization_steps
     assert job["needs"] == "authorize-review"
     assert job["if"] == "${{ needs.authorize-review.outputs.should_review == 'true' }}"
     assert job["permissions"] == {
