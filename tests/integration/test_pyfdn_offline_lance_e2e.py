@@ -208,13 +208,33 @@ def test_pyfdn_pitchshift_lance_reader_rerender_round_trip(tmp_path: Path) -> No
 
     assert result.returncode == 0, result.stderr[-2000:]
     dataset = lance.dataset(str(output))
-    table = dataset.to_table(columns=["audio", "param_array", "debug"])
-    stored_audio = table["audio"].combine_chunks().to_numpy_ndarray()[0]
-    encoded = table["param_array"].combine_chunks().to_numpy_ndarray()[0]
+    assert dataset.count_rows() == 1
+    datamodule = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        predict_file=output,
+        use_saved_mean_and_variance=False,
+        batch_size=1,
+        ot=False,
+        num_workers=0,
+        conditioning="audio",
+        pin_memory=False,
+        param_spec_name=identity,
+    )
+    datamodule.setup("predict")
+    batch = next(iter(datamodule.predict_dataloader()))
+    audio = batch["audio"]
+    params = batch["params"]
+    assert audio is not None
+    assert params is not None
+    encoded = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.model_to_encoded(params[0].numpy())
     decoded, note_params = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.decode(encoded)
     rerendered = PyFDNRenderer(param_spec_name=identity).render(decoded)
 
     assert spec.num_params == 109
-    assert stored_audio.shape == (1, 176_400)
+    assert audio.shape == (1, 1, 176_400)
+    assert params.shape == (1, 109)
+    assert audio.dtype == params.dtype == torch.float32
+    assert torch.isfinite(audio).all()
+    assert torch.all((-1.0 <= params) & (params <= 1.0))
     assert note_params == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
-    np.testing.assert_allclose(rerendered, stored_audio, rtol=1e-4, atol=5e-5)
+    np.testing.assert_allclose(rerendered, audio[0].numpy(), rtol=1e-4, atol=5e-5)

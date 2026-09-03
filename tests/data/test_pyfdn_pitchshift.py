@@ -9,7 +9,9 @@ from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_pitchshi
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
     PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC,
+    PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX,
     PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME,
+    PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX,
     PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME,
     PYFDN_RT_GEQ_SECONDS_NAME,
 )
@@ -94,6 +96,49 @@ def test_pitchshift_renderer_reference_patch_is_repeatable() -> None:
     assert first.dtype == np.float32
     assert np.isfinite(first).all()
     np.testing.assert_array_equal(second, first)
+
+
+def test_pitchshift_renderer_impulse_provenance_names_process_fdn() -> None:
+    """Impulse provenance identifies the processing path used by shimmer."""
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+
+    assert renderer.source_provenance["implementation"] == "pyFDN.process_fdn"
+
+
+def test_pitchshift_renderer_chirp_returns_finite_audio() -> None:
+    """The canonical chirp traverses the native pitch-shift topology."""
+    renderer = PyFDNRenderer(
+        excitation="chirp",
+        param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"),
+    )
+
+    audio = renderer.render(_reference_params())
+
+    assert audio.shape == (1, 176_400)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
+
+
+def test_pitchshift_renderer_rejects_transpose_above_spec_bound() -> None:
+    """Native rendering rejects transpose values outside the learnable domain."""
+    params = _reference_params()
+    params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] = (
+        PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX + 1.0
+    )
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+
+    with pytest.raises(ValueError, match="transpose_cents must be between"):
+        renderer.render(params)
+
+
+def test_pitchshift_renderer_rejects_window_above_spec_bound() -> None:
+    """Native rendering rejects window sizes outside the learnable domain."""
+    params = _reference_params()
+    params[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME] = PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX + 1
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+
+    with pytest.raises(ValueError, match="window_size must be between"):
+        renderer.render(params)
 
 
 def test_pitchshift_renderer_transpose_changes_real_audio() -> None:

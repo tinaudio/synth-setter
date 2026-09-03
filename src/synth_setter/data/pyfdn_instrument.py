@@ -18,7 +18,11 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_GEQ_RT_MAX_SECONDS,
     PYFDN_ORDER,
     PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
+    PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX,
+    PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN,
     PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME,
+    PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX,
+    PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN,
     PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME,
     PYFDN_RT_CROSSOVER_HZ,
     PYFDN_RT_DC_NAME,
@@ -36,8 +40,8 @@ from synth_setter.data.pyfdn_source import (
     generate_canonical_pyfdn_source,
 )
 from synth_setter.data.vst.param_spec import ParameterValue
-from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import PyFDNExcitation
 
 _PYFDN_VERSION = "0.4.2"
@@ -281,9 +285,29 @@ def _pitchshift_post_delay(
     transpose = params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME]
     if not isinstance(transpose, Real) or isinstance(transpose, bool):
         raise TypeError("transpose_cents must be a real scalar")
+    if not (
+        PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN
+        <= float(transpose)
+        <= PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX
+    ):
+        raise ValueError(
+            "transpose_cents must be between "
+            f"{PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN} and "
+            f"{PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX}"
+        )
     window_size = params[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME]
     if not isinstance(window_size, Integral) or isinstance(window_size, bool):
         raise TypeError("window_size must be an integer")
+    if not (
+        PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN
+        <= int(window_size)
+        <= PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX
+    ):
+        raise ValueError(
+            "window_size must be between "
+            f"{PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN} and "
+            f"{PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX}"
+        )
     active_mask = _require_array(
         PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
         params[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME],
@@ -385,7 +409,11 @@ class PyFDNRenderer(AudioRenderer):
             if self._source_audio is not None
             else {
                 "identity": "unit_impulse_v1",
-                "implementation": "pyFDN.build_to_impz",
+                "implementation": (
+                    "pyFDN.process_fdn"
+                    if param_spec_name == _PITCHSHIFT_PARAM_SPEC
+                    else "pyFDN.build_to_impz"
+                ),
                 "sample_rate_hz": PYFDN_SOURCE_SAMPLE_RATE_HZ,
                 "total_frames": PYFDN_SOURCE_TOTAL_FRAMES,
                 "channels": PYFDN_SOURCE_CHANNELS,

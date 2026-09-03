@@ -27,7 +27,11 @@ PYFDN_RT_NYQUIST_NAME = "post_delay.rt_nyquist_seconds"
 PYFDN_RT_GEQ_SECONDS_NAME = "post_delay.geq.rt_seconds"
 PYFDN_GEQ_RT_MAX_SECONDS = 5.0
 PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME = "post_delay.pitch_shift.transpose_cents"
+PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN = -1200.0
+PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX = 1200.0
 PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME = "post_delay.pitch_shift.window_size"
+PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN = 256
+PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX = 4096
 PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME = "post_delay.pitch_shift.active_channels"
 
 
@@ -243,13 +247,13 @@ PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC = PyFDNParamSpec(
         ),
         ContinuousParameter(
             name=PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME,
-            min=-1200.0,
-            max=1200.0,
+            min=PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN,
+            max=PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX,
         ),
         DiscreteLiteralParameter(
             name=PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME,
-            min=256,
-            max=4096,
+            min=PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN,
+            max=PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX,
         ),
         DiscreteArrayParameter(
             name=PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
