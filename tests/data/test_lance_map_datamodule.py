@@ -1003,6 +1003,32 @@ class TestLanceMapDataModuleModes:
             assert len(loader) == 10_000
         assert _unwrap(batch["params"]).shape == (2, len(param_specs["surge_xt"]))
 
+    def test_fake_mode_param_jitter_changes_training_targets(self, tmp_path: Path) -> None:
+        """Fake training batches honor the configured parameter jitter magnitude.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        batches = []
+        for amount in (0.0, 0.1):
+            torch.manual_seed(91)
+            with _set_up_map_module(
+                dataset_root=tmp_path,
+                batch_size=32,
+                fake=True,
+                ot=False,
+                param_jitter_amount=amount,
+                use_saved_mean_and_variance=False,
+            ) as module:
+                batches.append(_unwrap(next(iter(module.train_dataloader()))["params"]))
+
+        source, jittered = batches
+        assert torch.any(jittered != source)
+        assert torch.all(
+            torch.abs(jittered - source) <= 0.2 + torch.finfo(torch.float32).eps
+        )
+        assert jittered.min() >= -1.0
+        assert jittered.max() <= 1.0
+
     def test_fake_mode_preserves_conditioning_prediction_and_rng(self, tmp_path: Path) -> None:
         """Fake map batches retain m2l, prediction audio, ranges, and global RNG behavior.
 
