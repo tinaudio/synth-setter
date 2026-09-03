@@ -361,11 +361,9 @@ Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 the failure and launch a fresh worker with the next candidate in the pass.
 Codex-pass candidates are always `openai-codex/*`. The secondary pass uses only
 `openrouter/z-ai/glm-5.3-flash`. Exhaust the pass's returned `candidates` in
-order before attempting any Codex fallback. If a free-pool attempt fails
-authentication, record it, skip remaining candidates from that provider, and
-continue with the next candidate from a different free-pool provider. Stop
-when no different free-pool provider remains; authentication never triggers Codex fallback.
-If every free-pool candidate exhausts quota/capacity, move the
+order before attempting any Codex fallback. If the secondary attempt fails
+authentication, record it and stop that pass; authentication never triggers
+Codex fallback. If the secondary candidate exhausts quota/capacity, move the
 successful Codex pass's effective model to the end of `fallback_candidates`,
 then launch a fresh worker with the first model. This prefers a distinct
 fallback when the fixed tier permits one; mechanical fallback remains Terra.
@@ -462,8 +460,8 @@ those it can reproduce from the diff. This model has already passed availability
 preflight; if the original Codex pass used a fallback, verification uses that
 same effective fallback rather than a hard-coded selector.
 Extract and validate that verification report through the same helper commands.
-A confirmed candidate is tagged `<free-pool provider>; verified by: codex`
-(with `openrouter` provenance); a rejected candidate is omitted
+A confirmed candidate is tagged `secondary openrouter; verified by: codex`; a
+rejected candidate is omitted
 and recorded in the audit. If verification fails or is malformed, stop rather
 than posting unverified free-pool output. Add every
 unavailable, failed, malformed, verified, rejected, and successful attempt to
