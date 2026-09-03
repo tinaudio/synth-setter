@@ -330,7 +330,6 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         num_params: int,
         read_audio: bool,
         conditioning: Conditioning,
-        param_jitter_amount: float = 0.0,
         sketch: SketchControlSpec | None = None,
     ) -> None:
         """Configure synthetic sample shapes and epoch length.
@@ -339,7 +338,6 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         :param num_params: Width of parameter and noise tensors.
         :param read_audio: Whether generated samples include prediction audio.
         :param conditioning: Synthetic conditioning modality to populate.
-        :param param_jitter_amount: Maximum normalized-domain offset applied to targets.
         :param sketch: Optional sketch spec adding synthetic control matrices.
         """
         self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
@@ -350,7 +348,6 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
             isinstance(conditioning, str) and conditioning == "m2l"
         )
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
-        self._param_jitter_amount = param_jitter_amount
         self._sketch = sketch
 
     def __len__(self) -> int:
@@ -382,13 +379,6 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
             sketch = None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
         noise = torch.randn_like(params)
-        if self._param_jitter_amount:
-            signed_jitter_amount = 2 * self._param_jitter_amount
-            params.add_(
-                torch.empty_like(params).uniform_(
-                    -signed_jitter_amount, signed_jitter_amount
-                )
-            ).clamp_(-1.0, 1.0)
         return {
             "mel": mel,
             "m2l": m2l,
@@ -418,13 +408,36 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         return {name: value[0] if value is not None else None for name, value in batch.items()}
 
 
-def _model_batch_passthrough(batch: object) -> ModelBatch:
-    """Return a pre-collated synthetic batch unchanged.
+@dataclass(frozen=True)
+class _FakeBatchCollate:
+    """Apply training augmentation after fake sample selection and repetition.
 
-    :param batch: Synthetic model batch.
-    :returns: The same batch.
+    .. attribute :: param_jitter_amount
+
+        Maximum normalized-domain offset applied to targets.
     """
-    return cast(ModelBatch, batch)
+
+    param_jitter_amount: float
+
+    def __call__(self, batch: object) -> ModelBatch:
+        """Return a fake batch with fresh bounded parameter jitter when enabled.
+
+        :param batch: Pre-collated synthetic model batch.
+        :returns: Model batch with independently jittered parameter targets.
+        """
+        model_batch = cast(ModelBatch, batch)
+        if self.param_jitter_amount == 0:
+            return model_batch
+
+        params = cast(torch.Tensor, model_batch["params"])
+        signed_jitter_amount = 2 * self.param_jitter_amount
+        jitter = torch.empty_like(params).uniform_(
+            -signed_jitter_amount, signed_jitter_amount
+        )
+        return {
+            **model_batch,
+            "params": (params + jitter).clamp(-1.0, 1.0),
+        }
 
 
 class _RepeatFirstBatchDataset(torch.utils.data.Dataset[ModelBatch]):
@@ -688,10 +701,9 @@ class LanceVSTDataModule(VSTDataModule):
                 num_params=num_params,
                 read_audio=read_audio,
                 conditioning=self.conditioning,
-                param_jitter_amount=param_jitter_amount,
                 sketch=self.sketch_controls,
             ),
-            collate=_model_batch_passthrough,
+            collate=_FakeBatchCollate(param_jitter_amount),
         )
 
     def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:

@@ -1152,6 +1152,32 @@ class TestLanceMapDataModuleModes:
         for key in ("mel", "params", "noise"):
             assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
 
+    def test_fake_repeat_first_batch_redraws_training_param_jitter(
+        self, tmp_path: Path
+    ) -> None:
+        """Repeated fake source targets receive fresh training jitter per batch.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        """
+        with _set_up_map_module(
+            dataset_root=tmp_path,
+            batch_size=32,
+            fake=True,
+            ot=False,
+            param_jitter_amount=0.1,
+            repeat_first_batch=True,
+            use_saved_mean_and_variance=False,
+        ) as module:
+            iterator = iter(module.train_dataloader())
+            first = _unwrap(next(iterator)["params"])
+            second = _unwrap(next(iterator)["params"])
+
+        assert torch.any(first != second)
+        assert first.min() >= -1.0
+        assert first.max() <= 1.0
+        assert second.min() >= -1.0
+        assert second.max() <= 1.0
+
     def test_repeat_first_batch_every_train_batch_is_the_first(self, dataset_root: Path) -> None:
         """``repeat_first_batch=True`` yields rows ``[0, batch_size)`` for every batch.
 
