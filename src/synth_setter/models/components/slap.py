@@ -1,7 +1,11 @@
-"""Siamese arm and BYOL loss from the SLAP reference implementation.
+"""Siamese arm and BYOL loss adapted from the SLAP reference implementation.
 
 Source: Pliploop/SLAP commit b49290186ee354d34798f9947110a375f9e3f5a7.
 Paper: https://arxiv.org/abs/2506.17815.
+
+Typical usage:
+    arm = SiameseArm(encoder, projector, predictor)
+    representation, projection, prediction = arm(inputs)
 """
 
 from __future__ import annotations
@@ -14,6 +18,20 @@ from torch.nn import functional
 
 _BATCH_FEATURES = "batch features"
 _BATCH_REPRESENTATION = "batch representation"
+
+
+@jaxtyped(typechecker=beartype)
+def _cosine_prediction_distance(
+    query: Float[Tensor, _BATCH_FEATURES],
+    target: Float[Tensor, _BATCH_FEATURES],
+) -> Float[Tensor, ""]:
+    """Return mean cosine distance between normalized prediction vectors.
+
+    :param query: Online normalized prediction vectors.
+    :param target: Moving-average normalized projection vectors.
+    :returns: Mean cosine distance across the batch.
+    """
+    return (2 - 2 * (query * target).sum(dim=-1)).mean()
 
 
 class SiameseArm(nn.Module):
@@ -65,13 +83,13 @@ class SiameseArm(nn.Module):
         if self.freeze_encoder:
             self.encoder.eval()
         representation = self.encoder(inputs)
+        if self.normalize_representations:
+            representation = functional.normalize(representation)
         if self.projector is None:
             return representation, None, None
 
         projection = self.projector(representation)
         prediction = self.transform(projection)
-        if self.normalize_representations:
-            representation = functional.normalize(representation)
         if self.normalize_projections:
             projection = functional.normalize(projection)
             prediction = functional.normalize(prediction)
@@ -100,20 +118,6 @@ class BYOLLoss(nn.Module):
         self.unimodal = unimodal
         self.ssl_weight = ssl_weight
 
-    @staticmethod
-    @jaxtyped(typechecker=beartype)
-    def forward_single(
-        query: Float[Tensor, _BATCH_FEATURES],
-        target: Float[Tensor, _BATCH_FEATURES],
-    ) -> Float[Tensor, ""]:
-        """Return mean normalized cosine prediction distance.
-
-        :param query: Online normalized prediction vectors.
-        :param target: Moving-average normalized projection vectors.
-        :returns: Mean cosine distance across the batch.
-        """
-        return (2 - 2 * (query * target).sum(dim=-1)).mean()
-
     @jaxtyped(typechecker=beartype)
     def forward(
         self,
@@ -135,11 +139,11 @@ class BYOLLoss(nn.Module):
         z_a_ema = functional.normalize(z_a_ema)
         z_t_ema = functional.normalize(z_t_ema)
 
-        a_t_loss = self.forward_single(q_a, z_t_ema)
-        t_a_loss = self.forward_single(q_t, z_a_ema)
+        a_t_loss = _cosine_prediction_distance(q_a, z_t_ema)
+        t_a_loss = _cosine_prediction_distance(q_t, z_a_ema)
         if self.unimodal:
-            a_a_loss = self.forward_single(q_a, z_a_ema)
-            t_t_loss = self.forward_single(q_t, z_t_ema)
+            a_a_loss = _cosine_prediction_distance(q_a, z_a_ema)
+            t_t_loss = _cosine_prediction_distance(q_t, z_t_ema)
         else:
             a_a_loss = torch.zeros_like(a_t_loss)
             t_t_loss = torch.zeros_like(t_a_loss)

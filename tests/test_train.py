@@ -14,7 +14,7 @@ import os
 import re
 import shlex
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Literal
@@ -175,16 +175,21 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
-def test_train_slap_tiny_lance_end_to_end(cfg_slap_train_lance: DictConfig) -> None:
-    """Train and reload SLAP through the public entrypoint on paired Lance rows.
+def _assert_slap_train_artifacts(
+    cfg: DictConfig,
+    metric_dict: Mapping[str, torch.Tensor],
+    object_dict: Mapping[str, object],
+) -> Trainer:
+    """Assert finite SLAP fit, validation, checkpoint reload, and test outputs.
 
-    :param cfg_slap_train_lance: CPU-small fit, validation, checkpoint, and test config.
+    :param cfg: Training configuration carrying the output directory.
+    :param metric_dict: Metrics returned by the training entrypoint.
+    :param object_dict: Runtime objects returned by the training entrypoint.
+    :returns: Trainer that executed the SLAP run.
     """
-    HydraConfig().set_config(cfg_slap_train_lance)
-
-    metric_dict, object_dict = train(cfg_slap_train_lance)
-
-    assert object_dict["trainer"].global_step == 1
+    trainer = object_dict["trainer"]
+    assert isinstance(trainer, Trainer)
+    assert trainer.global_step == 1
     assert isinstance(object_dict["model"], SLAPModule)
     for metric_name in (
         "loss/train/total_loss",
@@ -194,9 +199,36 @@ def test_train_slap_tiny_lance_end_to_end(cfg_slap_train_lance: DictConfig) -> N
         assert metric_name in metric_dict
         assert torch.isfinite(metric_dict[metric_name])
 
-    best_checkpoint = Path(object_dict["trainer"].checkpoint_callback.best_model_path)
-    assert best_checkpoint.parent == Path(cfg_slap_train_lance.paths.output_dir) / "checkpoints"
+    checkpoint_callback = trainer.checkpoint_callback
+    assert isinstance(checkpoint_callback, ValidationAlignedModelCheckpoint)
+    best_checkpoint = Path(checkpoint_callback.best_model_path)
+    assert best_checkpoint.parent == Path(cfg.paths.output_dir) / "checkpoints"
     assert best_checkpoint.stat().st_size > 0
+    return trainer
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+@pytest.mark.slow
+def test_train_slap_tiny_lance_end_to_end(cfg_slap_train_lance: DictConfig) -> None:
+    """Run public SLAP fit, validation, reload, and test on one GPU.
+
+    :param cfg_slap_train_lance: Tiny real Lance training configuration.
+    """
+    with open_dict(cfg_slap_train_lance):
+        cfg_slap_train_lance.trainer.accelerator = "gpu"
+        cfg_slap_train_lance.trainer.devices = 1
+        cfg_slap_train_lance.trainer.precision = "32-true"
+    HydraConfig().set_config(cfg_slap_train_lance)
+
+    metric_dict, object_dict = train(cfg_slap_train_lance)
+
+    trainer = _assert_slap_train_artifacts(
+        cfg_slap_train_lance,
+        metric_dict,
+        object_dict,
+    )
+    assert trainer.strategy.root_device.type == "cuda"
 
 
 @pytest.mark.parametrize(
