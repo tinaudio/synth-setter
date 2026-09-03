@@ -2616,6 +2616,55 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
     )
 
 
+def _materialize_lance_smoke_root(dataset_root: Path) -> None:
+    """Create complete train, validation, and test Lance smoke splits.
+
+    :param dataset_root: Directory receiving the generated split datasets.
+    """
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+    (dataset_root / "dataset.complete").touch()
+
+
+def _slap_arm_config(input_dim: int) -> dict[str, object]:
+    """Build a tiny Hydra Siamese-arm configuration.
+
+    :param input_dim: Flattened modality width accepted by the arm.
+    :returns: Hydra-instantiable arm configuration.
+    """
+    return {
+        "_target_": "synth_setter.models.components.slap.SiameseArm",
+        "encoder": {
+            "_target_": "torch.nn.Sequential",
+            "_args_": [
+                {"_target_": "torch.nn.Flatten", "start_dim": 1},
+                {
+                    "_target_": "torch.nn.Linear",
+                    "in_features": input_dim,
+                    "out_features": 16,
+                },
+            ],
+        },
+        "projector": {
+            "_target_": "torch.nn.Linear",
+            "in_features": 16,
+            "out_features": 8,
+        },
+        "transform": {
+            "_target_": "torch.nn.Linear",
+            "in_features": 8,
+            "out_features": 8,
+        },
+        "normalize_projections": True,
+    }
+
+
 @pytest.fixture
 def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose a ``datamodule=surge_lance`` training cfg over a generated Lance dataset.
@@ -2630,15 +2679,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     :ytype: DictConfig
     """
     dataset_root = tmp_path / "lance-data"
-    dataset_root.mkdir()
-    for seed, split in enumerate(("train", "val", "test")):
-        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
-    (dataset_root / "dataset.complete").touch()
+    _materialize_lance_smoke_root(dataset_root)
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -2688,42 +2729,7 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
     :returns: Ready-to-run SLAP training configuration.
     """
     dataset_root = tmp_path / "slap-lance-data"
-    dataset_root.mkdir()
-    for seed, split in enumerate(("train", "val", "test")):
-        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
-    (dataset_root / "dataset.complete").touch()
-
-    def arm_config(input_dim: int) -> dict[str, object]:
-        return {
-            "_target_": "synth_setter.models.components.slap.SiameseArm",
-            "encoder": {
-                "_target_": "torch.nn.Sequential",
-                "_args_": [
-                    {"_target_": "torch.nn.Flatten", "start_dim": 1},
-                    {
-                        "_target_": "torch.nn.Linear",
-                        "in_features": input_dim,
-                        "out_features": 16,
-                    },
-                ],
-            },
-            "projector": {
-                "_target_": "torch.nn.Linear",
-                "in_features": 16,
-                "out_features": 8,
-            },
-            "transform": {
-                "_target_": "torch.nn.Linear",
-                "in_features": 8,
-                "out_features": 8,
-            },
-            "normalize_projections": True,
-        }
+    _materialize_lance_smoke_root(dataset_root)
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -2749,8 +2755,8 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
         cfg.datamodule.pin_memory = False
-        cfg.model.audio_encoder = arm_config(input_dim=128)
-        cfg.model.text_encoder = arm_config(input_dim=_LANCE_SMOKE_NUM_PARAMS)
+        cfg.model.audio_encoder = _slap_arm_config(input_dim=128)
+        cfg.model.text_encoder = _slap_arm_config(input_dim=_LANCE_SMOKE_NUM_PARAMS)
         cfg.model.compile = False
         cfg.trainer.max_epochs = 1
         cfg.trainer.max_steps = -1

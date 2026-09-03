@@ -9,6 +9,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 """
 
 import hashlib
+import json
 import math
 import os
 import shlex
@@ -17,6 +18,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
+from copy import deepcopy
 from pathlib import Path
 from typing import Literal, NamedTuple
 from unittest.mock import MagicMock, patch
@@ -48,6 +50,7 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -135,6 +138,58 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert "test/param_mse" in result.stdout
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+@pytest.mark.slow
+def test_evaluate_slap_checkpoint_reports_finite_loss(
+    cfg_slap_train_lance: DictConfig,
+) -> None:
+    """Reload a GPU-trained SLAP checkpoint through the public eval path.
+
+    :param cfg_slap_train_lance: Tiny paired Lance training configuration.
+    """
+    with open_dict(cfg_slap_train_lance):
+        cfg_slap_train_lance.trainer.accelerator = "gpu"
+        cfg_slap_train_lance.trainer.devices = 1
+        cfg_slap_train_lance.trainer.precision = "32-true"
+    HydraConfig().set_config(cfg_slap_train_lance)
+    _, train_objects = train(cfg_slap_train_lance)
+    checkpoint_path = train_objects["trainer"].checkpoint_callback.best_model_path
+
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "datamodule=surge_lance",
+                "model=slap",
+                "callbacks=none",
+                "trainer=gpu",
+                "synth=surge_4",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths = deepcopy(cfg_slap_train_lance.paths)
+        cfg.paths.output_dir = str(Path(cfg.paths.output_dir) / "eval")
+        cfg.datamodule = deepcopy(cfg_slap_train_lance.datamodule)
+        cfg.model = deepcopy(cfg_slap_train_lance.model)
+        cfg.logger = None
+        cfg.ckpt_path = checkpoint_path
+        cfg.mode = "test"
+        cfg.trainer.limit_test_batches = 1
+        cfg.trainer.enable_model_summary = False
+    HydraConfig().set_config(cfg)
+
+    metric_dict, object_dict = evaluate(cfg)
+    GlobalHydra.instance().clear()
+
+    assert isinstance(object_dict["model"], SLAPModule)
+    assert torch.isfinite(metric_dict["loss/test/total_loss"])
+    metrics_path = Path(cfg.paths.output_dir) / "metrics" / "metrics.json"
+    assert math.isfinite(json.loads(metrics_path.read_text())["loss/test/total_loss"])
 
 
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
