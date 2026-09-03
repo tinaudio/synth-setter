@@ -144,7 +144,7 @@ _PROGRAMS = (
 ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
     [
         # Program loads a full patch, so later writes restore every sampled control.
-        CategoricalParameter(name="program", values=_PROGRAMS, encoding="scalar"),
+        CategoricalParameter(name="program", values=_PROGRAMS, encoding="onehot"),
         CategoricalParameter(name="adsr_mode", values=["J60", "J106"], encoding="onehot"),
         ContinuousParameter(name="bender_dco"),
         ContinuousParameter(name="bender_vcf"),
@@ -175,7 +175,7 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="transpose",
             values=[False, True],
-            weights=[99.0, 1.0],
+            weights=[1.0, 0.0],
             encoding="onehot",
         ),
         CategoricalParameter(name="hold", values=[False, True], encoding="onehot"),
@@ -197,11 +197,11 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(name="vca_mode", values=["Env", "Gate"], encoding="onehot"),
         ContinuousParameter(name="bender"),
         ContinuousParameter(name="tuning"),
-        # Keep power-off reachable without making silent renders the common case.
+        # Represent power-off without sampling silent rows.
         CategoricalParameter(
             name="power",
             values=[False, True],
-            weights=[1.0, 99.0],
+            weights=[0.0, 1.0],
             encoding="onehot",
         ),
         CategoricalParameter(
@@ -259,11 +259,11 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="oscillator_mode", values=["Wavetable", "PolyBLEP"], encoding="onehot"
         ),
-        # Keep bypass reachable without making silent renders the common case.
+        # Represent bypass without sampling silent rows.
         CategoricalParameter(
             name="bypass",
             values=[False, True],
-            weights=[99.0, 1.0],
+            weights=[1.0, 0.0],
             encoding="onehot",
         ),
     ],

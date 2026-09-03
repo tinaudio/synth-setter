@@ -29,6 +29,7 @@ import json
 import math
 import multiprocessing
 import os
+import platform
 import shlex
 import shutil
 import subprocess
@@ -57,6 +58,7 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
+    MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
@@ -89,6 +91,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
     Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
 ).resolve()
+_KR106_PLUGIN_VST3 = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
+_KR106_PRESET = _REPO_ROOT / "presets" / "ultramaster_kr106-base.vstpreset"
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -805,6 +809,75 @@ def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
     assert resumed_attempts == first_attempts
 
     assert validate_all_shards_from_r2(spec) == []
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The public operator renders, validates, and finalizes a real KR-106 row.
+
+    :param cfg_dataset: Composed production dataset config.
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Configures the single local worker process.
+    :param tmp_path: Render and finalize workspace.
+    """
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _KR106_PLUGIN_VST3.is_dir(), (
+        f"Ultramaster KR-106 is not installed at {_KR106_PLUGIN_VST3}"
+    )
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset.mask_degenerate_bins = True
+        cfg_dataset.synth.name = "ultramaster_kr106"
+        cfg_dataset.synth.param_spec_name = "ultramaster_kr106"
+        cfg_dataset.synth.plugin_path = str(_KR106_PLUGIN_VST3)
+        cfg_dataset.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset.synth.synth_version = "2.5.13"
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 2
+        cfg_dataset.render.max_retries = 20
+        cfg_dataset.render.plugin_reload_cadence = "render"
+        cfg_dataset.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+    from_hydra(cfg_dataset)
+
+    shard = spec.shards[0]
+    assert shard_has_complete_attempt(spec, shard.shard_id)
+    assert validate_all_shards_from_r2(spec) == []
+
+    finalize_dir = tmp_path / "finalize"
+    finalize_dir.mkdir()
+    finalize_lance(spec, finalize_dir)
+    dataset_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "train.lance"
+    table = lance.dataset(dataset_path).to_table(
+        columns=[AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD]
+    )
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    mel_spec = table.column(MEL_SPEC_FIELD).combine_chunks().to_numpy_ndarray()
+    params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
+    expected_shapes = dataset_field_shapes(spec.render, spec.num_params)
+
+    assert audio.shape == expected_shapes[AUDIO_FIELD]
+    assert mel_spec.shape == expected_shapes[MEL_SPEC_FIELD]
+    assert params.shape == expected_shapes[PARAM_ARRAY_FIELD]
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) <= 1.0
+    assert np.any(audio != 0.0)
+    assert np.isfinite(mel_spec).all()
+    assert np.isfinite(params).all()
+    assert ((params >= 0.0) & (params <= 1.0)).all()
 
 
 def test_from_hydra_passes_per_shard_base_seed_to_renderer(
