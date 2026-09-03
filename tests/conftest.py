@@ -790,6 +790,34 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_pyfdn_hadamard(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the fixed-Hadamard pyFDN dataset with temporary local paths.
+
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: PyFDN cfg with ``tmp_path``-pinned paths.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/smoke-shard",
+                "synth=pyfdn_n8_mono_hadamard",
+                "render=pyfdn",
+                "render.gui_toggle_cadence=never",
+            ],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_torchsynth(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose the torchsynth smoke experiment with temporary local paths.
 

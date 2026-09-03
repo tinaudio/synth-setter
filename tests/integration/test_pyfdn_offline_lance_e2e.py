@@ -135,6 +135,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
     assert params.shape == (1, encoded_width)
     assert audio.dtype == params.dtype == torch.float32
     assert torch.isfinite(audio).all()
+    assert torch.all((-1.0 <= audio) & (audio <= 1.0))
     assert torch.all((-1.0 <= params) & (params <= 1.0))
 
     debug_json = dataset.to_table(columns=["debug"])["debug"][0].as_py()
