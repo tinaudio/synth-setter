@@ -22,6 +22,7 @@ from typing import cast
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_PARAM_SPEC,
+    PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC,
 )
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
@@ -57,6 +58,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("obxf"): OBXF_PARAM_SPEC,
     ParamSpecName("pyfdn_n8_mono"): PYFDN_N8_MONO_PARAM_SPEC,
     ParamSpecName("pyfdn_n8_mono_householder"): PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    ParamSpecName("pyfdn_pitchshift_n8_mono"): PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC,
     ParamSpecName("torchsynth_adsr"): TORCHSYNTH_ADSR_PARAM_SPEC,
     ParamSpecName("torchsynth_full"): TORCHSYNTH_FULL_PARAM_SPEC,
     ParamSpecName("torchsynth_simple"): TORCHSYNTH_SIMPLE_PARAM_SPEC,

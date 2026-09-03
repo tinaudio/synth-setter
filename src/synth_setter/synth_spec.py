@@ -133,6 +133,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "",
         "0.4.2",
     ),
+    "pyfdn_pitchshift_n8_mono": (
+        "pyfdn_pitchshift_n8_mono",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
     "torchsynth_adsr": ("torchsynth_adsr", "torchsynth", "", "1.0.2"),
     "torchsynth_full": ("torchsynth_full", "torchsynth", "", "1.0.2"),
     "torchsynth_simple": ("torchsynth_simple", "torchsynth", "", "1.0.2"),

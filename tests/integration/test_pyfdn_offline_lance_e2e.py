@@ -17,6 +17,7 @@ from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_PARAM_SPEC,
+    PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC,
 )
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.param_spec_name import ParamSpecName
@@ -150,3 +151,70 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
     decoded_rerender = PyFDNRenderer().render(decoded)
     assert note_params == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
     np.testing.assert_allclose(decoded_rerender, audio[0].numpy(), rtol=1e-4, atol=2e-5)
+
+
+@pytest.mark.slow
+def test_pyfdn_pitchshift_lance_reader_rerender_round_trip(tmp_path: Path) -> None:
+    """A real pitch-shift row survives generation, loading, and native rerender.
+
+    :param tmp_path: Isolated destination for the production Lance writer.
+    """
+    identity = ParamSpecName("pyfdn_pitchshift_n8_mono")
+    render = RenderConfig(
+        synth=SynthSpec(
+            name=SynthName(identity),
+            param_spec_name=identity,
+            plugin_path="pyfdn",
+            plugin_state_path="",
+            synth_version="0.4.2",
+        ),
+        renderer_backend="pyfdn",
+        pyfdn_excitation="impulse",
+        sample_rate=44_100,
+        channels=1,
+        velocity=0,
+        signal_duration_seconds=4.0,
+        min_loudness=-100.0,
+        audio_dtype="float32",
+        mel_spec_dtype="float32",
+        samples_per_render_batch=1,
+        samples_per_shard=1,
+        base_seed=23,
+        attempts_per_sample=100,
+        param_sample_cadence="sample",
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
+    )
+    spec = DatasetSpec.model_validate(
+        {
+            "task_name": "pyfdn-pitchshift-cli-e2e",
+            "output_format": "lance",
+            "train_val_test_sizes": [1, 0, 0],
+            "base_seed": 23,
+            "r2": {"bucket": "intermediate-data"},
+            "render": render.model_dump(mode="json"),
+        }
+    )
+    shard = spec.shards[0]
+    output = tmp_path / shard.filename
+
+    result = subprocess.run(  # noqa: S603 — production argv from the validated spec
+        build_generate_args(spec, shard, tmp_path),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr[-2000:]
+    dataset = lance.dataset(str(output))
+    table = dataset.to_table(columns=["audio", "param_array", "debug"])
+    stored_audio = table["audio"].combine_chunks().to_numpy_ndarray()[0]
+    encoded = table["param_array"].combine_chunks().to_numpy_ndarray()[0]
+    decoded, note_params = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.decode(encoded)
+    rerendered = PyFDNRenderer(param_spec_name=identity).render(decoded)
+
+    assert spec.num_params == 109
+    assert stored_audio.shape == (1, 176_400)
+    assert note_params == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
+    np.testing.assert_allclose(rerendered, stored_audio, rtol=1e-4, atol=5e-5)

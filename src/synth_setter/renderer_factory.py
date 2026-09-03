@@ -31,6 +31,7 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
 
         return PyFDNRenderer(
             excitation=render_config.pyfdn_excitation or "impulse",
+            param_spec_name=render_config.param_spec_name,
             synth_version=render_config.synth.synth_version,
             plugin_path=render_config.plugin_path,
             sample_rate=render_config.sample_rate,
