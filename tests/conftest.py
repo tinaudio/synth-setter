@@ -2740,6 +2740,95 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture
+def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
+    """Compose a one-step SLAP run over paired local Lance splits.
+
+    The configuration exercises fit, validation, checkpoint reload, and test.
+
+    :param tmp_path: Isolated dataset and training output root.
+    :returns: Ready-to-run SLAP training configuration.
+    """
+    dataset_root = tmp_path / "slap-lance-data"
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+    (dataset_root / "dataset.complete").touch()
+
+    def arm_config(input_dim: int) -> dict[str, object]:
+        return {
+            "_target_": "synth_setter.models.components.slap.SiameseArm",
+            "encoder": {
+                "_target_": "torch.nn.Sequential",
+                "_args_": [
+                    {"_target_": "torch.nn.Flatten", "start_dim": 1},
+                    {
+                        "_target_": "torch.nn.Linear",
+                        "in_features": input_dim,
+                        "out_features": 16,
+                    },
+                ],
+            },
+            "projector": {
+                "_target_": "torch.nn.Linear",
+                "in_features": 16,
+                "out_features": 8,
+            },
+            "transform": {
+                "_target_": "torch.nn.Linear",
+                "in_features": 8,
+                "out_features": 8,
+            },
+            "normalize_projections": True,
+        }
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "datamodule=surge_lance",
+                f"synth={_LANCE_SMOKE_PARAM_SPEC}",
+                "model=slap",
+                "callbacks=default_slap",
+                "trainer=cpu",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.seed = 1234
+        cfg.logger = None
+        cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.datamodule.conditioning = "audio"
+        cfg.datamodule.ot = False
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.pin_memory = False
+        cfg.model.audio_encoder = arm_config(input_dim=128)
+        cfg.model.text_encoder = arm_config(input_dim=_LANCE_SMOKE_NUM_PARAMS)
+        cfg.model.compile = False
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.max_steps = -1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 1
+        cfg.trainer.limit_test_batches = 1
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.val_check_interval = 1
+        cfg.trainer.enable_model_summary = False
+        cfg.training.val_audio_probe = False
+        if "lr_monitor" in cfg.callbacks:
+            del cfg.callbacks.lr_monitor
+
+    return cfg
+
+
 def _write_sketch_lance_root(dataset_root: Path) -> None:
     """Write tiny pooled m2l+sketch train/val/test Lance splits.
 
