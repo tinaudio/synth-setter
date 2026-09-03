@@ -1902,8 +1902,10 @@ def _assert_conditioning_train_validate_finite(
     )
 
     HydraConfig().set_config(cfg_train)
-    train(cfg_train)
+    _, train_objects = train(cfg_train)
 
+    train_model = train_objects["model"]
+    assert train_model.encoder.n_conditioning_outputs == len(train_model.vector_field.layers)
     assert "last.ckpt" in os.listdir(tmp_path / "checkpoints")
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -1937,10 +1939,12 @@ def _assert_conditioning_train_validate_finite(
 
     HydraConfig().set_config(cfg_eval)
     try:
-        val_metric_dict, _ = evaluate(cfg_eval)
+        val_metric_dict, eval_objects = evaluate(cfg_eval)
     finally:
         GlobalHydra.instance().clear()
 
+    eval_model = eval_objects["model"]
+    assert eval_model.encoder.n_conditioning_outputs == len(eval_model.vector_field.layers)
     validation_mse = val_metric_dict["val/param_mse"].item()
     assert math.isfinite(validation_mse)
     return validation_mse
