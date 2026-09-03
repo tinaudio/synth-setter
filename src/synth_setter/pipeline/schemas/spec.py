@@ -495,7 +495,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         )
         if self.renderer_backend != "pyfdn":
             if pyfdn_identity:
-                raise ValueError(f"{self.synth.name} requires renderer_backend='pyfdn'")
+                raise ValueError("all pyFDN identities require renderer_backend='pyfdn'")
             if self.pyfdn_excitation is not None:
                 raise ValueError("pyfdn_excitation requires renderer_backend='pyfdn'")
             return self
