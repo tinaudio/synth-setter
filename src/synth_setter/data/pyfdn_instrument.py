@@ -257,6 +257,7 @@ def params_to_pitchshift_fdn_build(
         sample_rate=sample_rate,
         topology="pitch-shift",
     )
+    _pitchshift_controls(params)
     rt_seconds = _require_array(
         PYFDN_RT_GEQ_SECONDS_NAME,
         params[PYFDN_RT_GEQ_SECONDS_NAME],
@@ -292,24 +293,23 @@ def params_to_pitchshift_fdn_build(
     return build
 
 
-def _pitchshift_post_delay(
-    build: FDNBuild,
+def _pitchshift_controls(
     params: Mapping[str, ParameterValue],
-) -> Series:
-    """Construct fresh reference-ordered GEQ and pitch-shifter state.
+) -> tuple[float, int, np.ndarray]:
+    """Validate native pitch-shifter controls.
 
-    :param build: Pitch-shift FDN build carrying the GEQ SOS bank.
-    :param params: Native pitch-shift controls.
-    :returns: Stateful post-delay chain for one render only.
+    :param params: Mapping containing transpose, window, and active-channel controls.
+    :returns: Validated transpose cents, window samples, and int64 active mask ``(8,)``.
     :raises TypeError: Scalar or active-channel controls have invalid native types.
-    :raises ValueError: The active-channel mask contains values other than zero or one.
+    :raises ValueError: Scalar bounds or active-channel values violate the ParamSpec.
     """
     transpose = params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME]
     if not isinstance(transpose, Real) or isinstance(transpose, bool):
         raise TypeError("transpose_cents must be a real scalar")
+    transpose_value = float(transpose)
     if not (
         PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MIN
-        <= float(transpose)
+        <= transpose_value
         <= PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX
     ):
         raise ValueError(
@@ -320,11 +320,8 @@ def _pitchshift_post_delay(
     window_size = params[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME]
     if not isinstance(window_size, Integral) or isinstance(window_size, bool):
         raise TypeError("window_size must be an integer")
-    if not (
-        PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN
-        <= int(window_size)
-        <= PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX
-    ):
+    window_value = int(window_size)
+    if not PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN <= window_value <= PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX:
         raise ValueError(
             "window_size must be between "
             f"{PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN} and "
@@ -338,16 +335,29 @@ def _pitchshift_post_delay(
     )
     if np.any((active_mask != 0) & (active_mask != 1)):
         raise ValueError("active_channels must contain only zero or one")
+    return transpose_value, window_value, active_mask
+
+
+def _pitchshift_post_delay(
+    build: FDNBuild,
+    params: Mapping[str, ParameterValue],
+) -> Series:
+    """Construct fresh reference-ordered GEQ and pitch-shifter state.
+
+    :param build: Pitch-shift FDN build carrying the GEQ SOS bank.
+    :param params: Native pitch-shift controls.
+    :returns: Stateful post-delay chain for one render only.
+    """
+    transpose, window_size, active_mask = _pitchshift_controls(params)
     geq = cast(np.ndarray, build.post_delay)
     return Series(
         [
             SOSBank(geq),
             PitchShift(
                 PYFDN_ORDER,
-                max_delay_samps=int(window_size)
-                * PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER,
-                window_size=int(window_size),
-                transpose_cents=float(transpose),
+                max_delay_samps=window_size * PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER,
+                window_size=window_size,
+                transpose_cents=transpose,
                 fs=_SAMPLE_RATE,
                 active_channels=np.flatnonzero(active_mask),
                 min_delay_samps=PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES,

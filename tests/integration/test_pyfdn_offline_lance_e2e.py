@@ -235,6 +235,7 @@ def test_pyfdn_pitchshift_lance_reader_rerender_round_trip(tmp_path: Path) -> No
     assert params.shape == (1, 109)
     assert audio.dtype == params.dtype == torch.float32
     assert torch.isfinite(audio).all()
+    assert torch.all((-1.0 <= audio) & (audio <= 1.0))
     assert torch.all((-1.0 <= params) & (params <= 1.0))
     assert note_params == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
     np.testing.assert_allclose(rerendered, audio[0].numpy(), rtol=1e-4, atol=5e-5)
