@@ -111,6 +111,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
     assert mel_rows[0].dtype == np.float32
     assert metadata == render.shard_metadata()
     assert rejections.clipped >= 0
+    assert rejections.non_finite >= 0
     assert rejections.silent >= 0
 
     datamodule = LanceVSTDataModule(
@@ -139,7 +140,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
 
     debug_json = dataset.to_table(columns=["debug"])["debug"][0].as_py()
     debug = SeedDebugDocument.model_validate(json.loads(debug_json))
-    assert debug.attempt == rejections.clipped + rejections.silent
+    assert debug.attempt == (rejections.clipped + rejections.non_finite + rejections.silent)
     assert debug.seed is not None
     native_params, native_notes = param_spec.sample(np.random.default_rng(debug.seed))
     assert native_notes == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}

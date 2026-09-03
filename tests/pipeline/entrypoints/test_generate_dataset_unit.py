@@ -4232,8 +4232,8 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
         None,
     ]
     outcomes = {
-        0: (True, False, RenderRejectionMetrics(clipped=1, silent=2)),
-        1: (True, False, RenderRejectionMetrics(clipped=3, silent=5)),
+        0: (True, False, RenderRejectionMetrics(clipped=1, non_finite=2, silent=3)),
+        1: (True, False, RenderRejectionMetrics(clipped=4, non_finite=5, silent=6)),
     }
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset._render_one_owned_shard",
@@ -4248,7 +4248,7 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
     )
 
     assert (rendered, skipped) == (2, 0)
-    assert rejections == RenderRejectionMetrics(clipped=4, silent=7)
+    assert rejections == RenderRejectionMetrics(clipped=5, non_finite=7, silent=9)
     assert claims.complete.call_count == 2
 
 
