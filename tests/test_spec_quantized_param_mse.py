@@ -153,6 +153,19 @@ def test_spec_quantized_per_param_mse_matches_render_postprocessor() -> None:
     assert torch.equal(result, torch.zeros(6))
 
 
+def test_spec_quantized_per_param_mse_matches_render_rounding_boundary() -> None:
+    """Training scoring uses the renderer's exact float32 discrete rounding."""
+    spec = ParamSpec([DiscreteArrayParameter("steps", shape=(1,), min=0, max=100)], [])
+    predicted = torch.tensor([[-0.61]], dtype=torch.float32)
+    rendered = torch.from_numpy(spec_quantize_model_output(predicted[0].numpy(), spec)).unsqueeze(
+        0
+    )
+
+    result = spec_quantized_per_param_mse(predicted, rendered, spec)
+
+    assert torch.equal(result, torch.zeros(1))
+
+
 def test_spec_quantized_per_param_mse_nonfinite_prediction_raises_value_error() -> None:
     """A NaN category cannot collapse into a finite, misleading score."""
     spec = ParamSpec([CategoricalParameter("mode", ["a", "b"], encoding="onehot")], [])

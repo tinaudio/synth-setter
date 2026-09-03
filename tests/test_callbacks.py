@@ -320,6 +320,7 @@ class _RecordingModule:
     """Stand-in for the LightningModule, capturing the metric dict the callback emits."""
 
     def __init__(self) -> None:
+        self.device = torch.device("cpu")
         self.logged: dict[str, float] = {}
         self.sync_dist = False
 
@@ -395,8 +396,13 @@ def test_log_per_param_mse_weights_spec_quantized_error_by_sample_count() -> Non
     assert module.logged["val/param_mse_spec_quantized"] == pytest.approx(0.75)
 
 
-def test_log_per_param_mse_synchronizes_epoch_metrics_across_ranks() -> None:
-    """Validation summaries request Lightning's distributed reduction."""
+def test_log_per_param_mse_weights_samples_across_distributed_ranks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distributed totals are reduced before the global sample mean is computed.
+
+    :param monkeypatch: Replaces the process-group reduction with rank-one totals.
+    """
     callback = LogPerParamMSE(param_spec="surge_4")
     module = _RecordingModule()
     trainer = cast(Trainer, None)
@@ -410,9 +416,17 @@ def test_log_per_param_mse_synchronizes_epoch_metrics_across_ranks() -> None:
         0,
     )
 
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    def add_rank_one_totals(total_and_count: torch.Tensor) -> None:
+        total_and_count[:-1] += 3.0
+        total_and_count[-1] += 3.0
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", add_rank_one_totals)
     callback.on_validation_epoch_end(trainer, pl_module)
 
-    assert module.sync_dist is True
+    assert module.logged["val/param_mse_spec_quantized"] == pytest.approx(0.75)
+    assert module.sync_dist is False
 
 
 def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:

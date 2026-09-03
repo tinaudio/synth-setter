@@ -927,6 +927,29 @@ _PER_PARAM_MSE_OUTPUTS = (
 _SPEC_QUANTIZED_PER_PARAM_MSE = "per_param_mse_spec_quantized"
 
 
+def _distributed_metric_mean(
+    total: np.ndarray,
+    count: int,
+    device: torch.device,
+) -> np.ndarray:
+    """Reduce an accumulated metric sum and count before computing its mean.
+
+    :param total: Rank-local per-column metric sums.
+    :param count: Rank-local number of contributing observations.
+    :param device: Device compatible with the active distributed backend.
+    :returns: Globally weighted per-column mean.
+    """
+    packed = torch.cat(
+        (
+            torch.as_tensor(total, device=device, dtype=torch.float64).flatten(),
+            torch.tensor([count], device=device, dtype=torch.float64),
+        )
+    )
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.all_reduce(packed)
+    return (packed[:-1] / packed[-1]).cpu().numpy().reshape(total.shape)
+
+
 class LogPerParamMSE(Callback):
     """Log validation-set MSE broken down per parameter dimension of the ParamSpec."""
 
@@ -983,7 +1006,11 @@ class LogPerParamMSE(Callback):
     ) -> None:
         metrics = {}
         for metric_name, total in self.metric_totals.items():
-            per_param_mse = total / self.metric_counts[metric_name]
+            per_param_mse = _distributed_metric_mean(
+                total,
+                self.metric_counts[metric_name],
+                pl_module.device,
+            )
             # Encoded spans preserve labels across onehot and multi-column parameters.
             metrics.update(
                 {
@@ -993,4 +1020,4 @@ class LogPerParamMSE(Callback):
             )
             if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
                 metrics["val/param_mse_spec_quantized"] = per_param_mse.mean()
-        pl_module.log_dict(metrics, sync_dist=True)
+        pl_module.log_dict(metrics)

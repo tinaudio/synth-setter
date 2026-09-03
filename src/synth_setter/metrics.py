@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
 from torchmetrics import Metric
@@ -102,39 +103,13 @@ def spec_quantized_per_param_mse(
     if not torch.isfinite(predicted).all() or not torch.isfinite(target).all():
         raise ValueError("predicted and target parameters must contain only finite values")
 
-    from synth_setter.data.vst.param_spec import (
-        CategoricalParameter,
-        DiscreteArrayParameter,
-        DiscreteLiteralParameter,
+    from synth_setter.data.vst.param_spec import spec_quantize_model_output
+
+    effective_rows = np.stack(
+        [spec_quantize_model_output(row, param_spec) for row in predicted.detach().cpu().numpy()]
     )
-
-    effective_encoded = ((predicted.float() + 1) / 2).clamp(0, 1)
-    for parameter, span in param_spec.encoded_slices():
-        values = effective_encoded[:, span]
-        is_onehot = isinstance(parameter, (CategoricalParameter, DiscreteLiteralParameter)) and (
-            parameter.encoding == "onehot"
-        )
-        if is_onehot:
-            quantized = torch.zeros_like(values)
-            quantized.scatter_(1, values.argmax(dim=1, keepdim=True), 1)
-            effective_encoded[:, span] = quantized
-        elif isinstance(parameter, CategoricalParameter):
-            levels = values.new_tensor(parameter.raw_values)
-            nearest = (values - levels).abs().argmin(dim=1)
-            effective_encoded[:, span] = levels[nearest].unsqueeze(1)
-        elif isinstance(parameter, DiscreteLiteralParameter):
-            native = values * (parameter.max - parameter.min) + parameter.min
-            effective_encoded[:, span] = (native.trunc() - parameter.min) / (
-                parameter.max - parameter.min
-            )
-        elif isinstance(parameter, DiscreteArrayParameter):
-            native = values * (parameter.max - parameter.min) + parameter.min
-            effective_encoded[:, span] = (native.round() - parameter.min) / (
-                parameter.max - parameter.min
-            )
-
-    effective_model = effective_encoded * 2 - 1
-    return (effective_model - target.float()).square().mean(dim=0)
+    effective = torch.as_tensor(effective_rows, device=predicted.device, dtype=torch.float32)
+    return (effective - target.float()).square().mean(dim=0)
 
 
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):
