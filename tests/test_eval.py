@@ -41,6 +41,7 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
@@ -1306,20 +1307,27 @@ def _compose_fake_oracle_eval_cfg(
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
         # Render group is null on fake_oracle; set it inline to the dataset's spec.
+        is_pyfdn = param_spec_name == "pyfdn_n8_mono"
         cfg.render = RenderConfig.model_validate(
             {
                 "synth": {
                     "name": param_spec_name,
                     "param_spec_name": param_spec_name,
-                    "plugin_state_path": str(plugin_state_paths[param_spec_name]),
-                    "plugin_path": "plugins/fake.vst3",
-                    "synth_version": "1.3.4",
+                    "plugin_state_path": (
+                        "" if is_pyfdn else str(plugin_state_paths[param_spec_name])
+                    ),
+                    "plugin_path": "pyfdn" if is_pyfdn else "plugins/fake.vst3",
+                    "synth_version": "0.4.2" if is_pyfdn else "1.3.4",
                 },
+                "renderer_backend": "pyfdn" if is_pyfdn else "pedalboard",
+                "pyfdn_excitation": "impulse" if is_pyfdn else None,
                 "sample_rate": 44100,
-                "channels": 2,
-                "velocity": 100,
+                "channels": 1 if is_pyfdn else 2,
+                "velocity": 0 if is_pyfdn else 100,
                 "signal_duration_seconds": 4.0,
                 "min_loudness": -55.0,
+                "audio_dtype": "float32" if is_pyfdn else "float16",
+                "mel_spec_dtype": "float32" if is_pyfdn else "float16",
                 "samples_per_render_batch": 1,
                 "samples_per_shard": 5,
                 "plugin_reload_cadence": "render",
@@ -1467,6 +1475,59 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)
     assert not any("shuffle" in key for key in metric_dict)
+
+
+@pytest.mark.slow
+def test_evaluate_predict_mode_pyfdn_projects_feedback_and_renders_finite_audio(
+    tmp_path: Path,
+) -> None:
+    """The eval entrypoint stabilizes unconstrained pyFDN predictions before rendering.
+
+    :param tmp_path: Hydra output root and two-row Lance predict dataset.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    dataset_root = tmp_path / "pyfdn-data"
+    dataset_root.mkdir()
+    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(17))
+    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    feedback_span = next(
+        span
+        for parameter, span in PYFDN_N8_MONO_PARAM_SPEC.encoded_slices()
+        if parameter.name == "feedback_matrix"
+    )
+    encoded[feedback_span] = 1.0
+    write_lance_shard(
+        dataset_root / "test.lance",
+        {
+            "audio": np.zeros((2, 1, 176_400), dtype=np.float32),
+            "mel_spec": np.zeros((2, 1, 128, 401), dtype=np.float32),
+            "param_array": np.repeat(encoded[None, :], 2, axis=0),
+        },
+    )
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        dataset_root,
+        mode="predict",
+        param_spec_name="pyfdn_n8_mono",
+        datamodule="pyfdn",
+    )
+    with open_dict(cfg):
+        cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.evaluation.compute_metrics = False
+        cfg.evaluation.rerender_target = True
+
+    HydraConfig().set_config(cfg)
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    with AudioFile(str(tmp_path / "audio" / "sample_0" / "pred.wav")) as audio_file:
+        rendered = audio_file.read(audio_file.frames)
+    assert rendered.shape == (1, 176_400)
+    assert np.isfinite(rendered).all()
 
 
 @pytest.mark.fake_vst
