@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 from click.testing import CliRunner
 
 import synth_setter.evaluation.compute_audio_metrics as cam
@@ -94,6 +95,138 @@ def test_compute_rms_silent_pred_returns_zero_not_nan() -> None:
     rms = compute_rms(target, pred)
     assert np.isfinite(rms), f"compute_rms produced non-finite {rms!r} for silent pred"
     assert rms == 0.0
+
+
+def test_compute_octave_rt60_log_rmse_identical_decay_returns_zero() -> None:
+    """Identical broadband decays have zero octave-band RT60 log error."""
+    rng = np.random.default_rng(7)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    decay = (rng.standard_normal(_SR) * np.exp(-20.0 * time))[None, :]
+
+    error = cam.compute_octave_rt60_log_rmse(decay, decay, _SR)
+
+    assert error == pytest.approx(0.0, abs=1e-12)
+
+
+def test_compute_octave_rt60_log_rmse_changed_decay_is_positive() -> None:
+    """Different broadband decay rates produce finite positive RT60 error."""
+    rng = np.random.default_rng(11)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    noise = rng.standard_normal(_SR)
+    target = (noise * np.exp(-20.0 * time))[None, :]
+    pred = (noise * np.exp(-10.0 * time))[None, :]
+
+    error = cam.compute_octave_rt60_log_rmse(target, pred, _SR)
+
+    assert np.isfinite(error)
+    assert error > 0.0
+
+
+def test_compute_octave_rt60_log_rmse_ignores_unfit_band_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero and non-finite estimates cannot enter the logarithmic reduction.
+
+    :param monkeypatch: Supplies controlled pyFDN RT estimates at the dependency boundary.
+    """
+    estimates = iter(
+        [
+            (np.array([1.0, 0.0, np.nan, 2.0]), np.array([63.0, 125.0, 250.0, 500.0])),
+            (np.array([2.0, 3.0, 4.0, 2.0]), np.array([63.0, 125.0, 250.0, 500.0])),
+        ]
+    )
+    monkeypatch.setattr(cam, "estimate_rt_bands", lambda *_args, **_kwargs: next(estimates))
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    error = cam.compute_octave_rt60_log_rmse(audio, audio, _SR)
+
+    assert error == pytest.approx(np.log(2.0) / np.sqrt(2.0))
+
+
+def test_compute_octave_rt60_log_rmse_without_valid_band_pair_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An entirely unfit pair fails instead of logging NaN or infinity.
+
+    :param monkeypatch: Supplies controlled zero RT estimates.
+    """
+    monkeypatch.setattr(
+        cam,
+        "estimate_rt_bands",
+        lambda *_args, **_kwargs: (np.zeros(2), np.array([63.0, 125.0])),
+    )
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="no valid paired octave-band RT60 estimates"):
+        cam.compute_octave_rt60_log_rmse(audio, audio, _SR)
+
+
+def test_compute_octave_edc_rmse_db_identical_decay_returns_zero() -> None:
+    """Identical broadband decays have zero octave-band EDC error."""
+    rng = np.random.default_rng(13)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+
+    error = cam.compute_octave_edc_rmse_db(decay, decay, _SR)
+
+    assert error == pytest.approx(0.0, abs=1e-7)
+
+
+def test_compute_octave_edc_rmse_db_disables_gradients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Using pyFDN's matching loss as a metric never records a gradient graph.
+
+    :param monkeypatch: Replaces the criterion at its external-library boundary.
+    """
+    grad_enabled: list[bool] = []
+
+    class Criterion:
+        def __init__(self, _target: np.ndarray) -> None:
+            pass
+
+        def __call__(self, _response: object) -> torch.Tensor:
+            grad_enabled.append(torch.is_grad_enabled())
+            return torch.tensor(0.0)
+
+    monkeypatch.setattr(cam, "MatchEnergyDecay", Criterion)
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with torch.enable_grad():
+        cam.compute_octave_edc_rmse_db(audio, audio, _SR)
+
+    assert grad_enabled == [False]
+
+
+def test_compute_octave_edc_rmse_db_changed_decay_is_positive() -> None:
+    """Different broadband decay rates produce finite positive EDC error."""
+    rng = np.random.default_rng(17)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    noise = rng.standard_normal(_SR).astype(np.float32)
+    target = (noise * np.exp(-20.0 * time))[None, :]
+    pred = (noise * np.exp(-10.0 * time))[None, :]
+
+    error = cam.compute_octave_edc_rmse_db(target, pred, _SR)
+
+    assert np.isfinite(error)
+    assert error > 0.0
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [cam.compute_octave_rt60_log_rmse, cam.compute_octave_edc_rmse_db],
+)
+def test_pyfdn_reverb_metric_stereo_input_raises(
+    metric: Callable[[np.ndarray, np.ndarray, float], float],
+) -> None:
+    """Reverb metrics reject multi-channel audio rather than collapsing it silently.
+
+    :param metric: pyFDN metric under test.
+    """
+    stereo = np.zeros((2, _SR), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="mono"):
+        metric(stereo, stereo, _SR)
 
 
 def test_compute_rms_quiet_nonzero_inputs_return_zero() -> None:
@@ -450,6 +583,30 @@ def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:
     assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms"}
     for value in metrics.values():
         assert np.isfinite(value)
+
+
+def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> None:
+    """Selecting pyFDN augments the historical metric set with reverb errors.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    rng = np.random.default_rng(23)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(tmp_path, "0", decay, decay)
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert set(metrics) == {
+        "mss",
+        "octave_edc_rmse_db",
+        "octave_rt60_log_rmse",
+        "rms",
+        "sot",
+        "wmfcc",
+    }
+    assert metrics["octave_edc_rmse_db"] == pytest.approx(0.0, abs=1e-7)
+    assert metrics["octave_rt60_log_rmse"] == pytest.approx(0.0, abs=1e-12)
 
 
 def test_compute_metrics_on_dir_identical_files_yields_perfect_scores(tmp_path: Path) -> None:

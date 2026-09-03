@@ -112,7 +112,10 @@ only; with `logger=wandb` they go to W&B only.
 | `LogPerParamMSE`         | `per_param_mse/{name}` plus optional `per_param_mse_{best_swap,number_group_swap}/{name}` | `on_validation_epoch_end` (via `self.log_dict`)                                                                                                                   | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
 | `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                      | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
 
-`ValAudioProbe`'s keys mirror §2i's `audio/*` metric set under the `val_audio/` prefix; the wav/spectrogram snapshot goes to R2, not W&B (free-tier storage budget).
+`ValAudioProbe`'s keys mirror §2i's `audio/*` metric set under the `val_audio/`
+prefix. pyFDN probes additionally log `val_audio/octave_rt60_log_rmse_{mean,std}`
+and `val_audio/octave_edc_rmse_db_{mean,std}` from their impulse responses. The
+wav/spectrogram snapshot goes to R2, not W&B (free-tier storage budget).
 
 ### 2d. Callbacks — Non-W&B
 
