@@ -46,6 +46,7 @@ from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.components.transformer import ApproxEquivTransformer
 from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -172,6 +173,30 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
         cfg_train.datamodule.num_workers = 2
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
+
+
+def test_train_slap_tiny_lance_end_to_end(cfg_slap_train_lance: DictConfig) -> None:
+    """Train and reload SLAP through the public entrypoint on paired Lance rows.
+
+    :param cfg_slap_train_lance: CPU-small fit, validation, checkpoint, and test config.
+    """
+    HydraConfig().set_config(cfg_slap_train_lance)
+
+    metric_dict, object_dict = train(cfg_slap_train_lance)
+
+    assert object_dict["trainer"].global_step == 1
+    assert isinstance(object_dict["model"], SLAPModule)
+    for metric_name in (
+        "loss/train/total_loss",
+        "loss/val/total_loss",
+        "loss/test/total_loss",
+    ):
+        assert metric_name in metric_dict
+        assert torch.isfinite(metric_dict[metric_name])
+
+    best_checkpoint = Path(object_dict["trainer"].checkpoint_callback.best_model_path)
+    assert best_checkpoint.parent == Path(cfg_slap_train_lance.paths.output_dir) / "checkpoints"
+    assert best_checkpoint.stat().st_size > 0
 
 
 @pytest.mark.parametrize(
