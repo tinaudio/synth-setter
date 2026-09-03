@@ -827,6 +827,30 @@ def test_discrete_scalar_decode_large_offset_preserves_half_step() -> None:
     assert decoded == minimum + 1
 
 
+@pytest.mark.skipif(
+    np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant,
+    reason="platform longdouble has no precision beyond float64",
+)
+def test_discrete_scalar_decode_longdouble_half_step_preserves_precision() -> None:
+    """Extended-precision encoded values retain half steps beyond float64's range."""
+    maximum = (1 << 54) + 1
+    parameter = DiscreteLiteralParameter(name="index", min=0, max=maximum)
+
+    decoded = parameter.decode(np.array([np.longdouble("0.5")], dtype=np.longdouble))
+
+    assert decoded == (1 << 53) + 1
+
+
+def test_discrete_scalar_decode_translated_negative_range_rounds_half_up() -> None:
+    """Half-up quantization is independent of a large negative native offset."""
+    minimum = -(1 << 60) - 7
+    parameter = DiscreteLiteralParameter(name="index", min=minimum, max=minimum + 4)
+
+    decoded = parameter.decode(np.array([0.625], dtype=np.float64))
+
+    assert decoded == minimum + 3
+
+
 def test_discrete_onehot_encoding_uses_native_integer_offset() -> None:
     """Discrete one-hot encoding selects the coordinate for the native integer."""
     parameter = DiscreteLiteralParameter(name="octave", min=-1, max=1, encoding="onehot")
@@ -1054,17 +1078,80 @@ class TestDecodeModelOutput:
 
         assert synth_params["mode"] == pytest.approx(0.75)
 
-    def test_fractional_pitch_prediction_rounds_to_nearest_midi_note(self) -> None:
-        """Model-space pitch predictions quantize to the closest MIDI note."""
+    @pytest.mark.parametrize(
+        ("model_value", "expected_pitch"),
+        [
+            (np.float32("0.041666664"), 60),
+            (np.float32("0.041666668"), 61),
+            (np.float32("0.04166667"), 61),
+        ],
+    )
+    def test_float32_pitch_boundary_preserves_prediction_side(
+        self,
+        model_value: np.float32,
+        expected_pitch: int,
+    ) -> None:
+        """Preserve a float32 prediction's side of a MIDI half-step boundary.
+
+        :param model_value: Representable model-space value adjacent to the boundary.
+        :param expected_pitch: MIDI note selected by half-up quantization.
+        """
         spec = ParamSpec([], [DiscreteLiteralParameter(name="pitch", min=48, max=72)])
 
-        _, below_midpoint = decode_model_output(np.array([0.0408333333]), spec)
-        _, midpoint = decode_model_output(np.array([1.0 / 24]), spec)
-        _, above_midpoint = decode_model_output(np.array([0.0425]), spec)
+        _, note_params = decode_model_output(np.array([model_value], dtype=np.float32), spec)
 
-        assert below_midpoint["pitch"] == 60
-        assert midpoint["pitch"] == 61
-        assert above_midpoint["pitch"] == 61
+        assert note_params["pitch"] == expected_pitch
+
+    @pytest.mark.parametrize(
+        ("model_value", "expected_value"),
+        [
+            (np.float32("0.24999999"), -1),
+            (np.float32("0.25"), 0),
+            (np.float32("0.25000003"), 0),
+        ],
+    )
+    def test_float32_dyadic_boundary_preserves_prediction_side(
+        self,
+        model_value: np.float32,
+        expected_value: int,
+    ) -> None:
+        """Preserve adjacent values around an exact half step during rescaling.
+
+        :param model_value: Representable model-space value adjacent to the boundary.
+        :param expected_value: Native integer selected by half-up quantization.
+        """
+        spec = ParamSpec([], [DiscreteLiteralParameter(name="step", min=-3, max=1)])
+
+        _, note_params = decode_model_output(np.array([model_value], dtype=np.float32), spec)
+
+        assert note_params["step"] == expected_value
+
+    @pytest.mark.parametrize(
+        ("model_value", "expected_value"),
+        [
+            (-math.inf, -3),
+            (-2.0, -3),
+            (-1.0, -3),
+            (1.0, 5),
+            (2.0, 5),
+            (math.inf, 5),
+        ],
+    )
+    def test_discrete_predictions_saturate_at_native_bounds(
+        self,
+        model_value: float,
+        expected_value: int,
+    ) -> None:
+        """Saturate out-of-range discrete predictions at configured endpoints.
+
+        :param model_value: Model-space value at or beyond an endpoint.
+        :param expected_value: Saturated native endpoint.
+        """
+        spec = ParamSpec([], [DiscreteLiteralParameter(name="step", min=-3, max=5)])
+
+        _, note_params = decode_model_output(np.array([model_value]), spec)
+
+        assert note_params["step"] == expected_value
 
     def test_note_params_decode_to_native_domain(self) -> None:
         """Note params come back in their native domains, not the encoded [0, 1]."""
@@ -1152,3 +1239,15 @@ class TestModelSpaceConversion:
         encoded = spec.model_to_encoded(np.array([-3.0, 3.0]))
 
         assert encoded.tolist() == [0.0, 1.0]
+
+    def test_model_to_encoded_preserves_multidimensional_shape(self) -> None:
+        """Model-space conversion applies elementwise without flattening batches."""
+        spec = _tiny_spec()
+        model = np.array([[-2.0, -1.0, -0.5], [0.0, 0.5, 2.0]], dtype=np.float32)
+
+        encoded = spec.model_to_encoded(model)
+
+        np.testing.assert_array_equal(
+            encoded,
+            np.array([[0.0, 0.0, 0.25], [0.5, 0.75, 1.0]], dtype=np.float64),
+        )

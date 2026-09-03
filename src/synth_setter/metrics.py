@@ -66,15 +66,20 @@ def midi_pitch_residuals(
         raise ValueError("expected a unique scalar discrete pitch parameter")
 
     pitch, span = pitch_field
-    predicted_encoded = ((predicted[:, span].squeeze(1) + 1) / 2).clamp(0, 1)
-    target_encoded = (target[:, span].squeeze(1) + 1) / 2
+    calculation_device = (
+        torch.device("cpu") if predicted.device.type == "mps" else predicted.device
+    )
+    predicted_model = predicted[:, span].squeeze(1).to(calculation_device, torch.float64)
+    target_model = target[:, span].squeeze(1).to(calculation_device, torch.float64)
+    predicted_encoded = ((predicted_model + 1) / 2).clamp(0, 1)
+    target_encoded = (target_model + 1) / 2
     pitch_span = pitch.max - pitch.min
     predicted_midi = pitch.min + predicted_encoded * pitch_span
     target_midi = torch.floor(pitch.min + target_encoded * pitch_span + 0.5)
     return {
-        "continuous": predicted_midi - target_midi,
-        "floor": torch.floor(predicted_midi) - target_midi,
-        "nearest": torch.floor(predicted_midi + 0.5) - target_midi,
+        "continuous": (predicted_midi - target_midi).to(predicted),
+        "floor": (torch.floor(predicted_midi) - target_midi).to(predicted),
+        "nearest": (torch.floor(predicted_midi + 0.5) - target_midi).to(predicted),
     }
 
 

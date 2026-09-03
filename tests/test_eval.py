@@ -1644,13 +1644,13 @@ def test_evaluate_predict_rounds_fractional_pitch_to_nearest_midi_note(
 
     spec = param_specs[param_spec_name]
     pitch_index = spec.encoded_names.index("pitch")
-    fractional_pitch_output = 0.0625
+    fractional_pitch_output = 0.0416666679084301
     trained_model = train_objects["model"]
     trainer = train_objects["trainer"]
     assert isinstance(trained_model, VSTFeedForwardModule)
     assert isinstance(trained_model.net, ASTWithProjectionHead)
     assert isinstance(trainer, Trainer)
-    # Keep every other learned output real while pinning the rounding input to MIDI 60.75.
+    # This float32 value is the first representable prediction above the MIDI 60.5 boundary.
     with torch.no_grad():
         trained_model.net.final_proj.weight[pitch_index].zero_()
         trained_model.net.final_proj.bias[pitch_index].fill_(fractional_pitch_output)

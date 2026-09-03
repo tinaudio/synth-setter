@@ -173,7 +173,7 @@ class DiscreteLiteralParameter(Parameter):
         return idx + self.min
 
     def _decode_scalar(self, scalar: np.ndarray) -> int:
-        offset = float(scalar.item()) * (self.max - self.min)
+        offset = scalar.item() * (self.max - self.min)
         lower_offset = math.floor(offset)
         return self.min + lower_offset + int(offset - lower_offset >= 0.5)
 
@@ -579,7 +579,9 @@ class ParamSpec:
         :param model: Values on the model's ``[-1, 1]`` scale.
         :returns: The same values clipped into ``[0, 1]``.
         """
-        return ((model + 1) / 2).clip(0, 1)
+        calculation_dtype = np.result_type(model.dtype, np.float64)
+        promoted = model.astype(calculation_dtype, copy=False)
+        return ((promoted + 1) / 2).clip(0, 1)
 
     def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode one encoded row of values in ``[0, 1]``.
