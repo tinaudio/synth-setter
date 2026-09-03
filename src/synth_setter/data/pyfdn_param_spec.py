@@ -121,7 +121,7 @@ class _FixedFeedbackPyFDNParamSpec(PyFDNParamSpec):
     def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode learned fields and restore an independent fixed feedback array.
 
-        :param params: Encoded learned FDN parameter row shaped ``(27,)``.
+        :param params: Encoded learned FDN parameter row shaped ``(self.encoded_width,)``.
         :returns: Complete native FDN values and fixed MIDI compatibility values.
         """
         synth_params, note_params = super().decode(params)

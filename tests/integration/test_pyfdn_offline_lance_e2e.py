@@ -35,24 +35,22 @@ from synth_setter.synth_spec import SynthName, SynthSpec
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("synth_name", "param_spec", "encoded_width"),
+    ("synth_name", "param_spec"),
     [
-        ("pyfdn_n8_mono", PYFDN_N8_MONO_PARAM_SPEC, 91),
-        ("pyfdn_n8_mono_hadamard", PYFDN_N8_MONO_HADAMARD_PARAM_SPEC, 27),
+        ("pyfdn_n8_mono", PYFDN_N8_MONO_PARAM_SPEC),
+        ("pyfdn_n8_mono_hadamard", PYFDN_N8_MONO_HADAMARD_PARAM_SPEC),
     ],
 )
 def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
     tmp_path: Path,
     synth_name: str,
     param_spec: ParamSpec,
-    encoded_width: int,
 ) -> None:
     """A real accepted row survives storage and the production model-batch reader.
 
     :param tmp_path: Isolated destination for the production Lance writer.
     :param synth_name: Registered pyFDN synth and parameter-spec name.
     :param param_spec: Spec used to reproduce and decode the stored patch.
-    :param encoded_width: Expected learned target width.
     """
     render = RenderConfig(
         synth=SynthSpec(
@@ -132,7 +130,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
     assert audio is not None
     assert params is not None
     assert audio.shape == (1, 1, 176_400)
-    assert params.shape == (1, encoded_width)
+    assert params.shape == (1, param_spec.encoded_width)
     assert audio.dtype == params.dtype == torch.float32
     assert torch.isfinite(audio).all()
     assert torch.all((-1.0 <= audio) & (audio <= 1.0))

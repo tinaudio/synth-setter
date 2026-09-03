@@ -65,6 +65,13 @@ __all__ = [
     "StorageDType",
 ]
 
+_PYFDN_SYNTH_NAMES = frozenset(
+    name for name, synth in SYNTHS.items() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
+_PYFDN_PARAM_SPEC_NAMES = frozenset(
+    synth.param_spec_name for synth in SYNTHS.values() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
+
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
 # Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
 # here (not on ``DatasetSpec``) so the dict literal is the source of truth and
@@ -478,22 +485,14 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :raises ValueError: The pyFDN identity or fixed render contract drifts.
         """
         registered_synth = SYNTHS.get(self.synth.name)
-        registered_pyfdn_synth = (
-            registered_synth is not None and registered_synth.plugin_path == PYFDN_PLUGIN_NAME
-        )
-        registered_pyfdn_spec = any(
-            synth.plugin_path == PYFDN_PLUGIN_NAME
-            and synth.param_spec_name == self.param_spec_name
-            for synth in SYNTHS.values()
-        )
         registered_pyfdn = (
-            registered_pyfdn_synth
+            self.synth.name in _PYFDN_SYNTH_NAMES
             and registered_synth is not None
             and registered_synth.param_spec_name == self.param_spec_name
         )
         pyfdn_identity = (
-            registered_pyfdn_synth
-            or registered_pyfdn_spec
+            self.synth.name in _PYFDN_SYNTH_NAMES
+            or self.param_spec_name in _PYFDN_PARAM_SPEC_NAMES
             or self.plugin_path == PYFDN_PLUGIN_NAME
         )
         if self.renderer_backend != "pyfdn":
