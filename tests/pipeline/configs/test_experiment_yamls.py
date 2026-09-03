@@ -42,6 +42,7 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/surge-xt-lance-10k-2k-1k": "surge-xt-lance-10k-2k-1k",
     "generate_dataset/surge-xt-lance-2m-40k-10k": "surge-xt-lance-2m-40k-10k",
     "generate_dataset/surge-xt-dawdreamer-smoke": "surge-xt-dawdreamer-smoke",
+    "generate_dataset/ultramaster-kr106-lance-smoke": "ultramaster-kr106-lance-smoke",
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
     "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
 }
@@ -102,6 +103,16 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
     assert spec.render.param_spec_name == "surge_xt"
     assert spec.render.samples_per_shard == 1
     assert spec.train_val_test_sizes == (1, 0, 0)
+
+
+def test_ultramaster_kr106_smoke_experiment_renders_twenty_lance_rows() -> None:
+    """The KR-106 smoke run uses its full spec and one restart-safe shard."""
+    spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-lance-smoke")
+
+    assert spec.render.synth.name == "ultramaster_kr106"
+    assert spec.render.renderer_backend == "pedalboard"
+    assert spec.render.samples_per_shard == 20
+    assert spec.train_val_test_sizes == (20, 0, 0)
 
 
 @pytest.mark.parametrize(

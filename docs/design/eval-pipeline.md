@@ -42,7 +42,7 @@ Topline goal: Run the full evaluation pipeline — predict, render, metrics — 
 **synth-setter** trains models that predict synthesizer parameters from audio. Evaluating these models is a three-stage pipeline:
 
 1. **Predict** — load a trained checkpoint, run inference on a test dataset, output predicted parameter tensors
-2. **Render** — feed predicted parameters into the VST plugin (Surge XT), render audio waveforms for both predictions and ground-truth targets
+2. **Render** — feed predicted parameters into the configured renderer and synth identity, then render predicted and ground-truth audio
 3. **Metrics** — compare predicted and target audio using spectral, envelope, and transport-based distance metrics
 
 This pipeline works end-to-end today but is tightly coupled to a university HPC cluster:
@@ -63,7 +63,7 @@ Separately, the data pipeline (#74) already uses R2 as the source of truth for g
 
 | Layer         | Technology                                                        | Role                                      |
 | ------------- | ----------------------------------------------------------------- | ----------------------------------------- |
-| **Rendering** | [Surge XT](https://surge-synthesizer.github.io/) via pedalboard   | Audio synthesis from predicted parameters |
+| **Rendering** | Registered synth identity through its configured backend          | Audio synthesis from predicted parameters |
 | **Display**   | Xvfb (Linux headless) / native (macOS)                            | VST plugins require a display server      |
 | **Storage**   | [Cloudflare R2](https://developers.cloudflare.com/r2/) via rclone | Datasets, eval artifacts                  |
 | **Tracking**  | [Weights & Biases](https://wandb.ai/)                             | Experiment tracking, metric dashboards    |

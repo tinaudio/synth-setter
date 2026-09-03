@@ -191,9 +191,10 @@ experiments. **None of these are needed for the TorchSynth quickstart above.**
 
 ### 4a. Surge XT (VST Plugin)
 
-[Surge XT](https://surge-synthesizer.github.io/) is the open-source synthesizer
-used for audio dataset generation. The data pipeline renders audio by
-programmatically driving this plugin.
+[Surge XT](https://surge-synthesizer.github.io/) is the default managed VST3
+for audio dataset generation. Other registered synths may require separate
+plugin installation; see [`SYNTHS`](../src/synth_setter/synth_spec.py) and
+[Adding a new synth](guides/adding-a-new-synth.md).
 
 Installation is covered in [section 2d](#2d-install-the-surge-xt-vst3).
 `make install-surge-xt` provisions the pinned package; `make link-plugins`
