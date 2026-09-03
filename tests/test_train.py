@@ -140,6 +140,21 @@ def _record_successful_r2_uploads(
     return uploads
 
 
+def test_train_eval_only_experiment_raises_before_instantiation() -> None:
+    """The training entrypoint rejects prediction-only experiment presets."""
+    GlobalHydra.instance().clear()
+    with hydra.initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = hydra.compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth"],
+        )
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="evaluation-only experiment"):
+        train(cfg)
+
+
 @pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")

@@ -40,9 +40,13 @@ evaluation:
   # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
   upload_output_dir_uri: null
 
-# passing checkpoint path is necessary for evaluation
+# Local path or R2-backed r2:// / s3:// object URI.
 ckpt_path: ???
+# Optional SHA-256 pin for the checkpoint bytes.
+ckpt_sha256: null
 
 # W&B model lineage (storage-provenance-spec §5): the train config ID this eval consumes.
-# Dataset lineage is discovered from ``datamodule.dataset_root/input_spec.json``.
+# Pin an immutable artifact version when the checkpoint itself is immutable.
+consumed_train_artifact_alias: latest
 consumed_train_config_id: null
+# Dataset lineage is discovered from ``datamodule.dataset_root/input_spec.json``.

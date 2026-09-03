@@ -1,0 +1,20 @@
+defaults:
+  - third_party/base@_here_
+  - _self_
+
+# The published corpus is read in place at its immutable Lance snapshot.
+dataset_uri: s3://experiments/third_party/NSynth/test.lance
+dataset_version: 1
+
+# Live PESTO extraction is batch-oriented and substantially heavier than mel decoding.
+batch_size: 32
+
+# Checkpoint-training statistics, not NSynth-test statistics.
+mel_stats_uri: r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz
+mel_stats_sha256: c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19
+
+sketch:
+  column: sketch
+  num_frames: 32
+  num_control_tokens: 32
+  pitch_zero_threshold: 0.1

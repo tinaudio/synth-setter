@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import pickle
 import re
@@ -12,10 +13,19 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import soundfile as sf
 import torch
 from lance.blob import blob_array, blob_field
 from pedalboard.io import AudioFile
 
+from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_ROW,
+    SKETCH_CTRL_FIELD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_SLICE,
+    SketchControls,
+)
 from synth_setter.data.third_party_datamodule import ThirdPartyAudioDataModule, decode_clip
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
 from tests.helpers.lance_fixtures import wav_bytes, write_blob_audio_corpus
@@ -80,6 +90,9 @@ def _datamodule(
     num_workers: int = 0,
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
+    mel_stats_sha256: str | None = None,
+    stats_cache_dir: str | None = None,
+    sketch: SketchControls = None,
 ) -> ThirdPartyAudioDataModule:
     """Build a datamodule over a corpus with the tiny render contract.
 
@@ -92,6 +105,9 @@ def _datamodule(
     :param num_workers: Dataloader worker processes.
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
+    :param mel_stats_sha256: Optional digest pin for the statistics bytes.
+    :param stats_cache_dir: Optional content-addressed statistics cache root.
+    :param sketch: Optional live sketch-control specification.
     :returns: Configured, un-setup datamodule.
     """
     return ThirdPartyAudioDataModule(
@@ -107,6 +123,9 @@ def _datamodule(
         num_workers=num_workers,
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
+        mel_stats_sha256=mel_stats_sha256,
+        stats_cache_dir=stats_cache_dir,
+        sketch=sketch,
     )
 
 
@@ -226,17 +245,54 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     mean = np.full((MEL_N_MELS, 1), -40.0, dtype=np.float32)
     std = np.full((MEL_N_MELS, 1), 4.0, dtype=np.float32)
     np.savez(stats_file, mean=mean, std=std)
+    expected_bytes = stats_file.read_bytes()
+    digest = hashlib.sha256(expected_bytes).hexdigest()
 
     plain = _first_batch(_datamodule(tmp_path / "corpus.lance"))["mel"]
-    normalized = _first_batch(
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        mel_stats_sha256=digest,
+        stats_cache_dir=str(tmp_path / "stats-cache"),
+    )
+    normalized = _first_batch(datamodule)["mel"]
+    stats_file.write_bytes(b"replacement statistics")
+    reused = _first_batch(
         _datamodule(
             tmp_path / "corpus.lance",
             use_saved_mean_and_variance=True,
             mel_stats_uri=str(stats_file),
+            mel_stats_sha256=digest,
+            stats_cache_dir=str(tmp_path / "stats-cache"),
         )
     )["mel"]
 
+    assert datamodule.cached_stats_path() != stats_file
+    assert datamodule.cached_stats_path().read_bytes() == expected_bytes
     assert torch.allclose(normalized, (plain + 40.0) / 4.0, atol=1e-5)
+    assert torch.equal(reused, normalized)
+
+
+def test_mel_statistics_digest_mismatch_raises(tmp_path: Path) -> None:
+    """Normalization rejects statistics that differ from their provenance pin.
+
+    :param tmp_path: Isolated corpus and statistics directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=38)])
+    stats_file = tmp_path / "stats.npz"
+    np.savez(stats_file, mean=np.float32(0.0), std=np.float32(1.0))
+
+    datamodule = _datamodule(
+        corpus,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        mel_stats_sha256="0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="mel statistics SHA-256 mismatch"):
+        datamodule.setup("predict")
 
 
 def test_saved_statistics_without_uri_raises(tmp_path: Path) -> None:
@@ -427,6 +483,68 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
 
 
+def test_decode_clip_rejects_out_of_range_source_before_resampling() -> None:
+    """Substantive source overflow cannot be hidden by output clipping."""
+    source_rate = 16_000
+    buffer = io.BytesIO()
+    sf.write(
+        buffer,
+        np.full(source_rate, 1.2, dtype=np.float32),
+        source_rate,
+        format="WAV",
+        subtype="FLOAT",
+    )
+
+    with pytest.raises(ValueError, match="source audio leaves"):
+        decode_clip(
+            buffer.getvalue(),
+            sample_rate=44_100,
+            channels=2,
+            num_samples=44_100,
+            amplitude_scale=1.0,
+        )
+
+
+def test_decode_clip_rejects_positive_pcm16_tolerance_as_source_overflow() -> None:
+    """PCM16's negative endpoint tolerance does not admit positive overflow."""
+    source_rate = 16_000
+    buffer = io.BytesIO()
+    sf.write(
+        buffer,
+        np.full(source_rate, 1.00002, dtype=np.float32),
+        source_rate,
+        format="WAV",
+        subtype="FLOAT",
+    )
+
+    with pytest.raises(ValueError, match="source audio leaves"):
+        decode_clip(
+            buffer.getvalue(),
+            sample_rate=44_100,
+            channels=2,
+            num_samples=44_100,
+            amplitude_scale=1.0,
+        )
+
+
+def test_decode_clip_clamps_resampling_ringing_to_storage_range() -> None:
+    """Band-limited resampling cannot leave otherwise normalized audio above full scale."""
+    source_rate = 16_000
+    samples = np.arange(source_rate, dtype=np.float32)
+    square = np.sign(np.sin(2 * np.pi * 3000.0 * samples / source_rate)).astype(np.float32)
+
+    clip = decode_clip(
+        wav_bytes(square, source_rate),
+        sample_rate=44_100,
+        channels=2,
+        num_samples=44_100,
+        amplitude_scale=1.0,
+    )
+
+    assert np.isfinite(clip).all()
+    assert np.abs(clip).max() == 1.0
+
+
 def test_decode_rejects_audio_outside_the_storage_range(tmp_path: Path) -> None:
     """Gain that drives a clip past full scale is rejected, not fed to the mel front-end.
 
@@ -487,19 +605,20 @@ def test_corpus_audio_column_without_blob_encoding_raises(tmp_path: Path) -> Non
         _datamodule(tmp_path / "corpus.lance").setup("predict")
 
 
-def test_corpus_served_from_an_r2_uri(fake_r2_remote: Path) -> None:
-    """The shipped configs name ``r2://`` corpora, so that resolution is served too.
-
-    Exercises the ``lance_target`` translation and storage-options wiring the
-    published configs depend on, which a local-path corpus never reaches.
+@pytest.mark.parametrize("scheme", ["r2", "s3"])
+def test_corpus_served_from_an_r2_backed_uri(fake_r2_remote: Path, scheme: str) -> None:
+    """Both accepted URI spellings resolve through the configured R2 remote.
 
     :param fake_r2_remote: Root backing the ``r2:`` remote as a local filesystem.
+    :param scheme: Public URI scheme used by the caller.
     """
     corpus = fake_r2_remote / "experiments" / "third_party" / "Tiny" / "test.lance"
     corpus.parent.mkdir(parents=True)
     _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=26)])
 
-    batch = _first_batch(_datamodule("r2://experiments/third_party/Tiny/test.lance"))
+    batch = _first_batch(
+        _datamodule(f"{scheme}://experiments/third_party/Tiny/test.lance")
+    )
 
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
 
@@ -582,6 +701,161 @@ def test_native_blob_v2_column_is_servable(tmp_path: Path) -> None:
     batch = _first_batch(_datamodule(tmp_path / "corpus.lance"))
 
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
+
+
+def test_nsynth_sketch_batch_native_blob_v2_preserves_order_and_model_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real Blob-v2 batch retains ordered audio and emits normalized model inputs.
+
+    :param tmp_path: Isolated corpus and statistics directory.
+    :param monkeypatch: Replaces only resource-heavy PESTO extraction for this fast contract test.
+    """
+    clips = [
+        np.full(_SOURCE_SAMPLE_RATE // 2, 0.25, dtype=np.float32),
+        np.full(_SOURCE_SAMPLE_RATE // 2, -0.5, dtype=np.float32),
+    ]
+    table = pa.table(
+        {AUDIO_FIELD: blob_array([wav_bytes(clip, _SOURCE_SAMPLE_RATE) for clip in clips])},
+        schema=pa.schema([blob_field(AUDIO_FIELD)]),
+    )
+    corpus = tmp_path / "nsynth-test.lance"
+    lance.write_dataset(table, corpus, mode="create", data_storage_version="2.2")
+    stats_file = tmp_path / "training-stats.npz"
+    np.savez(
+        stats_file,
+        mean=np.full((MEL_N_MELS, 1), -10.0, dtype=np.float32),
+        std=np.full((MEL_N_MELS, 1), 2.0, dtype=np.float32),
+    )
+
+    def fixed_controls(audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
+        del sample_rate
+        return torch.zeros(audio.shape[0], NUM_SKETCH_CONTROLS, 64, device=audio.device)
+
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        fixed_controls,
+    )
+    datamodule = _datamodule(
+        corpus,
+        row_limit=None,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        sketch={"column": "sketch", "num_frames": 32, "num_control_tokens": 32},
+    )
+    datamodule.setup("predict")
+    raw_batch = next(iter(datamodule.predict_dataloader()))
+    normalized = datamodule.on_before_batch_transfer(raw_batch, 0)
+    batch = datamodule.on_after_batch_transfer(normalized, 0)
+
+    expected_mel = (make_spectrogram(batch[AUDIO_FIELD][0].numpy(), _TARGET_SAMPLE_RATE) + 10.0) / 2.0
+    assert set(batch) == {AUDIO_FIELD, "mel", SKETCH_CTRL_FIELD}
+    assert sum(len(served[AUDIO_FIELD]) for served in datamodule.predict_dataloader()) == 2
+    assert batch[AUDIO_FIELD].shape == (2, _TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert batch[AUDIO_FIELD][0].mean() > 0
+    assert batch[AUDIO_FIELD][1].mean() < 0
+    assert batch["mel"].shape == (2, _TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES)
+    assert torch.allclose(batch["mel"][0], torch.from_numpy(expected_mel), atol=1e-5)
+    assert batch[SKETCH_CTRL_FIELD].shape == (2, NUM_SKETCH_CONTROLS, 32)
+
+
+def test_nsynth_sketch_batch_pools_controls_and_zeroes_weak_pitch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live controls use canonical scalar/pitch pooling and the checkpoint threshold.
+
+    :param tmp_path: Isolated datamodule path; no corpus access occurs.
+    :param monkeypatch: Supplies deterministic full-frame controls before real pooling.
+    """
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 64)
+    controls[:, SKETCH_LOUDNESS_ROW, 1::2] = 1.0
+    controls[:, SKETCH_CENTROID_ROW, ::2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, :] = 0.05
+    controls[:, SKETCH_PITCH_SLICE.start + 1, 1::2] = 0.2
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        lambda audio, sample_rate: controls,
+    )
+    datamodule = _datamodule(
+        tmp_path / "unused.lance",
+        sketch={
+            "column": "sketch",
+            "num_frames": 32,
+            "num_control_tokens": 32,
+            "pitch_zero_threshold": 0.1,
+        },
+    )
+
+    batch = datamodule.on_after_batch_transfer(
+        {AUDIO_FIELD: torch.zeros(1, _TARGET_CHANNELS, _TARGET_SAMPLES)}, 0
+    )
+
+    pooled = batch[SKETCH_CTRL_FIELD]
+    assert torch.equal(pooled[0, SKETCH_LOUDNESS_ROW], torch.full((32,), 0.5))
+    assert torch.equal(pooled[0, SKETCH_CENTROID_ROW], torch.full((32,), 0.5))
+    assert torch.count_nonzero(pooled[0, SKETCH_PITCH_SLICE.start]) == 0
+    assert torch.equal(pooled[0, SKETCH_PITCH_SLICE.start + 1], torch.full((32,), 0.2))
+
+
+def test_nsynth_sketch_noncanonical_frame_count_raises(tmp_path: Path) -> None:
+    """A live sketch config cannot drift from the checkpoint's 32-frame contract.
+
+    :param tmp_path: Isolated placeholder corpus path.
+    """
+    with pytest.raises(ValueError, match="32"):
+        _datamodule(
+            tmp_path / "unused.lance",
+            sketch={"column": "sketch", "num_frames": 64, "num_control_tokens": 64},
+        )
+
+
+@pytest.mark.slow
+def test_nsynth_sketch_batch_real_pesto_emits_finite_canonical_controls(tmp_path: Path) -> None:
+    """A real PESTO extraction consumes Blob-v2 audio through the datamodule hooks.
+
+    :param tmp_path: Isolated corpus and statistics directory.
+    """
+    sample_rate = 16_000
+    samples = np.arange(sample_rate // 2, dtype=np.float32)
+    clip = (0.5 * np.sin(2 * np.pi * 440.0 * samples / sample_rate)).astype(np.float32)
+    corpus = tmp_path / "nsynth-test.lance"
+    table = pa.table(
+        {AUDIO_FIELD: blob_array([wav_bytes(clip, sample_rate)])},
+        schema=pa.schema([blob_field(AUDIO_FIELD)]),
+    )
+    lance.write_dataset(table, corpus, mode="create", data_storage_version="2.2")
+    stats_file = tmp_path / "training-stats.npz"
+    np.savez(
+        stats_file,
+        mean=np.zeros((_TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES), dtype=np.float32),
+        std=np.ones((_TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES), dtype=np.float32),
+    )
+    datamodule = _datamodule(
+        corpus,
+        sample_rate=sample_rate,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        sketch={"column": "sketch", "num_frames": 32, "num_control_tokens": 32},
+    )
+    datamodule.setup("predict")
+    raw_batch = next(iter(datamodule.predict_dataloader()))
+    normalized = datamodule.on_before_batch_transfer(raw_batch, 0)
+
+    batch = datamodule.on_after_batch_transfer(normalized, 0)
+
+    controls = batch[SKETCH_CTRL_FIELD]
+    assert controls.shape == (1, NUM_SKETCH_CONTROLS, 32)
+    assert controls.dtype == torch.float32
+    assert torch.isfinite(controls).all()
+    assert torch.all((-1.0 <= controls[:, : SKETCH_PITCH_SLICE.start]))
+    assert torch.all((controls[:, : SKETCH_PITCH_SLICE.start] <= 1.0))
+    pitch = controls[0, SKETCH_PITCH_SLICE]
+    assert torch.all((0.0 <= pitch) & (pitch <= 1.0))
+    expected_a4_bin = 69 * 3
+    assert torch.all((pitch.argmax(dim=0) - expected_a4_bin).abs() <= 1)
+    assert torch.all(pitch.amax(dim=0) >= 0.1)
+    assert batch[AUDIO_FIELD].shape == (1, _TARGET_CHANNELS, sample_rate // 2)
+    assert "params" not in batch
 
 
 def test_statistics_overflowing_float32_are_rejected(tmp_path: Path) -> None:

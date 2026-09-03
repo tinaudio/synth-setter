@@ -3,8 +3,9 @@
 The corpora under ``r2:experiments/third_party`` store source WAV bytes as
 ``lance.blob.v2`` columns and are never rewritten. Decode, resample, up-mix,
 length-pinning, amplitude scaling, and the mel front-end happen per batch.
-Compose ``datamodule=third_party/nsynth_test`` with
-``evaluation.no_params=true evaluation.rerender_target=false`` for prediction.
+Compose ``datamodule=third_party/nsynth_test`` for mel-only prediction or
+``datamodule=third_party/nsynth_sketch sketch=on`` for live pooled controls;
+both require ``evaluation.no_params=true evaluation.rerender_target=false``.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import io
 import logging
 import math
 import os
+import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
@@ -26,16 +28,27 @@ from lightning import LightningDataModule
 from pedalboard.io import AudioFile
 from torch.utils.data import DataLoader, Dataset
 
+from synth_setter.conditioning import (
+    SKETCH_CTRL_FIELD,
+    SKETCH_PITCH_SLICE,
+    SKETCH_STORAGE_FRAMES,
+    SketchControls,
+    resolve_sketch_controls,
+)
 from synth_setter.data.vst.shapes import AUDIO_FIELD, make_spectrogram
 from synth_setter.data.vst_datamodule import load_mel_statistics
+from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
+from synth_setter.sketch import pool_sketch_controls
 
 log = logging.getLogger(__name__)
 
 _PREDICT_STAGES = frozenset({"predict", None})
 _MEL_STATS_CACHE_DIR = ".mel-stats"
 _BLOB_EXTENSION_NAME = "lance.blob.v2"
+# Pedalboard maps PCM16 -32768 to -32768/32767 when decoding.
+_PCM16_DECODE_FULL_SCALE = 32768.0 / 32767.0
 
 
 def _is_blob_encoded(field: pa.Field) -> bool:
@@ -173,8 +186,17 @@ def decode_clip(
     :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
     :param amplitude_scale: Gain applied after length-pinning.
     :returns: ``(channels, num_samples)`` float32 audio.
-    :raises ValueError: Samples are non-finite, out of range, or have an unsupported channel count.
+    :raises ValueError: Source or scaled samples are invalid, or channels mismatch.
     """
+    with AudioFile(io.BytesIO(data)) as source_handle:
+        source = source_handle.read(source_handle.frames)
+    if not np.isfinite(source).all():
+        raise ValueError("source audio contains non-finite samples")
+    source_min = source.min(initial=0.0)
+    source_max = source.max(initial=0.0)
+    if source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0:
+        raise ValueError("source audio leaves [-1, 1]")
+
     with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
         audio = handle.read(handle.frames)
     if audio.shape[0] == 1 < channels:
@@ -187,10 +209,12 @@ def decode_clip(
     if not np.isfinite(clip).all():
         raise ValueError("decoded audio contains non-finite samples")
     if np.abs(clip).max(initial=0.0) > 1.0:
-        raise ValueError(
-            f"decoded audio leaves [-1, 1] after amplitude_scale={amplitude_scale}; "
-            "the mel front-end and model contract assume normalized audio"
-        )
+        if amplitude_scale > 1.0:
+            raise ValueError(
+                f"decoded audio leaves [-1, 1] after amplitude_scale={amplitude_scale}; "
+                "the mel front-end and model contract assume normalized audio"
+            )
+        np.clip(clip, -1.0, 1.0, out=clip)
     return clip
 
 
@@ -324,13 +348,15 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         num_workers: int = 0,
         row_limit: int | None = None,
         conditioning: str = "mel",
+        sketch: SketchControls = None,
         use_saved_mean_and_variance: bool = False,
         mel_stats_uri: str | None = None,
+        mel_stats_sha256: str | None = None,
         stats_cache_dir: str | None = None,
     ) -> None:
         """Configure the corpus and render contract it maps onto.
 
-        :param dataset_uri: Corpus Lance dataset; local path or ``r2://`` URI.
+        :param dataset_uri: Corpus Lance dataset; local path or R2-backed URI.
         :param sample_rate: Target sample rate in Hz.
         :param channels: Target channel count.
         :param signal_duration_seconds: Target clip duration.
@@ -341,9 +367,12 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param num_workers: Dataloader workers decoding rows.
         :param row_limit: Serve only the first N rows; ``None`` serves the whole corpus.
         :param conditioning: Conditioning mode; only ``mel`` is accepted.
+        :param sketch: Optional live sketch-control specification.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
         :param mel_stats_uri: Training mel statistics, local or ``r2://``.
+        :param mel_stats_sha256: Optional SHA-256 pin for the statistics bytes.
         :param stats_cache_dir: Directory for fetched statistics.
+        :raises ValueError: A corpus, render, normalization, or sketch contract is invalid.
         """
         super().__init__()
         _validate_config(
@@ -372,7 +401,29 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.row_limit = row_limit
         self.conditioning = conditioning
+        self.sketch_controls = resolve_sketch_controls(sketch)
+        if (
+            self.sketch_controls is not None
+            and self.sketch_controls.num_frames != SKETCH_STORAGE_FRAMES
+        ):
+            raise ValueError(
+                f"live sketch extraction requires num_frames={SKETCH_STORAGE_FRAMES}, "
+                f"got {self.sketch_controls.num_frames}"
+            )
         self.mel_stats_uri = mel_stats_uri
+        if mel_stats_sha256 is not None:
+            if not isinstance(mel_stats_sha256, str):
+                raise ValueError("mel_stats_sha256 must contain 64 hexadecimal characters")
+            normalized_digest = mel_stats_sha256.lower()
+            valid_digest = len(normalized_digest) == 64 and all(
+                character in "0123456789abcdef" for character in normalized_digest
+            )
+            if not valid_digest:
+                raise ValueError("mel_stats_sha256 must contain 64 hexadecimal characters")
+            if mel_stats_uri is None:
+                raise ValueError("mel_stats_sha256 requires mel_stats_uri")
+            mel_stats_sha256 = normalized_digest
+        self.mel_stats_sha256 = mel_stats_sha256
         self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
         self._statistics: tuple[torch.Tensor, torch.Tensor] | None = None
         self._predict_dataset: _BlobAudioDataset | None = None
@@ -380,27 +431,56 @@ class ThirdPartyAudioDataModule(LightningDataModule):
     def cached_stats_path(self) -> Path:
         """Return the local path the configured statistics object resolves to.
 
-        :returns: Local ``.npz`` path, unique per ``r2://`` URI.
+        :returns: Immutable cache path for pinned bytes, otherwise the resolved local path.
         """
         uri = cast(str, self.mel_stats_uri)
+        if self.mel_stats_sha256 is not None:
+            return self.stats_cache_dir / self.mel_stats_sha256 / Path(uri).name
         if not r2_io.is_r2_uri(uri):
             return Path(uri)
-        digest = hashlib.sha256(uri.encode()).hexdigest()[:16]
-        return self.stats_cache_dir / f"{digest}-{Path(uri).name}"
+        digest = hashlib.sha256(uri.encode()).hexdigest()
+        return self.stats_cache_dir / f"{digest[:16]}-{Path(uri).name}"
+
+    def _verify_stats_digest(self, path: Path) -> None:
+        """Reject statistics bytes that differ from their optional pin.
+
+        :param path: Local statistics file.
+        :raises ValueError: The file digest differs from ``mel_stats_sha256``.
+        """
+        if self.mel_stats_sha256 is None:
+            return
+        with path.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != self.mel_stats_sha256:
+            raise ValueError(
+                "mel statistics SHA-256 mismatch: "
+                f"expected {self.mel_stats_sha256}, received {actual}"
+            )
 
     def _local_stats_file(self) -> Path:
         """Return a readable local path for the configured statistics object.
 
         :returns: Local ``.npz`` path, downloaded once per distinct ``r2://`` URI.
         """
+        uri = cast(str, self.mel_stats_uri)
         destination = self.cached_stats_path()
-        if not r2_io.is_r2_uri(cast(str, self.mel_stats_uri)):
+        is_remote = r2_io.is_r2_uri(uri)
+        if not is_remote and self.mel_stats_sha256 is None:
             return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not destination.exists():
-            staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
-            r2_io.download_to_path(cast(str, self.mel_stats_uri), staged)
+        if destination.exists():
+            self._verify_stats_digest(destination)
+            return destination
+        staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+        try:
+            if is_remote:
+                r2_io.download_to_path(uri, staged)
+            else:
+                shutil.copyfile(uri, staged)
+            self._verify_stats_digest(staged)
             staged.replace(destination)
+        finally:
+            staged.unlink(missing_ok=True)
         return destination
 
     def _open_corpus(self) -> tuple[_BlobAudioDataset, int]:
@@ -410,10 +490,15 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :raises KeyError: The corpus has no configured audio column.
         :raises ValueError: The audio column is not blob-encoded or the corpus is empty.
         """
+        corpus_uri = (
+            r2_io.from_s3_uri(self.dataset_uri)
+            if self.dataset_uri.startswith("s3://")
+            else self.dataset_uri
+        )
         uri, storage_options = (
-            r2_io.lance_target(self.dataset_uri)
-            if r2_io.is_r2_uri(self.dataset_uri)
-            else (self.dataset_uri, None)
+            r2_io.lance_target(corpus_uri)
+            if r2_io.is_r2_uri(corpus_uri)
+            else (corpus_uri, None)
         )
         dataset = _retry_lance_read(
             "third_party_corpus_open",
@@ -518,4 +603,26 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 "non-finite values"
             )
         model_batch["mel"] = normalized
+        return model_batch
+
+    def on_after_batch_transfer(
+        self, batch: Mapping[str, torch.Tensor], dataloader_idx: int
+    ) -> dict[str, torch.Tensor]:
+        """Derive canonical pooled sketch controls from transferred target audio.
+
+        :param batch: Model batch retaining decoded target audio.
+        :param dataloader_idx: Unused; the datamodule serves one loader.
+        :returns: Batch with live ``sketch_ctrl`` when configured.
+        """
+        del dataloader_idx
+        model_batch = dict(batch)
+        if self.sketch_controls is None:
+            return model_batch
+        controls = extract_sketch_controls_batch(model_batch[AUDIO_FIELD], self.sample_rate)
+        pooled = pool_sketch_controls(controls, self.sketch_controls.num_frames)
+        pitch = pooled[:, SKETCH_PITCH_SLICE]
+        pooled[:, SKETCH_PITCH_SLICE] = pitch.where(
+            pitch >= self.sketch_controls.pitch_zero_threshold, 0.0
+        )
+        model_batch[SKETCH_CTRL_FIELD] = pooled
         return model_batch
