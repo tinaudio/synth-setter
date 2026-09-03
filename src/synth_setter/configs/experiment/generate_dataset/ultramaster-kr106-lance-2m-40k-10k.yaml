@@ -1,0 +1,34 @@
+# @package _global_
+
+# Full-scale Ultramaster KR-106 Lance dataset: 2.05M total samples → 820 shards
+# at samples_per_shard=2500, written to the experiments bucket.
+# Inherited split masters keep rows stable across dataset sizes and shard layouts.
+
+defaults:
+  - override /datamodule: vst
+  - override /synth: ultramaster_kr106
+  - override /render: vst
+  - _self_
+
+task_name: ultramaster-kr106-lance-2m-40k-10k
+
+output_format: lance
+
+train_val_test_sizes: [2000000, 40000, 10000]
+
+r2:
+  bucket: experiments
+
+# Queue claims let workers join, retry, and drain the run independently.
+use_shard_queue: true
+
+render:
+  # 2500-sample shards bound retry work while avoiding excess object-store overhead.
+  samples_per_shard: 2500
+  samples_per_render_batch: 1
+  parallel: true
+  # Workers stage each shard to R2, then release its local disk immediately.
+  retain_local_shards: false
+  max_retries: 20
+  # KR-106 must reload between renders to isolate plugin state.
+  plugin_reload_cadence: render
