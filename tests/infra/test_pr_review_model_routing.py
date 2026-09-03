@@ -201,11 +201,11 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
 
     assert settings["defaultProvider"] == "openai-codex"
     assert settings["defaultModel"] == "gpt-5.6-sol"
-    assert settings["enabledModels"]
-    assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
-    assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
-    assert "kimi-coding/k3" in settings["enabledModels"]
-    assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
+    assert settings["enabledModels"] == [
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-sol",
+        "openrouter/z-ai/glm-5.3-flash",
+    ]
 
 
 def test_pi_project_subagents_enforce_model_scope_with_twenty_workers() -> None:
@@ -232,7 +232,7 @@ def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
     assert "Do not launch subagents" in text
     assert "openai-codex/gpt-5.6-sol" in text
     assert "Never pass the provider-only `openai-codex`" in text
-    assert "kimi-coding" in text
+    assert "GLM-5.3-Flash" in text
     assert "openrouter" in text
 
 
@@ -322,7 +322,7 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "review_failure.py deliver" in text
     assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
     assert re.search(r"never merely print the audit\s+and stop", text)
-    assert re.search(r"both Codex\s+and the selected free-pool tier pass provider", text)
+    assert re.search(r"both Codex and the secondary-review pass provider", text)
     assert "fallback_candidates" in text
     assert "skip remaining candidates from that provider" in text
     assert "authentication never triggers Codex fallback" in text
@@ -412,7 +412,7 @@ def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -
         '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
         '"deferred_passes":[{"skill":"correctness-review","pass_name":"free-pool",'
-        '"origin":"primary","model":"kimi-coding/k3",'
+        '"origin":"primary","model":"openrouter/z-ai/glm-5.3-flash",'
         '"verification_model":"openai-codex/gpt-5.6-sol","thinking":"high"}],'
         '"foreground_fingerprints":[]}\n'
         "JSON\n"
@@ -482,7 +482,7 @@ def _follow_up_success_payload() -> str:
                 {
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
-                    "model": "kimi-coding/k3",
+                    "model": "openrouter/z-ai/glm-5.3-flash",
                     "status": "success",
                     "agent_id": "agent-follow-up",
                     "output_path": ".pi/output/agent-follow-up.jsonl",
@@ -518,7 +518,7 @@ def _deferred_manifest_payload() -> str:
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
                     "origin": "primary",
-                    "model": "kimi-coding/k3",
+                    "model": "openrouter/z-ai/glm-5.3-flash",
                     "verification_model": "openai-codex/gpt-5.6-sol",
                     "thinking": "high",
                 }
@@ -851,7 +851,7 @@ def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Pat
                         "skill": "correctness-review",
                         "pass_name": "free-pool",
                         "origin": "primary",
-                        "model": "kimi-coding/k3",
+                        "model": "openrouter/z-ai/glm-5.3-flash",
                         "verification_model": "openai-codex/gpt-5.6-sol",
                         "thinking": "high",
                     }

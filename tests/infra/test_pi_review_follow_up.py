@@ -31,7 +31,7 @@ def _manifest(tmp_path: Path, *, output_path: Path | None = None) -> Path:
         "skill": "correctness-review",
         "pass_name": "free-pool",
         "origin": "primary",
-        "model": "kimi-coding/k3",
+        "model": "openrouter/z-ai/glm-5.3-flash",
         "verification_model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
     }
@@ -72,7 +72,7 @@ def _valid_result(*, status: str = "complete") -> str:
                 {
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
-                    "model": "kimi-coding/k3",
+                    "model": "openrouter/z-ai/glm-5.3-flash",
                     "status": "success",
                     "agent_id": "agent-follow-up",
                     "output_path": ".pi/output/agent-follow-up.jsonl",
@@ -451,7 +451,7 @@ def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_pat
             "skill": "code-health",
             "pass_name": "free-pool",
             "origin": "primary",
-            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model": "openrouter/z-ai/glm-5.3-flash",
             "verification_model": "openai-codex/gpt-5.6-terra",
             "thinking": "medium",
             "agent_id": "agent-still-running",

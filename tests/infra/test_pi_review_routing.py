@@ -32,17 +32,10 @@ from agent._shared.pi_review_routing import (
 AVAILABLE_MODELS = """\
 openai-codex  gpt-5.6-sol    372K  128K  yes  yes
 openai-codex  gpt-5.6-terra  372K  128K  yes  yes
-kimi-coding   k3  256K  128K  yes  yes
-openrouter    nvidia/nemotron-3-ultra-550b-a55b:free  1M  65.5K  yes  no
-openrouter    nvidia/nemotron-3-super-120b-a12b:free  262.1K  262.1K  yes  no
-openrouter    tencent/hy3:free  262.1K  262.1K  yes  no
+openrouter    z-ai/glm-5.3-flash  1M  131.1K  yes  yes
 """
 
-OPENROUTER_FREE_MODELS = (
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openrouter/tencent/hy3:free",
-)
-SMART_FREE_POOL_MODELS = ("kimi-coding/k3", *OPENROUTER_FREE_MODELS)
+SECONDARY_REVIEW_MODELS = ("openrouter/z-ai/glm-5.3-flash",)
 
 
 def test_parse_available_models_joins_provider_and_model_id() -> None:
@@ -50,15 +43,12 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     assert parse_available_models(AVAILABLE_MODELS) == {
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-5.6-terra",
-        "kimi-coding/k3",
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-        "openrouter/tencent/hy3:free",
+        "openrouter/z-ai/glm-5.3-flash",
     }
 
 
 def test_build_review_plan_allocates_fixed_smart_model_tier() -> None:
-    """Reserve Sol and K3 for semantic checklists regardless of diff risk."""
+    """Reserve Sol and GLM Flash for semantic checklists regardless of diff risk."""
     codex_pass, free_pool_pass = build_review_plan(
         ["correctness-review"],
         changed_lines=120,
@@ -75,7 +65,7 @@ def test_build_review_plan_allocates_fixed_smart_model_tier() -> None:
     )
     assert (free_pool_pass.model_tier, free_pool_pass.candidates) == (
         "smart",
-        SMART_FREE_POOL_MODELS,
+        SECONDARY_REVIEW_MODELS,
     )
     assert free_pool_pass.fallback_candidates == (
         "openai-codex/gpt-5.6-terra",
@@ -86,7 +76,7 @@ def test_build_review_plan_allocates_fixed_smart_model_tier() -> None:
 
 
 def test_build_review_plan_allocates_fixed_mechanical_model_tier() -> None:
-    """Keep mechanical checklists on Terra and free OpenRouter models."""
+    """Keep mechanical checklists on Terra and GLM Flash."""
     codex_pass, free_pool_pass = build_review_plan(
         ["comment-hygiene"],
         changed_lines=120,
@@ -100,7 +90,7 @@ def test_build_review_plan_allocates_fixed_mechanical_model_tier() -> None:
     )
     assert (free_pool_pass.model_tier, free_pool_pass.candidates) == (
         "mechanical",
-        OPENROUTER_FREE_MODELS,
+        SECONDARY_REVIEW_MODELS,
     )
     assert free_pool_pass.fallback_candidates == ("openai-codex/gpt-5.6-terra",)
     assert codex_pass.thinking == free_pool_pass.thinking == "low"
@@ -154,7 +144,7 @@ def test_build_review_plan_keeps_mechanical_passes_bounded_on_risky_diff() -> No
 
 
 def test_build_review_plan_risky_mechanical_skill_keeps_lower_model_tier() -> None:
-    """Raise thinking without promoting a fixed mechanical route to Sol or K3."""
+    """Raise thinking without promoting a fixed mechanical route to Sol."""
     plan = build_review_plan(
         ["code-health"],
         changed_lines=40,
@@ -166,7 +156,7 @@ def test_build_review_plan_risky_mechanical_skill_keeps_lower_model_tier() -> No
     assert [item.reason for item in plan] == ["risk: concurrency", "risk: concurrency"]
     assert [item.model_tier for item in plan] == ["mechanical", "mechanical"]
     assert plan[0].candidates == ("openai-codex/gpt-5.6-terra",)
-    assert plan[1].candidates == OPENROUTER_FREE_MODELS
+    assert plan[1].candidates == SECONDARY_REVIEW_MODELS
 
 
 @pytest.mark.parametrize(
@@ -227,24 +217,17 @@ def test_build_review_plan_mechanical_codex_pass_does_not_fall_back_to_sol() -> 
         )
 
 
-def test_build_review_plan_smart_pool_skips_unavailable_k3() -> None:
-    """Fall back from unavailable K3 to the pinned OpenRouter models."""
-    available = parse_available_models(AVAILABLE_MODELS)
-    available.remove("kimi-coding/k3")
-    available.remove("openrouter/tencent/hy3:free")
-
+def test_build_review_plan_secondary_pass_uses_glm_flash() -> None:
+    """Use the pinned GLM Flash model for independent review coverage."""
     plan = build_review_plan(
         ["correctness-review"],
         changed_lines=300,
         risk_reasons=(),
-        available_models=available,
+        available_models=parse_available_models(AVAILABLE_MODELS),
     )
 
-    assert plan[1].candidates == ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",)
-    assert plan[1].unavailable == (
-        "kimi-coding/k3",
-        "openrouter/tencent/hy3:free",
-    )
+    assert plan[1].candidates == SECONDARY_REVIEW_MODELS
+    assert plan[1].unavailable == ()
 
 
 def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
@@ -258,15 +241,15 @@ def test_build_review_plan_empty_skills_raises_actionable_error() -> None:
         )
 
 
-def test_build_review_plan_missing_free_pool_raises_provider_error() -> None:
-    """Reject the plan once when no free-pool model is registered with Pi."""
+def test_build_review_plan_missing_secondary_model_raises_provider_error() -> None:
+    """Reject the plan once when the secondary model is not registered with Pi."""
     available = {
         model
         for model in parse_available_models(AVAILABLE_MODELS)
         if model.startswith("openai-codex/")
     }
 
-    with pytest.raises(ValueError, match=r"free-pool.*credentials required"):
+    with pytest.raises(ValueError, match=r"secondary-review.*credentials required"):
         build_review_plan(
             ["code-health"],
             changed_lines=300,
@@ -275,15 +258,15 @@ def test_build_review_plan_missing_free_pool_raises_provider_error() -> None:
         )
 
 
-def test_build_review_plan_mechanical_pool_requires_openrouter() -> None:
-    """Do not substitute K3 when a mechanical checklist lacks free OpenRouter models."""
+def test_build_review_plan_secondary_pass_requires_openrouter() -> None:
+    """Require OpenRouter for the secondary review pass."""
     available = {
         model
         for model in parse_available_models(AVAILABLE_MODELS)
         if not model.startswith("openrouter/")
     }
 
-    with pytest.raises(ValueError, match=r"free-pool.*code-health") as error:
+    with pytest.raises(ValueError, match=r"secondary-review.*code-health") as error:
         build_review_plan(
             ["code-health"],
             changed_lines=300,
@@ -292,7 +275,6 @@ def test_build_review_plan_mechanical_pool_requires_openrouter() -> None:
         )
 
     assert "/login openrouter" in str(error.value)
-    assert "kimi-coding" not in str(error.value)
 
 
 def test_build_review_plan_missing_codex_raises_actionable_error() -> None:
@@ -340,22 +322,19 @@ def test_build_review_plan_invalid_input_raises(
 def test_provenance_for_model_uses_effective_provider() -> None:
     """Attribute pinned review models to the provider that produced the report."""
     assert provenance_for_model("openai-codex/gpt-5.6-sol") == "codex"
-    assert (
-        provenance_for_model("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free") == "openrouter"
-    )
-    assert provenance_for_model("kimi-coding/k3") == "kimi-coding"
+    assert provenance_for_model("openrouter/z-ai/glm-5.3-flash") == "openrouter"
 
 
 @pytest.mark.parametrize(
     "model",
     [
-        "kimi-coding/other",
+        "kimi-coding/k3",
         "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
         "openrouter/paid-model",
     ],
 )
-def test_provenance_for_model_unpinned_free_pool_model_raises(model: str) -> None:
-    """Reject selectors outside the exact pinned free-pool policy.
+def test_provenance_for_model_unpinned_secondary_model_raises(model: str) -> None:
+    """Reject selectors outside the exact pinned secondary-review policy.
 
     :param model: Unpinned selector using an otherwise allowed provider.
     """
@@ -1273,11 +1252,11 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     )
 
     stats = json.loads(str(python(script, "transcript-stats", transcript)))
-    provenance = str(python(script, "provenance", "kimi-coding/k3")).strip()
+    provenance = str(python(script, "provenance", "openrouter/z-ai/glm-5.3-flash")).strip()
 
     assert json.loads(report.read_text()) == result
     assert stats["turns"] == 1
-    assert provenance == "kimi-coding"
+    assert provenance == "openrouter"
 
 
 def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> None:
@@ -1304,7 +1283,7 @@ def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> N
     assert b"pi --list-models failed: registry unavailable" in error.value.stderr
 
 
-def test_plan_cli_real_process_missing_free_pool_fails_once(tmp_path: Path) -> None:
+def test_plan_cli_real_process_missing_secondary_model_fails_once(tmp_path: Path) -> None:
     """Stop before expanding model candidates when no free-pool model is registered.
 
     :param tmp_path: Temporary location for the fake executable.
@@ -1327,8 +1306,8 @@ def test_plan_cli_real_process_missing_free_pool_fails_once(tmp_path: Path) -> N
         )
 
     stderr = error.value.stderr.decode()
-    assert stderr.count("No free-pool models available") == 1
-    assert "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free" not in stderr
+    assert stderr.count("No secondary-review model available") == 1
+    assert "openrouter/z-ai/glm-5.3-flash" not in stderr
 
 
 def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
@@ -1352,5 +1331,5 @@ def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:
     )
 
     payload = json.loads(str(result))
-    assert payload[1]["candidates"] == list(OPENROUTER_FREE_MODELS)
+    assert payload[1]["candidates"] == list(SECONDARY_REVIEW_MODELS)
     assert payload[1]["model_tier"] == "mechanical"

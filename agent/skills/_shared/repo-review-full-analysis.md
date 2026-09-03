@@ -210,7 +210,10 @@ path. Repo-local checklists resolve from
 `~/.agents/skills/<skill>/SKILL.md`. A missing checklist is a terminal assignment-generation
 error; never launch a worker without the validated path.
 
-Both model passes share that immutable file. Their `Agent` prompt is only:
+Both model passes share that immutable file. The manifest-compatible `free-pool`
+pass name denotes the secondary review pass; it uses the paid
+`openrouter/z-ai/glm-5.3-flash` model rather than a free model pool. Their
+`Agent` prompt is only:
 `Read and execute the complete review assignment at <absolute-assignment-path>.`
 Do not make the host model reproduce the diff metadata, checklist contract, or
 JSON schema in every tool call. Launch all independent passes in one message and
@@ -339,27 +342,25 @@ but never change the model tier:
 
 - **Smart model tier:** `correctness-review`, `lance-review`,
   `ml-data-pipeline`, `ml-test`, and `synth-setter-project-standards`. The Codex
-  pass starts with Sol and may fall back to Terra; the independent pass starts
-  with Kimi K3 and may fall back to the pinned free OpenRouter models.
+  pass starts with Sol and may fall back to Terra; the independent pass uses
+  OpenRouter GLM-5.3-Flash.
 - **Mechanical model tier:** `code-health`, `comment-hygiene`,
   `gha-workflow-validator`, `python-style`, `shell-style`,
   `tdd-implementation`, and `tdd-refactor`. The Codex pass uses Terra only; the
-  independent pass uses only the pinned free OpenRouter models. Never spend Sol
-  or Kimi K3 on a mechanical checklist, including fallback.
+  independent pass uses OpenRouter GLM-5.3-Flash. Never spend Sol on a
+  mechanical checklist, including fallback.
 
-Codex and the checklist's fixed free pool must both be registered with Pi. If
+Codex and the secondary OpenRouter model must both be registered with Pi. If
 either is absent, stop on the planner's single provider-level error instead of
 expanding every configured model into audit rows. Record individually skipped
-models only after both Codex and the selected free-pool tier pass provider
-preflight.
+models only after both Codex and the secondary-review pass provider preflight.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
 the failure and launch a fresh worker with the next candidate in the pass.
-Codex-pass candidates are always `openai-codex/*`. Smart free-pool candidates
-start with `kimi-coding/k3`; mechanical free-pool candidates contain only the
-pinned free `openrouter/*` models. Exhaust the pass's returned `candidates` in
+Codex-pass candidates are always `openai-codex/*`. The secondary pass uses only
+`openrouter/z-ai/glm-5.3-flash`. Exhaust the pass's returned `candidates` in
 order before attempting any Codex fallback. If a free-pool attempt fails
 authentication, record it, skip remaining candidates from that provider, and
 continue with the next candidate from a different free-pool provider. Stop
@@ -461,8 +462,8 @@ those it can reproduce from the diff. This model has already passed availability
 preflight; if the original Codex pass used a fallback, verification uses that
 same effective fallback rather than a hard-coded selector.
 Extract and validate that verification report through the same helper commands.
-A confirmed candidate is tagged `<free-pool provider>; verified by: codex` (its
-own `kimi-coding` or `openrouter` provenance); a rejected candidate is omitted
+A confirmed candidate is tagged `<free-pool provider>; verified by: codex`
+(with `openrouter` provenance); a rejected candidate is omitted
 and recorded in the audit. If verification fails or is malformed, stop rather
 than posting unverified free-pool output. Add every
 unavailable, failed, malformed, verified, rejected, and successful attempt to
