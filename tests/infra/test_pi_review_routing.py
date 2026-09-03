@@ -1284,7 +1284,7 @@ def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> N
 
 
 def test_plan_cli_real_process_missing_secondary_model_fails_once(tmp_path: Path) -> None:
-    """Stop before expanding model candidates when no free-pool model is registered.
+    """Stop before expanding candidates when no secondary-review model is registered.
 
     :param tmp_path: Temporary location for the fake executable.
     """
