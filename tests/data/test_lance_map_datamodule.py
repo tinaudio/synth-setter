@@ -1029,6 +1029,33 @@ class TestLanceMapDataModuleModes:
         assert jittered.min() >= -1.0
         assert jittered.max() <= 1.0
 
+    @pytest.mark.parametrize(
+        "loader_name", ["predict_dataloader", "test_dataloader", "val_dataloader"]
+    )
+    def test_fake_mode_param_jitter_leaves_held_out_targets_unchanged(
+        self, tmp_path: Path, loader_name: str
+    ) -> None:
+        """Fake held-out targets ignore the training-only jitter option.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param loader_name: Held-out dataloader flow under test.
+        """
+        batches = []
+        for amount in (0.0, 0.1):
+            with _set_up_map_module(
+                dataset_root=tmp_path,
+                batch_size=32,
+                fake=True,
+                ot=False,
+                param_jitter_amount=amount,
+                use_saved_mean_and_variance=False,
+            ) as module:
+                torch.manual_seed(91)
+                loader = getattr(module, loader_name)()
+                batches.append(_unwrap(next(iter(loader))["params"]))
+
+        torch.testing.assert_close(batches[0], batches[1], atol=0.0, rtol=0.0)
+
     def test_fake_mode_preserves_conditioning_prediction_and_rng(self, tmp_path: Path) -> None:
         """Fake map batches retain m2l, prediction audio, ranges, and global RNG behavior.
 

@@ -604,6 +604,8 @@ def test_prepare_batch_param_jitter_clips_to_encoded_domain() -> None:
 
     lower_boundary = params[:, 0]
     upper_boundary = params[:, 1]
+    assert params.min() >= 0.0
+    assert params.max() <= 1.0
     assert torch.any(lower_boundary == 0.0)
     assert torch.any(lower_boundary > 0.0)
     assert torch.any(upper_boundary == 1.0)
