@@ -38,8 +38,8 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   `tinaudio/synth-setter`; existing upstream issues may be referenced only
   after verifying that they already exist.
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
-  `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
-  models only. Agent `model` arguments use a fully qualified
+  `openai-codex` or the pinned OpenRouter GLM-5.3-Flash secondary-review model
+  only. Agent `model` arguments use a fully qualified
   `provider/model-id` selector; default to `openai-codex/gpt-5.6-sol`, never
   the provider-only `openai-codex`. Do not select Anthropic models or launch
   Anthropic-backed Pi subagents; keep `.pi/settings.json`,
