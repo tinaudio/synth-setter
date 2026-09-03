@@ -324,8 +324,8 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"never merely print the audit\s+and stop", text)
     assert re.search(r"both Codex and the secondary-review pass provider", text)
     assert "fallback_candidates" in text
-    assert "secondary attempt fails\nauthentication" in text
-    assert "authentication never triggers\nCodex fallback" in text
+    assert re.search(r"secondary attempt fails\s+authentication", text)
+    assert re.search(r"authentication never triggers\s+Codex fallback", text)
     assert "Codex fallback" in text
     assert "Free-pool review failed; only Codex ran." in text
     assert "## Provider incidents" in text
