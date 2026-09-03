@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -143,6 +144,26 @@ def test_compute_octave_rt60_log_rmse_ignores_unfit_band_pairs(
     assert error == pytest.approx(np.log(2.0) / np.sqrt(2.0))
 
 
+def test_compute_octave_rt60_log_rmse_mismatched_band_centres_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pyFDN band-layout mismatch cannot silently pair unrelated estimates.
+
+    :param monkeypatch: Supplies inconsistent centre frequencies.
+    """
+    estimates = iter(
+        [
+            (np.ones(2), np.array([63.0, 125.0])),
+            (np.ones(2), np.array([63.0, 250.0])),
+        ]
+    )
+    monkeypatch.setattr(cam, "estimate_rt_bands", lambda *_args, **_kwargs: next(estimates))
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="centre frequencies differ"):
+        cam.compute_octave_rt60_log_rmse(audio, audio, _SR)
+
+
 def test_compute_octave_rt60_log_rmse_without_valid_band_pair_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -198,6 +219,28 @@ def test_compute_octave_edc_rmse_db_disables_gradients(
     assert grad_enabled == [False]
 
 
+def test_compute_octave_edc_rmse_db_nonfinite_result_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-finite pyFDN criterion result cannot enter metric aggregation.
+
+    :param monkeypatch: Replaces the criterion with a non-finite result.
+    """
+
+    class NonfiniteCriterion:
+        def __init__(self, _target: np.ndarray) -> None:
+            pass
+
+        def __call__(self, _response: object) -> torch.Tensor:
+            return torch.tensor(float("nan"))
+
+    monkeypatch.setattr(cam, "MatchEnergyDecay", NonfiniteCriterion)
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="energy-decay RMSE must be finite"):
+        cam.compute_octave_edc_rmse_db(audio, audio, _SR)
+
+
 def test_compute_octave_edc_rmse_db_changed_decay_is_positive() -> None:
     """Different broadband decay rates produce finite positive EDC error."""
     rng = np.random.default_rng(17)
@@ -210,6 +253,42 @@ def test_compute_octave_edc_rmse_db_changed_decay_is_positive() -> None:
 
     assert np.isfinite(error)
     assert error > 0.0
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [cam.compute_octave_rt60_log_rmse, cam.compute_octave_edc_rmse_db],
+)
+def test_pyfdn_reverb_metric_nonfinite_input_raises(
+    metric: Callable[[np.ndarray, np.ndarray, float], float],
+) -> None:
+    """Reverb metrics reject non-finite audio before calling pyFDN.
+
+    :param metric: pyFDN metric under test.
+    """
+    audio = np.zeros((1, _SR), dtype=np.float32)
+    audio[0, 0] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        metric(audio, audio, _SR)
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [cam.compute_octave_rt60_log_rmse, cam.compute_octave_edc_rmse_db],
+)
+def test_pyfdn_reverb_metric_mismatched_lengths_raise(
+    metric: Callable[[np.ndarray, np.ndarray, float], float],
+) -> None:
+    """Reverb metrics require aligned target and prediction durations.
+
+    :param metric: pyFDN metric under test.
+    """
+    target = np.zeros((1, _SR), dtype=np.float32)
+    pred = np.zeros((1, _SR - 1), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="same sample count"):
+        metric(target, pred, _SR)
 
 
 @pytest.mark.parametrize(
@@ -609,6 +688,21 @@ def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> Non
     assert metrics["octave_rt60_log_rmse"] == pytest.approx(0.0, abs=1e-12)
 
 
+def test_compute_metrics_on_dir_pyfdn_mismatched_sample_rates_raise(tmp_path: Path) -> None:
+    """A pyFDN pair with incompatible time bases cannot be compared.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    sample_dir = tmp_path / "sample_0"
+    sample_dir.mkdir()
+    audio = _sine(seconds=0.5)
+    write_wav(sample_dir / "target.wav", audio, sr=44_100)
+    write_wav(sample_dir / "pred.wav", audio, sr=48_000)
+
+    with pytest.raises(ValueError, match="same sample rate"):
+        compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+
 def test_compute_metrics_on_dir_identical_files_yields_perfect_scores(tmp_path: Path) -> None:
     """Identical target/pred → mss/wmfcc/sot ≈ 0 and rms == 1.
 
@@ -657,9 +751,60 @@ def test_compute_metrics_writes_csv_with_expected_index_and_columns(tmp_path: Pa
     assert np.isfinite(df.to_numpy()).all()
 
 
+def test_aggregate_metrics_pyfdn_preserves_reverb_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parallel aggregation forwards pyFDN specialization to each worker.
+
+    :param tmp_path: Pytest fixture providing isolated audio and metric directories.
+    :param monkeypatch: Replaces process isolation with threads for xdist-safe coverage.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    rng = np.random.default_rng(29)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(audio_root, "0", decay, decay)
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+
+    result = cam._aggregate_metrics([sample_dir], output_dir, 1, "pyfdn")
+
+    assert "octave_rt60_log_rmse" in result
+    assert "octave_edc_rmse_db" in result
+
+
 # ---------------------------------------------------------------------------
 # main (Click CLI)
 # ---------------------------------------------------------------------------
+
+
+def test_main_pyfdn_writes_reverb_aggregate_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI option persists pyFDN metrics in the public aggregate schema.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Replaces expensive parallel calculation with its resulting frame.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    metrics_dir = tmp_path / "metrics"
+    frame = pd.DataFrame({"octave_rt60_log_rmse": [0.2, 0.4], "octave_edc_rmse_db": [1.0, 3.0]})
+    monkeypatch.setattr(cam, "_aggregate_metrics", lambda *_args: frame)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "--renderer-backend", "pyfdn"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    assert aggregate.loc["octave_rt60_log_rmse", "mean"] == pytest.approx(0.3)
+    assert aggregate.loc["octave_edc_rmse_db", "mean"] == pytest.approx(2.0)
 
 
 @pytest.mark.slow
