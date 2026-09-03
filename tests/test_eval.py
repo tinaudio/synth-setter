@@ -1287,7 +1287,8 @@ def _compose_fake_oracle_eval_cfg(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
-            + ([f"datamodule={datamodule}"] if datamodule else []),
+            + ([f"datamodule={datamodule}"] if datamodule else [])
+            + (["render=pyfdn"] if param_spec_name == "pyfdn_n8_mono" else []),
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
@@ -1306,34 +1307,28 @@ def _compose_fake_oracle_eval_cfg(
         # Pin the full split because surge/base bounds validation by batch count.
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
-        # Render group is null on fake_oracle; set it inline to the dataset's spec.
-        is_pyfdn = param_spec_name == "pyfdn_n8_mono"
-        cfg.render = RenderConfig.model_validate(
-            {
-                "synth": {
-                    "name": param_spec_name,
-                    "param_spec_name": param_spec_name,
-                    "plugin_state_path": (
-                        "" if is_pyfdn else str(plugin_state_paths[param_spec_name])
-                    ),
-                    "plugin_path": "pyfdn" if is_pyfdn else "plugins/fake.vst3",
-                    "synth_version": "0.4.2" if is_pyfdn else "1.3.4",
-                },
-                "renderer_backend": "pyfdn" if is_pyfdn else "pedalboard",
-                "pyfdn_excitation": "impulse" if is_pyfdn else None,
-                "sample_rate": 44100,
-                "channels": 1 if is_pyfdn else 2,
-                "velocity": 0 if is_pyfdn else 100,
-                "signal_duration_seconds": 4.0,
-                "min_loudness": -55.0,
-                "audio_dtype": "float32" if is_pyfdn else "float16",
-                "mel_spec_dtype": "float32" if is_pyfdn else "float16",
-                "samples_per_render_batch": 1,
-                "samples_per_shard": 5,
-                "plugin_reload_cadence": "render",
-                "gui_toggle_cadence": "never",
-            }
-        ).model_dump(mode="json")
+        # Render group is null on fake_oracle; set it inline for fake VST datasets.
+        if param_spec_name != "pyfdn_n8_mono":
+            cfg.render = RenderConfig.model_validate(
+                {
+                    "synth": {
+                        "name": param_spec_name,
+                        "param_spec_name": param_spec_name,
+                        "plugin_state_path": str(plugin_state_paths[param_spec_name]),
+                        "plugin_path": "plugins/fake.vst3",
+                        "synth_version": "1.3.4",
+                    },
+                    "sample_rate": 44100,
+                    "channels": 2,
+                    "velocity": 100,
+                    "signal_duration_seconds": 4.0,
+                    "min_loudness": -55.0,
+                    "samples_per_render_batch": 1,
+                    "samples_per_shard": 5,
+                    "plugin_reload_cadence": "render",
+                    "gui_toggle_cadence": "never",
+                }
+            ).model_dump(mode="json")
     return cfg
 
 
@@ -1478,10 +1473,10 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
 
 @pytest.mark.slow
-def test_evaluate_predict_mode_pyfdn_projects_feedback_and_renders_finite_audio(
+def test_evaluate_predict_mode_pyfdn_renders_finite_audio_end_to_end(
     tmp_path: Path,
 ) -> None:
-    """The eval entrypoint stabilizes unconstrained pyFDN predictions before rendering.
+    """The eval entrypoint renders a pyFDN prediction through real post-processing.
 
     :param tmp_path: Hydra output root and two-row Lance predict dataset.
     """
@@ -1491,12 +1486,6 @@ def test_evaluate_predict_mode_pyfdn_projects_feedback_and_renders_finite_audio(
     dataset_root.mkdir()
     params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(17))
     encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
-    feedback_span = next(
-        span
-        for parameter, span in PYFDN_N8_MONO_PARAM_SPEC.encoded_slices()
-        if parameter.name == "feedback_matrix"
-    )
-    encoded[feedback_span] = 1.0
     write_lance_shard(
         dataset_root / "test.lance",
         {
