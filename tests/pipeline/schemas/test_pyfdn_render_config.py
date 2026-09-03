@@ -142,6 +142,60 @@ def test_pyfdn_render_config_noncanonical_contract_raises(
         RenderConfig.model_validate(_pyfdn_render_kwargs(**{field: value}))
 
 
+def test_pyfdn_param_spec_with_hosted_synth_rejects_hosted_backend() -> None:
+    """A registered pyFDN spec cannot route through a hosted synth identity."""
+    synth = {
+        "name": "surge_4",
+        "param_spec_name": "pyfdn_n8_mono_hadamard",
+        "plugin_path": "plugins/Surge XT.vst3",
+        "plugin_state_path": "presets/surge-mini.vstpreset",
+        "synth_version": "1.3.4",
+    }
+
+    with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):
+        RenderConfig.model_validate(
+            _pyfdn_render_kwargs(
+                synth=synth,
+                renderer_backend="pedalboard",
+                pyfdn_excitation=None,
+            )
+        )
+
+
+def test_pyfdn_plugin_path_with_unregistered_name_rejects_hosted_backend() -> None:
+    """The native package sentinel cannot route through a hosted backend."""
+    synth = {
+        "name": "unregistered_pyfdn",
+        "param_spec_name": "surge_4",
+        "plugin_path": "pyfdn",
+        "plugin_state_path": "",
+        "synth_version": "0.4.2",
+    }
+
+    with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):
+        RenderConfig.model_validate(
+            _pyfdn_render_kwargs(
+                synth=synth,
+                renderer_backend="pedalboard",
+                pyfdn_excitation=None,
+            )
+        )
+
+
+def test_pyfdn_name_with_mismatched_spec_rejects_native_backend() -> None:
+    """A pyFDN synth and unrelated parameter spec are not a registered identity."""
+    synth = {
+        "name": "pyfdn_n8_mono_hadamard",
+        "param_spec_name": "surge_4",
+        "plugin_path": "pyfdn",
+        "plugin_state_path": "",
+        "synth_version": "0.4.2",
+    }
+
+    with pytest.raises(ValidationError, match="registered pyfdn synth identity"):
+        RenderConfig.model_validate(_pyfdn_render_kwargs(synth=synth))
+
+
 def test_pyfdn_name_with_mismatched_spec_rejects_hosted_backend() -> None:
     """A malformed pyFDN identity cannot evade native-backend validation."""
     synth = {

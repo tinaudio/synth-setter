@@ -3,10 +3,12 @@
 from typing import cast
 
 import numpy as np
+import pytest
 
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HADAMARD_PARAM_SPEC,
     PYFDN_N8_MONO_PARAM_SPEC,
+    OrthogonalMatrixParameter,
 )
 from synth_setter.data.vst.param_spec import ContinuousParameter
 
@@ -118,6 +120,18 @@ _EXPECTED_HADAMARD_FEEDBACK = np.array(
     ],
     dtype=np.float64,
 ) / np.sqrt(8.0)
+
+
+def test_orthogonal_matrix_parameter_nonsquare_shape_raises() -> None:
+    """An orthogonal matrix parameter requires equal row and column counts."""
+    with pytest.raises(ValueError, match="shape must be square"):
+        OrthogonalMatrixParameter("feedback_matrix", shape=(8, 7), min=-1.0, max=1.0)
+
+
+def test_orthogonal_matrix_parameter_nonunit_bounds_raise() -> None:
+    """An orthogonal matrix parameter requires the complete unit element range."""
+    with pytest.raises(ValueError, match=r"bounds must be \[-1, 1\]"):
+        OrthogonalMatrixParameter("feedback_matrix", shape=(8, 8), min=0.0, max=1.0)
 
 
 def test_pyfdn_spec_layout_has_exact_91_columns_and_slices() -> None:

@@ -484,11 +484,9 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :returns: ``self`` unchanged for other backends or valid pyFDN configuration.
         :raises ValueError: The pyFDN identity or fixed render contract drifts.
         """
-        registered_synth = SYNTHS.get(self.synth.name)
         registered_pyfdn = (
             self.synth.name in _PYFDN_SYNTH_NAMES
-            and registered_synth is not None
-            and registered_synth.param_spec_name == self.param_spec_name
+            and SYNTHS[self.synth.name].param_spec_name == self.param_spec_name
         )
         pyfdn_identity = (
             self.synth.name in _PYFDN_SYNTH_NAMES
