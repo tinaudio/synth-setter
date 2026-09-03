@@ -171,9 +171,10 @@ def test_params_to_csv_writes_spec_quantized_effective_synth_value(tmp_path: Pat
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     pred_s, pred_n = _sample_param_dicts(seed=0)
-    effective_n: NoteParams = {
-        **pred_n,
-        "pitch": pred_n["pitch"] + 1,
+    parameter_name = "a_amp_eg_attack"
+    effective_s = {
+        **pred_s,
+        parameter_name: pred_s[parameter_name] + 0.1,
     }
     out = tmp_path / "params.csv"
 
@@ -184,14 +185,16 @@ def test_params_to_csv_writes_spec_quantized_effective_synth_value(tmp_path: Pat
         pred_n,
         str(out),
         _PARAM_SPEC,
-        pred_effective_synth_params=pred_s,
-        pred_effective_note_params=effective_n,
+        pred_effective_synth_params=effective_s,
+        pred_effective_note_params=pred_n,
         pred_effective_note_window=pred_n["note_start_and_end"],
     )
 
     df = pd.read_csv(out, index_col=0)
-    assert int(df.at["pitch", "pred"]) == pred_n["pitch"]
-    assert int(df.at["pitch", "pred_effective"]) == effective_n["pitch"]
+    assert float(df.at[parameter_name, "pred"]) == pytest.approx(pred_s[parameter_name])
+    assert float(df.at[parameter_name, "pred_effective"]) == pytest.approx(
+        effective_s[parameter_name]
+    )
 
 
 def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> None:

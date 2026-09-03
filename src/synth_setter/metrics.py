@@ -106,7 +106,10 @@ def spec_quantized_per_param_mse(
     from synth_setter.data.vst.param_spec import spec_quantize_model_output
 
     effective_rows = np.stack(
-        [spec_quantize_model_output(row, param_spec) for row in predicted.detach().cpu().numpy()]
+        [
+            spec_quantize_model_output(row, param_spec)
+            for row in predicted.detach().float().cpu().numpy()
+        ]
     )
     effective = torch.as_tensor(effective_rows, device=predicted.device, dtype=torch.float32)
     return (effective - target.float()).square().mean(dim=0)

@@ -166,6 +166,19 @@ def test_spec_quantized_per_param_mse_matches_render_rounding_boundary() -> None
     assert torch.equal(result, torch.zeros(1))
 
 
+def test_spec_quantized_per_param_mse_bfloat16_prediction_uses_render_dtype() -> None:
+    """Mixed-precision predictions canonicalize through the renderer's float32 path."""
+    spec = ParamSpec([ContinuousParameter("gain")], [])
+
+    result = spec_quantized_per_param_mse(
+        torch.zeros(1, 1, dtype=torch.bfloat16),
+        torch.zeros(1, 1),
+        spec,
+    )
+
+    assert torch.equal(result, torch.zeros(1))
+
+
 def test_spec_quantized_per_param_mse_nonfinite_prediction_raises_value_error() -> None:
     """A NaN category cannot collapse into a finite, misleading score."""
     spec = ParamSpec([CategoricalParameter("mode", ["a", "b"], encoding="onehot")], [])
