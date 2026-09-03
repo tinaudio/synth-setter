@@ -321,13 +321,16 @@ class _RecordingModule:
 
     def __init__(self) -> None:
         self.logged: dict[str, float] = {}
+        self.sync_dist = False
 
-    def log_dict(self, metrics: dict[str, float]) -> None:
+    def log_dict(self, metrics: dict[str, float], *, sync_dist: bool = False) -> None:
         """Record the per-parameter metrics the callback dispatches.
 
         :param metrics: Metric name to value mapping emitted by the callback.
+        :param sync_dist: Whether Lightning synchronizes metrics across ranks.
         """
         self.logged.update(metrics)
+        self.sync_dist = sync_dist
 
 
 def _run_validation_epoch(param_spec: str, per_param_mse: torch.Tensor) -> dict[str, float]:
@@ -363,6 +366,53 @@ def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) 
     logged = _run_validation_epoch(param_spec, per_param_mse)
 
     assert sorted(logged) == sorted(f"per_param_mse/{name}" for name in spec.names)
+
+
+def test_log_per_param_mse_weights_spec_quantized_error_by_sample_count() -> None:
+    """A ragged final batch contributes one vote per sample rather than per batch."""
+    callback = LogPerParamMSE(param_spec="surge_4")
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(
+        trainer,
+        pl_module,
+        {"preds": torch.zeros(1, 7)},
+        {"params": torch.zeros(1, 7)},
+        0,
+    )
+    callback.on_validation_batch_end(
+        trainer,
+        pl_module,
+        {"preds": torch.ones(3, 7)},
+        {"params": torch.zeros(3, 7)},
+        1,
+    )
+
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    assert module.logged["val/param_mse_spec_quantized"] == pytest.approx(0.75)
+
+
+def test_log_per_param_mse_synchronizes_epoch_metrics_across_ranks() -> None:
+    """Validation summaries request Lightning's distributed reduction."""
+    callback = LogPerParamMSE(param_spec="surge_4")
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(
+        trainer,
+        pl_module,
+        {"preds": torch.zeros(1, 7)},
+        {"params": torch.zeros(1, 7)},
+        0,
+    )
+
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    assert module.sync_dist is True
 
 
 def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:

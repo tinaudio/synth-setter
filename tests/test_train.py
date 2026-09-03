@@ -1907,8 +1907,10 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     HydraConfig().set_config(cfg_surge_real_train)
     metric_dict, object_dict = train(cfg_surge_real_train)
 
-    assert metric_dict["val/param_mse_spec_quantized"].item() == 0.0
-    assert metric_dict["per_param_mse_spec_quantized/a_amp_eg_attack"].item() == 0.0
+    assert metric_dict["val/param_mse_spec_quantized"].item() == pytest.approx(0.0, abs=1e-12)
+    assert metric_dict["per_param_mse_spec_quantized/a_amp_eg_attack"].item() == pytest.approx(
+        0.0, abs=1e-12
+    )
 
     probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
     assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"

@@ -635,10 +635,12 @@ def spec_quantize_model_output(row: np.ndarray, spec: ParamSpec) -> np.ndarray:
     :param row: Model-space parameter row shaped ``(len(spec),)``.
     :param spec: Parameter schema defining clipping and discrete values.
     :returns: Canonicalized model-space row with the same shape.
-    :raises ValueError: The row shape does not match the ParamSpec width.
+    :raises ValueError: The row shape is wrong or contains a non-finite value.
     """
     if row.shape != (spec.encoded_width,):
         raise ValueError(f"expected shape ({spec.encoded_width},), got {row.shape}")
+    if not np.isfinite(row).all():
+        raise ValueError("model output must contain only finite values")
 
     effective_encoded = spec.model_to_encoded(row).copy()
     for parameter, span in spec.encoded_slices():

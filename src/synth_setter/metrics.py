@@ -89,7 +89,7 @@ def spec_quantized_per_param_mse(
     :param target: Ground-truth model-space vectors with the same shape.
     :param param_spec: Spec defining clipping and discrete parameter values.
     :returns: Per-encoded-column mean squared error shaped ``(num_params,)``.
-    :raises ValueError: Tensor shapes or the ParamSpec width do not match.
+    :raises ValueError: Shapes mismatch or either tensor contains a non-finite value.
     """
     if predicted.ndim != 2 or predicted.shape != target.shape:
         raise ValueError(
@@ -99,6 +99,8 @@ def spec_quantized_per_param_mse(
         raise ValueError(
             f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
         )
+    if not torch.isfinite(predicted).all() or not torch.isfinite(target).all():
+        raise ValueError("predicted and target parameters must contain only finite values")
 
     from synth_setter.data.vst.param_spec import (
         CategoricalParameter,

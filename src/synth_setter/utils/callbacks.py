@@ -993,4 +993,4 @@ class LogPerParamMSE(Callback):
             )
             if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
                 metrics["val/param_mse_spec_quantized"] = per_param_mse.mean()
-        pl_module.log_dict(metrics)
+        pl_module.log_dict(metrics, sync_dist=True)

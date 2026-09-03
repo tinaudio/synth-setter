@@ -483,6 +483,33 @@ def test_main_no_params_writes_pred_target_csv_and_spectrogram(
             assert (sample_dir / name).is_file(), f"missing {name} under {sample_dir}"
 
 
+def test_main_passes_spec_quantized_pitch_to_renderer_and_csv(
+    pred_dir: Path,
+    out_dir: Path,
+    fake_renderer: MagicMock,
+) -> None:
+    """The renderer and effective artifact consume the same integral pitch.
+
+    :param pred_dir: Directory for staged prediction tensors.
+    :param out_dir: Destination for rendered artifacts.
+    :param fake_renderer: Renderer recording the effective prediction.
+    """
+    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
+    pitch_span = next(
+        span for parameter, span in _PARAM_SPEC.encoded_slices() if parameter.name == "pitch"
+    )
+    staged = torch.load(pred_dir / "pred-0.pt", weights_only=True)
+    staged[0, pitch_span] = 0.3
+    torch.save(staged, pred_dir / "pred-0.pt")
+
+    _invoke_main(pred_dir, out_dir, ("--no-params", "--skip-spectrogram"))
+
+    rendered_pitch = fake_renderer.render.call_args.args[1]
+    params = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert rendered_pitch == 63
+    assert int(params.at["pitch", "pred_effective"]) == rendered_pitch
+
+
 def test_main_reversed_prediction_window_renders_canonical_interval(
     pred_dir: Path,
     out_dir: Path,
