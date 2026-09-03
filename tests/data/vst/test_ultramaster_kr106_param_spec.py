@@ -110,13 +110,14 @@ def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
 
 def test_ultramaster_kr106_every_categorical_setting_can_be_sampled() -> None:
     """No registered switch or selector value has zero sampling probability."""
-    categorical_params = (
+    categorical_params = [
         param
         for param in param_specs["ultramaster_kr106"].synth_params
         if isinstance(param, CategoricalParameter)
-    )
+    ]
+    weights = [weight for param in categorical_params for weight in param.weights]
 
-    assert all(weight > 0.0 for param in categorical_params for weight in param.weights)
+    assert min(weights) > 0.0
 
 
 def test_ultramaster_kr106_preset_is_committed() -> None:
@@ -171,3 +172,54 @@ def test_ultramaster_kr106_categorical_params_cover_every_host_setting() -> None
             reached_labels.add(host_param.string_value)
 
         assert reached_labels == expected_labels, name
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_ultramaster_kr106_generate_dataset_stages_consumable_lance_shard(
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The production entrypoint renders and stages a real KR-106 Lance row.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Pins the single-worker process contract.
+    :param tmp_path: Local output directory for the generated shard.
+    """
+    if not _PLUGIN_PATH.is_dir():
+        pytest.skip(f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}")
+
+    from hydra import compose, initialize_config_module
+    from omegaconf import open_dict
+
+    from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
+    from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
+    from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-smoke"],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(_REPO_ROOT)
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.work_dir = str(_REPO_ROOT)
+        cfg.train_val_test_sizes = [1, 0, 0]
+        cfg.finalize_inline = False
+        cfg.synth.plugin_path = str(_PLUGIN_PATH)
+        cfg.synth.plugin_state_path = str(
+            _REPO_ROOT / plugin_state_paths["ultramaster_kr106"]
+        )
+        cfg.render.samples_per_shard = 1
+        cfg.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg.logger = None
+
+    spec = spec_from_cfg(cfg)
+    from_hydra(cfg)
+
+    assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
+    assert validate_all_shards_from_r2(spec) == []
