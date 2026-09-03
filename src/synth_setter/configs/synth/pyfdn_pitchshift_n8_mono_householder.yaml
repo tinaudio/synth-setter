@@ -1,6 +1,6 @@
 # Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
-name: "pyfdn_pitchshift_n8_mono"
-param_spec_name: "pyfdn_pitchshift_n8_mono"
+name: "pyfdn_pitchshift_n8_mono_householder"
+param_spec_name: "pyfdn_pitchshift_n8_mono_householder"
 plugin_path: "pyfdn"
 plugin_state_path: ""
 synth_version: "0.4.2"

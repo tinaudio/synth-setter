@@ -241,7 +241,7 @@ def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
     """The pitch-shift synth group reaches its native renderer through Hydra."""
     cfg = _compose(
         "train.yaml",
-        ["experiment=pyfdn/flow", "synth=pyfdn_pitchshift_n8_mono"],
+        ["experiment=pyfdn/flow", "synth=pyfdn_pitchshift_n8_mono_householder"],
     )
     render_values = OmegaConf.to_container(cfg.render, resolve=True)
     assert isinstance(render_values, dict)
@@ -250,8 +250,8 @@ def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
     render = RenderConfig.model_validate(render_values)
     renderer = make_audio_renderer(render)
 
-    assert cfg.datamodule.param_spec_name == "pyfdn_pitchshift_n8_mono"
-    assert cfg.model.param_spec == "pyfdn_pitchshift_n8_mono"
+    assert cfg.datamodule.param_spec_name == "pyfdn_pitchshift_n8_mono_householder"
+    assert cfg.model.param_spec == "pyfdn_pitchshift_n8_mono_householder"
     assert isinstance(renderer, PyFDNRenderer)
     assert renderer.source_provenance["implementation"] == "pyFDN.process_fdn"
 

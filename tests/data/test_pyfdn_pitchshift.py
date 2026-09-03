@@ -4,11 +4,12 @@ from typing import cast
 
 import numpy as np
 import pytest
+from pyFDN import householder_matrix
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_pitchshift_fdn_build
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
-    PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC,
+    PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX,
     PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME,
     PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX,
@@ -20,13 +21,12 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 
-_REFERENCE_RT = np.array(
-    [4.4, 4.4, 4.3, 4.1, 3.8, 3.4, 3.0, 1.7, 1.5, 0.5], dtype=np.float64
-)
+_REFERENCE_RT = np.array([4.4, 4.4, 4.3, 4.1, 3.8, 3.4, 3.0, 1.7, 1.5, 0.5], dtype=np.float64)
+_EXPECTED_HOUSEHOLDER_FEEDBACK = householder_matrix(np.ones(8, dtype=np.float64))
 
 
 def _reference_params() -> ParameterValues:
-    params, _ = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(7))
+    params, _ = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(7))
     params[PYFDN_RT_GEQ_SECONDS_NAME] = _REFERENCE_RT.copy()
     params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] = -700.0
     params[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME] = 2048
@@ -36,16 +36,42 @@ def _reference_params() -> ParameterValues:
     return params
 
 
+def test_pitchshift_spec_omits_fixed_feedback_from_model_coordinates() -> None:
+    """The Householder feedback matrix consumes no learned coordinates."""
+    spec = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+
+    assert spec.encoded_width == 45
+    assert "feedback_matrix" not in spec.synth_param_names
+    assert all(not name.startswith("feedback_matrix.") for name in spec.encoded_names)
+
+
+def test_pitchshift_spec_samples_householder_feedback() -> None:
+    """Every shimmer patch uses pyFDN's order-8 all-ones reflection."""
+    params = _reference_params()
+    feedback = cast(np.ndarray, params["feedback_matrix"])
+
+    np.testing.assert_allclose(feedback, _EXPECTED_HOUSEHOLDER_FEEDBACK, rtol=0.0, atol=1e-15)
+    np.testing.assert_allclose(
+        feedback.T @ feedback,
+        np.eye(8, dtype=np.float64),
+        rtol=0.0,
+        atol=1e-15,
+    )
+
+
 def test_pitchshift_spec_reference_controls_round_trip() -> None:
     """The exact upstream shimmer controls survive the model codec."""
     params = _reference_params()
 
-    encoded = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.encode(
+    encoded = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(
         params, {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
     )
-    decoded, _ = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.decode(encoded)
+    decoded, _ = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.decode(encoded)
 
-    assert encoded.shape == (109,)
+    assert encoded.shape == (45,)
+    np.testing.assert_allclose(
+        decoded["feedback_matrix"], _EXPECTED_HOUSEHOLDER_FEEDBACK, rtol=0.0, atol=1e-15
+    )
     np.testing.assert_allclose(decoded[PYFDN_RT_GEQ_SECONDS_NAME], _REFERENCE_RT, atol=1e-6)
     assert decoded[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] == pytest.approx(-700.0, abs=2e-5)
     assert decoded[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME] == 2048
@@ -86,7 +112,7 @@ def test_pitchshift_build_each_rt_coordinate_changes_geq(rt_index: int) -> None:
 
 def test_pitchshift_renderer_reference_patch_is_repeatable() -> None:
     """Fresh GEQ and pitch-shifter state make repeated renders identical."""
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
     params = _reference_params()
 
     first = renderer.render(params)
@@ -100,7 +126,7 @@ def test_pitchshift_renderer_reference_patch_is_repeatable() -> None:
 
 def test_pitchshift_renderer_impulse_provenance_names_process_fdn() -> None:
     """Impulse provenance identifies the processing path used by shimmer."""
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     assert renderer.source_provenance["implementation"] == "pyFDN.process_fdn"
 
@@ -109,7 +135,7 @@ def test_pitchshift_renderer_chirp_returns_finite_audio() -> None:
     """The canonical chirp traverses the native pitch-shift topology."""
     renderer = PyFDNRenderer(
         excitation="chirp",
-        param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"),
+        param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"),
     )
 
     audio = renderer.render(_reference_params())
@@ -122,10 +148,8 @@ def test_pitchshift_renderer_chirp_returns_finite_audio() -> None:
 def test_pitchshift_renderer_rejects_transpose_above_spec_bound() -> None:
     """Native rendering rejects transpose values outside the learnable domain."""
     params = _reference_params()
-    params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] = (
-        PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX + 1.0
-    )
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] = PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX + 1.0
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     with pytest.raises(ValueError, match="transpose_cents must be between"):
         renderer.render(params)
@@ -135,7 +159,7 @@ def test_pitchshift_renderer_rejects_window_above_spec_bound() -> None:
     """Native rendering rejects window sizes outside the learnable domain."""
     params = _reference_params()
     params[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME] = PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX + 1
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     with pytest.raises(ValueError, match="window_size must be between"):
         renderer.render(params)
@@ -145,7 +169,7 @@ def test_pitchshift_renderer_rejects_transpose_wrong_type() -> None:
     """Native rendering rejects non-scalar transpose controls."""
     params = _reference_params()
     params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] = np.array([700.0])
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     with pytest.raises(TypeError, match="transpose_cents must be a real scalar"):
         renderer.render(params)
@@ -155,7 +179,7 @@ def test_pitchshift_renderer_rejects_window_below_spec_bound() -> None:
     """Native rendering rejects windows below the learnable domain."""
     params = _reference_params()
     params[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME] = 255
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     with pytest.raises(ValueError, match="window_size must be between"):
         renderer.render(params)
@@ -174,7 +198,7 @@ def test_pitchshift_renderer_rejects_active_mask_wrong_dtype() -> None:
     """Native rendering rejects non-integer active-channel masks."""
     params = _reference_params()
     params[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME] = np.ones(8, dtype=np.float64)
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     with pytest.raises(TypeError, match="active_channels must have dtype int64"):
         renderer.render(params)
@@ -186,7 +210,7 @@ def test_pitchshift_renderer_rejects_active_mask_nonbinary_value() -> None:
     params[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME] = np.array(
         [0, 0, 0, 0, 0, 0, 1, 2], dtype=np.int64
     )
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     with pytest.raises(ValueError, match="active_channels must contain only zero or one"):
         renderer.render(params)
@@ -197,7 +221,7 @@ def test_pitchshift_renderer_transpose_changes_real_audio() -> None:
     baseline = _reference_params()
     changed = dict(baseline)
     changed[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] = 700.0
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     baseline_audio = renderer.render(baseline)
     changed_audio = renderer.render(changed)
@@ -210,7 +234,7 @@ def test_pitchshift_renderer_window_changes_real_audio() -> None:
     baseline = _reference_params()
     changed = dict(baseline)
     changed[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME] = 1024
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     baseline_audio = renderer.render(baseline)
     changed_audio = renderer.render(changed)
@@ -223,7 +247,7 @@ def test_pitchshift_renderer_active_mask_changes_real_audio() -> None:
     baseline = _reference_params()
     changed = dict(baseline)
     changed[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME] = np.ones(8, dtype=np.int64)
-    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono_householder"))
 
     baseline_audio = renderer.render(baseline)
     changed_audio = renderer.render(changed)
@@ -236,8 +260,8 @@ def test_pitchshift_render_config_constructs_matching_renderer() -> None:
     render = RenderConfig.model_validate(
         {
             "synth": {
-                "name": "pyfdn_pitchshift_n8_mono",
-                "param_spec_name": "pyfdn_pitchshift_n8_mono",
+                "name": "pyfdn_pitchshift_n8_mono_householder",
+                "param_spec_name": "pyfdn_pitchshift_n8_mono_householder",
                 "plugin_path": "pyfdn",
                 "plugin_state_path": "",
                 "synth_version": "0.4.2",
@@ -262,12 +286,12 @@ def test_pitchshift_render_config_constructs_matching_renderer() -> None:
     renderer = make_audio_renderer(render)
 
     assert isinstance(renderer, PyFDNRenderer)
-    assert renderer._param_spec_name == ParamSpecName("pyfdn_pitchshift_n8_mono")
+    assert renderer._param_spec_name == ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
 
 
 def test_pitchshift_spec_samples_native_control_types() -> None:
     """Sampling emits native values accepted directly by pyFDN."""
-    params, _ = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(11))
+    params, _ = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(11))
 
     assert cast(np.ndarray, params[PYFDN_RT_GEQ_SECONDS_NAME]).shape == (10,)
     assert isinstance(params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME], float)

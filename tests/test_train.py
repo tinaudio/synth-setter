@@ -652,12 +652,12 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
 
 
 @pytest.mark.slow
-def test_train_pyfdn_pitchshift_identity_uses_109_coordinate_batches(tmp_path: Path) -> None:
+def test_train_pyfdn_pitchshift_identity_uses_45_coordinate_batches(tmp_path: Path) -> None:
     """The train entrypoint resolves the pitch-shift synth and model width.
 
     :param tmp_path: Pinned as the one-step training output directory.
     """
-    identity = "pyfdn_pitchshift_n8_mono"
+    identity = "pyfdn_pitchshift_n8_mono_householder"
     cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
 
     HydraConfig().set_config(cfg)
@@ -669,7 +669,7 @@ def test_train_pyfdn_pitchshift_identity_uses_109_coordinate_batches(tmp_path: P
     datamodule = object_dict["datamodule"]
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
-    assert batch["params"].shape == (2, 109)
+    assert batch["params"].shape == (2, 45)
     datamodule.teardown("fit")
 
 

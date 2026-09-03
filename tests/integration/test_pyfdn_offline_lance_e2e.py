@@ -17,7 +17,7 @@ from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_PARAM_SPEC,
-    PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC,
+    PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.param_spec_name import ParamSpecName
@@ -159,7 +159,7 @@ def test_pyfdn_pitchshift_lance_reader_rerender_round_trip(tmp_path: Path) -> No
 
     :param tmp_path: Isolated destination for the production Lance writer.
     """
-    identity = ParamSpecName("pyfdn_pitchshift_n8_mono")
+    identity = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
     render = RenderConfig(
         synth=SynthSpec(
             name=SynthName(identity),
@@ -226,13 +226,13 @@ def test_pyfdn_pitchshift_lance_reader_rerender_round_trip(tmp_path: Path) -> No
     params = batch["params"]
     assert audio is not None
     assert params is not None
-    encoded = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.model_to_encoded(params[0].numpy())
-    decoded, note_params = PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC.decode(encoded)
+    encoded = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.model_to_encoded(params[0].numpy())
+    decoded, note_params = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.decode(encoded)
     rerendered = PyFDNRenderer(param_spec_name=identity).render(decoded)
 
-    assert spec.num_params == 109
+    assert spec.num_params == 45
     assert audio.shape == (1, 1, 176_400)
-    assert params.shape == (1, 109)
+    assert params.shape == (1, 45)
     assert audio.dtype == params.dtype == torch.float32
     assert torch.isfinite(audio).all()
     assert torch.all((-1.0 <= audio) & (audio <= 1.0))

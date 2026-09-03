@@ -133,8 +133,8 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "",
         "0.4.2",
     ),
-    "pyfdn_pitchshift_n8_mono": (
-        "pyfdn_pitchshift_n8_mono",
+    "pyfdn_pitchshift_n8_mono_householder": (
+        "pyfdn_pitchshift_n8_mono_householder",
         "pyfdn",
         "",
         "0.4.2",

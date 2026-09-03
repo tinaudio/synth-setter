@@ -1107,7 +1107,7 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     assert validate_all_shards_from_r2(spec) == []
 
 
-def test_from_hydra_pyfdn_pitchshift_writes_109_coordinate_shard(
+def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1120,7 +1120,7 @@ def test_from_hydra_pyfdn_pitchshift_writes_109_coordinate_shard(
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    identity = "pyfdn_pitchshift_n8_mono"
+    identity = "pyfdn_pitchshift_n8_mono_householder"
     with open_dict(cfg_dataset):
         cfg_dataset.task_name = "pyfdn-pitchshift-entrypoint-e2e"
         cfg_dataset.output_format = "lance"
@@ -1152,7 +1152,7 @@ def test_from_hydra_pyfdn_pitchshift_writes_109_coordinate_shard(
 
     from_hydra(cfg_dataset)
 
-    assert spec.num_params == 109
+    assert spec.num_params == 45
     assert spec.render.param_spec_name == identity
     assert validate_all_shards_from_r2(spec) == []
     shard = spec.shards[0]
@@ -1160,7 +1160,7 @@ def test_from_hydra_pyfdn_pitchshift_writes_109_coordinate_shard(
     assert len(uploaded) == 1
     param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
     assert isinstance(param_type, pa.FixedShapeTensorType)
-    assert tuple(param_type.shape) == (109,)
+    assert tuple(param_type.shape) == (45,)
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(

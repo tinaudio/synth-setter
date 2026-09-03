@@ -154,9 +154,7 @@ def _fdn_matrix_parameters(
     :returns: Fresh delay and A/B/C/D parameter definitions.
     """
     params: list[Parameter] = [
-        DiscreteArrayParameter(
-            name="delays", shape=(PYFDN_ORDER,), min=delay_min, max=delay_max
-        )
+        DiscreteArrayParameter(name="delays", shape=(PYFDN_ORDER,), min=delay_min, max=delay_max)
     ]
     if feedback_parameter is not None:
         params.append(feedback_parameter)
@@ -168,9 +166,7 @@ def _fdn_matrix_parameters(
             ContinuousArrayParameter(
                 name="output_matrix", shape=(1, PYFDN_ORDER), min=-1.0, max=1.0
             ),
-            ContinuousArrayParameter(
-                name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0
-            ),
+            ContinuousArrayParameter(name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0),
         ]
     )
     return params
@@ -202,9 +198,7 @@ PYFDN_N8_MONO_PARAM_SPEC = PyFDNParamSpec(
     note_params=[],
 )
 
-_PYFDN_N8_HOUSEHOLDER_FEEDBACK = householder_matrix(
-    np.ones(PYFDN_ORDER, dtype=np.float64)
-)
+_PYFDN_N8_HOUSEHOLDER_FEEDBACK = householder_matrix(np.ones(PYFDN_ORDER, dtype=np.float64))
 
 PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = _FixedFeedbackPyFDNParamSpec(
     synth_params=[
@@ -227,17 +221,12 @@ PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = _FixedFeedbackPyFDNParamSpec(
     feedback_matrix=_PYFDN_N8_HOUSEHOLDER_FEEDBACK,
 )
 
-PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC = PyFDNParamSpec(
+PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC = _FixedFeedbackPyFDNParamSpec(
     synth_params=[
         *_fdn_matrix_parameters(
             delay_min=1000,
             delay_max=6000,
-            feedback_parameter=OrthogonalMatrixParameter(
-                name="feedback_matrix",
-                shape=(PYFDN_ORDER, PYFDN_ORDER),
-                min=-1.0,
-                max=1.0,
-            ),
+            feedback_parameter=None,
         ),
         ContinuousArrayParameter(
             name=PYFDN_RT_GEQ_SECONDS_NAME,
@@ -262,5 +251,5 @@ PYFDN_PITCHSHIFT_N8_MONO_PARAM_SPEC = PyFDNParamSpec(
             max=1,
         ),
     ],
-    note_params=[],
+    feedback_matrix=_PYFDN_N8_HOUSEHOLDER_FEEDBACK,
 )
