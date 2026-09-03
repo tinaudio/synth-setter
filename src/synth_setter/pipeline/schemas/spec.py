@@ -308,10 +308,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     parallel: bool = Field(
         default=False,
         description=(
-            "When True, generate() dispatches shard renders concurrently with "
-            "pool size = min(max(1, available_cpus() // 2), len(my_range)). "
-            "Applies on both local-run and SkyPilot-worker contexts; peak "
-            "local disk scales with pool size."
+            "When True, generate() dispatches shard renders concurrently with half the "
+            "available CPUs, bounded to 1–16 workers. Static dispatch also limits the "
+            "pool to the owned shard count; dynamic dispatch limits active renders to "
+            "available claims. Applies on local and SkyPilot workers; peak local disk "
+            "scales with pool size."
         ),
     )
     retain_local_shards: bool = Field(
