@@ -261,7 +261,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         pytest.param("meanaudio_16k", (MEANAUDIO_EMBEDDING_DIM, 125), id="meanaudio_16k"),
     ],
 )
-def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
+def test_sequence_conditioning_profile_fake_batch_routes_through_encoder(
     profile: str, input_shape: tuple[int, int]
 ) -> None:
     """A sequence profile routes its declared fake batch through the encoder.
@@ -294,8 +294,12 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["conditioning"].shape == (2, *input_shape)
-    pooled = encoder(batch["conditioning"])
-    assert pooled.shape == (2, cfg.model.vector_field.d_model)
+    encoded = encoder(batch["conditioning"])
+    assert encoded.shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.vector_field.d_model,
+    )
     assert cfg.model.conditioning.column == profile
 
 
@@ -427,6 +431,53 @@ def test_t5gemma_conditioning_profile_cached_batch_trains(
     assert torch.isfinite(loss)
 
 
+@pytest.mark.parametrize("profile", ["clap", "m2l"])
+def test_cached_conditioning_defaults_to_vector_field_layer_count(profile: str) -> None:
+    """Cached conditioning emits one slot per vector-field layer by default.
+
+    :param profile: Cached vector or sequence encoder profile under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            f"conditioning={profile}",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "model.vector_field.num_layers=2",
+        ],
+    )
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    encoded = encoder(torch.randn(2, *cfg.model.conditioning.input_shape))
+
+    assert cfg.model.encoder.n_conditioning_outputs == 2
+    assert encoded.shape == (2, 2, cfg.model.encoder_output_dim)
+
+
+def test_cached_conditioning_explicit_output_count_overrides_default() -> None:
+    """An explicit conditioning output count preserves pooled encoder output."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "conditioning=clap",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "model.encoder.n_conditioning_outputs=1",
+        ],
+    )
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    encoded = encoder(torch.randn(2, *cfg.model.conditioning.input_shape))
+
+    assert encoded.shape == (2, cfg.model.encoder_output_dim)
+
+
 def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
     """A CLAP spec selects generic routing and the vector projection encoder."""
     cfg = _compose(
@@ -448,7 +499,7 @@ def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
 
     assert datamodule.embedding_conditioning is not None
     assert datamodule.embedding_conditioning.column == "clap"
-    assert encoder(torch.randn(2, 512)).shape == (2, 512)
+    assert encoder(torch.randn(2, 512)).shape == (2, 8, 512)
     assert cfg.model.vector_field.conditioning_dim == 512
 
 
@@ -470,7 +521,11 @@ def test_ssondo_conditioning_profile_projects_960_vector() -> None:
 
     assert cfg.datamodule.conditioning.column == "ssondo"
     assert tuple(cfg.datamodule.conditioning.input_shape) == (960,)
-    assert encoder(torch.randn(2, 960)).shape == (2, cfg.model.encoder_output_dim)
+    assert encoder(torch.randn(2, 960)).shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.encoder_output_dim,
+    )
 
 
 def _conditioning_profile_names() -> list[str]:
@@ -505,14 +560,22 @@ _CACHED_CONDITIONING_PROFILES = [
 
 
 @pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)
-@pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
+@pytest.mark.parametrize(
+    ("model_name", "conditioning_shape"),
+    [
+        pytest.param("vst_ffn", (), id="feed-forward"),
+        pytest.param("vst_flow", (8,), id="transformer-flow"),
+        pytest.param("vst_flowmlp", (9,), id="mlp-flow"),
+    ],
+)
 def test_embedding_conditioning_profile_encoder_matches_model_output(
-    profile: str, model_name: str
+    profile: str, model_name: str, conditioning_shape: tuple[int, ...]
 ) -> None:
-    """Every cached profile produces the output width its VST model owns.
+    """Every cached profile produces the output shape its VST model owns.
 
     :param profile: Conditioning profile under test.
     :param model_name: VST architecture consuming the profile.
+    :param conditioning_shape: Model-specific conditioning slot dimensions.
     """
     cfg = _compose(
         "train.yaml",
@@ -530,7 +593,7 @@ def test_embedding_conditioning_profile_encoder_matches_model_output(
 
     encoded = encoder(torch.randn(2, *input_shape))
 
-    assert encoded.shape == (2, cfg.model.encoder_output_dim)
+    assert encoded.shape == (2, *conditioning_shape, cfg.model.encoder_output_dim)
 
 
 @pytest.mark.parametrize("profile", _conditioning_profile_names())
@@ -575,7 +638,11 @@ def test_pupujepa_tiny_cached_profile_instantiates_100_patch_pool() -> None:
     encoder = hydra.utils.instantiate(cfg.model.encoder)
 
     assert tuple(cfg.model.conditioning.input_shape) == (1536, 100)
-    assert encoder(torch.randn(2, 1536, 100)).shape == (2, cfg.model.encoder_output_dim)
+    assert encoder(torch.randn(2, 1536, 100)).shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.encoder_output_dim,
+    )
 
 
 def test_pupujepa_large_cached_profile_instantiates_100_patch_pool() -> None:
@@ -588,7 +655,11 @@ def test_pupujepa_large_cached_profile_instantiates_100_patch_pool() -> None:
     encoder = hydra.utils.instantiate(cfg.model.encoder)
 
     assert tuple(cfg.model.conditioning.input_shape) == (8192, 100)
-    assert encoder(torch.randn(2, 8192, 100)).shape == (2, cfg.model.encoder_output_dim)
+    assert encoder(torch.randn(2, 8192, 100)).shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.encoder_output_dim,
+    )
 
 
 def test_pupujepa_large_online_profile_pins_variant_and_width() -> None:

@@ -193,7 +193,7 @@ def test_real_pupujepa_weights_add_embeddings_and_online_consumers_match(
     assert not np.array_equal(offline_sequence[0], offline_sequence[1])
     np.testing.assert_allclose(offline_sequence, online_sequence.numpy(), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(offline_vector, offline_sequence.mean(axis=-1), rtol=1e-5, atol=1e-6)
-    assert online_conditioning.shape == cached_conditioning.shape == (2, 512)
+    assert online_conditioning.shape == cached_conditioning.shape == (2, 8, 512)
     assert torch.isfinite(online_conditioning).all()
     assert torch.isfinite(cached_conditioning).all()
     assert not torch.equal(online_conditioning[0], online_conditioning[1])

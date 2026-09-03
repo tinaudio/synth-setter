@@ -165,7 +165,7 @@ def test_add_embeddings_real_matpac_plus_checkpoint_audio_conditions_generic_enc
     encoder = _matpac_plus_conditioning_encoder()
     with torch.inference_mode():
         conditioned = encoder(torch.from_numpy(sequence))
-    assert conditioned.shape == (2, 512)
+    assert conditioned.shape == (2, 8, 512)
     assert torch.isfinite(conditioned).all()
     assert not torch.allclose(conditioned[0], conditioned[1])
 

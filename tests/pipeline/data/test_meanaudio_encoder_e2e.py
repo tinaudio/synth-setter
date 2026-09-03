@@ -217,7 +217,7 @@ def test_add_embeddings_real_meanaudio_lance_conditions_embedding_pool(
     encoder = _conditioning_encoder()
     with torch.inference_mode():
         conditioned = encoder(torch.from_numpy(sequence))
-    assert conditioned.shape == (2, 512)
+    assert conditioned.shape == (2, 8, 512)
     assert torch.isfinite(conditioned).all()
     assert conditioned.std() > 0.0
     assert not torch.allclose(conditioned[0], conditioned[1])
