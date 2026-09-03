@@ -1,15 +1,16 @@
-"""Distribute stored full-resolution sketch pooling across Ray workers.
+"""Distribute canonical sketch construction across Ray fragment workers.
 
-Typical usage::
+Typical usage from audio::
 
     synth-setter-backfill-sketch-pool --lance-uri r2://bucket/train.lance \\
-        --workers 32 --rollback-tag pre-sketch-pool
+        --workers 32 --source audio --rollback-tag pre-sketch
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import hashlib
 import json
 import os
@@ -20,13 +21,18 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, cast
 from urllib.parse import unquote, urlparse
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from synth_setter.data.vst.shapes import SKETCH_STRUCT_FIELD, SKETCH_VEC_CHILD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    DEFAULT_PESTO_CHECKPOINT,
+    SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD,
+)
 from synth_setter.pipeline.data.lance_retry import retry_lance_io as _retry
 from synth_setter.utils.logging_utils import resolve_git_sha
 
@@ -109,6 +115,10 @@ class SketchPoolBackfillConfig(BaseModel):
 
         Ray fragment workers.
 
+    .. attribute :: source
+
+        Existing full-resolution controls or audio to extract directly.
+
     .. attribute :: batch_size
 
         Source rows decoded by each fragment callback.
@@ -147,6 +157,7 @@ class SketchPoolBackfillConfig(BaseModel):
     lance_uri: str = Field(min_length=1)
     branch: str = Field(default="main", min_length=1)
     workers: int = Field(ge=1)
+    source: Literal["stored", "audio"] = "stored"
     batch_size: int = Field(default=128, ge=1)
     tasks_per_worker: int = Field(default=4, ge=1)
     rollback_tag: str = Field(min_length=1)
@@ -190,7 +201,15 @@ class _FragmentTask(BaseModel):
 
     .. attribute :: artifact
 
-        Pooling-policy identity.
+        Output artifact identity.
+
+    .. attribute :: source
+
+        Source policy selected by the driver.
+
+    .. attribute :: sample_rate
+
+        Audio sample rate in Hz; unused for stored controls.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -202,6 +221,8 @@ class _FragmentTask(BaseModel):
     fragment_id: int
     batch_size: int
     artifact: str
+    source: Literal["stored", "audio"] = "stored"
+    sample_rate: int = Field(default=0, ge=0)
 
 
 class _FragmentReport(BaseModel):
@@ -357,13 +378,23 @@ class _OperationContext:
 
     .. attribute :: artifact
 
-        Pooling-policy identity.
+        Output artifact identity.
+
+    .. attribute :: source
+
+        Source policy selected by the driver.
+
+    .. attribute :: sample_rate
+
+        Dataset audio sample rate in Hz.
     """
 
     lance_uri: str
     storage_options: dict[str, str] | None
     source_version: int
     artifact: str
+    source: Literal["stored", "audio"]
+    sample_rate: int
 
 
 @dataclass(frozen=True)
@@ -475,6 +506,10 @@ class SketchPoolBackfillResult:
 
         Configured Ray workers.
 
+    .. attribute :: source
+
+        Existing full-resolution controls or audio extraction.
+
     .. attribute :: batch_size
 
         Rows per callback batch.
@@ -514,6 +549,7 @@ class SketchPoolBackfillResult:
     index_requested: bool
     index_skip_reason: str | None
     workers: int
+    source: Literal["stored", "audio"]
     batch_size: int
     tasks_per_worker: int
     index_name: str | None
@@ -600,8 +636,52 @@ def _pool_fragment_batch(batch: pa.RecordBatch, artifact: str) -> pa.RecordBatch
     return pa.RecordBatch.from_arrays([encoded], schema=pa.schema([field]))
 
 
+@functools.cache
+def _audio_sketch_encoder() -> object:
+    """Load one process-local CPU sketch encoder for recycled Ray workers.
+
+    :returns: Cached sketch encoder accepting decoded audio and sample rate.
+    """
+    from synth_setter.features.sketch_controls import load_pesto_model
+    from synth_setter.pipeline.data.add_embeddings import _sketch_encode
+
+    load_pesto_model(DEFAULT_PESTO_CHECKPOINT, device="cpu")
+    return functools.partial(_sketch_encode, device="cpu")
+
+
+def _audio_fragment_batch(
+    batch: pa.RecordBatch, artifact: str, sample_rate: int
+) -> pa.RecordBatch:
+    """Extract and pool canonical sketch controls directly from audio.
+
+    :param batch: Batch carrying fixed-shape audio tensors.
+    :param artifact: Extraction artifact identity stored in field metadata.
+    :param sample_rate: Dataset audio sample rate in Hz.
+    :returns: Batch carrying only the canonical pooled sketch struct.
+    """
+    import pyarrow as pa
+
+    from synth_setter.pipeline.data.add_embeddings import (
+        Encoder,
+        _decoded_sources,
+        _encode_sketch_column,
+    )
+
+    sources = _decoded_sources(batch, [AUDIO_FIELD])
+    encoded = _encode_sketch_column(sources, sample_rate, cast("Encoder", _audio_sketch_encoder()))
+    field = pa.field(
+        SKETCH_STRUCT_FIELD,
+        encoded.type,
+        metadata={
+            b"synth_setter.embedding.name": b"sketch",
+            b"synth_setter.embedding.artifact": artifact.encode(),
+        },
+    )
+    return pa.RecordBatch.from_arrays([encoded], schema=pa.schema([field]))
+
+
 def _transform_fragment(task_value: object) -> _FragmentReport:
-    """Write one fragment's pooled sketch column without committing a manifest.
+    """Write one fragment's canonical sketch column without committing a manifest.
 
     :param task_value: Strictly validated fragment task from the Ray driver.
     :returns: Validated, JSON-persistable fragment metadata and row count.
@@ -620,11 +700,19 @@ def _transform_fragment(task_value: object) -> _FragmentReport:
     if fragment is None:
         raise ValueError(f"missing fragment {task.fragment_id}")
 
+    if task.source == "audio":
+        transform = functools.partial(
+            _audio_fragment_batch, artifact=task.artifact, sample_rate=task.sample_rate
+        )
+        read_columns = [AUDIO_FIELD]
+    else:
+        transform = functools.partial(_pool_fragment_batch, artifact=task.artifact)
+        read_columns = [SKETCH_FULL_STRUCT_FIELD]
     metadata, schema = _retry(
         "merge_fragment_columns",
         lambda: fragment.merge_columns(
-            lambda batch: _pool_fragment_batch(batch, task.artifact),
-            [SKETCH_FULL_STRUCT_FIELD],
+            transform,
+            read_columns,
             batch_size=task.batch_size,
         ),
     )
@@ -636,20 +724,28 @@ def _transform_fragment(task_value: object) -> _FragmentReport:
     )
 
 
-def _is_complete(dataset: lance.LanceDataset, artifact: bytes) -> bool:
-    """Check whether the current snapshot carries the expected pooled field.
+def _is_complete(
+    dataset: lance.LanceDataset, artifact: bytes, source: Literal["stored", "audio"]
+) -> bool:
+    """Check whether the current snapshot carries the expected sketch field.
 
     :param dataset: Open Lance dataset.
-    :param artifact: Expected pooling-policy identity.
-    :returns: Whether both source and canonical output are present and compatible.
+    :param artifact: Expected output artifact identity.
+    :param source: Source policy governing required retained fields.
+    :returns: Whether source and canonical output are present and compatible.
     """
     from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
 
-    if {SKETCH_FULL_STRUCT_FIELD, SKETCH_STRUCT_FIELD} - set(dataset.schema.names):
+    required = {
+        SKETCH_STRUCT_FIELD,
+        AUDIO_FIELD if source == "audio" else SKETCH_FULL_STRUCT_FIELD,
+    }
+    if required - set(dataset.schema.names):
         return False
     metadata = dataset.schema.field(SKETCH_STRUCT_FIELD).metadata or {}
+    expected_name = b"sketch" if source == "audio" else b"sketch_pool"
     return (
-        metadata.get(b"synth_setter.embedding.name") == b"sketch_pool"
+        metadata.get(b"synth_setter.embedding.name") == expected_name
         and metadata.get(b"synth_setter.embedding.artifact") == artifact
     )
 
@@ -1034,6 +1130,8 @@ def _prepare_dispatch(
                 fragment_id=fragment_id,
                 batch_size=config.batch_size,
                 artifact=context.artifact,
+                source=config.source,
+                sample_rate=context.sample_rate,
             )
         )
         for fragment_id in sorted(fragment_ids - reports.keys())
@@ -1178,7 +1276,7 @@ def _commit_reports(
     def commit_or_recover() -> lance.LanceDataset:
         latest = _open_dataset(context.lance_uri, context.storage_options, config.branch, None)
         if latest.version != context.source_version:
-            if _is_complete(latest, context.artifact.encode()):
+            if _is_complete(latest, context.artifact.encode(), context.source):
                 return latest
             raise ValueError(
                 f"branch advanced from source version {context.source_version} to "
@@ -1304,6 +1402,7 @@ def _result(
         index_requested=config.build_index,
         index_skip_reason=index_skip_reason,
         workers=config.workers,
+        source=config.source,
         batch_size=config.batch_size,
         tasks_per_worker=config.tasks_per_worker,
         index_name=index_name,
@@ -1384,10 +1483,7 @@ def _validate_rollback_tag(
             f"rollback tag {rollback_tag!r} identifies branch {existing['branch']!r}, "
             f"not {config.branch!r}"
         )
-    if (
-        context.expected_version is not None
-        and existing["version"] != context.expected_version
-    ):
+    if context.expected_version is not None and existing["version"] != context.expected_version:
         raise ValueError(
             f"rollback tag {rollback_tag!r} identifies version {existing['version']}, "
             f"not source version {context.expected_version}"
@@ -1399,11 +1495,17 @@ def _validate_rollback_tag(
         existing["version"],
     )
     names = set(tagged.schema.names)
-    if SKETCH_STRUCT_FIELD not in names or SKETCH_FULL_STRUCT_FIELD in names:
-        raise ValueError(
-            f"rollback tag {rollback_tag!r} does not identify the canonical-only "
-            "pre-migration schema"
+    if config.source == "audio":
+        valid = AUDIO_FIELD in names and SKETCH_STRUCT_FIELD not in names
+    else:
+        valid = SKETCH_STRUCT_FIELD in names and SKETCH_FULL_STRUCT_FIELD not in names
+    if not valid:
+        expected = (
+            "audio-only pre-migration schema"
+            if config.source == "audio"
+            else "canonical-only pre-migration schema"
         )
+        raise ValueError(f"rollback tag {rollback_tag!r} does not identify the {expected}")
 
 
 type _SketchChildLayout = int | tuple[tuple[int, ...], tuple[int, ...]]
@@ -1535,6 +1637,44 @@ def _validate_and_tag_source(
     return has_canonical
 
 
+def _prepare_audio_source(
+    dataset: lance.LanceDataset,
+    config: SketchPoolBackfillConfig,
+    lance_uri: str,
+    storage_options: dict[str, str] | None,
+) -> lance.LanceDataset:
+    """Validate and tag an audio-only source without publishing a rename.
+
+    :param dataset: Current branch snapshot.
+    :param config: Rollback tag and source configuration.
+    :param lance_uri: Lance-openable dataset target.
+    :param storage_options: Object-store credentials, when required.
+    :returns: Unchanged tagged source snapshot.
+    :raises ValueError: Audio is missing, output exists, or the dataset is empty.
+    """
+    from synth_setter.pipeline.data.add_embeddings import SKETCH_FULL_STRUCT_FIELD
+
+    names = set(dataset.schema.names)
+    if AUDIO_FIELD not in names:
+        raise ValueError(f"dataset has no {AUDIO_FIELD!r} source")
+    existing = {SKETCH_STRUCT_FIELD, SKETCH_FULL_STRUCT_FIELD} & names
+    if existing:
+        raise ValueError(f"audio source already has sketch column(s) {sorted(existing)}")
+    if _retry("count_prepared_rows", dataset.count_rows) == 0:
+        raise ValueError("cannot backfill an empty dataset")
+    _create_rollback_tag(dataset, config)
+    _validate_rollback_tag(
+        dataset,
+        config,
+        _RollbackContext(
+            lance_uri=lance_uri,
+            storage_options=storage_options,
+            expected_version=dataset.version,
+        ),
+    )
+    return dataset
+
+
 def _prepare_source(
     dataset: lance.LanceDataset,
     config: SketchPoolBackfillConfig,
@@ -1594,12 +1734,23 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
     run_id = str(uuid.uuid4())
     ray.init(num_cpus=config.workers, include_dashboard=False, log_to_driver=False)
     try:
-        from synth_setter.pipeline.data.add_embeddings import _sketch_pool_artifact_identity
+        from synth_setter.pipeline.data.add_embeddings import (
+            _sketch_artifact_identity,
+            _sketch_pool_artifact_identity,
+        )
+        from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
         lance_uri, storage_options = _lance_target(config.lance_uri)
         dataset = _open_dataset(lance_uri, storage_options, config.branch, None)
-        artifact = _sketch_pool_artifact_identity("")
-        if _is_complete(dataset, artifact.encode()):
+        sample_rate = (
+            int(read_shard_metadata(dataset.schema).sample_rate) if config.source == "audio" else 0
+        )
+        artifact = (
+            _sketch_artifact_identity(DEFAULT_PESTO_CHECKPOINT)
+            if config.source == "audio"
+            else _sketch_pool_artifact_identity("")
+        )
+        if _is_complete(dataset, artifact.encode(), config.source):
             _validate_rollback_tag(
                 dataset,
                 config,
@@ -1625,13 +1776,18 @@ def backfill_sketch_pool(config: SketchPoolBackfillConfig) -> SketchPoolBackfill
                 ),
                 config.result,
             )
-        dataset = _prepare_source(dataset, config, lance_uri, storage_options)
+        if config.source == "audio":
+            dataset = _prepare_audio_source(dataset, config, lance_uri, storage_options)
+        else:
+            dataset = _prepare_source(dataset, config, lance_uri, storage_options)
         source_version = dataset.version
         context = _OperationContext(
             lance_uri=lance_uri,
             storage_options=storage_options,
             source_version=source_version,
             artifact=artifact,
+            source=config.source,
+            sample_rate=sample_rate,
         )
         reports = _run_fragment_tasks(dataset, config, context, started)
         committed = _commit_reports(dataset, reports, config, context)
@@ -1664,6 +1820,7 @@ def _parse_args() -> SketchPoolBackfillConfig:
     parser.add_argument("--lance-uri", required=True)
     parser.add_argument("--branch", default="main")
     parser.add_argument("--workers", required=True, type=int)
+    parser.add_argument("--source", choices=("stored", "audio"), default="stored")
     parser.add_argument("--batch-size", default=128, type=int)
     parser.add_argument("--tasks-per-worker", default=4, type=int)
     parser.add_argument("--rollback-tag", required=True)

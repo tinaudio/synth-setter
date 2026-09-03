@@ -1172,7 +1172,9 @@ the same canonical pooled `sketch` representation without rerunning PESTO. For
 large existing splits, `synth-setter-backfill-sketch-pool --lance-uri <uri> --workers <n> --rollback-tag <tag>` renames the source, writes fragments through
 recycled Ray workers, validates the exact 401-frame finite/bounded source
 contract, publishes one branch-scoped Lance merge commit, and builds the
-canonical `sketch.vec` index. Each worker attempt has a unique report object
+canonical `sketch.vec` index. Selecting `--source audio` instead retains the
+original audio schema and extracts the same canonical pooled representation
+directly from each fragment's audio column. Each worker attempt has a unique report object
 persisted under the R2 dataset's shared `metadata/workers/sketch-pool/`
 reconciliation prefix before progress is acknowledged; local datasets use
 `--resume-dir` or a dataset-keyed user cache. A retry therefore resumes after

@@ -32,6 +32,7 @@ from synth_setter.pipeline.data.add_embeddings import (
 from synth_setter.pipeline.data.backfill_sketch_pool import (
     SketchPoolBackfillConfig,
     _AlterColumnsDataset,
+    _audio_fragment_batch,
     _CacheIdentity,
     _ColumnRename,
     _DispatchState,
@@ -163,6 +164,43 @@ def test_backfill_sketch_pool_candidate_real_lance_round_trip_is_exact(
     actual = np.concatenate((loudness[:, None], centroid[:, None], pitch), axis=1)
     expected = pool_sketch_controls(torch.from_numpy(controls)).numpy()
     np.testing.assert_array_equal(actual, expected)
+
+
+def test_audio_fragment_batch_extracts_canonical_pooled_sketch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audio mode writes the same pooled representation as the shared policy.
+
+    :param monkeypatch: Fixture replacing only the expensive PESTO encoder.
+    """
+    rows = 2
+    frames = 401
+    audio = np.zeros((rows, 1, 64_000), dtype=np.float32)
+    controls = np.zeros((rows, SKETCH_PITCH_BINS + 2, frames), dtype=np.float32)
+    controls[:, 0] = np.linspace(-1.0, 1.0, frames)
+    controls[:, 1] = np.linspace(1.0, -1.0, frames)
+    controls[:, 2:] = np.linspace(0.0, 1.0, frames)
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.backfill_sketch_pool._audio_sketch_encoder",
+        lambda: lambda source, sample_rate: controls,
+    )
+    batch = pa.record_batch([pa.FixedShapeTensorArray.from_numpy_ndarray(audio)], names=["audio"])
+
+    result = _audio_fragment_batch(batch, "artifact", 16_000)
+
+    actual_rows = result.column(SKETCH_STRUCT_FIELD).to_numpy(zero_copy_only=False)
+    loudness = np.stack([row[SKETCH_LOUDNESS_CHILD] for row in actual_rows])
+    centroid = np.stack([row[SKETCH_CENTROID_CHILD] for row in actual_rows])
+    pitch = np.stack([row[SKETCH_PITCH_CHILD] for row in actual_rows]).reshape(
+        rows, SKETCH_PITCH_BINS, -1
+    )
+    actual = np.concatenate((loudness[:, None], centroid[:, None], pitch), axis=1)
+    expected = pool_sketch_controls(torch.from_numpy(controls)).numpy()
+    np.testing.assert_array_equal(actual, expected)
+    assert result.schema.field(SKETCH_STRUCT_FIELD).metadata == {
+        b"synth_setter.embedding.name": b"sketch",
+        b"synth_setter.embedding.artifact": b"artifact",
+    }
 
 
 def test_backfill_sketch_pool_local_source_commits_exact_pooled_values(
@@ -714,6 +752,8 @@ def test_parse_args_with_explicit_cli_values_returns_strict_config(
             "candidate",
             "--workers",
             "3",
+            "--source",
+            "audio",
             "--batch-size",
             "16",
             "--tasks-per-worker",
@@ -734,6 +774,7 @@ def test_parse_args_with_explicit_cli_values_returns_strict_config(
         lance_uri="r2://bucket/split.lance",
         branch="candidate",
         workers=3,
+        source="audio",
         batch_size=16,
         tasks_per_worker=2,
         rollback_tag="before",
