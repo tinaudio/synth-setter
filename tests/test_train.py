@@ -175,6 +175,24 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+@pytest.mark.slow
+def test_train_pyfdn_householder_one_step_writes_checkpoint(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train the shipped pyFDN flow against its sole orthogonal-feedback spec.
+
+    :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
+    assert cfg_pyfdn_train.model.num_params == 27
+    assert objects["trainer"].global_step == 1
+    assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
+
+
 def _assert_slap_train_artifacts(
     cfg: DictConfig,
     metric_dict: Mapping[str, torch.Tensor],

@@ -12,8 +12,8 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
     values: dict[str, object] = {
         "synth": {
-            "name": "pyfdn_n8_mono",
-            "param_spec_name": "pyfdn_n8_mono",
+            "name": "pyfdn_n8_mono_householder",
+            "param_spec_name": "pyfdn_n8_mono_householder",
             "plugin_path": "pyfdn",
             "plugin_state_path": "",
             "synth_version": "0.4.2",
@@ -35,21 +35,6 @@ def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
     }
     values.update(overrides)
     return values
-
-
-def test_pyfdn_render_config_accepts_fixed_householder_identity() -> None:
-    """The fixed-feedback spec routes through the existing native renderer."""
-    synth = {
-        "name": "pyfdn_n8_mono_householder",
-        "param_spec_name": "pyfdn_n8_mono_householder",
-        "plugin_path": "pyfdn",
-        "plugin_state_path": "",
-        "synth_version": "0.4.2",
-    }
-
-    render = RenderConfig.model_validate(_pyfdn_render_kwargs(synth=synth))
-
-    assert render.param_spec_name == "pyfdn_n8_mono_householder"
 
 
 def test_pyfdn_render_config_uses_existing_renderer_stubs() -> None:
