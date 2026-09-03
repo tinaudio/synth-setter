@@ -1,6 +1,7 @@
 """Shared VST datamodule configuration and model-batch preparation."""
 
 from collections.abc import Mapping, Sequence
+from math import isfinite
 from pathlib import Path
 from typing import NotRequired, Self, TypedDict
 
@@ -98,6 +99,16 @@ def _sketch_range_validation_error(sketch: np.ndarray | None) -> str | None:
     return None
 
 
+def _validate_param_jitter_amount(amount: float) -> None:
+    """Validate jitter as a nonnegative finite encoded-domain distance.
+
+    :param amount: Maximum absolute offset in the normalized ``[0, 1]`` domain.
+    :raises ValueError: If ``amount`` is negative or non-finite.
+    """
+    if not isfinite(amount) or amount < 0:
+        raise ValueError("param_jitter_amount must be finite and nonnegative")
+
+
 def prepare_batch(
     raw: RawBatch,
     *,
@@ -107,6 +118,7 @@ def prepare_batch(
     ot: bool,
     generator: torch.Generator,
     sketch_pitch_zero_threshold: float | None = None,
+    param_jitter_amount: float = 0.0,
 ) -> dict[str, torch.Tensor | None]:
     """Turn one batch of stored columns into model-ready tensors.
 
@@ -118,6 +130,8 @@ def prepare_batch(
     :param generator: RNG for the noise draw.
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
+    :param param_jitter_amount: Maximum absolute uniform offset in the encoded
+        ``[0, 1]`` domain; zero disables jitter.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread
         modalities; the stored ``mel_spec`` column is emitted under the ``mel`` key,
         as ``music2latent`` is under ``m2l``.
@@ -126,6 +140,7 @@ def prepare_batch(
     validation_error = _raw_batch_validation_error(raw)
     if validation_error is not None:
         raise ValueError(validation_error)
+    _validate_param_jitter_amount(param_jitter_amount)
 
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
@@ -170,9 +185,18 @@ def prepare_batch(
         sketch = None
 
     param_array = raw["param_array"]
-    if rescale_params:
-        param_array = param_array * 2 - 1
-    params = torch.from_numpy(param_array).to(dtype=torch.float32)
+    if param_jitter_amount > 0:
+        params = torch.from_numpy(param_array).to(dtype=torch.float32)
+        jitter = torch.empty_like(params).uniform_(
+            -param_jitter_amount, param_jitter_amount, generator=generator
+        )
+        params = (params + jitter).clamp(0, 1)
+        if rescale_params:
+            params = params * 2 - 1
+    else:
+        if rescale_params:
+            param_array = param_array * 2 - 1
+        params = torch.from_numpy(param_array).to(dtype=torch.float32)
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
         noise, params, mel, m2l, conditioning, sketch, audio = _hungarian_match(

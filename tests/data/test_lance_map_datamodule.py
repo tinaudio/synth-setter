@@ -822,6 +822,45 @@ class TestLanceMapDataModuleFlows:
         source_order = np.lexsort(source.T[::-1])
         np.testing.assert_array_equal(epoch[order], source[source_order])
 
+    def test_param_jitter_only_changes_training_targets(self, dataset_root: Path) -> None:
+        """Opt-in jitter perturbs train targets while evaluation targets stay exact.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        train_source = make_shard_columns(16, seed=1)["param_array"] * 2 - 1
+        val_source = make_shard_columns(6, seed=2)["param_array"] * 2 - 1
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=4,
+            ot=False,
+            param_jitter_amount=0.001,
+        ) as module:
+            train_epoch = _params_in_order(module.train_dataloader())
+            val_epoch = _params_in_order(module.val_dataloader())
+
+        assert train_epoch.min() >= -1.0
+        assert train_epoch.max() <= 1.0
+        train_order = np.lexsort(train_epoch.T[::-1])
+        source_order = np.lexsort(train_source.T[::-1])
+        assert not np.array_equal(train_epoch[train_order], train_source[source_order])
+        np.testing.assert_array_equal(val_epoch, val_source)
+
+    @pytest.mark.parametrize("amount", [-0.001, float("inf"), float("nan")])
+    def test_param_jitter_invalid_amount_raises_value_error(
+        self, dataset_root: Path, amount: float
+    ) -> None:
+        """Jitter must be a finite fraction of the normalized parameter range.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        :param amount: Invalid configured jitter amount.
+        """
+        with pytest.raises(ValueError, match="param_jitter_amount"):
+            LanceVSTDataModule(
+                dataset_root=dataset_root,
+                param_jitter_amount=amount,
+                param_spec_name=ParamSpecName("surge_xt"),
+            )
+
     def test_train_loader_drops_ragged_tail(self, dataset_root: Path) -> None:
         """Train keeps legacy floor-divide semantics: no short trailing batch.
 
