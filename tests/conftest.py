@@ -709,6 +709,29 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_kr106_2m(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the production-scale KR-106 dataset experiment with temporary paths.
+
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: KR-106 cfg with ``tmp_path``-pinned paths.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-2m-40k-10k"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose ``dataset.yaml`` with ``synth=obxf render=vst`` for entrypoint OB-Xf coverage.
 

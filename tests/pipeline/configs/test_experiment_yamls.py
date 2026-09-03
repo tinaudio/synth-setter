@@ -42,6 +42,7 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/surge-xt-lance-10k-2k-1k": "surge-xt-lance-10k-2k-1k",
     "generate_dataset/surge-xt-lance-2m-40k-10k": "surge-xt-lance-2m-40k-10k",
     "generate_dataset/surge-xt-dawdreamer-smoke": "surge-xt-dawdreamer-smoke",
+    "generate_dataset/ultramaster-kr106-lance-2m-40k-10k": ("ultramaster-kr106-lance-2m-40k-10k"),
     "generate_dataset/ultramaster-kr106-lance-smoke": "ultramaster-kr106-lance-smoke",
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
     "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
@@ -126,6 +127,10 @@ def test_ultramaster_kr106_smoke_experiment_renders_twenty_lance_rows() -> None:
             "generate_dataset/surge-xt-lance-2m-40k-10k",
             {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
         ),
+        (
+            "generate_dataset/ultramaster-kr106-lance-2m-40k-10k",
+            {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
+        ),
     ],
 )
 def test_full_scale_lance_experiment_composes_expected_split_shard_ranges(
@@ -142,3 +147,13 @@ def test_full_scale_lance_experiment_composes_expected_split_shard_ranges(
         (each span is ``split_size // samples_per_shard``).
     """
     assert _compose_dataset_spec(experiment).split_shard_ranges == expected_ranges
+
+
+def test_ultramaster_kr106_full_scale_experiment_uses_distributed_queue() -> None:
+    """KR-106 production generation uploads queue-claimed shards without retaining them."""
+    spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-lance-2m-40k-10k")
+
+    assert spec.train_val_test_sizes == (2_000_000, 40_000, 10_000)
+    assert spec.render.parallel is True
+    assert spec.render.retain_local_shards is False
+    assert spec.use_shard_queue is True

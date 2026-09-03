@@ -814,14 +814,14 @@ def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
-    cfg_dataset: DictConfig,
+    cfg_dataset_kr106_2m: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """The public operator renders, validates, and finalizes a real KR-106 row.
 
-    :param cfg_dataset: Composed production dataset config.
+    :param cfg_dataset_kr106_2m: Composed production-scale KR-106 experiment.
     :param fake_r2_remote: Local filesystem backing the real rclone transport.
     :param monkeypatch: Configures the single local worker process.
     :param tmp_path: Render and finalize workspace.
@@ -834,24 +834,17 @@ def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    with open_dict(cfg_dataset):
-        cfg_dataset.output_format = "lance"
-        cfg_dataset.train_val_test_sizes = [2, 0, 0]
-        cfg_dataset.mask_degenerate_bins = True
-        cfg_dataset.synth.name = "ultramaster_kr106"
-        cfg_dataset.synth.param_spec_name = "ultramaster_kr106"
-        cfg_dataset.synth.plugin_path = str(_KR106_PLUGIN_VST3)
-        cfg_dataset.synth.plugin_state_path = str(_KR106_PRESET)
-        cfg_dataset.synth.synth_version = "2.5.13"
-        cfg_dataset.render.samples_per_render_batch = 1
-        cfg_dataset.render.samples_per_shard = 2
-        cfg_dataset.render.max_retries = 20
-        cfg_dataset.render.plugin_reload_cadence = "render"
-        cfg_dataset.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
-        cfg_dataset.logger = None
+    with open_dict(cfg_dataset_kr106_2m):
+        cfg_dataset_kr106_2m.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_kr106_2m.mask_degenerate_bins = True
+        cfg_dataset_kr106_2m.synth.plugin_path = str(_KR106_PLUGIN_VST3)
+        cfg_dataset_kr106_2m.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset_kr106_2m.render.samples_per_shard = 2
+        cfg_dataset_kr106_2m.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset_kr106_2m.logger = None
 
-    spec = spec_from_cfg(cfg_dataset)
-    from_hydra(cfg_dataset)
+    spec = spec_from_cfg(cfg_dataset_kr106_2m)
+    from_hydra(cfg_dataset_kr106_2m)
 
     shard = spec.shards[0]
     assert shard_has_complete_attempt(spec, shard.shard_id)
