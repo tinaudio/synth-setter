@@ -50,7 +50,7 @@ from synth_setter.renderer_backend import (
     PyFDNExcitation,
     RendererBackend,
 )
-from synth_setter.synth_spec import SynthSpec
+from synth_setter.synth_spec import SYNTHS, SynthSpec
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -64,6 +64,13 @@ __all__ = [
     "Split",
     "StorageDType",
 ]
+
+_PYFDN_SYNTH_NAMES = frozenset(
+    name for name, synth in SYNTHS.items() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
+_PYFDN_PARAM_SPEC_NAMES = frozenset(
+    synth.param_spec_name for synth in SYNTHS.values() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
 
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
 # Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
@@ -477,17 +484,23 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :returns: ``self`` unchanged for other backends or valid pyFDN configuration.
         :raises ValueError: The pyFDN identity or fixed render contract drifts.
         """
+        registered_pyfdn = (
+            self.synth.name in _PYFDN_SYNTH_NAMES
+            and SYNTHS[self.synth.name].param_spec_name == self.param_spec_name
+        )
         pyfdn_identity = (
-            self.synth.name == "pyfdn_n8_mono" or self.param_spec_name == "pyfdn_n8_mono"
+            self.synth.name in _PYFDN_SYNTH_NAMES
+            or self.param_spec_name in _PYFDN_PARAM_SPEC_NAMES
+            or self.plugin_path == PYFDN_PLUGIN_NAME
         )
         if self.renderer_backend != "pyfdn":
-            if pyfdn_identity or self.plugin_path == PYFDN_PLUGIN_NAME:
-                raise ValueError("pyfdn_n8_mono requires renderer_backend='pyfdn'")
+            if pyfdn_identity:
+                raise ValueError(f"{self.synth.name} requires renderer_backend='pyfdn'")
             if self.pyfdn_excitation is not None:
                 raise ValueError("pyfdn_excitation requires renderer_backend='pyfdn'")
             return self
-        if self.synth.name != "pyfdn_n8_mono" or self.param_spec_name != "pyfdn_n8_mono":
-            raise ValueError("pyfdn requires the registered pyfdn_n8_mono identity")
+        if not registered_pyfdn:
+            raise ValueError("pyfdn requires a registered pyfdn synth identity")
         if self.plugin_path != PYFDN_PLUGIN_NAME or self.plugin_state_path:
             raise ValueError('pyfdn requires plugin_path="pyfdn" and no plugin_state_path')
         expected_rate = renderer_backend_contract.PYFDN_SOURCE_SAMPLE_RATE_HZ

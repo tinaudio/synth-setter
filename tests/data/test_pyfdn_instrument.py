@@ -11,6 +11,7 @@ from scipy.signal import sosfreqz
 
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
 from synth_setter.data.vst.param_spec import ParameterValues
 
@@ -128,6 +129,17 @@ def test_params_to_fdn_build_preserves_nonorthogonal_prediction_without_projecti
     assert build.A is feedback
     assert build.post_delay is not None
     assert np.isfinite(build.post_delay).all()
+
+
+def test_pyfdn_renderer_fixed_householder_spec_returns_finite_impulse_response() -> None:
+    """The fixed-feedback spec produces complete patches consumed by pyFDN."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+
+    audio = PyFDNRenderer().render(params)
+
+    assert audio.shape == (1, 176_400)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
 
 
 def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
