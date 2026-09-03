@@ -12,8 +12,10 @@ from synth_setter.data.vst.renderers import (
     SurgePyRenderer,
     TorchSynthRenderer,
 )
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
+from synth_setter.synth_spec import SYNTHS
 
 
 def _render_config(**overrides: object) -> RenderConfig:
@@ -43,15 +45,22 @@ def _render_config(**overrides: object) -> RenderConfig:
     return RenderConfig(**values)  # type: ignore[arg-type]
 
 
-def test_make_audio_renderer_pyfdn_returns_common_renderer() -> None:
-    """The common factory constructs pyFDN with fixed MIDI stubs."""
+@pytest.mark.parametrize(
+    "identity",
+    [name for name, synth in SYNTHS.items() if synth.plugin_path == "pyfdn"],
+)
+def test_make_audio_renderer_pyfdn_accepts_registered_identity(identity: str) -> None:
+    """The common factory constructs every registered pyFDN topology.
+
+    :param identity: Registered pyFDN synth and parameter-spec identity.
+    """
     renderer = make_audio_renderer(
         _render_config(
             renderer_backend="pyfdn",
             pyfdn_excitation="impulse",
             synth={
-                "name": "pyfdn_n8_mono",
-                "param_spec_name": "pyfdn_n8_mono",
+                "name": identity,
+                "param_spec_name": identity,
                 "plugin_path": "pyfdn",
                 "plugin_state_path": "",
                 "synth_version": "0.4.2",
@@ -68,6 +77,7 @@ def test_make_audio_renderer_pyfdn_returns_common_renderer() -> None:
     )
 
     assert isinstance(renderer, PyFDNRenderer)
+    assert renderer._param_spec_name == ParamSpecName(identity)
     assert renderer.sample_rate == 44_100
     assert renderer.channels == 1
 
