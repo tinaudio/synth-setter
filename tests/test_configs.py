@@ -202,6 +202,38 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     )
 
 
+@pytest.mark.parametrize(
+    ("config_name", "overrides"),
+    [
+        pytest.param(
+            "train.yaml",
+            ["datamodule=pyfdn", "synth=pyfdn_n8_mono", "model=vst_flow"],
+            id="datamodule",
+        ),
+        pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
+        pytest.param(
+            "eval.yaml",
+            ["experiment=pyfdn/flow", "ckpt_path=null"],
+            id="eval",
+        ),
+    ],
+)
+def test_pyfdn_configs_compose_without_external_source(
+    config_name: str,
+    overrides: list[str],
+) -> None:
+    """PyFDN datamodule, train, and eval configs need no source path or digest.
+
+    :param config_name: Top-level Hydra config under test.
+    :param overrides: pyFDN selection for the composition case.
+    """
+    cfg = _compose(config_name, overrides)
+
+    assert "source_audio_path" not in cfg.datamodule
+    assert "source_audio_sha256" not in cfg.datamodule
+    hydra.utils.instantiate(cfg.datamodule)
+
+
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
     """Compose a top-level config with overrides, clearing GlobalHydra around it.
 
@@ -1228,6 +1260,21 @@ def test_surge_experiment_resolves_identity_with_audio_datamodule(
     assert OmegaConf.select(cfg, spec_path) == "surge_xt"
 
 
+def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:
+    """The shipped pyFDN identity field exposes CLI-forced skew to ``extras``."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "experiment=pyfdn/flow",
+            "trainer=cpu",
+            "datamodule.param_spec_name=surge_4",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="surge_4"):
+        extras(cfg)
+
+
 def test_extras_rejects_datamodule_spec_skewed_from_synth_selection() -> None:
     """``extras`` fails fast when a forced datamodule spec contradicts ``synth``.
 
@@ -1389,6 +1436,42 @@ def test_third_party_eval_config_resolves_per_corpus(corpus: str, audio_column: 
     assert cfg.datamodule.conditioning == "mel"
 
 
+def test_nsynth_sketch_eval_config_pins_corpus_controls_and_training_statistics() -> None:
+    """The dedicated NSynth config composes the held-out corpus onto the sketch contract."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "datamodule=third_party/nsynth_sketch",
+            "sketch=on",
+            "synth=surge_simple",
+            "render=vst",
+            "model=vst_flow",
+            "trainer=cpu",
+            "mode=predict",
+            "callbacks=eval_vst",
+            "ckpt_path=/tmp/none.ckpt",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    assert cfg.datamodule.dataset_uri == "s3://experiments/third_party/NSynth/test.lance"
+    assert cfg.datamodule.dataset_version == 1
+    assert cfg.datamodule.audio_column == "audio"
+    assert cfg.datamodule.row_limit is None
+    assert cfg.datamodule.batch_size == 32
+    assert cfg.datamodule.mel_stats_uri == (
+        "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
+        "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz"
+    )
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
+    assert cfg.datamodule.sketch.num_frames == 32
+    assert cfg.datamodule.sketch.num_control_tokens == 32
+    assert "param_spec_name" not in cfg.datamodule
+    assert "live_embeddings" not in cfg.datamodule
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    assert datamodule.sketch_controls is not None
+
+
 def test_third_party_eval_config_requires_checkpoint_mel_statistics() -> None:
     """Normalized third-party evaluation requires checkpoint-training statistics."""
     cfg = _compose(
@@ -1408,3 +1491,38 @@ def test_third_party_eval_config_requires_checkpoint_mel_statistics() -> None:
     assert OmegaConf.is_missing(cfg.datamodule, "mel_stats_uri")
     with pytest.raises(MissingMandatoryValue):
         _ = cfg.datamodule.mel_stats_uri
+
+
+def test_nsynth_sketch_eval_experiment_pins_full_production_run() -> None:
+    """One experiment selector pins the complete NSynth sketch evaluation."""
+    cfg = _compose("eval.yaml", ["experiment=surge/eval_flow_sketch_nsynth"])
+
+    assert cfg.mode == "predict"
+    assert cfg.ckpt_path == (
+        "r2://intermediate-data/checkpoints/flow_sketch_prelim/"
+        "flow_sketch_prelim-20260902T044048985Z-eed5063da1164b1e92ac62a55ffc17b3/"
+        "last.ckpt"
+    )
+    assert cfg.ckpt_sha256 == "d20cd4c3c86ae062a206f05596072b230c8aa86334920c775c2b4fec04aefc9e"
+    assert cfg.consumed_train_artifact_alias == "v0"
+    assert cfg.datamodule.dataset_uri == "s3://experiments/third_party/NSynth/test.lance"
+    assert cfg.datamodule.dataset_version == 1
+    assert cfg.datamodule.row_limit is None
+    assert cfg.datamodule.mel_stats_uri == (
+        "r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/"
+        "surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/stats.npz"
+    )
+    assert (
+        cfg.datamodule.mel_stats_sha256
+        == "c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19"
+    )
+    assert cfg.model.sketch_controls.num_frames == 32
+    assert cfg.model.test_cfg_strength == 8.0
+    assert cfg.model.test_sketch_cfg_strength == 8.0
+    assert cfg.model.test_sample_steps == 200
+    assert cfg.evaluation.render_vst is True
+    assert cfg.evaluation.compute_metrics is True
+    assert cfg.evaluation.no_params is True
+    assert cfg.evaluation.rerender_target is False
+    assert cfg.render.renderer_backend == "surgepy"
+    assert cfg.logger.wandb.offline is False

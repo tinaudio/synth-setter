@@ -8,6 +8,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 ``synth_setter.cli`` helper is imported here.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -34,7 +35,7 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import Trainer, seed_everything
 from omegaconf import DictConfig, open_dict
-from omegaconf.errors import InterpolationResolutionError
+from omegaconf.errors import InterpolationResolutionError, MissingMandatoryValue
 from pedalboard.io import AudioFile
 
 from synth_setter.cli.eval import evaluate
@@ -137,6 +138,23 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert "test/param_mse" in result.stdout
+
+
+def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
+    """The evaluation entrypoint rejects a config without checkpoint provenance."""
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth"],
+        )
+    with open_dict(cfg):
+        cfg.ckpt_path = "???"
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(MissingMandatoryValue, match="ckpt_path"):
+        evaluate(cfg)
 
 
 def _compose_sketch_cfg_eval(
@@ -295,7 +313,16 @@ def test_eval_pyfdn_flow_consumes_train_produced_checkpoint(
     with open_dict(cfg_pyfdn_flow_eval):
         cfg_pyfdn_flow_eval.ckpt_path = str(checkpoint_path)
     HydraConfig().set_config(cfg_pyfdn_flow_eval)
-    metric_dict, _ = evaluate(cfg_pyfdn_flow_eval)
+    metric_dict, eval_objects = evaluate(cfg_pyfdn_flow_eval)
+
+    assert cfg_pyfdn_flow_eval.datamodule.param_spec_name == "pyfdn_n8_mono"
+    assert eval_objects["datamodule"].param_spec_name == "pyfdn_n8_mono"
+    assert "source_audio_path" not in cfg_pyfdn_flow_eval.datamodule
+    assert "source_audio_sha256" not in cfg_pyfdn_flow_eval.datamodule
+    assert (
+        eval_objects["datamodule"].source_provenance
+        == train_objects["datamodule"].source_provenance
+    )
 
     groups = {
         "delays",
@@ -2272,16 +2299,20 @@ _THIRD_PARTY_MODEL_OVERRIDES = (
 )
 
 
-def _save_third_party_checkpoint(path: Path) -> None:
-    """Save a real surge-simple flow checkpoint from the shipped Hydra config.
+def _save_third_party_checkpoint(
+    path: Path,
+    experiment: str = "surge/flow_simple",
+) -> None:
+    """Save a real surge-simple flow checkpoint from a shipped Hydra config.
 
     :param path: Destination checkpoint path.
+    :param experiment: Experiment whose model architecture is serialized.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             overrides=[
-                "experiment=surge/flow_simple",
+                f"experiment={experiment}",
                 "trainer=cpu",
                 *_THIRD_PARTY_MODEL_OVERRIDES,
             ],
@@ -2319,8 +2350,10 @@ def test_third_party_checkpoint_creation_is_reproducible(tmp_path: Path) -> None
 def _run_third_party_eval(
     *,
     corpus: Path,
-    checkpoint: Path,
+    checkpoint: Path | str,
     output_dir: Path,
+    experiment: str = "surge/flow_simple",
+    datamodule: str = "third_party/nsynth_test",
     extra_overrides: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run the public eval CLI over a third-party corpus with no ground-truth patch.
@@ -2328,6 +2361,8 @@ def _run_third_party_eval(
     :param corpus: Blob-audio Lance corpus to serve.
     :param checkpoint: Checkpoint to load.
     :param output_dir: Eval output root.
+    :param experiment: Experiment config exercised by the subprocess.
+    :param datamodule: Third-party datamodule config exercised by the subprocess.
     :param extra_overrides: Scenario-specific Hydra overrides.
     :returns: The completed CLI process.
     """
@@ -2337,8 +2372,8 @@ def _run_third_party_eval(
             sys.executable,
             "-m",
             "synth_setter.cli.eval",
-            "experiment=surge/flow_simple",
-            "datamodule=third_party/nsynth_test",
+            f"experiment={experiment}",
+            f"datamodule={datamodule}",
             "render=vst",
             f"seed={_THIRD_PARTY_TEST_SEED}",
             f"datamodule.dataset_uri={corpus}",
@@ -2409,6 +2444,59 @@ def test_third_party_corpus_predict_entrypoint_writes_artifacts(tmp_path: Path) 
     # Mean amplitude verifies content, order, padding, and up-mixing.
     served = [float(row.abs().mean()) for row in target_audio]
     assert served == pytest.approx([0.0, 0.025], abs=1e-3)
+
+
+@pytest.mark.slow
+def test_nsynth_sketch_eval_entrypoint_writes_prediction(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The NSynth preset runs an R2 checkpoint and live PESTO through prediction.
+
+    :param tmp_path: Isolated corpus, checkpoint, and output directories.
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param monkeypatch: Configures storage credentials inherited by the subprocess.
+    """
+    sample_rate = _THIRD_PARTY_SOURCE_SAMPLE_RATE
+    samples = np.arange(sample_rate, dtype=np.float32)
+    tone = (0.5 * np.sin(2 * np.pi * 440.0 * samples / sample_rate)).astype(np.float32)
+    corpus = tmp_path / "corpus.lance"
+    write_blob_audio_corpus(corpus, [tone], sample_rate=sample_rate)
+    checkpoint = tmp_path / "flow_sketch.ckpt"
+    _save_third_party_checkpoint(checkpoint, experiment="surge/flow_sketch_prelim")
+    remote_checkpoint = fake_r2_remote / "bucket" / "runs" / "flow_sketch.ckpt"
+    remote_checkpoint.parent.mkdir(parents=True)
+    shutil.copyfile(checkpoint, remote_checkpoint)
+    checkpoint_digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+    output_dir = tmp_path / "output"
+
+    result = _run_third_party_eval(
+        corpus=corpus,
+        checkpoint="r2://bucket/runs/flow_sketch.ckpt",
+        output_dir=output_dir,
+        experiment="surge/eval_flow_sketch_nsynth",
+        datamodule="third_party/nsynth_sketch",
+        extra_overrides=(
+            f"ckpt_sha256={checkpoint_digest}",
+            "datamodule.batch_size=1",
+            "datamodule.mel_stats_sha256=null",
+            "evaluation.compute_metrics=false",
+            "evaluation.render_vst=false",
+            "~logger",
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    prediction = torch.load(
+        output_dir / "predictions" / "pred-0.pt", map_location="cpu", weights_only=True
+    )
+    assert prediction.shape == (1, _SURGE_SIMPLE_PREDICTION_WIDTH)
+    assert torch.isfinite(prediction).all()
 
 
 @pytest.mark.requires_vst

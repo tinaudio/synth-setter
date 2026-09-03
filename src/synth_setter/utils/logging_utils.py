@@ -185,6 +185,7 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
 
     :param object_dict: A dictionary containing the following objects:
         - `"cfg"`: A DictConfig object containing the main config.
+        - `"datamodule"`: Optional data source exposing run provenance.
         - `"model"`: The Lightning model.
         - `"trainer"`: The Lightning trainer.
     """
@@ -208,6 +209,11 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
             "trainer",
         )
     }
+
+    datamodule = object_dict.get("datamodule")
+    source_provenance = getattr(datamodule, "source_provenance", None)
+    if source_provenance is not None:
+        hparams["source_provenance"] = source_provenance
 
     model = object_dict["model"]
 

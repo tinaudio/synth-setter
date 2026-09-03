@@ -11,9 +11,11 @@ import logging
 import os
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,6 +38,7 @@ log = logging.getLogger(__name__)
 # Bound on consecutive failed uploads of one unchanged checkpoint before backing
 # off until the file next changes — caps R2 retries when R2 is down.
 _MAX_UPLOAD_ATTEMPTS = 3
+_PREDICTION_PROGRESS_INTERVAL = 25
 
 # The single mirrored object name; the whole class contract hinges on this basename.
 _LAST_CKPT_NAME = "last.ckpt"
@@ -596,38 +599,125 @@ def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
 
 
 class PredictionWriter(BasePredictionWriter):
-    """Save per-batch and per-epoch predictions plus target tensors to disk."""
+    """Save predictions and report durable, rate-limited batch progress."""
 
-    def __init__(self, output_dir, write_interval):
+    def __init__(
+        self,
+        output_dir: str | os.PathLike[str],
+        write_interval: Literal["batch", "epoch", "batch_and_epoch"],
+    ) -> None:
+        """Initialize prediction persistence and progress state.
+
+        :param output_dir: Directory receiving prediction tensors.
+        :param write_interval: Lightning prediction-writer callback interval.
+        """
         super().__init__(write_interval)
         self.output_dir = output_dir
+        self._progress_started_at: dict[int, float] = {}
+        self._samples_written: dict[int, int] = {}
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def on_predict_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Reset progress counters for a prediction pass.
+
+        :param trainer: Ignored; required by Lightning's callback contract.
+        :param pl_module: Ignored; required by Lightning's callback contract.
+        """
+        del trainer, pl_module
+        self._progress_started_at.clear()
+        self._samples_written.clear()
+
+    def on_predict_batch_start(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Start each dataloader's timer before its first prediction batch.
+
+        :param trainer: Ignored; required by Lightning's callback contract.
+        :param pl_module: Ignored; required by Lightning's callback contract.
+        :param batch: Ignored; required by Lightning's callback contract.
+        :param batch_idx: Zero-based batch index.
+        :param dataloader_idx: Active prediction dataloader index.
+        """
+        del trainer, pl_module, batch
+        if batch_idx == 0:
+            self._progress_started_at[dataloader_idx] = time.monotonic()
+
+    def _log_progress(
+        self,
+        trainer: Trainer,
+        batch: object,
+        batch_idx: int,
+        *,
+        dataloader_idx: int,
+    ) -> None:
+        """Log first, interval, and final completed prediction batches.
+
+        :param trainer: Active trainer exposing total prediction batches.
+        :param batch: Persisted model batch.
+        :param batch_idx: Zero-based batch index.
+        :param dataloader_idx: Active prediction dataloader index.
+        """
+        if not trainer.is_global_zero:
+            return
+        started_at = self._progress_started_at.get(dataloader_idx)
+        if started_at is None:
+            started_at = time.monotonic()
+            self._progress_started_at[dataloader_idx] = started_at
+        samples_written = self._samples_written.get(dataloader_idx, 0) + batch_sample_count(batch)
+        self._samples_written[dataloader_idx] = samples_written
+        totals = trainer.num_predict_batches
+        total = totals if isinstance(totals, int) else totals[dataloader_idx]
+        completed = batch_idx + 1
+        if (
+            completed != 1
+            and completed % _PREDICTION_PROGRESS_INTERVAL != 0
+            and completed != total
+        ):
+            return
+        elapsed = max(time.monotonic() - started_at, 1e-9)
+        percent = 100.0 * completed / total
+        log.info(
+            "Prediction progress: dataloader=%d batches=%d/%d samples=%d "
+            "percent=%.1f batches_per_second=%.2f",
+            dataloader_idx,
+            completed,
+            total,
+            samples_written,
+            percent,
+            completed / elapsed,
+        )
 
     def write_on_batch_end(
         self,
-        trainer,
-        pl_module,
-        prediction,
-        batch_indices,
-        batch,
-        batch_idx,
-        dataloader_idx,
-    ):
-        prediction, batch = prediction
+        trainer: Trainer,
+        pl_module: LightningModule,
+        prediction: tuple[torch.Tensor, Mapping[str, torch.Tensor]],
+        batch_indices: Sequence[int] | None,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        prediction_tensor, persisted_batch = prediction
         torch.save(
-            _plain_cpu_tensor(prediction),
+            _plain_cpu_tensor(prediction_tensor),
             os.path.join(self.output_dir, f"pred-{batch_idx}.pt"),
         )
         torch.save(
-            _plain_cpu_tensor(batch["audio"]),
+            _plain_cpu_tensor(persisted_batch["audio"]),
             os.path.join(self.output_dir, f"target-audio-{batch_idx}.pt"),
         )
 
-        if "params" in batch:
+        if "params" in persisted_batch:
             torch.save(
-                _plain_cpu_tensor(batch["params"]),
+                _plain_cpu_tensor(persisted_batch["params"]),
                 os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"),
             )
+        self._log_progress(trainer, persisted_batch, batch_idx, dataloader_idx=dataloader_idx)
 
     def write_on_epoch_end(self, trainer, pl_module, predictions, batch_indices):
         predictions, batch = predictions

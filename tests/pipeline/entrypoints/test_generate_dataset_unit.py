@@ -1936,9 +1936,8 @@ class TestRun(RenderSeamFixtures):
     ) -> None:
         """``render.parallel=True`` + 4 shards → ≥2 worker threads; every shard stages.
 
-        Pins ``available_cpus`` to 8 so the dispatch heuristic
-        ``min(max(1, available_cpus() // 2), len(my_range))`` resolves to 4
-        workers regardless of CI runner CPU count. The dispatcher stub blocks
+        Pins ``available_cpus`` to 8 so the capped half-affinity heuristic
+        resolves to 4 workers regardless of CI runner CPU count. The dispatcher stub blocks
         each render until the second thread enters, forcing the pool to
         actually parallelize.
 
@@ -4251,6 +4250,89 @@ def test_dispatch_shards_claims_mode_relays_rejections_and_claim_count(
 
     assert (rendered, skipped, assigned) == (2, 1, 3)
     assert rejections == expected
+
+
+@pytest.mark.parametrize(
+    ("cpu_count", "expected_workers"),
+    [(128, 16), (32, 16), (10, 5), (1, 1)],
+)
+def test_parallel_static_dispatch_worker_count_tracks_affinity_with_cap(
+    cpu_count: int,
+    expected_workers: int,
+    monkeypatch: pytest.MonkeyPatch,
+    spec: DatasetSpec,
+    tmp_path: Path,
+) -> None:
+    """Parallel static dispatch halves affinity CPUs without exceeding 16 workers.
+
+    :param cpu_count: Affinity-visible CPU count.
+    :param expected_workers: Effective local render concurrency.
+    :param monkeypatch: Pins CPU affinity and observes the executor boundary.
+    :param spec: Fixture-provided dataset specification.
+    :param tmp_path: Work directory passed through the dispatcher.
+    """
+    worker_counts: list[int] = []
+
+    def _executor(*, max_workers: int) -> ThreadPoolExecutor:
+        worker_counts.append(max_workers)
+        return ThreadPoolExecutor(max_workers=max_workers)
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: cpu_count)
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.ThreadPoolExecutor", _executor)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda *_args: (True, False, RenderRejectionMetrics()),
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_parallel(
+        spec,
+        range(17),
+        tmp_path,
+        [],
+    )
+
+    assert (rendered, skipped, rejections) == (17, 0, RenderRejectionMetrics())
+    assert worker_counts == [expected_workers]
+
+
+def test_parallel_claim_dispatch_caps_worker_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Parallel claim dispatch caps oversized affinity at 16 workers.
+
+    :param monkeypatch: Pins oversized CPU affinity and observes the executor boundary.
+    :param tmp_path: Builds the claims spec and receives dispatcher work.
+    """
+    spec = _claims_spec(tmp_path, n=17)
+    claims = MagicMock()
+    claims.claim.side_effect = [
+        *(SimpleNamespace(shard_id=shard_id, claim_gen=1) for shard_id in range(17)),
+        None,
+    ]
+    worker_counts: list[int] = []
+
+    def _executor(*, max_workers: int) -> ThreadPoolExecutor:
+        worker_counts.append(max_workers)
+        return ThreadPoolExecutor(max_workers=max_workers)
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 128)
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.ThreadPoolExecutor", _executor)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda *_args: (True, False, RenderRejectionMetrics()),
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_from_claims_parallel(
+        claims,
+        spec,
+        work_dir=tmp_path,
+        loggers=[],
+    )
+
+    assert (rendered, skipped, rejections) == (17, 0, RenderRejectionMetrics())
+    assert claims.complete.call_count == 17
+    assert worker_counts == [16]
 
 
 def test_parallel_dispatch_aggregates_rejections_without_rclone(

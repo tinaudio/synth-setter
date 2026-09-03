@@ -140,6 +140,21 @@ def _record_successful_r2_uploads(
     return uploads
 
 
+def test_train_eval_only_experiment_raises_before_instantiation() -> None:
+    """The training entrypoint rejects prediction-only experiment presets."""
+    GlobalHydra.instance().clear()
+    with hydra.initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = hydra.compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth"],
+        )
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="evaluation-only experiment"):
+        train(cfg)
+
+
 @pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
@@ -199,6 +214,8 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     :param cfg_pyfdn_flow_train: Tiny production pyFDN flow configuration.
     """
     HydraConfig().set_config(cfg_pyfdn_flow_train)
+    with open_dict(cfg_pyfdn_flow_train):
+        cfg_pyfdn_flow_train.datamodule.num_workers = 2
 
     metric_dict, object_dict = train(cfg_pyfdn_flow_train)
 
@@ -207,6 +224,13 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert torch.isfinite(metric_dict["val/param_mse"])
 
     datamodule = object_dict["datamodule"]
+    assert cfg_pyfdn_flow_train.datamodule.param_spec_name == "pyfdn_n8_mono"
+    assert datamodule.param_spec_name == "pyfdn_n8_mono"
+    assert "source_audio_path" not in cfg_pyfdn_flow_train.datamodule
+    assert "source_audio_sha256" not in cfg_pyfdn_flow_train.datamodule
+    source_provenance = datamodule.source_provenance
+    assert source_provenance["identity"] == "librosa_log_chirp_v1"
+    assert source_provenance["librosa_version"] == "0.11.0"
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["audio"].shape == (1, 192_000)
@@ -231,7 +255,12 @@ def test_train_pyfdn_flow_advances_on_real_online_batch(
     assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
 
     checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
-    assert (checkpoint_dir / "last.ckpt").stat().st_size > 0
+    checkpoint_path = checkpoint_dir / "last.ckpt"
+    assert checkpoint_path.stat().st_size > 0
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["PyFDNDataModule"] == {
+        "source_provenance": source_provenance,
+    }
 
 
 def test_train_torchsynth_experiment_renders_audio_online(

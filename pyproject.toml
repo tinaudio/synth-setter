@@ -62,6 +62,7 @@ synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
 synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
 synth-setter-clap = "synth_setter.cli.clap_render:main"
+synth-setter-sketch = "synth_setter.cli.sketch_render:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-migrate-checkpoint = "synth_setter.cli.migrate_checkpoint:main"
 synth-setter-plugins = "synth_setter.cli.plugins:main"
@@ -184,7 +185,7 @@ data = [
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
   "dawdreamer==0.8.3; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
-  "librosa",
+  "librosa==0.11.0",
   "mido",
   "pedalboard",
   "pyFDN==0.4.2",

@@ -338,34 +338,34 @@ def test_flow_matching_validation_loop_logs_signed_pitch_residuals() -> None:
 def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Lightning averages signed pitch residuals over rows, not over batches.
+    """Lightning averages real signed pitch residuals over rows, not batches.
 
-    :param monkeypatch: Residual values isolating Lightning's aggregation contract.
+    :param monkeypatch: Deterministic validation sampler replacement scoped to this test.
     """
+    from synth_setter.data.vst import param_specs
+
     module = _flow_matching_module()
-
-    def fixed_residuals(
-        predicted: torch.Tensor,
-        _target: torch.Tensor,
-        _param_spec: ParamSpec,
-    ) -> dict[str, torch.Tensor]:
-        if predicted.shape[0] == 2:
-            return {
-                "continuous": predicted.new_tensor([-6.0, 3.0]),
-                "floor": predicted.new_tensor([8.0, -2.0]),
-                "nearest": predicted.new_tensor([-4.0, 10.0]),
-            }
-        return {
-            "continuous": predicted.new_tensor([12.0]),
-            "floor": predicted.new_tensor([-9.0]),
-            "nearest": predicted.new_tensor([-15.0]),
-        }
-
-    monkeypatch.setattr(
-        "synth_setter.models.vst_flow_matching_module.midi_pitch_residuals",
-        fixed_residuals,
+    param_spec = param_specs["surge_4"]
+    pitch_span = next(
+        span for parameter, span in param_spec.encoded_slices() if parameter.name == "pitch"
     )
-    full_batch = _batch()
+    target_params = torch.zeros(_BATCH, param_spec.encoded_width)
+    sampled_params = torch.zeros_like(target_params)
+    sampled_params[:, pitch_span] = torch.tensor(
+        [-0.3541666666666667, 0.1875, 0.20833334]
+    ).unsqueeze(1)
+    sampled_by_batch_size = {2: sampled_params[:2], 1: sampled_params[2:]}
+
+    def deterministic_sample(
+        _conditioning: object,
+        noise: torch.Tensor,
+        *_args: object,
+        **_kwargs: object,
+    ) -> torch.Tensor:
+        return sampled_by_batch_size[noise.shape[0]]
+
+    monkeypatch.setattr(module, "_sample", deterministic_sample)
+    full_batch = {**_batch(), "params": target_params}
     first_batch = {name: values[:2] for name, values in full_batch.items()}
     second_batch = {name: values[2:] for name, values in full_batch.items()}
     trainer = Trainer(
@@ -384,13 +384,13 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
 
     torch.testing.assert_close(
         trainer.callback_metrics["val/pitch_residual_continuous_mean_semitones"],
-        torch.tensor(3.0),
+        torch.tensor(0.16666667),
     )
     torch.testing.assert_close(
         trainer.callback_metrics["val/pitch_residual_floor_mean_semitones"],
-        torch.tensor(-1.0),
+        torch.tensor(-0.33333334),
     )
     torch.testing.assert_close(
         trainer.callback_metrics["val/pitch_residual_nearest_mean_semitones"],
-        torch.tensor(-3.0),
+        torch.tensor(0.33333334),
     )

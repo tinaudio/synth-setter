@@ -698,7 +698,7 @@ def test_pi_review_launcher_nonzero_exit_withholds_intermediate_text(tmp_path: P
 
     with pytest.raises(sh.ErrorReturnCode):
         sh.Command(str(launcher))(
-            "repo-review-full-no-comments",
+            "repo-review-full",
             _cwd=REPO_ROOT,
             _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
             _out=stdout,

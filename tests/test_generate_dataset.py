@@ -1845,7 +1845,7 @@ def test_cfg_dataset_carries_ram_bounded_num_workers_for_oracle_eval(
 
     Unlike ``train`` / ``evaluate``, generate never builds a datamodule: it
     forwards this value into the oracle-eval subprocess's argv, and the shard
-    render pool sizes itself from ``available_cpus() // 2`` independently. The
+    render pool independently uses half the available CPUs capped at 16. The
     forwarding helper is private, which this module may not import, so the
     composed default is the consumable surface a test can pin here — the argv
     itself is covered by the oracle-eval inline tests above.

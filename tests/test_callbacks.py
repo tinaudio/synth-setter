@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -125,6 +127,92 @@ def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
         LogPerParamMSE()  # type: ignore[call-arg]
 
 
+def test_prediction_writer_logs_rate_limited_batch_and_sample_progress(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Prediction persistence reports boundaries without logging every batch.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    :param caplog: Captures durable progress records.
+    """
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[3]))
+    module = cast("LightningModule", None)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+    batch = {"audio": torch.zeros(2, 1)}
+    final_batch = {"audio": torch.zeros(1, 1)}
+    prediction = torch.zeros(2, 3)
+
+    caplog.set_level("INFO", logger="synth_setter.utils.callbacks")
+    writer.on_predict_start(trainer, module)
+    writer.write_on_batch_end(trainer, module, (prediction, batch), None, None, 0, 0)
+    writer.write_on_batch_end(trainer, module, (prediction, batch), None, None, 1, 0)
+    writer.write_on_batch_end(
+        trainer,
+        module,
+        (prediction[:1], final_batch),
+        None,
+        None,
+        2,
+        0,
+    )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2
+    assert "batches=1/3 samples=2 percent=33.3" in messages[0]
+    assert "batches=3/3 samples=5 percent=100.0" in messages[1]
+    assert all("batches_per_second=" in message for message in messages)
+
+
+def test_prediction_writer_one_batch_rate_includes_prediction_time(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One-batch throughput starts before the batch is predicted.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    :param caplog: Captures durable progress records.
+    :param monkeypatch: Supplies deterministic monotonic timestamps.
+    """
+    clock = Mock(side_effect=(10.0, 12.0))
+    monkeypatch.setattr("synth_setter.utils.callbacks.time.monotonic", clock)
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[1]))
+    module = cast("LightningModule", None)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+
+    caplog.set_level("INFO", logger="synth_setter.utils.callbacks")
+    writer.on_predict_start(trainer, module)
+    writer.on_predict_batch_start(trainer, module, {}, 0, dataloader_idx=0)
+    assert clock.call_count == 1
+    writer._log_progress(trainer, {"audio": torch.zeros(2, 1)}, 0, dataloader_idx=0)
+
+    assert "batches_per_second=0.50" in caplog.records[0].getMessage()
+
+
+def test_prediction_writer_tracks_each_predict_dataloader_independently(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each prediction dataloader reports its own batch and sample progress.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    :param caplog: Captures durable progress records.
+    """
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[1, 1]))
+    module = cast("LightningModule", None)
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+
+    caplog.set_level("INFO", logger="synth_setter.utils.callbacks")
+    writer.on_predict_start(trainer, module)
+    writer._log_progress(trainer, {"audio": torch.zeros(2, 1)}, 0, dataloader_idx=0)
+    writer._log_progress(trainer, {"audio": torch.zeros(3, 1)}, 0, dataloader_idx=1)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "dataloader=0 batches=1/1 samples=2 percent=100.0" in messages[0]
+    assert "dataloader=1 batches=1/1 samples=3 percent=100.0" in messages[1]
+
+
 def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
     tmp_path: Path,
 ) -> None:
@@ -140,9 +228,10 @@ def test_prediction_writer_serializes_real_torchsynth_signals_as_plain_tensors(
         torch.arange(10, dtype=torch.float32).reshape(2, 5).as_subclass(Signal).requires_grad_()
     )
     writer = PredictionWriter(tmp_path, write_interval="batch")
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[1]))
 
     writer.write_on_batch_end(
-        cast("Trainer", None),
+        trainer,
         cast("LightningModule", None),
         (prediction, {"audio": audio, "params": params}),
         None,
@@ -180,9 +269,10 @@ def test_prediction_writer_serializes_views_without_backing_storage(
     """
     backing = torch.arange(4096, dtype=torch.float32)
     writer = PredictionWriter(tmp_path, write_interval="batch")
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[1]))
 
     writer.write_on_batch_end(
-        cast("Trainer", None),
+        trainer,
         cast("LightningModule", None),
         (backing[:2], {"audio": backing[2:4], "params": backing[4:6]}),
         None,

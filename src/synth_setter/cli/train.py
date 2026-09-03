@@ -472,7 +472,11 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
     :raises SystemExit: With status 143 after Lightning handles SIGTERM during fit.
+    :raises ValueError: If an evaluation-only experiment reaches the training entrypoint.
     """
+    if cfg.get("evaluation_only", False):
+        raise ValueError("evaluation-only experiment cannot run through training entrypoint")
+
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
