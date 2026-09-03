@@ -478,12 +478,24 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :raises ValueError: The pyFDN identity or fixed render contract drifts.
         """
         registered_synth = SYNTHS.get(self.synth.name)
+        registered_pyfdn_synth = (
+            registered_synth is not None and registered_synth.plugin_path == PYFDN_PLUGIN_NAME
+        )
+        registered_pyfdn_spec = any(
+            synth.plugin_path == PYFDN_PLUGIN_NAME
+            and synth.param_spec_name == self.param_spec_name
+            for synth in SYNTHS.values()
+        )
         registered_pyfdn = (
-            registered_synth is not None
-            and registered_synth.plugin_path == PYFDN_PLUGIN_NAME
+            registered_pyfdn_synth
+            and registered_synth is not None
             and registered_synth.param_spec_name == self.param_spec_name
         )
-        pyfdn_identity = registered_pyfdn or self.plugin_path == PYFDN_PLUGIN_NAME
+        pyfdn_identity = (
+            registered_pyfdn_synth
+            or registered_pyfdn_spec
+            or self.plugin_path == PYFDN_PLUGIN_NAME
+        )
         if self.renderer_backend != "pyfdn":
             if pyfdn_identity:
                 raise ValueError(f"{self.synth.name} requires renderer_backend='pyfdn'")

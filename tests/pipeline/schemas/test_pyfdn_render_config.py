@@ -142,6 +142,26 @@ def test_pyfdn_render_config_noncanonical_contract_raises(
         RenderConfig.model_validate(_pyfdn_render_kwargs(**{field: value}))
 
 
+def test_pyfdn_name_with_mismatched_spec_rejects_hosted_backend() -> None:
+    """A malformed pyFDN identity cannot evade native-backend validation."""
+    synth = {
+        "name": "pyfdn_n8_mono_hadamard",
+        "param_spec_name": "surge_4",
+        "plugin_path": "plugins/Surge XT.vst3",
+        "plugin_state_path": "presets/surge-mini.vstpreset",
+        "synth_version": "1.3.4",
+    }
+
+    with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):
+        RenderConfig.model_validate(
+            _pyfdn_render_kwargs(
+                synth=synth,
+                renderer_backend="pedalboard",
+                pyfdn_excitation=None,
+            )
+        )
+
+
 def test_pyfdn_identity_rejects_hosted_backend() -> None:
     """The pyFDN identity cannot route through an external plugin host."""
     with pytest.raises(ValidationError, match="requires renderer_backend='pyfdn'"):

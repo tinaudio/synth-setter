@@ -258,6 +258,25 @@ def test_pyfdn_hadamard_spec_decode_restores_fixed_feedback() -> None:
     np.testing.assert_array_equal(decoded["feedback_matrix"], _EXPECTED_HADAMARD_FEEDBACK)
 
 
+def test_pyfdn_hadamard_spec_encoding_round_trips_learned_fields() -> None:
+    """Encoding and decoding preserve every non-feedback native field."""
+    params, notes = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.sample(np.random.default_rng(123))
+
+    encoded = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.encode(params, notes)
+    decoded, _ = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.decode(encoded)
+
+    assert (encoded.shape, encoded.dtype) == ((27,), np.dtype(np.float32))
+    np.testing.assert_array_equal(decoded["delays"], params["delays"])
+    for name in (
+        "input_matrix",
+        "output_matrix",
+        "direct_matrix",
+        "post_delay.rt_dc_seconds",
+        "post_delay.rt_nyquist_seconds",
+    ):
+        np.testing.assert_allclose(decoded[name], params[name], atol=1.2e-7)
+
+
 def test_pyfdn_hadamard_spec_samples_return_independent_feedback_arrays() -> None:
     """Mutating one sampled patch cannot alter the fixed matrix in later patches."""
     first, _ = PYFDN_N8_MONO_HADAMARD_PARAM_SPEC.sample(np.random.default_rng(123))
