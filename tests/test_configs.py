@@ -253,7 +253,7 @@ def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
     assert cfg.datamodule.param_spec_name == "pyfdn_pitchshift_n8_mono"
     assert cfg.model.param_spec == "pyfdn_pitchshift_n8_mono"
     assert isinstance(renderer, PyFDNRenderer)
-    assert renderer._param_spec_name == "pyfdn_pitchshift_n8_mono"
+    assert renderer.source_provenance["implementation"] == "pyFDN.process_fdn"
 
 
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:

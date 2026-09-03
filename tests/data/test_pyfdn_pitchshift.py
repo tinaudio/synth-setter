@@ -141,6 +141,57 @@ def test_pitchshift_renderer_rejects_window_above_spec_bound() -> None:
         renderer.render(params)
 
 
+def test_pitchshift_renderer_rejects_transpose_wrong_type() -> None:
+    """Native rendering rejects non-scalar transpose controls."""
+    params = _reference_params()
+    params[PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_NAME] = np.array([700.0])
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+
+    with pytest.raises(TypeError, match="transpose_cents must be a real scalar"):
+        renderer.render(params)
+
+
+def test_pitchshift_renderer_rejects_window_below_spec_bound() -> None:
+    """Native rendering rejects windows below the learnable domain."""
+    params = _reference_params()
+    params[PYFDN_PITCHSHIFT_WINDOW_SIZE_NAME] = 255
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+
+    with pytest.raises(ValueError, match="window_size must be between"):
+        renderer.render(params)
+
+
+def test_pitchshift_build_rejects_malformed_geq_shape() -> None:
+    """GEQ conversion rejects decay arrays without all ten bands."""
+    params = _reference_params()
+    params[PYFDN_RT_GEQ_SECONDS_NAME] = _REFERENCE_RT[:-1].copy()
+
+    with pytest.raises(ValueError, match=r"rt_seconds must have shape \(10,\)"):
+        params_to_pitchshift_fdn_build(params, sample_rate=44_100.0)
+
+
+def test_pitchshift_renderer_rejects_active_mask_wrong_dtype() -> None:
+    """Native rendering rejects non-integer active-channel masks."""
+    params = _reference_params()
+    params[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME] = np.ones(8, dtype=np.float64)
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+
+    with pytest.raises(TypeError, match="active_channels must have dtype int64"):
+        renderer.render(params)
+
+
+def test_pitchshift_renderer_rejects_active_mask_nonbinary_value() -> None:
+    """Native rendering rejects active-channel values outside zero and one."""
+    params = _reference_params()
+    params[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME] = np.array(
+        [0, 0, 0, 0, 0, 0, 1, 2], dtype=np.int64
+    )
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_pitchshift_n8_mono"))
+
+    with pytest.raises(ValueError, match="active_channels must contain only zero or one"):
+        renderer.render(params)
+
+
 def test_pitchshift_renderer_transpose_changes_real_audio() -> None:
     """The predicted transpose control reaches the native pitch shifter."""
     baseline = _reference_params()

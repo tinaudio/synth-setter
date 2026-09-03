@@ -176,6 +176,35 @@ def _build_decay_fdn(
     return decay_build
 
 
+def _validate_base_params(
+    params: Mapping[str, ParameterValue],
+    *,
+    required_keys: frozenset[str],
+    sample_rate: float,
+    topology: str,
+) -> dict[str, np.ndarray]:
+    """Validate and return the shared native FDN arrays.
+
+    :param params: Native parameter mapping for one pyFDN topology.
+    :param required_keys: Exact keys required by that topology.
+    :param sample_rate: Processing rate in Hz; exactly ``44100.0``.
+    :param topology: Name included in invalid-key diagnostics.
+    :returns: Validated float64 A/B/C/D arrays and positive int64 delays.
+    :raises ValueError: Keys, sample rate, shapes, values, or delays violate the contract.
+    """
+    if set(params) != required_keys:
+        raise ValueError(f"{topology} params must contain exactly {sorted(required_keys)}")
+    if sample_rate != _SAMPLE_RATE:
+        raise ValueError("sample_rate must be exactly 44100.0")
+    arrays = {
+        name: _require_array(name, params[name], shape=shape, dtype=dtype)
+        for name, shape, dtype in _ARRAY_CONTRACTS
+    }
+    if np.any(arrays["delays"] <= 0):
+        raise ValueError("delays must be positive")
+    return arrays
+
+
 def params_to_fdn_build(
     params: Mapping[str, ParameterValue],
     *,
@@ -190,19 +219,13 @@ def params_to_fdn_build(
         must contain only finite values.
     :param sample_rate: Processing rate in Hz; exactly ``44100.0``.
     :returns: Native build with derived ``post_delay`` SOS and no other post hooks.
-    :raises ValueError: Keys, shapes, values, delays, or sample rate violate the contract.
     """
-    if set(params) != _REQUIRED_KEYS:
-        raise ValueError(f"params must contain exactly {sorted(_REQUIRED_KEYS)}")
-    if sample_rate != _SAMPLE_RATE:
-        raise ValueError("sample_rate must be exactly 44100.0")
-
-    arrays = {
-        name: _require_array(name, params[name], shape=shape, dtype=dtype)
-        for name, shape, dtype in _ARRAY_CONTRACTS
-    }
-    if np.any(arrays["delays"] <= 0):
-        raise ValueError("delays must be positive")
+    arrays = _validate_base_params(
+        params,
+        required_keys=_REQUIRED_KEYS,
+        sample_rate=sample_rate,
+        topology="plain",
+    )
     rt_seconds = (
         _require_rt_seconds(PYFDN_RT_DC_NAME, params[PYFDN_RT_DC_NAME]),
         _require_rt_seconds(PYFDN_RT_NYQUIST_NAME, params[PYFDN_RT_NYQUIST_NAME]),
@@ -217,24 +240,23 @@ def params_to_pitchshift_fdn_build(
 ) -> FDNBuild:
     """Build an order-8 FDN with the reference ten-band decay profile.
 
-    :param params: Exact pitch-shift ParamSpec native mapping.
+    :param params: Mapping containing ``feedback_matrix`` float64 ``(8, 8)``,
+        ``input_matrix`` float64 ``(8, 1)``, ``output_matrix`` float64 ``(1, 8)``,
+        ``direct_matrix`` float64 ``(1, 1)``, positive ``delays`` int64 ``(8,)``,
+        ten GEQ reverberation times float64 ``(10,)`` bounded to 0.1–5.0 seconds,
+        transpose bounded to -1200–1200 cents, window size bounded to 256–4096
+        samples, and an active-channel int64 mask ``(8,)`` containing zero or one.
     :param sample_rate: Processing rate in Hz; exactly ``44100.0``.
     :returns: Native build carrying an eleven-section GEQ SOS bank.
     :raises TypeError: A native control has the wrong type or dtype.
     :raises ValueError: Keys, shapes, values, or sample rate violate the contract.
     """
-    if set(params) != _PITCHSHIFT_REQUIRED_KEYS:
-        raise ValueError(
-            f"pitch-shift params must contain exactly {sorted(_PITCHSHIFT_REQUIRED_KEYS)}"
-        )
-    if sample_rate != _SAMPLE_RATE:
-        raise ValueError("sample_rate must be exactly 44100.0")
-    arrays = {
-        name: _require_array(name, params[name], shape=shape, dtype=dtype)
-        for name, shape, dtype in _ARRAY_CONTRACTS
-    }
-    if np.any(arrays["delays"] <= 0):
-        raise ValueError("delays must be positive")
+    arrays = _validate_base_params(
+        params,
+        required_keys=_PITCHSHIFT_REQUIRED_KEYS,
+        sample_rate=sample_rate,
+        topology="pitch-shift",
+    )
     rt_seconds = _require_array(
         PYFDN_RT_GEQ_SECONDS_NAME,
         params[PYFDN_RT_GEQ_SECONDS_NAME],
@@ -331,6 +353,33 @@ def _pitchshift_post_delay(
                 min_delay_samps=PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES,
             ),
         ]
+    )
+
+
+def _process_source(
+    build: FDNBuild,
+    source: np.ndarray,
+    post_delay: SOSBank | Series,
+) -> np.ndarray:
+    """Process one mono source through a configured native FDN.
+
+    :param build: Native FDN matrices, delays, and optional post hooks.
+    :param source: Mono source waveform shaped ``(176400,)``.
+    :param post_delay: Fresh stateful delay-line processor for this render.
+    :returns: Native pyFDN output as a NumPy array.
+    """
+    return np.asarray(
+        process_fdn(
+            source,
+            build.delays,
+            build.A,
+            build.B,
+            build.C,
+            build.D,
+            post_delay=post_delay,
+            post_matrix=build.post_matrix,
+            post_output=build.post_output,
+        )
     )
 
 
@@ -458,18 +507,10 @@ class PyFDNRenderer(AudioRenderer):
                 source[0] = 1.0
             else:
                 source = cast(np.ndarray, self._source_audio)[0]
-            output_array = np.asarray(
-                process_fdn(
-                    source,
-                    build.delays,
-                    build.A,
-                    build.B,
-                    build.C,
-                    build.D,
-                    post_delay=_pitchshift_post_delay(build, params),
-                    post_matrix=build.post_matrix,
-                    post_output=build.post_output,
-                )
+            output_array = _process_source(
+                build,
+                source,
+                _pitchshift_post_delay(build, params),
             )
         else:
             build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
@@ -485,19 +526,7 @@ class PyFDNRenderer(AudioRenderer):
             else:
                 post_delay = cast(np.ndarray, build.post_delay)
                 source = cast(np.ndarray, self._source_audio)[0]
-                output_array = np.asarray(
-                    process_fdn(
-                        source,
-                        build.delays,
-                        build.A,
-                        build.B,
-                        build.C,
-                        build.D,
-                        post_delay=SOSBank(post_delay),
-                        post_matrix=build.post_matrix,
-                        post_output=build.post_output,
-                    )
-                )
+                output_array = _process_source(build, source, SOSBank(post_delay))
         if output_array.shape != (_SIGNAL_LENGTH,):
             raise ValueError(
                 f"pyFDN output must have shape {(_SIGNAL_LENGTH,)}, got {output_array.shape}"
