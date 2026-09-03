@@ -688,8 +688,34 @@ def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> Non
     assert metrics["octave_rt60_log_rmse"] == pytest.approx(0.0, abs=1e-12)
 
 
-def test_compute_metrics_on_dir_pyfdn_mismatched_sample_rates_raise(tmp_path: Path) -> None:
-    """A pyFDN pair with incompatible time bases cannot be compared.
+def test_compute_metrics_on_dir_uses_wav_sample_rate(tmp_path: Path) -> None:
+    """File sample rate controls analysis windows instead of the 44.1 kHz default.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    sample_dir = tmp_path / "sample_0"
+    sample_dir.mkdir()
+    target = sine(freq=440.0, amplitude=0.5, channels=1, sr=8_000, seconds=0.5)
+    pred = sine(freq=880.0, amplitude=0.5, channels=1, sr=8_000, seconds=0.5)
+    write_wav(sample_dir / "target.wav", target, sr=8_000)
+    write_wav(sample_dir / "pred.wav", pred, sr=8_000)
+
+    with cam.AudioFile(str(sample_dir / "target.wav")) as target_file:
+        loaded_target = target_file.read(target_file.frames)
+    with cam.AudioFile(str(sample_dir / "pred.wav")) as pred_file:
+        loaded_pred = pred_file.read(pred_file.frames)
+    metrics = compute_metrics_on_dir(sample_dir)
+
+    assert metrics["mss"] == pytest.approx(
+        compute_mss(loaded_target, loaded_pred, 8_000), rel=1e-5
+    )
+    assert metrics["mss"] != pytest.approx(
+        compute_mss(loaded_target, loaded_pred, 44_100), rel=1e-3
+    )
+
+
+def test_compute_metrics_on_dir_mismatched_sample_rates_raise(tmp_path: Path) -> None:
+    """An audio pair with incompatible time bases cannot be compared.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -700,7 +726,7 @@ def test_compute_metrics_on_dir_pyfdn_mismatched_sample_rates_raise(tmp_path: Pa
     write_wav(sample_dir / "pred.wav", audio, sr=48_000)
 
     with pytest.raises(ValueError, match="same sample rate"):
-        compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+        compute_metrics_on_dir(sample_dir)
 
 
 def test_compute_metrics_on_dir_identical_files_yields_perfect_scores(tmp_path: Path) -> None:

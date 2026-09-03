@@ -447,7 +447,7 @@ def compute_metrics_on_dir(
     :param audio_dir: Directory containing ``target.wav`` and ``pred.wav``.
     :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
     :returns: Dict mapping metric name to scalar score.
-    :raises ValueError: The pyFDN WAV files have different sample rates.
+    :raises ValueError: The target and predicted WAV files have different sample rates.
     """
     with AudioFile(str(audio_dir / "target.wav")) as target_file:
         target = target_file.read(target_file.frames)
@@ -456,15 +456,15 @@ def compute_metrics_on_dir(
         pred = pred_file.read(pred_file.frames)
         pred_sample_rate = float(pred_file.samplerate)
 
+    if target_sample_rate != pred_sample_rate:
+        raise ValueError("target and predicted audio must have the same sample rate")
     metrics = {
-        "mss": compute_mss(target, pred),
-        "wmfcc": compute_wmfcc(target, pred),
-        "sot": compute_sot(target, pred),
-        "rms": compute_rms(target, pred),
+        "mss": compute_mss(target, pred, target_sample_rate),
+        "wmfcc": compute_wmfcc(target, pred, target_sample_rate),
+        "sot": compute_sot(target, pred, target_sample_rate),
+        "rms": compute_rms(target, pred, target_sample_rate),
     }
     if renderer_backend == "pyfdn":
-        if target_sample_rate != pred_sample_rate:
-            raise ValueError("target and predicted pyFDN audio must have the same sample rate")
         metrics.update(
             {
                 "octave_rt60_log_rmse": compute_octave_rt60_log_rmse(
