@@ -498,7 +498,14 @@ class VSTFlowMatchingModule(LightningModule):
         return target
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return batch[self._conditioning_key]
+        conditioning = batch[self._conditioning_key]
+        if (
+            self._conditioning_key == "audio"
+            and conditioning.ndim == 3
+            and conditioning.shape[1] == 1
+        ):
+            return conditioning.squeeze(1)
+        return conditioning
 
     @jaxtyped(typechecker=beartype)
     def _sample_conditioning_keep_masks(

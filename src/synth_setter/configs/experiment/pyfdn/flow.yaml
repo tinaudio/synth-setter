@@ -19,6 +19,7 @@ model:
   encoder:
     frontend:
       in_dim: 176_400
+      sample_rate: 44_100
 
 callbacks:
   model_checkpoint:
