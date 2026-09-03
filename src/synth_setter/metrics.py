@@ -10,9 +10,72 @@ from scipy.optimize import linear_sum_assignment
 from torchmetrics import Metric
 
 if TYPE_CHECKING:
-    from synth_setter.data.vst.param_spec import ParamSpec
+    from synth_setter.data.vst.param_spec import DiscreteLiteralParameter, ParamSpec
 
 _NUMBER_VALUE_PATTERN = re.compile(r"[\s_.-]*\d+[\s_.-]*")
+
+
+def _scalar_midi_pitch_field(
+    param_spec: "ParamSpec",
+) -> tuple["DiscreteLiteralParameter", slice] | None:
+    from synth_setter.data.vst.param_spec import DiscreteLiteralParameter
+
+    pitch_fields = [
+        (parameter, span)
+        for parameter, span in param_spec.encoded_slices()
+        if parameter.name == "pitch"
+        and isinstance(parameter, DiscreteLiteralParameter)
+        and parameter.encoding == "scalar"
+    ]
+    return pitch_fields[0] if len(pitch_fields) == 1 else None
+
+
+def supports_midi_pitch_residuals(param_spec: "ParamSpec") -> bool:
+    """Return whether a spec has one scalar discrete MIDI pitch coordinate.
+
+    :param param_spec: Parameter schema to inspect.
+    :returns: True when signed MIDI residuals are defined for the schema.
+    """
+    return _scalar_midi_pitch_field(param_spec) is not None
+
+
+def midi_pitch_residuals(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Return signed continuous and quantized MIDI residuals in semitones.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec containing one scalar discrete parameter named ``pitch``.
+    :returns: Per-row predicted-minus-target residuals for each decoding policy.
+    :raises ValueError: Tensor shapes mismatch or the spec lacks one scalar discrete pitch.
+    """
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+    if predicted.shape[1] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
+        )
+
+    pitch_field = _scalar_midi_pitch_field(param_spec)
+    if pitch_field is None:
+        raise ValueError("expected a unique scalar discrete pitch parameter")
+
+    pitch, span = pitch_field
+    predicted_encoded = ((predicted[:, span].squeeze(1) + 1) / 2).clamp(0, 1)
+    target_encoded = (target[:, span].squeeze(1) + 1) / 2
+    pitch_span = pitch.max - pitch.min
+    predicted_midi = pitch.min + predicted_encoded * pitch_span
+    target_midi = torch.floor(pitch.min + target_encoded * pitch_span + 0.5)
+    return {
+        "continuous": predicted_midi - target_midi,
+        "floor": torch.floor(predicted_midi) - target_midi,
+        "nearest": torch.floor(predicted_midi + 0.5) - target_midi,
+    }
 
 
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):

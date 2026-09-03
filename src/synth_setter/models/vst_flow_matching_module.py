@@ -23,7 +23,9 @@ from synth_setter.metrics import (
     BestSwapParamMSE,
     NumberGroupSwapParamMSE,
     best_swap_per_param_mse,
+    midi_pitch_residuals,
     number_group_swap_per_param_mse,
+    supports_midi_pitch_residuals,
 )
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
@@ -350,7 +352,7 @@ class VSTFlowMatchingModule(LightningModule):
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
         :raises ValueError: ``audio_loss`` is combined with a nonzero
-            ``rectified_sigma_min`` or with ``compile=True`` (#2585).
+            ``rectified_sigma_min`` or ``compile=True`` (#2585).
         """
         super().__init__()
 
@@ -397,6 +399,12 @@ class VSTFlowMatchingModule(LightningModule):
             from synth_setter.data.vst import param_specs
 
             metric_spec = param_specs[param_spec]
+        self._metric_param_spec = metric_spec
+        self._pitch_metric_spec = (
+            metric_spec
+            if metric_spec is not None and supports_midi_pitch_residuals(metric_spec)
+            else None
+        )
         self.val_param_mse_number_group_swap = (
             NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
         )
@@ -825,6 +833,30 @@ class VSTFlowMatchingModule(LightningModule):
             control_tokens=self._control_token_branches_from_batch(batch),
         )
 
+    @jaxtyped(typechecker=beartype)
+    def _log_validation_pitch_residuals(
+        self,
+        predicted: Float[torch.Tensor, "batch params"],
+        target: Float[torch.Tensor, "batch params"],
+    ) -> None:
+        """Log row-weighted signed pitch residual means in semitones.
+
+        :param predicted: Sampled model-space parameter vectors.
+        :param target: Ground-truth model-space parameter vectors.
+        """
+        if self._pitch_metric_spec is None:
+            return
+        residuals = midi_pitch_residuals(predicted, target, self._pitch_metric_spec)
+        for decode_policy, values in residuals.items():
+            self.log(
+                f"val/pitch_residual_{decode_policy}_mean_semitones",
+                values.mean(),
+                on_step=False,
+                on_epoch=True,
+                batch_size=predicted.shape[0],
+                sync_dist=True,
+            )
+
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
@@ -836,6 +868,7 @@ class VSTFlowMatchingModule(LightningModule):
             control_tokens=self._control_token_branches_from_batch(batch),
         )
 
+        self._log_validation_pitch_residuals(pred_params, batch["params"])
         per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
         per_param_mse_best_swap = best_swap_per_param_mse(pred_params, batch["params"])
         per_param_mse_number_group_swap = None
