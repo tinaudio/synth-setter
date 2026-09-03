@@ -210,7 +210,11 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     [
         pytest.param(
             "train.yaml",
-            ["datamodule=pyfdn", "synth=pyfdn_n8_mono", "model=vst_flow"],
+            [
+                "datamodule=pyfdn",
+                "synth=pyfdn_n8_mono_householder",
+                "model=vst_flow",
+            ],
             id="datamodule",
         ),
         pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),

@@ -16,10 +16,8 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
-    PYFDN_N8_MONO_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
-from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import (
     iter_lance_column_rows,
@@ -35,24 +33,13 @@ from synth_setter.synth_spec import SynthName, SynthSpec
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    ("synth_name", "param_spec"),
-    [
-        ("pyfdn_n8_mono", PYFDN_N8_MONO_PARAM_SPEC),
-        ("pyfdn_n8_mono_householder", PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
-    ],
-)
-def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
-    tmp_path: Path,
-    synth_name: str,
-    param_spec: ParamSpec,
-) -> None:
+def test_pyfdn_acceptance_lance_reader_rerender_round_trip(tmp_path: Path) -> None:
     """A real accepted row survives storage and the production model-batch reader.
 
     :param tmp_path: Isolated destination for the production Lance writer.
-    :param synth_name: Registered pyFDN synth and parameter-spec name.
-    :param param_spec: Spec used to reproduce and decode the stored patch.
     """
+    synth_name = "pyfdn_n8_mono_householder"
+    param_spec = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
     render = RenderConfig(
         synth=SynthSpec(
             name=SynthName(synth_name),

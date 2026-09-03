@@ -50,8 +50,8 @@ def test_make_audio_renderer_pyfdn_returns_common_renderer() -> None:
             renderer_backend="pyfdn",
             pyfdn_excitation="impulse",
             synth={
-                "name": "pyfdn_n8_mono",
-                "param_spec_name": "pyfdn_n8_mono",
+                "name": "pyfdn_n8_mono_householder",
+                "param_spec_name": "pyfdn_n8_mono_householder",
                 "plugin_path": "pyfdn",
                 "plugin_state_path": "",
                 "synth_version": "0.4.2",

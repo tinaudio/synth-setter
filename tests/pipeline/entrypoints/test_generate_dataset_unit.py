@@ -1437,7 +1437,7 @@ class TestRun(RenderSeamFixtures):
             tmp_path,
             train_val_test_sizes=[1, 0, 0],
             render={
-                "synth": SYNTHS[SynthName("pyfdn_n8_mono")].model_dump(mode="json"),
+                "synth": SYNTHS[SynthName("pyfdn_n8_mono_householder")].model_dump(mode="json"),
                 "renderer_backend": "pyfdn",
                 "pyfdn_excitation": "impulse",
                 "sample_rate": 44_100,

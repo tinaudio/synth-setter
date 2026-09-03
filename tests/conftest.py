@@ -2582,6 +2582,93 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 # Lance datamodule smoke fixtures.
 
+_PYFDN_LANCE_SMOKE_MEL_SHAPE = (1, 128, 401)
+_PYFDN_LANCE_SMOKE_NUM_PARAMS = len(param_specs["pyfdn_n8_mono_householder"])
+
+
+def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int) -> None:
+    """Write one fixed-Householder pyFDN split for entrypoint tests.
+
+    :param path: Output ``.lance`` split.
+    :param seed: RNG seed distinguishing splits.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    rng = np.random.default_rng(seed)
+    write_lance_shard(
+        path,
+        {
+            "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
+            "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
+            "param_array": rng.random((1, _PYFDN_LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+        },
+    )
+
+
+@pytest.fixture
+def cfg_pyfdn_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step pyFDN flow run over fixed-Householder Lance rows.
+
+    :param tmp_path: Per-test dataset and output root.
+    :returns: Ready-to-run training configuration.
+    """
+    dataset_root = tmp_path / "pyfdn-lance-data"
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_pyfdn_lance_smoke_split(dataset_root / f"{split}.lance", seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+    (dataset_root / "dataset.complete").touch()
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=pyfdn/flow", "trainer=cpu"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.logger = None
+            cfg.training.val_audio_probe = False
+            cfg.test = False
+            cfg.trainer.max_epochs = 1
+            cfg.trainer.max_steps = 1
+            cfg.trainer.limit_train_batches = 1
+            cfg.trainer.limit_val_batches = 0
+            cfg.trainer.num_sanity_val_steps = 0
+            cfg.trainer.log_every_n_steps = 1
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.ot = False
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.pin_memory = False
+            cfg.model.compile = False
+            cfg.model.scheduler = None
+            cfg.model.encoder.backbone.hidden_dim = 2
+            cfg.model.encoder.backbone.out_dim = 16
+            cfg.model.encoder.backbone.num_blocks = 1
+            cfg.model.vector_field.d_model = 16
+            cfg.model.vector_field.num_heads = 1
+            cfg.model.vector_field.d_ff = 16
+            cfg.model.vector_field.num_layers = 1
+            cfg.model.vector_field.projection.num_tokens = 2
+            cfg.model.validation_sample_steps = 1
+            cfg.model.test_sample_steps = 1
+            cfg.callbacks.model_checkpoint.save_top_k = 0
+            cfg.callbacks.model_checkpoint.save_last = True
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
+
+    GlobalHydra.instance().clear()
+    return cfg
+
+
 # vst_ffn's AST net hard-codes the production mel shape and channel count, so the
 # Lance smoke fixture must carry production-shaped mel rows; everything else is tiny.
 _LANCE_SMOKE_MEL_SHAPE = (2, 128, 401)

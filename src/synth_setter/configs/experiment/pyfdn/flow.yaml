@@ -2,7 +2,7 @@
 
 defaults:
   - override /datamodule: pyfdn
-  - override /synth: pyfdn_n8_mono
+  - override /synth: pyfdn_n8_mono_householder
   - override /render: pyfdn
   - override /model: vst_flow
   - override /conditioning: log_mel

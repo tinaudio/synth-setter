@@ -284,6 +284,7 @@ def test_from_hydra_pyfdn_householder_writes_consumable_shard(
     spec = spec_from_cfg(cfg_dataset_pyfdn_householder)
     from_hydra(cfg_dataset_pyfdn_householder)
 
+    assert spec.render.param_spec_name == "pyfdn_n8_mono_householder"
     assert spec.num_params == 27
     shard = spec.shards[0]
     assert shard_has_complete_attempt(spec, shard.shard_id)
