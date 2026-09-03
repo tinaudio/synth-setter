@@ -166,7 +166,7 @@ portable `make` targets instead. No new code references SGE.
 ### Non-Goals
 
 - **Training pipeline changes.** This doc covers eval and R2 integration only. Training orchestration is a separate concern.
-- **Custom metric development.** Existing metrics (MSS, wMFCC, SOT, RMS) are fixed. Adding new metrics is future work.
+- **Metric-framework redesign.** Backend-specific metrics may extend the existing CSV contract without replacing its parallel computation or aggregation model.
 
 ## 4. System Overview
 
@@ -322,14 +322,17 @@ is isolated and receives the complete `RenderConfig` for every backend.
 | **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std)                           |
 | **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`) |
 
-Four metrics are computed for each (predicted, target) audio pair:
+Four metrics are computed for every (predicted, target) audio pair. Passing
+`--renderer-backend pyfdn` adds two impulse-response metrics:
 
-| Metric    | Full Name                  | Method                                       | Range     |
-| --------- | -------------------------- | -------------------------------------------- | --------- |
-| **MSS**   | Multi-Scale Spectrogram    | L1 on mel spectrograms at 3 time scales      | \[0, ∞) ↓ |
-| **wMFCC** | Weighted MFCC              | DTW cost between MFCC sequences              | \[0, ∞) ↓ |
-| **SOT**   | Spectral Optimal Transport | Wasserstein distance on normalized STFT bins | \[0, ∞) ↓ |
-| **RMS**   | RMS Amplitude Envelope     | Cosine similarity of RMS envelopes           | [-1, 1] ↑ |
+| Metric                   | Full Name                     | Method                                              | Range     |
+| ------------------------ | ----------------------------- | --------------------------------------------------- | --------- |
+| **MSS**                  | Multi-Scale Spectrogram       | L1 on mel spectrograms at 3 time scales             | \[0, ∞) ↓ |
+| **wMFCC**                | Weighted MFCC                 | DTW cost between MFCC sequences                     | \[0, ∞) ↓ |
+| **SOT**                  | Spectral Optimal Transport    | Wasserstein distance on normalized STFT bins        | \[0, ∞) ↓ |
+| **RMS**                  | RMS Amplitude Envelope        | Cosine similarity of RMS envelopes                  | [-1, 1] ↑ |
+| **octave_rt60_log_rmse** | Octave-band RT60 log-RMSE     | RMSE of valid paired natural-log RT60 estimates     | \[0, ∞) ↓ |
+| **octave_edc_rmse_db**   | Octave-band energy-decay RMSE | pyFDN `MatchEnergyDecay` over target-valid EDC bins | \[0, ∞) ↓ |
 
 **Key behaviors:**
 
@@ -337,6 +340,10 @@ Four metrics are computed for each (predicted, target) audio pair:
 - Audio loaded via `pedalboard.io.AudioFile` at native sample rate
 - MSS uses three windows: 10ms, 25ms, 100ms (hops: 5ms, 10ms, 50ms)
 - Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
+- pyFDN RT60 excludes bands where either estimate is zero or non-finite; no valid
+  paired bands fail the probe rather than logging a non-finite value
+- `MatchEnergyDecay` runs under `torch.no_grad()` as an evaluation metric and is
+  not part of the training objective
 
 ## 6. R2 Integration
 
