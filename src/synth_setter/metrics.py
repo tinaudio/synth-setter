@@ -78,6 +78,63 @@ def midi_pitch_residuals(
     }
 
 
+def spec_quantized_per_param_mse(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> torch.Tensor:
+    """Return MSE after predictions snap to values used by the renderer.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining clipping and discrete parameter values.
+    :returns: Per-encoded-column mean squared error shaped ``(num_params,)``.
+    :raises ValueError: Tensor shapes or the ParamSpec width do not match.
+    """
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+    if predicted.shape[1] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
+        )
+
+    from synth_setter.data.vst.param_spec import (
+        CategoricalParameter,
+        DiscreteArrayParameter,
+        DiscreteLiteralParameter,
+    )
+
+    effective_encoded = ((predicted.float() + 1) / 2).clamp(0, 1)
+    for parameter, span in param_spec.encoded_slices():
+        values = effective_encoded[:, span]
+        is_onehot = isinstance(parameter, (CategoricalParameter, DiscreteLiteralParameter)) and (
+            parameter.encoding == "onehot"
+        )
+        if is_onehot:
+            quantized = torch.zeros_like(values)
+            quantized.scatter_(1, values.argmax(dim=1, keepdim=True), 1)
+            effective_encoded[:, span] = quantized
+        elif isinstance(parameter, CategoricalParameter):
+            levels = values.new_tensor(parameter.raw_values)
+            nearest = (values - levels).abs().argmin(dim=1)
+            effective_encoded[:, span] = levels[nearest].unsqueeze(1)
+        elif isinstance(parameter, DiscreteLiteralParameter):
+            native = values * (parameter.max - parameter.min) + parameter.min
+            effective_encoded[:, span] = (native.trunc() - parameter.min) / (
+                parameter.max - parameter.min
+            )
+        elif isinstance(parameter, DiscreteArrayParameter):
+            native = values * (parameter.max - parameter.min) + parameter.min
+            effective_encoded[:, span] = (native.round() - parameter.min) / (
+                parameter.max - parameter.min
+            )
+
+    effective_model = effective_encoded * 2 - 1
+    return (effective_model - target.float()).square().mean(dim=0)
+
+
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):
     squared_modulus = z.real.square() + z.imag.square()
     clamped = torch.clamp(squared_modulus, min=eps)

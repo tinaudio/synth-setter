@@ -165,6 +165,35 @@ def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:
     assert df["pred_effective"].equals(df["pred"])
 
 
+def test_params_to_csv_writes_spec_quantized_effective_synth_value(tmp_path: Path) -> None:
+    """The effective column records the quantized value used by the audio render.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    pred_s, pred_n = _sample_param_dicts(seed=0)
+    effective_n: NoteParams = {
+        **pred_n,
+        "pitch": pred_n["pitch"] + 1,
+    }
+    out = tmp_path / "params.csv"
+
+    params_to_csv(
+        None,
+        None,
+        pred_s,
+        pred_n,
+        str(out),
+        _PARAM_SPEC,
+        pred_effective_synth_params=pred_s,
+        pred_effective_note_params=effective_n,
+        pred_effective_note_window=pred_n["note_start_and_end"],
+    )
+
+    df = pd.read_csv(out, index_col=0)
+    assert int(df.at["pitch", "pred"]) == pred_n["pitch"]
+    assert int(df.at["pitch", "pred_effective"]) == effective_n["pitch"]
+
+
 def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> None:
     """``None`` target params (the CLI's ``--no-params`` path) leave an all-NaN target column.
 

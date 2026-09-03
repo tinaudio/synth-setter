@@ -6,6 +6,7 @@ structured middle bound ``best_swap <= number_group_swap <= param_mse``.
 
 from __future__ import annotations
 
+import math
 from functools import partial
 
 import torch
@@ -180,6 +181,19 @@ def test_validation_loop_logs_per_param_best_swap() -> None:
     metrics = trainer.validate(module, dataloaders=loader)[0]
 
     assert "per_param_mse_best_swap/note_start_and_end" in metrics
+
+
+def test_validation_loop_logs_spec_quantized_metrics() -> None:
+    """The callback publishes scalar and per-parameter rendered-value errors."""
+    spec = param_specs["surge_4"]
+    module = _flow_module(spec.encoded_width, param_spec="surge_4")
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE("surge_4")])
+
+    metrics = trainer.validate(module, dataloaders=loader)[0]
+
+    assert math.isfinite(metrics["val/param_mse_spec_quantized"])
+    assert math.isfinite(metrics["per_param_mse_spec_quantized/a_amp_eg_attack"])
 
 
 def test_test_loop_logs_number_group_swap() -> None:

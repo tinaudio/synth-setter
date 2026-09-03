@@ -1905,7 +1905,10 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
         cfg_surge_real_train.trainer.num_sanity_val_steps = 0
 
     HydraConfig().set_config(cfg_surge_real_train)
-    _, object_dict = train(cfg_surge_real_train)
+    metric_dict, object_dict = train(cfg_surge_real_train)
+
+    assert metric_dict["val/param_mse_spec_quantized"].item() == 0.0
+    assert metric_dict["per_param_mse_spec_quantized/a_amp_eg_attack"].item() == 0.0
 
     probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
     assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"
@@ -1927,6 +1930,10 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             wav = sample_dir / wav_name
             assert wav.is_file(), f"{wav} was not rendered"
             assert wav.stat().st_size > 0, f"{wav} is empty"
+        rendered_params = pd.read_csv(sample_dir / "params.csv", index_col=0)
+        assert rendered_params.at["a_amp_eg_attack", "pred_effective"] == pytest.approx(
+            rendered_params.at["a_amp_eg_attack", "target"]
+        )
 
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
