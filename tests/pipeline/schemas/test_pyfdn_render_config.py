@@ -37,6 +37,21 @@ def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
     return values
 
 
+def test_pyfdn_render_config_accepts_fixed_hadamard_identity() -> None:
+    """The fixed-feedback spec routes through the existing native renderer."""
+    synth = {
+        "name": "pyfdn_n8_mono_hadamard",
+        "param_spec_name": "pyfdn_n8_mono_hadamard",
+        "plugin_path": "pyfdn",
+        "plugin_state_path": "",
+        "synth_version": "0.4.2",
+    }
+
+    render = RenderConfig.model_validate(_pyfdn_render_kwargs(synth=synth))
+
+    assert render.param_spec_name == "pyfdn_n8_mono_hadamard"
+
+
 def test_pyfdn_render_config_uses_existing_renderer_stubs() -> None:
     """PyFDN supplies fixed values required by the MIDI-shaped contract."""
     render = RenderConfig.model_validate(_pyfdn_render_kwargs())

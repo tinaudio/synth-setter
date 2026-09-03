@@ -127,6 +127,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
     ),
     "obxf": ("obxf", "plugins/OB-Xf.vst3", "presets/obxf-base.vstpreset", "1.0.3"),
     "pyfdn_n8_mono": ("pyfdn_n8_mono", "pyfdn", "", "0.4.2"),
+    "pyfdn_n8_mono_hadamard": (
+        "pyfdn_n8_mono_hadamard",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
     "torchsynth_adsr": ("torchsynth_adsr", "torchsynth", "", "1.0.2"),
     "torchsynth_full": ("torchsynth_full", "torchsynth", "", "1.0.2"),
     "torchsynth_simple": ("torchsynth_simple", "torchsynth", "", "1.0.2"),
