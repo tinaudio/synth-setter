@@ -55,8 +55,12 @@ jobs:
           if [[ "${IS_MANUAL}" == "true" ]]; then
             pull_request=$(gh api \
               "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
-            should_review=$(python agent/_shared/is_trusted_pi_review_pr.py \
-              --repository "${GITHUB_REPOSITORY}" <<< "${pull_request}")
+            if python agent/_shared/is_trusted_pi_review_pr.py \
+              --repository "${GITHUB_REPOSITORY}" <<< "${pull_request}"; then
+              should_review=true
+            else
+              should_review=false
+            fi
           else
             reviews=$(gh api --paginate --slurp \
               "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
