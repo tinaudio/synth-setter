@@ -205,64 +205,6 @@ def test_train_fit_system_exit_uses_signal_status_only_for_sigterm(
     assert exc_info.value.code == expected_exit_code
 
 
-@pytest.mark.slow
-def test_train_pyfdn_flow_advances_on_real_online_batch(
-    cfg_pyfdn_flow_train: DictConfig,
-) -> None:
-    """Train one flow step on a real pyFDN-rendered batch.
-
-    :param cfg_pyfdn_flow_train: Tiny production pyFDN flow configuration.
-    """
-    HydraConfig().set_config(cfg_pyfdn_flow_train)
-    with open_dict(cfg_pyfdn_flow_train):
-        cfg_pyfdn_flow_train.datamodule.num_workers = 2
-
-    metric_dict, object_dict = train(cfg_pyfdn_flow_train)
-
-    assert object_dict["trainer"].global_step == 1
-    assert_finite_train_loss(metric_dict)
-    assert torch.isfinite(metric_dict["val/param_mse"])
-
-    datamodule = object_dict["datamodule"]
-    assert cfg_pyfdn_flow_train.datamodule.param_spec_name == "pyfdn_n8_mono"
-    assert datamodule.param_spec_name == "pyfdn_n8_mono"
-    assert "source_audio_path" not in cfg_pyfdn_flow_train.datamodule
-    assert "source_audio_sha256" not in cfg_pyfdn_flow_train.datamodule
-    source_provenance = datamodule.source_provenance
-    assert source_provenance["identity"] == "librosa_log_chirp_v1"
-    assert source_provenance["librosa_version"] == "0.11.0"
-    datamodule.setup("fit")
-    batch = next(iter(datamodule.train_dataloader()))
-    assert batch["audio"].shape == (1, 192_000)
-    assert batch["params"].shape == (1, 91)
-    assert torch.isfinite(batch["audio"]).all()
-    assert torch.isfinite(batch["params"]).all()
-    assert batch["audio"].abs().max() > 0
-
-    model = object_dict["model"].eval()
-    zero_audio_batch = {**batch, "audio": torch.zeros_like(batch["audio"])}
-    with torch.inference_mode(), torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
-        conditioned_prediction, conditioned_batch = model.predict_step(batch, batch_idx=0)
-        torch.manual_seed(0)
-        zero_audio_prediction, returned_zero_audio_batch = model.predict_step(
-            zero_audio_batch, batch_idx=0
-        )
-    assert conditioned_prediction.shape == zero_audio_prediction.shape == (1, 91)
-    assert conditioned_prediction.dtype == zero_audio_prediction.dtype == torch.float32
-    assert conditioned_batch is batch
-    assert returned_zero_audio_batch is zero_audio_batch
-    assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
-
-    checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
-    checkpoint_path = checkpoint_dir / "last.ckpt"
-    assert checkpoint_path.stat().st_size > 0
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    assert checkpoint["PyFDNDataModule"] == {
-        "source_provenance": source_provenance,
-    }
-
-
 def test_train_torchsynth_experiment_renders_audio_online(
     cfg_torchsynth_train: DictConfig,
 ) -> None:

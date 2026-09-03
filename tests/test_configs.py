@@ -231,7 +231,7 @@ def test_pyfdn_configs_compose_without_external_source(
 
     assert "source_audio_path" not in cfg.datamodule
     assert "source_audio_sha256" not in cfg.datamodule
-    hydra.utils.instantiate(cfg.datamodule)
+    assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
 
 
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:

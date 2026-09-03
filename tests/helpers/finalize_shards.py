@@ -136,16 +136,7 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
     :param render: Render config supplying the sidecar field values.
     :returns: Strict ``ShardMetadata`` with every render-derived field filled.
     """
-    return ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-        base_seed=render.base_seed,
-        sample_offset=render.sample_offset,
-        attempts_per_sample=render.attempts_per_sample,
-    )
+    return render.shard_metadata()
 
 
 def write_minimal_lance_shard(

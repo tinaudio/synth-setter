@@ -1,0 +1,16 @@
+renderer_backend: pyfdn
+sample_rate: 44_100
+channels: 1
+velocity: 0
+signal_duration_seconds: 4.0
+min_loudness: -55.0
+audio_dtype: float32
+mel_spec_dtype: float32
+samples_per_shard: 100
+samples_per_render_batch: 8
+max_retries: 0
+parallel: false
+retain_local_shards: true
+param_sample_cadence: sample
+plugin_reload_cadence: render
+gui_toggle_cadence: never

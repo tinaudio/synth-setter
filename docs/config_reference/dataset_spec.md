@@ -15,6 +15,12 @@ Nested under `DatasetSpec.render`:
 
 ::: synth_setter.pipeline.schemas.spec.RenderConfig
 
+`renderer_backend: pyfdn` selects the canonical in-process pyFDN source. It
+uses fixed zero-valued MIDI compatibility inputs with the common `AudioRenderer`,
+fixes source geometry to mono 44.1 kHz / 176400 frames, and stores accepted audio
+as float32. The source is generated locally; no source path, checksum input, R2
+download, or SkyPilot mount is part of the spec.
+
 Nested entries inside the computed `DatasetSpec.shards` tuple:
 
 ::: synth_setter.pipeline.schemas.spec.ShardSpec

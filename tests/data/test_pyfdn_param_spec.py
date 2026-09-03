@@ -150,7 +150,10 @@ def test_pyfdn_spec_same_seed_samples_same_patch() -> None:
     first, first_notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(123))
     second, second_notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(123))
 
-    assert first_notes == second_notes == {}
+    assert first_notes == second_notes == {
+        "pitch": 0,
+        "note_start_and_end": (0.0, 0.0),
+    }
     for name in first:
         np.testing.assert_array_equal(first[name], second[name])
 
@@ -218,7 +221,7 @@ def test_pyfdn_spec_encoding_is_float32_and_round_trips_native_fields() -> None:
 
     assert encoded.shape == (91,)
     assert encoded.dtype == np.float32
-    assert decoded_notes == {}
+    assert decoded_notes == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
     np.testing.assert_array_equal(decoded["delays"], params["delays"])
     for name in (
         "feedback_matrix",

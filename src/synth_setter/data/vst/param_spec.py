@@ -441,7 +441,7 @@ def require_scalar_synth_params(values: Mapping[str, ParameterValue]) -> dict[st
     return result
 
 
-def require_note_params(values: Mapping[str, ParameterValue]) -> NoteParams:
+def require_note_params(values: Mapping[str, object]) -> NoteParams:
     """Validate and normalize the complete MIDI mapping for a renderer.
 
     :param values: Renderer-native note values decoded by a generic parameter spec.

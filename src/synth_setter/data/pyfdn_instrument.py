@@ -30,7 +30,8 @@ from synth_setter.data.pyfdn_source import (
     _canonical_pyfdn_source_provenance,
     generate_canonical_pyfdn_source,
 )
-from synth_setter.data.vst.param_spec import ParameterValue, ParameterValues
+from synth_setter.data.vst.param_spec import ParameterValue
+from synth_setter.data.vst.renderers import AudioRenderer
 
 _PYFDN_VERSION = "0.4.2"
 _SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
@@ -153,7 +154,7 @@ def _build_decay_fdn(
 
 
 def params_to_fdn_build(
-    params: ParameterValues,
+    params: Mapping[str, ParameterValue],
     *,
     sample_rate: float,
 ) -> FDNBuild:
@@ -164,14 +165,14 @@ def params_to_fdn_build(
         ``direct_matrix`` float64 ``(1, 1)``, positive ``delays`` int64 ``(8,)``,
         and finite scalar DC and Nyquist reverberation times in seconds; every array
         must contain only finite values.
-    :param sample_rate: Processing rate in Hz; exactly ``48000.0``.
+    :param sample_rate: Processing rate in Hz; exactly ``44100.0``.
     :returns: Native build with derived ``post_delay`` SOS and no other post hooks.
     :raises ValueError: Keys, shapes, values, delays, or sample rate violate the contract.
     """
     if set(params) != _REQUIRED_KEYS:
         raise ValueError(f"params must contain exactly {sorted(_REQUIRED_KEYS)}")
     if sample_rate != _SAMPLE_RATE:
-        raise ValueError("sample_rate must be exactly 48000.0")
+        raise ValueError("sample_rate must be exactly 44100.0")
 
     arrays = {
         name: _require_array(name, params[name], shape=shape, dtype=dtype)
@@ -204,15 +205,45 @@ def _validate_version(synth_version: str) -> None:
         )
 
 
-class PyFDNRenderer:
-    """Render the canonical procedural source through native pyFDN patches."""
+class PyFDNRenderer(AudioRenderer):
+    """Render the canonical procedural source through the common audio contract."""
 
-    def __init__(self, *, synth_version: str = _PYFDN_VERSION) -> None:
+    def __init__(
+        self,
+        *,
+        synth_version: str = _PYFDN_VERSION,
+        plugin_path: str = "pyfdn",
+        sample_rate: float = _SAMPLE_RATE,
+        channels: int = _CHANNELS,
+        signal_duration_seconds: float = _SIGNAL_LENGTH / _SAMPLE_RATE,
+        plugin_state_path: str | None = None,
+    ) -> None:
         """Generate the immutable source for this process-local renderer.
 
         :param synth_version: Required installed pyFDN version.
+        :param plugin_path: Required in-process backend sentinel.
+        :param sample_rate: Required canonical source sample rate.
+        :param channels: Required mono output channel count.
+        :param signal_duration_seconds: Required canonical source duration.
+        :param plugin_state_path: Required empty preset path.
+        :raises ValueError: The requested render geometry or artifact identity drifts.
         """
         _validate_version(synth_version)
+        if (
+            plugin_path != "pyfdn"
+            or sample_rate != _SAMPLE_RATE
+            or channels != _CHANNELS
+            or signal_duration_seconds != _SIGNAL_LENGTH / _SAMPLE_RATE
+            or plugin_state_path not in (None, "")
+        ):
+            raise ValueError("pyFDN renderer requires its canonical source contract")
+        super().__init__(
+            plugin_path=plugin_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            signal_duration_seconds=signal_duration_seconds,
+            plugin_state_path=plugin_state_path,
+        )
         self._source_audio = generate_canonical_pyfdn_source()
         self._source_provenance = _canonical_pyfdn_source_provenance(self._source_audio)
 
@@ -225,15 +256,26 @@ class PyFDNRenderer:
         return self._source_provenance.copy()
 
     def render(
-        self, params: ParameterValues
-    ) -> Float32[np.ndarray, "1 192000"]:
+        self,
+        params: Mapping[str, ParameterValue],
+        midi_note: int = 0,
+        velocity: int = 0,
+        note_start_and_end: tuple[float, float] = (0.0, 0.0),
+        *,
+        warmup: bool = False,
+    ) -> Float32[np.ndarray, "1 176400"]:
         """Process the fixed source through one exact patch with fresh recursion state.
 
         :param params: Native order-8 mono pyFDN arrays.
-        :returns: Contiguous finite channel-first float32 audio shaped ``(1, 192000)``; native
+        :param midi_note: Ignored compatibility stub.
+        :param velocity: Ignored compatibility stub.
+        :param note_start_and_end: Ignored compatibility stub.
+        :param warmup: Ignored compatibility stub.
+        :returns: Contiguous finite channel-first float32 audio shaped ``(1, 176400)``; native
             amplitude is preserved without clipping or normalization.
         :raises ValueError: The patch or rendered audio violates the fixed contract.
         """
+        del midi_note, velocity, note_start_and_end, warmup
         build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
         post_delay = cast(np.ndarray, build.post_delay)
         output = process_fdn(
