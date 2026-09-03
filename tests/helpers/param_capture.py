@@ -1,6 +1,6 @@
 """Lightning callback recording parameter targets consumed during training."""
 
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import torch
 from lightning import Callback, LightningModule, Trainer
@@ -20,7 +20,7 @@ class ParamCaptureCallback(Callback):
         self,
         trainer: Trainer,
         pl_module: LightningModule,
-        outputs: Any,
+        outputs: object,
         batch: dict[str, torch.Tensor | None],
         batch_idx: int,
     ) -> None:

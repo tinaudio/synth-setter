@@ -560,13 +560,35 @@ def test_prepare_batch_normalizes_mel_only_when_mean_and_std_set(
     assert torch.allclose(out, torch.full_like(out, expected))
 
 
-def test_prepare_batch_param_jitter_draws_bounded_clipped_offsets() -> None:
-    """Parameter jitter stays within its offset and encoded-domain bounds."""
+def test_prepare_batch_param_jitter_respects_configured_offset_bound() -> None:
+    """Interior parameters move by no more than the configured magnitude."""
+    raw = _make_raw(read_mel=False)
+    raw["param_array"] = np.full((32, 3), 0.5, dtype=np.float32)
+    source = torch.from_numpy(raw["param_array"])
+    amount = 0.01
+
+    params = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=amount,
+        )["params"]
+    )
+
+    assert torch.any(params != source)
+    assert torch.all(torch.abs(params - source) <= amount + torch.finfo(torch.float32).eps)
+
+
+def test_prepare_batch_param_jitter_clips_to_encoded_domain() -> None:
+    """Large boundary-crossing offsets clip to the encoded domain."""
     raw = _make_raw(read_mel=False)
     raw["param_array"] = np.tile(
-        np.array([[0.0, 0.5, 1.0]], dtype=np.float32), (32, 1)
+        np.array([[0.0, 1.0]], dtype=np.float32), (32, 1)
     )
-    source = torch.from_numpy(raw["param_array"])
 
     params = _unwrap(
         prepare_batch(
@@ -580,8 +602,6 @@ def test_prepare_batch_param_jitter_draws_bounded_clipped_offsets() -> None:
         )["params"]
     )
 
-    assert torch.any(params != source)
-    assert torch.all(torch.abs(params - source) <= 1.0)
     assert params.min() == 0.0
     assert params.max() == 1.0
 

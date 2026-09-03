@@ -1,14 +1,13 @@
 """Shared VST datamodule configuration and model-batch preparation."""
 
 from collections.abc import Mapping, Sequence
-from math import isfinite
 from pathlib import Path
 from typing import NotRequired, Self, TypedDict
 
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
     NUM_SKETCH_TRACK_ROWS,
@@ -99,14 +98,23 @@ def _sketch_range_validation_error(sketch: np.ndarray | None) -> str | None:
     return None
 
 
+class _ParamJitterConfig(BaseModel, frozen=True, strict=True):
+    """Validate the jitter value crossing the Hydra configuration boundary.
+
+    .. attribute :: param_jitter_amount
+
+        Maximum absolute offset in the normalized ``[0, 1]`` domain.
+    """
+
+    param_jitter_amount: float = Field(ge=0, le=1)
+
+
 def _validate_param_jitter_amount(amount: float) -> None:
-    """Validate jitter as a finite encoded-domain fraction.
+    """Reject jitter values outside the strict normalized-domain contract.
 
     :param amount: Maximum absolute offset in the normalized ``[0, 1]`` domain.
-    :raises ValueError: If ``amount`` is outside ``[0, 1]``.
     """
-    if not isfinite(amount) or not 0 <= amount <= 1:
-        raise ValueError("param_jitter_amount must be within [0, 1]")
+    _ParamJitterConfig(param_jitter_amount=amount)
 
 
 def prepare_batch(

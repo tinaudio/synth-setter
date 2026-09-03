@@ -829,6 +829,7 @@ class TestLanceMapDataModuleFlows:
         """
         train_source = make_shard_columns(16, seed=1)["param_array"] * 2 - 1
         val_source = make_shard_columns(6, seed=2)["param_array"] * 2 - 1
+        test_source = make_shard_columns(6, seed=3)["param_array"] * 2 - 1
         with _set_up_map_module(
             dataset_root=dataset_root,
             batch_size=4,
@@ -837,6 +838,8 @@ class TestLanceMapDataModuleFlows:
         ) as module:
             train_epoch = _params_in_order(module.train_dataloader())
             val_epoch = _params_in_order(module.val_dataloader())
+            test_epoch = _params_in_order(module.test_dataloader())
+            predict_epoch = _params_in_order(module.predict_dataloader())
 
         assert train_epoch.min() >= -1.0
         assert train_epoch.max() <= 1.0
@@ -844,8 +847,12 @@ class TestLanceMapDataModuleFlows:
         source_order = np.lexsort(train_source.T[::-1])
         assert not np.array_equal(train_epoch[train_order], train_source[source_order])
         np.testing.assert_array_equal(val_epoch, val_source)
+        np.testing.assert_array_equal(test_epoch, test_source)
+        np.testing.assert_array_equal(predict_epoch, test_source)
 
-    @pytest.mark.parametrize("amount", [-0.001, 1.001, 1e100, float("inf"), float("nan")])
+    @pytest.mark.parametrize(
+        "amount", [-0.001, 1.001, 1e100, float("inf"), float("nan"), True]
+    )
     def test_param_jitter_invalid_amount_raises_value_error(
         self, dataset_root: Path, amount: float
     ) -> None:
