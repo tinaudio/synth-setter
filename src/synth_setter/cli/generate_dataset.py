@@ -103,6 +103,7 @@ _X_GET_PROPERTY_SIGNATURE = b"20 (X_GetProperty)"
 # Full Lance validation can hold a multi-GiB shard resident; cap that peak to one shard
 # per process while rendering, staging, and cleanup remain independently parallel.
 _FULL_SHARD_VALIDATION_LOCK = threading.Lock()
+_MAX_PARALLEL_SHARD_WORKERS = 16
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -591,7 +592,8 @@ def _dispatch_shards_parallel(
 ) -> tuple[int, int, RenderRejectionMetrics]:
     """Render+upload owned shards concurrently via a ``ThreadPoolExecutor``.
 
-    Pool size is ``min(max(1, available_cpus() // 2), len(my_range))``. The
+    Pool size is capped at ``_MAX_PARALLEL_SHARD_WORKERS`` after halving the
+    available CPU count and limiting concurrency to the owned shard count. The
     heuristic halves the CPU count to leave headroom for each renderer
     subprocess's own intra-process threading (pedalboard / librosa / BLAS).
 
@@ -614,7 +616,7 @@ def _dispatch_shards_parallel(
         byte size + render duration land in wandb history.
     :returns: Rendered/skipped shard counts and rejection totals over ``my_range``.
     """
-    workers = min(max(1, available_cpus() // 2), len(my_range))
+    workers = min(_MAX_PARALLEL_SHARD_WORKERS, max(1, available_cpus() // 2), len(my_range))
     logger.info(f"parallel dispatch: workers={workers} shards={len(my_range)}")
     rendered = 0
     skipped = 0
@@ -829,7 +831,11 @@ def _dispatch_shards_from_claims_parallel(
     :raises BaseException: Claim, render, or completion fails after successful peers drain.
     :raises BaseExceptionGroup: Primary and peer-completion failures both occur.
     """
-    workers = min(max(1, available_cpus() // 2), spec.num_shards)
+    workers = min(
+        _MAX_PARALLEL_SHARD_WORKERS,
+        max(1, available_cpus() // 2),
+        spec.num_shards,
+    )
     logger.info(f"parallel claims dispatch: workers={workers} shards={spec.num_shards}")
     pending = iter(lambda: _claim_next_shard(claims, spec), None)
     rendered = 0

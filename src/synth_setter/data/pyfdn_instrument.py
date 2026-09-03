@@ -1,19 +1,15 @@
-"""Native pyFDN build conversion and fixed-source instrument rendering.
+"""Native pyFDN build conversion and canonical-source instrument rendering.
 
 Example:
-    ``PyFDNRenderer(source_path, sha256).render(native_params)`` returns channel-first audio.
+    ``PyFDNRenderer().render(native_params)`` returns channel-first audio.
 """
 
-import hashlib
-import io
 from collections.abc import Mapping
 from importlib.metadata import version
 from numbers import Real
-from pathlib import Path
 from typing import cast
 
 import numpy as np
-import soundfile as sf
 from jaxtyping import Float32
 from pyFDN import FDNBuild, build_set_decay, process_fdn
 from pyFDN.td import SOSBank
@@ -26,14 +22,20 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_MIN_SECONDS,
     PYFDN_RT_NYQUIST_NAME,
 )
+from synth_setter.data.pyfdn_source import (
+    PYFDN_SOURCE_CHANNELS,
+    PYFDN_SOURCE_SAMPLE_RATE_HZ,
+    PYFDN_SOURCE_TOTAL_FRAMES,
+    PyFDNSourceProvenance,
+    _canonical_pyfdn_source_provenance,
+    generate_canonical_pyfdn_source,
+)
 from synth_setter.data.vst.param_spec import ParameterValue, ParameterValues
 
 _PYFDN_VERSION = "0.4.2"
-_SAMPLE_RATE = 48_000.0
-_CHANNELS = 1
-_SIGNAL_DURATION_SECONDS = 4.0
-_SIGNAL_LENGTH = 192_000
-_LOSSLESS_WAV_FLOAT_SUBTYPES = frozenset({"FLOAT", "DOUBLE"})
+_SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
+_CHANNELS = PYFDN_SOURCE_CHANNELS
+_SIGNAL_LENGTH = PYFDN_SOURCE_TOTAL_FRAMES
 _POST_DELAY_SOS_SHAPE = (1, 6, PYFDN_ORDER)
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
@@ -202,105 +204,25 @@ def _validate_version(synth_version: str) -> None:
         )
 
 
-def _validate_geometry(
-    sample_rate: int, channels: int, signal_duration_seconds: float
-) -> None:
-    """Require the fixed F1 source geometry.
-
-    :param sample_rate: Candidate source rate in Hz.
-    :param channels: Candidate source channel count.
-    :param signal_duration_seconds: Candidate source duration in seconds.
-    :raises ValueError: Any geometry field differs from the fixed contract.
-    """
-    if (
-        sample_rate != _SAMPLE_RATE
-        or channels != _CHANNELS
-        or signal_duration_seconds != _SIGNAL_DURATION_SECONDS
-    ):
-        raise ValueError("pyFDN renderer geometry is fixed at 48 kHz mono for 4 seconds")
-
-
-def _load_source(
-    path: Path,
-    source_audio_sha256: str,
-    *,
-    sample_rate: int,
-    channels: int,
-) -> np.ndarray:
-    """Validate and decode the exact checksum-verified source bytes.
-
-    :param path: Path read once to obtain the immutable source bytes.
-    :param source_audio_sha256: Expected SHA-256 of those bytes.
-    :param sample_rate: Required decoded sample rate in Hz.
-    :param channels: Required decoded channel count.
-    :returns: Contiguous mono float64 samples shaped ``(192000,)``.
-    :raises ValueError: Checksum, metadata, shape, or samples violate the fixed contract.
-    """
-    source_bytes = path.read_bytes()
-    actual_checksum = hashlib.sha256(source_bytes).hexdigest()
-    if actual_checksum != source_audio_sha256.lower():
-        raise ValueError("source audio SHA-256 does not match source_audio_sha256")
-
-    info = sf.info(io.BytesIO(source_bytes))
-    is_lossless_wav = info.format == "WAV" and (
-        info.subtype.startswith("PCM_") or info.subtype in _LOSSLESS_WAV_FLOAT_SUBTYPES
-    )
-    if not is_lossless_wav:
-        raise ValueError(
-            "source audio must use a lossless WAV subtype, "
-            f"got {info.format}/{info.subtype}"
-        )
-    if info.samplerate != sample_rate:
-        raise ValueError(f"source sample rate must be {sample_rate}, got {info.samplerate}")
-    if info.channels != channels:
-        raise ValueError(f"source channels must be {channels}, got {info.channels}")
-    if info.frames != _SIGNAL_LENGTH:
-        raise ValueError(f"source frames must be {_SIGNAL_LENGTH}, got {info.frames}")
-
-    decoded, decoded_rate = sf.read(
-        io.BytesIO(source_bytes), dtype="float64", always_2d=True
-    )
-    if decoded_rate != sample_rate:
-        raise ValueError(f"decoded sample rate must be {sample_rate}, got {decoded_rate}")
-    if decoded.shape != (_SIGNAL_LENGTH, _CHANNELS):
-        raise ValueError(
-            f"decoded source must have shape {(_SIGNAL_LENGTH, _CHANNELS)}, got {decoded.shape}"
-        )
-    if not np.isfinite(decoded).all():
-        raise ValueError("decoded source must contain only finite values")
-    return np.ascontiguousarray(decoded[:, 0], dtype=np.float64)
-
-
 class PyFDNRenderer:
-    """Render one checksum-pinned mono source through native pyFDN patches."""
+    """Render the canonical procedural source through native pyFDN patches."""
 
-    def __init__(
-        self,
-        source_audio_path: str | Path,
-        source_audio_sha256: str,
-        *,
-        synth_version: str = _PYFDN_VERSION,
-        sample_rate: int = 48_000,
-        channels: int = _CHANNELS,
-        signal_duration_seconds: float = _SIGNAL_DURATION_SECONDS,
-    ) -> None:
-        """Load and validate the fixed source for this process-local renderer.
+    def __init__(self, *, synth_version: str = _PYFDN_VERSION) -> None:
+        """Generate the immutable source for this process-local renderer.
 
-        :param source_audio_path: Path to the exact lossless mono source.
-        :param source_audio_sha256: Expected SHA-256 of the stored source bytes.
         :param synth_version: Required installed pyFDN version.
-        :param sample_rate: Fixed source and build sample rate in Hz.
-        :param channels: Fixed source channel count.
-        :param signal_duration_seconds: Fixed source duration in seconds.
         """
         _validate_version(synth_version)
-        _validate_geometry(sample_rate, channels, signal_duration_seconds)
-        self._source_audio = _load_source(
-            Path(source_audio_path),
-            source_audio_sha256,
-            sample_rate=sample_rate,
-            channels=channels,
-        )
+        self._source_audio = generate_canonical_pyfdn_source()
+        self._source_provenance = _canonical_pyfdn_source_provenance(self._source_audio)
+
+    @property
+    def source_provenance(self) -> PyFDNSourceProvenance:
+        """Return provenance for the source bytes used by this renderer.
+
+        :returns: Independent provenance metadata safe for caller mutation.
+        """
+        return self._source_provenance.copy()
 
     def render(
         self, params: ParameterValues
@@ -315,7 +237,7 @@ class PyFDNRenderer:
         build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
         post_delay = cast(np.ndarray, build.post_delay)
         output = process_fdn(
-            self._source_audio,
+            self._source_audio[0],
             build.delays,
             build.A,
             build.B,

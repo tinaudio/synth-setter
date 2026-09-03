@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 import pytest
 
+import synth_setter.data.vst as vst
 import synth_setter.data.vst.param_spec_registry as param_spec_registry
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.param_spec_registry import (
@@ -37,6 +38,12 @@ if TYPE_CHECKING:
 
 _ENV_VAR = "SYNTH_SETTER_PLUGIN_PATH"
 _BUNDLED_PATH = "plugins/Surge XT.vst3"
+
+
+def test_package_dir_includes_lazy_registry_exports() -> None:
+    """Package introspection retains both backward-compatible registry names."""
+    assert {"param_specs", "plugin_state_paths"} <= set(dir(vst))
+
 
 # Absent from the spec: inert or harmful under the harness's single-note,
 # monophonic, no-pitch-bend playback (``core.make_midi_events``).

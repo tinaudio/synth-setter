@@ -337,8 +337,11 @@ def build_review_payload(
     return payload
 
 
-_SELF_REVIEW_422_RE = re.compile(
-    r"can not (?:request changes|approve) (?:on )?your own", re.IGNORECASE
+# Narrowly match event-refusal 422s (#2922); malformed payloads must not downgrade to COMMENT.
+_HTTP_422_RE = re.compile(r"\bHTTP 422\b")
+_EVENT_REFUSED_RE = re.compile(
+    r"can ?not (?:request changes|approve)|not permitted to (?:request changes|approve)",
+    re.IGNORECASE,
 )
 
 
@@ -373,11 +376,12 @@ def _post_review(
 def submit_review(
     repo: str, pr_number: int, payload: dict[str, object], fallback_banner: str
 ) -> dict[str, object]:
-    """POST the review, falling back to COMMENT on a self-review 422.
+    """POST the review, falling back to COMMENT on a rejected privileged event.
 
-    GitHub rejects REQUEST_CHANGES/APPROVE on the bot's own PR with an HTTP 422.
-    On that specific failure, retry once as COMMENT with ``fallback_banner``
-    prepended to the body so the blocking intent stays visible.
+    GitHub answers HTTP 422 when it will not accept REQUEST_CHANGES/APPROVE from this
+    identity — reviewing its own PR, or the Actions token approving at all (#2922).
+    Retry once as COMMENT with ``fallback_banner`` prepended so the review still lands
+    and its intent stays visible; COMMENT needs no elevated permission.
 
     :param repo: GitHub repository in `owner/name` form.
     :param pr_number: Pull request number.
@@ -390,9 +394,10 @@ def submit_review(
     if result.returncode == 0:
         return json.loads(result.stdout)
     # gh writes the JSON error body to stdout and only "HTTP 422" to stderr, so scan both.
-    if _SELF_REVIEW_422_RE.search(f"{result.stdout}\n{result.stderr}"):
+    diagnostic = f"{result.stdout}\n{result.stderr}"
+    if _HTTP_422_RE.search(diagnostic) and _EVENT_REFUSED_RE.search(diagnostic):
         sys.stderr.write(
-            "Self-review 422: falling back to event=COMMENT with the fallback banner.\n"
+            "Review event refused (422): falling back to event=COMMENT with the banner.\n"
         )
         retry = dict(payload)
         retry["event"] = "COMMENT"
@@ -450,15 +455,15 @@ def main() -> int:
         sys.stdout.write("\n")
         return 0
 
-    # Only REQUEST_CHANGES/APPROVE can 422 on a self-review; phrase the banner to match
-    # the intent GitHub refused (an APPROVE downgrade carries no "changes required").
+    # Name the refused intent, not the reason: the same downgrade covers a self-review and
+    # an Actions token that may not approve at all, so asserting either would sometimes lie.
     if event == "APPROVE":
-        banner = "✅ No findings (self-review: APPROVE not allowed on own PR — posted as COMMENT)"
+        banner = "✅ No findings (APPROVE refused for this identity — posted as COMMENT)"
     else:
         block_count = review_body.count(":block]") + sum(f.body.count(":block]") for f in findings)
         banner = (
             f"⛔ {block_count} BLOCKING finding(s) — changes required "
-            "(self-review: posted as COMMENT)"
+            "(REQUEST_CHANGES refused for this identity — posted as COMMENT)"
         )
     response = submit_review(repo, pr_number, payload, fallback_banner=banner)
     html_url = response.get("html_url")

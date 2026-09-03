@@ -73,9 +73,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > This is the exact call from `agent/skills/_shared/repo-review-full-analysis.md`
 > Step 1 — use that file's guidance for parsing it.
 >
-> **Local-branch mode.** Use this when no `<N>` was passed AND
-> `gh pr view --json number` fails / returns nothing for the current branch.
-> Derive the same fields from local git:
+> **Local-branch mode.** Use this when no `<N>` was passed and a successful
+> open-PR lookup scoped to `<current-repository-owner>:<current-branch>` returns
+> no PR. A lookup failure is a terminal error, not evidence that the branch has
+> no PR. Derive the same fields from local git:
 >
 > ```bash
 > base_ref=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -278,6 +279,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## Notes
 
+- The shared launcher permits at most three local pre-PR invocations per branch.
+  On a fourth request it refuses before starting Pi and directs the caller to
+  open the PR and continue with `/repo-review-full`, which uses the public GitHub
+  review bot. Explicit PR-mode dry runs do not consume the pre-PR budget.
 - This skill's foreground result is side-effect-free on GitHub. For an existing
   PR, detached follow-up may post one review containing only new Codex-verified
   findings from passes deferred at the response deadline. It rechecks the exact

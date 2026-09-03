@@ -1,8 +1,12 @@
 """Hydra entrypoint for evaluating a trained model on a datamodule's test split."""
 
+import fcntl
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
@@ -25,6 +29,7 @@ from synth_setter.evaluation.audio_probe import (
     RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
 )
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
+from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
@@ -251,6 +256,175 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     return {}
 
 
+def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> None:
+    """Reject checkpoint bytes that do not match their optional provenance pin.
+
+    :param checkpoint: Local checkpoint file.
+    :param expected_sha256: Validated lowercase SHA-256 hex digest, or ``None``.
+    :raises RuntimeError: The checkpoint digest differs from the pin.
+    """
+    if expected_sha256 is None:
+        return
+    with checkpoint.open("rb") as stream:
+        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+    if actual != expected_sha256:
+        raise RuntimeError(
+            f"checkpoint SHA-256 mismatch: expected {expected_sha256}, "
+            f"received {actual} for {checkpoint}"
+        )
+
+
+def _normalize_checkpoint_sha256(expected_sha256: str | None) -> str | None:
+    """Validate and normalize an optional checkpoint digest.
+
+    :param expected_sha256: Configured SHA-256 hex digest.
+    :returns: Lowercase digest, or ``None``.
+    :raises ValueError: The configured digest is not a SHA-256 hex string.
+    """
+    if expected_sha256 is None:
+        return None
+    if not isinstance(expected_sha256, str):
+        raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
+    normalized = expected_sha256.lower()
+    valid = len(normalized) == 64 and all(
+        character in "0123456789abcdef" for character in normalized
+    )
+    if not valid:
+        raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
+    return normalized
+
+
+def _download_verified_checkpoint(r2_uri: str, digest: str, cached: Path) -> None:
+    """Stage and atomically publish one verified remote checkpoint.
+
+    :param r2_uri: R2 object URI to download.
+    :param digest: Expected lowercase SHA-256 digest.
+    :param cached: Content-addressed destination path.
+    :raises FileNotFoundError: The remote object does not exist.
+    :raises RuntimeError: R2 access fails or downloaded bytes violate the pin.
+    """
+    try:
+        r2_io.ensure_r2_env_loaded()
+        remote_size = r2_io.object_size(r2_uri)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            "rclone R2 credentials are unavailable or cannot access remote "
+            f"eval checkpoint: {r2_uri}"
+        ) from exc
+    if remote_size is None:
+        raise FileNotFoundError(f"remote eval checkpoint does not exist: {r2_uri}")
+    if remote_size == 0:
+        raise RuntimeError(f"remote eval checkpoint is empty: {r2_uri}")
+    with tempfile.NamedTemporaryFile(
+        prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+    ) as temporary:
+        staging = Path(temporary.name)
+    try:
+        r2_io.download_to_path(r2_uri, staging)
+        if staging.stat().st_size != remote_size:
+            raise RuntimeError(f"downloaded eval checkpoint is incomplete: {r2_uri}")
+        _verify_checkpoint_sha256(staging, digest)
+        staging.replace(cached)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"rclone cannot download eval checkpoint: {r2_uri}") from exc
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _copy_verified_checkpoint(source: Path, digest: str, cached: Path) -> None:
+    """Atomically publish a verified copy of a local checkpoint.
+
+    :param source: Mutable local checkpoint path.
+    :param digest: Expected lowercase SHA-256 digest.
+    :param cached: Content-addressed destination path.
+    """
+    with tempfile.NamedTemporaryFile(
+        prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+    ) as temporary:
+        staging = Path(temporary.name)
+    try:
+        shutil.copyfile(source, staging)
+        _verify_checkpoint_sha256(staging, digest)
+        staging.replace(cached)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _cached_checkpoint(digest: str, publish: Callable[[Path], None]) -> Path:
+    """Return a verified content-addressed checkpoint under an interprocess lock.
+
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :param publish: Cache-miss operation that atomically publishes verified bytes.
+    :returns: Verified immutable checkpoint path.
+    """
+    cached = synth_setter_cache_dir() / "checkpoints" / "evaluation" / digest / "model.ckpt"
+    lock_path = cached.with_suffix(".ckpt.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            if cached.is_file():
+                _verify_checkpoint_sha256(cached, digest)
+            else:
+                publish(cached)
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return cached
+
+
+def _cached_remote_checkpoint(r2_uri: str, digest: str) -> Path:
+    """Return an immutable content-addressed remote checkpoint.
+
+    :param r2_uri: R2 object URI to localize on a cache miss.
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :returns: Verified local checkpoint path.
+    """
+    return _cached_checkpoint(
+        digest, lambda cached: _download_verified_checkpoint(r2_uri, digest, cached)
+    )
+
+
+def _cached_local_checkpoint(source: Path, digest: str) -> Path:
+    """Return an immutable content-addressed copy of a local checkpoint.
+
+    :param source: Mutable local checkpoint path.
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :returns: Verified immutable checkpoint path.
+    """
+    return _cached_checkpoint(
+        digest, lambda cached: _copy_verified_checkpoint(source, digest, cached)
+    )
+
+
+def _localize_eval_checkpoint(
+    checkpoint: str | None,
+    expected_sha256: str | None = None,
+) -> str | None:
+    """Return the verified local checkpoint path Lightning should consume.
+
+    :param checkpoint: Local path, R2-backed URI, or ``None``.
+    :param expected_sha256: SHA-256 pin, required for remote checkpoint bytes.
+    :returns: Local checkpoint path for Lightning, or ``None``.
+    :raises ValueError: Checkpoint provenance is contradictory or malformed.
+    """
+    if checkpoint is None:
+        if expected_sha256 is not None:
+            raise ValueError("ckpt_sha256 requires ckpt_path")
+        return None
+    if not isinstance(checkpoint, str):
+        raise ValueError("ckpt_path must be a string or null")
+    digest = _normalize_checkpoint_sha256(expected_sha256)
+    is_remote = checkpoint.startswith(("r2://", "s3://"))
+    if not is_remote:
+        if digest is None:
+            return checkpoint
+        return str(_cached_local_checkpoint(Path(checkpoint), digest))
+    if digest is None:
+        raise ValueError("remote checkpoint requires ckpt_sha256")
+    r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint
+    return str(_cached_remote_checkpoint(r2_uri, digest))
+
+
 def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
     """Build the consumed-artifact lineage edges for an eval run (spec §5).
 
@@ -267,7 +441,8 @@ def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], lis
     refs: list[tuple[str, str]] = []
     train_id = cfg.get("consumed_train_config_id")
     if train_id:
-        refs.append((f"model-{train_id}", "latest"))
+        train_alias = cfg.get("consumed_train_artifact_alias", "latest")
+        refs.append((f"model-{train_id}", train_alias))
     dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
     download_uri = OmegaConf.select(cfg, "datamodule.download_dataset_root_uri")
     ref = dataset_artifact_ref(dataset_root, download_uri)
@@ -288,13 +463,16 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     Wrapped in ``@task_wrapper`` so crashes still flush the run dir.
 
-    :param cfg: Hydra-composed cfg; ``cfg.ckpt_path=None`` is allowed and
-        evaluates the in-memory model (Lightning's documented no-op).
+    :param cfg: Hydra-composed cfg; ``ckpt_path`` accepts a local path or an
+        R2-backed ``r2://`` / ``s3://`` URI. ``None`` evaluates the in-memory
+        model (Lightning's documented no-op).
     :return: ``(metric_dict, object_dict)``. ``metric_dict`` merges
         ``trainer.callback_metrics`` (``torch.Tensor`` values) with audio
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
     """
+    checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
+
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
@@ -334,29 +512,29 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     audio_metrics: dict[str, float] = {}
     if mode == "test":
         log.info("Starting testing!")
-        with checkpoint_migration_hint(cfg.ckpt_path):
+        with checkpoint_migration_hint(checkpoint_path):
             trainer.test(
                 model=model,
                 datamodule=datamodule,
-                ckpt_path=cfg.ckpt_path,
+                ckpt_path=checkpoint_path,
                 weights_only=False,
             )
     # Accept both spellings for backwards compatibility with older configs.
     elif mode == "val" or mode == "validate":
         log.info("Starting validating!")
-        with checkpoint_migration_hint(cfg.ckpt_path):
+        with checkpoint_migration_hint(checkpoint_path):
             trainer.validate(
                 model=model,
                 datamodule=datamodule,
-                ckpt_path=cfg.ckpt_path,
+                ckpt_path=checkpoint_path,
                 weights_only=False,
             )
     elif mode == "predict":
-        with checkpoint_migration_hint(cfg.ckpt_path):
+        with checkpoint_migration_hint(checkpoint_path):
             trainer.predict(
                 model=model,
                 dataloaders=datamodule,
-                ckpt_path=cfg.ckpt_path,
+                ckpt_path=checkpoint_path,
                 return_predictions=False,
                 weights_only=False,
             )
