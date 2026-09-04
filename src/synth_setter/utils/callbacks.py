@@ -482,7 +482,7 @@ class PlotLearntProjection(Callback):
 
         maxval = assignment.abs().max().item()
         img = ax.imshow(
-            assignment.cpu().numpy(),
+            assignment.detach().cpu().numpy(),
             aspect="equal",
             vmin=-maxval,
             vmax=maxval,
@@ -519,11 +519,11 @@ class PlotLearntProjection(Callback):
         val_sim = self._get_value_similarity(pl_module)
         out_sim = self._get_output_similarity(pl_module)
 
-        val_max = val_sim.abs().max()
-        out_max = out_sim.abs().max()
+        val_max = val_sim.abs().max().item()
+        out_max = out_sim.abs().max().item()
 
         val_im = ax[0].imshow(
-            val_sim.cpu().numpy(),
+            val_sim.detach().cpu().numpy(),
             aspect="equal",
             vmin=-val_max,
             vmax=val_max,
@@ -534,7 +534,7 @@ class PlotLearntProjection(Callback):
         ax[0].set_ylabel("params")
 
         out_im = ax[1].imshow(
-            out_sim.cpu().numpy(),
+            out_sim.detach().cpu().numpy(),
             aspect="equal",
             vmin=-out_max,
             vmax=out_max,
@@ -566,7 +566,7 @@ class PlotLearntProjection(Callback):
         if not hasattr(pl_module.vector_field, "projection"):
             return
 
-        if not isinstance(pl_module.vector_field, LearntProjection):
+        if not isinstance(pl_module.vector_field.projection, LearntProjection):
             return
 
         fig_ass = self._plot_assignments(pl_module)

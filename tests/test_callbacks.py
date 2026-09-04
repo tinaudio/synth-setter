@@ -24,7 +24,14 @@ from matplotlib.figure import Figure
 from torchsynth.signal import Signal
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.utils.callbacks import LogPerParamMSE, PredictionWriter, _log_figure
+from synth_setter.models.components.transformer import LearntProjection
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.utils.callbacks import (
+    LogPerParamMSE,
+    PlotLearntProjection,
+    PredictionWriter,
+    _log_figure,
+)
 
 
 class _RecordingWandbLogger(WandbLogger):
@@ -667,3 +674,22 @@ def test_log_figure_is_noop_on_non_zero_rank():
 
     assert wandb_logger.image_calls == []
     assert tb_logger.experiment.figure_calls == []
+
+
+def test_plot_learnt_projection_logs_similarity_for_projection_attribute() -> None:
+    """A flow model with a learnt projection emits assignment and similarity plots."""
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    wandb_logger = _RecordingWandbLogger()
+
+    PlotLearntProjection().on_validation_epoch_end(_trainer([wandb_logger]), module)
+
+    assert [call["key"] for call in wandb_logger.image_calls] == ["assignment", "value"]

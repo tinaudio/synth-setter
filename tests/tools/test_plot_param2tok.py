@@ -7,10 +7,11 @@ misaligns every label drawn after the gap.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.tools.plot_param2tok import get_labels
+from synth_setter.tools.plot_param2tok import cosine_self_sim, get_labels
 
 
 @pytest.mark.parametrize("spec", ["surge_4", "surge_simple", "surge_xt", "obxf"])
@@ -36,3 +37,24 @@ def test_get_labels_widths_are_positive() -> None:
     intervals = get_labels("surge_simple")
 
     assert all(width > 0 for _, width in intervals)
+
+
+def test_cosine_self_sim_with_different_norms_returns_symmetric_similarity() -> None:
+    """Pairwise cosine similarity normalizes both vectors independently."""
+    vectors = np.array([[2.0, 0.0], [1.0, 1.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_allclose(
+        similarity,
+        np.array([[1.0, 1 / np.sqrt(2)], [1 / np.sqrt(2), 1.0]]),
+    )
+
+
+def test_cosine_self_sim_with_zero_vector_returns_zero_similarity() -> None:
+    """A zero projection has finite zero similarity with every vector."""
+    vectors = np.array([[0.0, 0.0], [1.0, 0.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_array_equal(similarity, np.array([[0.0, 0.0], [0.0, 1.0]]))
