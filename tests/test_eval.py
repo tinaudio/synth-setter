@@ -41,7 +41,7 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
@@ -1288,7 +1288,7 @@ def _compose_fake_oracle_eval_cfg(
             return_hydra_config=True,
             overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
             + ([f"datamodule={datamodule}"] if datamodule else [])
-            + (["render=pyfdn"] if param_spec_name == "pyfdn_n8_mono" else []),
+            + (["render=pyfdn"] if param_spec_name == "pyfdn_n8_mono_householder" else []),
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
@@ -1308,7 +1308,7 @@ def _compose_fake_oracle_eval_cfg(
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
         # Render group is null on fake_oracle; set it inline for fake VST datasets.
-        if param_spec_name != "pyfdn_n8_mono":
+        if param_spec_name != "pyfdn_n8_mono_householder":
             cfg.render = RenderConfig.model_validate(
                 {
                     "synth": {
@@ -1484,8 +1484,8 @@ def test_evaluate_predict_mode_pyfdn_renders_finite_audio_end_to_end(
 
     dataset_root = tmp_path / "pyfdn-data"
     dataset_root.mkdir()
-    params, notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(17))
-    encoded = PYFDN_N8_MONO_PARAM_SPEC.encode(params, notes)
+    params, notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(17))
+    encoded = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(params, notes)
     write_lance_shard(
         dataset_root / "test.lance",
         {
@@ -1498,7 +1498,7 @@ def test_evaluate_predict_mode_pyfdn_renders_finite_audio_end_to_end(
         tmp_path,
         dataset_root,
         mode="predict",
-        param_spec_name="pyfdn_n8_mono",
+        param_spec_name="pyfdn_n8_mono_householder",
         datamodule="pyfdn",
     )
     with open_dict(cfg):
