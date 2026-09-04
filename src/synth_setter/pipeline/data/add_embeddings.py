@@ -149,7 +149,7 @@ SKETCH_ENCODE_MAX_BATCH: int = 32
 # Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
 # per-child schema evolution (unused here) is the 2.2-only operation.
 SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
-PYFDN_SKETCH_POLICY_VERSION = 1
+PYFDN_SKETCH_POLICY_VERSION = 2
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
@@ -368,9 +368,9 @@ def _pyfdn_sketch_artifact_identity(checkpoint: str) -> str:
         f"{name}:{importlib.metadata.version(name)}" for name in ("numpy", "pyfdn", "scipy")
     )
     policy = (
-        f"dsp:octave-edc-abel-huang-density-rfft-flatness-v{PYFDN_SKETCH_POLICY_VERSION};"
+        f"dsp:octave-edc-abel-huang-density-stft-flatness-v{PYFDN_SKETCH_POLICY_VERSION};"
         "normalization:signed-unit-edc-floor-60db-density-rational-flatness-linear;"
-        "temporal:equal-duration-32;"
+        "temporal:fractional-log-32-head-0.005-ratio-200-hann-1024-hop-128-frame-center;"
         f"packages:{packages}"
     )
     return _versioned_artifact_identity("pyfdn_sketch", policy)
