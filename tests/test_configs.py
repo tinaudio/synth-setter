@@ -18,7 +18,7 @@ from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT,
     DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
 )
-from synth_setter.conditioning import NUM_SKETCH_CONTROLS
+from synth_setter.conditioning import NUM_SKETCH_CONTROLS, resolve_sketch_controls
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
@@ -1427,6 +1427,9 @@ def test_pyfdn_flow_sketch_resolves_stored_temporal_reverb_conditioning() -> Non
     assert cfg.model.sketch_controls.num_frames == 32
     assert cfg.model.sketch_controls.num_control_tokens == 32
     assert cfg.datamodule.sketch == cfg.model.sketch_controls
+    sketch_controls = resolve_sketch_controls(cfg.model.sketch_controls)
+    assert sketch_controls is not None
+    assert sketch_controls.layout.num_controls == 10
 
 
 def test_pyfdn_flow_ast_online_sketch_reads_sketch_from_lance() -> None:
