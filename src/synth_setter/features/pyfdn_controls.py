@@ -26,7 +26,10 @@ def _validated_impulse_response(ir: np.ndarray, sample_rate: float) -> np.ndarra
     :returns: Float64 impulse response.
     :raises ValueError: The signal or sample rate violates the descriptor contract.
     """
-    response = np.asarray(ir, dtype=np.float64)
+    raw_response = np.asarray(ir)
+    if np.iscomplexobj(raw_response):
+        raise ValueError("impulse response must be real-valued")
+    response = np.asarray(raw_response, dtype=np.float64)
     if response.ndim != 1 or response.size == 0:
         raise ValueError("impulse response must have shape (samples,) with at least one sample")
     if not np.isfinite(response).all():

@@ -109,6 +109,12 @@ def test_extract_octave_rt60_seconds_stereo_response_raises() -> None:
         extract_octave_rt60_seconds(np.ones((2, 1024)), _SAMPLE_RATE)
 
 
+def test_extract_octave_edc_db_complex_response_raises() -> None:
+    """A complex response cannot silently lose its imaginary component."""
+    with pytest.raises(ValueError, match="real-valued"):
+        extract_octave_edc_db(np.array([1.0 + 1.0j]), _SAMPLE_RATE)
+
+
 def test_extract_octave_edc_db_nonfinite_response_raises() -> None:
     """A non-finite impulse response fails before filtering."""
     with pytest.raises(ValueError, match="finite"):
