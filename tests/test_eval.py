@@ -146,7 +146,12 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_evaluate_slap_ast_audio_mlp_param_experiment_checkpoint_end_to_end(
+@pytest.mark.parametrize(
+    "cfg_slap_train_lance",
+    ["surge/slap_ast_audio_mlp_param", "surge/slap_ast_audio_transformer_param"],
+    indirect=True,
+)
+def test_evaluate_slap_experiment_checkpoint_end_to_end(
     cfg_slap_train_lance: DictConfig,
 ) -> None:
     """Reload the shipped experiment's GPU checkpoint through public evaluation.
@@ -167,7 +172,7 @@ def test_evaluate_slap_ast_audio_mlp_param_experiment_checkpoint_end_to_end(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/slap_ast_audio_mlp_param",
+                f"experiment=surge/{cfg_slap_train_lance.run_name}",
                 "callbacks=none",
                 "trainer=gpu",
             ],
