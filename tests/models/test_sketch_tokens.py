@@ -105,7 +105,7 @@ class TestSketchControlSpec:
         assert spec.pitch_zero_threshold == 0.1
 
     def test_pyfdn_reverb_profile_has_temporal_layout(self) -> None:
-        """The reverb profile pins ten channels and three temporal groups."""
+        """The reverb profile pins its channel and temporal-group layout."""
         spec = SketchControlSpec(num_frames=32, profile="pyfdn_reverb")
 
         assert spec.layout.num_controls == 10
@@ -300,7 +300,7 @@ class TestPyFDNReverbSketchControlTokens:
     """Temporal reverb profile behavior."""
 
     def test_forward_returns_one_token_per_reverb_frame(self) -> None:
-        """Ten reverb channels produce a same-length token sequence."""
+        """Reverb channels produce a same-length token sequence."""
         module = _reverb_tokens_module()
         controls = torch.randn(_BATCH, 10, _REVERB_FRAMES, dtype=torch.float32)
 
@@ -354,7 +354,7 @@ class TestPyFDNReverbSketchControlTokens:
         assert torch.count_nonzero(delta[0, 3:]) == 0
 
     def test_forward_reverb_wrong_channel_count_raises(self) -> None:
-        """The reverb profile rejects tensors outside its ten-channel contract."""
+        """The reverb profile rejects tensors outside its channel contract."""
         module = _reverb_tokens_module()
 
         with pytest.raises(ValueError, match="10 channels"):
