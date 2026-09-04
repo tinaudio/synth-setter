@@ -101,8 +101,8 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
 
     ``WandbLogger.finalize`` records status but does not close the run;
     ``wandb.finish()`` is what flushes the offline ``.wandb`` binary. The run
-    is closed only when a ``WandbLogger`` is in ``loggers`` — i.e. this process
-    opened it — so a stale ``wandb.run`` started elsewhere is left untouched.
+    is closed only when a ``WandbLogger`` is in ``loggers``; callers must ensure
+    that logger owns the active run.
 
     :param loggers: Lightning loggers; ``finalize`` is invoked on each.
     :param status: ``"success"`` or ``"failed"``; forwarded to each logger and

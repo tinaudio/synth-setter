@@ -3090,6 +3090,59 @@ def test_add_embeddings_main_when_augmentation_fails_marks_wandb_run_failed(
     assert read_run_exit_code(Path(run_files[0])) == 1
 
 
+def test_add_embeddings_main_with_active_wandb_run_preserves_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nested invocation rejects W&B reuse without mutating or closing its parent run.
+
+    :param tmp_path: Scratch directory for the dataset, Hydra output, and W&B run.
+    :param monkeypatch: Fixture installing dependency-free encoders and a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    uri = tmp_path / "nested.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("clap",))
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={uri}",
+        "embeddings=[clap]",
+        "build_index=false",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        "logger.wandb.project=add-embeddings-test",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+    parent_run = wandb.init(
+        project="add-embeddings-parent-test",
+        dir=str(tmp_path),
+        config={"sentinel": "parent"},
+    )
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert wandb.run is parent_run
+        assert dict(parent_run.config) == {"sentinel": "parent"}
+        assert CLAP_FIELD not in lance.dataset(str(uri)).schema.names
+    finally:
+        wandb.finish(exit_code=0)
+
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    assert read_run_exit_code(Path(run_files[0])) == 0
+
+
 def test_add_embeddings_main_when_open_fails_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

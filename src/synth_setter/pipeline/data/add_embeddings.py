@@ -2038,6 +2038,22 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     return lance.dataset(uri)
 
 
+def _assert_no_active_wandb_run(cfg: DictConfig) -> None:
+    """Reject a configured W&B logger when this process already owns a run.
+
+    :param cfg: Hydra-composed endpoint config.
+    :raises RuntimeError: If a configured W&B logger would reuse an active run.
+    """
+    logger_cfg = cfg.get("logger")
+    if not logger_cfg or "wandb" not in logger_cfg:
+        return
+
+    import wandb
+
+    if wandb.run is not None:
+        raise RuntimeError("add-embeddings cannot reuse an active W&B run")
+
+
 @hydra.main(
     version_base="1.3", config_path="pkg://synth_setter.configs", config_name="add_embeddings"
 )
@@ -2052,6 +2068,7 @@ def _hydra_main(cfg: DictConfig) -> None:
     status = "failed"
     try:
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+        _assert_no_active_wandb_run(cfg)
         loggers = instantiate_loggers(cfg.get("logger"))
         for run_logger in loggers:
             run_logger.log_hyperparams(config.model_dump(mode="json"))
