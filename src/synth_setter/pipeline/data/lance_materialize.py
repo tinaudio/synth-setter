@@ -87,7 +87,7 @@ def _is_retryable_lance_read_error(error: BaseException) -> bool:
     )
 
 
-def _retry_lance_read[ReadResult](
+def retry_lance_read[ReadResult](
     operation_name: str, read: Callable[[], ReadResult]
 ) -> ReadResult:
     """Run one idempotent Lance read under the bounded retry policy.
@@ -270,10 +270,10 @@ def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
     :raises LookupError: No live version's transaction matches ``txid`` — the
         pin was cleaned up by ``cleanup_old_versions()`` or never existed.
     """
-    versions = _retry_lance_read("version_list", ds.versions)
+    versions = retry_lance_read("version_list", ds.versions)
     for entry in versions:
         version = entry["version"]
-        transaction = _retry_lance_read(
+        transaction = retry_lance_read(
             "transaction_read", lambda: ds.read_transaction(version)
         )
         if transaction is not None and transaction.uuid == txid:
@@ -296,7 +296,7 @@ def _open_source(source_uri: str) -> lance.LanceDataset:
         open_uri, storage_options = file_uri_to_path(source_uri).as_uri(), None
     else:
         open_uri, storage_options = source_uri, None
-    return _retry_lance_read(
+    return retry_lance_read(
         "source_open", lambda: lance.dataset(open_uri, storage_options=storage_options)
     )
 
@@ -309,7 +309,7 @@ def _transaction_uuid(ds: lance.LanceDataset, version: int) -> str:
     :returns: Transaction uuid for ``version``.
     :raises ValueError: The source version has no transaction record.
     """
-    transaction = _retry_lance_read(
+    transaction = retry_lance_read(
         "transaction_read", lambda: ds.read_transaction(version)
     )
     if transaction is None:
@@ -378,14 +378,14 @@ def _validate_materialized_destination(
             "delete the dataset and re-materialize"
         )
     try:
-        destination = _retry_lance_read(
+        destination = retry_lance_read(
             "destination_open", lambda: lance.dataset(str(dest_path))
         )
-        transaction = _retry_lance_read(
+        transaction = retry_lance_read(
             "destination_transaction_read",
             lambda: destination.read_transaction(destination.version),
         )
-        _retry_lance_read("destination_validate", destination.validate)
+        retry_lance_read("destination_validate", destination.validate)
     except (OSError, ValueError) as exc:
         raise ValueError(
             f"materialized dataset {dest_path} failed Lance validation; "

@@ -13,6 +13,7 @@ import lance
 
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_materialize import retry_lance_read
 from synth_setter.pipeline.data.rolling_lance import (
     PendingRefreshRequest,
     RollingSnapshot,
@@ -62,8 +63,11 @@ def _publish_metadata(spec: DatasetSpec, snapshot: RollingSnapshot, version_dir:
 def _ready_snapshot(spec: DatasetSpec, branch: str) -> RollingSnapshot:
     train_uri = spec.r2.split_lance_uri("train")
     target, storage_options = r2_io.lance_target(train_uri)
-    version = lance.dataset(target, storage_options=storage_options).tags.get_version(
-        f"{branch}-ready"
+    version = retry_lance_read(
+        "rolling_ready_tag_read",
+        lambda: lance.dataset(target, storage_options=storage_options).tags.get_version(
+            f"{branch}-ready"
+        ),
     )
     if version is None:
         raise ValueError(f"ready tag for branch {branch!r} does not exist")

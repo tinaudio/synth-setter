@@ -28,7 +28,7 @@ from synth_setter.cli.sketch_render import (
 )
 from synth_setter.data.vst.core import write_wav
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
+from synth_setter.pipeline.data.lance_materialize import retry_lance_read
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.utils.logging_utils import resolve_git_sha
 
@@ -224,7 +224,7 @@ def _open_dataset(uri: str, version: int) -> lance.LanceDataset:
     :returns: Open Lance dataset.
     """
     target, storage_options = r2_io.lance_target(uri)
-    return _retry_lance_read(
+    return retry_lance_read(
         "sketch_suite_open",
         lambda: lance.dataset(target, version=version, storage_options=storage_options),
     )
@@ -292,7 +292,7 @@ def _materialize_pairs(
     """
     vocal = _open_dataset(VOCAL_DATASET, VOCAL_DATASET_VERSION)
     content = _open_dataset(CONTENT_DATASET, CONTENT_DATASET_VERSION)
-    if _retry_lance_read("sketch_suite_content_count", content.count_rows) < count:
+    if retry_lance_read("sketch_suite_content_count", content.count_rows) < count:
         raise ValueError(f"content dataset has fewer than {count} rows")
 
     vocal_columns = [
@@ -303,13 +303,13 @@ def _materialize_pairs(
         "audio_sha256",
         "source_path",
     ]
-    vocal_metadata = _retry_lance_read(
+    vocal_metadata = retry_lance_read(
         "sketch_suite_vocal_metadata",
         lambda: vocal.to_table(columns=vocal_columns).to_pylist(),
     )
     vocal_rows = select_vocal_rows(vocal_metadata, count)
     vocal_indices = [index for index, _ in vocal_rows]
-    vocal_blobs = _retry_lance_read(
+    vocal_blobs = retry_lance_read(
         "sketch_suite_vocal_audio",
         lambda: dict(vocal.read_blobs("audio", indices=vocal_indices, preserve_order=True)),
     )
@@ -323,11 +323,11 @@ def _materialize_pairs(
         "sample_rate",
         "wav_sha256",
     ]
-    content_metadata = _retry_lance_read(
+    content_metadata = retry_lance_read(
         "sketch_suite_content_metadata",
         lambda: content.take(content_indices, columns=content_columns).to_pylist(),
     )
-    content_blobs = _retry_lance_read(
+    content_blobs = retry_lance_read(
         "sketch_suite_content_audio",
         lambda: dict(content.read_blobs("audio", indices=content_indices, preserve_order=True)),
     )
