@@ -352,7 +352,7 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
     target_params = torch.zeros(_BATCH, param_spec.encoded_width)
     sampled_params = torch.zeros_like(target_params)
     sampled_params[:, pitch_span] = torch.tensor(
-        [-0.3541666666666667, 0.1875, 0.20833333333333334]
+        [-0.3541666666666667, 0.1875, 0.20833334]
     ).unsqueeze(1)
     sampled_by_batch_size = {2: sampled_params[:2], 1: sampled_params[2:]}
 
