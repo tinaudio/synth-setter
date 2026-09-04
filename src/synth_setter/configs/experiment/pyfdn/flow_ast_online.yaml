@@ -5,18 +5,23 @@ defaults:
   - override /synth: pyfdn_n8_mono_householder
   - override /render: pyfdn
   - override /model: vst_flow
+  - override /conditioning: ast_online
   - override /callbacks: [default, log_per_param_mse]
   - override /trainer: gpu_400k_steps
   - _self_
 
 experiment_name: pyfdn
-run_name: flow
-tags: [pyfdn, flow]
+run_name: flow-ast-online
+tags: [pyfdn, flow, ast-online]
 
 model:
   compile: false
   encoder:
-    input_channels: 1
+    frontend:
+      in_dim: 176_400
+      sample_rate: 44_100
+    backbone:
+      spec_shape: [128, 401]
 
 callbacks:
   model_checkpoint:

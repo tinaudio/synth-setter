@@ -2606,12 +2606,14 @@ def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int) -> None:
 
 
 @pytest.fixture
-def cfg_pyfdn_train(tmp_path: Path) -> DictConfig:
+def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfig:
     """Compose a one-step pyFDN flow run over fixed-Householder Lance rows.
 
     :param tmp_path: Per-test dataset and output root.
+    :param request: Optional indirect experiment-name parameter.
     :returns: Ready-to-run training configuration.
     """
+    experiment = getattr(request, "param", "pyfdn/flow")
     dataset_root = tmp_path / "pyfdn-lance-data"
     dataset_root.mkdir()
     for seed, split in enumerate(("train", "val", "test")):
@@ -2627,7 +2629,7 @@ def cfg_pyfdn_train(tmp_path: Path) -> DictConfig:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["experiment=pyfdn/flow", "trainer=cpu"],
+            overrides=[f"experiment={experiment}", "trainer=cpu"],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -2650,9 +2652,15 @@ def cfg_pyfdn_train(tmp_path: Path) -> DictConfig:
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.scheduler = None
-            cfg.model.encoder.backbone.hidden_dim = 2
-            cfg.model.encoder.backbone.out_dim = 16
-            cfg.model.encoder.backbone.num_blocks = 1
+            encoder = (
+                cfg.model.encoder.backbone
+                if experiment == "pyfdn/flow_ast_online"
+                else cfg.model.encoder
+            )
+            encoder.d_model = 16
+            encoder.n_heads = 1
+            encoder.n_layers = 1
+            encoder.n_conditioning_outputs = 1
             cfg.model.vector_field.d_model = 16
             cfg.model.vector_field.num_heads = 1
             cfg.model.vector_field.d_ff = 16
