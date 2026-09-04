@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import cast
+from typing import Literal, cast
 
 import torch
 from beartype import beartype
@@ -34,18 +34,22 @@ type ScalarTensor = Float[Tensor, ""]
 
 
 @jaxtyped(typechecker=beartype)
-def _paired_inputs(batch: ModelBatch) -> tuple[BatchTensor, BatchTensor]:
-    """Return non-null audio and parameter tensors from a synth-setter batch.
+def _paired_inputs(
+    batch: ModelBatch,
+    audio_input_key: Literal["audio", "mel"],
+) -> tuple[BatchTensor, BatchTensor]:
+    """Return non-null audio-modality and parameter tensors from a batch.
 
     :param batch: Collated model batch carrying paired modalities.
-    :returns: Audio and parameter tensors in matching row order.
+    :param audio_input_key: Batch key supplying the audio arm input.
+    :returns: Audio-modality and parameter tensors in matching row order.
     :raises ValueError: If either required modality is absent.
     """
-    audio = batch.get("audio")
+    audio_input = batch.get(audio_input_key)
     params = batch.get("params")
-    if audio is None or params is None:
-        raise ValueError("SLAP batches require non-null audio and params")
-    return audio, params
+    if audio_input is None or params is None:
+        raise ValueError(f"SLAP batches require non-null {audio_input_key} and params")
+    return audio_input, params
 
 
 class SLAPModule(LightningModule):
@@ -61,6 +65,7 @@ class SLAPModule(LightningModule):
         loss_fn: BYOLLoss,
         optimizer: OptimizerFactory,
         *,
+        audio_input_key: Literal["audio", "mel"] = "audio",
         scheduler: SchedulerFactory | None = None,
         ma_callback: MovingAverageWeightUpdate | None = None,
         compile: bool | str = False,
@@ -71,6 +76,7 @@ class SLAPModule(LightningModule):
         :param text_encoder: Online Siamese arm consuming the paired second modality.
         :param loss_fn: Reference BYOL loss over online predictions and target projections.
         :param optimizer: Partially configured optimizer factory.
+        :param audio_input_key: Batch key supplying the audio arm input.
         :param scheduler: Optional partially configured scheduler factory.
         :param ma_callback: Target-weight update policy.
         :param compile: Whether and how to compile both online and target arms.
@@ -90,6 +96,7 @@ class SLAPModule(LightningModule):
         )
         self.audio_encoder = audio_encoder
         self.text_encoder = text_encoder
+        self.audio_input_key: Literal["audio", "mel"] = audio_input_key
         self.loss_fn = loss_fn
         self.optimizer_factory = optimizer
         self.scheduler_factory = scheduler
@@ -150,7 +157,7 @@ class SLAPModule(LightningModule):
         :returns: Scalar reference loss terms.
         :raises ValueError: If either arm omits its required projector or predictor.
         """
-        audio, params = _paired_inputs(batch)
+        audio, params = _paired_inputs(batch, self.audio_input_key)
         _, _, audio_prediction = self.audio_encoder(audio)
         _, _, text_prediction = self.text_encoder(params)
         with torch.no_grad():

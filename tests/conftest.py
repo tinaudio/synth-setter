@@ -2719,39 +2719,6 @@ def _materialize_lance_smoke_root(dataset_root: Path) -> None:
     (dataset_root / "dataset.complete").touch()
 
 
-def _slap_arm_config(input_dim: int) -> dict[str, object]:
-    """Build a tiny Hydra Siamese-arm configuration.
-
-    :param input_dim: Flattened modality width accepted by the arm.
-    :returns: Hydra-instantiable arm configuration.
-    """
-    return {
-        "_target_": "synth_setter.models.components.slap.SiameseArm",
-        "encoder": {
-            "_target_": "torch.nn.Sequential",
-            "_args_": [
-                {"_target_": "torch.nn.Flatten", "start_dim": 1},
-                {
-                    "_target_": "torch.nn.Linear",
-                    "in_features": input_dim,
-                    "out_features": 16,
-                },
-            ],
-        },
-        "projector": {
-            "_target_": "torch.nn.Linear",
-            "in_features": 16,
-            "out_features": 8,
-        },
-        "transform": {
-            "_target_": "torch.nn.Linear",
-            "in_features": 8,
-            "out_features": 8,
-        },
-        "normalize_projections": True,
-    }
-
-
 @pytest.fixture
 def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose a ``datamodule=surge_lance`` training cfg over a generated Lance dataset.
@@ -2808,7 +2775,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
 
 @pytest.fixture
 def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
-    """Compose a one-step SLAP run over paired local Lance splits.
+    """Compose a one-step shipped SLAP experiment over local Lance splits.
 
     The configuration exercises fit, validation, checkpoint reload, and test.
 
@@ -2823,10 +2790,7 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "datamodule=surge_lance",
-                f"synth={_LANCE_SMOKE_PARAM_SPEC}",
-                "model=slap",
-                "callbacks=default_slap",
+                "experiment=surge/slap_ast_audio_mlp_param",
                 "trainer=cpu",
             ],
         )
@@ -2836,16 +2800,18 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
         cfg.paths.log_dir = str(tmp_path)
         cfg.seed = 1234
         cfg.logger = None
+        cfg.test = True
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.conditioning = "audio"
-        cfg.datamodule.ot = False
+        cfg.datamodule.download_dataset_root_uri = None
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
         cfg.datamodule.pin_memory = False
-        cfg.model.audio_encoder = _slap_arm_config(input_dim=128)
-        cfg.model.text_encoder = _slap_arm_config(input_dim=_LANCE_SMOKE_NUM_PARAMS)
+        cfg.model.audio_encoder.encoder._args_[0].n_layers = 1
         cfg.model.compile = False
+        cfg.callbacks.model_checkpoint.every_n_epochs = 1
+        cfg.callbacks.model_checkpoint.every_n_train_steps = None
         cfg.trainer.max_epochs = 1
+        cfg.trainer.min_steps = None
         cfg.trainer.max_steps = -1
         cfg.trainer.limit_train_batches = 1
         cfg.trainer.limit_val_batches = 1
