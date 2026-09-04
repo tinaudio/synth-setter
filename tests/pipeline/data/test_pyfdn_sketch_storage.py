@@ -154,13 +154,14 @@ def test_pyfdn_sketch_encode_column_with_out_of_range_child_raises(
 def _distinct_reverb_audio(sample_rate: int) -> np.ndarray:
     """Return two seeded decays whose sketches distinguish row alignment.
 
-    :param sample_rate: Response length and sample rate in Hz.
-    :returns: Two mono one-second responses.
+    :param sample_rate: Response sample rate in Hz.
+    :returns: Two mono four-second responses.
     """
     rng = np.random.default_rng(2021)
-    time = np.arange(sample_rate, dtype=np.float64) / sample_rate
+    num_samples = 4 * sample_rate
+    time = np.arange(num_samples, dtype=np.float64) / sample_rate
     responses = [
-        rng.standard_normal(sample_rate) * np.exp(-decay * time)
+        rng.standard_normal(num_samples) * np.exp(-decay * time)
         for decay in (6.0, 12.0)
     ]
     return np.asarray(responses, dtype=np.float32)[:, None].copy(order="C")
@@ -197,7 +198,7 @@ def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(tmp_path: Path)
             "audio_dtype": "float32",
             "sample_rate": sample_rate,
             "channels": 1,
-            "signal_duration_seconds": 1.0,
+            "signal_duration_seconds": 4.0,
             "samples_per_render_batch": len(audio),
             "samples_per_shard": len(audio),
         }
@@ -249,9 +250,9 @@ def test_pyfdn_sketch_artifact_identity_covers_output_policy() -> None:
     """Persisted identity names DSP, normalization, bins, and package versions."""
     identity = EMBEDDING_REGISTRY["pyfdn_sketch"].resolve_artifact_identity("")
 
-    assert "dsp:octave-edc-abel-huang-density-rfft-flatness-v1" in identity
+    assert "dsp:octave-edc-abel-huang-density-stft-flatness-v2" in identity
     assert "normalization:signed-unit-edc-floor-60db-density-rational-flatness-linear" in identity
-    assert "temporal:equal-duration-32" in identity
+    assert "temporal:fractional-log-32-head-0.005-ratio-200-hann-1024-hop-128-frame-center" in identity
     assert "packages:numpy:" in identity
     assert ",pyfdn:" in identity
     assert ",scipy:" in identity
