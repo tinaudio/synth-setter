@@ -148,6 +148,25 @@ files under `r2://experiments/clap-renders/`; the CSV records the prompt-to-rend
 CLAP cosine similarity and distance. Run `synth-setter-clap --help` for checkpoint,
 device, output, seed, and upload overrides.
 
+The paired experiment runner also accepts official MeanAudio-S-Full generation:
+
+```bash
+uv run python scripts/dev/run_clap_comparison.py \
+  --candidate-source meanaudio-s-full \
+  --candidate-checkpoint r2://intermediate-data/checkpoints/flow_sketch_prelim_base/flow_sketch_prelim_base-20260901T230441570Z-1463d84a00744d739e598e01bdce4196/last.ckpt \
+  --destination r2://experiments/clap-renders/comparisons/<run-id> \
+  --output-dir logs/clap-comparisons/<run-id>
+```
+
+This path defaults to 25 MeanFlow steps, four seconds, and seed zero. It feeds the
+unnormalized pre-decode `(B, 20, 125)` latent directly to the inverse checkpoint;
+resume refuses artifacts whose generation or checkpoint identity differs. Use
+`--candidate-source meanaudio-s-full-reencoded` to compare the explicit
+VAE-decode → BigVGAN → VAE-encode posterior-mean projection without changing the
+direct experimental path. CLAP candidates accept `--clap-sample-steps` and
+`--clap-cfg-strength` for solver and guidance A/B runs; both settings are part of
+the resume identity and published provenance.
+
 See the project documentation for a full walkthrough.
 
 ## Project Structure

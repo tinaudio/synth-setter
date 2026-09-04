@@ -10,11 +10,15 @@ import pytest
 
 from synth_setter.pipeline.data.matpac_plus import TINYMU_PACKAGE_COMMIT, TINYMU_TIMM_VERSION
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_PACKAGE_COMMIT
+from synth_setter.pipeline.data.meanaudio_generation import MEANAUDIO_CLAP_PACKAGE_REVISION
 from synth_setter.pupujepa import PUPUJEPA_TIMM_VERSION
 
 _TINYMU_REQUIREMENT = f"tinymu @ git+https://github.com/ktinubu/TinyMU@{TINYMU_PACKAGE_COMMIT}"
 _MEANAUDIO_REQUIREMENT = (
     f"meanaudio @ git+https://github.com/xiquan-li/MeanAudio.git@{MEANAUDIO_PACKAGE_COMMIT}"
+)
+_MEANAUDIO_CLAP_REQUIREMENT = (
+    f"laion-clap @ git+https://github.com/hkchengrex/CLAP.git@{MEANAUDIO_CLAP_PACKAGE_REVISION}"
 )
 _MEANAUDIO_REQUIRES_DIST = [
     "einops>=0.6",
@@ -140,6 +144,25 @@ def test_meanaudio_package_and_metadata_override_match_lock(
     assert (
         'source = { git = "https://github.com/xiquan-li/MeanAudio.git?rev='
         f"{MEANAUDIO_PACKAGE_COMMIT}#{MEANAUDIO_PACKAGE_COMMIT}"
+        '" }'
+    ) in lock_text
+
+
+def test_meanaudio_generation_dependencies_are_pinned_in_torch_runtime(
+    project_root: Path, pyproject: _Pyproject
+) -> None:
+    """S-Full generation installs its immutable CLAP code and MeanFlow integrator.
+
+    :param project_root: Repository root containing ``uv.lock``.
+    :param pyproject: Parsed project metadata.
+    """
+    torch_dependencies = pyproject["dependency-groups"]["torch"]
+    assert _MEANAUDIO_CLAP_REQUIREMENT in torch_dependencies
+    assert "torchdiffeq>=0.2.5" in torch_dependencies
+    lock_text = (project_root / "uv.lock").read_text()
+    assert (
+        'source = { git = "https://github.com/hkchengrex/CLAP.git?rev='
+        f"{MEANAUDIO_CLAP_PACKAGE_REVISION}#{MEANAUDIO_CLAP_PACKAGE_REVISION}"
         '" }'
     ) in lock_text
 
