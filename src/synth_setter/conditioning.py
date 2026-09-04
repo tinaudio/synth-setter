@@ -71,7 +71,7 @@ class SketchControlLayout:
         return self.group_slices[-1].stop
 
 
-SKETCH_CONTROL_LAYOUTS: Mapping[SketchControlProfile, SketchControlLayout] = {
+_SKETCH_CONTROL_LAYOUTS: Mapping[SketchControlProfile, SketchControlLayout] = {
     "music": SketchControlLayout(
         profile="music",
         group_names=("loudness", "centroid", "pitch"),
@@ -95,7 +95,7 @@ def sketch_control_layout(profile: SketchControlProfile) -> SketchControlLayout:
     :param profile: Profile discriminator.
     :returns: Immutable group names and channel slices.
     """
-    return SKETCH_CONTROL_LAYOUTS[profile]
+    return _SKETCH_CONTROL_LAYOUTS[profile]
 
 
 class EmbeddingConditioningSpec(BaseModel):
