@@ -183,13 +183,17 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
     :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
     """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
     HydraConfig().set_config(cfg_pyfdn_train)
 
-    _, objects = train(cfg_pyfdn_train)
+    metrics, objects = train(cfg_pyfdn_train)
 
     assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
     assert cfg_pyfdn_train.model.num_params == 27
     assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics["per_param_mse_spec_quantized/delays"])
     assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
 
 

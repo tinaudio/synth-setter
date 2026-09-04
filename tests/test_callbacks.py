@@ -351,7 +351,17 @@ def _run_validation_epoch(param_spec: str, per_param_mse: torch.Tensor) -> dict[
     return module.logged
 
 
-@pytest.mark.parametrize("param_spec", ["surge_4", "surge_simple", "surge_xt", "obxf"])
+@pytest.mark.parametrize(
+    "param_spec",
+    [
+        "obxf",
+        "pyfdn_n8_mono_householder",
+        "pyfdn_pitchshift_n8_mono_householder",
+        "surge_4",
+        "surge_simple",
+        "surge_xt",
+    ],
+)
 def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) -> None:
     """Every ParamSpec parameter gets a metric, regardless of how many columns it spans.
 
@@ -367,6 +377,69 @@ def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) 
     logged = _run_validation_epoch(param_spec, per_param_mse)
 
     assert sorted(logged) == sorted(f"per_param_mse/{name}" for name in spec.names)
+
+
+@pytest.mark.parametrize(
+    ("param_spec", "expected"),
+    [
+        pytest.param(
+            "pyfdn_n8_mono_householder",
+            {
+                "per_param_mse_spec_quantized/delays": 0.25,
+                "per_param_mse_spec_quantized/direct_matrix": 0.0,
+                "per_param_mse_spec_quantized/input_matrix": 0.0625,
+                "per_param_mse_spec_quantized/output_matrix": 0.0,
+                "per_param_mse_spec_quantized/post_delay.rt_dc_seconds": 0.0,
+                "per_param_mse_spec_quantized/post_delay.rt_nyquist_seconds": 0.0,
+                "val/param_mse_spec_quantized": 0.09259259259259259,
+            },
+            id="householder",
+        ),
+        pytest.param(
+            "pyfdn_pitchshift_n8_mono_householder",
+            {
+                "per_param_mse_spec_quantized/delays": 0.25,
+                "per_param_mse_spec_quantized/direct_matrix": 0.0,
+                "per_param_mse_spec_quantized/input_matrix": 0.0625,
+                "per_param_mse_spec_quantized/output_matrix": 0.0,
+                "per_param_mse_spec_quantized/post_delay.geq.rt_seconds": 0.0,
+                "per_param_mse_spec_quantized/post_delay.pitch_shift.active_channels": 1.0,
+                "per_param_mse_spec_quantized/post_delay.pitch_shift.transpose_cents": 0.0,
+                "per_param_mse_spec_quantized/post_delay.pitch_shift.window_size": 0.0,
+                "val/param_mse_spec_quantized": 0.23333333333333334,
+            },
+            id="pitchshift",
+        ),
+    ],
+)
+def test_log_per_param_mse_emits_pyfdn_spec_quantized_graph_per_parameter(
+    param_spec: str, expected: dict[str, float]
+) -> None:
+    """Verify pyFDN array spans retain distinct spec-quantized errors.
+
+    :param param_spec: Registered pyFDN identity under test.
+    :param expected: Exact scalar metrics expected after quantization.
+    """
+    spec = param_specs[param_spec]
+    predictions = torch.zeros(1, spec.encoded_width)
+    predictions[:, :8] = 0.5
+    predictions[:, 8:16] = -0.25
+    callback = LogPerParamMSE(param_spec=param_spec)
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(
+        trainer,
+        pl_module,
+        {"preds": predictions},
+        {"params": torch.zeros_like(predictions)},
+        0,
+    )
+
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    assert module.logged == pytest.approx(expected)
 
 
 def test_log_per_param_mse_weights_spec_quantized_error_by_sample_count() -> None:
