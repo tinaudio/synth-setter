@@ -13,6 +13,14 @@ from jaxtyping import Float, jaxtyped
 from lance.file import LanceFileReader
 from pydantic import ValidationError
 
+from synth_setter.conditioning import (
+    PYFDN_SKETCH_CONTROLS,
+    PYFDN_SKETCH_EDC_BANDS,
+    PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+    PYFDN_SKETCH_EDC_CHILD,
+    PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
+    SKETCH_STORAGE_FRAMES,
+)
 from synth_setter.data.vst.shapes import (
     AUDIO_MP3_FIELD,
     AUDIO_MP3_FIELD_METADATA,
@@ -33,9 +41,6 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
 DEBUG_JSON_TYPE = pa.json_()
-PYFDN_EDC_BANDS = 8
-PYFDN_SKETCH_CONTROLS = 10
-PYFDN_SKETCH_FRAMES = 32
 _LANCE_JSON_FIELD_METADATA = {
     b"ARROW:extension:name": b"lance.json",
     b"ARROW:extension:metadata": b"",
@@ -163,24 +168,28 @@ def pyfdn_sketch_struct_array(
     :returns: Struct array containing EDC, echo-density, and spectral-flatness children.
     :raises ValueError: The control stack does not have shape ``(B, 10, 32)``.
     """
-    expected_inner_shape = (PYFDN_SKETCH_CONTROLS, PYFDN_SKETCH_FRAMES)
+    expected_inner_shape = (PYFDN_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES)
     contiguous = np.ascontiguousarray(controls, dtype=np.float32)
     if contiguous.ndim != 3 or contiguous.shape[1:] != expected_inner_shape:
         raise ValueError(
             f"pyFDN sketch controls have shape {contiguous.shape}, "
-            f"expected (batch, {PYFDN_SKETCH_CONTROLS}, {PYFDN_SKETCH_FRAMES})"
+            f"expected (batch, {PYFDN_SKETCH_CONTROLS}, {SKETCH_STORAGE_FRAMES})"
         )
     return pa.StructArray.from_arrays(
         [
             tensor_array(
-                contiguous[:, :PYFDN_EDC_BANDS],
+                contiguous[:, :PYFDN_SKETCH_EDC_BANDS],
                 np.dtype("float32"),
-                (PYFDN_EDC_BANDS, PYFDN_SKETCH_FRAMES),
+                (PYFDN_SKETCH_EDC_BANDS, SKETCH_STORAGE_FRAMES),
             ),
-            _fixed_size_list_array(contiguous[:, PYFDN_EDC_BANDS]),
-            _fixed_size_list_array(contiguous[:, PYFDN_EDC_BANDS + 1]),
+            _fixed_size_list_array(contiguous[:, PYFDN_SKETCH_EDC_BANDS]),
+            _fixed_size_list_array(contiguous[:, PYFDN_SKETCH_EDC_BANDS + 1]),
         ],
-        names=["edc", "echo_density", "spectral_flatness"],
+        names=[
+            PYFDN_SKETCH_EDC_CHILD,
+            PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+            PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
+        ],
     )
 
 

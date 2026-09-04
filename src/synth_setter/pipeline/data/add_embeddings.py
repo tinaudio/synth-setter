@@ -32,7 +32,11 @@ from einops import rearrange
 from jaxtyping import Float, jaxtyped
 
 from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
-from synth_setter.conditioning import SKETCH_STORAGE_FRAMES
+from synth_setter.conditioning import (
+    PYFDN_SKETCH_CONTROLS,
+    PYFDN_SKETCH_STRUCT_FIELD,
+    SKETCH_STORAGE_FRAMES,
+)
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -145,7 +149,6 @@ SKETCH_ENCODE_MAX_BATCH: int = 32
 # Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
 # per-child schema evolution (unused here) is the 2.2-only operation.
 SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
-PYFDN_SKETCH_FIELD = "pyfdn_sketch"
 PYFDN_SKETCH_POLICY_VERSION = 1
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
@@ -805,23 +808,21 @@ def _encode_pyfdn_sketch_column(
     :returns: Struct array containing the three temporal control families.
     :raises ValueError: Controls have the wrong shape, non-finite values, or leave ``[0, 1]``.
     """
-    from synth_setter.pipeline.data.lance_shard import (
-        PYFDN_SKETCH_CONTROLS,
-        PYFDN_SKETCH_FRAMES,
-        pyfdn_sketch_struct_array,
-    )
+    from synth_setter.pipeline.data.lance_shard import pyfdn_sketch_struct_array
 
     audio = sources[AUDIO_FIELD]
     encode = cast("SketchEncodeFn", encoder)
-    controls = _finite_embedding(PYFDN_SKETCH_FIELD, encode(audio, sample_rate))
-    expected_shape = (len(audio), PYFDN_SKETCH_CONTROLS, PYFDN_SKETCH_FRAMES)
+    controls = _finite_embedding(PYFDN_SKETCH_STRUCT_FIELD, encode(audio, sample_rate))
+    expected_shape = (len(audio), PYFDN_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES)
     if controls.shape != expected_shape:
         raise ValueError(
-            f"{PYFDN_SKETCH_FIELD} encoder produced shape {controls.shape}, "
+            f"{PYFDN_SKETCH_STRUCT_FIELD} encoder produced shape {controls.shape}, "
             f"expected {expected_shape}"
         )
     if controls.min() < -1.0 or controls.max() > 1.0:
-        raise ValueError(f"{PYFDN_SKETCH_FIELD} controls out of bounds; expected [-1, 1]")
+        raise ValueError(
+            f"{PYFDN_SKETCH_STRUCT_FIELD} controls out of bounds; expected [-1, 1]"
+        )
     return pyfdn_sketch_struct_array(controls)
 
 
@@ -1009,7 +1010,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     ),
     "pyfdn_sketch": EmbeddingSpec(
         name="pyfdn_sketch",
-        column=PYFDN_SKETCH_FIELD,
+        column=PYFDN_SKETCH_STRUCT_FIELD,
         default_checkpoint="",
         co_resident=True,
         index=None,
