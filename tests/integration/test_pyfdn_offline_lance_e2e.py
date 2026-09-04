@@ -356,6 +356,8 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.scheduler = None
+            cfg.model.sketch_dropout_rate = 0.0
+            cfg.model.all_conditioning_dropout_rate = 0.0
             cfg.model.encoder.d_model = 16
             cfg.model.encoder.n_heads = 1
             cfg.model.encoder.n_layers = 1
