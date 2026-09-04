@@ -41,6 +41,7 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.vst import plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
@@ -1286,7 +1287,8 @@ def _compose_fake_oracle_eval_cfg(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
-            + ([f"datamodule={datamodule}"] if datamodule else []),
+            + ([f"datamodule={datamodule}"] if datamodule else [])
+            + (["render=pyfdn"] if param_spec_name == "pyfdn_n8_mono_householder" else []),
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
@@ -1305,27 +1307,28 @@ def _compose_fake_oracle_eval_cfg(
         # Pin the full split because surge/base bounds validation by batch count.
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
-        # Render group is null on fake_oracle; set it inline to the dataset's spec.
-        cfg.render = RenderConfig.model_validate(
-            {
-                "synth": {
-                    "name": param_spec_name,
-                    "param_spec_name": param_spec_name,
-                    "plugin_state_path": str(plugin_state_paths[param_spec_name]),
-                    "plugin_path": "plugins/fake.vst3",
-                    "synth_version": "1.3.4",
-                },
-                "sample_rate": 44100,
-                "channels": 2,
-                "velocity": 100,
-                "signal_duration_seconds": 4.0,
-                "min_loudness": -55.0,
-                "samples_per_render_batch": 1,
-                "samples_per_shard": 5,
-                "plugin_reload_cadence": "render",
-                "gui_toggle_cadence": "never",
-            }
-        ).model_dump(mode="json")
+        # Render group is null on fake_oracle; set it inline for fake VST datasets.
+        if param_spec_name != "pyfdn_n8_mono_householder":
+            cfg.render = RenderConfig.model_validate(
+                {
+                    "synth": {
+                        "name": param_spec_name,
+                        "param_spec_name": param_spec_name,
+                        "plugin_state_path": str(plugin_state_paths[param_spec_name]),
+                        "plugin_path": "plugins/fake.vst3",
+                        "synth_version": "1.3.4",
+                    },
+                    "sample_rate": 44100,
+                    "channels": 2,
+                    "velocity": 100,
+                    "signal_duration_seconds": 4.0,
+                    "min_loudness": -55.0,
+                    "samples_per_render_batch": 1,
+                    "samples_per_shard": 5,
+                    "plugin_reload_cadence": "render",
+                    "gui_toggle_cadence": "never",
+                }
+            ).model_dump(mode="json")
     return cfg
 
 
@@ -1467,6 +1470,53 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)
     assert not any("shuffle" in key for key in metric_dict)
+
+
+@pytest.mark.slow
+def test_evaluate_predict_mode_pyfdn_renders_finite_audio_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """The eval entrypoint renders a pyFDN prediction through real post-processing.
+
+    :param tmp_path: Hydra output root and two-row Lance predict dataset.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    dataset_root = tmp_path / "pyfdn-data"
+    dataset_root.mkdir()
+    params, notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(17))
+    encoded = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(params, notes)
+    write_lance_shard(
+        dataset_root / "test.lance",
+        {
+            "audio": np.zeros((2, 1, 176_400), dtype=np.float32),
+            "mel_spec": np.zeros((2, 1, 128, 401), dtype=np.float32),
+            "param_array": np.repeat(encoded[None, :], 2, axis=0),
+        },
+    )
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        dataset_root,
+        mode="predict",
+        param_spec_name="pyfdn_n8_mono_householder",
+        datamodule="pyfdn",
+    )
+    with open_dict(cfg):
+        cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.evaluation.compute_metrics = False
+        cfg.evaluation.rerender_target = True
+
+    HydraConfig().set_config(cfg)
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    with AudioFile(str(tmp_path / "audio" / "sample_0" / "pred.wav")) as audio_file:
+        rendered = audio_file.read(audio_file.frames)
+    assert rendered.shape == (1, 176_400)
+    assert np.isfinite(rendered).all()
 
 
 @pytest.mark.fake_vst
