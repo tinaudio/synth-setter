@@ -34,6 +34,18 @@ WORKFLOW_TARGETS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _workflow_target_cases() -> list[tuple[str, str]]:
+    """Return sorted workflow and Makefile target pairs.
+
+    :returns: Workflow filename and Makefile target pairs.
+    """
+    cases = []
+    for workflow, targets in WORKFLOW_TARGETS.items():
+        for target in targets:
+            cases.append((workflow, target))
+    return sorted(cases)
+
+
 def _recipe(makefile: str, target: str) -> str:
     """Return the tab-indented recipe body for ``target`` in the Makefile text.
 
@@ -230,12 +242,7 @@ def test_full_cpu_linux_runs_all_cpu_tests_through_headless_wrapper(
 
 
 @pytest.mark.infra
-@pytest.mark.parametrize(
-    ("workflow", "target"),
-    sorted(
-        (workflow, target) for workflow, targets in WORKFLOW_TARGETS.items() for target in targets
-    ),
-)
+@pytest.mark.parametrize(("workflow", "target"), _workflow_target_cases())
 def test_workflow_invokes_make_target(project_root: Path, workflow: str, target: str) -> None:
     """The workflow calls `make <target>` rather than re-spelling pytest markers.
 
@@ -253,7 +260,7 @@ def test_workflow_invokes_make_target(project_root: Path, workflow: str, target:
 
 @pytest.mark.infra
 def test_ci_workflow_fast_lane_exceeds_wall_clock_limit_terminates(project_root: Path) -> None:
-    """CI terminates the fast lane once its 120-second limit expires.
+    """CI terminates the fast lane at its configured budget.
 
     :param project_root: Session fixture locating the workflow.
     """

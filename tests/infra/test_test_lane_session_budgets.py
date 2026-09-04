@@ -69,7 +69,8 @@ def test_fast_lane_collects_only_curated_test_paths() -> None:
     expanded = _dry_run("test-fast")
     selected_paths = {token for token in expanded.split() if token.startswith("tests/")}
 
-    assert len(selected_paths) > 1
+    assert "tests/_meta" in selected_paths
+    assert "tests/integration/test_parallel_shard_dispatch.py" in selected_paths
     assert '-m "not slow and not gpu and not mps and not requires_vst and not infra"' in expanded
     assert " tests " not in f" {expanded} "
 
@@ -87,7 +88,7 @@ def test_medium_lane_preserves_previous_full_non_slow_selection() -> None:
 @pytest.mark.infra
 @pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
 def test_fast_budget_target_prints_two_minute_limit() -> None:
-    """The workflow-readable fast budget is 120 seconds."""
+    """The workflow-readable fast budget matches the lane configuration."""
     make = shutil.which("make")
     assert make is not None
 
