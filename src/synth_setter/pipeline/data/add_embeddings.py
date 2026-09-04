@@ -32,7 +32,11 @@ from einops import rearrange
 from jaxtyping import Float, jaxtyped
 
 from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
-from synth_setter.conditioning import SKETCH_STORAGE_FRAMES
+from synth_setter.conditioning import (
+    PYFDN_SKETCH_CONTROLS,
+    PYFDN_SKETCH_STRUCT_FIELD,
+    SKETCH_STORAGE_FRAMES,
+)
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -145,6 +149,7 @@ SKETCH_ENCODE_MAX_BATCH: int = 32
 # Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
 # per-child schema evolution (unused here) is the 2.2-only operation.
 SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
+PYFDN_SKETCH_POLICY_VERSION = 2
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
@@ -348,6 +353,27 @@ def _sketch_artifact_identity(checkpoint: str) -> str:
         f"storage:avgmax{SKETCH_STORAGE_FRAMES}"
     )
     return _versioned_artifact_identity("sketch", identity)
+
+
+def _pyfdn_sketch_artifact_identity(checkpoint: str) -> str:
+    """Identify the checkpoint-free pyFDN temporal-sketch extraction policy.
+
+    :param checkpoint: Empty placeholder; the extractor has no learned weights.
+    :returns: Versioned DSP, normalization, temporal-bin, and package identity.
+    :raises ValueError: A checkpoint override was supplied.
+    """
+    if checkpoint:
+        raise ValueError("pyfdn_sketch is checkpoint-free and rejects checkpoint overrides")
+    packages = ",".join(
+        f"{name}:{importlib.metadata.version(name)}" for name in ("numpy", "pyfdn", "scipy")
+    )
+    policy = (
+        f"dsp:octave-edc-abel-huang-density-stft-flatness-v{PYFDN_SKETCH_POLICY_VERSION};"
+        "normalization:signed-unit-edc-floor-60db-density-rational-flatness-linear;"
+        "temporal:fractional-log-32-head-0.005-ratio-200-hann-1024-hop-128-frame-center;"
+        f"packages:{packages}"
+    )
+    return _versioned_artifact_identity("pyfdn_sketch", policy)
 
 
 def _ssondo_artifact_identity(checkpoint: str) -> str:
@@ -741,6 +767,65 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
+def _load_pyfdn_sketch_encoder(
+    checkpoint: str, config: AddEmbeddingsConfig
+) -> Encoder:
+    """Bind the canonical checkpoint-free pyFDN sketch extractor.
+
+    :param checkpoint: Empty registry placeholder.
+    :param config: Uniform registry config; no device is needed.
+    :returns: Batch adapter over stored mono waveform audio.
+    """
+    _pyfdn_sketch_artifact_identity(checkpoint)
+    del config
+
+    def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        from synth_setter.features import pyfdn_controls
+
+        extract = cast(
+            "Callable[[np.ndarray, float], np.ndarray]",
+            pyfdn_controls.extract_reverb_sketch,
+        )
+        if audio.ndim != 3 or audio.shape[1] != 1:
+            raise ValueError(
+                f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}"
+            )
+        return np.stack(
+            [extract(row[0], sample_rate) for row in audio]
+        ).astype(np.float32, copy=False)
+
+    return encode
+
+
+def _encode_pyfdn_sketch_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> pa.Array:
+    """Encode stored waveform audio as the pyFDN temporal-sketch struct.
+
+    :param sources: Decoded source columns carrying ``(B, 1, T)`` real audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: Canonical pyFDN sketch extractor batch adapter.
+    :returns: Struct array containing the three temporal control families.
+    :raises ValueError: Controls have the wrong shape, non-finite values, or leave ``[0, 1]``.
+    """
+    from synth_setter.pipeline.data.lance_shard import pyfdn_sketch_struct_array
+
+    audio = sources[AUDIO_FIELD]
+    encode = cast("SketchEncodeFn", encoder)
+    controls = _finite_embedding(PYFDN_SKETCH_STRUCT_FIELD, encode(audio, sample_rate))
+    expected_shape = (len(audio), PYFDN_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES)
+    if controls.shape != expected_shape:
+        raise ValueError(
+            f"{PYFDN_SKETCH_STRUCT_FIELD} encoder produced shape {controls.shape}, "
+            f"expected {expected_shape}"
+        )
+    if controls.min() < -1.0 or controls.max() > 1.0:
+        raise ValueError(
+            f"{PYFDN_SKETCH_STRUCT_FIELD} controls out of bounds; expected [-1, 1]"
+        )
+    return pyfdn_sketch_struct_array(controls)
+
+
 def _encode_ssondo_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
 ) -> pa.Array:
@@ -922,6 +1007,16 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_pupujepa_large_spec_encoder,
         encode_column=encode_pupujepa_large_column,
         resolve_artifact_identity=_pupujepa_large_artifact_identity,
+    ),
+    "pyfdn_sketch": EmbeddingSpec(
+        name="pyfdn_sketch",
+        column=PYFDN_SKETCH_STRUCT_FIELD,
+        default_checkpoint="",
+        co_resident=True,
+        index=None,
+        load_encoder=_load_pyfdn_sketch_encoder,
+        encode_column=_encode_pyfdn_sketch_column,
+        resolve_artifact_identity=_pyfdn_sketch_artifact_identity,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",

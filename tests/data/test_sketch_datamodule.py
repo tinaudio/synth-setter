@@ -14,13 +14,18 @@ from synth_setter.conditioning import (
     SKETCH_CENTROID_CHILD,
     SKETCH_LOUDNESS_CHILD,
     SKETCH_PITCH_SLICE,
+    SKETCH_STORAGE_FRAMES,
     SKETCH_STRUCT_FIELD,
     SketchControlSpec,
 )
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.data.lance_shard import sketch_struct_array, write_lance_dataset
+from synth_setter.pipeline.data.lance_shard import (
+    pyfdn_sketch_struct_array,
+    sketch_struct_array,
+    write_lance_dataset,
+)
 from tests.data.test_embedding_conditioning import _write_embedding_shard
 from tests.helpers.lance_fixtures import (
     make_shard_columns,
@@ -324,6 +329,133 @@ def test_real_lance_split_nonfinite_struct_child_raises(tmp_path: Path) -> None:
     module = _sketch_module(tmp_path, fake=False)
 
     with pytest.raises(ValueError, match=f"'{SKETCH_LOUDNESS_CHILD}'.*non-finite"):
+        module.setup("validate")
+
+
+def _write_pyfdn_sketch_split(path: Path, values: np.ndarray) -> None:
+    """Write one split carrying the pyFDN reverb-sketch struct.
+
+    :param path: Destination Lance dataset.
+    :param values: Signed-unit ``(rows, 10, 32)`` controls.
+    """
+    struct = pyfdn_sketch_struct_array(values)
+    batch = shard_record_batch(make_shard_columns(len(values), seed=10))
+    extended = batch.append_column(
+        pa.field("pyfdn_sketch", struct.type, nullable=False), struct
+    )
+    write_lance_dataset(path, extended.schema, [extended])
+
+
+def _pyfdn_sketch_module(root: Path, *, fake: bool) -> LanceVSTDataModule:
+    """Build a pyFDN sketch-profile datamodule.
+
+    :param root: Dataset root, or an unused path in fake mode.
+    :param fake: Whether to synthesize batches.
+    :returns: Unset-up datamodule.
+    """
+    return LanceVSTDataModule(
+        dataset_root=root,
+        batch_size=2,
+        sketch=SketchControlSpec(
+            column="pyfdn_sketch",
+            profile="pyfdn_reverb",
+            num_frames=SKETCH_STORAGE_FRAMES,
+        ),
+        fake=fake,
+        use_saved_mean_and_variance=False,
+        num_workers=0,
+        pin_memory=False,
+        param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
+    )
+
+
+def test_real_pyfdn_sketch_profile_reassembles_float32_controls(
+    tmp_path: Path,
+) -> None:
+    """The three stored children reassemble as model-ready ``float32[B,10,32]``.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    values = np.linspace(-0.9, 0.9, 4 * 10 * 32, dtype=np.float32).reshape(4, 10, 32)
+    _write_pyfdn_sketch_split(tmp_path / "val.lance", values)
+    module = _pyfdn_sketch_module(tmp_path, fake=False)
+
+    module.setup("validate")
+    try:
+        sketch = next(iter(module.val_dataloader()))["sketch_ctrl"]
+    finally:
+        module.teardown()
+
+    assert sketch is not None
+    assert sketch.dtype == torch.float32
+    assert sketch.shape == (2, 10, SKETCH_STORAGE_FRAMES)
+    assert torch.equal(sketch, torch.from_numpy(values[:2]))
+
+
+def test_real_pyfdn_sketch_profile_does_not_apply_music_pitch_threshold(
+    tmp_path: Path,
+) -> None:
+    """Low signed reverb coordinates survive the music-only pitch zero-bin.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    values = np.full((4, 10, SKETCH_STORAGE_FRAMES), 0.05, dtype=np.float32)
+    values[:, 2:] *= -1
+    _write_pyfdn_sketch_split(tmp_path / "val.lance", values)
+    module = _pyfdn_sketch_module(tmp_path, fake=False)
+
+    module.setup("validate")
+    try:
+        sketch = next(iter(module.val_dataloader()))["sketch_ctrl"]
+    finally:
+        module.teardown()
+
+    assert sketch is not None
+    assert torch.equal(sketch, torch.from_numpy(values[:2]))
+
+
+def test_fake_pyfdn_sketch_profile_uses_reverb_layout(tmp_path: Path) -> None:
+    """Synthetic batches honor the selected profile's channel count and range.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = _pyfdn_sketch_module(tmp_path, fake=True)
+
+    module.setup("validate")
+    try:
+        sketch = next(iter(module.val_dataloader()))["sketch_ctrl"]
+    finally:
+        module.teardown()
+
+    assert sketch is not None
+    assert sketch.shape == (2, 10, SKETCH_STORAGE_FRAMES)
+    assert torch.all((sketch >= -1) & (sketch <= 1))
+
+
+def test_real_pyfdn_sketch_profile_with_mis_shaped_child_raises(
+    tmp_path: Path,
+) -> None:
+    """Every reverb child must match its profile-specific fixed shape.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    values = np.zeros((4, 10, SKETCH_STORAGE_FRAMES), dtype=np.float32)
+    full = pyfdn_sketch_struct_array(values)
+    wrong = pa.FixedSizeListArray.from_arrays(
+        pa.array(np.zeros(4 * 31, dtype=np.float32)), 31
+    )
+    struct = pa.StructArray.from_arrays(
+        [full.field("edc"), wrong, full.field("spectral_flatness")],
+        names=["edc", "echo_density", "spectral_flatness"],
+    )
+    batch = shard_record_batch(make_shard_columns(4, seed=10))
+    extended = batch.append_column(
+        pa.field("pyfdn_sketch", struct.type, nullable=False), struct
+    )
+    write_lance_dataset(tmp_path / "val.lance", extended.schema, [extended])
+    module = _pyfdn_sketch_module(tmp_path, fake=False)
+
+    with pytest.raises(ValueError, match="echo_density.*has shape"):
         module.setup("validate")
 
 
