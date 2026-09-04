@@ -228,8 +228,10 @@ def _assert_slap_train_artifacts(
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_train_slap_tiny_lance_end_to_end(cfg_slap_train_lance: DictConfig) -> None:
-    """Run public SLAP fit, validation, reload, and test on one GPU.
+def test_train_slap_ast_audio_mlp_param_experiment_end_to_end(
+    cfg_slap_train_lance: DictConfig,
+) -> None:
+    """Run the shipped SLAP experiment through fit, reload, and test on one GPU.
 
     :param cfg_slap_train_lance: Tiny real Lance training configuration.
     """

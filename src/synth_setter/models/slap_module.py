@@ -72,7 +72,7 @@ class SLAPModule(LightningModule):
     ) -> None:
         """Build online and moving-average modality arms.
 
-        :param audio_encoder: Online Siamese arm consuming waveform batches.
+        :param audio_encoder: Online Siamese arm consuming audio or mel batches.
         :param text_encoder: Online Siamese arm consuming the paired second modality.
         :param loss_fn: Reference BYOL loss over online predictions and target projections.
         :param optimizer: Partially configured optimizer factory.

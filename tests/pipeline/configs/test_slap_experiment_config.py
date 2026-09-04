@@ -40,5 +40,8 @@ def test_slap_ast_audio_mlp_param_model_accepts_paired_surge_batch() -> None:
     }
 
     loss = model.training_step(batch, batch_idx=0)
+    loss.backward()
 
     assert torch.isfinite(loss)
+    assert all(parameter.grad is not None for parameter in model.audio_encoder.parameters())
+    assert all(parameter.grad is not None for parameter in model.text_encoder.parameters())
