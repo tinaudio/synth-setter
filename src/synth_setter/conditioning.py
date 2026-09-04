@@ -36,7 +36,7 @@ SKETCH_LOUDNESS_ROW: int = 0
 SKETCH_CENTROID_ROW: int = 1
 SKETCH_PITCH_SLICE: slice = slice(NUM_SKETCH_TRACK_ROWS, NUM_SKETCH_CONTROLS)
 
-SketchControlProfile = Literal["music", "pyfdn_reverb"]
+type SketchControlProfile = Literal["music", "pyfdn_reverb"]
 
 
 @dataclass(frozen=True)
