@@ -864,6 +864,35 @@ class VSTFlowMatchingModule(LightningModule):
                 sync_dist=True,
             )
 
+    @jaxtyped(typechecker=beartype)
+    def _per_param_mse_outputs(
+        self,
+        predicted: Float[torch.Tensor, "batch params"],
+        target: Float[torch.Tensor, "batch params"],
+        number_group_metric: NumberGroupSwapParamMSE | None,
+    ) -> dict[str, Shaped[torch.Tensor, ...]]:
+        """Build the per-parameter metrics consumed by evaluation callbacks.
+
+        :param predicted: Sampled model-space parameter vectors.
+        :param target: Ground-truth model-space parameter vectors.
+        :param number_group_metric: Structured metric defining eligible parameter swaps.
+        :returns: Scalar, per-parameter, and prediction tensors for one batch.
+        """
+        per_param_mse = (predicted - target).square().mean(dim=0)
+        outputs = {
+            "param_mse": per_param_mse.mean(),
+            "per_param_mse": per_param_mse,
+            "per_param_mse_best_swap": best_swap_per_param_mse(predicted, target),
+            "preds": predicted,
+        }
+        if number_group_metric is not None:
+            outputs["per_param_mse_number_group_swap"] = number_group_swap_per_param_mse(
+                predicted,
+                target,
+                number_group_metric.param_spec,
+            )
+        return outputs
+
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
@@ -876,17 +905,14 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
         self._log_validation_pitch_residuals(pred_params, batch["params"])
-        per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
-        per_param_mse_best_swap = best_swap_per_param_mse(pred_params, batch["params"])
-        per_param_mse_number_group_swap = None
-        if self.val_param_mse_number_group_swap is not None:
-            per_param_mse_number_group_swap = number_group_swap_per_param_mse(
-                pred_params,
-                batch["params"],
-                self.val_param_mse_number_group_swap.param_spec,
-            )
-        param_mse = per_param_mse.mean()
-        self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
+        outputs = self._per_param_mse_outputs(
+            pred_params,
+            batch["params"],
+            self.val_param_mse_number_group_swap,
+        )
+        self.log(
+            "val/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
+        )
 
         self.val_param_mse_best_swap.update(pred_params, batch["params"])
         self.log(
@@ -903,15 +929,6 @@ class VSTFlowMatchingModule(LightningModule):
                 on_step=False,
                 on_epoch=True,
             )
-
-        outputs = {
-            "param_mse": param_mse,
-            "per_param_mse": per_param_mse,
-            "per_param_mse_best_swap": per_param_mse_best_swap,
-            "preds": pred_params,
-        }
-        if per_param_mse_number_group_swap is not None:
-            outputs["per_param_mse_number_group_swap"] = per_param_mse_number_group_swap
         return outputs
 
     def on_validation_epoch_end(self):
@@ -928,8 +945,14 @@ class VSTFlowMatchingModule(LightningModule):
             control_tokens=self._control_token_branches_from_batch(batch),
         )
 
-        param_mse = (pred_params - batch["params"]).square().mean()
-        self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
+        outputs = self._per_param_mse_outputs(
+            pred_params,
+            batch["params"],
+            self.test_param_mse_number_group_swap,
+        )
+        self.log(
+            "test/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
+        )
 
         self.test_param_mse_best_swap.update(pred_params, batch["params"])
         self.log(
@@ -946,8 +969,7 @@ class VSTFlowMatchingModule(LightningModule):
                 on_step=False,
                 on_epoch=True,
             )
-
-        return param_mse
+        return outputs
 
     def on_test_epoch_end(self) -> None:
         pass

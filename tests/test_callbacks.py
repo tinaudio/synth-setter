@@ -351,6 +351,23 @@ def _run_validation_epoch(param_spec: str, per_param_mse: torch.Tensor) -> dict[
     return module.logged
 
 
+def _run_test_epoch(param_spec: str, per_param_mse: torch.Tensor) -> dict[str, float]:
+    """Drive one test epoch of ``LogPerParamMSE`` and return what it logged.
+
+    :param param_spec: Registered ParamSpec name selecting the metric labels.
+    :param per_param_mse: One per-encoded-column MSE vector, as the modules emit it.
+    :returns: The metric mapping the callback passed to ``log_dict``.
+    """
+    callback = LogPerParamMSE(param_spec)
+    module = _RecordingModule()
+    trainer = cast("Trainer", None)
+    pl_module = cast("LightningModule", module)
+    callback.on_test_epoch_start(trainer, pl_module)
+    callback.on_test_batch_end(trainer, pl_module, {"per_param_mse": per_param_mse}, None, 0)
+    callback.on_test_epoch_end(trainer, pl_module)
+    return module.logged
+
+
 @pytest.mark.parametrize(
     "param_spec",
     [
@@ -376,7 +393,34 @@ def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) 
 
     logged = _run_validation_epoch(param_spec, per_param_mse)
 
-    assert sorted(logged) == sorted(f"per_param_mse/{name}" for name in spec.names)
+    assert sorted(logged) == sorted(f"val/per_param_mse/{name}" for name in spec.names)
+
+
+def test_log_per_param_mse_weights_batch_means_by_sample_count() -> None:
+    """A ragged final batch contributes one per-parameter vote per sample."""
+    callback = LogPerParamMSE(param_spec="surge_4")
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    callback.on_test_epoch_start(trainer, pl_module)
+    callback.on_test_batch_end(
+        trainer,
+        pl_module,
+        {"per_param_mse": torch.zeros(7)},
+        {"params": torch.zeros(1, 7)},
+        0,
+    )
+    callback.on_test_batch_end(
+        trainer,
+        pl_module,
+        {"per_param_mse": torch.ones(7)},
+        {"params": torch.zeros(3, 7)},
+        1,
+    )
+
+    callback.on_test_epoch_end(trainer, pl_module)
+
+    assert module.logged["test/per_param_mse/a_amp_eg_attack"] == pytest.approx(0.75)
 
 
 @pytest.mark.parametrize(
@@ -385,12 +429,12 @@ def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) 
         pytest.param(
             "pyfdn_n8_mono_householder",
             {
-                "per_param_mse_spec_quantized/delays": 0.25,
-                "per_param_mse_spec_quantized/direct_matrix": 0.0,
-                "per_param_mse_spec_quantized/input_matrix": 0.0625,
-                "per_param_mse_spec_quantized/output_matrix": 0.0,
-                "per_param_mse_spec_quantized/post_delay.rt_dc_seconds": 0.0,
-                "per_param_mse_spec_quantized/post_delay.rt_nyquist_seconds": 0.0,
+                "val/per_param_mse_spec_quantized/delays": 0.25,
+                "val/per_param_mse_spec_quantized/direct_matrix": 0.0,
+                "val/per_param_mse_spec_quantized/input_matrix": 0.0625,
+                "val/per_param_mse_spec_quantized/output_matrix": 0.0,
+                "val/per_param_mse_spec_quantized/post_delay.rt_dc_seconds": 0.0,
+                "val/per_param_mse_spec_quantized/post_delay.rt_nyquist_seconds": 0.0,
                 "val/param_mse_spec_quantized": 0.09259259259259259,
             },
             id="householder",
@@ -398,14 +442,14 @@ def test_log_per_param_mse_emits_one_metric_per_parameter_name(param_spec: str) 
         pytest.param(
             "pyfdn_pitchshift_n8_mono_householder",
             {
-                "per_param_mse_spec_quantized/delays": 0.25,
-                "per_param_mse_spec_quantized/direct_matrix": 0.0,
-                "per_param_mse_spec_quantized/input_matrix": 0.0625,
-                "per_param_mse_spec_quantized/output_matrix": 0.0,
-                "per_param_mse_spec_quantized/post_delay.geq.rt_seconds": 0.0,
-                "per_param_mse_spec_quantized/post_delay.pitch_shift.active_channels": 1.0,
-                "per_param_mse_spec_quantized/post_delay.pitch_shift.transpose_cents": 0.0,
-                "per_param_mse_spec_quantized/post_delay.pitch_shift.window_size": 0.0,
+                "val/per_param_mse_spec_quantized/delays": 0.25,
+                "val/per_param_mse_spec_quantized/direct_matrix": 0.0,
+                "val/per_param_mse_spec_quantized/input_matrix": 0.0625,
+                "val/per_param_mse_spec_quantized/output_matrix": 0.0,
+                "val/per_param_mse_spec_quantized/post_delay.geq.rt_seconds": 0.0,
+                "val/per_param_mse_spec_quantized/post_delay.pitch_shift.active_channels": 1.0,
+                "val/per_param_mse_spec_quantized/post_delay.pitch_shift.transpose_cents": 0.0,
+                "val/per_param_mse_spec_quantized/post_delay.pitch_shift.window_size": 0.0,
                 "val/param_mse_spec_quantized": 0.23333333333333334,
             },
             id="pitchshift",
@@ -518,7 +562,17 @@ def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:
     callback.on_validation_batch_end(trainer, pl_module, outputs, None, 0)
     callback.on_validation_epoch_end(trainer, pl_module)
 
-    assert module.logged["per_param_mse_best_swap/note_start_and_end"] == pytest.approx(5.5)
+    assert module.logged["val/per_param_mse_best_swap/note_start_and_end"] == pytest.approx(5.5)
+
+
+def test_log_per_param_mse_emits_test_metrics_in_separate_namespace() -> None:
+    """Test-set vectors cannot overwrite validation series in W&B."""
+    spec = param_specs["surge_4"]
+
+    logged = _run_test_epoch("surge_4", torch.arange(spec.encoded_width, dtype=torch.float32))
+
+    assert logged["test/per_param_mse/note_start_and_end"] == pytest.approx(5.5)
+    assert not any(name.startswith("val/") for name in logged)
 
 
 def test_log_per_param_mse_averages_a_multi_column_parameter_over_its_span() -> None:
@@ -533,7 +587,7 @@ def test_log_per_param_mse_averages_a_multi_column_parameter_over_its_span() -> 
 
     logged = _run_validation_epoch("surge_4", per_param_mse)
 
-    assert logged["per_param_mse/note_start_and_end"] == pytest.approx(5.5)
+    assert logged["val/per_param_mse/note_start_and_end"] == pytest.approx(5.5)
 
 
 def test_log_per_param_mse_labels_parameters_after_a_onehot_correctly() -> None:
@@ -549,7 +603,7 @@ def test_log_per_param_mse_labels_parameters_after_a_onehot_correctly() -> None:
     logged = _run_validation_epoch("surge_xt", per_param_mse)
 
     pitch_span = spans["pitch"]
-    assert logged["per_param_mse/pitch"] == pytest.approx(float(pitch_span.start))
+    assert logged["val/per_param_mse/pitch"] == pytest.approx(float(pitch_span.start))
 
 
 def test_log_figure_routes_to_wandb_logger_when_only_wandb_logger_present():
