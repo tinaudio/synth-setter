@@ -117,13 +117,14 @@ def _render_in_batches(
     :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
         shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
-    :returns: Counts of silent and clipped draws rejected across the shard.
+    :returns: Counts of clipped, non-finite, and silent draws rejected across the shard.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
     """
     num_samples = render_cfg.samples_per_shard
     share_params = render_cfg.param_sample_cadence == "shard"
     clipped_rejections = 0
+    non_finite_rejections = 0
     silent_rejections = 0
 
     # Delayed host finalizers can clear DPF process-global state while DawDreamer is live (#2549).
@@ -142,7 +143,7 @@ def _render_in_batches(
     assert renderer is not None
 
     def _render_loop() -> None:
-        nonlocal clipped_rejections, silent_rejections
+        nonlocal clipped_rejections, non_finite_rejections, silent_rejections
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
@@ -188,6 +189,7 @@ def _render_in_batches(
                 shared_synth = sample.synth_params
                 shared_note = sample.note_params
             clipped_rejections += sample.clipped_rejections
+            non_finite_rejections += sample.non_finite_rejections
             silent_rejections += sample.silent_rejections
             sample_batch.append(sample)
             if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
@@ -214,6 +216,7 @@ def _render_in_batches(
 
         return RenderRejectionMetrics(
             clipped=clipped_rejections,
+            non_finite=non_finite_rejections,
             silent=silent_rejections,
         )
     finally:
@@ -252,7 +255,7 @@ def make_lance_dataset(
         shard's single patch); rows 1..N are required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
-    :returns: Counts of silent and clipped draws rejected across the shard.
+    :returns: Counts of clipped, non-finite, and silent draws rejected across the shard.
     """
     validate_mp3_sample_rate(render_cfg.sample_rate)
 
