@@ -18,6 +18,9 @@ from mutmut.file_mutation import mutate_file_contents
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/mutmut.yaml"
 _PREDICT_MODULE = "synth_setter.evaluation.predict_vst_audio"
+_DATASET_REOPEN_SHARD = {
+    "pipeline-dataset-reopen": ["synth_setter.pipeline.data.dataset_reopen.*"]
+}
 _PREDICT_SHARDS = {
     "evaluation-predict-misc": [
         f"{_PREDICT_MODULE}.x_[!_r]*",
@@ -77,6 +80,12 @@ def test_mutmut_workflow_shards_full_sandbox_with_bounded_jobs() -> None:
         if shard["name"].startswith("evaluation-predict-")
     }
     assert predict_shards == _PREDICT_SHARDS
+    reopen_shards = {
+        shard["name"]: shard["patterns"]
+        for shard in shards
+        if shard["name"] == "pipeline-dataset-reopen"
+    }
+    assert reopen_shards == _DATASET_REOPEN_SHARD
 
     for mutation_path in mutation_paths:
         root = _REPO_ROOT / mutation_path

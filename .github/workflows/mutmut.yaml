@@ -70,6 +70,9 @@ jobs:
           - name: pipeline-lance
             patterns:
               - synth_setter.pipeline.data.lance_*
+          - name: pipeline-dataset-reopen
+            patterns:
+              - synth_setter.pipeline.data.dataset_reopen.*
           - name: pipeline-stats
             patterns:
               - synth_setter.pipeline.data.stats.*

@@ -188,6 +188,13 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(shard.filename)
 
+    def dataset_root_uri(self) -> str:
+        """Return the run-root R2 URI, including its trailing slash.
+
+        :returns: Run-root R2 URI with a trailing slash.
+        """
+        return self._under_prefix("")
+
     def input_spec_uri(self) -> str:
         """R2 URI of the frozen ``input_spec.json`` (the materialized ``DatasetSpec``).
 

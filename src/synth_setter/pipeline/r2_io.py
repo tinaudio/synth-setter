@@ -32,6 +32,9 @@ from synth_setter.pipeline.schemas.object_storage import (
 __all__ = [
     "R2_URI_SCHEME",
     "RemoteEntry",
+    "copy_prefix",
+    "delete_object",
+    "delete_prefix",
     "download_dir_no_overwrite",
     "download_to_path",
     "downloaded_to_tempfile",
@@ -155,13 +158,13 @@ def _storage_config_from_sources(env_file: Path | None = None) -> StorageConfig:
 
 
 def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
-    """Build an rclone argv with the shared reliability-flag block, then operands.
+    """Build an rclone transfer or deletion argv with shared reliability flags.
 
     ``--timeout`` is
     the IO idle timeout, not a wall-clock cap; only directory uploads widen it past
     the 300s single-file default.
 
-    :param verb: rclone subcommand (``copy`` / ``copyto``).
+    :param verb: rclone subcommand (for example, ``copy`` or ``purge``).
     :param \\*operands: Per-call args (extra flags like ``--immutable`` plus the
         source/destination paths) appended verbatim after the shared flags.
     :param timeout: Value for ``--timeout`` (IO idle timeout).
@@ -585,6 +588,89 @@ def upload(source: str | Path, destination_uri: str) -> None:
         subprocess.check_call(args)  # noqa: S603 — args from validated URIs
         return
     upload_to_uri(Path(source), destination_uri)
+
+
+def copy_prefix(source_uri: str, dest_uri: str, exclude: str | None = None) -> None:
+    """Copy every object under one R2 prefix to another, server-side.
+
+    Both operands live on the same remote, so rclone issues server-side copies
+    rather than streaming bytes through this host. ``--checksum`` makes a re-run
+    idempotent, which is what lets an interrupted copy be resumed by repeating
+    the call.
+
+    :param source_uri: ``r2://`` prefix to read; contents land directly under ``dest_uri``.
+    :param dest_uri: ``r2://`` destination prefix, created implicitly by rclone.
+    :param exclude: Optional rclone ``--exclude`` glob, for keys the destination
+        must never receive even transiently.
+    """
+    operands = [f"--exclude={exclude}"] if exclude is not None else []
+    operands += [_to_rclone_path(source_uri), _to_rclone_path(dest_uri)]
+    args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
+    subprocess.check_call(args)  # noqa: S603 — args from validated URIs
+
+
+def delete_object(r2_uri: str) -> None:
+    """Delete one object, tolerating only confirmed absence.
+
+    :param r2_uri: ``r2://`` URI of the object to remove.
+    :raises subprocess.CalledProcessError: rclone fails while the object may
+        still exist.
+    :raises RuntimeError: rclone reports success but the object remains.
+    """
+    args = _rclone_argv("deletefile", _to_rclone_path(r2_uri))
+    result = subprocess.run(  # noqa: S603 — args from validated URI
+        args, check=False, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        try:
+            absent = object_size(r2_uri) is None
+        except subprocess.CalledProcessError as exc:
+            raise subprocess.CalledProcessError(
+                result.returncode, args, output=result.stdout, stderr=result.stderr
+            ) from exc
+        if absent:
+            return
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
+        )
+    if object_size(r2_uri) is not None:
+        raise RuntimeError(f"rclone deletefile reported success but {r2_uri} still exists")
+
+
+def delete_prefix(r2_uri: str) -> None:
+    """Recursively delete one prefix, tolerating only confirmed absence.
+
+    :param r2_uri: Non-root ``r2://bucket/key/`` prefix ending in ``/``.
+    :raises ValueError: The URI could target a whole bucket or one object.
+    :raises subprocess.CalledProcessError: rclone fails while the prefix may
+        still contain objects.
+    :raises RuntimeError: rclone reports success but objects remain.
+    """
+    if not is_r2_uri(r2_uri):
+        raise ValueError(f"not an r2:// URI: {r2_uri!r}")
+    bucket_and_key = r2_uri.removeprefix(R2_URI_SCHEME)
+    bucket, separator, key = bucket_and_key.partition("/")
+    if not bucket or not separator or not key.strip("/") or not r2_uri.endswith("/"):
+        raise ValueError(f"delete_prefix refuses bucket-wide or single-object target: {r2_uri!r}")
+
+    args = _rclone_argv("purge", _to_rclone_path(r2_uri))
+    result = subprocess.run(  # noqa: S603 — args from validated URI
+        args, check=False, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        try:
+            absent = not r2_directory_exists(r2_uri)
+        except subprocess.CalledProcessError as exc:
+            raise subprocess.CalledProcessError(
+                result.returncode, args, output=result.stdout, stderr=result.stderr
+            ) from exc
+        if absent:
+            return
+        raise subprocess.CalledProcessError(
+            result.returncode, args, output=result.stdout, stderr=result.stderr
+        )
+    if r2_directory_exists(r2_uri):
+        raise RuntimeError(f"rclone purge reported success but {r2_uri} is not empty")
 
 
 def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:
