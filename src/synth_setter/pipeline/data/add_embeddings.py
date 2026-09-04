@@ -767,17 +767,73 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
+def _require_stored_mono(audio: np.ndarray) -> None:
+    """Reject audio the per-row pyFDN extractor cannot consume.
+
+    :param audio: Decoded stored-audio batch.
+    :raises ValueError: The batch is not ``(B, 1, T)`` mono.
+    """
+    if audio.ndim != 3 or audio.shape[1] != 1:
+        raise ValueError(
+            f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}"
+        )
+
+
+class PyFDNSketchPoolEncoder:
+    """Fan per-row pyFDN sketch extraction across a process pool, bit-exact vs serial.
+
+    The context must be non-fork: lance is live in the backfill process and is not
+    fork-safe. Workers unpickle only the lance-free worker module.
+    """
+
+    def __init__(self, num_workers: int) -> None:
+        """Build the pool once at encoder-load time.
+
+        :param num_workers: Worker processes; the extractor is bandwidth-bound, so returns are sub-
+            linear past a few workers.
+        """
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        self._num_workers = num_workers
+        self._pool = ProcessPoolExecutor(
+            max_workers=num_workers, mp_context=multiprocessing.get_context("spawn")
+        )
+
+    def __call__(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Extract one batch of temporal sketches through the pool.
+
+        :param audio: Stored ``(B, 1, T)`` mono audio batch.
+        :param sample_rate: Source sample rate in Hz.
+        :returns: ``(B, controls, frames)`` float32 control stack.
+        """
+        from synth_setter.pipeline.data.pyfdn_sketch_worker import (
+            extract_reverb_sketch_row,
+        )
+
+        _require_stored_mono(audio)
+        extract = functools.partial(extract_reverb_sketch_row, sample_rate=float(sample_rate))
+        chunksize = max(1, len(audio) // (self._num_workers * 4))
+        rows = self._pool.map(extract, (row[0] for row in audio), chunksize=chunksize)
+        return np.stack(list(rows)).astype(np.float32, copy=False)
+
+    def close(self) -> None:
+        """Release the worker processes."""
+        self._pool.shutdown()
+
+
 def _load_pyfdn_sketch_encoder(
     checkpoint: str, config: AddEmbeddingsConfig
 ) -> Encoder:
     """Bind the canonical checkpoint-free pyFDN sketch extractor.
 
     :param checkpoint: Empty registry placeholder.
-    :param config: Uniform registry config; no device is needed.
+    :param config: Uniform registry config supplying the worker count; no device is needed.
     :returns: Batch adapter over stored mono waveform audio.
     """
     _pyfdn_sketch_artifact_identity(checkpoint)
-    del config
+    if config.num_workers > 1:
+        return PyFDNSketchPoolEncoder(config.num_workers)
 
     def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
         from synth_setter.features import pyfdn_controls
@@ -786,10 +842,7 @@ def _load_pyfdn_sketch_encoder(
             "Callable[[np.ndarray, float], np.ndarray]",
             pyfdn_controls.extract_reverb_sketch,
         )
-        if audio.ndim != 3 or audio.shape[1] != 1:
-            raise ValueError(
-                f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}"
-            )
+        _require_stored_mono(audio)
         return np.stack(
             [extract(row[0], sample_rate) for row in audio]
         ).astype(np.float32, copy=False)
@@ -1463,98 +1516,106 @@ def _write_columns(
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
         encoders = _load_encoders(specs, config)
-    identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
-    resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
-    source_identity = _resume_source_identity(
-        dataset,
-        sample_rate=sample_rate,
-        batch_size=config.batch_size,
-        input_fields=input_fields,
-    )
-    _prepare_resume_cache(resume_cache, identities, source_identity)
-    output_columns = [column for spec in specs for column in _output_columns(spec)]
-
-    logger.info("inferring_embedding_schema", columns=output_columns)
-    sample = next(dataset.to_batches(columns=input_fields, limit=1))
-    # Schema probing must not perturb stochastic encoders' persisted outputs.
-    with torch.random.fork_rng():
-        sample_output = _encode_columns(
-            _decoded_sources(sample, input_fields), sample_rate, specs, encoders
+    try:
+        identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
+        resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
+        source_identity = _resume_source_identity(
+            dataset,
+            sample_rate=sample_rate,
+            batch_size=config.batch_size,
+            input_fields=input_fields,
         )
-    output_schema = _embedding_output_schema(
-        sample_output.schema, specs, config, identities=identities
-    )
-    logger.info("inferred_embedding_schema", columns=output_columns)
+        _prepare_resume_cache(resume_cache, identities, source_identity)
+        output_columns = [column for spec in specs for column in _output_columns(spec)]
 
-    progress_interval = max(
-        config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
-    )
-    next_progress_row = progress_interval
-    rows_processed = 0
-    started_at = time.monotonic()
-    last_progress_at = started_at
-    last_udf_end = started_at
-    stage_ms: dict[str, float] = {}
-
-    @lance.batch_udf(
-        output_schema=output_schema,
-        checkpoint_file=None if resume_cache is None else str(resume_cache),
-    )
-    def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
-        nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
-        udf_started = time.monotonic()
-        sources = _decoded_sources(batch, input_fields)
-        output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
-        rows_processed += batch.num_rows
-        now = time.monotonic()
-        interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
-        time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
-        if config.debug or interval_due or time_due:
-            timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
-            logger.info(
-                "embedding_progress",
-                rows_processed=rows_processed,
-                total_rows=total_rows,
-                percent=round(rows_processed / total_rows * 100, 1),
-                rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
-                batch_rows=batch.num_rows,
-                batch_ms=round((now - udf_started) * 1000, 1),
-                interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
-                **timings,
+        logger.info("inferring_embedding_schema", columns=output_columns)
+        sample = next(dataset.to_batches(columns=input_fields, limit=1))
+        # Schema probing must not perturb stochastic encoders' persisted outputs.
+        with torch.random.fork_rng():
+            sample_output = _encode_columns(
+                _decoded_sources(sample, input_fields), sample_rate, specs, encoders
             )
-            last_progress_at = now
-        if interval_due:
-            next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
-        last_udf_end = time.monotonic()
-        return output
-
-    logger.info(
-        "embedding_write_started",
-        columns=output_columns,
-        total_rows=total_rows,
-        batch_size=config.batch_size,
-        source_version=dataset.version,
-    )
-    dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
-    # A zero-batch replay is valid only when the target columns are already committed.
-    uncommitted = [
-        column for column in output_columns if column not in dataset.schema.names
-    ]
-    if uncommitted:
-        raise RuntimeError(
-            f"add_columns returned without committing column(s) {uncommitted} "
-            f"(rows_processed={rows_processed} of {total_rows}); refusing to "
-            "treat the write as done"
+        output_schema = _embedding_output_schema(
+            sample_output.schema, specs, config, identities=identities
         )
-    _delete_resume_cache(resume_cache)
-    logger.info(
-        "wrote_embeddings",
-        columns=output_columns,
-        total_rows=total_rows,
-        rows_processed=rows_processed,
-        committed_version=dataset.version,
-    )
-    encoders.clear()
+        logger.info("inferred_embedding_schema", columns=output_columns)
+
+        progress_interval = max(
+            config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
+        )
+        next_progress_row = progress_interval
+        rows_processed = 0
+        started_at = time.monotonic()
+        last_progress_at = started_at
+        last_udf_end = started_at
+        stage_ms: dict[str, float] = {}
+
+        @lance.batch_udf(
+            output_schema=output_schema,
+            checkpoint_file=None if resume_cache is None else str(resume_cache),
+        )
+        def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
+            nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
+            udf_started = time.monotonic()
+            sources = _decoded_sources(batch, input_fields)
+            output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
+            rows_processed += batch.num_rows
+            now = time.monotonic()
+            interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
+            time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
+            if config.debug or interval_due or time_due:
+                timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
+                logger.info(
+                    "embedding_progress",
+                    rows_processed=rows_processed,
+                    total_rows=total_rows,
+                    percent=round(rows_processed / total_rows * 100, 1),
+                    rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
+                    batch_rows=batch.num_rows,
+                    batch_ms=round((now - udf_started) * 1000, 1),
+                    interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
+                    **timings,
+                )
+                last_progress_at = now
+            if interval_due:
+                next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
+            last_udf_end = time.monotonic()
+            return output
+
+        logger.info(
+            "embedding_write_started",
+            columns=output_columns,
+            total_rows=total_rows,
+            batch_size=config.batch_size,
+            source_version=dataset.version,
+        )
+        dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+        # A zero-batch replay is valid only when the target columns are already committed.
+        uncommitted = [
+            column for column in output_columns if column not in dataset.schema.names
+        ]
+        if uncommitted:
+            raise RuntimeError(
+                f"add_columns returned without committing column(s) {uncommitted} "
+                f"(rows_processed={rows_processed} of {total_rows}); refusing to "
+                "treat the write as done"
+            )
+        _delete_resume_cache(resume_cache)
+        logger.info(
+            "wrote_embeddings",
+            columns=output_columns,
+            total_rows=total_rows,
+            rows_processed=rows_processed,
+            committed_version=dataset.version,
+        )
+    finally:
+        # Pool-backed encoders hold worker processes; release them even when the
+        # pass aborts, so a failed backfill cannot leak spawn workers.
+        for encoder in encoders:
+            closer = getattr(encoder, "close", None)
+            if callable(closer):
+                closer()
+        encoders.clear()
 
 
 def build_index(

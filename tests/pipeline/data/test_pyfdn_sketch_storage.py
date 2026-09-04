@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from lance.udf import BatchUDF
+from pydantic import ValidationError
 
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
@@ -21,6 +22,7 @@ from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.pipeline.data.add_embeddings import (
     EMBEDDING_REGISTRY,
+    PyFDNSketchPoolEncoder,
     SketchEncodeFn,
     _encode_pyfdn_sketch_column,
     _missing_embedding_specs,
@@ -185,10 +187,160 @@ def test_pyfdn_sketch_registry_encoder_preserves_real_extractor_row_alignment() 
     np.testing.assert_allclose(actual, expected)
 
 
-def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(tmp_path: Path) -> None:
+def test_add_embeddings_config_num_workers_defaults_to_serial() -> None:
+    """Omitting num_workers preserves the single-process encode path."""
+    config = AddEmbeddingsConfig(lance_uri="fixture.lance", embeddings=("pyfdn_sketch",))
+
+    assert config.num_workers == 1
+
+
+def test_add_embeddings_config_num_workers_below_one_raises() -> None:
+    """The strict boundary rejects a worker count that cannot encode anything."""
+    with pytest.raises(ValidationError, match="num_workers"):
+        AddEmbeddingsConfig(
+            lance_uri="fixture.lance", embeddings=("pyfdn_sketch",), num_workers=0
+        )
+
+
+def test_pyfdn_sketch_pooled_encoder_matches_serial_output_bit_exact() -> None:
+    """A worker pool changes throughput only; every output byte matches serial."""
+    sample_rate = 44_100
+    audio = _distinct_reverb_audio(sample_rate)
+    spec = EMBEDDING_REGISTRY["pyfdn_sketch"]
+    serial = spec.load_encoder(
+        "", AddEmbeddingsConfig(lance_uri="fixture.lance", embeddings=("pyfdn_sketch",))
+    )
+    pooled = spec.load_encoder(
+        "",
+        AddEmbeddingsConfig(
+            lance_uri="fixture.lance", embeddings=("pyfdn_sketch",), num_workers=2
+        ),
+    )
+
+    try:
+        actual = cast("SketchEncodeFn", pooled)(audio, sample_rate)
+    finally:
+        cast("PyFDNSketchPoolEncoder", pooled).close()
+    expected = cast("SketchEncodeFn", serial)(audio, sample_rate)
+
+    assert not np.array_equal(expected[0], expected[1])
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_pyfdn_sketch_pooled_encoder_with_non_mono_audio_raises() -> None:
+    """The pooled adapter enforces the same stored-mono contract as serial."""
+    encoder = EMBEDDING_REGISTRY["pyfdn_sketch"].load_encoder(
+        "",
+        AddEmbeddingsConfig(
+            lance_uri="fixture.lance", embeddings=("pyfdn_sketch",), num_workers=2
+        ),
+    )
+
+    try:
+        with pytest.raises(ValueError, match="stored mono"):
+            cast("SketchEncodeFn", encoder)(np.ones((2, 2, 64), dtype=np.float32), 48_000)
+    finally:
+        cast("PyFDNSketchPoolEncoder", encoder).close()
+
+
+def test_pyfdn_sketch_pooled_encoder_close_releases_pool() -> None:
+    """A closed encoder refuses new work instead of leaking worker processes."""
+    encoder = EMBEDDING_REGISTRY["pyfdn_sketch"].load_encoder(
+        "",
+        AddEmbeddingsConfig(
+            lance_uri="fixture.lance", embeddings=("pyfdn_sketch",), num_workers=2
+        ),
+    )
+
+    cast("PyFDNSketchPoolEncoder", encoder).close()
+
+    with pytest.raises(RuntimeError):
+        cast("SketchEncodeFn", encoder)(np.ones((1, 1, 64), dtype=np.float32), 48_000)
+
+
+def test_write_columns_closes_closeable_encoders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The UDF pass releases encoder-held pools once the commit lands.
+
+    :param tmp_path: Parent of the real local Lance dataset.
+    :param monkeypatch: Fixture running the Lance UDF synchronously.
+    """
+
+    class ClosingEncoder:
+        closed = False
+
+        def __call__(self, batch: np.ndarray, sample_rate: int) -> np.ndarray:
+            return _controls(len(batch))
+
+        def close(self) -> None:
+            self.closed = True
+
+    encoder = ClosingEncoder()
+    uri = tmp_path / "closing.lance"
+    audio = np.ones((2, 1, 64), dtype=np.float32)
+    lance.write_dataset(
+        pa.table({AUDIO_FIELD: pa.FixedShapeTensorArray.from_numpy_ndarray(audio)}), str(uri)
+    )
+    spec = replace(
+        EMBEDDING_REGISTRY["pyfdn_sketch"],
+        load_encoder=lambda checkpoint, config: encoder,
+        resolve_artifact_identity=lambda checkpoint: "pyfdn-sketch:test-policy-v1",
+    )
+
+    monkeypatch.setattr(lance.LanceDataset, "add_columns", _add_columns_in_process)
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri), embeddings=("pyfdn_sketch",), build_index=False
+    )
+    _write_columns(lance.dataset(str(uri)), [spec], 48_000, config)
+
+    assert encoder.closed
+
+
+def test_write_columns_with_failing_encoder_still_closes_pools(tmp_path: Path) -> None:
+    """An aborted UDF pass must not leak encoder-held worker processes.
+
+    :param tmp_path: Parent of the real local Lance dataset.
+    """
+
+    class FailingClosingEncoder:
+        closed = False
+
+        def __call__(self, batch: np.ndarray, sample_rate: int) -> np.ndarray:
+            raise ValueError("extractor blew up")
+
+        def close(self) -> None:
+            self.closed = True
+
+    encoder = FailingClosingEncoder()
+    uri = tmp_path / "failing.lance"
+    audio = np.ones((2, 1, 64), dtype=np.float32)
+    lance.write_dataset(
+        pa.table({AUDIO_FIELD: pa.FixedShapeTensorArray.from_numpy_ndarray(audio)}), str(uri)
+    )
+    spec = replace(
+        EMBEDDING_REGISTRY["pyfdn_sketch"],
+        load_encoder=lambda checkpoint, config: encoder,
+        resolve_artifact_identity=lambda checkpoint: "pyfdn-sketch:test-policy-v1",
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri), embeddings=("pyfdn_sketch",), build_index=False
+    )
+
+    with pytest.raises(ValueError, match="extractor blew up"):
+        _write_columns(lance.dataset(str(uri)), [spec], 48_000, config)
+
+    assert encoder.closed
+
+
+@pytest.mark.parametrize("num_workers", [1, 2])
+def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(
+    tmp_path: Path, num_workers: int
+) -> None:
     """Real extraction and Lance evolution produce model-ready datamodule controls.
 
     :param tmp_path: Dataset root for the production-path round trip.
+    :param num_workers: Serial and pooled encode paths must persist identical bytes.
     """
     sample_rate = 44_100
     audio = _distinct_reverb_audio(sample_rate)
@@ -215,6 +367,7 @@ def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(tmp_path: Path)
             embeddings=("pyfdn_sketch",),
             batch_size=len(audio),
             build_index=False,
+            num_workers=num_workers,
         )
     )
     module = LanceVSTDataModule(
