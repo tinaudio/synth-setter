@@ -142,7 +142,7 @@ def test_slap_loss_keeps_audio_prediction_in_first_byol_position() -> None:
 
 
 def test_slap_configured_audio_input_uses_stored_mel() -> None:
-    """A spectrogram-backed arm reads the configured mel modality."""
+    """Selecting mel must leave the incompatible waveform tensor unused."""
     model = SLAPModule(
         audio_encoder=_arm(5),
         text_encoder=_arm(2),

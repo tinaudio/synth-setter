@@ -2773,6 +2773,21 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
+def _shrink_slap_ast(cfg: DictConfig) -> None:
+    """Reduce the configured AST depth without relying on its list position.
+
+    :param cfg: Composed SLAP experiment configuration.
+    """
+    target = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
+    ast_configs = [
+        layer
+        for layer in cfg.model.audio_encoder.encoder._args_
+        if layer.get("_target_") == target
+    ]
+    assert len(ast_configs) == 1
+    ast_configs[0].n_layers = 1
+
+
 @pytest.fixture
 def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
     """Compose a one-step shipped SLAP experiment over local Lance splits.
@@ -2806,7 +2821,7 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
         cfg.datamodule.pin_memory = False
-        cfg.model.audio_encoder.encoder._args_[0].n_layers = 1
+        _shrink_slap_ast(cfg)
         cfg.model.compile = False
         cfg.callbacks.model_checkpoint.every_n_epochs = 1
         cfg.callbacks.model_checkpoint.every_n_train_steps = None

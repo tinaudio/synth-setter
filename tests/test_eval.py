@@ -143,10 +143,10 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_evaluate_slap_checkpoint_reports_finite_loss(
+def test_evaluate_slap_ast_audio_mlp_param_experiment_checkpoint_end_to_end(
     cfg_slap_train_lance: DictConfig,
 ) -> None:
-    """Reload a GPU-trained SLAP checkpoint through the public eval path.
+    """Reload the shipped experiment's GPU checkpoint through public evaluation.
 
     :param cfg_slap_train_lance: Tiny paired Lance training configuration.
     """
@@ -164,11 +164,9 @@ def test_evaluate_slap_checkpoint_reports_finite_loss(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "datamodule=surge_lance",
-                "model=slap",
+                "experiment=surge/slap_ast_audio_mlp_param",
                 "callbacks=none",
                 "trainer=gpu",
-                "synth=surge_4",
             ],
         )
     with open_dict(cfg):
