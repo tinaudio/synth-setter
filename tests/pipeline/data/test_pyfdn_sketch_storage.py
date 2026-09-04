@@ -172,6 +172,16 @@ def test_pyfdn_sketch_artifact_identity_covers_output_policy() -> None:
     assert ",scipy:" in identity
 
 
+def test_pyfdn_sketch_config_with_checkpoint_override_raises() -> None:
+    """The strict config rejects learned weights for the checkpoint-free transform."""
+    with pytest.raises(ValueError, match="checkpoint-free"):
+        AddEmbeddingsConfig(
+            lance_uri="fixture.lance",
+            embeddings=("pyfdn_sketch",),
+            checkpoints={"pyfdn_sketch": "weights.ckpt"},
+        )
+
+
 def test_pyfdn_sketch_artifact_identity_with_checkpoint_raises() -> None:
     """A learned-weight override cannot masquerade as the checkpoint-free policy."""
     with pytest.raises(ValueError, match="checkpoint-free"):
