@@ -9,7 +9,9 @@ from synth_setter.models.components.transformer import (
 )
 
 
-def _param_token_embed(num_params: int = 7, num_tokens: int = 16, d_model: int = 32):
+def _param_token_embed(
+    num_params: int = 7, num_tokens: int = 16, d_model: int = 32
+) -> ParamTokenEmbed:
     projection = LearntProjection(
         d_model=d_model,
         d_token=d_model,
@@ -48,6 +50,18 @@ def test_param_token_embed_freezes_decoder_half_and_trains_encoder_half() -> Non
     assert all(
         weight.grad is not None and torch.count_nonzero(weight.grad) for weight in encoder_side
     )
+
+
+def test_param_token_embed_keeps_batch_rows_isolated() -> None:
+    """Give one row's tokens zero input gradient with respect to any other row."""
+    embed = _param_token_embed()
+    params = torch.rand(3, 7, requires_grad=True)
+
+    embed(params)[0].sum().backward()
+
+    assert params.grad is not None
+    assert torch.count_nonzero(params.grad[0])
+    assert torch.all(params.grad[1:] == 0)
 
 
 def test_param_token_embed_with_final_ffn_freezes_it_too() -> None:

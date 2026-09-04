@@ -125,7 +125,7 @@ class ParamTokenEmbed(nn.Module):
     """
 
     @jaxtyped(typechecker=beartype)
-    def __init__(self, projection: LearntProjection):
+    def __init__(self, projection: LearntProjection) -> None:
         """Wrap the projection and freeze its unused token-to-parameter half.
 
         :param projection: Parameter-token soft assignment shared with the flow models.

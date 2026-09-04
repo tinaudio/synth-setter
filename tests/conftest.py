@@ -2798,13 +2798,13 @@ def _shrink_slap_ast(cfg: DictConfig) -> None:
     :param cfg: Composed SLAP experiment configuration.
     """
     target = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
-    ast_configs = [
-        layer
-        for arm in (cfg.model.audio_encoder, cfg.model.text_encoder)
-        if "_args_" in arm.encoder
-        for layer in arm.encoder._args_
-        if layer.get("_target_") == target
-    ]
+    ast_configs = []
+    for arm in (cfg.model.audio_encoder, cfg.model.text_encoder):
+        if "_args_" not in arm.encoder:
+            continue
+        ast_configs.extend(
+            layer for layer in arm.encoder._args_ if layer.get("_target_") == target
+        )
     assert ast_configs
     for ast_config in ast_configs:
         ast_config.n_layers = 1
