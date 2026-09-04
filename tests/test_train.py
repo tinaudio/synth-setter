@@ -214,6 +214,28 @@ def test_train_pyfdn_online_ast_one_step_uses_waveforms(
     assert objects["trainer"].global_step == 1
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train",
+    ["pyfdn/flow_sketch", "pyfdn/flow_ast_online_sketch"],
+    indirect=True,
+)
+def test_train_pyfdn_sketch_experiment_one_step_uses_temporal_profile(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Run each shipped pyFDN sketch experiment through the training entrypoint.
+
+    :param cfg_pyfdn_train: One-step pyFDN configuration with stored sketch profiles.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert objects["trainer"].global_step == 1
+    assert objects["model"].sketch_tokens is not None
+    assert objects["datamodule"].sketch_controls.num_frames == 32
+
+
 def _assert_slap_train_artifacts(
     cfg: DictConfig,
     metric_dict: Mapping[str, torch.Tensor],
