@@ -196,6 +196,7 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
     assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
     assert cfg_pyfdn_train.model.num_params == 27
     assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics["train/per_param_flow_mse/delays"])
     assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/delays"])
     assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
 
@@ -215,6 +216,28 @@ def test_train_pyfdn_online_ast_one_step_uses_waveforms(
 
     assert cfg_pyfdn_train.model.conditioning == "audio"
     assert objects["trainer"].global_step == 1
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train",
+    ["pyfdn/flow_sketch", "pyfdn/flow_ast_online_sketch"],
+    indirect=True,
+)
+def test_train_pyfdn_sketch_experiment_one_step_uses_temporal_profile(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Run each shipped pyFDN sketch experiment through the training entrypoint.
+
+    :param cfg_pyfdn_train: One-step pyFDN configuration with stored sketch profiles.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert objects["trainer"].global_step == 1
+    assert objects["model"].sketch_tokens is not None
+    assert objects["datamodule"].sketch_controls.num_frames == 32
 
 
 def _assert_slap_train_artifacts(
@@ -252,10 +275,15 @@ def _assert_slap_train_artifacts(
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_train_slap_ast_audio_mlp_param_experiment_end_to_end(
+@pytest.mark.parametrize(
+    "cfg_slap_train_lance",
+    ["surge/slap_ast_audio_mlp_param", "surge/slap_ast_audio_transformer_param"],
+    indirect=True,
+)
+def test_train_slap_experiment_end_to_end(
     cfg_slap_train_lance: DictConfig,
 ) -> None:
-    """Run the shipped SLAP experiment through fit, reload, and test on one GPU.
+    """Run each shipped SLAP experiment through fit, reload, and test on one GPU.
 
     :param cfg_slap_train_lance: Tiny real Lance training configuration.
     """

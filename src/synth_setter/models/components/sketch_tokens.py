@@ -6,21 +6,17 @@ from jaxtyping import Bool, Float, jaxtyped
 from torch import nn
 
 from synth_setter.conditioning import (
-    NUM_SKETCH_CONTROLS,
-    SKETCH_CENTROID_ROW,
-    SKETCH_LOUDNESS_ROW,
-    SKETCH_PITCH_SLICE,
+    SKETCH_STORAGE_FRAMES,
+    SketchControlLayout,
+    SketchControlProfile,
+    sketch_control_layout,
 )
 from synth_setter.models.components.embed_pool import make_sin_pos_enc
 from synth_setter.sketch import pool_sketch_controls
 
-_CONTROL_CHANNELS = {
-    "loudness": slice(SKETCH_LOUDNESS_ROW, SKETCH_LOUDNESS_ROW + 1),
-    "centroid": slice(SKETCH_CENTROID_ROW, SKETCH_CENTROID_ROW + 1),
-    "pitch": SKETCH_PITCH_SLICE,
-}
-# Drop-mask column order; each name keys one projection and one channel group.
-CONTROL_GROUPS = tuple(_CONTROL_CHANNELS)
+_MUSIC_LAYOUT = sketch_control_layout("music")
+# Compatibility export for callers that construct music-profile masks directly.
+CONTROL_GROUPS = _MUSIC_LAYOUT.group_names
 
 
 class SketchControlTokens(nn.Module):
@@ -41,16 +37,28 @@ class SketchControlTokens(nn.Module):
     positional_encoding: torch.Tensor
 
     @jaxtyped(typechecker=beartype)
-    def __init__(self, d_model: int, num_control_tokens: int = 32) -> None:
-        """Build the per-control projections and the fixed temporal encoding.
+    def __init__(
+        self,
+        d_model: int,
+        num_control_tokens: int = 32,
+        profile: SketchControlProfile = "music",
+    ) -> None:
+        """Build the profile projections and fixed temporal encoding.
 
         :param d_model: Vector-field token width the controls project into.
-        :param num_control_tokens: Control tokens the time axis is resampled to.
+        :param num_control_tokens: Control tokens retained along the time axis.
+        :param profile: Channel grouping and temporal processing contract.
+        :raises ValueError: The reverb profile receives a noncanonical token count.
         """
         super().__init__()
+        self.layout: SketchControlLayout = sketch_control_layout(profile)
+        if profile == "pyfdn_reverb" and num_control_tokens != SKETCH_STORAGE_FRAMES:
+            raise ValueError(
+                f"pyfdn_reverb sketch requires {SKETCH_STORAGE_FRAMES} control tokens"
+            )
         projections = {
-            group: nn.Linear(channels.stop - channels.start, d_model, bias=False)
-            for group, channels in _CONTROL_CHANNELS.items()
+            group: nn.Linear(width, d_model, bias=False)
+            for group, width in zip(self.layout.group_names, self.layout.group_widths, strict=True)
         }
         for projection in projections.values():
             nn.init.zeros_(projection.weight)
@@ -69,21 +77,60 @@ class SketchControlTokens(nn.Module):
     @jaxtyped(typechecker=beartype)
     def forward(
         self,
-        controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
-        keep: Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"],
+        controls: Float[torch.Tensor, "batch channels frames"],
+        keep: Bool[torch.Tensor, "batch groups"],
     ) -> Float[torch.Tensor, "batch tokens d_model"]:
         """Tokenize a stored sketch-control batch.
 
-        :param controls: Loudness, centroid, and pitch rows on the mel grid.
-        :param keep: Positive per-group keep state in ``CONTROL_GROUPS`` order;
-            an absent group's channels are zeroed before projection.
+        :param controls: Profile channels arranged as ``(batch, channels, frames)``.
+        :param keep: Positive per-group keep state in layout order.
         :returns: Control tokens with the temporal encoding added.
         """
+        self._validate_inputs(controls, keep)
         keep_values = keep.to(controls.dtype)
-        pooled = pool_sketch_controls(controls, self.positional_encoding.shape[1])
+        temporal_controls = (
+            pool_sketch_controls(controls, self.positional_encoding.shape[1])
+            if self.layout.profile == "music"
+            else controls
+        )
         tokens = self.unconditional(controls.shape[0])
-        for group_index, group in enumerate(CONTROL_GROUPS):
-            channels = pooled[:, _CONTROL_CHANNELS[group]]
+        for group_index, (group, channel_slice) in enumerate(
+            zip(self.layout.group_names, self.layout.group_slices, strict=True)
+        ):
+            channels = temporal_controls[:, channel_slice]
             channels = channels * keep_values[:, group_index, None, None]
             tokens = tokens + self.projections[group](channels.transpose(1, 2))
         return tokens
+
+    @jaxtyped(typechecker=beartype)
+    def _validate_inputs(
+        self,
+        controls: Float[torch.Tensor, "batch channels frames"],
+        keep: Bool[torch.Tensor, "batch groups"],
+    ) -> None:
+        """Reject inputs that do not match the selected profile layout.
+
+        :param controls: Profile control tensor.
+        :param keep: Per-group positive keep state.
+        :raises ValueError: Channel, group, dtype, or temporal dimensions violate the profile.
+        """
+        expected_channels = self.layout.num_controls
+        if controls.shape[1] != expected_channels:
+            raise ValueError(
+                f"{self.layout.profile} sketch requires {expected_channels} channels, "
+                f"got {controls.shape[1]}"
+            )
+        if keep.shape[1] != len(self.layout.group_names):
+            raise ValueError(
+                f"{self.layout.profile} sketch requires {len(self.layout.group_names)} "
+                f"keep groups, got {keep.shape[1]}"
+            )
+        if self.layout.profile == "pyfdn_reverb":
+            expected_frames = self.positional_encoding.shape[1]
+            if controls.dtype != torch.float32:
+                raise ValueError("pyfdn_reverb sketch controls must be float32")
+            if controls.shape[2] != expected_frames:
+                raise ValueError(
+                    f"pyfdn_reverb sketch requires {expected_frames} frames, "
+                    f"got {controls.shape[2]}"
+                )

@@ -146,7 +146,12 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_evaluate_slap_ast_audio_mlp_param_experiment_checkpoint_end_to_end(
+@pytest.mark.parametrize(
+    "cfg_slap_train_lance",
+    ["surge/slap_ast_audio_mlp_param", "surge/slap_ast_audio_transformer_param"],
+    indirect=True,
+)
+def test_evaluate_slap_experiment_checkpoint_end_to_end(
     cfg_slap_train_lance: DictConfig,
 ) -> None:
     """Reload the shipped experiment's GPU checkpoint through public evaluation.
@@ -167,7 +172,7 @@ def test_evaluate_slap_ast_audio_mlp_param_experiment_checkpoint_end_to_end(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/slap_ast_audio_mlp_param",
+                f"experiment=surge/{cfg_slap_train_lance.run_name}",
                 "callbacks=none",
                 "trainer=gpu",
             ],
@@ -367,6 +372,56 @@ def test_evaluate_flow_sketch_prelim_routes_independent_sketch_cfg_strength(
     assert sketch_disabled != sketch_guided
     assert objects["model"].sketch_tokens is not None
     assert objects["datamodule"].sketch_controls is not None
+    assert objects["datamodule"].sketch_controls.num_frames == 32
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("cfg_pyfdn_train", "experiment"),
+    [
+        ("pyfdn/flow_sketch", "pyfdn/flow_sketch"),
+        ("pyfdn/flow_ast_online_sketch", "pyfdn/flow_ast_online_sketch"),
+    ],
+    indirect=["cfg_pyfdn_train"],
+)
+def test_evaluate_pyfdn_sketch_experiment_uses_temporal_profile(
+    cfg_pyfdn_train: DictConfig,
+    experiment: str,
+) -> None:
+    """Run each shipped pyFDN sketch experiment through the evaluation entrypoint.
+
+    :param cfg_pyfdn_train: Tiny model and Lance splits matching the experiment.
+    :param experiment: Experiment config group exercised by evaluation.
+    """
+    checkpoint_path = Path(cfg_pyfdn_train.paths.output_dir) / "pyfdn-sketch.ckpt"
+    _save_nonzero_sketch_checkpoint(cfg_pyfdn_train, checkpoint_path)
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[f"experiment={experiment}", "trainer=cpu", "callbacks=none"],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = cfg_pyfdn_train.paths.root_dir
+        cfg.paths.output_dir = str(Path(cfg_pyfdn_train.paths.output_dir) / "eval")
+        cfg.paths.log_dir = cfg.paths.output_dir
+        cfg.logger = None
+        cfg.ckpt_path = str(checkpoint_path)
+        cfg.datamodule = deepcopy(cfg_pyfdn_train.datamodule)
+        cfg.model = deepcopy(cfg_pyfdn_train.model)
+        cfg.trainer.limit_test_batches = 1
+        cfg.evaluation.render_vst = False
+        cfg.evaluation.compute_metrics = False
+
+    HydraConfig().set_config(cfg)
+    try:
+        metrics, objects = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metrics["test/param_mse"])
+    assert objects["model"].sketch_tokens is not None
     assert objects["datamodule"].sketch_controls.num_frames == 32
 
 

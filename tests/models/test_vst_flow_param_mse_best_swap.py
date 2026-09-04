@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from functools import partial
 
+import pytest
 import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import Callback
@@ -55,6 +56,7 @@ class _FakeBatchDataset(Dataset[dict[str, torch.Tensor]]):
         """
         generator = torch.Generator().manual_seed(0)
         self._params = torch.rand(4, num_params, generator=generator)
+        self._noise = torch.randn(4, num_params, generator=generator)
         self._mels = torch.rand(4, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES, generator=generator)
 
     def __len__(self) -> int:
@@ -64,9 +66,13 @@ class _FakeBatchDataset(Dataset[dict[str, torch.Tensor]]):
         """Return one sample carrying the keys the module's step functions read.
 
         :param index: Sample index.
-        :returns: ``params`` / ``mel`` sample dict.
+        :returns: ``params`` / ``noise`` / ``mel`` sample dict.
         """
-        return {"params": self._params[index], "mel": self._mels[index]}
+        return {
+            "params": self._params[index],
+            "noise": self._noise[index],
+            "mel": self._mels[index],
+        }
 
 
 def _flow_module(num_params: int, *, param_spec: str | None = None) -> VSTFlowMatchingModule:
@@ -122,9 +128,42 @@ def _tiny_trainer(*, callbacks: list[Callback] | None = None) -> Trainer:
         enable_checkpointing=False,
         enable_progress_bar=False,
         enable_model_summary=False,
+        limit_train_batches=1,
         limit_val_batches=1,
         limit_test_batches=1,
+        max_epochs=1,
     )
+
+
+def test_training_loop_logs_per_param_flow_mse_alongside_validation_metrics() -> None:
+    """Training flow errors and validation endpoint errors retain distinct namespaces."""
+    spec_name = "surge_4"
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)])
+
+    trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
+
+    metrics = trainer.callback_metrics
+    expected_train_metrics = {f"train/per_param_flow_mse/{name}" for name in spec.names}
+    assert expected_train_metrics <= metrics.keys()
+    grouped_flow_mse = (
+        metrics["train/per_param_flow_mse/a_amp_eg_attack"]
+        + metrics["train/per_param_flow_mse/a_filter_1_cutoff"]
+        + metrics["train/per_param_flow_mse/a_lfo_1_amplitude"]
+        + metrics["train/per_param_flow_mse/a_lfo_1_rate"]
+        + metrics["train/per_param_flow_mse/pitch"]
+        + 2 * metrics["train/per_param_flow_mse/note_start_and_end"]
+    ) / 7
+    assert grouped_flow_mse.item() == pytest.approx(metrics["train/loss_epoch"].item())
+    assert "val/per_param_mse/a_amp_eg_attack" in metrics
+
+
+def test_ctor_param_spec_width_mismatch_raises() -> None:
+    """Metric labels cannot silently address columns outside the model output."""
+    with pytest.raises(ValueError, match="encoded width 7.*num_params 6"):
+        _flow_module(6, param_spec="surge_4")
 
 
 def test_ctor_instantiates_best_swap_metrics_unconditionally() -> None:

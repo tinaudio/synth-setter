@@ -509,7 +509,8 @@ def test_main_passes_spec_quantized_pitch_to_renderer_and_csv(
 
     rendered_pitch = fake_renderer.render.call_args.args[1]
     params = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
-    assert rendered_pitch == 63
+    # 0.3 model-space -> 0.65 encoded -> offset 15.6 over [48, 72]; #3046 rounds half-up.
+    assert rendered_pitch == 64
     assert int(params.at["pitch", "pred_effective"]) == rendered_pitch
 
 

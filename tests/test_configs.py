@@ -18,7 +18,7 @@ from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT,
     DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
 )
-from synth_setter.conditioning import NUM_SKETCH_CONTROLS
+from synth_setter.conditioning import NUM_SKETCH_CONTROLS, resolve_sketch_controls
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
@@ -1414,6 +1414,33 @@ def test_pyfdn_flow_ast_online_resolves_waveform_ast_conditioning() -> None:
     assert cfg.model.encoder.backbone._target_.endswith("AudioSpectrogramTransformer")
     assert cfg.model.encoder.backbone.input_channels == 1
     assert cfg.model.encoder.backbone.n_conditioning_outputs == 8
+
+
+def test_pyfdn_flow_sketch_resolves_stored_temporal_reverb_conditioning() -> None:
+    """The stored-mel pyFDN variant reads the persisted temporal reverb sketch."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_sketch"])
+
+    assert cfg.datamodule.conditioning == "mel"
+    assert cfg.model.conditioning == "mel"
+    assert cfg.model.sketch_controls.profile == "pyfdn_reverb"
+    assert cfg.model.sketch_controls.column == "pyfdn_sketch"
+    assert cfg.model.sketch_controls.num_frames == 32
+    assert cfg.model.sketch_controls.num_control_tokens == 32
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
+    sketch_controls = resolve_sketch_controls(cfg.model.sketch_controls)
+    assert sketch_controls is not None
+    assert sketch_controls.layout.num_controls == 10
+
+
+def test_pyfdn_flow_ast_online_sketch_reads_sketch_from_lance() -> None:
+    """The online-content pyFDN variant still reads its temporal sketch from Lance."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_ast_online_sketch"])
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.conditioning == "audio"
+    assert cfg.model.sketch_controls.profile == "pyfdn_reverb"
+    assert cfg.model.sketch_controls.column == "pyfdn_sketch"
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
 
 
 def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:

@@ -34,6 +34,7 @@ _BATCH_SHAPE = "batch"
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
+_PARAM_SHAPE = "params"
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -56,7 +57,7 @@ class ConditioningKeepMasks:
     """
 
     content: Bool[torch.Tensor, _BATCH_SHAPE]
-    sketch_groups: Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"]
+    sketch_groups: Bool[torch.Tensor, "batch groups"]
 
     @classmethod
     @jaxtyped(typechecker=beartype)
@@ -111,6 +112,10 @@ class TrainStepOutputs:
 
        Flow-matching loss; the only term every configuration produces.
 
+    .. attribute :: per_param_flow_mse
+
+       Training objective error for each encoded parameter column.
+
     .. attribute :: audio_term
 
        Weighted audio-feedback loss, or ``None`` without an attached audio loss.
@@ -133,6 +138,7 @@ class TrainStepOutputs:
     """
 
     loss: torch.Tensor
+    per_param_flow_mse: Float[torch.Tensor, _PARAM_SHAPE]
     audio_term: torch.Tensor | None
     penalty: torch.Tensor | None
     grad_balance: GradientBalance | None
@@ -351,8 +357,9 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
-        :raises ValueError: ``audio_loss`` is combined with a nonzero
-            ``rectified_sigma_min`` or ``compile=True`` (#2585).
+        :raises ValueError: The ParamSpec width differs from ``num_params``, or
+            ``audio_loss`` is combined with a nonzero ``rectified_sigma_min`` or
+            ``compile=True`` (#2585).
         """
         super().__init__()
 
@@ -371,6 +378,7 @@ class VSTFlowMatchingModule(LightningModule):
             SketchControlTokens(
                 d_model=vector_field.d_model,
                 num_control_tokens=self._sketch_controls.num_control_tokens,
+                profile=self._sketch_controls.profile,
             )
             if self._sketch_controls is not None
             else None
@@ -399,6 +407,11 @@ class VSTFlowMatchingModule(LightningModule):
             from synth_setter.data.vst import param_specs
 
             metric_spec = param_specs[param_spec]
+            if metric_spec.encoded_width != num_params:
+                raise ValueError(
+                    f"ParamSpec {param_spec!r} encoded width {metric_spec.encoded_width} "
+                    f"does not match num_params {num_params}"
+                )
         self._metric_param_spec = metric_spec
         self._pitch_metric_spec = (
             metric_spec
@@ -518,8 +531,13 @@ class VSTFlowMatchingModule(LightningModule):
         :returns: Positive content and per-sketch-group keep masks.
         """
         content = torch.rand(batch_size, device=device) > self.hparams.cfg_dropout_rate
+        num_sketch_groups = (
+            len(CONTROL_GROUPS)
+            if self.sketch_tokens is None
+            else len(self.sketch_tokens.layout.group_names)
+        )
         sketch_groups = (
-            torch.rand(batch_size, len(CONTROL_GROUPS), device=device)
+            torch.rand(batch_size, num_sketch_groups, device=device)
             > self.hparams.sketch_dropout_rate
         )
         global_keep = (
@@ -577,7 +595,10 @@ class VSTFlowMatchingModule(LightningModule):
             return None
         controls = batch["sketch_ctrl"]
         keep = torch.ones(
-            controls.shape[0], len(CONTROL_GROUPS), dtype=torch.bool, device=controls.device
+            controls.shape[0],
+            len(self.sketch_tokens.layout.group_names),
+            dtype=torch.bool,
+            device=controls.device,
         )
         return ControlTokenBranches(
             conditional=self.sketch_tokens(controls, keep),
@@ -658,9 +679,9 @@ class VSTFlowMatchingModule(LightningModule):
         else:
             prediction = self.vector_field(x_t, t, z, control_tokens=control_tokens)
 
-        loss = (prediction - target).square().mean(dim=-1)
-        loss = loss * w
-        loss = loss.mean()
+        squared_flow_error = (prediction - target).square()
+        per_param_flow_mse = (squared_flow_error * w).mean(dim=0)
+        loss = (squared_flow_error.mean(dim=-1) * w).mean()
 
         audio_term = None
         grad_balance = None
@@ -689,6 +710,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         return TrainStepOutputs(
             loss=loss,
+            per_param_flow_mse=per_param_flow_mse,
             audio_term=audio_term,
             penalty=penalty,
             grad_balance=grad_balance,
@@ -699,6 +721,18 @@ class VSTFlowMatchingModule(LightningModule):
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         outputs = self._train_step(batch)
         self.log("train/loss", outputs.loss, on_step=True, on_epoch=True, prog_bar=True)
+        if self._metric_param_spec is not None:
+            metrics = {
+                f"train/per_param_flow_mse/{param.name}": outputs.per_param_flow_mse[span].mean()
+                for param, span in self._metric_param_spec.encoded_slices()
+            }
+            self.log_dict(
+                metrics,
+                on_step=False,
+                on_epoch=True,
+                batch_size=batch["params"].shape[0],
+                sync_dist=True,
+            )
 
         total = outputs.loss
         if outputs.audio_term is not None:

@@ -17,6 +17,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
+    SKETCH_ENCODE_MAX_BATCH,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -43,7 +44,7 @@ class AddEmbeddingsConfig(BaseModel):
 
     .. attribute :: checkpoints
 
-        Per-registry-key checkpoint overrides; unsupported for music2latent.
+        Per-registry-key checkpoint overrides; unsupported for checkpoint-free policies.
 
     .. attribute :: device
 
@@ -52,6 +53,14 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: batch_size
 
         Rows per Lance UDF call.
+
+    .. attribute :: num_workers
+
+        Worker processes for CPU-bound registry encoders; ``1`` keeps them in-process.
+
+    .. attribute :: sketch_encode_chunk
+
+        Rows per sketch extractor invocation.
 
     .. attribute :: build_index
 
@@ -102,11 +111,21 @@ class AddEmbeddingsConfig(BaseModel):
     )
     checkpoints: dict[str, str] = Field(
         default_factory=dict,
-        description="Checkpoint overrides keyed by registry name; m2l is unsupported.",
+        description="Checkpoint overrides keyed by registry name; checkpoint-free entries reject them.",
     )
     device: str | None = Field(default=None, description="Torch device; null auto-selects.")
     batch_size: int = Field(
         default=DEFAULT_LANCE_BATCH_SIZE, ge=1, description="Rows per Lance UDF call."
+    )
+    num_workers: int = Field(
+        default=1,
+        ge=1,
+        description="Worker processes for CPU-bound encoders; torch/GPU encoders ignore it.",
+    )
+    sketch_encode_chunk: int = Field(
+        default=SKETCH_ENCODE_MAX_BATCH,
+        ge=1,
+        description="Rows per sketch extractor invocation; sizes memory and GPU utilization.",
     )
     build_index: bool = Field(
         default=True, description="Build indexes declared by selected embedding specs."
@@ -176,6 +195,8 @@ class AddEmbeddingsConfig(BaseModel):
             )
         if "m2l" in value:
             raise ValueError("music2latent does not support checkpoint overrides")
+        if "pyfdn_sketch" in value:
+            raise ValueError("pyfdn_sketch is checkpoint-free and rejects checkpoint overrides")
         return value
 
     @field_validator("resume_cache", mode="before")
