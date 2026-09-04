@@ -193,11 +193,14 @@ and the `model-{config_id}` W&B artifact references it as an `s3://` URI. See
 a native branch without mutating the finalized baseline. The
 `synth-setter-growing-lance init` contract pins the baseline transaction, its
 train-shard count, the producer spec, the total train-shard maximum, and the
-per-refresh request size. `enqueue` freezes `[high_watermark, min(H + N, max))`;
-parallel `generate` processes use branch-isolated claims and staging metadata;
-and `finalize` publishes only a native Lance `Append`. Cumulative Welford state
+per-refresh request size. The `grow` driver loops enqueue (freezing
+`[high_watermark, min(H + N, max))`), waits for parallel polling `generate`
+workers to stage every position through branch-isolated claims, and finalizes
+each range as a native Lance `Append`. Cumulative Welford state
 and derived statistics are hash-bound before the `<branch>-ready` tag advances.
-At capacity all producer commands are safe no-ops.
+At capacity all producer commands are safe no-ops and the daemons exit.
+Copy-paste commands and failure behavior:
+[operations/growing-lance-runbook.md](operations/growing-lance-runbook.md).
 
 `materialize` serializes writers with a file lock and incrementally appends new
 remote fragments to one local `train.lance`; version directories contain only

@@ -156,8 +156,6 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
                 spec.r2.input_spec_uri(),
                 "--branch",
                 "growing-e2e",
-                "--baseline-version",
-                "1",
                 "--max-train-shards",
                 "3",
                 "--num-extra-shards",
@@ -180,17 +178,6 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
         _run(materialize)
         active_path = local_root / "active.json"
         initial = ActiveGrowingSnapshot.model_validate_json(active_path.read_bytes())
-        _run(
-            growing
-            + [
-                "enqueue",
-                spec.r2.input_spec_uri(),
-                "--branch",
-                "growing-e2e",
-                "--work-dir",
-                str(operator / "enqueue"),
-            ]
-        )
 
         baseline_root = tmp_path / "baseline"
         _run(
@@ -212,6 +199,24 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
             text=True,
         )
         processes.append(trainer)
+        # One grow driver + N generators, all polling daemons: the plug-and-play
+        # producer topology the runbook documents. Every producer exits on its
+        # own once the branch reaches capacity.
+        grower = subprocess.Popen(  # noqa: S603 — fixed public CLI with test-owned values.
+            growing
+            + [
+                "grow",
+                spec.r2.input_spec_uri(),
+                "--branch",
+                "growing-e2e",
+                "--work-dir",
+                str(operator / "grow"),
+                "--poll-seconds",
+                "0.2",
+            ],
+            text=True,
+        )
+        processes.append(grower)
         generate_command = growing + [
             "generate",
             spec.r2.input_spec_uri(),
@@ -219,6 +224,8 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
             "growing-e2e",
             "--work-dir",
             str(operator / "generate"),
+            "--poll-seconds",
+            "0.2",
         ]
         generators = [
             subprocess.Popen(  # noqa: S603 — fixed public CLI with test-owned values.
@@ -229,17 +236,7 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
         processes.extend(generators)
         for generator in generators:
             assert generator.wait(timeout=900) == 0
-        _run(
-            growing
-            + [
-                "finalize",
-                spec.r2.input_spec_uri(),
-                "--branch",
-                "growing-e2e",
-                "--work-dir",
-                str(operator / "finalize"),
-            ]
-        )
+        assert grower.wait(timeout=900) == 0
         adopted_version = _wait_for_version(active_path, initial.remote_version, trainer)
         adopted = ActiveGrowingSnapshot.model_validate_json(active_path.read_bytes())
         assert initial.row_count == 2

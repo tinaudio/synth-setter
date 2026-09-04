@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import lightning
+import logging
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import lance
 import numpy as np
@@ -219,3 +223,24 @@ def test_test_stage_uses_frozen_baseline_statistics(tmp_path: Path) -> None:
     baseline_batch = next(iter(baseline_only.test_dataloader()))
 
     assert np.array_equal(grown_batch["mel"].numpy(), baseline_batch["mel"].numpy())
+
+
+def test_growing_record_without_dataloader_reload_warns_snapshots_never_adopt(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A trainer that never reloads loaders can never adopt a newer snapshot.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    :param caplog: Captured datamodule log records.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, _ = _active_snapshot(tmp_path, baseline)
+    module = _module(baseline, active_path)
+    module.trainer = cast(
+        "lightning.Trainer", SimpleNamespace(reload_dataloaders_every_n_epochs=0)
+    )
+
+    with caplog.at_level(logging.WARNING, logger="synth_setter.data.lance_datamodule"):
+        module.setup("fit")
+
+    assert any("reload_dataloaders_every_n_epochs" in record.message for record in caplog.records)

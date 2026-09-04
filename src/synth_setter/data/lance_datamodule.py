@@ -886,6 +886,19 @@ class LanceVSTDataModule(VSTDataModule):
 
         :param stage: Lightning stage hint; ``None`` retains eager all-split setup.
         """
+        # getattr: the attribute is set dynamically in Trainer.__init__, so
+        # static type checkers do not see it on the class.
+        if (
+            stage == "fit"
+            and self.growing_active_record is not None
+            and self.trainer is not None
+            and getattr(self.trainer, "reload_dataloaders_every_n_epochs", 0) == 0
+        ):
+            logger.warning(
+                "growing_active_record is set but the trainer's "
+                "reload_dataloaders_every_n_epochs is 0; newer growing snapshots will "
+                "never be adopted mid-run (set training.growing_refresh_epoch_interval)"
+            )
         split_names = (
             self._ALL_SPLITS
             if stage is None
