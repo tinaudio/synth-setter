@@ -14,6 +14,7 @@ from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_buil
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
 from synth_setter.data.vst.param_spec import ParameterValues
+from synth_setter.data.vst.renderers import NonFiniteAudioError
 
 
 @pytest.fixture
@@ -155,7 +156,7 @@ def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
     params["post_delay.rt_nyquist_seconds"] = 4.0
 
     with np.errstate(over="ignore", invalid="ignore"):
-        with pytest.raises(ValueError, match="finite"):
+        with pytest.raises(NonFiniteAudioError, match="finite"):
             PyFDNRenderer().render(params)
 
 

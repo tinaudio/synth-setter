@@ -286,9 +286,7 @@ When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_m
 | **Compute**  | CPU — selected by `make_audio_renderer` from the dataset's renderer configuration                       |
 | **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                      |
 
-The render stage loads each predicted parameter tensor, decodes it via
-`decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and uses
-`make_audio_renderer` for both predicted and target audio. Pedalboard and
+The render stage loads each predicted parameter tensor, canonicalizes it through the ParamSpec, and uses `make_audio_renderer` for both predicted and target audio. The `params.csv` `pred_effective` column records those clipped and quantized values, including the final note window. Pedalboard and
 DawDreamer VST load a plugin; `torchsynth` renders in-process; and
 `dawdreamer_faust` compiles the checked-in source registered by
 `param_spec_name`, then sets renderer-native values under exact compiled

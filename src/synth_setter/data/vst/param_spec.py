@@ -173,8 +173,9 @@ class DiscreteLiteralParameter(Parameter):
         return idx + self.min
 
     def _decode_scalar(self, scalar: np.ndarray) -> int:
-        scaled = scalar * (self.max - self.min) + self.min
-        return int(scaled.item())
+        offset = scalar.item() * (self.max - self.min)
+        lower_offset = math.floor(offset)
+        return self.min + lower_offset + int(offset - lower_offset >= 0.5)
 
     def decode(self, encoded: np.ndarray) -> int:
         if self.encoding == "scalar":
@@ -578,7 +579,9 @@ class ParamSpec:
         :param model: Values on the model's ``[-1, 1]`` scale.
         :returns: The same values clipped into ``[0, 1]``.
         """
-        return ((model + 1) / 2).clip(0, 1)
+        calculation_dtype = np.result_type(model.dtype, np.float64)
+        promoted = model.astype(calculation_dtype, copy=False)
+        return ((promoted + 1) / 2).clip(0, 1)
 
     def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode one encoded row of values in ``[0, 1]``.
@@ -627,6 +630,31 @@ class ParamSpec:
         for parameter in (*self.synth_params, *self.note_params):
             names.extend(parameter.encoded_names())
         return names
+
+
+def spec_quantize_model_output(row: np.ndarray, spec: ParamSpec) -> np.ndarray:
+    """Canonicalize one model-space row to the values used for rendering.
+
+    :param row: Model-space parameter row shaped ``(len(spec),)``.
+    :param spec: Parameter schema defining clipping and discrete values.
+    :returns: Canonicalized model-space row with the same shape.
+    :raises ValueError: The row shape is wrong or contains a non-finite value.
+    """
+    if row.shape != (spec.encoded_width,):
+        raise ValueError(f"expected shape ({spec.encoded_width},), got {row.shape}")
+    if not np.isfinite(row).all():
+        raise ValueError("model output must contain only finite values")
+
+    effective_encoded = spec.model_to_encoded(row).copy()
+    for parameter, span in spec.encoded_slices():
+        encoded = effective_encoded[span]
+        if isinstance(parameter, CategoricalParameter) and parameter.encoding == "scalar":
+            raw_values = np.asarray(parameter.raw_values)
+            raw_value = raw_values[np.abs(raw_values - encoded.item()).argmin()]
+        else:
+            raw_value = parameter.decode(encoded)
+        effective_encoded[span] = parameter.encode(raw_value)
+    return spec.encoded_to_model(effective_encoded)
 
 
 def decode_model_output(

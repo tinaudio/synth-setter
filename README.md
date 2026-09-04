@@ -129,8 +129,11 @@ in [docs/reference/dependency-management.md](docs/reference/dependency-managemen
 # Render a CLAP-conditioned Surge patch and upload the WAV to R2
 synth-setter-clap "frog croak"
 
-# Run tests
+# Run the strict two-minute test tier
 make test-fast
+
+# Run the complete non-slow CPU suite
+make test-medium
 
 # Run all pre-commit hooks (formatting + linting)
 make format

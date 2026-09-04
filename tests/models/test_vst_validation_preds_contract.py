@@ -236,7 +236,7 @@ def test_flow_vae_validation_loop_emits_per_param_metric() -> None:
     dataloader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], [_batch()]), batch_size=None)
     trainer.validate(_flow_vae_module(), dataloaders=dataloader)
 
-    assert torch.isfinite(trainer.callback_metrics["per_param_mse/a_amp_eg_attack"])
+    assert torch.isfinite(trainer.callback_metrics["val/per_param_mse/a_amp_eg_attack"])
 
 
 def test_validation_step_preds_are_the_feed_forward_nets_predictions() -> None:
@@ -352,7 +352,7 @@ def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
     target_params = torch.zeros(_BATCH, param_spec.encoded_width)
     sampled_params = torch.zeros_like(target_params)
     sampled_params[:, pitch_span] = torch.tensor(
-        [-0.3541666666666667, 0.1875, 0.20833333333333334]
+        [-0.3541666666666667, 0.1875, 0.20833334]
     ).unsqueeze(1)
     sampled_by_batch_size = {2: sampled_params[:2], 1: sampled_params[2:]}
 

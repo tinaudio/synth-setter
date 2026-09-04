@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
 from torchmetrics import Metric
@@ -66,16 +67,57 @@ def midi_pitch_residuals(
         raise ValueError("expected a unique scalar discrete pitch parameter")
 
     pitch, span = pitch_field
-    predicted_encoded = ((predicted[:, span].squeeze(1) + 1) / 2).clamp(0, 1)
-    target_encoded = (target[:, span].squeeze(1) + 1) / 2
+    calculation_device = (
+        torch.device("cpu") if predicted.device.type == "mps" else predicted.device
+    )
+    predicted_model = predicted[:, span].squeeze(1).to(calculation_device).to(torch.float64)
+    target_model = target[:, span].squeeze(1).to(calculation_device).to(torch.float64)
+    predicted_encoded = ((predicted_model + 1) / 2).clamp(0, 1)
+    target_encoded = (target_model + 1) / 2
     pitch_span = pitch.max - pitch.min
     predicted_midi = pitch.min + predicted_encoded * pitch_span
     target_midi = torch.floor(pitch.min + target_encoded * pitch_span + 0.5)
     return {
-        "continuous": predicted_midi - target_midi,
-        "floor": torch.floor(predicted_midi) - target_midi,
-        "nearest": torch.floor(predicted_midi + 0.5) - target_midi,
+        "continuous": (predicted_midi - target_midi).to(predicted),
+        "floor": (torch.floor(predicted_midi) - target_midi).to(predicted),
+        "nearest": (torch.floor(predicted_midi + 0.5) - target_midi).to(predicted),
     }
+
+
+def spec_quantized_per_param_mse(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> torch.Tensor:
+    """Return MSE after predictions snap to values used by the renderer.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining clipping and discrete parameter values.
+    :returns: Per-encoded-column mean squared error shaped ``(num_params,)``.
+    :raises ValueError: Shapes mismatch or either tensor contains a non-finite value.
+    """
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+    if predicted.shape[1] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
+        )
+    if not torch.isfinite(predicted).all() or not torch.isfinite(target).all():
+        raise ValueError("predicted and target parameters must contain only finite values")
+
+    from synth_setter.data.vst.param_spec import spec_quantize_model_output
+
+    effective_rows = np.stack(
+        [
+            spec_quantize_model_output(row, param_spec)
+            for row in predicted.detach().float().cpu().numpy()
+        ]
+    )
+    effective = torch.as_tensor(effective_rows, device=predicted.device, dtype=torch.float32)
+    return (effective - target.float()).square().mean(dim=0)
 
 
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):

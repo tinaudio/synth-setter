@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import lance
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 import wandb
@@ -41,7 +42,8 @@ from pedalboard.io import AudioFile
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
-from synth_setter.data.vst import plugin_state_paths
+from synth_setter.data.vst import param_specs, plugin_state_paths
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
@@ -49,6 +51,7 @@ from synth_setter.models.components.pretrained_encoder import (
     PretrainedConditioningEncoder,
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
+from synth_setter.models.components.transformer import ASTWithProjectionHead
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
@@ -143,10 +146,10 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_evaluate_slap_checkpoint_reports_finite_loss(
+def test_evaluate_slap_ast_audio_mlp_param_experiment_checkpoint_end_to_end(
     cfg_slap_train_lance: DictConfig,
 ) -> None:
-    """Reload a GPU-trained SLAP checkpoint through the public eval path.
+    """Reload the shipped experiment's GPU checkpoint through public evaluation.
 
     :param cfg_slap_train_lance: Tiny paired Lance training configuration.
     """
@@ -164,11 +167,9 @@ def test_evaluate_slap_checkpoint_reports_finite_loss(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "datamodule=surge_lance",
-                "model=slap",
+                "experiment=surge/slap_ast_audio_mlp_param",
                 "callbacks=none",
                 "trainer=gpu",
-                "synth=surge_4",
             ],
         )
     with open_dict(cfg):
@@ -190,6 +191,28 @@ def test_evaluate_slap_checkpoint_reports_finite_loss(
     assert torch.isfinite(metric_dict["loss/test/total_loss"])
     metrics_path = Path(cfg.paths.output_dir) / "metrics" / "metrics.json"
     assert math.isfinite(json.loads(metrics_path.read_text())["loss/test/total_loss"])
+
+
+@pytest.mark.slow
+def test_evaluate_pyfdn_householder_checkpoint_logs_param_mse(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Evaluate a real checkpoint through the fixed-Householder pyFDN config.
+
+    :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+    train(cfg_pyfdn_train)
+    checkpoint = Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.ckpt_path = str(checkpoint)
+        cfg_pyfdn_train.mode = "test"
+        cfg_pyfdn_train.trainer.limit_test_batches = 1
+
+    HydraConfig().set_config(cfg_pyfdn_train)
+    metrics, _ = evaluate(cfg_pyfdn_train)
+
+    assert torch.isfinite(metrics["test/param_mse"])
 
 
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
@@ -814,7 +837,7 @@ def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
     finally:
         GlobalHydra.instance().clear()
 
-    assert torch.isfinite(metric_dict["per_param_mse_number_group_swap/adsr_1.attack"]).all()
+    assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
 
 
 @pytest.mark.slow
@@ -1264,7 +1287,8 @@ def _compose_fake_oracle_eval_cfg(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
-            + ([f"datamodule={datamodule}"] if datamodule else []),
+            + ([f"datamodule={datamodule}"] if datamodule else [])
+            + (["render=pyfdn"] if param_spec_name == "pyfdn_n8_mono_householder" else []),
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
@@ -1283,27 +1307,28 @@ def _compose_fake_oracle_eval_cfg(
         # Pin the full split because surge/base bounds validation by batch count.
         # mode=val/validate must see every fixture row.
         cfg.trainer.limit_val_batches = 1.0
-        # Render group is null on fake_oracle; set it inline to the dataset's spec.
-        cfg.render = RenderConfig.model_validate(
-            {
-                "synth": {
-                    "name": param_spec_name,
-                    "param_spec_name": param_spec_name,
-                    "plugin_state_path": str(plugin_state_paths[param_spec_name]),
-                    "plugin_path": "plugins/fake.vst3",
-                    "synth_version": "1.3.4",
-                },
-                "sample_rate": 44100,
-                "channels": 2,
-                "velocity": 100,
-                "signal_duration_seconds": 4.0,
-                "min_loudness": -55.0,
-                "samples_per_render_batch": 1,
-                "samples_per_shard": 5,
-                "plugin_reload_cadence": "render",
-                "gui_toggle_cadence": "never",
-            }
-        ).model_dump(mode="json")
+        # Render group is null on fake_oracle; set it inline for fake VST datasets.
+        if param_spec_name != "pyfdn_n8_mono_householder":
+            cfg.render = RenderConfig.model_validate(
+                {
+                    "synth": {
+                        "name": param_spec_name,
+                        "param_spec_name": param_spec_name,
+                        "plugin_state_path": str(plugin_state_paths[param_spec_name]),
+                        "plugin_path": "plugins/fake.vst3",
+                        "synth_version": "1.3.4",
+                    },
+                    "sample_rate": 44100,
+                    "channels": 2,
+                    "velocity": 100,
+                    "signal_duration_seconds": 4.0,
+                    "min_loudness": -55.0,
+                    "samples_per_render_batch": 1,
+                    "samples_per_shard": 5,
+                    "plugin_reload_cadence": "render",
+                    "gui_toggle_cadence": "never",
+                }
+            ).model_dump(mode="json")
     return cfg
 
 
@@ -1445,6 +1470,53 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)
     assert not any("shuffle" in key for key in metric_dict)
+
+
+@pytest.mark.slow
+def test_evaluate_predict_mode_pyfdn_renders_finite_audio_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """The eval entrypoint renders a pyFDN prediction through real post-processing.
+
+    :param tmp_path: Hydra output root and two-row Lance predict dataset.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    dataset_root = tmp_path / "pyfdn-data"
+    dataset_root.mkdir()
+    params, notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(17))
+    encoded = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(params, notes)
+    write_lance_shard(
+        dataset_root / "test.lance",
+        {
+            "audio": np.zeros((2, 1, 176_400), dtype=np.float32),
+            "mel_spec": np.zeros((2, 1, 128, 401), dtype=np.float32),
+            "param_array": np.repeat(encoded[None, :], 2, axis=0),
+        },
+    )
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        dataset_root,
+        mode="predict",
+        param_spec_name="pyfdn_n8_mono_householder",
+        datamodule="pyfdn",
+    )
+    with open_dict(cfg):
+        cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.evaluation.compute_metrics = False
+        cfg.evaluation.rerender_target = True
+
+    HydraConfig().set_config(cfg)
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    with AudioFile(str(tmp_path / "audio" / "sample_0" / "pred.wav")) as audio_file:
+        rendered = audio_file.read(audio_file.frames)
+    assert rendered.shape == (1, 176_400)
+    assert np.isfinite(rendered).all()
 
 
 @pytest.mark.fake_vst
@@ -1633,6 +1705,68 @@ def test_eval_synth_group_exposes_postprocessing_keys(synth_group: str) -> None:
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["cpu"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/ffn_simple"], indirect=True)
+def test_evaluate_predict_rounds_fractional_pitch_to_nearest_midi_note(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+    param_spec_name: str,
+) -> None:
+    """Render a trained model's fractional pitch as its nearest MIDI note.
+
+    :param tmp_path: Shared train, prediction, and rendered-audio directory.
+    :param cfg_surge_xt: One-step real Surge XT training configuration.
+    :param cfg_surge_xt_eval: Matching production predict-mode configuration.
+    :param param_spec_name: Parameter spec locating the scalar pitch output.
+    """
+    for cfg in (cfg_surge_xt, cfg_surge_xt_eval):
+        with open_dict(cfg):
+            cfg.model.net.d_model = 16
+            cfg.model.net.n_heads = 1
+            cfg.model.net.n_layers = 1
+            cfg.model.net.patch_size = 128
+            cfg.model.net.patch_stride = 64
+    HydraConfig().set_config(cfg_surge_xt)
+    _, train_objects = train(cfg_surge_xt)
+
+    spec = param_specs[param_spec_name]
+    pitch_index = spec.encoded_names.index("pitch")
+    fractional_pitch_output = 0.0416666679084301
+    trained_model = train_objects["model"]
+    trainer = train_objects["trainer"]
+    assert isinstance(trained_model, VSTFeedForwardModule)
+    assert isinstance(trained_model.net, ASTWithProjectionHead)
+    assert isinstance(trainer, Trainer)
+    # This float32 value is the first representable prediction above the MIDI 60.5 boundary.
+    with torch.no_grad():
+        trained_model.net.final_proj.weight[pitch_index].zero_()
+        trained_model.net.final_proj.bias[pitch_index].fill_(fractional_pitch_output)
+    trainer.save_checkpoint(cfg_surge_xt_eval.ckpt_path, weights_only=False)
+
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.evaluation.compute_metrics = False
+        cfg_surge_xt_eval.evaluation.rerender_target = False
+        cfg_surge_xt_eval.datamodule.batch_size = 1
+        cfg_surge_xt_eval.render.plugin_reload_cadence = "once"
+        cfg_surge_xt_eval.trainer.limit_predict_batches = 1
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    try:
+        evaluate(cfg_surge_xt_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    prediction = torch.load(tmp_path / "predictions" / "pred-0.pt", weights_only=True)
+    assert prediction[0, pitch_index].item() == fractional_pitch_output
+
+    rendered_pitch = pd.read_csv(tmp_path / "audio" / "sample_0" / "params.csv", index_col=0).at[
+        "pitch", "pred_effective"
+    ]
+    assert int(rendered_pitch) == 61
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
 @pytest.mark.skipif(
     not os.environ.get("WANDB_API_KEY"),
     reason="real W&B round-trip needs WANDB_API_KEY (injected on trusted CI only)",
@@ -1719,7 +1853,7 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.item() == 0.0
-    assert metric_dict["per_param_mse/a_amp_eg_attack"].item() == 0.0
+    assert metric_dict["val/per_param_mse/a_amp_eg_attack"].item() == 0.0
 
 
 def test_evaluate_test_mode_partial_lance_root_returns_metric(
@@ -2462,5 +2596,8 @@ def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Pa
     with AudioFile(str(sample / "target.wav")) as handle:
         target = handle.read(handle.frames)
     assert (sample / "pred.wav").is_file()
+    rendered_params = pd.read_csv(sample / "params.csv", index_col=0)
+    effective_pitch = float(rendered_params.at["pitch", "pred_effective"])
+    assert effective_pitch.is_integer()
     # Staged corpus audio must be preserved; a re-render or zeroed target changes its level.
     assert float(np.abs(target).mean()) == pytest.approx(0.0625, abs=5e-3)

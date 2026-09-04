@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.evaluation import audio_probe
 from synth_setter.evaluation.audio_probe import _render_argv, _staged_sample_count, run_audio_probe
 from synth_setter.param_spec_name import ParamSpecName
@@ -30,8 +30,8 @@ from synth_setter.synth_spec import SynthName, SynthSpec
 
 _PYFDN_SETTINGS = RenderConfig(
     synth=SynthSpec(
-        name=SynthName("pyfdn_n8_mono"),
-        param_spec_name=ParamSpecName("pyfdn_n8_mono"),
+        name=SynthName("pyfdn_n8_mono_householder"),
+        param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
         plugin_path="pyfdn",
         plugin_state_path="",
         synth_version="0.4.2",
@@ -236,15 +236,19 @@ def test_run_audio_probe_pyfdn_real_chain_returns_reverb_metrics(tmp_path: Path)
 
     :param tmp_path: Isolated probe directory for real subprocess artifacts.
     """
-    first_params, first_notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(31))
-    second_params, second_notes = PYFDN_N8_MONO_PARAM_SPEC.sample(np.random.default_rng(37))
+    first_params, first_notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(
+        np.random.default_rng(31)
+    )
+    second_params, second_notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(
+        np.random.default_rng(37)
+    )
     rows = np.stack(
         [
-            PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(
-                PYFDN_N8_MONO_PARAM_SPEC.encode(first_params, first_notes)
+            PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_to_model(
+                PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(first_params, first_notes)
             ),
-            PYFDN_N8_MONO_PARAM_SPEC.encoded_to_model(
-                PYFDN_N8_MONO_PARAM_SPEC.encode(second_params, second_notes)
+            PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_to_model(
+                PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(second_params, second_notes)
             ),
         ]
     )

@@ -40,7 +40,7 @@ from synth_setter.data.pyfdn_source import (
     generate_canonical_pyfdn_source,
 )
 from synth_setter.data.vst.param_spec import ParameterValue
-from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.data.vst.renderers import AudioRenderer, NonFiniteAudioError
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import PyFDNExcitation
 
@@ -52,7 +52,7 @@ _POST_DELAY_SOS_SHAPE = (1, 6, PYFDN_ORDER)
 _PITCHSHIFT_GEQ_SOS_SHAPE = (11, 6, PYFDN_ORDER)
 PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES = 3
 PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER = 2
-_PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono")
+_PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder")
 _PITCHSHIFT_PARAM_SPEC = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
@@ -507,7 +507,8 @@ class PyFDNRenderer(AudioRenderer):
         :param warmup: Ignored compatibility stub.
         :returns: Contiguous finite channel-first float32 audio shaped ``(1, 176400)``; native
             amplitude is preserved without clipping or normalization.
-        :raises ValueError: The patch or rendered audio violates the fixed contract.
+        :raises ValueError: The patch or rendered shape violates the fixed contract.
+        :raises NonFiniteAudioError: The rendered audio contains NaN or infinity.
         """
         del midi_note, velocity, note_start_and_end, warmup
         if self._param_spec_name == _PITCHSHIFT_PARAM_SPEC:
@@ -542,11 +543,11 @@ class PyFDNRenderer(AudioRenderer):
                 f"pyFDN output must have shape {(_SIGNAL_LENGTH,)}, got {output_array.shape}"
             )
         if not np.isfinite(output_array).all():
-            raise ValueError("pyFDN output must contain only finite values")
+            raise NonFiniteAudioError("pyFDN output must contain only finite values")
         with np.errstate(over="ignore"):
             audio = np.ascontiguousarray(output_array, dtype=np.float32).reshape(
                 _CHANNELS, _SIGNAL_LENGTH
             )
         if not np.isfinite(audio).all():
-            raise ValueError("float32 pyFDN output must contain only finite values")
+            raise NonFiniteAudioError("float32 pyFDN output must contain only finite values")
         return audio

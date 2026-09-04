@@ -178,6 +178,45 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+@pytest.mark.slow
+def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train the shipped pyFDN AST on stored mels and write a checkpoint.
+
+    :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
+    """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
+    assert cfg_pyfdn_train.model.num_params == 27
+    assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/delays"])
+    assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+def test_train_pyfdn_online_ast_one_step_uses_waveforms(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train the online-AST comparison from stored pyFDN waveforms.
+
+    :param cfg_pyfdn_train: One-step online-AST pyFDN configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.conditioning == "audio"
+    assert objects["trainer"].global_step == 1
+
+
 def _assert_slap_train_artifacts(
     cfg: DictConfig,
     metric_dict: Mapping[str, torch.Tensor],
@@ -213,8 +252,10 @@ def _assert_slap_train_artifacts(
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_train_slap_tiny_lance_end_to_end(cfg_slap_train_lance: DictConfig) -> None:
-    """Run public SLAP fit, validation, reload, and test on one GPU.
+def test_train_slap_ast_audio_mlp_param_experiment_end_to_end(
+    cfg_slap_train_lance: DictConfig,
+) -> None:
+    """Run the shipped SLAP experiment through fit, reload, and test on one GPU.
 
     :param cfg_slap_train_lance: Tiny real Lance training configuration.
     """
@@ -426,7 +467,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
-    assert torch.isfinite(metric_dict["per_param_mse_number_group_swap/adsr_1.attack"]).all()
+    assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
@@ -986,7 +1027,7 @@ def test_train_runpod_experiment_default_datamodule_advances(
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
     assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
-    assert torch.isfinite(metric_dict["per_param_mse/a_amp_eg_attack"])
+    assert torch.isfinite(metric_dict["val/per_param_mse/a_amp_eg_attack"])
 
 
 @pytest.mark.slow
@@ -1966,7 +2007,12 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
         cfg_surge_real_train.trainer.num_sanity_val_steps = 0
 
     HydraConfig().set_config(cfg_surge_real_train)
-    _, object_dict = train(cfg_surge_real_train)
+    metric_dict, object_dict = train(cfg_surge_real_train)
+
+    assert metric_dict["val/param_mse_spec_quantized"].item() == pytest.approx(0.0, abs=1e-12)
+    assert metric_dict["val/per_param_mse_spec_quantized/a_amp_eg_attack"].item() == pytest.approx(
+        0.0, abs=1e-12
+    )
 
     probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
     assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"
@@ -1988,6 +2034,10 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             wav = sample_dir / wav_name
             assert wav.is_file(), f"{wav} was not rendered"
             assert wav.stat().st_size > 0, f"{wav} is empty"
+        rendered_params = pd.read_csv(sample_dir / "params.csv", index_col=0)
+        assert rendered_params.at["a_amp_eg_attack", "pred_effective"] == pytest.approx(
+            rendered_params.at["a_amp_eg_attack", "target"]
+        )
 
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"

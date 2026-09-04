@@ -105,16 +105,19 @@ Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
 both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
 only; with `logger=wandb` they go to W&B only.
 
-| Callback                 | Logged key                                                                                | Trigger                                                                                                                                                           | Symbol                                                                                                               |
-| ------------------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `PlotLossPerTimestep`    | `plot` (image)                                                                            | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
-| `PlotLearntProjection`   | `assignment`, `value` (images)                                                            | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
-| `LogPerParamMSE`         | `per_param_mse/{name}` plus optional `per_param_mse_{best_swap,number_group_swap}/{name}` | `on_validation_epoch_end` (via `self.log_dict`)                                                                                                                   | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
-| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                      | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+| Callback                 | Logged key                                                                                                                                                                                                                       | Trigger                                                                                                                                                           | Symbol                                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                   | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
+| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                   | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
+| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}/per_param_mse_best_swap/{name}`, `{val,test}/per_param_mse_number_group_swap/{name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, and `{val,test}/param_mse_spec_quantized` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
+| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                             | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
 
-`ValAudioProbe`'s keys mirror §2i's `audio/*` metric set under the `val_audio/`
-prefix. pyFDN probes additionally log `val_audio/octave_rt60_log_rmse_{mean,std}`
-and `val_audio/octave_edc_rmse_db_{mean,std}` from their impulse responses. The
+`{val,test}/param_mse_spec_quantized` clips predictions to the ParamSpec domain
+and snaps categorical and integral fields to the values used for rendering
+before scoring them against the targets. `ValAudioProbe`'s keys mirror §2i's `audio/*`
+metric set under the `val_audio/` prefix. pyFDN probes additionally log
+`val_audio/octave_rt60_log_rmse_{mean,std}` and
+`val_audio/octave_edc_rmse_db_{mean,std}` from their impulse responses. The
 wav/spectrogram snapshot goes to R2, not W&B (free-tier storage budget).
 
 ### 2d. Callbacks — Non-W&B
@@ -226,12 +229,13 @@ the single binding point: re-running with the same `spec` resumes the same W&B r
 
 ### 5b. Per-shard metrics (one history row per shard, `step=shard_id`)
 
-| Key                              | What                                                                           |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| `shard/bytes`                    | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
-| `shard/render_seconds`           | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
-| `shard/samples_rejected_clipped` | Sampled renders rejected for exceeding `[-1, 1]`; `0` on R2-skip               |
-| `shard/samples_rejected_silent`  | Sampled renders rejected below `render.min_loudness`; `0` on R2-skip           |
+| Key                                 | What                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------------ |
+| `shard/bytes`                       | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
+| `shard/render_seconds`              | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
+| `shard/samples_rejected_clipped`    | Sampled renders rejected for exceeding `[-1, 1]`; `0` on R2-skip               |
+| `shard/samples_rejected_non_finite` | Sampled renders rejected for NaN or infinity; `0` on R2-skip                   |
+| `shard/samples_rejected_silent`     | Sampled renders rejected below `render.min_loudness`; `0` on R2-skip           |
 
 Emitted by `_log_shard_metrics` from `_render_one_owned_shard` in both the
 serial and parallel dispatchers. A renderer that exits successfully without a
@@ -239,16 +243,17 @@ valid metrics sidecar fails the shard with a shard-qualified `RuntimeError`.
 
 ### 5c. Per-worker summary (one terminal row per worker invocation)
 
-| Key                                   | What                                                         |
-| ------------------------------------- | ------------------------------------------------------------ |
-| `shards/rendered`                     | Shards this rank actually rendered                           |
-| `shards/skipped`                      | Shards short-circuited by the R2-skip probe                  |
-| `shards/total`                        | `len(my_range)` — owned shard count for this rank            |
-| `generation/elapsed_seconds`          | Wall-clock dispatcher duration (mirrors #1304)               |
-| `generation/samples`                  | `rendered * spec.render.samples_per_shard`                   |
-| `generation/samples_per_second`       | `samples / elapsed_s` (0.0 when `elapsed_s == 0`)            |
-| `generation/samples_rejected_clipped` | Clipped sampled renders rejected across this worker's shards |
-| `generation/samples_rejected_silent`  | Silent sampled renders rejected across this worker's shards  |
+| Key                                      | What                                                            |
+| ---------------------------------------- | --------------------------------------------------------------- |
+| `shards/rendered`                        | Shards this rank actually rendered                              |
+| `shards/skipped`                         | Shards short-circuited by the R2-skip probe                     |
+| `shards/total`                           | `len(my_range)` — owned shard count for this rank               |
+| `generation/elapsed_seconds`             | Wall-clock dispatcher duration (mirrors #1304)                  |
+| `generation/samples`                     | `rendered * spec.render.samples_per_shard`                      |
+| `generation/samples_per_second`          | `samples / elapsed_s` (0.0 when `elapsed_s == 0`)               |
+| `generation/samples_rejected_clipped`    | Clipped sampled renders rejected across this worker's shards    |
+| `generation/samples_rejected_non_finite` | Non-finite sampled renders rejected across this worker's shards |
+| `generation/samples_rejected_silent`     | Silent sampled renders rejected across this worker's shards     |
 
 Generation rejection totals are worker-local, not distributed-run totals. They
 sum only shards rendered by this invocation; in claims mode, those are claims
@@ -268,6 +273,7 @@ in the `finally`.
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [#1318](https://github.com/tinaudio/synth-setter/issues/1318) | v2: per-sample loudness telemetry relay (stdout protocol, worker → launcher) — deferred non-goal from the design doc Q5 |
 | [#2032](https://github.com/tinaudio/synth-setter/issues/2032) | Separate per-shard counts for silent and clipped sampled-render rejections                                              |
+| [#3092](https://github.com/tinaudio/synth-setter/issues/3092) | Retry and report non-finite sampled renders instead of aborting the shard                                               |
 
 ### 5e. Sweeps
 

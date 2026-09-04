@@ -28,6 +28,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
+from synth_setter.metrics import spec_quantized_per_param_mse
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -923,55 +924,132 @@ _PER_PARAM_MSE_OUTPUTS = (
     "per_param_mse_best_swap",
     "per_param_mse_number_group_swap",
 )
+_SPEC_QUANTIZED_PER_PARAM_MSE = "per_param_mse_spec_quantized"
+
+
+def _distributed_metric_mean(
+    total: np.ndarray,
+    count: int,
+    device: torch.device,
+) -> np.ndarray:
+    """Reduce an accumulated metric sum and count before computing its mean.
+
+    :param total: Rank-local per-column metric sums.
+    :param count: Rank-local number of contributing observations.
+    :param device: Device compatible with the active distributed backend.
+    :returns: Globally weighted per-column mean.
+    """
+    packed = torch.cat(
+        (
+            torch.as_tensor(total, device=device, dtype=torch.float32).flatten(),
+            torch.tensor([count], device=device, dtype=torch.float32),
+        )
+    )
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.all_reduce(packed)
+    return (packed[:-1] / packed[-1]).cpu().numpy().reshape(total.shape)
 
 
 class LogPerParamMSE(Callback):
-    """Log validation-set MSE broken down per parameter dimension of the ParamSpec."""
+    """Log validation and test MSE broken down by ParamSpec parameter."""
 
-    def __init__(self, param_spec: str):
+    def __init__(self, param_spec: str) -> None:
         """Select the ParamSpec whose dimension names label emitted metrics.
 
-        :param param_spec: Registered ParamSpec name for validation outputs.
+        :param param_spec: Registered ParamSpec name for evaluation outputs.
         """
         super().__init__()
         self.param_spec = param_specs[param_spec]
 
-    def on_validation_epoch_start(
-        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
-    ) -> None:
+    def _reset(self) -> None:
         self.metric_totals: dict[str, np.ndarray] = {}
         self.metric_counts: dict[str, int] = {}
 
-    def on_validation_batch_end(
-        self,
-        trainer,
-        pl_module,
-        outputs,
-        batch,
-        batch_idx,
-        dataloader_idx=0,
-    ) -> None:
+    def _accumulate(self, outputs: object, batch: object) -> None:
+        if not isinstance(outputs, Mapping):
+            return
+        params = batch.get("params") if isinstance(batch, Mapping) else None
+        weight = params.shape[0] if isinstance(params, torch.Tensor) else 1
+        batch_metrics: list[tuple[str, torch.Tensor, int]] = []
         for metric_name in _PER_PARAM_MSE_OUTPUTS:
-            if metric_name not in outputs:
-                continue
-            values = outputs[metric_name].detach().cpu().numpy()
-            total = self.metric_totals.get(metric_name, np.zeros_like(values))
-            self.metric_totals[metric_name] = total + values
-            self.metric_counts[metric_name] = self.metric_counts.get(metric_name, 0) + 1
+            metric = outputs.get(metric_name)
+            if isinstance(metric, torch.Tensor):
+                batch_metrics.append((metric_name, metric, weight))
 
-    def on_validation_epoch_end(
-        self,
-        trainer,
-        pl_module,
-    ) -> None:
+        predictions = outputs.get("preds")
+        if isinstance(predictions, torch.Tensor) and isinstance(params, torch.Tensor):
+            batch_metrics.append(
+                (
+                    _SPEC_QUANTIZED_PER_PARAM_MSE,
+                    spec_quantized_per_param_mse(predictions, params, self.param_spec),
+                    weight,
+                )
+            )
+
+        for metric_name, metric, metric_weight in batch_metrics:
+            values = metric.detach().cpu().numpy()
+            total = self.metric_totals.get(metric_name, np.zeros_like(values))
+            self.metric_totals[metric_name] = total + values * metric_weight
+            self.metric_counts[metric_name] = (
+                self.metric_counts.get(metric_name, 0) + metric_weight
+            )
+
+    def _log(self, pl_module: LightningModule, stage: Literal["test", "val"]) -> None:
         metrics = {}
         for metric_name, total in self.metric_totals.items():
-            per_param_mse = total / self.metric_counts[metric_name]
-            # Encoded spans preserve labels across onehot and multi-column parameters.
+            per_param_mse = _distributed_metric_mean(
+                total,
+                self.metric_counts[metric_name],
+                pl_module.device,
+            )
             metrics.update(
                 {
-                    f"{metric_name}/{param.name}": per_param_mse[span].mean()
+                    f"{stage}/{metric_name}/{param.name}": per_param_mse[span].mean()
                     for param, span in self.param_spec.encoded_slices()
                 }
             )
+            if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
+                metrics[f"{stage}/param_mse_spec_quantized"] = per_param_mse.mean()
         pl_module.log_dict(metrics)
+
+    def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._reset()
+
+    def on_validation_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: object,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        self._accumulate(outputs, batch)
+
+    def on_validation_epoch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+    ) -> None:
+        self._log(pl_module, "val")
+
+    def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._reset()
+
+    def on_test_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: object,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        self._accumulate(outputs, batch)
+
+    def on_test_epoch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+    ) -> None:
+        self._log(pl_module, "test")

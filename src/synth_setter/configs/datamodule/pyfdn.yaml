@@ -3,4 +3,3 @@ defaults:
   - _self_
 
 batch_size: 32
-conditioning: audio

@@ -2582,6 +2582,101 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 # Lance datamodule smoke fixtures.
 
+_PYFDN_LANCE_SMOKE_MEL_SHAPE = (1, 128, 401)
+_PYFDN_LANCE_SMOKE_NUM_PARAMS = len(param_specs["pyfdn_n8_mono_householder"])
+
+
+def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int) -> None:
+    """Write one fixed-Householder pyFDN split for entrypoint tests.
+
+    :param path: Output ``.lance`` split.
+    :param seed: RNG seed distinguishing splits.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    rng = np.random.default_rng(seed)
+    write_lance_shard(
+        path,
+        {
+            "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
+            "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
+            "param_array": rng.random((1, _PYFDN_LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+        },
+    )
+
+
+@pytest.fixture
+def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfig:
+    """Compose a one-step pyFDN flow run over fixed-Householder Lance rows.
+
+    :param tmp_path: Per-test dataset and output root.
+    :param request: Optional indirect experiment-name parameter.
+    :returns: Ready-to-run training configuration.
+    """
+    experiment = getattr(request, "param", "pyfdn/flow")
+    dataset_root = tmp_path / "pyfdn-lance-data"
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_pyfdn_lance_smoke_split(dataset_root / f"{split}.lance", seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+    (dataset_root / "dataset.complete").touch()
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[f"experiment={experiment}", "trainer=cpu"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.logger = None
+            cfg.training.val_audio_probe = False
+            cfg.test = False
+            cfg.trainer.max_epochs = 1
+            cfg.trainer.max_steps = 1
+            cfg.trainer.limit_train_batches = 1
+            cfg.trainer.limit_val_batches = 0
+            cfg.trainer.num_sanity_val_steps = 0
+            cfg.trainer.log_every_n_steps = 1
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.ot = False
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.pin_memory = False
+            cfg.model.compile = False
+            cfg.model.scheduler = None
+            encoder = (
+                cfg.model.encoder.backbone
+                if experiment == "pyfdn/flow_ast_online"
+                else cfg.model.encoder
+            )
+            encoder.d_model = 16
+            encoder.n_heads = 1
+            encoder.n_layers = 1
+            encoder.n_conditioning_outputs = 1
+            cfg.model.vector_field.d_model = 16
+            cfg.model.vector_field.num_heads = 1
+            cfg.model.vector_field.d_ff = 16
+            cfg.model.vector_field.num_layers = 1
+            cfg.model.vector_field.projection.num_tokens = 2
+            cfg.model.validation_sample_steps = 1
+            cfg.model.test_sample_steps = 1
+            cfg.callbacks.model_checkpoint.save_top_k = 0
+            cfg.callbacks.model_checkpoint.save_last = True
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
+
+    GlobalHydra.instance().clear()
+    return cfg
+
+
 # vst_ffn's AST net hard-codes the production mel shape and channel count, so the
 # Lance smoke fixture must carry production-shaped mel rows; everything else is tiny.
 _LANCE_SMOKE_MEL_SHAPE = (2, 128, 401)
@@ -2630,39 +2725,6 @@ def _materialize_lance_smoke_root(dataset_root: Path) -> None:
         std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
     )
     (dataset_root / "dataset.complete").touch()
-
-
-def _slap_arm_config(input_dim: int) -> dict[str, object]:
-    """Build a tiny Hydra Siamese-arm configuration.
-
-    :param input_dim: Flattened modality width accepted by the arm.
-    :returns: Hydra-instantiable arm configuration.
-    """
-    return {
-        "_target_": "synth_setter.models.components.slap.SiameseArm",
-        "encoder": {
-            "_target_": "torch.nn.Sequential",
-            "_args_": [
-                {"_target_": "torch.nn.Flatten", "start_dim": 1},
-                {
-                    "_target_": "torch.nn.Linear",
-                    "in_features": input_dim,
-                    "out_features": 16,
-                },
-            ],
-        },
-        "projector": {
-            "_target_": "torch.nn.Linear",
-            "in_features": 16,
-            "out_features": 8,
-        },
-        "transform": {
-            "_target_": "torch.nn.Linear",
-            "in_features": 8,
-            "out_features": 8,
-        },
-        "normalize_projections": True,
-    }
 
 
 @pytest.fixture
@@ -2719,9 +2781,24 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
+def _shrink_slap_ast(cfg: DictConfig) -> None:
+    """Reduce the configured AST depth without relying on its list position.
+
+    :param cfg: Composed SLAP experiment configuration.
+    """
+    target = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
+    ast_configs = [
+        layer
+        for layer in cfg.model.audio_encoder.encoder._args_
+        if layer.get("_target_") == target
+    ]
+    assert len(ast_configs) == 1
+    ast_configs[0].n_layers = 1
+
+
 @pytest.fixture
 def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
-    """Compose a one-step SLAP run over paired local Lance splits.
+    """Compose a one-step shipped SLAP experiment over local Lance splits.
 
     The configuration exercises fit, validation, checkpoint reload, and test.
 
@@ -2736,10 +2813,7 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "datamodule=surge_lance",
-                f"synth={_LANCE_SMOKE_PARAM_SPEC}",
-                "model=slap",
-                "callbacks=default_slap",
+                "experiment=surge/slap_ast_audio_mlp_param",
                 "trainer=cpu",
             ],
         )
@@ -2749,16 +2823,18 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
         cfg.paths.log_dir = str(tmp_path)
         cfg.seed = 1234
         cfg.logger = None
+        cfg.test = True
         cfg.datamodule.dataset_root = str(dataset_root)
-        cfg.datamodule.conditioning = "audio"
-        cfg.datamodule.ot = False
+        cfg.datamodule.download_dataset_root_uri = None
         cfg.datamodule.batch_size = 2
         cfg.datamodule.num_workers = 0
         cfg.datamodule.pin_memory = False
-        cfg.model.audio_encoder = _slap_arm_config(input_dim=128)
-        cfg.model.text_encoder = _slap_arm_config(input_dim=_LANCE_SMOKE_NUM_PARAMS)
+        _shrink_slap_ast(cfg)
         cfg.model.compile = False
+        cfg.callbacks.model_checkpoint.every_n_epochs = 1
+        cfg.callbacks.model_checkpoint.every_n_train_steps = None
         cfg.trainer.max_epochs = 1
+        cfg.trainer.min_steps = None
         cfg.trainer.max_steps = -1
         cfg.trainer.limit_train_batches = 1
         cfg.trainer.limit_val_batches = 1

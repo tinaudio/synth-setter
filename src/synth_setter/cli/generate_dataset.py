@@ -460,11 +460,12 @@ def _log_shard_metrics(
     :param byte_size: Local shard size measured before optional post-stage deletion.
     :param render_seconds: Wall-clock seconds from subprocess invoke through
         upload-end; ``0.0`` on the R2-skip branch.
-    :param rejections: Silent and clipped sampled draws rejected by the renderer.
+    :param rejections: Clipped, non-finite, and silent sampled draws rejected by the renderer.
     """
     payload = {
         "shard/bytes": byte_size,
         "shard/samples_rejected_clipped": rejections.clipped,
+        "shard/samples_rejected_non_finite": rejections.non_finite,
         "shard/samples_rejected_silent": rejections.silent,
         "shard/render_seconds": render_seconds,
     }
@@ -521,7 +522,7 @@ def _log_summary(
         the R2 skip probes by design).
     :param samples: ``rendered * spec.render.samples_per_shard``.
     :param rate: ``samples / elapsed_s`` (``0.0`` when ``elapsed_s == 0``).
-    :param rejections: Silent and clipped sampled draws rejected across rendered shards.
+    :param rejections: Clipped, non-finite, and silent draws rejected across rendered shards.
     """
     payload = {
         "shards/rendered": rendered,
@@ -531,6 +532,7 @@ def _log_summary(
         "generation/samples": samples,
         "generation/samples_per_second": rate,
         "generation/samples_rejected_clipped": rejections.clipped,
+        "generation/samples_rejected_non_finite": rejections.non_finite,
         "generation/samples_rejected_silent": rejections.silent,
     }
     for lg in loggers:
@@ -552,6 +554,7 @@ def _sum_rejections(
     """
     return RenderRejectionMetrics(
         clipped=left.clipped + right.clipped,
+        non_finite=left.non_finite + right.non_finite,
         silent=left.silent + right.silent,
     )
 
@@ -935,10 +938,11 @@ def _render_one_owned_shard(
     t0 = time.monotonic()
     byte_size, rejections = render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
     logger.info(
-        "shard {} render rejections: silent={} clipped={}",
+        "shard {} render rejections: clipped={} non_finite={} silent={}",
         shard_id,
-        rejections.silent,
         rejections.clipped,
+        rejections.non_finite,
+        rejections.silent,
     )
     _log_shard_metrics(
         loggers,

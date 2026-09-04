@@ -220,6 +220,10 @@ class _DawDreamerModule(Protocol):
     def RenderEngine(self, sample_rate: float, block_size: int) -> _DawDreamerEngine: ...
 
 
+class NonFiniteAudioError(ValueError):
+    """Rendered audio contained NaN or infinity."""
+
+
 def _validate_rendered_audio(
     audio: np.ndarray,
     *,
@@ -232,14 +236,15 @@ def _validate_rendered_audio(
     :param channels: Required output channel count.
     :param samples: Required output sample count.
     :returns: The validated audio without replacement.
-    :raises ValueError: If shape or finiteness is invalid.
+    :raises ValueError: If the shape is invalid.
+    :raises NonFiniteAudioError: If any sample is non-finite.
     """
     if audio.shape != (channels, samples):
         raise ValueError(
             f"rendered audio shape {audio.shape} != expected {(channels, samples)}"
         )
     if not np.isfinite(audio).all():
-        raise ValueError("rendered audio must contain only finite samples")
+        raise NonFiniteAudioError("rendered audio must contain only finite samples")
     return audio
 
 

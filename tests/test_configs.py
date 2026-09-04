@@ -210,7 +210,11 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     [
         pytest.param(
             "train.yaml",
-            ["datamodule=pyfdn", "synth=pyfdn_n8_mono", "model=vst_flow"],
+            [
+                "datamodule=pyfdn",
+                "synth=pyfdn_n8_mono_householder",
+                "model=vst_flow",
+            ],
             id="datamodule",
         ),
         pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
@@ -235,6 +239,38 @@ def test_pyfdn_configs_compose_without_external_source(
     assert "source_audio_path" not in cfg.datamodule
     assert "source_audio_sha256" not in cfg.datamodule
     assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
+
+
+@pytest.mark.parametrize(
+    ("config_name", "overrides"),
+    [
+        pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
+        pytest.param(
+            "eval.yaml",
+            ["experiment=pyfdn/flow", "ckpt_path=null"],
+            id="eval",
+        ),
+        pytest.param(
+            "train.yaml",
+            [
+                "experiment=pyfdn/flow",
+                "synth=pyfdn_pitchshift_n8_mono_householder",
+            ],
+            id="pitchshift",
+        ),
+    ],
+)
+def test_pyfdn_flow_composition_enables_per_param_metrics(
+    config_name: str, overrides: list[str]
+) -> None:
+    """The pyFDN recipe labels per-parameter graphs with its active synth identity.
+
+    :param config_name: Top-level Hydra config composed with the pyFDN recipe.
+    :param overrides: Hydra selections required by the top-level config.
+    """
+    cfg = _compose(config_name, overrides)
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == cfg.synth.param_spec_name
 
 
 def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
@@ -1353,13 +1389,31 @@ def test_surge_experiment_resolves_identity_with_audio_datamodule(
     assert OmegaConf.select(cfg, spec_path) == "surge_xt"
 
 
-def test_pyfdn_flow_resolves_lance_audio_geometry() -> None:
-    """The offline pyFDN recipe fully resolves its waveform frontend geometry."""
+def test_pyfdn_flow_resolves_stored_mel_ast_conditioning() -> None:
+    """The production pyFDN recipe feeds stored mels through layerwise AST."""
     cfg = _compose("train.yaml", ["experiment=pyfdn/flow"])
 
     assert cfg.datamodule._target_.endswith("LanceVSTDataModule")
+    assert cfg.datamodule.conditioning == "mel"
+    assert cfg.model.conditioning == "mel"
+    assert cfg.model.encoder._target_.endswith("AudioSpectrogramTransformer")
+    assert cfg.model.encoder.input_channels == 1
+    assert cfg.model.encoder.n_conditioning_outputs == 8
+
+
+def test_pyfdn_flow_ast_online_resolves_waveform_ast_conditioning() -> None:
+    """The online-AST comparison computes mono mels from stored waveforms."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_ast_online"])
+
+    hydra.utils.instantiate(cfg.model.encoder)
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.conditioning == "audio"
+    assert cfg.model.encoder._target_.endswith("SpecEncoder")
     assert cfg.model.encoder.frontend.in_dim == 176_400
     assert cfg.model.encoder.frontend.sample_rate == 44_100
+    assert cfg.model.encoder.backbone._target_.endswith("AudioSpectrogramTransformer")
+    assert cfg.model.encoder.backbone.input_channels == 1
+    assert cfg.model.encoder.backbone.n_conditioning_outputs == 8
 
 
 def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:

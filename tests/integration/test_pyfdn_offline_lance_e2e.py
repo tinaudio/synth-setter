@@ -16,10 +16,8 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
-    PYFDN_N8_MONO_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
-from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import (
     iter_lance_column_rows,
@@ -35,24 +33,13 @@ from synth_setter.synth_spec import SynthName, SynthSpec
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    ("synth_name", "param_spec"),
-    [
-        ("pyfdn_n8_mono", PYFDN_N8_MONO_PARAM_SPEC),
-        ("pyfdn_n8_mono_householder", PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
-    ],
-)
-def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
-    tmp_path: Path,
-    synth_name: str,
-    param_spec: ParamSpec,
-) -> None:
+def test_pyfdn_acceptance_lance_reader_rerender_round_trip(tmp_path: Path) -> None:
     """A real accepted row survives storage and the production model-batch reader.
 
     :param tmp_path: Isolated destination for the production Lance writer.
-    :param synth_name: Registered pyFDN synth and parameter-spec name.
-    :param param_spec: Spec used to reproduce and decode the stored patch.
     """
+    synth_name = "pyfdn_n8_mono_householder"
+    param_spec = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
     render = RenderConfig(
         synth=SynthSpec(
             name=SynthName(synth_name),
@@ -111,6 +98,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
     assert mel_rows[0].dtype == np.float32
     assert metadata == render.shard_metadata()
     assert rejections.clipped >= 0
+    assert rejections.non_finite >= 0
     assert rejections.silent >= 0
 
     datamodule = LanceVSTDataModule(
@@ -139,7 +127,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
 
     debug_json = dataset.to_table(columns=["debug"])["debug"][0].as_py()
     debug = SeedDebugDocument.model_validate(json.loads(debug_json))
-    assert debug.attempt == rejections.clipped + rejections.silent
+    assert debug.attempt == (rejections.clipped + rejections.non_finite + rejections.silent)
     assert debug.seed is not None
     native_params, native_notes = param_spec.sample(np.random.default_rng(debug.seed))
     assert native_notes == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
