@@ -941,8 +941,8 @@ def _distributed_metric_mean(
     """
     packed = torch.cat(
         (
-            torch.as_tensor(total, device=device, dtype=torch.float64).flatten(),
-            torch.tensor([count], device=device, dtype=torch.float64),
+            torch.as_tensor(total, device=device, dtype=torch.float32).flatten(),
+            torch.tensor([count], device=device, dtype=torch.float32),
         )
     )
     if torch.distributed.is_available() and torch.distributed.is_initialized():
