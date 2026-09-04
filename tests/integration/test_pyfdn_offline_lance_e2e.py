@@ -25,6 +25,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import (
     iter_lance_column_rows,
@@ -379,6 +380,7 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
     assert all(torch.isfinite(loss).all() for loss in train_losses)
 
     datamodule = objects["datamodule"]
+    assert isinstance(datamodule, LanceVSTDataModule)
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     sketch = batch["sketch_ctrl"]
@@ -388,8 +390,14 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
     assert torch.all((0.0 <= sketch) & (sketch <= 1.0))
     assert torch.all(torch.diff(sketch[:, :8], dim=-1) <= 1e-6)
 
+    trained_model = objects["model"]
+    assert isinstance(trained_model, VSTFlowMatchingModule)
     checkpoint = Path(cfg.paths.output_dir) / "checkpoints" / "last.ckpt"
-    model = objects["model"].__class__.load_from_checkpoint(checkpoint, map_location="cpu")
+    model = VSTFlowMatchingModule.load_from_checkpoint(checkpoint, map_location="cpu")
+    assert model.sketch_tokens is not None
+    control_tokens = model.sketch_tokens(sketch, torch.ones((1, 3), dtype=torch.bool))
+    assert control_tokens.shape == (1, 32, 16)
+
     model.train()
     loss = model.training_step(batch, 0)
     loss.backward()
