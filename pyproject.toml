@@ -67,6 +67,7 @@ synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-migrate-checkpoint = "synth_setter.cli.migrate_checkpoint:main"
 synth-setter-plugins = "synth_setter.cli.plugins:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
+synth-setter-rolling-lance = "synth_setter.cli.rolling_lance:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
 

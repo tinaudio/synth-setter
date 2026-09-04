@@ -189,6 +189,21 @@ of W&B (5 GB total budget); at train end the best checkpoint is uploaded to R2
 and the `model-{config_id}` W&B artifact references it as an `s3://` URI. See
 [training-pipeline.md](design/training-pipeline.md) section 6.
 
+**Rolling Lance train snapshots.** Long-running offline training may use a
+fixed-size train window without mutating the finalized baseline.
+`synth-setter-rolling-lance init` creates a native branch pinned to an explicit
+baseline version. `enqueue` durably freezes one collision-free relative range,
+parallel `generate` processes drain its isolated R2 claim queue, and the single
+`finalize` operator commits one branch overwrite from a staging cutoff.
+Versioned statistics and snapshot metadata are durable before the native
+`<branch>-ready` tag advances. `materialize` resolves that tag,
+materializes the exact branch version to an immutable local directory, and
+atomically replaces `active.json`. Set `training.rolling_active_record` and
+`training.rolling_refresh_epoch_interval=1` to rebuild only the train loader at
+epoch boundaries. DDP ranks adopt only an identity available to every rank;
+checkpoint state restores the recorded identity before later adoption. Rolling
+jobs keep `persistent_workers=false` so workers cannot retain old Lance handles.
+
 **Storage conventions are shared.** All pipelines (data, training, eval) follow
 the same R2 path structure and ID conventions defined in
 [storage-provenance-spec.md](design/storage-provenance-spec.md).

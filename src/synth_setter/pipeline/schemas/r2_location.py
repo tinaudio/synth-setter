@@ -285,6 +285,23 @@ class R2Location(BaseModel):
         """
         return f"{self.shard_staging_dir_uri(shard_id)}{worker_id}-{attempt_uuid}{ext}"
 
+    def rolling_metadata_uri(self, branch: str, name: str) -> str:
+        """Return a versioned rolling-publication object URI.
+
+        :param branch: Native Lance branch name.
+        :param name: Relative metadata object below the branch root.
+        :returns: R2 URI under ``metadata/rolling/<branch>/``.
+        """
+        return self._under_prefix(f"metadata/rolling/{branch}/{name}")
+
+    def rolling_shard_claims_uri(self, branch: str) -> str:
+        """Return the rolling extra-shard claim queue URI.
+
+        :param branch: Native Lance branch name.
+        :returns: Lance queue URI isolated from the frozen baseline claims.
+        """
+        return self.rolling_metadata_uri(branch, "shard-claims.lance")
+
     def shard_claims_uri(self) -> str:
         """R2 URI of the run's Lance shard-claims table (``pipeline/shard_claims.py``).
 

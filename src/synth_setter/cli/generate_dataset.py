@@ -996,6 +996,7 @@ def _render_and_upload_shard(
     work_dir: Path,
     *,
     loggers: list[Logger],
+    target_lance_uri: str | None = None,
 ) -> tuple[int, RenderRejectionMetrics]:
     """Render a single shard and stage it to R2.
 
@@ -1007,6 +1008,7 @@ def _render_and_upload_shard(
     :param shard: Shard to render; names the output dataset and seeds the renderer.
     :param work_dir: Hydra per-run output dir the shard is written under.
     :param loggers: Receive a metric before a recognized X11 failure propagates.
+    :param target_lance_uri: Rolling branch URI receiving uncommitted fragment data.
     :returns: Local shard byte size and validated renderer rejection counts.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -1062,14 +1064,32 @@ def _render_and_upload_shard(
     # Worker-side validation gates staging — corrupt renders never earn a
     # .valid marker (design §7.3 shard write protocol).
     with _FULL_SHARD_VALIDATION_LOCK:
-        shard_errors = validate_shard(shard_path, spec)
+        shard_errors = (
+            validate_shard(shard_path, spec)
+            if shard.shard_id < spec.num_shards
+            else validate_shard(shard_path, spec, expected_shard=shard)
+        )
     if shard_errors:
         raise RuntimeError(
             f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
         )
-    stage_lance_shard_attempt(
-        spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
-    )
+    if target_lance_uri is None:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+        )
+    else:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+            target_lance_uri=target_lance_uri,
+        )
     logger.info(
         "shard staged: {} -> {}",
         shard.filename,

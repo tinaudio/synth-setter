@@ -81,3 +81,7 @@ training:
   val_audio_probe: auto
   # Samples taken from the first val batch; each costs a plugin load plus a render.
   val_audio_probe_samples: 5
+  # Atomic local rolling-snapshot record; null keeps the finalized baseline pinned.
+  rolling_active_record: null
+  # Lightning rebuilds train loaders only at this epoch cadence; 0 disables reload.
+  rolling_refresh_epoch_interval: 0

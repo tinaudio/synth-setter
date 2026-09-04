@@ -596,12 +596,15 @@ def _write_materialized_snapshot(
 
 # DOC502: the documented LookupError/ValueError propagate from
 # resolve_txid_version, _reuse_or_raise, and _transaction_uuid.
-def materialize_lance_subset(  # noqa: DOC502
+def materialize_lance_subset(  # noqa: DOC502, DOC503
     source_uri: str,
     dest_path: Path,
     *,
     txid: str | None,
     columns: Sequence[str],
+    version: int | None = None,
+    branch: str | None = None,
+    source_base_uri: str | None = None,
     limit: int | None = None,
     batch_size: int | None = None,
     high_memory_materialization: bool = False,
@@ -619,6 +622,10 @@ def materialize_lance_subset(  # noqa: DOC502
         unrelated dataset.
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
+    :param version: Explicit source version, used for native branch snapshots whose
+        transaction reader is unavailable in Lance 9. Mutually exclusive with ``txid``.
+    :param branch: Native branch selected from ``source_base_uri`` at ``version``.
+    :param source_base_uri: Parent dataset URI used to resolve inherited branch fragments.
     :param limit: First-N row cap, or ``None`` for all rows.
     :param batch_size: Optional scan batch-size override in rows.
     :param high_memory_materialization: Whether to opt into high-memory scanner and
@@ -629,6 +636,10 @@ def materialize_lance_subset(  # noqa: DOC502
     :raises ValueError: ``dest_path`` exists with a missing/unparsable
         sidecar or a sidecar whose request hash differs from this request.
     """
+    if txid is not None and version is not None:
+        raise ValueError("txid and version are mutually exclusive snapshot pins")
+    if branch is not None and (version is None or source_base_uri is None):
+        raise ValueError("branch materialization requires version and source_base_uri")
     dest_path = Path(dest_path)
     requested_columns = tuple(columns)
     if dest_path.exists() and txid is not None:
@@ -639,9 +650,15 @@ def materialize_lance_subset(  # noqa: DOC502
             columns=requested_columns,
             limit=limit,
         )
-    ds = _open_source(source_uri)
-    resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
-    resolved_txid = _transaction_uuid(ds, resolved_version)
+    ds = _open_source(source_base_uri or source_uri)
+    if branch is not None:
+        ds = ds.checkout_version((branch, version))
+    resolved_version = (
+        version
+        if version is not None
+        else ds.version if txid is None else resolve_txid_version(ds, txid)
+    )
+    resolved_txid = None if version is not None else _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
         return _reuse_or_raise(
             dest_path,

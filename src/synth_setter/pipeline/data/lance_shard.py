@@ -416,6 +416,22 @@ def lance_fragment(
     return fragment
 
 
+def commit_lance_branch(
+    branch: lance.LanceDataset,
+    schema: pa.Schema,
+    fragments: Sequence[lance.fragment.FragmentMetadata],
+) -> lance.LanceDataset:
+    """Overwrite one native Lance branch with staged fragment metadata.
+
+    :param branch: Checked-out branch receiving the new manifest version.
+    :param schema: Arrow schema shared by every selected fragment.
+    :param fragments: Fragment metadata whose files live in the parent dataset namespace.
+    :returns: The branch checked out at the committed version.
+    """
+    operation = lance.LanceOperation.Overwrite(schema, list(fragments))
+    return lance.LanceDataset.commit(branch, operation, read_version=branch.version)
+
+
 def commit_lance_dataset(
     uri: Path | str,
     schema: pa.Schema,

@@ -98,6 +98,7 @@ def stage_lance_shard_attempt(
     *,
     worker_id: str,
     attempt_uuid: str,
+    target_lance_uri: str | None = None,
 ) -> None:
     """Stage one rendered shard as an uncommitted fragment attempt.
 
@@ -111,6 +112,8 @@ def stage_lance_shard_attempt(
     :param local_shard_path: Local ``shard-NNNNNN.lance`` dataset directory.
     :param worker_id: Worker identifier for the staging filenames.
     :param attempt_uuid: Per-attempt UUID for the staging filenames.
+    :param target_lance_uri: Rolling branch URI receiving fragment data; ``None``
+        uses the baseline split assigned by the spec.
     :raises ValueError: The local shard's row count does not match the spec, or
         the shard's bytes would exceed the single-data-file bound
         (``LANCE_MAX_BYTES_PER_FILE``) the fragment write cannot split.
@@ -143,11 +146,28 @@ def stage_lance_shard_attempt(
         raise ValueError(
             f"local shard {local_shard_path.name} schema does not match spec-derived schema"
         )
-    split = split_for_shard(spec, shard.shard_id)
-    split_target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))
+    rolling_target = target_lance_uri is not None
+    if target_lance_uri is None:
+        split = split_for_shard(spec, shard.shard_id)
+        target_lance_uri = spec.r2.split_lance_uri(split)
+    if r2_io.is_r2_uri(target_lance_uri):
+        split_target, storage_options = r2_io.lance_target(target_lance_uri)
+    else:
+        split_target = target_lance_uri
+        storage_options = (
+            r2_io.r2_storage_options() if target_lance_uri.startswith("s3://") else None
+        )
+    fragment_schema = dataset.schema
+    if rolling_target:
+        branch_schema = lance.dataset(
+            split_target, storage_options=storage_options
+        ).schema
+        if not dataset.schema.equals(branch_schema, check_metadata=False):
+            raise ValueError("rolling shard fields do not match the branch schema")
+        fragment_schema = branch_schema
     fragment = lance_fragment(
         split_target,
-        dataset.schema,
+        fragment_schema,
         dataset.to_batches(),
         storage_options=storage_options,
     )

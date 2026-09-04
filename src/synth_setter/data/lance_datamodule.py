@@ -45,6 +45,7 @@ from synth_setter.data.vst_datamodule import (
     ranked_generator_seed,
 )
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data.rolling_lance import ActiveRollingSnapshot
 
 _FAKE_BATCHES_PER_EPOCH = 10_000
 _FAKE_AUDIO_SHAPE = (2, 44100 * 4)
@@ -521,6 +522,7 @@ class LanceVSTDataModule(VSTDataModule):
         download_dataset_txids: dict[str, str] | None = None,
         download_dataset_row_limit: int | None = None,
         high_memory_materialization: bool = False,
+        rolling_active_record: str | Path | None = None,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -547,6 +549,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
         :param high_memory_materialization: Whether to use high-memory Lance tuning.
+        :param rolling_active_record: Atomic active-record path for train-only snapshots.
+        :raises ValueError: Rolling refresh is combined with persistent workers.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -571,6 +575,17 @@ class LanceVSTDataModule(VSTDataModule):
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
         self._setup_stage: str | None = None
+        self.rolling_active_record = (
+            Path(rolling_active_record) if rolling_active_record is not None else None
+        )
+        if self.rolling_active_record is not None and persistent_workers:
+            raise ValueError("rolling_active_record requires persistent_workers=false")
+        self._rolling_active_version: int | None = None
+        self._rolling_fingerprint: str | None = None
+        self._rolling_history: list[int] = []
+        self._rolling_identity: dict[str, object] | None = None
+        self._rolling_resume_version: int | None = None
+        self._rolling_skip_refresh_once = False
 
     def _dataset_for(self, split: str) -> _SplitDataset:
         """Return one built split through the public dataset attributes.
@@ -671,7 +686,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param split_names: Split names required by the current stage.
         :returns: Requested split datasets and collate operations.
         """
-        train_shard = self.dataset_root / f"train{self.shard_suffix}"
+        train_shard = self._active_train_shard()
         split_stats = predict_stats = None
         if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
             if any(name != "predict" for name in split_names):
@@ -699,6 +714,84 @@ class LanceVSTDataModule(VSTDataModule):
             for name in split_names
         }
 
+    def _read_active_train(self) -> tuple[Path, ActiveRollingSnapshot] | None:
+        """Read a complete local active record, retaining prior data on failure.
+
+        :returns: Dataset path, version, and spec fingerprint, or ``None``.
+        """
+        if self.rolling_active_record is None:
+            return None
+        from pydantic import ValidationError
+
+        try:
+            active = ActiveRollingSnapshot.model_validate_json(
+                self.rolling_active_record.read_bytes()
+            )
+        except (OSError, ValidationError):
+            return None
+        path = Path(active.dataset_path)
+        local = (path, active) if path.is_dir() else None
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return local
+        identity = active.model_dump(exclude={"dataset_path"})
+        payload = [
+            identity if torch.distributed.get_rank() == 0 and local is not None else None
+        ]
+        torch.distributed.broadcast_object_list(payload, src=0)
+        selected = payload[0]
+        ready = local is not None and identity == selected
+        readiness: list[bool | None] = [None] * torch.distributed.get_world_size()
+        torch.distributed.all_gather_object(readiness, ready)
+        return local if selected is not None and all(readiness) else None
+
+    def _active_train_shard(self) -> Path:
+        """Return the active immutable train snapshot or the frozen baseline.
+
+        :returns: Train Lance path selected for the next loader construction.
+        """
+        active = self._read_active_train()
+        if self._rolling_resume_version is not None and self.rolling_active_record is not None:
+            resume_path = (
+                self.rolling_active_record.parent
+                / "versions"
+                / str(self._rolling_resume_version)
+                / f"train{self.shard_suffix}"
+            )
+            if resume_path.is_dir():
+                return resume_path
+        if active is None:
+            return self.dataset_root / f"train{self.shard_suffix}"
+        path, snapshot = active
+        if (
+            self._rolling_fingerprint is not None
+            and snapshot.dataset_spec_fingerprint != self._rolling_fingerprint
+        ):
+            return self.dataset_root / f"train{self.shard_suffix}"
+        self._rolling_fingerprint = snapshot.dataset_spec_fingerprint
+        if snapshot.version != self._rolling_active_version:
+            self._rolling_active_version = snapshot.version
+            self._rolling_identity = snapshot.model_dump(exclude={"dataset_path"})
+            self._rolling_history.append(snapshot.version)
+        return path
+
+    def _refresh_rolling_train(self) -> None:
+        """Rebuild only train when an epoch-boundary loader request sees a new version."""
+        if self.rolling_active_record is None or "train" not in self._splits:
+            return
+        previous_version = self._rolling_active_version
+        train_shard = self._active_train_shard()
+        if previous_version == self._rolling_active_version:
+            return
+        stats = None
+        if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
+            stats = load_dataset_statistics(train_shard)
+        self._splits["train"] = self._build_lance_split(
+            train_shard,
+            ot=self.ot,
+            read_audio=False,
+            stats=stats,
+        )
+
     def setup(self, stage: str | None = None) -> None:
         """Build the sample-indexed splits required by a Lightning stage.
 
@@ -720,6 +813,9 @@ class LanceVSTDataModule(VSTDataModule):
         else:
             self._splits = self._build_real_splits(split_names)
         self._setup_stage = stage
+        if self._rolling_resume_version is not None:
+            self._rolling_resume_version = None
+            self._rolling_skip_refresh_once = True
 
     def _dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
         """Build one standard map-style dataloader.
@@ -758,7 +854,42 @@ class LanceVSTDataModule(VSTDataModule):
 
         :returns: Sample-indexed training dataloader.
         """
+        if self._rolling_skip_refresh_once:
+            self._rolling_skip_refresh_once = False
+        else:
+            self._refresh_rolling_train()
         return self._dataloader("train", shuffle=True, drop_last=True)
+
+    def state_dict(self) -> dict[str, object]:
+        """Persist rolling train identity and adoption history in checkpoints.
+
+        :returns: DataModule checkpoint state.
+        """
+        return {
+            "rolling_active_version": self._rolling_active_version,
+            "rolling_fingerprint": self._rolling_fingerprint,
+            "rolling_history": tuple(self._rolling_history),
+            "rolling_identity": self._rolling_identity,
+        }
+
+    def load_state_dict(self, state_dict: dict[str, object]) -> None:
+        """Restore the exact rolling identity before loader construction.
+
+        :param state_dict: DataModule checkpoint state.
+        """
+        version = state_dict.get("rolling_active_version")
+        fingerprint = state_dict.get("rolling_fingerprint")
+        history = state_dict.get("rolling_history", ())
+        identity = state_dict.get("rolling_identity")
+        self._rolling_active_version = version if isinstance(version, int) else None
+        self._rolling_resume_version = self._rolling_active_version
+        self._rolling_fingerprint = fingerprint if isinstance(fingerprint, str) else None
+        self._rolling_history = (
+            [item for item in history if isinstance(item, int)]
+            if isinstance(history, (list, tuple))
+            else []
+        )
+        self._rolling_identity = identity if isinstance(identity, dict) else None
 
     def val_dataloader(self) -> DataLoader:
         """Return the ordered validation loader, retaining a ragged tail.

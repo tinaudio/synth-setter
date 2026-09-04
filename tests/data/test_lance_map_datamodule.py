@@ -27,6 +27,7 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule, PrepareBatchC
 from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data.rolling_lance import ActiveRollingSnapshot
 from tests.helpers.lance_fixtures import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLES,
@@ -91,6 +92,74 @@ def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
     :return: ``(total_rows, num_params)`` array.
     """
     return torch.cat([_unwrap(batch["params"]) for batch in loader]).numpy()
+
+
+def test_rolling_active_record_with_persistent_workers_raises(dataset_root: Path) -> None:
+    """Rolling reloads reject workers that could retain stale dataset handles.
+
+    :param dataset_root: Frozen baseline dataset root.
+    """
+    with pytest.raises(ValueError, match="persistent_workers"):
+        LanceVSTDataModule(
+            dataset_root=dataset_root,
+            rolling_active_record=dataset_root / "active.json",
+            persistent_workers=True,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+
+def test_rolling_active_record_rebuilds_train_only(dataset_root: Path, tmp_path: Path) -> None:
+    """Loader recreation adopts active train data without replacing validation.
+
+    :param dataset_root: Frozen baseline train/validation/test root.
+    :param tmp_path: Isolated immutable rolling snapshot root.
+    """
+    versions = tmp_path / "rolling" / "versions"
+    for version, seed in ((1, 11), (2, 12)):
+        root = versions / str(version)
+        root.mkdir(parents=True)
+        write_seeded_lance_shard(root / "train.lance", num_rows=16, seed=seed)
+        write_mel_stats(root)
+    active_path = tmp_path / "rolling" / "active.json"
+
+    def activate(version: int) -> None:
+        active_path.write_text(
+            ActiveRollingSnapshot(
+                branch="rolling",
+                version=version,
+                transaction=f"tx-{version}",
+                dataset_path=str(versions / str(version) / "train.lance"),
+                dataset_spec_fingerprint="fingerprint",
+                row_count=16,
+                schema_fingerprint="schema",
+                stats_sha256="stats",
+                high_watermark=version + 1,
+                membership_relative_ids=(version, version + 1),
+            ).model_dump_json()
+        )
+
+    activate(1)
+    module = LanceVSTDataModule(
+        dataset_root=dataset_root,
+        rolling_active_record=active_path,
+        use_saved_mean_and_variance=True,
+        batch_size=4,
+        ot=False,
+        num_workers=0,
+        val_num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    module.setup("fit")
+    first_train = _params_in_order(module.train_dataloader())
+    validation = _params_in_order(module.val_dataloader())
+
+    activate(2)
+    second_train = _params_in_order(module.train_dataloader())
+
+    assert not np.array_equal(first_train, second_train)
+    np.testing.assert_array_equal(_params_in_order(module.val_dataloader()), validation)
 
 
 class _DDPIndexRecorder(LightningModule):
@@ -934,6 +1003,103 @@ class TestLanceMapDataModuleFlows:
             assert tensor.dtype == torch.float32, key
             assert tensor.is_contiguous(), key
             assert tensor.numpy().flags.writeable, key
+
+
+def test_rolling_ddp_disagreement_keeps_current_train(
+    dataset_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rank missing rank 0's exact identity prevents distributed adoption.
+
+    :param dataset_root: Frozen baseline dataset root.
+    :param tmp_path: Isolated active record workspace.
+    :param monkeypatch: Distributed collectives patched for one dissenting rank.
+    """
+    rolling_root = tmp_path / "rolling"
+    train_path = rolling_root / "versions/1/train.lance"
+    train_path.mkdir(parents=True)
+    active_path = rolling_root / "active.json"
+    active_path.write_text(
+        ActiveRollingSnapshot(
+            branch="rolling",
+            version=1,
+            transaction="tx-1",
+            dataset_path=str(train_path),
+            dataset_spec_fingerprint="fingerprint",
+            row_count=16,
+            schema_fingerprint="schema",
+            stats_sha256="stats",
+            high_watermark=2,
+            membership_relative_ids=(0, 1),
+        ).model_dump_json()
+    )
+    module = LanceVSTDataModule(
+        dataset_root=dataset_root,
+        rolling_active_record=active_path,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(torch.distributed, "broadcast_object_list", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        torch.distributed,
+        "all_gather_object",
+        lambda output, _ready: output.__setitem__(slice(None), [True, False]),
+    )
+
+    assert module._read_active_train() is None
+
+
+def test_rolling_resume_uses_checkpoint_version_before_newer_active(
+    dataset_root: Path, tmp_path: Path
+) -> None:
+    """Checkpoint restore retains its version for one loader before adopting newer data.
+
+    :param dataset_root: Frozen baseline dataset root.
+    :param tmp_path: Isolated immutable rolling snapshot root.
+    """
+    rolling_root = tmp_path / "rolling"
+    for version in (1, 2):
+        version_root = rolling_root / f"versions/{version}"
+        version_root.mkdir(parents=True)
+        write_seeded_lance_shard(version_root / "train.lance", num_rows=16, seed=version)
+        write_mel_stats(version_root)
+    active_path = rolling_root / "active.json"
+    active_path.write_text(
+        ActiveRollingSnapshot(
+            branch="rolling",
+            version=2,
+            transaction="tx-2",
+            dataset_path=str(rolling_root / "versions/2/train.lance"),
+            dataset_spec_fingerprint="fingerprint",
+            row_count=16,
+            schema_fingerprint="schema",
+            stats_sha256="stats",
+            high_watermark=3,
+            membership_relative_ids=(1, 2),
+        ).model_dump_json()
+    )
+    module = LanceVSTDataModule(
+        dataset_root=dataset_root,
+        rolling_active_record=active_path,
+        batch_size=4,
+        num_workers=0,
+        val_num_workers=0,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    module.load_state_dict(
+        {
+            "rolling_active_version": 1,
+            "rolling_fingerprint": "fingerprint",
+            "rolling_history": (1,),
+        }
+    )
+    module.setup("fit")
+
+    module.train_dataloader()
+    assert module.state_dict()["rolling_history"] == (1,)
+    module.train_dataloader()
+    assert module.state_dict()["rolling_history"] == (1, 2)
 
 
 class TestLanceMapDataModuleModes:
