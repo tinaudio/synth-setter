@@ -266,7 +266,7 @@ class TestPrepareBatchCollate:
     ) -> None:
         """In-process DDP ranks derive distinct reproducible noise.
 
-        :param monkeypatch: Fixture contgrowing the distributed rank reported to the collate.
+        :param monkeypatch: Fixture controlling the distributed rank reported to the collate.
         """
         monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
 
@@ -286,7 +286,7 @@ class TestPrepareBatchCollate:
     ) -> None:
         """Every distributed rank-worker pair receives its own noise stream.
 
-        :param monkeypatch: Fixture contgrowing distributed rank and worker identity.
+        :param monkeypatch: Fixture controlling distributed rank and worker identity.
         """
         monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
         base_seed = 91

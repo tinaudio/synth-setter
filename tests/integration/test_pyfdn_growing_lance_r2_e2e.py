@@ -110,8 +110,8 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
             "r2": {"bucket": "intermediate-data", "prefix": prefix},
             "render": RenderConfig(
                 synth=SynthSpec(
-                    name=SynthName("pyfdn_n8_mono"),
-                    param_spec_name=ParamSpecName("pyfdn_n8_mono"),
+                    name=SynthName("pyfdn_n8_mono_householder"),
+                    param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
                     plugin_path="pyfdn",
                     plugin_state_path="",
                     synth_version="0.4.2",

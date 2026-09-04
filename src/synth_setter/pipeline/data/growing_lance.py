@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Iterator
 
 import lance
 import numpy as np
+import pyarrow as pa
 from pydantic import BaseModel, ConfigDict
 
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, dataset_field_shapes
@@ -22,7 +23,6 @@ from synth_setter.pipeline.data.lance_materialize import retry_lance_read
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
     LANCE_MAX_BYTES_PER_FILE,
-    commit_lance_dataset,
     fragment_schema_matches,
 )
 from synth_setter.pipeline.data.stats import (
@@ -788,6 +788,20 @@ def _write_local_fragments(
     return written
 
 
+def _commit_local_initial(
+    destination: Path,
+    schema: pa.Schema,
+    fragments: Sequence[lance.fragment.FragmentMetadata],
+    identity: str,
+) -> lance.LanceDataset:
+    transaction = lance.Transaction(
+        read_version=0,
+        operation=lance.LanceOperation.Overwrite(schema, list(fragments)),
+        transaction_properties={_LOCAL_SOURCE_PROPERTY: identity},
+    )
+    return lance.LanceDataset.commit(str(destination), transaction)
+
+
 def _commit_local_append(
     dataset: lance.LanceDataset,
     fragments: Sequence[lance.fragment.FragmentMetadata],
@@ -903,10 +917,20 @@ def materialize_and_activate(
         dataset_path = local_root / "train.lance"
         start_fragment = 0 if active is None else active.fragment_count
         identity = f"{snapshot.branch}:{snapshot.version}:{snapshot.transaction}"
-        if active is None:
+        projected_schema = source.scanner(columns=list(columns)).projected_schema
+        if active is None and dataset_path.exists():
+            try:
+                local = lance.dataset(str(dataset_path))
+            except (OSError, ValueError) as exc:
+                raise ValueError("unrecorded local Lance dataset is not readable") from exc
+            properties = _local_transaction(local).transaction_properties or {}
+            if properties.get(_LOCAL_SOURCE_PROPERTY) != identity:
+                raise ValueError("unrecorded local Lance dataset belongs to a different remote snapshot")
+        elif active is None:
             new_fragments = _write_local_fragments(source, dataset_path, columns, 0)
-            commit_lance_dataset(dataset_path, source.scanner(columns=list(columns)).projected_schema, new_fragments)
-            local = lance.dataset(str(dataset_path))
+            local = _commit_local_initial(
+                dataset_path, projected_schema, new_fragments, identity
+            )
         else:
             local = lance.dataset(str(dataset_path))
             if local.version != active.local_version:
@@ -923,6 +947,8 @@ def materialize_and_activate(
             raise ValueError("local row count does not match remote snapshot")
         if len(local.get_fragments()) != snapshot.fragment_count:
             raise ValueError("local fragment count does not match remote snapshot")
+        if not local.schema.equals(projected_schema, check_metadata=True):
+            raise ValueError("local schema does not match projected remote schema")
         version_stats_path = _copy_version_metadata(snapshot, metadata_root, local_root)
         return _activate(
             snapshot, local, dataset_path, version_stats_path, active_path

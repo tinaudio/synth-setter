@@ -318,6 +318,84 @@ def test_publish_rejects_unknown_branch_advancement(tmp_path: Path) -> None:
         )
 
 
+def test_materialization_reconciles_crash_after_initial_local_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rerun activates an initial local commit without rewriting it.
+
+    :param tmp_path: Isolated Lance and metadata roots.
+    :param monkeypatch: Replaces activation only for the simulated crash.
+    """
+    _, train_uri, metadata_root, initial = _baseline(tmp_path)
+    local_root = tmp_path / "local"
+    real_activate = growing_lance._activate
+
+    def fail_activation(*args: object, **kwargs: object) -> ActiveGrowingSnapshot:
+        del args, kwargs
+        raise RuntimeError("simulated activation crash")
+
+    monkeypatch.setattr(growing_lance, "_activate", fail_activation)
+    with pytest.raises(RuntimeError, match="simulated activation crash"):
+        materialize_and_activate(
+            train_uri,
+            snapshot=initial,
+            metadata_root=metadata_root,
+            local_root=local_root,
+            columns=DATASET_FIELD_NAMES,
+        )
+    committed_version = lance.dataset(str(local_root / "train.lance")).version
+    monkeypatch.setattr(growing_lance, "_activate", real_activate)
+
+    recovered = materialize_and_activate(
+        train_uri,
+        snapshot=initial,
+        metadata_root=metadata_root,
+        local_root=local_root,
+        columns=DATASET_FIELD_NAMES,
+    )
+
+    assert recovered.local_version == committed_version
+    assert lance.dataset(recovered.dataset_path).count_rows() == initial.row_count
+
+
+def test_materialization_without_active_rejects_different_local_identity(
+    tmp_path: Path,
+) -> None:
+    """An unrecorded local dataset from another snapshot fails closed.
+
+    :param tmp_path: Isolated Lance and metadata roots.
+    """
+    spec, train_uri, metadata_root, initial = _baseline(tmp_path)
+    local_root = tmp_path / "local"
+    first = materialize_and_activate(
+        train_uri,
+        snapshot=initial,
+        metadata_root=metadata_root,
+        local_root=local_root,
+        columns=DATASET_FIELD_NAMES,
+    )
+    published = publish_growing_branch(
+        train_uri,
+        spec=spec,
+        current=initial,
+        fragments=_append_fragments(initial, 2),
+        welford=_states(2),
+        metadata_root=metadata_root,
+    )
+    (local_root / "active.json").unlink()
+
+    with pytest.raises(ValueError, match="different remote snapshot"):
+        materialize_and_activate(
+            train_uri,
+            snapshot=published,
+            metadata_root=metadata_root,
+            local_root=local_root,
+            columns=DATASET_FIELD_NAMES,
+        )
+
+    assert lance.dataset(first.dataset_path).version == first.local_version
+
+
 def test_materialization_reconciles_crash_after_local_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
