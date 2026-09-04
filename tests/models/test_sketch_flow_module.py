@@ -517,6 +517,24 @@ def test_train_step_pyfdn_reverb_profile_uses_temporal_groups() -> None:
     assert torch.isfinite(loss)
 
 
+def test_sample_batch_pyfdn_reverb_profile_returns_parameter_rows() -> None:
+    """Inference accepts temporal reverb controls and preserves parameter shape."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    predictions = module.sample_batch(
+        batch,
+        noise=batch["noise"],
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert predictions.shape == (_BATCH, _NUM_PARAMS)
+    assert torch.isfinite(predictions).all()
+
+
 def test_train_step_none_spec_ignores_sketch_free_batch() -> None:
     """The default configuration trains on batches without ``sketch_ctrl``."""
     module = _module(None)
