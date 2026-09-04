@@ -105,8 +105,8 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
     opened it — so a stale ``wandb.run`` started elsewhere is left untouched.
 
     :param loggers: Lightning loggers; ``finalize`` is invoked on each.
-    :param status: ``"success"`` or ``"failed"``; forwarded verbatim to each
-        logger's ``finalize`` contract.
+    :param status: ``"success"`` or ``"failed"``; forwarded to each logger and
+        mapped to W&B process exit code zero or one.
     """
     _finalize_loggers(loggers, status)
     if not find_spec("wandb"):
@@ -116,6 +116,6 @@ def close_loggers(loggers: list[Logger], status: str) -> None:
 
     if any(isinstance(lg, WandbLogger) for lg in loggers) and wandb.run is not None:
         try:
-            wandb.finish()
+            wandb.finish(exit_code=0 if status == "success" else 1)
         except Exception as exc:  # noqa: BLE001 — finish errors must not mask the original raise
             log.warning(f"wandb.finish() failed ({type(exc).__name__})")

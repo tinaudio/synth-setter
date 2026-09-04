@@ -124,7 +124,7 @@ from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.run_if import RunIf
-from tests.helpers.wandb_offline import read_run_config
+from tests.helpers.wandb_offline import read_run_config, read_run_exit_code
 
 _SAMPLE_RATE = 44100
 _FIXTURE_SAMPLES = 16
@@ -3048,7 +3048,46 @@ def test_add_embeddings_main_creates_offline_wandb_run_with_config_and_command(
     assert json.loads(run_config["embeddings"]) == ["clap"]
     assert json.loads(run_config["batch_size"]) == 7
     assert json.loads(run_config["command"]) == " ".join(argv)
+    assert read_run_exit_code(Path(run_files[0])) == 0
     assert CLAP_FIELD in lance.dataset(str(uri)).schema.names
+
+
+def test_add_embeddings_main_when_augmentation_fails_marks_wandb_run_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed augmentation finalizes its offline W&B run with a nonzero exit code.
+
+    :param tmp_path: Scratch directory for the Hydra output and W&B run.
+    :param monkeypatch: Fixture installing a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={tmp_path / 'missing.lance'}",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        "logger.wandb.project=add-embeddings-test",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    assert wandb.run is None
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    assert read_run_exit_code(Path(run_files[0])) == 1
 
 
 def test_add_embeddings_main_when_open_fails_exits_one(
