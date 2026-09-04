@@ -500,6 +500,41 @@ def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     assert torch.isfinite(loss)
 
 
+def test_train_step_pyfdn_reverb_profile_uses_temporal_groups() -> None:
+    """Flow construction and training use the selected reverb layout."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    loss = module._train_step(batch).loss  # noqa: SLF001
+
+    assert module.sketch_tokens is not None
+    assert tuple(module.sketch_tokens.projections) == (
+        "edc",
+        "echo_density",
+        "spectral_flatness",
+    )
+    assert torch.isfinite(loss)
+
+
+def test_sample_batch_pyfdn_reverb_profile_returns_parameter_rows() -> None:
+    """Inference accepts temporal reverb controls and preserves parameter shape."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    predictions = module.sample_batch(
+        batch,
+        noise=batch["noise"],
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert predictions.shape == (_BATCH, _NUM_PARAMS)
+    assert torch.isfinite(predictions).all()
+
+
 def test_train_step_none_spec_ignores_sketch_free_batch() -> None:
     """The default configuration trains on batches without ``sketch_ctrl``."""
     module = _module(None)
@@ -657,6 +692,44 @@ def test_sketch_conditioned_training_fixed_batch_lowers_loss_and_updates_project
     assert all(
         torch.count_nonzero(cast(torch.nn.Linear, projection).weight) == 0
         for projection in projections
+    )
+
+    optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
+    torch.manual_seed(11)
+    initial_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    for _ in range(100):
+        optimizer.zero_grad(set_to_none=True)
+        loss = module._train_step(batch).loss  # noqa: SLF001
+        loss.backward()
+        optimizer.step()
+
+    torch.manual_seed(11)
+    final_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    assert final_loss < 0.01
+    assert final_loss < initial_loss / 100
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) > 0
+        for projection in module.sketch_tokens.projections.values()
+    )
+
+
+@pytest.mark.slow
+def test_pyfdn_reverb_training_fixed_batch_lowers_loss_and_updates_projections() -> None:
+    """A fixed reverb batch trains every temporal-group projection."""
+    module = _module(
+        SketchControlSpec(num_frames=32, profile="pyfdn_reverb"),
+        sketch_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
+        cfg_dropout_rate=0.0,
+    )
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+    assert module.sketch_tokens is not None
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) == 0
+        for projection in module.sketch_tokens.projections.values()
     )
 
     optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)

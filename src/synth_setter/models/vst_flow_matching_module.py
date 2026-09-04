@@ -56,7 +56,7 @@ class ConditioningKeepMasks:
     """
 
     content: Bool[torch.Tensor, _BATCH_SHAPE]
-    sketch_groups: Bool[torch.Tensor, f"batch {len(CONTROL_GROUPS)}"]
+    sketch_groups: Bool[torch.Tensor, "batch groups"]
 
     @classmethod
     @jaxtyped(typechecker=beartype)
@@ -371,6 +371,7 @@ class VSTFlowMatchingModule(LightningModule):
             SketchControlTokens(
                 d_model=vector_field.d_model,
                 num_control_tokens=self._sketch_controls.num_control_tokens,
+                profile=self._sketch_controls.profile,
             )
             if self._sketch_controls is not None
             else None
@@ -518,8 +519,13 @@ class VSTFlowMatchingModule(LightningModule):
         :returns: Positive content and per-sketch-group keep masks.
         """
         content = torch.rand(batch_size, device=device) > self.hparams.cfg_dropout_rate
+        num_sketch_groups = (
+            len(CONTROL_GROUPS)
+            if self.sketch_tokens is None
+            else len(self.sketch_tokens.layout.group_names)
+        )
         sketch_groups = (
-            torch.rand(batch_size, len(CONTROL_GROUPS), device=device)
+            torch.rand(batch_size, num_sketch_groups, device=device)
             > self.hparams.sketch_dropout_rate
         )
         global_keep = (
@@ -577,7 +583,10 @@ class VSTFlowMatchingModule(LightningModule):
             return None
         controls = batch["sketch_ctrl"]
         keep = torch.ones(
-            controls.shape[0], len(CONTROL_GROUPS), dtype=torch.bool, device=controls.device
+            controls.shape[0],
+            len(self.sketch_tokens.layout.group_names),
+            dtype=torch.bool,
+            device=controls.device,
         )
         return ControlTokenBranches(
             conditional=self.sketch_tokens(controls, keep),
