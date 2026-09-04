@@ -1,6 +1,7 @@
 """Conditioning contracts shared across data and model layers."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
@@ -34,6 +35,67 @@ SKETCH_STORAGE_FRAMES: int = 32
 SKETCH_LOUDNESS_ROW: int = 0
 SKETCH_CENTROID_ROW: int = 1
 SKETCH_PITCH_SLICE: slice = slice(NUM_SKETCH_TRACK_ROWS, NUM_SKETCH_CONTROLS)
+
+SketchControlProfile = Literal["music", "pyfdn_reverb"]
+
+
+@dataclass(frozen=True)
+class SketchControlLayout:
+    """Define channel groups for one sketch-control profile.
+
+    .. attribute :: profile
+
+        Profile discriminator.
+
+    .. attribute :: group_names
+
+        Projection and dropout group names in channel order.
+
+    .. attribute :: group_slices
+
+        Non-overlapping channel slices in group order.
+    """
+
+    profile: SketchControlProfile
+    group_names: tuple[str, ...]
+    group_slices: tuple[slice, ...]
+
+    @property
+    def group_widths(self) -> tuple[int, ...]:
+        """Return projection input widths in group order."""
+        return tuple(group.stop - group.start for group in self.group_slices)
+
+    @property
+    def num_controls(self) -> int:
+        """Return the required input channel count."""
+        return self.group_slices[-1].stop
+
+
+SKETCH_CONTROL_LAYOUTS: Mapping[SketchControlProfile, SketchControlLayout] = {
+    "music": SketchControlLayout(
+        profile="music",
+        group_names=("loudness", "centroid", "pitch"),
+        group_slices=(
+            slice(SKETCH_LOUDNESS_ROW, SKETCH_LOUDNESS_ROW + 1),
+            slice(SKETCH_CENTROID_ROW, SKETCH_CENTROID_ROW + 1),
+            SKETCH_PITCH_SLICE,
+        ),
+    ),
+    "pyfdn_reverb": SketchControlLayout(
+        profile="pyfdn_reverb",
+        group_names=("edc", "echo_density", "spectral_flatness"),
+        group_slices=(slice(0, 8), slice(8, 9), slice(9, 10)),
+    ),
+}
+
+
+def sketch_control_layout(profile: SketchControlProfile) -> SketchControlLayout:
+    """Return the authoritative channel layout for a sketch profile.
+
+    :param profile: Profile discriminator.
+    :returns: Immutable group names and channel slices.
+    """
+    return SKETCH_CONTROL_LAYOUTS[profile]
 
 
 class EmbeddingConditioningSpec(BaseModel):
@@ -108,8 +170,7 @@ def resolve_embedding_conditioning(
 class SketchControlSpec(BaseModel):
     """Select the stored sketch-control column and its token budget.
 
-    The channel layout is fixed by this module's ``SKETCH_*`` constants and is
-    not configurable here.
+    The selected profile resolves to this module's authoritative channel layout.
 
     .. attribute :: model_config
 
@@ -118,6 +179,10 @@ class SketchControlSpec(BaseModel):
     .. attribute :: column
 
         Stored Lance struct column name.
+
+    .. attribute :: profile
+
+        Channel layout and temporal tokenization contract.
 
     .. attribute :: num_frames
 
@@ -135,21 +200,36 @@ class SketchControlSpec(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     column: str = Field(default=SKETCH_STRUCT_FIELD, min_length=1)
+    profile: SketchControlProfile = "music"
     num_frames: PositiveInt
     num_control_tokens: PositiveInt = 32
     # Bounded to the documented [0, 1] activation range: a negative threshold
     # silently disables binning and one above 1 zeroes the whole pitch block.
     pitch_zero_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
 
+    @property
+    def layout(self) -> SketchControlLayout:
+        """Return the selected profile's channel layout."""
+        return sketch_control_layout(self.profile)
+
     @model_validator(mode="after")
-    def pooled_storage_matches_token_budget(self) -> "SketchControlSpec":
-        """Reject temporal resampling after canonical storage pooling.
+    def temporal_layout_matches_token_budget(self) -> "SketchControlSpec":
+        """Reject profile configurations that lose the stored temporal contract.
 
         :returns: The validated sketch-control specification.
-        :raises ValueError: Pooled storage and model token counts differ.
+        :raises ValueError: Stored frames and model token counts violate the profile.
         """
+        if self.profile == "pyfdn_reverb" and (
+            self.num_frames != SKETCH_STORAGE_FRAMES
+            or self.num_control_tokens != SKETCH_STORAGE_FRAMES
+        ):
+            raise ValueError(
+                f"pyfdn_reverb sketch requires num_frames=num_control_tokens="
+                f"{SKETCH_STORAGE_FRAMES}"
+            )
         if (
-            self.num_frames == SKETCH_STORAGE_FRAMES
+            self.profile == "music"
+            and self.num_frames == SKETCH_STORAGE_FRAMES
             and self.num_control_tokens != SKETCH_STORAGE_FRAMES
         ):
             raise ValueError(
