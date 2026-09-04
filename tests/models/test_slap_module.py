@@ -141,6 +141,44 @@ def test_slap_loss_keeps_audio_prediction_in_first_byol_position() -> None:
     assert loss.item() == pytest.approx(0.0)
 
 
+def test_slap_configured_audio_input_uses_stored_mel() -> None:
+    """Selecting mel must leave the incompatible waveform tensor unused."""
+    model = SLAPModule(
+        audio_encoder=_arm(5),
+        text_encoder=_arm(2),
+        loss_fn=BYOLLoss(),
+        optimizer=partial(torch.optim.SGD, lr=0.1),
+        audio_input_key="mel",
+    )
+    batch = {
+        "audio": torch.randn(2, 7),
+        "mel": torch.randn(2, 5),
+        "params": torch.randn(2, 2),
+    }
+
+    loss = model.training_step(batch, batch_idx=0)
+
+    assert torch.isfinite(loss)
+
+
+def test_slap_configured_audio_input_requires_stored_mel() -> None:
+    """Selecting mel fails clearly when the stored feature is absent."""
+    model = SLAPModule(
+        audio_encoder=_arm(5),
+        text_encoder=_arm(2),
+        loss_fn=BYOLLoss(),
+        optimizer=partial(torch.optim.SGD, lr=0.1),
+        audio_input_key="mel",
+    )
+    batch = {
+        "audio": torch.randn(2, 5),
+        "params": torch.randn(2, 2),
+    }
+
+    with pytest.raises(ValueError, match="non-null mel and params"):
+        model.training_step(batch, batch_idx=0)
+
+
 def test_slap_optional_dependencies_are_keyword_only() -> None:
     """Optional factories cannot be positionally misbound."""
     parameters = inspect.signature(SLAPModule).parameters

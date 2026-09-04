@@ -43,7 +43,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
-from synth_setter.data.vst import plugin_state_paths
+from synth_setter.data.vst import param_specs, plugin_state_paths
 from synth_setter.data.vst.shapes import AUDIO_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
@@ -51,6 +51,7 @@ from synth_setter.models.components.pretrained_encoder import (
     PretrainedConditioningEncoder,
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
+from synth_setter.models.components.transformer import ASTWithProjectionHead
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
@@ -145,10 +146,10 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_evaluate_slap_checkpoint_reports_finite_loss(
+def test_evaluate_slap_ast_audio_mlp_param_experiment_checkpoint_end_to_end(
     cfg_slap_train_lance: DictConfig,
 ) -> None:
-    """Reload a GPU-trained SLAP checkpoint through the public eval path.
+    """Reload the shipped experiment's GPU checkpoint through public evaluation.
 
     :param cfg_slap_train_lance: Tiny paired Lance training configuration.
     """
@@ -166,11 +167,9 @@ def test_evaluate_slap_checkpoint_reports_finite_loss(
             config_name="eval.yaml",
             return_hydra_config=True,
             overrides=[
-                "datamodule=surge_lance",
-                "model=slap",
+                "experiment=surge/slap_ast_audio_mlp_param",
                 "callbacks=none",
                 "trainer=gpu",
-                "synth=surge_4",
             ],
         )
     with open_dict(cfg):
@@ -1702,6 +1701,68 @@ def test_eval_synth_group_exposes_postprocessing_keys(synth_group: str) -> None:
         assert cfg.synth.plugin_path
     finally:
         GlobalHydra.instance().clear()
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["cpu"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/ffn_simple"], indirect=True)
+def test_evaluate_predict_rounds_fractional_pitch_to_nearest_midi_note(
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+    param_spec_name: str,
+) -> None:
+    """Render a trained model's fractional pitch as its nearest MIDI note.
+
+    :param tmp_path: Shared train, prediction, and rendered-audio directory.
+    :param cfg_surge_xt: One-step real Surge XT training configuration.
+    :param cfg_surge_xt_eval: Matching production predict-mode configuration.
+    :param param_spec_name: Parameter spec locating the scalar pitch output.
+    """
+    for cfg in (cfg_surge_xt, cfg_surge_xt_eval):
+        with open_dict(cfg):
+            cfg.model.net.d_model = 16
+            cfg.model.net.n_heads = 1
+            cfg.model.net.n_layers = 1
+            cfg.model.net.patch_size = 128
+            cfg.model.net.patch_stride = 64
+    HydraConfig().set_config(cfg_surge_xt)
+    _, train_objects = train(cfg_surge_xt)
+
+    spec = param_specs[param_spec_name]
+    pitch_index = spec.encoded_names.index("pitch")
+    fractional_pitch_output = 0.0416666679084301
+    trained_model = train_objects["model"]
+    trainer = train_objects["trainer"]
+    assert isinstance(trained_model, VSTFeedForwardModule)
+    assert isinstance(trained_model.net, ASTWithProjectionHead)
+    assert isinstance(trainer, Trainer)
+    # This float32 value is the first representable prediction above the MIDI 60.5 boundary.
+    with torch.no_grad():
+        trained_model.net.final_proj.weight[pitch_index].zero_()
+        trained_model.net.final_proj.bias[pitch_index].fill_(fractional_pitch_output)
+    trainer.save_checkpoint(cfg_surge_xt_eval.ckpt_path, weights_only=False)
+
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.evaluation.compute_metrics = False
+        cfg_surge_xt_eval.evaluation.rerender_target = False
+        cfg_surge_xt_eval.datamodule.batch_size = 1
+        cfg_surge_xt_eval.render.plugin_reload_cadence = "once"
+        cfg_surge_xt_eval.trainer.limit_predict_batches = 1
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    try:
+        evaluate(cfg_surge_xt_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    prediction = torch.load(tmp_path / "predictions" / "pred-0.pt", weights_only=True)
+    assert prediction[0, pitch_index].item() == fractional_pitch_output
+
+    rendered_pitch = pd.read_csv(tmp_path / "audio" / "sample_0" / "params.csv", index_col=0).at[
+        "pitch", "pred_effective"
+    ]
+    assert int(rendered_pitch) == 61
 
 
 @pytest.mark.requires_vst
