@@ -50,6 +50,18 @@ def test_param_token_embed_freezes_decoder_half_and_trains_encoder_half() -> Non
     )
 
 
+def test_param_token_embed_with_final_ffn_freezes_it_too() -> None:
+    """Freeze a configured final FFN alongside the out projection."""
+    projection = LearntProjection(
+        d_model=32, d_token=32, num_params=7, num_tokens=16, initial_ffn=True, final_ffn=True
+    )
+
+    embed = ParamTokenEmbed(projection=projection)
+
+    assert embed.projection.final_ffn is not None
+    assert all(not weight.requires_grad for weight in embed.projection.final_ffn.parameters())
+
+
 def test_token_transformer_with_param_embed_returns_conditioning_tokens() -> None:
     """Encode parameter vectors into class tokens through the injected embed."""
     encoder = AudioSpectrogramTransformer(
