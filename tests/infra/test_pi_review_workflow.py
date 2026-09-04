@@ -62,7 +62,9 @@ def test_pi_review_workflow_triggers_for_pr_heads_and_cancels_stale_runs(
     assert workflow["concurrency"] == {
         "group": (
             "pi-repo-review-full-${{ github.event.pull_request.number || "
-            "github.event.issue.number }}"
+            "(github.event.comment.user.login == 'ktinubu' && "
+            "contains(github.event.comment.body, '@github-actions review') && "
+            "github.event.issue.number) || github.run_id }}"
         ),
         "cancel-in-progress": True,
     }
