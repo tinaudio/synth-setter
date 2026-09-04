@@ -277,6 +277,17 @@ class TestSketchControlTokens:
             atol=0,
         )
 
+    def test_music_profile_preserves_projection_parameter_names(self) -> None:
+        """Default-profile checkpoints retain the established projection keys."""
+        module = SketchControlTokens(d_model=_D_MODEL)
+
+        assert tuple(module.state_dict()) == (
+            "positional_encoding",
+            "projections.loudness.weight",
+            "projections.centroid.weight",
+            "projections.pitch.weight",
+        )
+
     def test_forward_wrong_channel_count_raises_shape_error(self) -> None:
         """The music profile rejects tensors outside its channel contract."""
         module = _tokens_module()
@@ -348,6 +359,20 @@ class TestPyFDNReverbSketchControlTokens:
 
         with pytest.raises(ValueError, match="10 channels"):
             module(torch.randn(_BATCH, 9, _REVERB_FRAMES), _keep_all())
+
+    def test_forward_reverb_wrong_frame_count_raises(self) -> None:
+        """The reverb profile rejects temporal resampling at the model boundary."""
+        module = _reverb_tokens_module()
+
+        with pytest.raises(ValueError, match="32 frames"):
+            module(torch.randn(_BATCH, 10, 31), _keep_all())
+
+    def test_forward_reverb_non_float32_raises(self) -> None:
+        """The reverb profile rejects descriptor tensors outside float32."""
+        module = _reverb_tokens_module()
+
+        with pytest.raises(ValueError, match="float32"):
+            module(torch.randn(_BATCH, 10, _REVERB_FRAMES).double(), _keep_all())
 
     def test_forward_reverb_wrong_group_count_raises(self) -> None:
         """The reverb profile requires one keep decision per projection group."""
