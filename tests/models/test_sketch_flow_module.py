@@ -500,6 +500,23 @@ def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     assert torch.isfinite(loss)
 
 
+def test_train_step_pyfdn_reverb_profile_uses_temporal_groups() -> None:
+    """Flow construction and training use the selected reverb layout."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    loss = module._train_step(batch).loss  # noqa: SLF001
+
+    assert module.sketch_tokens is not None
+    assert tuple(module.sketch_tokens.projections) == (
+        "edc",
+        "echo_density",
+        "spectral_flatness",
+    )
+    assert torch.isfinite(loss)
+
+
 def test_train_step_none_spec_ignores_sketch_free_batch() -> None:
     """The default configuration trains on batches without ``sketch_ctrl``."""
     module = _module(None)
