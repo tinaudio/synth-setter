@@ -1516,103 +1516,106 @@ def _write_columns(
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
         encoders = _load_encoders(specs, config)
-    identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
-    resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
-    source_identity = _resume_source_identity(
-        dataset,
-        sample_rate=sample_rate,
-        batch_size=config.batch_size,
-        input_fields=input_fields,
-    )
-    _prepare_resume_cache(resume_cache, identities, source_identity)
-    output_columns = [column for spec in specs for column in _output_columns(spec)]
-
-    logger.info("inferring_embedding_schema", columns=output_columns)
-    sample = next(dataset.to_batches(columns=input_fields, limit=1))
-    # Schema probing must not perturb stochastic encoders' persisted outputs.
-    with torch.random.fork_rng():
-        sample_output = _encode_columns(
-            _decoded_sources(sample, input_fields), sample_rate, specs, encoders
+    try:
+        identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
+        resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
+        source_identity = _resume_source_identity(
+            dataset,
+            sample_rate=sample_rate,
+            batch_size=config.batch_size,
+            input_fields=input_fields,
         )
-    output_schema = _embedding_output_schema(
-        sample_output.schema, specs, config, identities=identities
-    )
-    logger.info("inferred_embedding_schema", columns=output_columns)
+        _prepare_resume_cache(resume_cache, identities, source_identity)
+        output_columns = [column for spec in specs for column in _output_columns(spec)]
 
-    progress_interval = max(
-        config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
-    )
-    next_progress_row = progress_interval
-    rows_processed = 0
-    started_at = time.monotonic()
-    last_progress_at = started_at
-    last_udf_end = started_at
-    stage_ms: dict[str, float] = {}
-
-    @lance.batch_udf(
-        output_schema=output_schema,
-        checkpoint_file=None if resume_cache is None else str(resume_cache),
-    )
-    def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
-        nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
-        udf_started = time.monotonic()
-        sources = _decoded_sources(batch, input_fields)
-        output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
-        rows_processed += batch.num_rows
-        now = time.monotonic()
-        interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
-        time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
-        if config.debug or interval_due or time_due:
-            timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
-            logger.info(
-                "embedding_progress",
-                rows_processed=rows_processed,
-                total_rows=total_rows,
-                percent=round(rows_processed / total_rows * 100, 1),
-                rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
-                batch_rows=batch.num_rows,
-                batch_ms=round((now - udf_started) * 1000, 1),
-                interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
-                **timings,
+        logger.info("inferring_embedding_schema", columns=output_columns)
+        sample = next(dataset.to_batches(columns=input_fields, limit=1))
+        # Schema probing must not perturb stochastic encoders' persisted outputs.
+        with torch.random.fork_rng():
+            sample_output = _encode_columns(
+                _decoded_sources(sample, input_fields), sample_rate, specs, encoders
             )
-            last_progress_at = now
-        if interval_due:
-            next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
-        last_udf_end = time.monotonic()
-        return output
-
-    logger.info(
-        "embedding_write_started",
-        columns=output_columns,
-        total_rows=total_rows,
-        batch_size=config.batch_size,
-        source_version=dataset.version,
-    )
-    dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
-    # A zero-batch replay is valid only when the target columns are already committed.
-    uncommitted = [
-        column for column in output_columns if column not in dataset.schema.names
-    ]
-    if uncommitted:
-        raise RuntimeError(
-            f"add_columns returned without committing column(s) {uncommitted} "
-            f"(rows_processed={rows_processed} of {total_rows}); refusing to "
-            "treat the write as done"
+        output_schema = _embedding_output_schema(
+            sample_output.schema, specs, config, identities=identities
         )
-    _delete_resume_cache(resume_cache)
-    logger.info(
-        "wrote_embeddings",
-        columns=output_columns,
-        total_rows=total_rows,
-        rows_processed=rows_processed,
-        committed_version=dataset.version,
-    )
-    # Pool-backed encoders hold worker processes; release them with the pass.
-    for encoder in encoders:
-        closer = getattr(encoder, "close", None)
-        if callable(closer):
-            closer()
-    encoders.clear()
+        logger.info("inferred_embedding_schema", columns=output_columns)
+
+        progress_interval = max(
+            config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
+        )
+        next_progress_row = progress_interval
+        rows_processed = 0
+        started_at = time.monotonic()
+        last_progress_at = started_at
+        last_udf_end = started_at
+        stage_ms: dict[str, float] = {}
+
+        @lance.batch_udf(
+            output_schema=output_schema,
+            checkpoint_file=None if resume_cache is None else str(resume_cache),
+        )
+        def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
+            nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
+            udf_started = time.monotonic()
+            sources = _decoded_sources(batch, input_fields)
+            output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
+            rows_processed += batch.num_rows
+            now = time.monotonic()
+            interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
+            time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
+            if config.debug or interval_due or time_due:
+                timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
+                logger.info(
+                    "embedding_progress",
+                    rows_processed=rows_processed,
+                    total_rows=total_rows,
+                    percent=round(rows_processed / total_rows * 100, 1),
+                    rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
+                    batch_rows=batch.num_rows,
+                    batch_ms=round((now - udf_started) * 1000, 1),
+                    interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
+                    **timings,
+                )
+                last_progress_at = now
+            if interval_due:
+                next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
+            last_udf_end = time.monotonic()
+            return output
+
+        logger.info(
+            "embedding_write_started",
+            columns=output_columns,
+            total_rows=total_rows,
+            batch_size=config.batch_size,
+            source_version=dataset.version,
+        )
+        dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+        # A zero-batch replay is valid only when the target columns are already committed.
+        uncommitted = [
+            column for column in output_columns if column not in dataset.schema.names
+        ]
+        if uncommitted:
+            raise RuntimeError(
+                f"add_columns returned without committing column(s) {uncommitted} "
+                f"(rows_processed={rows_processed} of {total_rows}); refusing to "
+                "treat the write as done"
+            )
+        _delete_resume_cache(resume_cache)
+        logger.info(
+            "wrote_embeddings",
+            columns=output_columns,
+            total_rows=total_rows,
+            rows_processed=rows_processed,
+            committed_version=dataset.version,
+        )
+    finally:
+        # Pool-backed encoders hold worker processes; release them even when the
+        # pass aborts, so a failed backfill cannot leak spawn workers.
+        for encoder in encoders:
+            closer = getattr(encoder, "close", None)
+            if callable(closer):
+                closer()
+        encoders.clear()
 
 
 def build_index(

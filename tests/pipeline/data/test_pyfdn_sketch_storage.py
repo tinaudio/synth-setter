@@ -297,6 +297,42 @@ def test_write_columns_closes_closeable_encoders(
     assert encoder.closed
 
 
+def test_write_columns_with_failing_encoder_still_closes_pools(tmp_path: Path) -> None:
+    """An aborted UDF pass must not leak encoder-held worker processes.
+
+    :param tmp_path: Parent of the real local Lance dataset.
+    """
+
+    class FailingClosingEncoder:
+        closed = False
+
+        def __call__(self, batch: np.ndarray, sample_rate: int) -> np.ndarray:
+            raise ValueError("extractor blew up")
+
+        def close(self) -> None:
+            self.closed = True
+
+    encoder = FailingClosingEncoder()
+    uri = tmp_path / "failing.lance"
+    audio = np.ones((2, 1, 64), dtype=np.float32)
+    lance.write_dataset(
+        pa.table({AUDIO_FIELD: pa.FixedShapeTensorArray.from_numpy_ndarray(audio)}), str(uri)
+    )
+    spec = replace(
+        EMBEDDING_REGISTRY["pyfdn_sketch"],
+        load_encoder=lambda checkpoint, config: encoder,
+        resolve_artifact_identity=lambda checkpoint: "pyfdn-sketch:test-policy-v1",
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri=str(uri), embeddings=("pyfdn_sketch",), build_index=False
+    )
+
+    with pytest.raises(ValueError, match="extractor blew up"):
+        _write_columns(lance.dataset(str(uri)), [spec], 48_000, config)
+
+    assert encoder.closed
+
+
 @pytest.mark.parametrize("num_workers", [1, 2])
 def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(
     tmp_path: Path, num_workers: int
