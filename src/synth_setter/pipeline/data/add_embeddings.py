@@ -928,7 +928,10 @@ def _encode_t5gemma_column(
 
 @jaxtyped(typechecker=beartype)
 def _sketch_encode(
-    audio: Float[np.ndarray, "batch channel time"], sample_rate: int, device: str = "cpu"
+    audio: Float[np.ndarray, "batch channel time"],
+    sample_rate: int,
+    device: str = "cpu",
+    chunk: int = SKETCH_ENCODE_MAX_BATCH,
 ) -> Float[np.ndarray, "batch control frame"]:
     """Extract sketch controls for one audio batch in memory-capped chunks.
 
@@ -939,6 +942,8 @@ def _sketch_encode(
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param device: Torch device the extractor runs on.
+    :param chunk: Rows per extractor invocation; sizes memory, and on CUDA also
+        GPU utilization (#3131).
     :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
     """
     import torch
@@ -947,12 +952,10 @@ def _sketch_encode(
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
     chunks = [
-        extract_sketch_controls_batch(
-            batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate, device=device
-        )
+        extract_sketch_controls_batch(batch[start : start + chunk], sample_rate, device=device)
         .cpu()
         .numpy()
-        for start in range(0, len(batch), SKETCH_ENCODE_MAX_BATCH)
+        for start in range(0, len(batch), chunk)
     ]
     return np.concatenate(chunks, axis=0)
 
@@ -970,8 +973,12 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     from synth_setter.features.sketch_controls import load_pesto_model
 
     device = _resolve_torch_device(config.device)
+    # Surfaces a silently-CPU run in the first log lines (#3131).
+    logger.info(
+        "sketch_encoder_loaded", device=device, encode_chunk=config.sketch_encode_chunk
+    )
     load_pesto_model(checkpoint, device=device)
-    return functools.partial(_sketch_encode, device=device)
+    return functools.partial(_sketch_encode, device=device, chunk=config.sketch_encode_chunk)
 
 
 def _encode_sketch_column(

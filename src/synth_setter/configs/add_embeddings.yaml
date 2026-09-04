@@ -21,6 +21,10 @@ device: null
 batch_size: 128
 # Worker processes for CPU-bound encoders (pyfdn_sketch); 1 keeps encoding in-process.
 num_workers: 1
+# Rows per sketch extractor invocation. 32 caps CPU RSS (#2707); a data-center GPU
+# is likely underfed at 32 — benchmark upward per #3131 before a large backfill.
+# Values differ across chunk sizes only within float32 kernel jitter (~1e-6).
+sketch_encode_chunk: 32
 # Build IVF_PQ indexes on selected global vectors and pooled sequence companions.
 build_index: true
 # IVF partition count; null uses round(sqrt(rows)).

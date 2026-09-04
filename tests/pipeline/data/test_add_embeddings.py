@@ -3618,6 +3618,82 @@ def test_sketch_encode_never_exceeds_extraction_batch_cap(
     assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
 
 
+def test_sketch_encode_with_custom_chunk_caps_extractor_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured chunk overrides the default extraction cap.
+
+    :param monkeypatch: Fixture recording extractor input batch sizes.
+    """
+    import synth_setter.features.sketch_controls as sketch_controls
+    from synth_setter.pipeline.data.add_embeddings import _sketch_encode
+
+    seen_sizes: list[int] = []
+
+    def record(batch: torch.Tensor, sample_rate: int, device: str = "cpu") -> torch.Tensor:
+        del sample_rate, device
+        seen_sizes.append(len(batch))
+        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
+
+    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
+    audio = np.zeros((20, 1, _FIXTURE_SAMPLES), dtype=np.float32)
+
+    controls = _sketch_encode(audio, _SAMPLE_RATE, chunk=8)
+
+    assert len(controls) == 20
+    assert seen_sizes == [8, 8, 4]
+
+
+def test_add_embeddings_config_with_non_positive_sketch_chunk_raises() -> None:
+    """The sketch extraction chunk validates as a positive row count."""
+    with pytest.raises(ValidationError):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, sketch_encode_chunk=0)
+
+
+def test_add_embeddings_config_composition_overrides_sketch_encode_chunk() -> None:
+    """The shipped Hydra config exposes the sketch extraction chunk as a tunable."""
+    cfg = _compose_add_embeddings("sketch_encode_chunk=128")
+    try:
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+    assert config.sketch_encode_chunk == 128
+
+
+def test_sketch_spec_encoder_binds_config_chunk_and_logs_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry loader threads the configured chunk and logs the resolved device.
+
+    :param monkeypatch: Fixture stubbing PESTO load and recording extractor batch sizes.
+    """
+    import synth_setter.features.sketch_controls as sketch_controls
+    from synth_setter.pipeline.data.add_embeddings import (
+        SketchEncodeFn,
+        _load_sketch_spec_encoder,
+    )
+
+    seen_sizes: list[int] = []
+
+    def record(batch: torch.Tensor, sample_rate: int, device: str = "cpu") -> torch.Tensor:
+        del sample_rate, device
+        seen_sizes.append(len(batch))
+        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
+
+    monkeypatch.setattr(sketch_controls, "load_pesto_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
+    config = AddEmbeddingsConfig(
+        lance_uri=_LANCE_URI, embeddings=("sketch",), device="cpu", sketch_encode_chunk=4
+    )
+
+    with capture_logs() as logs:
+        encode = cast("SketchEncodeFn", _load_sketch_spec_encoder("dummy.ckpt", config))
+    encode(np.zeros((10, 1, _FIXTURE_SAMPLES), dtype=np.float32), _SAMPLE_RATE)
+
+    assert seen_sizes == [4, 4, 2]
+    assert any(log.get("device") == "cpu" and log.get("encode_chunk") == 4 for log in logs)
+
+
 @pytest.mark.slow
 def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
     """Memory-capped chunking preserves control values within float32 kernel jitter.

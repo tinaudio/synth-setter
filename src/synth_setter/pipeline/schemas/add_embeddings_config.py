@@ -17,6 +17,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
+    SKETCH_ENCODE_MAX_BATCH,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -56,6 +57,10 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: num_workers
 
         Worker processes for CPU-bound registry encoders; ``1`` keeps them in-process.
+
+    .. attribute :: sketch_encode_chunk
+
+        Rows per sketch extractor invocation.
 
     .. attribute :: build_index
 
@@ -116,6 +121,11 @@ class AddEmbeddingsConfig(BaseModel):
         default=1,
         ge=1,
         description="Worker processes for CPU-bound encoders; torch/GPU encoders ignore it.",
+    )
+    sketch_encode_chunk: int = Field(
+        default=SKETCH_ENCODE_MAX_BATCH,
+        ge=1,
+        description="Rows per sketch extractor invocation; sizes memory and GPU utilization.",
     )
     build_index: bool = Field(
         default=True, description="Build indexes declared by selected embedding specs."
