@@ -69,9 +69,8 @@ def _octave_edc_tracks(response: np.ndarray, sample_rate: float) -> np.ndarray:
 
     normalized = energy_decay / initial_energy
     edc_db = 10.0 * np.log10(np.maximum(normalized, np.finfo(np.float64).tiny))
-    pooled_db = np.stack([_pool_intervals(track) for track in edc_db])
-    clipped_db = np.clip(pooled_db, _EDC_FLOOR_DB, 0.0)
-    return 1.0 + clipped_db / 30.0
+    normalized_edc = 1.0 + np.clip(edc_db, _EDC_FLOOR_DB, 0.0) / 30.0
+    return np.stack([_pool_intervals(track) for track in normalized_edc])
 
 
 def _echo_density_track(response: np.ndarray, sample_rate: float) -> np.ndarray:
@@ -85,7 +84,6 @@ def _echo_density_track(response: np.ndarray, sample_rate: float) -> np.ndarray:
         response,
         n=_ECHO_DENSITY_WINDOW,
         fs=sample_rate,
-        mixing_thresh=-1.0,
         hop=_ECHO_DENSITY_HOP,
     )
     pooled = _pool_intervals(np.asarray(density, dtype=np.float64))
