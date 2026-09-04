@@ -176,10 +176,10 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
 
 
 @pytest.mark.slow
-def test_train_pyfdn_householder_one_step_writes_checkpoint(
+def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
     cfg_pyfdn_train: DictConfig,
 ) -> None:
-    """Train the shipped pyFDN flow against its sole orthogonal-feedback spec.
+    """Train the shipped pyFDN AST on stored mels and write a checkpoint.
 
     :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
     """
@@ -191,6 +191,23 @@ def test_train_pyfdn_householder_one_step_writes_checkpoint(
     assert cfg_pyfdn_train.model.num_params == 27
     assert objects["trainer"].global_step == 1
     assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+def test_train_pyfdn_online_ast_one_step_uses_waveforms(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train the online-AST comparison from stored pyFDN waveforms.
+
+    :param cfg_pyfdn_train: One-step online-AST pyFDN configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.conditioning == "audio"
+    assert objects["trainer"].global_step == 1
 
 
 def _assert_slap_train_artifacts(

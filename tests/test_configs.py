@@ -1357,13 +1357,31 @@ def test_surge_experiment_resolves_identity_with_audio_datamodule(
     assert OmegaConf.select(cfg, spec_path) == "surge_xt"
 
 
-def test_pyfdn_flow_resolves_lance_audio_geometry() -> None:
-    """The offline pyFDN recipe fully resolves its waveform frontend geometry."""
+def test_pyfdn_flow_resolves_stored_mel_ast_conditioning() -> None:
+    """The production pyFDN recipe feeds stored mels through layerwise AST."""
     cfg = _compose("train.yaml", ["experiment=pyfdn/flow"])
 
     assert cfg.datamodule._target_.endswith("LanceVSTDataModule")
+    assert cfg.datamodule.conditioning == "mel"
+    assert cfg.model.conditioning == "mel"
+    assert cfg.model.encoder._target_.endswith("AudioSpectrogramTransformer")
+    assert cfg.model.encoder.input_channels == 1
+    assert cfg.model.encoder.n_conditioning_outputs == 8
+
+
+def test_pyfdn_flow_ast_online_resolves_waveform_ast_conditioning() -> None:
+    """The online-AST comparison computes mono mels from stored waveforms."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_ast_online"])
+
+    hydra.utils.instantiate(cfg.model.encoder)
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.conditioning == "audio"
+    assert cfg.model.encoder._target_.endswith("SpecEncoder")
     assert cfg.model.encoder.frontend.in_dim == 176_400
     assert cfg.model.encoder.frontend.sample_rate == 44_100
+    assert cfg.model.encoder.backbone._target_.endswith("AudioSpectrogramTransformer")
+    assert cfg.model.encoder.backbone.input_channels == 1
+    assert cfg.model.encoder.backbone.n_conditioning_outputs == 8
 
 
 def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:
