@@ -560,6 +560,119 @@ def test_prepare_batch_normalizes_mel_only_when_mean_and_std_set(
     assert torch.allclose(out, torch.full_like(out, expected))
 
 
+def test_prepare_batch_param_jitter_respects_configured_offset_bound() -> None:
+    """Interior parameters move by no more than the configured magnitude."""
+    raw = _make_raw(read_mel=False)
+    raw["param_array"] = np.full((32, 3), 0.5, dtype=np.float32)
+    source = torch.from_numpy(raw["param_array"])
+    amount = 0.01
+
+    params = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=amount,
+        )["params"]
+    )
+
+    assert torch.any(params != source)
+    assert torch.all(torch.abs(params - source) <= amount + torch.finfo(torch.float32).eps)
+
+
+def test_prepare_batch_param_jitter_clips_to_encoded_domain() -> None:
+    """Large boundary-crossing offsets clip to the encoded domain."""
+    raw = _make_raw(read_mel=False)
+    raw["param_array"] = np.tile(
+        np.array([[0.0, 1.0]], dtype=np.float32), (32, 1)
+    )
+
+    params = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=1.0,
+        )["params"]
+    )
+
+    lower_boundary = params[:, 0]
+    upper_boundary = params[:, 1]
+    assert params.min() >= 0.0
+    assert params.max() <= 1.0
+    assert torch.any(lower_boundary == 0.0)
+    assert torch.any(lower_boundary > 0.0)
+    assert torch.any(upper_boundary == 1.0)
+    assert torch.any(upper_boundary < 1.0)
+
+
+def test_prepare_batch_param_jitter_same_seed_repeats_offsets() -> None:
+    """The injected generator controls the jitter stream reproducibly."""
+    raw = _make_raw(read_mel=False)
+    generator = torch.Generator().manual_seed(17)
+    first = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=generator,
+            param_jitter_amount=0.01,
+        )["params"]
+    )
+    second = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=0.01,
+        )["params"]
+    )
+
+    torch.testing.assert_close(first, second, atol=0.0, rtol=0.0)
+
+
+def test_prepare_batch_param_jitter_rescales_after_clipping() -> None:
+    """Rescaling maps the same clipped jitter sample into the signed domain."""
+    raw = _make_raw(read_mel=False)
+    raw["param_array"] = np.array([[0.0, 0.5, 1.0]], dtype=np.float32)
+    encoded = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=False,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=0.01,
+        )["params"]
+    )
+
+    rescaled = _unwrap(
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator().manual_seed(17),
+            param_jitter_amount=0.01,
+        )["params"]
+    )
+
+    torch.testing.assert_close(rescaled, encoded * 2 - 1, atol=0.0, rtol=0.0)
+
+
 def test_prepare_batch_rescale_toggle() -> None:
     """``rescale_params`` maps params ``[0, 1] -> [-1, 1]`` exactly as ``x * 2 - 1``."""
     raw = _make_raw(read_mel=False)

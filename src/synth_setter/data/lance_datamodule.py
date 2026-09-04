@@ -37,6 +37,7 @@ from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst_datamodule import (
     RawBatch,
     VSTDataModule,
+    _validate_param_jitter_amount,
     draw_generator_seed,
     load_dataset_statistics,
     prepare_batch,
@@ -223,6 +224,7 @@ class PrepareBatchCollate:
         std: np.ndarray | None,
         rescale_params: bool,
         ot: bool,
+        param_jitter_amount: float = 0.0,
         conditioning_column: str | None = None,
         conditioning_shape: tuple[int, ...] | None = None,
         sketch_column: str | None = None,
@@ -236,6 +238,8 @@ class PrepareBatchCollate:
         :param std: Mel standard deviation, or ``None`` to skip normalization.
         :param rescale_params: Whether to map parameters to ``[-1, 1]``.
         :param ot: Whether to Hungarian-match noise to parameters.
+        :param param_jitter_amount: Maximum absolute uniform offset in the encoded
+            ``[0, 1]`` domain; zero disables jitter.
         :param conditioning_column: Generic embedding column to expose as ``conditioning``.
         :param conditioning_shape: Per-row model shape restored from flattened storage.
         :param sketch_column: Stored sketch struct column whose expanded
@@ -247,8 +251,10 @@ class PrepareBatchCollate:
         """
         self.mean = mean
         self.std = std
+        _validate_param_jitter_amount(param_jitter_amount)
         self.rescale_params = rescale_params
         self.ot = ot
+        self.param_jitter_amount = param_jitter_amount
         self.conditioning_column = conditioning_column
         self.conditioning_shape = conditioning_shape
         self.sketch_column = sketch_column
@@ -327,6 +333,7 @@ class PrepareBatchCollate:
             generator=self._live_generator(),
             sketch_profile=self.sketch_profile,
             sketch_pitch_zero_threshold=self.sketch_pitch_zero_threshold,
+            param_jitter_amount=self.param_jitter_amount,
         )
 
 
@@ -424,13 +431,36 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         return {name: value[0] if value is not None else None for name, value in batch.items()}
 
 
-def _model_batch_passthrough(batch: object) -> ModelBatch:
-    """Return a pre-collated synthetic batch unchanged.
+@dataclass(frozen=True)
+class _FakeBatchCollate:
+    """Apply training augmentation after fake sample selection and repetition.
 
-    :param batch: Synthetic model batch.
-    :returns: The same batch.
+    .. attribute :: param_jitter_amount
+
+        Maximum normalized-domain offset applied to targets.
     """
-    return cast(ModelBatch, batch)
+
+    param_jitter_amount: float
+
+    def __call__(self, batch: object) -> ModelBatch:
+        """Return a fake batch with fresh bounded parameter jitter when enabled.
+
+        :param batch: Pre-collated synthetic model batch.
+        :returns: Model batch with independently jittered parameter targets.
+        """
+        model_batch = cast(ModelBatch, batch)
+        if self.param_jitter_amount == 0:
+            return model_batch
+
+        params = cast(torch.Tensor, model_batch["params"])
+        signed_jitter_amount = 2 * self.param_jitter_amount
+        jitter = torch.empty_like(params).uniform_(
+            -signed_jitter_amount, signed_jitter_amount
+        )
+        return {
+            **model_batch,
+            "params": (params + jitter).clamp(-1.0, 1.0),
+        }
 
 
 class _RepeatFirstBatchDataset(torch.utils.data.Dataset[ModelBatch]):
@@ -530,6 +560,7 @@ class LanceVSTDataModule(VSTDataModule):
         use_saved_mean_and_variance: bool = True,
         batch_size: int = 1024,
         ot: bool = True,
+        param_jitter_amount: float = 0.0,
         num_workers: int = 0,
         val_num_workers: int = 0,
         fake: bool = False,
@@ -552,6 +583,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param use_saved_mean_and_variance: Whether to apply saved mel statistics.
         :param batch_size: Samples per model batch.
         :param ot: Whether training batches use optimal-transport matching.
+        :param param_jitter_amount: Training-only maximum absolute uniform offset in
+            the normalized parameter domain; zero disables jitter.
         :param num_workers: Worker processes for training, test, and prediction loaders.
         :param val_num_workers: Worker processes for the validation loader.
         :param fake: Whether to synthesize samples instead of reading Lance.
@@ -589,6 +622,8 @@ class LanceVSTDataModule(VSTDataModule):
             download_dataset_row_limit=download_dataset_row_limit,
             high_memory_materialization=high_memory_materialization,
         )
+        _validate_param_jitter_amount(param_jitter_amount)
+        self.param_jitter_amount = param_jitter_amount
         self.val_num_workers = val_num_workers
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
@@ -632,6 +667,7 @@ class LanceVSTDataModule(VSTDataModule):
         shard_path: Path,
         *,
         ot: bool,
+        param_jitter_amount: float,
         read_audio: bool,
         stats: tuple[np.ndarray, np.ndarray] | None,
     ) -> _MapSplit:
@@ -639,6 +675,7 @@ class LanceVSTDataModule(VSTDataModule):
 
         :param shard_path: Lance dataset directory.
         :param ot: Whether to match batch noise to parameters.
+        :param param_jitter_amount: Maximum absolute uniform parameter offset.
         :param read_audio: Whether to project prediction audio.
         :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
         :returns: Sample-indexed dataset and collate operation.
@@ -658,6 +695,7 @@ class LanceVSTDataModule(VSTDataModule):
                 std=std,
                 rescale_params=True,
                 ot=ot,
+                param_jitter_amount=param_jitter_amount,
                 conditioning_column=spec.column if spec is not None else None,
                 conditioning_shape=spec.input_shape if spec is not None else None,
                 sketch_column=sketch.column if sketch is not None else None,
@@ -673,11 +711,14 @@ class LanceVSTDataModule(VSTDataModule):
             ),
         )
 
-    def _build_fake_split(self, *, num_params: int, read_audio: bool) -> _MapSplit:
+    def _build_fake_split(
+        self, *, num_params: int, read_audio: bool, param_jitter_amount: float
+    ) -> _MapSplit:
         """Build one sample-indexed in-memory split.
 
         :param num_params: Selected parameter-spec width.
         :param read_audio: Whether prediction audio is generated.
+        :param param_jitter_amount: Maximum normalized-domain offset applied to targets.
         :returns: Synthetic dataset and pass-through collate.
         """
         return _MapSplit(
@@ -688,7 +729,7 @@ class LanceVSTDataModule(VSTDataModule):
                 conditioning=self.conditioning,
                 sketch=self.sketch_controls,
             ),
-            collate=_model_batch_passthrough,
+            collate=_FakeBatchCollate(param_jitter_amount),
         )
 
     def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:
@@ -719,6 +760,9 @@ class LanceVSTDataModule(VSTDataModule):
             name: self._build_lance_split(
                 shard_paths[name],
                 ot=self.ot if name == "train" else False,
+                param_jitter_amount=(
+                    self.param_jitter_amount if name == "train" else 0.0
+                ),
                 read_audio=name == "predict",
                 stats=predict_stats if name == "predict" else split_stats,
             )
@@ -739,7 +783,11 @@ class LanceVSTDataModule(VSTDataModule):
         if self.fake:
             self._splits = {
                 name: self._build_fake_split(
-                    num_params=num_params, read_audio=name == "predict"
+                    num_params=num_params,
+                    read_audio=name == "predict",
+                    param_jitter_amount=(
+                        self.param_jitter_amount if name == "train" else 0.0
+                    ),
                 )
                 for name in split_names
             }

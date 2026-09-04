@@ -822,6 +822,52 @@ class TestLanceMapDataModuleFlows:
         source_order = np.lexsort(source.T[::-1])
         np.testing.assert_array_equal(epoch[order], source[source_order])
 
+    def test_param_jitter_only_changes_training_targets(self, dataset_root: Path) -> None:
+        """Opt-in jitter perturbs train targets while evaluation targets stay exact.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        train_source = make_shard_columns(16, seed=1)["param_array"] * 2 - 1
+        val_source = make_shard_columns(6, seed=2)["param_array"] * 2 - 1
+        test_source = make_shard_columns(6, seed=3)["param_array"] * 2 - 1
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=4,
+            ot=False,
+            param_jitter_amount=0.001,
+        ) as module:
+            train_epoch = _params_in_order(module.train_dataloader())
+            val_epoch = _params_in_order(module.val_dataloader())
+            test_epoch = _params_in_order(module.test_dataloader())
+            predict_epoch = _params_in_order(module.predict_dataloader())
+
+        assert train_epoch.min() >= -1.0
+        assert train_epoch.max() <= 1.0
+        train_order = np.lexsort(train_epoch.T[::-1])
+        source_order = np.lexsort(train_source.T[::-1])
+        assert not np.array_equal(train_epoch[train_order], train_source[source_order])
+        np.testing.assert_array_equal(val_epoch, val_source)
+        np.testing.assert_array_equal(test_epoch, test_source)
+        np.testing.assert_array_equal(predict_epoch, test_source)
+
+    @pytest.mark.parametrize(
+        "amount", [-0.001, 1.001, 1e100, float("inf"), float("nan"), True]
+    )
+    def test_param_jitter_invalid_amount_raises_value_error(
+        self, dataset_root: Path, amount: float
+    ) -> None:
+        """Jitter must be a finite fraction of the normalized parameter range.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        :param amount: Invalid configured jitter amount.
+        """
+        with pytest.raises(ValueError, match="param_jitter_amount"):
+            LanceVSTDataModule(
+                dataset_root=dataset_root,
+                param_jitter_amount=amount,
+                param_spec_name=ParamSpecName("surge_xt"),
+            )
+
     def test_train_loader_drops_ragged_tail(self, dataset_root: Path) -> None:
         """Train keeps legacy floor-divide semantics: no short trailing batch.
 
@@ -957,6 +1003,59 @@ class TestLanceMapDataModuleModes:
             assert len(loader) == 10_000
         assert _unwrap(batch["params"]).shape == (2, len(param_specs["surge_xt"]))
 
+    def test_fake_mode_param_jitter_changes_training_targets(self, tmp_path: Path) -> None:
+        """Fake training batches honor the configured parameter jitter magnitude.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        batches = []
+        for amount in (0.0, 0.1):
+            torch.manual_seed(91)
+            with _set_up_map_module(
+                dataset_root=tmp_path,
+                batch_size=32,
+                fake=True,
+                ot=False,
+                param_jitter_amount=amount,
+                use_saved_mean_and_variance=False,
+            ) as module:
+                batches.append(_unwrap(next(iter(module.train_dataloader()))["params"]))
+
+        source, jittered = batches
+        assert torch.any(jittered != source)
+        assert torch.all(
+            torch.abs(jittered - source) <= 0.2 + torch.finfo(torch.float32).eps
+        )
+        assert jittered.min() >= -1.0
+        assert jittered.max() <= 1.0
+
+    @pytest.mark.parametrize(
+        "loader_name", ["predict_dataloader", "test_dataloader", "val_dataloader"]
+    )
+    def test_fake_mode_param_jitter_leaves_held_out_targets_unchanged(
+        self, tmp_path: Path, loader_name: str
+    ) -> None:
+        """Fake held-out targets ignore the training-only jitter option.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param loader_name: Held-out dataloader flow under test.
+        """
+        batches = []
+        for amount in (0.0, 0.1):
+            with _set_up_map_module(
+                dataset_root=tmp_path,
+                batch_size=32,
+                fake=True,
+                ot=False,
+                param_jitter_amount=amount,
+                use_saved_mean_and_variance=False,
+            ) as module:
+                torch.manual_seed(91)
+                loader = getattr(module, loader_name)()
+                batches.append(_unwrap(next(iter(loader))["params"]))
+
+        torch.testing.assert_close(batches[0], batches[1], atol=0.0, rtol=0.0)
+
     def test_fake_mode_preserves_conditioning_prediction_and_rng(self, tmp_path: Path) -> None:
         """Fake map batches retain m2l, prediction audio, ranges, and global RNG behavior.
 
@@ -1052,6 +1151,32 @@ class TestLanceMapDataModuleModes:
 
         for key in ("mel", "params", "noise"):
             assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
+
+    def test_fake_repeat_first_batch_redraws_training_param_jitter(
+        self, tmp_path: Path
+    ) -> None:
+        """Repeated fake source targets receive fresh training jitter per batch.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        """
+        with _set_up_map_module(
+            dataset_root=tmp_path,
+            batch_size=32,
+            fake=True,
+            ot=False,
+            param_jitter_amount=0.1,
+            repeat_first_batch=True,
+            use_saved_mean_and_variance=False,
+        ) as module:
+            iterator = iter(module.train_dataloader())
+            first = _unwrap(next(iterator)["params"])
+            second = _unwrap(next(iterator)["params"])
+
+        assert torch.any(first != second)
+        assert first.min() >= -1.0
+        assert first.max() <= 1.0
+        assert second.min() >= -1.0
+        assert second.max() <= 1.0
 
     def test_repeat_first_batch_every_train_batch_is_the_first(self, dataset_root: Path) -> None:
         """``repeat_first_batch=True`` yields rows ``[0, batch_size)`` for every batch.
