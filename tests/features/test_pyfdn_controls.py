@@ -28,7 +28,14 @@ def test_extract_octave_rt60_seconds_broadband_decay_returns_valid_bands() -> No
 
     np.testing.assert_array_equal(centres, _EXPECTED_OCTAVE_CENTRES_HZ)
     assert rt60.shape == (8,)
+    assert rt60.dtype == np.float64
+    assert centres.dtype == np.float64
     assert np.isfinite(rt60).all()
+    np.testing.assert_allclose(
+        rt60,
+        [0.2591, 0.3633, 0.3529, 0.3435, 0.3536, 0.3504, 0.3480, 0.3565],
+        atol=1e-4,
+    )
     assert (rt60 > 0.0).all()
 
 
@@ -46,7 +53,10 @@ def test_extract_octave_edc_db_broadband_decay_returns_normalized_curves() -> No
 
     np.testing.assert_array_equal(centres, _EXPECTED_OCTAVE_CENTRES_HZ)
     assert edc_db.shape == (8, int(_SAMPLE_RATE))
+    assert edc_db.dtype == np.float64
+    assert centres.dtype == np.float64
     np.testing.assert_allclose(edc_db[:, 0], 0.0, atol=1e-12)
+    np.testing.assert_allclose(edc_db[3, [11_025, 22_050]], [-42.84, -87.87], atol=0.01)
     assert np.all(np.diff(edc_db, axis=1) <= 0.0)
     assert np.isfinite(edc_db).all()
 
@@ -74,7 +84,15 @@ def test_extract_modal_excitation_quantiles_db_unequal_modes_returns_expected_va
     """Quantiles retain the spread and strong-mode tail of modal excitation."""
     quantiles = extract_modal_excitation_quantiles_db(np.array([0.1, 1.0, 10.0, 100.0]))
 
+    assert quantiles.dtype == np.float64
     np.testing.assert_allclose(quantiles, [-27.0, -15.0, 15.0, 24.0, 27.0, 29.4])
+
+
+def test_extract_modal_excitation_quantiles_db_zero_mode_uses_finite_floor() -> None:
+    """An unexcited mode reaches the finite floor without contaminating quantiles."""
+    quantiles = extract_modal_excitation_quantiles_db(np.array([0.0, 1.0]))
+
+    np.testing.assert_allclose(quantiles, [-54.0, -30.0, 30.0, 48.0, 54.0, 58.8])
 
 
 def test_extract_modal_excitation_quantiles_db_global_gain_is_invariant() -> None:
@@ -83,6 +101,30 @@ def test_extract_modal_excitation_quantiles_db_global_gain_is_invariant() -> Non
     louder = extract_modal_excitation_quantiles_db(np.array([0.2, 2.0, 20.0, 200.0]))
 
     np.testing.assert_allclose(louder, reference, atol=1e-10)
+
+
+def test_extract_octave_rt60_seconds_stereo_response_raises() -> None:
+    """Channel-first stereo audio is not accepted as a mono impulse response."""
+    with pytest.raises(ValueError, match="shape"):
+        extract_octave_rt60_seconds(np.ones((2, 1024)), _SAMPLE_RATE)
+
+
+def test_extract_octave_edc_db_nonfinite_response_raises() -> None:
+    """A non-finite impulse response fails before filtering."""
+    with pytest.raises(ValueError, match="finite"):
+        extract_octave_edc_db(np.array([1.0, np.nan]), _SAMPLE_RATE)
+
+
+def test_extract_octave_rt60_seconds_invalid_sample_rate_raises() -> None:
+    """A non-positive sample rate cannot define octave bands."""
+    with pytest.raises(ValueError, match="sample_rate"):
+        extract_octave_rt60_seconds(np.ones(1024), 0.0)
+
+
+def test_extract_modal_excitation_quantiles_db_negative_magnitude_raises() -> None:
+    """Residue magnitudes cannot be negative."""
+    with pytest.raises(ValueError, match="non-negative"):
+        extract_modal_excitation_quantiles_db(np.array([1.0, -1.0]))
 
 
 def test_modal_excitation_quantile_probabilities_pin_control_coordinates() -> None:

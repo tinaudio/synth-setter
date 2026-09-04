@@ -1,4 +1,11 @@
-"""Extract decay and modal-excitation descriptors from pyFDN responses."""
+"""Extract decay and modal-excitation descriptors from pyFDN responses.
+
+Typical usage::
+
+    rt60, octave_centres = extract_octave_rt60_seconds(impulse_response, sample_rate)
+    edc_db, _ = extract_octave_edc_db(impulse_response, sample_rate)
+    excitation = extract_modal_excitation_quantiles_db(residue_magnitudes)
+"""
 
 import numpy as np
 from pyFDN import edc, estimate_rt_bands, octave_band_filterbank, octave_bands
@@ -98,8 +105,8 @@ def extract_modal_excitation_quantiles_db(
     """Return median-centered quantiles of modal residue magnitudes.
 
     The input contains one magnitude per pole, including both members of each
-    conjugate pair. Excitations below 120 dB relative to the strongest mode are
-    floored before median centering.
+    conjugate pair. Excitations below :data:`MODAL_EXCITATION_FLOOR_DB` relative
+    to the strongest mode are floored before median centering.
 
     :param modal_excitation_magnitudes: Non-negative residue magnitudes shaped
         ``(modes,)``.
