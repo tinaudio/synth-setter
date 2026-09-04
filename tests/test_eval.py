@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import lance
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 import wandb
@@ -2534,5 +2535,8 @@ def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Pa
     with AudioFile(str(sample / "target.wav")) as handle:
         target = handle.read(handle.frames)
     assert (sample / "pred.wav").is_file()
+    rendered_params = pd.read_csv(sample / "params.csv", index_col=0)
+    effective_pitch = float(rendered_params.at["pitch", "pred_effective"])
+    assert effective_pitch.is_integer()
     # Staged corpus audio must be preserved; a re-render or zeroed target changes its level.
     assert float(np.abs(target).mean()) == pytest.approx(0.0625, abs=5e-3)

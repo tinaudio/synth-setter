@@ -28,6 +28,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
+from synth_setter.metrics import spec_quantized_per_param_mse
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -923,6 +924,30 @@ _PER_PARAM_MSE_OUTPUTS = (
     "per_param_mse_best_swap",
     "per_param_mse_number_group_swap",
 )
+_SPEC_QUANTIZED_PER_PARAM_MSE = "per_param_mse_spec_quantized"
+
+
+def _distributed_metric_mean(
+    total: np.ndarray,
+    count: int,
+    device: torch.device,
+) -> np.ndarray:
+    """Reduce an accumulated metric sum and count before computing its mean.
+
+    :param total: Rank-local per-column metric sums.
+    :param count: Rank-local number of contributing observations.
+    :param device: Device compatible with the active distributed backend.
+    :returns: Globally weighted per-column mean.
+    """
+    packed = torch.cat(
+        (
+            torch.as_tensor(total, device=device, dtype=torch.float32).flatten(),
+            torch.tensor([count], device=device, dtype=torch.float32),
+        )
+    )
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.all_reduce(packed)
+    return (packed[:-1] / packed[-1]).cpu().numpy().reshape(total.shape)
 
 
 class LogPerParamMSE(Callback):
@@ -951,13 +976,28 @@ class LogPerParamMSE(Callback):
         batch_idx,
         dataloader_idx=0,
     ) -> None:
-        for metric_name in _PER_PARAM_MSE_OUTPUTS:
-            if metric_name not in outputs:
-                continue
-            values = outputs[metric_name].detach().cpu().numpy()
+        batch_metrics = [
+            (metric_name, outputs[metric_name], 1)
+            for metric_name in _PER_PARAM_MSE_OUTPUTS
+            if metric_name in outputs
+        ]
+        params = batch.get("params") if isinstance(batch, Mapping) else None
+        if "preds" in outputs and isinstance(params, torch.Tensor):
+            predictions = outputs["preds"]
+            batch_size = predictions.shape[0]
+            batch_metrics.append(
+                (
+                    _SPEC_QUANTIZED_PER_PARAM_MSE,
+                    spec_quantized_per_param_mse(predictions, params, self.param_spec),
+                    batch_size,
+                )
+            )
+
+        for metric_name, metric, weight in batch_metrics:
+            values = metric.detach().cpu().numpy()
             total = self.metric_totals.get(metric_name, np.zeros_like(values))
-            self.metric_totals[metric_name] = total + values
-            self.metric_counts[metric_name] = self.metric_counts.get(metric_name, 0) + 1
+            self.metric_totals[metric_name] = total + values * weight
+            self.metric_counts[metric_name] = self.metric_counts.get(metric_name, 0) + weight
 
     def on_validation_epoch_end(
         self,
@@ -966,7 +1006,11 @@ class LogPerParamMSE(Callback):
     ) -> None:
         metrics = {}
         for metric_name, total in self.metric_totals.items():
-            per_param_mse = total / self.metric_counts[metric_name]
+            per_param_mse = _distributed_metric_mean(
+                total,
+                self.metric_counts[metric_name],
+                pl_module.device,
+            )
             # Encoded spans preserve labels across onehot and multi-column parameters.
             metrics.update(
                 {
@@ -974,4 +1018,6 @@ class LogPerParamMSE(Callback):
                     for param, span in self.param_spec.encoded_slices()
                 }
             )
+            if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
+                metrics["val/param_mse_spec_quantized"] = per_param_mse.mean()
         pl_module.log_dict(metrics)
