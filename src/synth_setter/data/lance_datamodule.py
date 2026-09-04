@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from math import prod
@@ -46,6 +47,8 @@ from synth_setter.data.vst_datamodule import (
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.rolling_lance import ActiveRollingSnapshot
+
+logger = logging.getLogger(__name__)
 
 _FAKE_BATCHES_PER_EPOCH = 10_000
 _FAKE_AUDIO_SHAPE = (2, 44100 * 4)
@@ -727,7 +730,12 @@ class LanceVSTDataModule(VSTDataModule):
             active = ActiveRollingSnapshot.model_validate_json(
                 self.rolling_active_record.read_bytes()
             )
-        except (OSError, ValidationError):
+        except (OSError, ValidationError) as exc:
+            logger.warning(
+                "unable to read rolling active record %s; retaining baseline: %s",
+                self.rolling_active_record,
+                exc,
+            )
             return None
         path = Path(active.dataset_path)
         local = (path, active) if path.is_dir() else None
@@ -748,6 +756,7 @@ class LanceVSTDataModule(VSTDataModule):
         """Return the active immutable train snapshot or the frozen baseline.
 
         :returns: Train Lance path selected for the next loader construction.
+        :raises FileNotFoundError: A checkpoint's immutable local version is absent.
         """
         active = self._read_active_train()
         if self._rolling_resume_version is not None and self.rolling_active_record is not None:
@@ -759,6 +768,10 @@ class LanceVSTDataModule(VSTDataModule):
             )
             if resume_path.is_dir():
                 return resume_path
+            raise FileNotFoundError(
+                f"rolling checkpoint version {self._rolling_resume_version} is not "
+                f"available at {resume_path}"
+            )
         if active is None:
             return self.dataset_root / f"train{self.shard_suffix}"
         path, snapshot = active
@@ -766,6 +779,12 @@ class LanceVSTDataModule(VSTDataModule):
             self._rolling_fingerprint is not None
             and snapshot.dataset_spec_fingerprint != self._rolling_fingerprint
         ):
+            logger.warning(
+                "rolling active record fingerprint %s is incompatible with adopted fingerprint "
+                "%s; ignoring snapshot",
+                snapshot.dataset_spec_fingerprint,
+                self._rolling_fingerprint,
+            )
             return self.dataset_root / f"train{self.shard_suffix}"
         self._rolling_fingerprint = snapshot.dataset_spec_fingerprint
         if snapshot.version != self._rolling_active_version:

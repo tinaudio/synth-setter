@@ -33,6 +33,7 @@ __all__ = [
     "R2_URI_SCHEME",
     "RemoteEntry",
     "download_dir_no_overwrite",
+    "delete_file",
     "download_to_path",
     "downloaded_to_tempfile",
     "ensure_r2_env_loaded",
@@ -508,6 +509,15 @@ def download_dir_no_overwrite(
     operands = [f"--exclude={exclude}"] if exclude is not None else []
     args = _rclone_argv("copy", "--immutable", *operands, source_path, str(dest_path))
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
+
+
+def delete_file(r2_uri: str) -> None:
+    """Delete one exact R2 object with shared checksum and retry behavior.
+
+    :param r2_uri: Exact ``r2://`` object URI to remove.
+    """
+    args = _rclone_argv("deletefile", _to_rclone_path(r2_uri))
+    subprocess.check_call(args)  # noqa: S603 — URI is validated by the caller.
 
 
 def download_to_path(r2_uri: str, dest_path: Path) -> None:

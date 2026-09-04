@@ -48,10 +48,10 @@ from synth_setter.cli.generate_dataset import (
     _dispatch_shards_from_claims_parallel,
     _dispatch_shards_parallel,
     _load_render_rejections,
-    _render_and_upload_shard,
     _render_one_owned_shard,
     build_generate_args,
     generate,
+    render_and_upload_shard,
 )
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
@@ -2033,12 +2033,12 @@ class TestRun(RenderSeamFixtures):
             ThreadPoolExecutor(max_workers=2) as executor,
         ):
             first = executor.submit(
-                _render_and_upload_shard, spec, spec.shards[0], tmp_path, loggers=[]
+                render_and_upload_shard, spec, spec.shards[0], tmp_path, loggers=[]
             )
             try:
                 assert concurrency.first_validation_started.wait(timeout=5.0)
                 second = executor.submit(
-                    _render_and_upload_shard, spec, spec.shards[1], tmp_path, loggers=[]
+                    render_and_upload_shard, spec, spec.shards[1], tmp_path, loggers=[]
                 )
                 assert concurrency.validation_waiter_started.wait(timeout=5.0)
                 assert not concurrency.second_validation_started.is_set()
@@ -4449,7 +4449,7 @@ def test_render_one_owned_shard_relays_rejection_report_without_rclone(
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "synth_setter.cli.generate_dataset._render_and_upload_shard",
+        "synth_setter.cli.generate_dataset.render_and_upload_shard",
         lambda _spec, _shard, _work_dir, **_kwargs: (123, expected),
     )
 

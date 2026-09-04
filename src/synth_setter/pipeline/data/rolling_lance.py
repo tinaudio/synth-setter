@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-import shutil
 from typing import TYPE_CHECKING
 
 import lance
@@ -20,7 +21,10 @@ from synth_setter.pipeline.data.stats import WelfordState, merge_welford
 from synth_setter.pipeline.data.stats import finalize as finalize_welford
 
 if TYPE_CHECKING:
+    from synth_setter.pipeline.data.lance_finalize import StagedLanceAttempt
     from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
+
+_ROLLING_PENDING_PROPERTY = "synth_setter.rolling_pending_identity"
 
 
 class ActiveRollingSnapshot(BaseModel):
@@ -298,16 +302,23 @@ def _write_snapshot(metadata_root: Path, snapshot: RollingSnapshot) -> None:
 
 
 def _create_or_resume_branch(
-    dataset: lance.LanceDataset, branch: str, baseline_version: int
+    dataset: lance.LanceDataset,
+    branch: str,
+    baseline_version: int,
+    contract: dict[str, str],
 ) -> lance.LanceDataset:
     branch_info = dataset.branches.list().get(branch)
     if branch_info is None:
-        return dataset.create_branch(branch, baseline_version)
+        checked_out = dataset.create_branch(branch, baseline_version)
+        dataset.branches.replace_metadata(branch, contract)
+        return checked_out
     if branch_info.get("parent_version") != baseline_version:
         raise ValueError(
             f"branch {branch!r} already exists from baseline "
             f"{branch_info.get('parent_version')}, not {baseline_version}"
         )
+    if branch_info.get("metadata") != contract:
+        raise ValueError(f"branch {branch!r} already exists with a different rolling contract")
     checked_out = dataset.checkout_version((branch, None))
     if checked_out.version != baseline_version:
         raise ValueError(
@@ -356,7 +367,17 @@ def initialize_rolling_branch(
     stats_path = metadata_root / "versions" / str(baseline_version) / "stats.npz"
     if not stats_path.is_file():
         raise ValueError("baseline statistics are required before branch initialization")
-    checked_out = _create_or_resume_branch(dataset, branch, baseline_version)
+    spec_fingerprint = dataset_spec_fingerprint(spec)
+    contract = {
+        "synth_setter.rolling_baseline_transaction": transaction.uuid,
+        "synth_setter.rolling_baseline_version": str(baseline_version),
+        "synth_setter.rolling_dataset_spec_fingerprint": spec_fingerprint,
+        "synth_setter.rolling_num_extra_shards": str(num_extra_shards),
+        "synth_setter.rolling_window_size": str(window.size),
+    }
+    checked_out = _create_or_resume_branch(
+        dataset, branch, baseline_version, contract
+    )
     snapshot = RollingSnapshot(
         branch=branch,
         branch_uri=str(checked_out.uri),
@@ -368,7 +389,7 @@ def initialize_rolling_branch(
         num_extra_shards=num_extra_shards,
         high_watermark=window.high_watermark,
         membership_relative_ids=tuple(range(window.size)),
-        dataset_spec_fingerprint=dataset_spec_fingerprint(spec),
+        dataset_spec_fingerprint=spec_fingerprint,
         row_count=baseline.count_rows(),
         schema_fingerprint=_schema_fingerprint(baseline),
         stats_sha256=_file_sha256(stats_path),
@@ -565,7 +586,41 @@ def publish_rolling_branch(
         spec.render.samples_per_shard,
         storage_options=storage_options,
     )
-    published = commit_lance_branch(dataset, dataset.schema, fragments)
+    identity = sha256()
+    identity.update(current.transaction.encode())
+    identity.update(repr(pending.membership_relative_ids).encode())
+    identity.update(current.dataset_spec_fingerprint.encode())
+    for fragment, shard_state in zip(fragments, welford, strict=True):
+        identity.update(json.dumps(fragment.to_json(), sort_keys=True).encode())
+        identity.update(str(shard_state[0]).encode())
+        for value in shard_state[1:]:
+            array = np.asarray(value)
+            identity.update(array.dtype.str.encode())
+            identity.update(repr(array.shape).encode())
+            identity.update(array.tobytes())
+    pending_identity = identity.hexdigest()
+    latest = _open_train(train_uri).checkout_version((current.branch, None))
+    if latest.version == current.version:
+        published = commit_lance_branch(
+            dataset,
+            dataset.schema,
+            fragments,
+            transaction_properties={_ROLLING_PENDING_PROPERTY: pending_identity},
+        )
+    else:
+        transaction = latest.read_transaction(latest.version)
+        properties = (
+            transaction.transaction_properties or {} if transaction is not None else {}
+        )
+        if (
+            latest.version != current.version + 1
+            or properties.get(_ROLLING_PENDING_PROPERTY) != pending_identity
+        ):
+            raise ValueError(
+                f"rolling branch advanced unexpectedly from version {current.version} "
+                f"to {latest.version}"
+            )
+        published = latest
     state: WelfordState = (0, 0, 0)
     for shard_state in welford:
         state = merge_welford(state, shard_state)
@@ -718,7 +773,7 @@ def generate_pending_shards(
     :returns: Number of claims rendered by this process.
     :raises ValueError: The pending request does not match the ready source snapshot.
     """
-    from synth_setter.cli.generate_dataset import _render_and_upload_shard
+    from synth_setter.cli.generate_dataset import render_and_upload_shard
     from synth_setter.pipeline.shard_claims import ShardClaims
 
     expected = pending_refresh_request(snapshot)
@@ -741,7 +796,7 @@ def generate_pending_shards(
         shard = shards.get(claim.shard_id)
         if shard is None:
             raise ValueError(f"rolling queue returned unexpected shard {claim.shard_id}")
-        _render_and_upload_shard(
+        render_and_upload_shard(
             spec,
             shard,
             work_dir,
@@ -751,6 +806,46 @@ def generate_pending_shards(
         claims.complete(claim)
         rendered += 1
     return rendered
+
+
+def _fragment_storage_identity(
+    fragment: lance.fragment.FragmentMetadata,
+) -> tuple[tuple[str, ...], int]:
+    """Identify immutable fragment content despite commit-enriched metadata.
+
+    :param fragment: Worker or committed Lance fragment metadata.
+    :returns: Exact underlying file paths and physical row count.
+    """
+    return tuple(data_file.path for data_file in fragment.files), fragment.physical_rows
+
+
+def _retained_attempt_for_fragment(
+    spec: DatasetSpec,
+    candidates: Sequence[StagedLanceAttempt],
+    fragment: lance.fragment.FragmentMetadata,
+) -> StagedLanceAttempt:
+    from synth_setter.pipeline.data.lance_finalize import _load_fragment_metadata
+
+    expected = _fragment_storage_identity(fragment)
+    candidate_fragments = [
+        (attempt, _load_fragment_metadata(spec, attempt)) for attempt in candidates
+    ]
+    matches = [
+        attempt
+        for attempt, candidate in candidate_fragments
+        if _fragment_storage_identity(candidate) == expected
+    ]
+    if len(matches) != 1:
+        candidate_paths = [
+            [data_file.path for data_file in candidate.files]
+            for _, candidate in candidate_fragments
+        ]
+        expected_paths = [data_file.path for data_file in fragment.files]
+        raise ValueError(
+            "retained fragment must map to exactly one staged attempt; "
+            f"found {len(matches)} for files {expected_paths}, candidates {candidate_paths}"
+        )
+    return matches[0]
 
 
 def finalize_staged_refresh(
@@ -802,11 +897,14 @@ def finalize_staged_refresh(
         candidates = cutoff.get(shard_id)
         if not candidates:
             raise ValueError(f"shard-{shard_id:06d} has no staged-valid attempt at cutoff")
-        attempt = select_winner(candidates)
-        states.append(_load_welford_state(spec, attempt))
-        fragments.append(
-            current_fragments.get(relative_id) or _load_fragment_metadata(spec, attempt)
+        retained = current_fragments.get(relative_id)
+        attempt = (
+            _retained_attempt_for_fragment(spec, candidates, retained)
+            if retained is not None
+            else select_winner(candidates)
         )
+        states.append(_load_welford_state(spec, attempt))
+        fragments.append(retained or _load_fragment_metadata(spec, attempt))
     return publish_rolling_branch(
         train_uri,
         spec=spec,

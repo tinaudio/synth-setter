@@ -50,6 +50,7 @@ from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.rolling_lance import ActiveRollingSnapshot
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
@@ -1257,6 +1258,47 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 
 
 @pytest.mark.slow
+def test_train_rolling_config_adopts_active_snapshot(cfg_train_lance: DictConfig) -> None:
+    """The public train entrypoint adopts the configured immutable rolling version.
+
+    :param cfg_train_lance: Composed tiny Lance training configuration.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    rolling_root = dataset_root.parent / "rolling"
+    version_root = rolling_root / "versions/7"
+    version_root.mkdir(parents=True)
+    shutil.copytree(dataset_root / "train.lance", version_root / "train.lance")
+    shutil.copyfile(dataset_root / "stats.npz", version_root / "stats.npz")
+    active_path = rolling_root / "active.json"
+    active_path.write_text(
+        ActiveRollingSnapshot(
+            branch="rolling",
+            version=7,
+            transaction="tx-7",
+            dataset_path=str(version_root / "train.lance"),
+            dataset_spec_fingerprint="entrypoint-fingerprint",
+            row_count=2,
+            schema_fingerprint="schema",
+            stats_sha256="stats",
+            high_watermark=2,
+            membership_relative_ids=(0,),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.training.rolling_active_record = str(active_path)
+        cfg_train_lance.training.rolling_refresh_epoch_interval = 1
+        cfg_train_lance.datamodule.num_workers = 0
+        cfg_train_lance.datamodule.persistent_workers = False
+    HydraConfig().set_config(cfg_train_lance)
+
+    _, object_dict = train(cfg_train_lance)
+
+    datamodule = object_dict["datamodule"]
+    assert datamodule.state_dict()["rolling_active_version"] == 7
+    assert datamodule.state_dict()["rolling_history"] == (7,)
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:

@@ -1,6 +1,6 @@
 """Stress integration test for parallel shard renders under the Linux Xvfb wrapper.
 
-When ``render.parallel=True`` and we run on Linux, ``_render_and_upload_shard``
+When ``render.parallel=True`` and we run on Linux, ``render_and_upload_shard``
 forks N concurrent invocations of ``src/synth_setter/scripts/run-linux-vst-headless.sh``
 (resolved via :func:`synth_setter.resources.vst_headless_wrapper`). The wrapper bootstraps Xvfb +
 xsettingsd + dbus for the pedalboard ``VST3Plugin`` to construct against an

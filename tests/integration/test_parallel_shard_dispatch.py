@@ -57,7 +57,7 @@ def _write_fake_renderer(tmp_path: Path) -> Path:
 
     The script takes the same first positional arg as the real renderer (the
     output shard path), writes a minimal ``.lance`` directory tree there, and
-    exits 0 — enough to satisfy ``_render_and_upload_shard``'s post-render
+    exits 0 — enough to satisfy ``render_and_upload_shard``'s post-render
     ``is_dir()`` check and give ``upload_dir`` real files to copy. Subsequent
     ``--<key> <value>`` flags from ``build_generate_args`` are accepted and ignored.
 

@@ -903,7 +903,7 @@ def _render_one_owned_shard(
 ) -> tuple[bool, bool, RenderRejectionMetrics]:
     """Render+stage one owned shard, or skip if it is already staged.
 
-    Encapsulates the staging skip-probe + ``_render_and_upload_shard`` invocation
+    Encapsulates the staging skip-probe + ``render_and_upload_shard`` invocation
     so the serial and parallel dispatch arms share one callable. Emits one
     ``shard/bytes`` + ``shard/render_seconds`` history row per call —
     ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
@@ -933,7 +933,7 @@ def _render_one_owned_shard(
         )
         return False, True, RenderRejectionMetrics()
     t0 = time.monotonic()
-    byte_size, rejections = _render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
+    byte_size, rejections = render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
     logger.info(
         "shard {} render rejections: silent={} clipped={}",
         shard_id,
@@ -990,7 +990,7 @@ def _is_badwindow_x_get_property_failure(error: subprocess.CalledProcessError) -
     return _BADWINDOW_SIGNATURE in output and _X_GET_PROPERTY_SIGNATURE in output
 
 
-def _render_and_upload_shard(
+def render_and_upload_shard(
     spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,

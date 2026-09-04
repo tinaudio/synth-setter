@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -157,15 +156,7 @@ def _complete_pending(
         completed,
         spec.r2.rolling_metadata_uri(branch, f"completed/{version}.json"),
     )
-    subprocess.run(  # noqa: S603 — URI is produced by the validated R2Location.
-        [  # noqa: S607 — rclone is a required project executable resolved by PATH.
-            "rclone",
-            "deletefile",
-            r2_io.to_rclone_path(pending_uri),
-            "--checksum",
-        ],
-        check=True,
-    )
+    r2_io.delete_file(pending_uri)
 
 
 def finalize(args: argparse.Namespace) -> None:

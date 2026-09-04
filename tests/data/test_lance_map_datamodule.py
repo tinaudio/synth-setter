@@ -94,6 +94,15 @@ def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
     return torch.cat([_unwrap(batch["params"]) for batch in loader]).numpy()
 
 
+def _mel_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
+    """Concatenate normalized mel tensors across one loader epoch.
+
+    :param loader: Loader whose epoch is materialized.
+    :returns: All normalized mel rows.
+    """
+    return torch.cat([_unwrap(batch["mel"]) for batch in loader]).numpy()
+
+
 def test_rolling_active_record_with_persistent_workers_raises(dataset_root: Path) -> None:
     """Rolling reloads reject workers that could retain stale dataset handles.
 
@@ -115,11 +124,16 @@ def test_rolling_active_record_rebuilds_train_only(dataset_root: Path, tmp_path:
     :param tmp_path: Isolated immutable rolling snapshot root.
     """
     versions = tmp_path / "rolling" / "versions"
-    for version, seed in ((1, 11), (2, 12)):
+    for version, seed, mel_fill, mean in (
+        (1, 11, 3.0, 1.0),
+        (2, 12, 10.0, 4.0),
+    ):
         root = versions / str(version)
         root.mkdir(parents=True)
-        write_seeded_lance_shard(root / "train.lance", num_rows=16, seed=seed)
-        write_mel_stats(root)
+        write_seeded_lance_shard(
+            root / "train.lance", num_rows=16, seed=seed, mel_fill=mel_fill
+        )
+        write_mel_stats(root, mean=mean, std=2.0)
     active_path = tmp_path / "rolling" / "active.json"
 
     def activate(version: int) -> None:
@@ -156,9 +170,12 @@ def test_rolling_active_record_rebuilds_train_only(dataset_root: Path, tmp_path:
     validation = _params_in_order(module.val_dataloader())
 
     activate(2)
-    second_train = _params_in_order(module.train_dataloader())
+    second_loader = module.train_dataloader()
+    second_train = _params_in_order(second_loader)
+    second_mel = _mel_in_order(module.train_dataloader())
 
     assert not np.array_equal(first_train, second_train)
+    np.testing.assert_allclose(second_mel, 3.0)
     np.testing.assert_array_equal(_params_in_order(module.val_dataloader()), validation)
 
 
@@ -1100,6 +1117,106 @@ def test_rolling_resume_uses_checkpoint_version_before_newer_active(
     assert module.state_dict()["rolling_history"] == (1,)
     module.train_dataloader()
     assert module.state_dict()["rolling_history"] == (1, 2)
+
+
+def test_rolling_resume_missing_immutable_version_raises(
+    dataset_root: Path, tmp_path: Path
+) -> None:
+    """Checkpoint restore fails when its exact local snapshot was removed.
+
+    :param dataset_root: Frozen baseline dataset root.
+    :param tmp_path: Isolated rolling record root.
+    """
+    active_path = tmp_path / "rolling/active.json"
+    active_path.parent.mkdir()
+    module = LanceVSTDataModule(
+        dataset_root=dataset_root,
+        rolling_active_record=active_path,
+        num_workers=0,
+        val_num_workers=0,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    module.load_state_dict(
+        {"rolling_active_version": 7, "rolling_fingerprint": "fingerprint"}
+    )
+
+    with pytest.raises(FileNotFoundError, match="rolling checkpoint version 7"):
+        module.setup("fit")
+
+
+def test_rolling_malformed_active_record_logs_fallback(
+    dataset_root: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Malformed active metadata reports why the baseline remains selected.
+
+    :param dataset_root: Frozen baseline dataset root.
+    :param tmp_path: Isolated active-record path.
+    :param caplog: Captured operator diagnostics.
+    """
+    active_path = tmp_path / "active.json"
+    active_path.write_text("not-json", encoding="utf-8")
+    module = LanceVSTDataModule(
+        dataset_root=dataset_root,
+        rolling_active_record=active_path,
+        num_workers=0,
+        val_num_workers=0,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+
+    with caplog.at_level("WARNING"):
+        module.setup("fit")
+
+    assert "unable to read rolling active record" in caplog.text
+
+
+def test_rolling_incompatible_fingerprint_logs_rejection(
+    dataset_root: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A changed producer fingerprint is rejected with an operator diagnostic.
+
+    :param dataset_root: Frozen baseline dataset root.
+    :param tmp_path: Isolated rolling snapshot root.
+    :param caplog: Captured operator diagnostics.
+    """
+    rolling_root = tmp_path / "rolling"
+    version_root = rolling_root / "versions/1"
+    version_root.mkdir(parents=True)
+    write_seeded_lance_shard(version_root / "train.lance", num_rows=16, seed=11)
+    write_mel_stats(version_root)
+    active_path = rolling_root / "active.json"
+
+    def activate(fingerprint: str) -> None:
+        active_path.write_text(
+            ActiveRollingSnapshot(
+                branch="rolling",
+                version=1,
+                transaction="tx-1",
+                dataset_path=str(version_root / "train.lance"),
+                dataset_spec_fingerprint=fingerprint,
+                row_count=16,
+                schema_fingerprint="schema",
+                stats_sha256="stats",
+                high_watermark=2,
+                membership_relative_ids=(0, 1),
+            ).model_dump_json(),
+            encoding="utf-8",
+        )
+
+    activate("first")
+    module = LanceVSTDataModule(
+        dataset_root=dataset_root,
+        rolling_active_record=active_path,
+        num_workers=0,
+        val_num_workers=0,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    module.setup("fit")
+    activate("incompatible")
+
+    with caplog.at_level("WARNING"):
+        module.train_dataloader()
+
+    assert "fingerprint incompatible is incompatible with adopted fingerprint first" in caplog.text
 
 
 class TestLanceMapDataModuleModes:
