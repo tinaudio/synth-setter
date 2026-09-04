@@ -297,10 +297,14 @@ def test_write_columns_closes_closeable_encoders(
     assert encoder.closed
 
 
-def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(tmp_path: Path) -> None:
+@pytest.mark.parametrize("num_workers", [1, 2])
+def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(
+    tmp_path: Path, num_workers: int
+) -> None:
     """Real extraction and Lance evolution produce model-ready datamodule controls.
 
     :param tmp_path: Dataset root for the production-path round trip.
+    :param num_workers: Serial and pooled encode paths must persist identical bytes.
     """
     sample_rate = 44_100
     audio = _distinct_reverb_audio(sample_rate)
@@ -327,6 +331,7 @@ def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(tmp_path: Path)
             embeddings=("pyfdn_sketch",),
             batch_size=len(audio),
             build_index=False,
+            num_workers=num_workers,
         )
     )
     module = LanceVSTDataModule(
