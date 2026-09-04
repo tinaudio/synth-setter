@@ -509,8 +509,8 @@ def test_main_passes_spec_quantized_pitch_to_renderer_and_csv(
 
     rendered_pitch = fake_renderer.render.call_args.args[1]
     params = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
-    # 0.3 in model space decodes to a fractional pitch of 63.x; nearest-integer
-    # quantization (#3046) lands on 64 where legacy truncation gave 63.
+    # 0.3 in model space decodes to a fractional 63.x pitch, so nearest-integer
+    # quantization (#3046) selects 64.
     assert rendered_pitch == 64
     assert int(params.at["pitch", "pred_effective"]) == rendered_pitch
 
