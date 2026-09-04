@@ -241,6 +241,7 @@ dev = [
   "pytest-cov",
   "pytest-randomly",
   "pytest-repeat",
+  "pytest-timeout>=2.4.0",
   "pytest-xdist",
   # Provides the `semantic-release` binary that
   # tests/infra/test_release_lock_refresh.py drives; not imported by
