@@ -260,6 +260,10 @@ class GrowingPlan:
     high_watermark: int
 
     def __post_init__(self) -> None:
+        """Reject bounds that permit shrinking or exceed the fixed maximum.
+
+        :raises ValueError: Any bound is non-positive or out of order.
+        """
         if self.baseline_train_shards < 1:
             raise ValueError("baseline_train_shards must be positive")
         if self.max_train_shards < self.baseline_train_shards:
@@ -357,6 +361,11 @@ def dataset_spec_fingerprint(spec: DatasetSpec) -> str:
 
 
 def _plan(snapshot: GrowingSnapshot) -> GrowingPlan:
+    """Rebuild the immutable growth bounds recorded in a snapshot.
+
+    :param snapshot: Ready snapshot carrying the contract fields.
+    :returns: Validated growth plan.
+    """
     return GrowingPlan(
         snapshot.baseline_train_shards,
         snapshot.max_train_shards,
@@ -366,6 +375,11 @@ def _plan(snapshot: GrowingSnapshot) -> GrowingPlan:
 
 
 def _lance_target(uri: Path | str) -> tuple[str, dict[str, str] | None]:
+    """Resolve any supported dataset URI into a Lance-openable target.
+
+    :param uri: Local path, ``r2://``, or ``s3://`` URI.
+    :returns: ``(uri, storage_options)`` for ``lance.dataset``.
+    """
     value = str(uri)
     if r2_io.is_r2_uri(value):
         return r2_io.lance_target(value)
@@ -373,6 +387,11 @@ def _lance_target(uri: Path | str) -> tuple[str, dict[str, str] | None]:
 
 
 def _open_train(train_uri: Path | str) -> lance.LanceDataset:
+    """Open the train dataset under the bounded read-retry policy.
+
+    :param train_uri: Baseline train dataset URI.
+    :returns: Open dataset at its latest main version.
+    """
     target, storage_options = _lance_target(train_uri)
     return retry_lance_read(
         "growing_train_open",
@@ -381,6 +400,13 @@ def _open_train(train_uri: Path | str) -> lance.LanceDataset:
 
 
 def _transaction(dataset: lance.LanceDataset, version: int) -> lance.Transaction:
+    """Read one version's transaction record.
+
+    :param dataset: Open Lance dataset.
+    :param version: Version whose transaction is read.
+    :returns: The version's transaction.
+    :raises ValueError: The version has no transaction record.
+    """
     transaction = retry_lance_read(
         "growing_transaction_read", lambda: dataset.read_transaction(version)
     )
@@ -390,22 +416,48 @@ def _transaction(dataset: lance.LanceDataset, version: int) -> lance.Transaction
 
 
 def _schema_fingerprint(dataset: lance.LanceDataset) -> str:
+    """Digest a dataset's serialized Arrow schema.
+
+    :param dataset: Open Lance dataset.
+    :returns: SHA-256 hexadecimal digest.
+    """
     return sha256(dataset.schema.serialize().to_pybytes()).hexdigest()
 
 
 def _file_sha256(path: Path) -> str:
+    """Digest one local file's bytes.
+
+    :param path: File to digest.
+    :returns: SHA-256 hexadecimal digest.
+    """
     return sha256(path.read_bytes()).hexdigest()
 
 
 def _expected_mel_shape(spec: DatasetSpec) -> tuple[int, ...]:
+    """Return the per-row mel shape Welford archives must match.
+
+    :param spec: Frozen producer specification.
+    :returns: Mel shape without the row axis.
+    """
     return dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
 
 
 def _version_dir(metadata_root: Path, version: int) -> Path:
+    """Return one version's metadata directory.
+
+    :param metadata_root: Metadata workspace root.
+    :param version: Native branch version.
+    :returns: ``<root>/versions/<version>``.
+    """
     return metadata_root / "versions" / str(version)
 
 
 def _write_snapshot(metadata_root: Path, snapshot: GrowingSnapshot) -> None:
+    """Atomically persist one snapshot record into its version directory.
+
+    :param metadata_root: Metadata workspace root.
+    :param snapshot: Snapshot to persist.
+    """
     version_dir = _version_dir(metadata_root, snapshot.version)
     version_dir.mkdir(parents=True, exist_ok=True)
     destination = version_dir / "snapshot.json"
@@ -420,23 +472,41 @@ def _create_or_resume_branch(
     baseline_version: int,
     contract: dict[str, str],
 ) -> lance.LanceDataset:
+    """Create the branch, or resume one whose contract matches exactly.
+
+    :param dataset: Open train dataset.
+    :param branch: Native branch name.
+    :param baseline_version: Frozen baseline version.
+    :param contract: Immutable growth contract metadata.
+    :returns: The branch checked out at the baseline version.
+    :raises ValueError: The branch exists with a different contract or advanced.
+    """
     branch_info = dataset.branches.list().get(branch)
     if branch_info is None:
         checked_out = dataset.create_branch(branch, baseline_version)
         dataset.branches.replace_metadata(branch, contract)
         return checked_out
-    if (
-        branch_info.get("parent_version") != baseline_version
-        or branch_info.get("metadata") != contract
-    ):
+    if branch_info.get("parent_version") != baseline_version:
         raise ValueError(f"branch {branch!r} already exists with a different growing contract")
     checked_out = dataset.checkout_version((branch, None))
     if checked_out.version != baseline_version:
         raise ValueError(f"branch {branch!r} already advanced to version {checked_out.version}")
+    if not branch_info.get("metadata"):
+        # Crash between create_branch and replace_metadata: an unadvanced
+        # branch with empty metadata is our own partial init — complete it.
+        dataset.branches.replace_metadata(branch, contract)
+    elif branch_info.get("metadata") != contract:
+        raise ValueError(f"branch {branch!r} already exists with a different growing contract")
     return checked_out
 
 
 def _set_ready_tag(dataset: lance.LanceDataset, branch: str, version: int) -> None:
+    """Advance the branch's ready tag to a version, creating it if absent.
+
+    :param dataset: Open train dataset.
+    :param branch: Native branch name.
+    :param version: Version the tag exposes as ready.
+    """
     name = f"{branch}-ready"
     try:
         ready_version = retry_lance_read(
@@ -536,6 +606,11 @@ def initialize_growing_branch(
 def _fragment_storage_identity(
     fragment: lance.fragment.FragmentMetadata,
 ) -> tuple[tuple[str, ...], int]:
+    """Reduce fragment metadata to its comparable storage identity.
+
+    :param fragment: Fragment metadata.
+    :returns: Data-file paths and physical row count.
+    """
     return tuple(data_file.path for data_file in fragment.files), fragment.physical_rows
 
 
@@ -593,6 +668,13 @@ def _commit_append(
     fragments: Sequence[lance.fragment.FragmentMetadata],
     identity: str,
 ) -> lance.LanceDataset:
+    """Commit one append transaction stamped with its deterministic identity.
+
+    :param dataset: Branch checked out at the source version.
+    :param fragments: New fragment metadata to append.
+    :param identity: Deterministic pending identity for crash reconciliation.
+    :returns: The dataset at the committed version.
+    """
     transaction = lance.Transaction(
         read_version=dataset.version,
         operation=lance.LanceOperation.Append(list(fragments)),
@@ -745,6 +827,10 @@ def publish_growing_branch(
 
 @contextmanager
 def _materialize_lock(local_root: Path) -> Iterator[None]:
+    """Serialize materializers for one local root with an exclusive file lock.
+
+    :param local_root: Shared local growing root. :yields: Nothing; the lock is held for the block.
+    """
     local_root.mkdir(parents=True, exist_ok=True)
     with (local_root / ".materialize.lock").open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -755,12 +841,22 @@ def _materialize_lock(local_root: Path) -> Iterator[None]:
 
 
 def _read_active(path: Path) -> ActiveGrowingSnapshot | None:
+    """Read the active record, treating a missing file as no activation.
+
+    :param path: ``active.json`` path.
+    :returns: Validated record, or ``None`` when absent.
+    """
     if not path.is_file():
         return None
     return ActiveGrowingSnapshot.model_validate_json(path.read_bytes())
 
 
 def _local_transaction(dataset: lance.LanceDataset) -> lance.Transaction:
+    """Read the transaction of a dataset's current version.
+
+    :param dataset: Open local dataset.
+    :returns: Current version's transaction.
+    """
     return _transaction(dataset, dataset.version)
 
 
@@ -818,6 +914,14 @@ def _commit_local_append(
 def _copy_version_metadata(
     snapshot: GrowingSnapshot, metadata_root: Path, local_root: Path
 ) -> Path:
+    """Copy digest-verified version metadata into the shared local root.
+
+    :param snapshot: Snapshot naming the version and expected digests.
+    :param metadata_root: Downloaded metadata workspace.
+    :param local_root: Shared local growing root.
+    :returns: The local version directory.
+    :raises ValueError: A sidecar digest disagrees with the snapshot.
+    """
     source = _version_dir(metadata_root, snapshot.version)
     destination = _version_dir(local_root, snapshot.version)
     destination.mkdir(parents=True, exist_ok=True)
@@ -842,6 +946,15 @@ def _activate(
     version_stats_path: Path,
     active_path: Path,
 ) -> ActiveGrowingSnapshot:
+    """Atomically publish the remote-to-local identity as the active record.
+
+    :param snapshot: Hydrated remote snapshot.
+    :param local: Local dataset at the hydrated version.
+    :param dataset_path: Shared local train dataset path.
+    :param version_stats_path: Version-bound local metadata directory.
+    :param active_path: ``active.json`` destination.
+    :returns: The activated identity.
+    """
     transaction = _local_transaction(local)
     active = ActiveGrowingSnapshot(
         branch=snapshot.branch,
@@ -1047,15 +1160,30 @@ def finalize_staged_refresh(
     fragments: list[lance.fragment.FragmentMetadata] = []
     states: list[WelfordState] = []
     for shard_id in pending.enqueue_shard_ids:
-        candidates = attempts.get(shard_id)
+        candidates = list(attempts.get(shard_id) or ())
         if not candidates:
             raise ValueError(f"growing shard-{shard_id:06d} has no staged-valid attempt")
-        winner = select_winner(candidates)
         staging_dir = spec.r2.growing_shard_staging_dir_uri(current.branch, shard_id)
-        fragments.append(
-            _load_fragment_metadata(spec, winner, staging_dir_uri=staging_dir)
-        )
-        states.append(_load_welford_state(spec, winner, staging_dir_uri=staging_dir))
+        failures: list[str] = []
+        # Mirror baseline finalization's checked-winner fallback: a damaged
+        # preferred attempt must not block a healthy retry indefinitely.
+        while candidates:
+            winner = select_winner(candidates)
+            try:
+                fragment = _load_fragment_metadata(spec, winner, staging_dir_uri=staging_dir)
+                state = _load_welford_state(spec, winner, staging_dir_uri=staging_dir)
+            except ValueError as exc:
+                candidates.remove(winner)
+                failures.append(str(exc))
+                continue
+            fragments.append(fragment)
+            states.append(state)
+            break
+        else:
+            raise ValueError(
+                f"growing shard-{shard_id:06d} has no healthy staged attempt: "
+                + "; ".join(failures)
+            )
     return publish_growing_branch(
         train_uri,
         spec=spec,

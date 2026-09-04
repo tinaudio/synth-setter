@@ -712,6 +712,11 @@ class LanceVSTDataModule(VSTDataModule):
 
     @staticmethod
     def _digest(path: Path) -> str:
+        """Digest one local file's bytes.
+
+        :param path: File to digest.
+        :returns: SHA-256 hexadecimal digest.
+        """
         return sha256(path.read_bytes()).hexdigest()
 
     def _validate_growing_snapshot(self, snapshot: ActiveGrowingSnapshot) -> None:
@@ -760,6 +765,10 @@ class LanceVSTDataModule(VSTDataModule):
         local.validate()
 
     def _local_active_candidate(self) -> ActiveGrowingSnapshot | None:
+        """Read and fully validate this rank's active record, or retain prior data.
+
+        :returns: Validated candidate, or ``None`` when unreadable or invalid.
+        """
         if self.growing_active_record is None:
             return None
         from pydantic import ValidationError
@@ -769,7 +778,8 @@ class LanceVSTDataModule(VSTDataModule):
                 self.growing_active_record.read_bytes()
             )
             self._validate_growing_snapshot(candidate)
-        except (OSError, ValidationError, ValueError) as exc:
+        # RuntimeError: lance raises it for unreadable/corrupt local manifests.
+        except (OSError, RuntimeError, ValidationError, ValueError) as exc:
             logger.warning(
                 "unable to validate growing active record %s; retaining prior data: %s",
                 self.growing_active_record,
@@ -801,6 +811,10 @@ class LanceVSTDataModule(VSTDataModule):
         return ActiveGrowingSnapshot.model_validate(selected)
 
     def _select_growing_snapshot(self) -> ActiveGrowingSnapshot | None:
+        """Choose the resume identity, a unanimous candidate, or the prior snapshot.
+
+        :returns: The snapshot the train split must build from, or ``None``.
+        """
         if self._growing_resume_snapshot is not None:
             self._validate_growing_snapshot(self._growing_resume_snapshot)
             return self._growing_resume_snapshot
@@ -833,6 +847,11 @@ class LanceVSTDataModule(VSTDataModule):
         return Path(snapshot.dataset_path)
 
     def _active_stats_shard(self, train_shard: Path) -> Path:
+        """Return the statistics location bound to the adopted train snapshot.
+
+        :param train_shard: Active train dataset path.
+        :returns: Version-bound statistics directory, or the shard itself.
+        """
         if self._growing_snapshot is None:
             return train_shard
         return Path(self._growing_snapshot.version_stats_path) / f"train{self.shard_suffix}"
@@ -844,20 +863,23 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: Built split datasets and collates.
         """
         uses_train = "train" in split_names
-        train_shard = (
-            self._active_train_shard()
-            if uses_train
-            else self.dataset_root / f"train{self.shard_suffix}"
-        )
-        split_stats = predict_stats = None
+        baseline_shard = self.dataset_root / f"train{self.shard_suffix}"
+        train_shard = self._active_train_shard() if uses_train else baseline_shard
+        train_stats = eval_stats = predict_stats = None
         if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
             if any(name != "predict" for name in split_names):
-                stats_shard = self._active_stats_shard(train_shard) if uses_train else train_shard
-                split_stats = load_dataset_statistics(stats_shard)
+                # Val/test normalization stays pinned to the baseline even while
+                # train follows growing snapshots (epoch-comparable eval metrics).
+                eval_stats = load_dataset_statistics(baseline_shard)
+                train_stats = (
+                    load_dataset_statistics(self._active_stats_shard(train_shard))
+                    if uses_train and self._growing_snapshot is not None
+                    else eval_stats
+                )
             if "predict" in split_names:
                 predict_stats = (
-                    split_stats
-                    if split_stats is not None
+                    eval_stats
+                    if eval_stats is not None
                     and self.predict_file.parent == self.dataset_root
                     else load_dataset_statistics(self.predict_file)
                 )
@@ -872,12 +894,13 @@ class LanceVSTDataModule(VSTDataModule):
             if uses_train and self._growing_snapshot is not None
             else None
         )
+        stats_by_split = {"train": train_stats, "predict": predict_stats}
         return {
             name: self._build_lance_split(
                 paths[name],
                 ot=self.ot if name == "train" else False,
                 read_audio=name == "predict",
-                stats=predict_stats if name == "predict" else split_stats,
+                stats=stats_by_split.get(name, eval_stats),
                 version=active_version if name == "train" else None,
             )
             for name in split_names

@@ -130,7 +130,7 @@ class LanceMapDataset(SafeLanceDataset):
         columns: Sequence[str] | None = None,
         storage_options: dict[str, str] | None = None,
         version: int | None = None,
-    ):
+    ) -> None:
         """Open the dataset lazily for map-style access.
 
         :param uri: Dataset directory (local path or ``s3://`` URI).

@@ -7,6 +7,7 @@ import lightning
 import logging
 import shutil
 from pathlib import Path
+from collections.abc import Sized
 from types import SimpleNamespace
 from typing import cast
 
@@ -182,6 +183,79 @@ def test_checkpoint_resume_restores_recorded_snapshot_before_newer_active(
     assert resumed.state_dict()["growing_history"] == (7, newer.remote_version)
 
 
+def test_refresh_rebuilds_train_loader_with_appended_rows_and_new_statistics(
+    tmp_path: Path,
+) -> None:
+    """Adoption exposes the appended local version's rows and its normalization.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, active = _active_snapshot(tmp_path, baseline)
+    module = _module(baseline, active_path)
+    module.setup("fit")
+    assert len(cast("Sized", module.train_dataloader().dataset)) == 16
+
+    write_seeded_lance_shard(tmp_path / "appended.lance", num_rows=4, seed=9, mel_fill=3.0)
+    dataset_path = Path(active.dataset_path)
+    source = lance.dataset(str(tmp_path / "appended.lance"))
+    lance.write_dataset(source.to_table(), str(dataset_path), mode="append")
+    local = lance.dataset(str(dataset_path))
+    local_transaction = local.read_transaction(local.version)
+    assert local_transaction is not None
+    version_root = Path(active.version_stats_path).parent / "8"
+    version_root.mkdir()
+    # (3.0 - 1.0) / 0.5 == 4.0 pins the adopted normalization exactly.
+    write_mel_stats(version_root, mean=1.0, std=0.5)
+    np.savez(
+        version_root / "welford.npz",
+        count=np.int64(20),
+        mean=np.zeros((1,), dtype=np.float32),
+        m2=np.ones((1,), dtype=np.float32),
+    )
+    remote = GrowingSnapshot.model_validate_json(
+        (Path(active.version_stats_path) / "snapshot.json").read_bytes()
+    ).model_copy(
+        update={
+            "version": 8,
+            "transaction": "remote-transaction-8",
+            "high_watermark": 8,
+            "row_count": local.count_rows(),
+            "fragment_count": len(local.get_fragments()),
+            "stats_sha256": _sha(version_root / "stats.npz"),
+            "welford_sha256": _sha(version_root / "welford.npz"),
+        }
+    )
+    (version_root / "snapshot.json").write_text(remote.model_dump_json())
+    active_path.write_text(
+        active.model_copy(
+            update={
+                "remote_version": 8,
+                "remote_transaction": remote.transaction,
+                "local_version": local.version,
+                "local_transaction": local_transaction.uuid,
+                "version_stats_path": str(version_root),
+                "row_count": remote.row_count,
+                "fragment_count": remote.fragment_count,
+                "stats_sha256": remote.stats_sha256,
+                "welford_sha256": remote.welford_sha256,
+                "high_watermark": 8,
+            }
+        ).model_dump_json()
+    )
+
+    refreshed = module.train_dataloader()
+
+    assert len(cast("Sized", refreshed.dataset)) == 20
+    normalized_fills = [
+        batch["mel"][index]
+        for batch in refreshed
+        for index in range(batch["mel"].shape[0])
+        if np.allclose(batch["mel"][index].numpy(), 4.0)
+    ]
+    assert len(normalized_fills) == 4
+
+
 def test_ddp_candidate_disagreement_retains_current_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -221,6 +295,45 @@ def test_test_stage_uses_frozen_baseline_statistics(tmp_path: Path) -> None:
 
     grown_batch = next(iter(with_growth.test_dataloader()))
     baseline_batch = next(iter(baseline_only.test_dataloader()))
+
+    assert np.array_equal(grown_batch["mel"].numpy(), baseline_batch["mel"].numpy())
+
+
+def test_candidate_lance_runtime_error_retains_prior_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Lance runtime failure while validating a candidate falls back to baseline.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    :param monkeypatch: Injects the Lance manifest failure.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, _ = _active_snapshot(tmp_path, baseline)
+    module = _module(baseline, active_path)
+
+    def raise_runtime(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("corrupt local manifest")
+
+    monkeypatch.setattr(module, "_validate_growing_snapshot", raise_runtime)
+    module.setup("fit")
+
+    assert module._growing_snapshot is None
+
+
+def test_fit_stage_validation_keeps_frozen_baseline_statistics(tmp_path: Path) -> None:
+    """Fit-stage validation normalization stays pinned while train follows growth.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, _ = _active_snapshot(tmp_path, baseline)
+    with_growth = _module(baseline, active_path)
+    baseline_only = _module(baseline, baseline / "missing-active.json")
+    with_growth.setup("fit")
+    baseline_only.setup("fit")
+
+    grown_batch = next(iter(with_growth.val_dataloader()))
+    baseline_batch = next(iter(baseline_only.val_dataloader()))
 
     assert np.array_equal(grown_batch["mel"].numpy(), baseline_batch["mel"].numpy())
 

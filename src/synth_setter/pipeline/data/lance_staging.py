@@ -171,9 +171,12 @@ def stage_lance_shard_attempt(
         )
     fragment_schema = dataset.schema
     if growing_target:
-        branch_schema = lance.dataset(
-            split_target, storage_options=storage_options
-        ).schema
+        from synth_setter.pipeline.data.lance_materialize import retry_lance_read
+
+        branch_schema = retry_lance_read(
+            "growing_branch_schema_read",
+            lambda: lance.dataset(split_target, storage_options=storage_options).schema,
+        )
         if not dataset.schema.equals(branch_schema, check_metadata=False):
             raise ValueError("growing shard fields do not match the branch schema")
         fragment_schema = branch_schema

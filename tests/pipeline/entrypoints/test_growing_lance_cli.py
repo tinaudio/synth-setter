@@ -8,6 +8,7 @@ storage or Lance paths.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import lance
@@ -138,7 +139,12 @@ def test_grow_single_pass_enqueues_and_returns_before_shards_are_staged(
 
 
 def _stage_growing_shard(
-    fake_r2_remote: Path, spec: DatasetSpec, shard_id: int, work_dir: Path
+    fake_r2_remote: Path,
+    spec: DatasetSpec,
+    shard_id: int,
+    work_dir: Path,
+    *,
+    worker_id: str = "grow-worker",
 ) -> None:
     """Stage one growing shard attempt exactly as a generator worker does.
 
@@ -146,6 +152,7 @@ def _stage_growing_shard(
     :param spec: Finalized baseline spec.
     :param shard_id: Direct train position to stage.
     :param work_dir: Local scratch directory for the shard dataset.
+    :param worker_id: Worker identifier for the staging filenames.
     """
     ready_version = _train_dataset(fake_r2_remote, spec).tags.get_version("g-ready")
     snapshot = json.loads(
@@ -168,7 +175,7 @@ def _stage_growing_shard(
         spec,
         shard,
         local,
-        worker_id="grow-worker",
+        worker_id=worker_id,
         attempt_uuid=f"u{shard_id:04d}",
         target_lance_uri=snapshot["branch_uri"],
         attempt_staging_dir_uri=spec.r2.growing_shard_staging_dir_uri("g", shard_id),
@@ -205,6 +212,71 @@ def test_grow_finalizes_staged_range_then_stops_cleanly_at_capacity(
     assert _train_dataset(fake_r2_remote, finalized_spec).tags.get_version("g-ready") == (
         ready_version
     )
+
+
+def test_grow_falls_back_to_healthy_attempt_when_preferred_winner_is_damaged(
+    fake_r2_remote: Path, finalized_spec: DatasetSpec, tmp_path: Path
+) -> None:
+    """A damaged preferred attempt is skipped in favor of a healthy retry.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param finalized_spec: Finalized baseline spec.
+    :param tmp_path: Operator work dir root.
+    """
+    operator = tmp_path / "operator"
+    _init(finalized_spec, operator)
+    _grow(finalized_spec, operator)
+    _stage_growing_shard(
+        fake_r2_remote, finalized_spec, 2, tmp_path / "shard-a", worker_id="worker-a"
+    )
+    _stage_growing_shard(
+        fake_r2_remote, finalized_spec, 2, tmp_path / "shard-b", worker_id="worker-b"
+    )
+    staging_dir = (
+        _remote_metadata_dir(fake_r2_remote, finalized_spec, "g")
+        / "workers"
+        / "shards"
+        / "shard-000002"
+    )
+    # Pin worker-a as the preferred (earliest) winner, then damage its sidecar.
+    for marker in staging_dir.glob("*.valid"):
+        age = 100 if marker.name.startswith("worker-a") else 50
+        os.utime(marker, (marker.stat().st_atime - age, marker.stat().st_mtime - age))
+    next(staging_dir.glob("worker-a-*.fragment.json")).write_bytes(b"damaged")
+
+    _grow(finalized_spec, operator)
+
+    train = _train_dataset(fake_r2_remote, finalized_spec)
+    grown = train.checkout_version(("g", train.tags.get_version("g-ready")))
+    assert grown.count_rows() == 6
+
+
+def test_grow_restart_recovers_after_crash_between_publish_and_pending_clear(
+    fake_r2_remote: Path, finalized_spec: DatasetSpec, tmp_path: Path
+) -> None:
+    """A restarted grow completes a published-but-uncleared pending request.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param finalized_spec: Finalized baseline spec.
+    :param tmp_path: Operator work dir root.
+    """
+    operator = tmp_path / "operator"
+    _init(finalized_spec, operator, "--max-train-shards", "4")
+    _grow(finalized_spec, operator)
+    stale_pending = (
+        _remote_metadata_dir(fake_r2_remote, finalized_spec, "g") / "pending.json"
+    ).read_bytes()
+    _stage_growing_shard(fake_r2_remote, finalized_spec, 2, tmp_path / "grow-shards")
+    _grow(finalized_spec, operator)
+    metadata_dir = _remote_metadata_dir(fake_r2_remote, finalized_spec, "g")
+    # Simulate a driver crash after the append published but before the
+    # pending marker was cleared: the completed request is durable again.
+    (metadata_dir / "pending.json").write_bytes(stale_pending)
+
+    _grow(finalized_spec, operator)
+
+    pending = json.loads((metadata_dir / "pending.json").read_text(encoding="utf-8"))
+    assert pending["enqueue_shard_ids"] == [3]
 
 
 def test_generate_before_first_enqueue_exits_cleanly_without_rendering(

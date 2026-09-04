@@ -321,6 +321,28 @@ def _complete_stale_pending(
     _complete_pending(spec, branch, pending_uri, completed, current.version, work_dir)
 
 
+def _reconcile_completed_pending(
+    spec: DatasetSpec, branch: str, work_dir: Path, current: GrowingSnapshot
+) -> None:
+    """Clear a pending request whose publication already advanced the watermark.
+
+    A driver crash between the append and the pending-marker delete leaves the completed request
+    durable; a restart must finish it before enqueueing the next range. A pending request that is
+    still in flight is left untouched.
+
+    :param spec: Frozen producer specification.
+    :param branch: Native branch name.
+    :param work_dir: Local operator workspace.
+    :param current: Exact ready snapshot.
+    """
+    if not _pending_exists(spec, branch):
+        return
+    pending_uri = spec.r2.growing_metadata_uri(branch, "pending.json")
+    pending = _load_pending(pending_uri)
+    if pending.next_high_watermark == current.high_watermark:
+        _complete_pending(spec, branch, pending_uri, pending, current.version, work_dir)
+
+
 def _finalize_pending(spec: DatasetSpec, branch: str, work_dir: Path) -> None:
     """Append one pending range and clear it only after readiness.
 
@@ -389,6 +411,7 @@ def grow(args: argparse.Namespace) -> None:
     r2_io.ensure_r2_env_loaded()
     while True:
         current = _ready_snapshot(spec, args.branch)
+        _reconcile_completed_pending(spec, args.branch, args.work_dir, current)
         pending = _enqueue_pending(spec, args.branch, args.work_dir, current)
         if pending is None:
             _complete_stale_pending(spec, args.branch, args.work_dir, current)

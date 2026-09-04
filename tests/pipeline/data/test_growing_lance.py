@@ -31,9 +31,7 @@ from tests.pipeline.data.test_lance_fragment_finalize_poc import (
 from tests.pipeline.data.test_lance_staging import tiny_lance_spec
 
 
-def _baseline(
-    tmp_path: Path, *, max_train_shards: int = 5
-) -> tuple[DatasetSpec, Path, Path, GrowingSnapshot]:
+def _baseline_dataset(tmp_path: Path) -> tuple[DatasetSpec, Path, Path]:
     spec = tiny_lance_spec()
     train_uri = tmp_path / "train.lance"
     schema = lance_schema(_FIELD_SHAPES, _METADATA)
@@ -53,6 +51,13 @@ def _baseline(
     )
     save_welford(version_root / "welford.npz", state, expected_shape=state[1].shape)
     np.savez(version_root / "stats.npz", mean=state[1], std=np.ones_like(state[1]))
+    return spec, train_uri, metadata_root
+
+
+def _baseline(
+    tmp_path: Path, *, max_train_shards: int = 5
+) -> tuple[DatasetSpec, Path, Path, GrowingSnapshot]:
+    spec, train_uri, metadata_root = _baseline_dataset(tmp_path)
     snapshot = initialize_growing_branch(
         train_uri,
         spec=spec,
@@ -63,6 +68,31 @@ def _baseline(
         num_extra_shards=2,
     )
     return spec, train_uri, metadata_root, snapshot
+
+
+def test_initialize_recovers_branch_created_without_contract_metadata(
+    tmp_path: Path,
+) -> None:
+    """A rerun completes a branch whose metadata write crashed after creation.
+
+    :param tmp_path: Isolated Lance and metadata roots.
+    """
+    spec, train_uri, metadata_root = _baseline_dataset(tmp_path)
+    lance.dataset(str(train_uri)).create_branch("growing", 1)
+
+    snapshot = initialize_growing_branch(
+        train_uri,
+        spec=spec,
+        branch="growing",
+        baseline_version=1,
+        metadata_root=metadata_root,
+        max_train_shards=5,
+        num_extra_shards=2,
+    )
+
+    metadata = lance.dataset(str(train_uri)).branches.list()["growing"]["metadata"]
+    assert metadata["synth_setter.growing_max_train_shards"] == "5"
+    assert snapshot.high_watermark == 2
 
 
 def _append_fragments(
