@@ -241,6 +241,38 @@ def test_pyfdn_configs_compose_without_external_source(
     assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
 
 
+@pytest.mark.parametrize(
+    ("config_name", "overrides"),
+    [
+        pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
+        pytest.param(
+            "eval.yaml",
+            ["experiment=pyfdn/flow", "ckpt_path=null"],
+            id="eval",
+        ),
+        pytest.param(
+            "train.yaml",
+            [
+                "experiment=pyfdn/flow",
+                "synth=pyfdn_pitchshift_n8_mono_householder",
+            ],
+            id="pitchshift",
+        ),
+    ],
+)
+def test_pyfdn_flow_composition_enables_per_param_metrics(
+    config_name: str, overrides: list[str]
+) -> None:
+    """The pyFDN recipe labels per-parameter graphs with its active synth identity.
+
+    :param config_name: Top-level Hydra config composed with the pyFDN recipe.
+    :param overrides: Hydra selections required by the top-level config.
+    """
+    cfg = _compose(config_name, overrides)
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == cfg.synth.param_spec_name
+
+
 def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
     """The pitch-shift synth group reaches its native renderer through Hydra."""
     cfg = _compose(
