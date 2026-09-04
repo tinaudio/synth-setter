@@ -43,10 +43,14 @@ jobs:
               - synth_setter.evaluation.predict_vst_audio.x__make_render_fn*
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1?
-          - name: evaluation-predict-render-audio-leading-2-4
+          - name: evaluation-predict-render-audio-leading-2
             patterns:
-              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]
-              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]?*
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_2
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_2?*
+          - name: evaluation-predict-render-audio-leading-3-4
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[3-4]
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[3-4]?*
           - name: evaluation-predict-render-artifacts-leading-2-9-and-100-149
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]
