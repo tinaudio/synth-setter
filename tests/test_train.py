@@ -193,7 +193,7 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
     assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
     assert cfg_pyfdn_train.model.num_params == 27
     assert objects["trainer"].global_step == 1
-    assert torch.isfinite(metrics["per_param_mse_spec_quantized/delays"])
+    assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/delays"])
     assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
 
 
@@ -462,7 +462,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
-    assert torch.isfinite(metric_dict["per_param_mse_number_group_swap/adsr_1.attack"]).all()
+    assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
@@ -1022,7 +1022,7 @@ def test_train_runpod_experiment_default_datamodule_advances(
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
     assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
-    assert torch.isfinite(metric_dict["per_param_mse/a_amp_eg_attack"])
+    assert torch.isfinite(metric_dict["val/per_param_mse/a_amp_eg_attack"])
 
 
 @pytest.mark.slow
@@ -1929,7 +1929,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     metric_dict, object_dict = train(cfg_surge_real_train)
 
     assert metric_dict["val/param_mse_spec_quantized"].item() == pytest.approx(0.0, abs=1e-12)
-    assert metric_dict["per_param_mse_spec_quantized/a_amp_eg_attack"].item() == pytest.approx(
+    assert metric_dict["val/per_param_mse_spec_quantized/a_amp_eg_attack"].item() == pytest.approx(
         0.0, abs=1e-12
     )
 

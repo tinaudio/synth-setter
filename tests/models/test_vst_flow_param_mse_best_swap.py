@@ -167,7 +167,7 @@ def test_validation_loop_logs_number_group_swap_metrics() -> None:
     metrics = trainer.validate(module, dataloaders=loader)[0]
 
     assert "val/param_mse_number_group_swap" in metrics
-    assert "per_param_mse_number_group_swap/a_osc_1_pitch" in metrics
+    assert "val/per_param_mse_number_group_swap/a_osc_1_pitch" in metrics
     assert metrics["val/param_mse_best_swap"] <= metrics["val/param_mse_number_group_swap"]
     assert metrics["val/param_mse_number_group_swap"] <= metrics["val/param_mse"] + 1e-6
 
@@ -180,7 +180,7 @@ def test_validation_loop_logs_per_param_best_swap() -> None:
 
     metrics = trainer.validate(module, dataloaders=loader)[0]
 
-    assert "per_param_mse_best_swap/note_start_and_end" in metrics
+    assert "val/per_param_mse_best_swap/note_start_and_end" in metrics
 
 
 def test_validation_loop_logs_spec_quantized_metrics() -> None:
@@ -193,7 +193,41 @@ def test_validation_loop_logs_spec_quantized_metrics() -> None:
     metrics = trainer.validate(module, dataloaders=loader)[0]
 
     assert math.isfinite(metrics["val/param_mse_spec_quantized"])
-    assert math.isfinite(metrics["per_param_mse_spec_quantized/a_amp_eg_attack"])
+    assert math.isfinite(metrics["val/per_param_mse_spec_quantized/a_amp_eg_attack"])
+
+
+def test_pyfdn_validation_loop_logs_all_per_param_metric_families() -> None:
+    """PyFDN validation publishes each per-parameter metric family under ``val``."""
+    spec_name = "pyfdn_n8_mono_householder"
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+
+    metrics = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)]).validate(
+        module, dataloaders=loader
+    )[0]
+
+    assert "val/per_param_mse/delays" in metrics
+    assert "val/per_param_mse_best_swap/delays" in metrics
+    assert "val/per_param_mse_number_group_swap/delays" in metrics
+    assert "val/per_param_mse_spec_quantized/delays" in metrics
+
+
+def test_pyfdn_test_loop_logs_all_per_param_metric_families() -> None:
+    """PyFDN test publishes each per-parameter metric family under ``test``."""
+    spec_name = "pyfdn_n8_mono_householder"
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+
+    metrics = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)]).test(
+        module, dataloaders=loader
+    )[0]
+
+    assert "test/per_param_mse/delays" in metrics
+    assert "test/per_param_mse_best_swap/delays" in metrics
+    assert "test/per_param_mse_number_group_swap/delays" in metrics
+    assert "test/per_param_mse_spec_quantized/delays" in metrics
 
 
 def test_test_loop_logs_number_group_swap() -> None:
@@ -201,10 +235,16 @@ def test_test_loop_logs_number_group_swap() -> None:
     spec = param_specs["surge_simple"]
     module = _flow_module(spec.encoded_width, param_spec="surge_simple")
     loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE("surge_simple")])
 
-    metrics = _tiny_trainer().test(module, dataloaders=loader)[0]
+    metrics = trainer.test(module, dataloaders=loader)[0]
 
     assert "test/param_mse_number_group_swap" in metrics
+    assert "test/per_param_mse/a_osc_1_pitch" in metrics
+    assert "test/per_param_mse_best_swap/a_osc_1_pitch" in metrics
+    assert "test/per_param_mse_number_group_swap/a_osc_1_pitch" in metrics
+    assert "test/per_param_mse_spec_quantized/a_osc_1_pitch" in metrics
+    assert "test/param_mse_spec_quantized" in metrics
     assert metrics["test/param_mse_best_swap"] <= metrics["test/param_mse_number_group_swap"]
     assert metrics["test/param_mse_number_group_swap"] <= metrics["test/param_mse"] + 1e-6
 

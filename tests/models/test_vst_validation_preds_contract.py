@@ -236,7 +236,7 @@ def test_flow_vae_validation_loop_emits_per_param_metric() -> None:
     dataloader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], [_batch()]), batch_size=None)
     trainer.validate(_flow_vae_module(), dataloaders=dataloader)
 
-    assert torch.isfinite(trainer.callback_metrics["per_param_mse/a_amp_eg_attack"])
+    assert torch.isfinite(trainer.callback_metrics["val/per_param_mse/a_amp_eg_attack"])
 
 
 def test_validation_step_preds_are_the_feed_forward_nets_predictions() -> None:
