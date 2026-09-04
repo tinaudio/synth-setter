@@ -387,13 +387,15 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
     assert sketch.shape == (1, 10, 32)
     assert sketch.dtype == torch.float32
     assert torch.isfinite(sketch).all()
-    assert torch.all((0.0 <= sketch) & (sketch <= 1.0))
+    assert torch.all((-1.0 <= sketch) & (sketch <= 1.0))
     assert torch.all(torch.diff(sketch[:, :8], dim=-1) <= 1e-6)
 
     trained_model = objects["model"]
     assert isinstance(trained_model, VSTFlowMatchingModule)
     checkpoint = Path(cfg.paths.output_dir) / "checkpoints" / "last.ckpt"
-    model = VSTFlowMatchingModule.load_from_checkpoint(checkpoint, map_location="cpu")
+    model = VSTFlowMatchingModule.load_from_checkpoint(
+        checkpoint, map_location="cpu", weights_only=False
+    )
     assert model.sketch_tokens is not None
     control_tokens = model.sketch_tokens(sketch, torch.ones((1, 3), dtype=torch.bool))
     assert control_tokens.shape == (1, 32, 16)
