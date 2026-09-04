@@ -109,6 +109,7 @@ def _shifted_dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
             sys.executable,
             "-m",
             "synth_setter.pipeline.data.add_embeddings",
+            "logger=[]",
             f"lance_uri={shard}",
             "embeddings=[param_shift]",
             "render=torchsynth",

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import gc
+import glob
+import json
 import os
 import shutil
 import subprocess
@@ -21,6 +23,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 import torch
+import wandb
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig
@@ -121,6 +124,7 @@ from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.run_if import RunIf
+from tests.helpers.wandb_offline import read_run_config, read_run_exit_code
 
 _SAMPLE_RATE = 44100
 _FIXTURE_SAMPLES = 16
@@ -544,6 +548,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
         assert cfg.debug is False
+        assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
         assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(lance_uri=_LANCE_URI)
     finally:
         GlobalHydra.instance().clear()
@@ -2997,6 +3002,147 @@ def test_module_import_defers_lance_initialization_until_cli_configures_logging(
     assert result.returncode == 0, result.stderr
 
 
+def test_add_embeddings_main_creates_offline_wandb_run_with_config_and_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI records its resolved settings and launch command in one W&B run.
+
+    :param tmp_path: Scratch directory for the dataset, Hydra output, and W&B run.
+    :param monkeypatch: Fixture installing dependency-free encoders and a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    uri = tmp_path / "tracked.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("clap",))
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={uri}",
+        "embeddings=[clap]",
+        "build_index=false",
+        "batch_size=7",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        "logger.wandb.project=add-embeddings-test",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    main()
+
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    run_config = read_run_config(
+        Path(run_files[0]),
+        until=lambda config: "command" in config and "lance_uri" in config,
+    )
+    assert json.loads(run_config["lance_uri"]) == str(uri)
+    assert json.loads(run_config["embeddings"]) == ["clap"]
+    assert json.loads(run_config["batch_size"]) == 7
+    assert json.loads(run_config["command"]) == " ".join(argv)
+    assert read_run_exit_code(Path(run_files[0])) == 0
+    assert CLAP_FIELD in lance.dataset(str(uri)).schema.names
+
+
+def test_add_embeddings_main_when_augmentation_fails_marks_wandb_run_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed augmentation finalizes its offline W&B run with a nonzero exit code.
+
+    :param tmp_path: Scratch directory for the Hydra output and W&B run.
+    :param monkeypatch: Fixture installing a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={tmp_path / 'missing.lance'}",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        "logger.wandb.project=add-embeddings-test",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    assert wandb.run is None
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    assert read_run_exit_code(Path(run_files[0])) == 1
+
+
+def test_add_embeddings_main_with_active_wandb_run_preserves_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nested invocation rejects W&B reuse without mutating or closing its parent run.
+
+    :param tmp_path: Scratch directory for the dataset, Hydra output, and W&B run.
+    :param monkeypatch: Fixture installing dependency-free encoders and a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    uri = tmp_path / "nested.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("clap",))
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={uri}",
+        "embeddings=[clap]",
+        "build_index=false",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        "logger.wandb.project=add-embeddings-test",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+    parent_run = wandb.init(
+        project="add-embeddings-parent-test",
+        dir=str(tmp_path),
+        config={"sentinel": "parent"},
+    )
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert wandb.run is parent_run
+        assert dict(parent_run.config) == {"sentinel": "parent"}
+        assert CLAP_FIELD not in lance.dataset(str(uri)).schema.names
+    finally:
+        wandb.finish(exit_code=0)
+
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    assert read_run_exit_code(Path(run_files[0])) == 0
+
+
 def test_add_embeddings_main_when_open_fails_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3017,6 +3163,7 @@ def test_add_embeddings_main_when_open_fails_exits_one(
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             "lance_uri=s3://bucket/missing.lance",
             f"paths.log_dir={tmp_path}",
             f"hydra.run.dir={tmp_path / 'run'}",
@@ -3116,6 +3263,7 @@ def test_add_embeddings_main_with_registry_mode_writes_exact_columns(
         monkeypatch.setitem(EMBEDDING_REGISTRY, name, replace(spec, load_encoder=load))
     argv = [
         "synth-setter-add-embeddings",
+        "logger=[]",
         f"lance_uri={uri}",
         "build_index=false",
         f"paths.log_dir={tmp_path}",
@@ -3177,6 +3325,7 @@ def test_add_embeddings_main_with_registry_selection_writes_requested_columns(
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             f"lance_uri={uri}",
             "embeddings=[clap,same_s]",
             "checkpoints.same_s=custom/same-s",
@@ -3884,6 +4033,7 @@ def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             f"lance_uri={uri}",
             "embeddings=[sketch]",
             "build_index=false",

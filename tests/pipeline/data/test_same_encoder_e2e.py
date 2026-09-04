@@ -86,6 +86,7 @@ def test_same_hydra_main_writes_legacy_matching_lance_column(
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             f"lance_uri={uri}",
             f"embeddings=[{model_name}]",
             f"checkpoints.{model_name}={checkpoint_dir}",

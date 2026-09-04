@@ -39,6 +39,7 @@ def test_ssondo_hydra_main_real_checkpoint_writes_stable_input_sensitive_vectors
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             f"lance_uri={uri}",
             "embeddings=[ssondo]",
             "device=cpu",
