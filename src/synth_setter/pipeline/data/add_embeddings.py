@@ -365,8 +365,9 @@ def _pyfdn_sketch_artifact_identity(checkpoint: str) -> str:
         f"{name}:{importlib.metadata.version(name)}" for name in ("numpy", "pyfdn", "scipy")
     )
     policy = (
-        f"dsp:reverb-sketch-v{PYFDN_SKETCH_POLICY_VERSION};"
-        "normalization:canonical-unit;temporal:equal-duration-32;"
+        f"dsp:octave-edc-abel-huang-density-rfft-flatness-v{PYFDN_SKETCH_POLICY_VERSION};"
+        "normalization:signed-unit-edc-floor-60db-density-rational-flatness-linear;"
+        "temporal:equal-duration-32;"
         f"packages:{packages}"
     )
     return _versioned_artifact_identity("pyfdn_sketch", policy)
@@ -780,7 +781,7 @@ def _load_pyfdn_sketch_encoder(
 
         extract = cast(
             "Callable[[np.ndarray, float], np.ndarray]",
-            getattr(pyfdn_controls, "extract_reverb_sketch_controls"),
+            pyfdn_controls.extract_reverb_sketch,
         )
         if audio.ndim != 3 or audio.shape[1] != 1:
             raise ValueError(
@@ -819,8 +820,8 @@ def _encode_pyfdn_sketch_column(
             f"{PYFDN_SKETCH_FIELD} encoder produced shape {controls.shape}, "
             f"expected {expected_shape}"
         )
-    if controls.min() < 0.0 or controls.max() > 1.0:
-        raise ValueError(f"{PYFDN_SKETCH_FIELD} controls out of bounds; expected [0, 1]")
+    if controls.min() < -1.0 or controls.max() > 1.0:
+        raise ValueError(f"{PYFDN_SKETCH_FIELD} controls out of bounds; expected [-1, 1]")
     return pyfdn_sketch_struct_array(controls)
 
 
