@@ -193,6 +193,7 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
     assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
     assert cfg_pyfdn_train.model.num_params == 27
     assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics["train/per_param_flow_mse/delays"])
     assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/delays"])
     assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
 

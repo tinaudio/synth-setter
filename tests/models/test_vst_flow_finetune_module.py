@@ -494,6 +494,16 @@ def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:
     assert outputs.audio_term is None
 
 
+def test_finetune_train_step_per_param_flow_mse_matches_loss(tmp_path: Path) -> None:
+    """The per-column diagnostic preserves the finetuning flow objective.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    outputs = _finetune(_base_checkpoint(tmp_path))._train_step(_batch())
+
+    assert outputs.per_param_flow_mse.mean().item() == pytest.approx(outputs.loss.item())
+
+
 @pytest.mark.slow
 def test_finetune_fit_from_a_trained_base_moves_only_the_control(tmp_path: Path) -> None:
     """A real fit over a real trained base moves the control and leaves that base untouched.

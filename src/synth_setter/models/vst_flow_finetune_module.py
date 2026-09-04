@@ -650,9 +650,11 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self._log_control_telemetry(control_input, active)
         prediction = self.vector_field.combine(velocity, t, control_input)
 
-        loss = ((prediction - target).square().mean(dim=-1) * w).mean()
+        squared_flow_error = (prediction - target).square()
+        loss = (squared_flow_error.mean(dim=-1) * w).mean()
         return TrainStepOutputs(
             loss=loss,
+            per_param_flow_mse=(squared_flow_error * w).mean(dim=0),
             audio_term=None,
             penalty=None,
             grad_balance=None,
