@@ -71,7 +71,12 @@ def _upload_empty_marker(marker_uri: str) -> None:
 
 
 def write_rendering_marker(
-    spec: DatasetSpec, shard_id: int, *, worker_id: str, attempt_uuid: str
+    spec: DatasetSpec,
+    shard_id: int,
+    *,
+    worker_id: str,
+    attempt_uuid: str,
+    attempt_staging_dir_uri: str | None = None,
 ) -> None:
     """Record the start of a shard attempt (``.rendering``, append-only).
 
@@ -83,12 +88,16 @@ def write_rendering_marker(
     :param shard_id: Logical shard the attempt renders.
     :param worker_id: Worker identifier for the staging filename.
     :param attempt_uuid: Per-attempt UUID for the staging filename.
+    :param attempt_staging_dir_uri: Optional feature-specific attempt directory.
     """
-    _upload_empty_marker(
-        spec.r2.worker_staged_shard_uri(
+    marker_uri = (
+        f"{attempt_staging_dir_uri}{worker_id}-{attempt_uuid}{ATTEMPT_RENDERING_SUFFIX}"
+        if attempt_staging_dir_uri is not None
+        else spec.r2.worker_staged_shard_uri(
             shard_id, worker_id, attempt_uuid, ATTEMPT_RENDERING_SUFFIX
         )
     )
+    _upload_empty_marker(marker_uri)
 
 
 def stage_lance_shard_attempt(
@@ -99,6 +108,7 @@ def stage_lance_shard_attempt(
     worker_id: str,
     attempt_uuid: str,
     target_lance_uri: str | None = None,
+    attempt_staging_dir_uri: str | None = None,
 ) -> None:
     """Stage one rendered shard as an uncommitted fragment attempt.
 
@@ -112,8 +122,10 @@ def stage_lance_shard_attempt(
     :param local_shard_path: Local ``shard-NNNNNN.lance`` dataset directory.
     :param worker_id: Worker identifier for the staging filenames.
     :param attempt_uuid: Per-attempt UUID for the staging filenames.
-    :param target_lance_uri: Rolling branch URI receiving fragment data; ``None``
+    :param target_lance_uri: Growing branch URI receiving fragment data; ``None``
         uses the baseline split assigned by the spec.
+    :param attempt_staging_dir_uri: Branch-specific sidecar directory; ``None``
+        uses the finalized baseline staging namespace.
     :raises ValueError: The local shard's row count does not match the spec, or
         the shard's bytes would exceed the single-data-file bound
         (``LANCE_MAX_BYTES_PER_FILE``) the fragment write cannot split.
@@ -146,7 +158,7 @@ def stage_lance_shard_attempt(
         raise ValueError(
             f"local shard {local_shard_path.name} schema does not match spec-derived schema"
         )
-    rolling_target = target_lance_uri is not None
+    growing_target = target_lance_uri is not None
     if target_lance_uri is None:
         split = split_for_shard(spec, shard.shard_id)
         target_lance_uri = spec.r2.split_lance_uri(split)
@@ -158,12 +170,12 @@ def stage_lance_shard_attempt(
             r2_io.r2_storage_options() if target_lance_uri.startswith("s3://") else None
         )
     fragment_schema = dataset.schema
-    if rolling_target:
+    if growing_target:
         branch_schema = lance.dataset(
             split_target, storage_options=storage_options
         ).schema
         if not dataset.schema.equals(branch_schema, check_metadata=False):
-            raise ValueError("rolling shard fields do not match the branch schema")
+            raise ValueError("growing shard fields do not match the branch schema")
         fragment_schema = branch_schema
     fragment = lance_fragment(
         split_target,
@@ -174,7 +186,11 @@ def stage_lance_shard_attempt(
     count, mean, m2 = fold_lance_shard_into_welford((0, 0, 0), local_shard_path)
 
     def _attempt_uri(suffix: str) -> str:
-        return spec.r2.worker_staged_shard_uri(shard.shard_id, worker_id, attempt_uuid, suffix)
+        if attempt_staging_dir_uri is not None:
+            return f"{attempt_staging_dir_uri}{worker_id}-{attempt_uuid}{suffix}"
+        return spec.r2.worker_staged_shard_uri(
+            shard.shard_id, worker_id, attempt_uuid, suffix
+        )
 
     welford_arrays = dict(zip(LANCE_SHARD_STATS_KEYS, (np.int64(count), mean, m2), strict=True))
     with tempfile.TemporaryDirectory() as tmp:

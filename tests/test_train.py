@@ -7,6 +7,7 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -22,6 +23,7 @@ from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
 import hydra
+import lance
 import numpy as np
 import pandas as pd
 import pytest
@@ -50,7 +52,7 @@ from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.rolling_lance import ActiveRollingSnapshot
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
@@ -1258,36 +1260,71 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 
 
 @pytest.mark.slow
-def test_train_rolling_config_adopts_active_snapshot(cfg_train_lance: DictConfig) -> None:
-    """The public train entrypoint adopts the configured immutable rolling version.
+def test_train_growing_config_adopts_active_snapshot(cfg_train_lance: DictConfig) -> None:
+    """The public train entrypoint adopts the configured immutable growing version.
 
     :param cfg_train_lance: Composed tiny Lance training configuration.
     """
     dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
-    rolling_root = dataset_root.parent / "rolling"
-    version_root = rolling_root / "versions/7"
+    growing_root = dataset_root.parent / "growing"
+    dataset_path = growing_root / "train.lance"
+    shutil.copytree(dataset_root / "train.lance", dataset_path)
+    local = lance.dataset(dataset_path)
+    transaction = local.read_transaction(local.version)
+    assert transaction is not None
+    version_root = growing_root / "versions/7"
     version_root.mkdir(parents=True)
-    shutil.copytree(dataset_root / "train.lance", version_root / "train.lance")
     shutil.copyfile(dataset_root / "stats.npz", version_root / "stats.npz")
-    active_path = rolling_root / "active.json"
+    np.savez(
+        version_root / "welford.npz",
+        count=np.int64(2),
+        mean=np.zeros((1,), dtype=np.float32),
+        m2=np.ones((1,), dtype=np.float32),
+    )
+    stats_sha = hashlib.sha256((version_root / "stats.npz").read_bytes()).hexdigest()
+    welford_sha = hashlib.sha256((version_root / "welford.npz").read_bytes()).hexdigest()
+    remote = GrowingSnapshot(
+        branch="growing",
+        branch_uri="s3://example/train.lance/tree/growing",
+        version=7,
+        baseline_version=1,
+        baseline_transaction="baseline-tx",
+        transaction="remote-tx-7",
+        baseline_train_shards=1,
+        max_train_shards=500,
+        num_extra_shards=1,
+        high_watermark=2,
+        dataset_spec_fingerprint="entrypoint-fingerprint",
+        row_count=local.count_rows(),
+        fragment_count=len(local.get_fragments()),
+        schema_fingerprint="remote-schema",
+        stats_sha256=stats_sha,
+        welford_sha256=welford_sha,
+    )
+    (version_root / "snapshot.json").write_text(remote.model_dump_json())
+    active_path = growing_root / "active.json"
     active_path.write_text(
-        ActiveRollingSnapshot(
-            branch="rolling",
-            version=7,
-            transaction="tx-7",
-            dataset_path=str(version_root / "train.lance"),
-            dataset_spec_fingerprint="entrypoint-fingerprint",
-            row_count=2,
-            schema_fingerprint="schema",
-            stats_sha256="stats",
-            high_watermark=2,
-            membership_relative_ids=(0,),
+        ActiveGrowingSnapshot(
+            branch=remote.branch,
+            remote_version=remote.version,
+            remote_transaction=remote.transaction,
+            local_version=local.version,
+            local_transaction=transaction.uuid,
+            dataset_path=str(dataset_path),
+            version_stats_path=str(version_root),
+            dataset_spec_fingerprint=remote.dataset_spec_fingerprint,
+            row_count=remote.row_count,
+            fragment_count=remote.fragment_count,
+            schema_fingerprint=hashlib.sha256(local.schema.serialize().to_pybytes()).hexdigest(),
+            stats_sha256=stats_sha,
+            welford_sha256=welford_sha,
+            high_watermark=remote.high_watermark,
         ).model_dump_json(),
         encoding="utf-8",
     )
     with open_dict(cfg_train_lance):
-        cfg_train_lance.training.rolling_active_record = str(active_path)
-        cfg_train_lance.training.rolling_refresh_epoch_interval = 1
+        cfg_train_lance.training.growing_active_record = str(active_path)
+        cfg_train_lance.training.growing_refresh_epoch_interval = 1
         cfg_train_lance.datamodule.num_workers = 0
         cfg_train_lance.datamodule.persistent_workers = False
     HydraConfig().set_config(cfg_train_lance)
@@ -1295,8 +1332,8 @@ def test_train_rolling_config_adopts_active_snapshot(cfg_train_lance: DictConfig
     _, object_dict = train(cfg_train_lance)
 
     datamodule = object_dict["datamodule"]
-    assert datamodule.state_dict()["rolling_active_version"] == 7
-    assert datamodule.state_dict()["rolling_history"] == (7,)
+    assert datamodule.state_dict()["growing_active_snapshot"]["remote_version"] == 7
+    assert datamodule.state_dict()["growing_history"] == (7,)
 
 
 @pytest.mark.dataloader_multiprocess

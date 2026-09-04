@@ -129,6 +129,7 @@ class LanceMapDataset(SafeLanceDataset):
         *,
         columns: Sequence[str] | None = None,
         storage_options: dict[str, str] | None = None,
+        version: int | None = None,
     ):
         """Open the dataset lazily for map-style access.
 
@@ -136,8 +137,12 @@ class LanceMapDataset(SafeLanceDataset):
         :param columns: Columns each item carries; ``None`` reads all.
         :param storage_options: Object-store config for a cloud ``uri`` (see
             :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
+        :param version: Exact local Lance version retained across worker reopens.
         """
-        super().__init__(str(uri), dataset_options=_dataset_options(storage_options))
+        options = cast(dict[str, object], _dataset_options(storage_options) or {})
+        if version is not None:
+            options["version"] = version
+        super().__init__(str(uri), dataset_options=options)
         self._columns = list(columns) if columns is not None else None
         self._opening_pid: int | None = None
 

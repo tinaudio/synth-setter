@@ -237,6 +237,13 @@ class R2Location(BaseModel):
         """
         return self._under_prefix(f"{split}.lance")
 
+    def welford_uri(self) -> str:
+        """R2 URI of the canonical cumulative ``welford.npz`` state.
+
+        :returns: URI consumed by growing-train publication.
+        """
+        return self._under_prefix("welford.npz")
+
     def stats_uri(self) -> str:
         """R2 URI of ``stats.npz`` (normalization statistics).
 
@@ -285,22 +292,39 @@ class R2Location(BaseModel):
         """
         return f"{self.shard_staging_dir_uri(shard_id)}{worker_id}-{attempt_uuid}{ext}"
 
-    def rolling_metadata_uri(self, branch: str, name: str) -> str:
-        """Return a versioned rolling-publication object URI.
+    def growing_metadata_uri(self, branch: str, name: str) -> str:
+        """Return a versioned growing-publication object URI.
 
         :param branch: Native Lance branch name.
         :param name: Relative metadata object below the branch root.
-        :returns: R2 URI under ``metadata/rolling/<branch>/``.
+        :returns: R2 URI under ``metadata/growing/<branch>/``.
         """
-        return self._under_prefix(f"metadata/rolling/{branch}/{name}")
+        return self._under_prefix(f"metadata/growing/{branch}/{name}")
 
-    def rolling_shard_claims_uri(self, branch: str) -> str:
-        """Return the rolling extra-shard claim queue URI.
+    def growing_shard_staging_dir_uri(self, branch: str, shard_id: int) -> str:
+        """Return a branch-isolated growing shard sidecar directory.
+
+        :param branch: Native Lance branch name.
+        :param shard_id: Direct logical train-shard position.
+        :returns: URI below the growing branch's worker metadata.
+        """
+        return self.growing_metadata_uri(branch, f"workers/shards/shard-{shard_id:06d}/")
+
+    def growing_workers_shards_root_uri(self, branch: str) -> str:
+        """Return the branch-isolated growing shard sidecar root.
+
+        :param branch: Native Lance branch name.
+        :returns: URI containing direct train-position directories.
+        """
+        return self.growing_metadata_uri(branch, "workers/shards/")
+
+    def growing_shard_claims_uri(self, branch: str) -> str:
+        """Return the growing extra-shard claim queue URI.
 
         :param branch: Native Lance branch name.
         :returns: Lance queue URI isolated from the frozen baseline claims.
         """
-        return self.rolling_metadata_uri(branch, "shard-claims.lance")
+        return self.growing_metadata_uri(branch, "shard-claims.lance")
 
     def shard_claims_uri(self) -> str:
         """R2 URI of the run's Lance shard-claims table (``pipeline/shard_claims.py``).

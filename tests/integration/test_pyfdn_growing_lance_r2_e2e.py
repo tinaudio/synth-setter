@@ -1,4 +1,4 @@
-"""Real public-CLI pyFDN, R2, rolling refresh, and checkpoint-resume E2E."""
+"""Real public-CLI pyFDN, R2, growing refresh, and checkpoint-resume E2E."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import torch
 
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.rolling_lance import ActiveRollingSnapshot
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import upload_spec
 from synth_setter.synth_spec import SynthName, SynthSpec
@@ -37,14 +37,14 @@ def _wait_for_version(
 ) -> int:
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
-        assert process.poll() is None, "training exited before rolling activation"
+        assert process.poll() is None, "training exited before growing activation"
         try:
-            active = ActiveRollingSnapshot.model_validate_json(active_path.read_bytes())
+            active = ActiveGrowingSnapshot.model_validate_json(active_path.read_bytes())
         except (OSError, ValueError):
             time.sleep(0.1)
             continue
-        if active.version != prior_version:
-            return active.version
+        if active.remote_version != prior_version:
+            return active.remote_version
         time.sleep(0.1)
     raise AssertionError("background materializer did not activate the ready version")
 
@@ -62,8 +62,8 @@ def _train_command(
         "experiment=pyfdn/flow",
         "trainer=cpu",
         f"datamodule.dataset_root={dataset_root}",
-        f"training.rolling_active_record={active_path}",
-        "training.rolling_refresh_epoch_interval=1",
+        f"training.growing_active_record={active_path}",
+        "training.growing_refresh_epoch_interval=1",
         "training.val_audio_probe=false",
         "datamodule.batch_size=1",
         "datamodule.num_workers=0",
@@ -95,14 +95,14 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
     for command in (
         "synth-setter-finalize-dataset",
         "synth-setter-generate-dataset-from-spec-uri",
-        "synth-setter-rolling-lance",
+        "synth-setter-growing-lance",
         "synth-setter-train",
     ):
         assert shutil.which(command), f"installed public CLI is missing: {command}"
-    prefix = f"ci-rolling-pyfdn/{os.environ.get('GITHUB_RUN_ID', 'local')}/{uuid.uuid4().hex}/"
+    prefix = f"ci-growing-pyfdn/{os.environ.get('GITHUB_RUN_ID', 'local')}/{uuid.uuid4().hex}/"
     spec = DatasetSpec.model_validate(
         {
-            "task_name": "pyfdn-rolling-r2-e2e",
+            "task_name": "pyfdn-growing-r2-e2e",
             "output_format": "lance",
             "train_val_test_sizes": [2, 1, 1],
             "base_seed": 3090,
@@ -148,28 +148,30 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
             ]
         )
         operator = tmp_path / "operator"
-        rolling = ["synth-setter-rolling-lance"]
+        growing = ["synth-setter-growing-lance"]
         _run(
-            rolling
+            growing
             + [
                 "init",
                 spec.r2.input_spec_uri(),
                 "--branch",
-                "rolling-e2e",
+                "growing-e2e",
                 "--baseline-version",
                 "1",
+                "--max-train-shards",
+                "3",
                 "--num-extra-shards",
                 "1",
                 "--work-dir",
                 str(operator),
             ]
         )
-        local_root = tmp_path / "rolling-local"
-        materialize = rolling + [
+        local_root = tmp_path / "growing-local"
+        materialize = growing + [
             "materialize",
             spec.r2.input_spec_uri(),
             "--branch",
-            "rolling-e2e",
+            "growing-e2e",
             "--local-root",
             str(local_root),
             "--work-dir",
@@ -177,14 +179,14 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
         ]
         _run(materialize)
         active_path = local_root / "active.json"
-        initial = ActiveRollingSnapshot.model_validate_json(active_path.read_bytes())
+        initial = ActiveGrowingSnapshot.model_validate_json(active_path.read_bytes())
         _run(
-            rolling
+            growing
             + [
                 "enqueue",
                 spec.r2.input_spec_uri(),
                 "--branch",
-                "rolling-e2e",
+                "growing-e2e",
                 "--work-dir",
                 str(operator / "enqueue"),
             ]
@@ -210,11 +212,11 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
             text=True,
         )
         processes.append(trainer)
-        generate_command = rolling + [
+        generate_command = growing + [
             "generate",
             spec.r2.input_spec_uri(),
             "--branch",
-            "rolling-e2e",
+            "growing-e2e",
             "--work-dir",
             str(operator / "generate"),
         ]
@@ -228,26 +230,36 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
         for generator in generators:
             assert generator.wait(timeout=900) == 0
         _run(
-            rolling
+            growing
             + [
                 "finalize",
                 spec.r2.input_spec_uri(),
                 "--branch",
-                "rolling-e2e",
+                "growing-e2e",
                 "--work-dir",
                 str(operator / "finalize"),
             ]
         )
-        adopted_version = _wait_for_version(active_path, initial.version, trainer)
-        adopted = ActiveRollingSnapshot.model_validate_json(active_path.read_bytes())
-        assert adopted.row_count == initial.row_count == 2
+        adopted_version = _wait_for_version(active_path, initial.remote_version, trainer)
+        adopted = ActiveGrowingSnapshot.model_validate_json(active_path.read_bytes())
+        assert initial.row_count == 2
+        assert adopted.row_count == 3
+        assert adopted.dataset_path == initial.dataset_path
         train_target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri("train"))
         remote_train = lance.dataset(train_target, storage_options=storage_options)
         assert remote_train.version == 1
         assert remote_train.count_rows() == 2
-        assert remote_train.checkout_version(("rolling-e2e", initial.version)).count_rows() == 2
-        refreshed = remote_train.checkout_version(("rolling-e2e", adopted_version))
-        assert refreshed.count_rows() == 2
+        baseline_branch = remote_train.checkout_version(("growing-e2e", initial.remote_version))
+        refreshed = remote_train.checkout_version(("growing-e2e", adopted_version))
+        baseline_files = [
+            fragment.metadata.files[0].path for fragment in baseline_branch.get_fragments()
+        ]
+        refreshed_files = [
+            fragment.metadata.files[0].path for fragment in refreshed.get_fragments()
+        ]
+        assert baseline_branch.count_rows() == 2
+        assert refreshed.count_rows() == 3
+        assert refreshed_files[: len(baseline_files)] == baseline_files
         audio = np.asarray(refreshed.to_table(columns=["audio"])["audio"].to_pylist())
         assert np.isfinite(audio).all()
         assert np.any(audio != 0)
@@ -263,8 +275,11 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
         checkpoint = train_root / "checkpoints" / "last.ckpt"
         saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
         state = saved["LanceVSTDataModule"]
-        assert tuple(state["rolling_history"]) == (initial.version, adopted_version)
-        assert state["rolling_active_version"] == adopted_version
+        assert tuple(state["growing_history"]) == (
+            initial.remote_version,
+            adopted_version,
+        )
+        assert state["growing_active_snapshot"]["remote_version"] == adopted_version
 
         resume_root = tmp_path / "resume"
         _run(
@@ -281,8 +296,11 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
             map_location="cpu",
             weights_only=False,
         )["LanceVSTDataModule"]
-        assert resumed["rolling_active_version"] == adopted_version
-        assert tuple(resumed["rolling_history"]) == (initial.version, adopted_version)
+        assert resumed["growing_active_snapshot"]["remote_version"] == adopted_version
+        assert tuple(resumed["growing_history"]) == (
+            initial.remote_version,
+            adopted_version,
+        )
     finally:
         for process in processes:
             if process.poll() is None:

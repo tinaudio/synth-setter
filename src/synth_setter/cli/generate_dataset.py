@@ -997,6 +997,7 @@ def render_and_upload_shard(
     *,
     loggers: list[Logger],
     target_lance_uri: str | None = None,
+    attempt_staging_dir_uri: str | None = None,
 ) -> tuple[int, RenderRejectionMetrics]:
     """Render a single shard and stage it to R2.
 
@@ -1008,7 +1009,8 @@ def render_and_upload_shard(
     :param shard: Shard to render; names the output dataset and seeds the renderer.
     :param work_dir: Hydra per-run output dir the shard is written under.
     :param loggers: Receive a metric before a recognized X11 failure propagates.
-    :param target_lance_uri: Rolling branch URI receiving uncommitted fragment data.
+    :param target_lance_uri: Growing branch URI receiving uncommitted fragment data.
+    :param attempt_staging_dir_uri: Branch-specific growing sidecar directory.
     :returns: Local shard byte size and validated renderer rejection counts.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -1020,7 +1022,13 @@ def render_and_upload_shard(
     attempt_uuid = uuid4().hex
     # Attempt start marker — append-only; orphaned without a .valid it is
     # the observable evidence of a crashed attempt (#1776).
-    write_rendering_marker(spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid)
+    write_rendering_marker(
+        spec,
+        shard.shard_id,
+        worker_id=worker_id,
+        attempt_uuid=attempt_uuid,
+        attempt_staging_dir_uri=attempt_staging_dir_uri,
+    )
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
     # loop, and skips materialization on non-Linux.
@@ -1064,10 +1072,11 @@ def render_and_upload_shard(
     # Worker-side validation gates staging — corrupt renders never earn a
     # .valid marker (design §7.3 shard write protocol).
     with _FULL_SHARD_VALIDATION_LOCK:
+        uses_explicit_identity = target_lance_uri is not None or shard.shard_id >= spec.num_shards
         shard_errors = (
-            validate_shard(shard_path, spec)
-            if shard.shard_id < spec.num_shards
-            else validate_shard(shard_path, spec, expected_shard=shard)
+            validate_shard(shard_path, spec, expected_shard=shard)
+            if uses_explicit_identity
+            else validate_shard(shard_path, spec)
         )
     if shard_errors:
         raise RuntimeError(
@@ -1089,6 +1098,7 @@ def render_and_upload_shard(
             worker_id=worker_id,
             attempt_uuid=attempt_uuid,
             target_lance_uri=target_lance_uri,
+            attempt_staging_dir_uri=attempt_staging_dir_uri,
         )
     logger.info(
         "shard staged: {} -> {}",

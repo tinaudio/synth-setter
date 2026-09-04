@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from math import prod
 from pathlib import Path
 from typing import cast
@@ -46,7 +47,7 @@ from synth_setter.data.vst_datamodule import (
     ranked_generator_seed,
 )
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.data.rolling_lance import ActiveRollingSnapshot
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +526,7 @@ class LanceVSTDataModule(VSTDataModule):
         download_dataset_txids: dict[str, str] | None = None,
         download_dataset_row_limit: int | None = None,
         high_memory_materialization: bool = False,
-        rolling_active_record: str | Path | None = None,
+        growing_active_record: str | Path | None = None,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -552,8 +553,8 @@ class LanceVSTDataModule(VSTDataModule):
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
         :param high_memory_materialization: Whether to use high-memory Lance tuning.
-        :param rolling_active_record: Atomic active-record path for train-only snapshots.
-        :raises ValueError: Rolling refresh is combined with persistent workers.
+        :param growing_active_record: Atomic active-record path for train-only snapshots.
+        :raises ValueError: Growing refresh is combined with persistent workers.
         """
         super().__init__(
             dataset_root=dataset_root,
@@ -578,17 +579,15 @@ class LanceVSTDataModule(VSTDataModule):
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
         self._setup_stage: str | None = None
-        self.rolling_active_record = (
-            Path(rolling_active_record) if rolling_active_record is not None else None
+        self.growing_active_record = (
+            Path(growing_active_record) if growing_active_record is not None else None
         )
-        if self.rolling_active_record is not None and persistent_workers:
-            raise ValueError("rolling_active_record requires persistent_workers=false")
-        self._rolling_active_version: int | None = None
-        self._rolling_fingerprint: str | None = None
-        self._rolling_history: list[int] = []
-        self._rolling_identity: dict[str, object] | None = None
-        self._rolling_resume_version: int | None = None
-        self._rolling_skip_refresh_once = False
+        if self.growing_active_record is not None and persistent_workers:
+            raise ValueError("growing_active_record requires persistent_workers=false")
+        self._growing_snapshot: ActiveGrowingSnapshot | None = None
+        self._growing_resume_snapshot: ActiveGrowingSnapshot | None = None
+        self._growing_history: list[int] = []
+        self._growing_skip_refresh_once = False
 
     def _dataset_for(self, split: str) -> _SplitDataset:
         """Return one built split through the public dataset attributes.
@@ -629,6 +628,7 @@ class LanceVSTDataModule(VSTDataModule):
         ot: bool,
         read_audio: bool,
         stats: tuple[np.ndarray, np.ndarray] | None,
+        version: int | None = None,
     ) -> _MapSplit:
         """Build one real Lance split and its batch transformer.
 
@@ -636,6 +636,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param ot: Whether to match batch noise to parameters.
         :param read_audio: Whether to project prediction audio.
         :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
+        :param version: Exact local Lance version for a growing train split.
         :returns: Sample-indexed dataset and collate operation.
         """
         spec = self.embedding_conditioning
@@ -647,7 +648,7 @@ class LanceVSTDataModule(VSTDataModule):
         columns = self._loader_columns(read_audio=read_audio)
         mean, std = stats if stats is not None else (None, None)
         return _MapSplit(
-            dataset=LanceMapDataset(shard_path, columns=columns),
+            dataset=LanceMapDataset(shard_path, columns=columns, version=version),
             collate=PrepareBatchCollate(
                 mean=mean,
                 std=std,
@@ -683,17 +684,150 @@ class LanceVSTDataModule(VSTDataModule):
             collate=_model_batch_passthrough,
         )
 
-    def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:
-        """Build the requested on-disk Lance splits.
+    @staticmethod
+    def _digest(path: Path) -> str:
+        return sha256(path.read_bytes()).hexdigest()
 
-        :param split_names: Split names required by the current stage.
-        :returns: Requested split datasets and collate operations.
+    def _validate_growing_snapshot(self, snapshot: ActiveGrowingSnapshot) -> None:
+        """Validate every checkpoint-loadable local identity field.
+
+        :param snapshot: Remote-to-local identity to validate.
+        :raises ValueError: Any exact identity field disagrees with local artifacts.
         """
-        train_shard = self._active_train_shard()
+        dataset_path = Path(snapshot.dataset_path)
+        version_root = Path(snapshot.version_stats_path)
+        if dataset_path != version_root.parents[1] / f"train{self.shard_suffix}":
+            raise ValueError("growing snapshot does not use the shared train dataset path")
+        local = lance.dataset(str(dataset_path), version=snapshot.local_version)
+        transaction = local.read_transaction(snapshot.local_version)
+        if transaction is None or transaction.uuid != snapshot.local_transaction:
+            raise ValueError("growing local Lance transaction does not match identity")
+        if local.count_rows() != snapshot.row_count:
+            raise ValueError("growing local row count does not match identity")
+        if len(local.get_fragments()) != snapshot.fragment_count:
+            raise ValueError("growing local fragment count does not match identity")
+        schema_digest = sha256(local.schema.serialize().to_pybytes()).hexdigest()
+        if schema_digest != snapshot.schema_fingerprint:
+            raise ValueError("growing local schema does not match identity")
+        for name, digest in (
+            ("stats.npz", snapshot.stats_sha256),
+            ("welford.npz", snapshot.welford_sha256),
+        ):
+            path = version_root / name
+            if not path.is_file() or self._digest(path) != digest:
+                raise ValueError(f"growing {name} does not match identity")
+        remote = GrowingSnapshot.model_validate_json(
+            (version_root / "snapshot.json").read_bytes()
+        )
+        if (
+            remote.branch != snapshot.branch
+            or remote.version != snapshot.remote_version
+            or remote.transaction != snapshot.remote_transaction
+            or remote.dataset_spec_fingerprint != snapshot.dataset_spec_fingerprint
+            or remote.row_count != snapshot.row_count
+            or remote.fragment_count != snapshot.fragment_count
+            or remote.stats_sha256 != snapshot.stats_sha256
+            or remote.welford_sha256 != snapshot.welford_sha256
+            or remote.high_watermark != snapshot.high_watermark
+        ):
+            raise ValueError("growing remote-to-local identity metadata disagrees")
+        local.validate()
+
+    def _local_active_candidate(self) -> ActiveGrowingSnapshot | None:
+        if self.growing_active_record is None:
+            return None
+        from pydantic import ValidationError
+
+        try:
+            candidate = ActiveGrowingSnapshot.model_validate_json(
+                self.growing_active_record.read_bytes()
+            )
+            self._validate_growing_snapshot(candidate)
+        except (OSError, ValidationError, ValueError) as exc:
+            logger.warning(
+                "unable to validate growing active record %s; retaining prior data: %s",
+                self.growing_active_record,
+                exc,
+            )
+            return None
+        return candidate
+
+    def _read_active_train(self) -> ActiveGrowingSnapshot | None:
+        """Coordinate one exact candidate without returning before DDP collectives.
+
+        :returns: Unanimously available candidate, or ``None``.
+        """
+        local = self._local_active_candidate()
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return local
+        payload = [
+            local.model_dump()
+            if torch.distributed.get_rank() == 0 and local is not None
+            else None
+        ]
+        torch.distributed.broadcast_object_list(payload, src=0)
+        selected = payload[0]
+        ready = local is not None and local.model_dump() == selected
+        readiness: list[bool | None] = [None] * torch.distributed.get_world_size()
+        torch.distributed.all_gather_object(readiness, ready)
+        if selected is None or not all(readiness):
+            return None
+        return ActiveGrowingSnapshot.model_validate(selected)
+
+    def _select_growing_snapshot(self) -> ActiveGrowingSnapshot | None:
+        if self._growing_resume_snapshot is not None:
+            self._validate_growing_snapshot(self._growing_resume_snapshot)
+            return self._growing_resume_snapshot
+        candidate = self._read_active_train()
+        if candidate is None:
+            return self._growing_snapshot
+        if self._growing_snapshot is not None and (
+            candidate.branch != self._growing_snapshot.branch
+            or candidate.dataset_spec_fingerprint
+            != self._growing_snapshot.dataset_spec_fingerprint
+        ):
+            logger.warning("incompatible growing candidate; retaining prior snapshot")
+            return self._growing_snapshot
+        return candidate
+
+    def _active_train_shard(self) -> Path:
+        """Adopt one validated exact local version or retain the prior data.
+
+        :returns: Active shared train dataset path or baseline path.
+        """
+        snapshot = self._select_growing_snapshot()
+        if snapshot is None:
+            return self.dataset_root / f"train{self.shard_suffix}"
+        if (
+            self._growing_snapshot is None
+            or snapshot.remote_version != self._growing_snapshot.remote_version
+        ):
+            self._growing_snapshot = snapshot
+            self._growing_history.append(snapshot.remote_version)
+        return Path(snapshot.dataset_path)
+
+    def _active_stats_shard(self, train_shard: Path) -> Path:
+        if self._growing_snapshot is None:
+            return train_shard
+        return Path(self._growing_snapshot.version_stats_path) / f"train{self.shard_suffix}"
+
+    def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:
+        """Build train from growth while eval-only stages stay on baseline stats.
+
+        :param split_names: Stage-specific splits to build.
+        :returns: Built split datasets and collates.
+        """
+        uses_train = "train" in split_names
+        train_shard = (
+            self._active_train_shard()
+            if uses_train
+            else self.dataset_root / f"train{self.shard_suffix}"
+        )
         split_stats = predict_stats = None
         if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
             if any(name != "predict" for name in split_names):
-                split_stats = load_dataset_statistics(train_shard)
+                stats_shard = self._active_stats_shard(train_shard) if uses_train else train_shard
+                split_stats = load_dataset_statistics(stats_shard)
             if "predict" in split_names:
                 predict_stats = (
                     split_stats
@@ -701,114 +835,50 @@ class LanceVSTDataModule(VSTDataModule):
                     and self.predict_file.parent == self.dataset_root
                     else load_dataset_statistics(self.predict_file)
                 )
-        shard_paths = {
+        paths = {
             "train": train_shard,
             "val": self.dataset_root / f"val{self.shard_suffix}",
             "test": self.dataset_root / f"test{self.shard_suffix}",
             "predict": self.predict_file,
         }
+        active_version = (
+            self._growing_snapshot.local_version
+            if uses_train and self._growing_snapshot is not None
+            else None
+        )
         return {
             name: self._build_lance_split(
-                shard_paths[name],
+                paths[name],
                 ot=self.ot if name == "train" else False,
                 read_audio=name == "predict",
                 stats=predict_stats if name == "predict" else split_stats,
+                version=active_version if name == "train" else None,
             )
             for name in split_names
         }
 
-    def _read_active_train(self) -> tuple[Path, ActiveRollingSnapshot] | None:
-        """Read a complete local active record, retaining prior data on failure.
-
-        :returns: Dataset path, version, and spec fingerprint, or ``None``.
-        """
-        if self.rolling_active_record is None:
-            return None
-        from pydantic import ValidationError
-
-        try:
-            active = ActiveRollingSnapshot.model_validate_json(
-                self.rolling_active_record.read_bytes()
-            )
-        except (OSError, ValidationError) as exc:
-            logger.warning(
-                "unable to read rolling active record %s; retaining baseline: %s",
-                self.rolling_active_record,
-                exc,
-            )
-            return None
-        path = Path(active.dataset_path)
-        local = (path, active) if path.is_dir() else None
-        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
-            return local
-        identity = active.model_dump(exclude={"dataset_path"})
-        payload = [
-            identity if torch.distributed.get_rank() == 0 and local is not None else None
-        ]
-        torch.distributed.broadcast_object_list(payload, src=0)
-        selected = payload[0]
-        ready = local is not None and identity == selected
-        readiness: list[bool | None] = [None] * torch.distributed.get_world_size()
-        torch.distributed.all_gather_object(readiness, ready)
-        return local if selected is not None and all(readiness) else None
-
-    def _active_train_shard(self) -> Path:
-        """Return the active immutable train snapshot or the frozen baseline.
-
-        :returns: Train Lance path selected for the next loader construction.
-        :raises FileNotFoundError: A checkpoint's immutable local version is absent.
-        """
-        active = self._read_active_train()
-        if self._rolling_resume_version is not None and self.rolling_active_record is not None:
-            resume_path = (
-                self.rolling_active_record.parent
-                / "versions"
-                / str(self._rolling_resume_version)
-                / f"train{self.shard_suffix}"
-            )
-            if resume_path.is_dir():
-                return resume_path
-            raise FileNotFoundError(
-                f"rolling checkpoint version {self._rolling_resume_version} is not "
-                f"available at {resume_path}"
-            )
-        if active is None:
-            return self.dataset_root / f"train{self.shard_suffix}"
-        path, snapshot = active
-        if (
-            self._rolling_fingerprint is not None
-            and snapshot.dataset_spec_fingerprint != self._rolling_fingerprint
-        ):
-            logger.warning(
-                "rolling active record fingerprint %s is incompatible with adopted fingerprint "
-                "%s; ignoring snapshot",
-                snapshot.dataset_spec_fingerprint,
-                self._rolling_fingerprint,
-            )
-            return self.dataset_root / f"train{self.shard_suffix}"
-        self._rolling_fingerprint = snapshot.dataset_spec_fingerprint
-        if snapshot.version != self._rolling_active_version:
-            self._rolling_active_version = snapshot.version
-            self._rolling_identity = snapshot.model_dump(exclude={"dataset_path"})
-            self._rolling_history.append(snapshot.version)
-        return path
-
-    def _refresh_rolling_train(self) -> None:
-        """Rebuild only train when an epoch-boundary loader request sees a new version."""
-        if self.rolling_active_record is None or "train" not in self._splits:
+    def _refresh_growing_train(self) -> None:
+        """Rebuild train only when every rank can adopt a newer exact snapshot."""
+        if self.growing_active_record is None or "train" not in self._splits:
             return
-        previous_version = self._rolling_active_version
+        previous = self._growing_snapshot
         train_shard = self._active_train_shard()
-        if previous_version == self._rolling_active_version:
+        if previous == self._growing_snapshot:
             return
         stats = None
         if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
-            stats = load_dataset_statistics(train_shard)
+            stats = load_dataset_statistics(self._active_stats_shard(train_shard))
+        version = (
+            self._growing_snapshot.local_version
+            if self._growing_snapshot is not None
+            else None
+        )
         self._splits["train"] = self._build_lance_split(
             train_shard,
             ot=self.ot,
             read_audio=False,
             stats=stats,
+            version=version,
         )
 
     def setup(self, stage: str | None = None) -> None:
@@ -832,9 +902,9 @@ class LanceVSTDataModule(VSTDataModule):
         else:
             self._splits = self._build_real_splits(split_names)
         self._setup_stage = stage
-        if self._rolling_resume_version is not None:
-            self._rolling_resume_version = None
-            self._rolling_skip_refresh_once = True
+        if self._growing_resume_snapshot is not None:
+            self._growing_resume_snapshot = None
+            self._growing_skip_refresh_once = True
 
     def _dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
         """Build one standard map-style dataloader.
@@ -873,42 +943,48 @@ class LanceVSTDataModule(VSTDataModule):
 
         :returns: Sample-indexed training dataloader.
         """
-        if self._rolling_skip_refresh_once:
-            self._rolling_skip_refresh_once = False
+        if self._growing_skip_refresh_once:
+            self._growing_skip_refresh_once = False
         else:
-            self._refresh_rolling_train()
+            self._refresh_growing_train()
         return self._dataloader("train", shuffle=True, drop_last=True)
 
     def state_dict(self) -> dict[str, object]:
-        """Persist rolling train identity and adoption history in checkpoints.
+        """Persist growing train identity and adoption history in checkpoints.
 
         :returns: DataModule checkpoint state.
         """
         return {
-            "rolling_active_version": self._rolling_active_version,
-            "rolling_fingerprint": self._rolling_fingerprint,
-            "rolling_history": tuple(self._rolling_history),
-            "rolling_identity": self._rolling_identity,
+            "growing_active_snapshot": (
+                self._growing_snapshot.model_dump()
+                if self._growing_snapshot is not None
+                else None
+            ),
+            "growing_history": tuple(self._growing_history),
         }
 
     def load_state_dict(self, state_dict: dict[str, object]) -> None:
-        """Restore the exact rolling identity before loader construction.
+        """Restore the exact growing identity before loader construction.
 
         :param state_dict: DataModule checkpoint state.
+        :raises ValueError: Checkpoint history or snapshot identity is invalid.
         """
-        version = state_dict.get("rolling_active_version")
-        fingerprint = state_dict.get("rolling_fingerprint")
-        history = state_dict.get("rolling_history", ())
-        identity = state_dict.get("rolling_identity")
-        self._rolling_active_version = version if isinstance(version, int) else None
-        self._rolling_resume_version = self._rolling_active_version
-        self._rolling_fingerprint = fingerprint if isinstance(fingerprint, str) else None
-        self._rolling_history = (
-            [item for item in history if isinstance(item, int)]
-            if isinstance(history, (list, tuple))
-            else []
+        payload = state_dict.get("growing_active_snapshot")
+        snapshot = (
+            ActiveGrowingSnapshot.model_validate(payload)
+            if payload is not None
+            else None
         )
-        self._rolling_identity = identity if isinstance(identity, dict) else None
+        history = state_dict.get("growing_history", ())
+        if not isinstance(history, (list, tuple)) or not all(
+            isinstance(item, int) for item in history
+        ):
+            raise ValueError("growing_history must contain only integer remote versions")
+        if snapshot is not None:
+            self._validate_growing_snapshot(snapshot)
+        self._growing_snapshot = snapshot
+        self._growing_resume_snapshot = snapshot
+        self._growing_history = list(history)
 
     def val_dataloader(self) -> DataLoader:
         """Return the ordered validation loader, retaining a ragged tail.

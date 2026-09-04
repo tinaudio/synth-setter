@@ -202,18 +202,18 @@ def finalize_from_spec(
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     """Return the R2 URIs of the objects finalize materialized for this run.
 
-    Each non-empty split ``.lance`` dataset plus ``stats.npz`` is referenced;
+    Each non-empty split plus cumulative ``welford.npz`` and ``stats.npz`` is referenced;
     empty splits contribute nothing — finalize prunes them.
 
     :param spec: Validated dataset spec.
-    :returns: Canonical ``r2://`` URIs, split datasets first then ``stats.npz``.
+    :returns: Canonical URIs, split datasets first then Welford and derived stats.
     """
     split_uris = [
         spec.r2.split_lance_uri(split)
         for split, (lo, hi) in spec.split_shard_ranges.items()
         if lo < hi
     ]
-    return [*split_uris, spec.r2.stats_uri()]
+    return [*split_uris, spec.r2.welford_uri(), spec.r2.stats_uri()]
 
 
 def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
@@ -221,7 +221,7 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
 
     Names the artifact ``data-{spec.task_name}`` (type ``dataset``) per
     ``storage-provenance-spec.md`` §4, references the finalized R2 objects as
-    ``s3://`` URIs (split ``.lance`` datasets plus ``stats.npz``), and records
+    ``s3://`` URIs (split datasets plus Welford state and stats), and records
     ``shard_count`` / ``n_samples`` / ``git_sha``
     in ``artifact.metadata`` per §6. References use ``checksum=False`` because
     R2's custom S3 endpoint is not reachable by W&B's default reference

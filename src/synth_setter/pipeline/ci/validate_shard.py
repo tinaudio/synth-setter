@@ -77,7 +77,7 @@ def validate_shard(
 
     :param shard_path: Local filesystem path to the shard to validate.
     :param spec: Dataset spec the shard is expected to conform to.
-    :param expected_shard: Explicit identity for rolling shards outside ``spec.shards``.
+    :param expected_shard: Explicit identity for growing shards outside ``spec.shards``.
     :returns: List of error strings (empty = valid).
     :rtype: list[str]
     """
@@ -170,7 +170,7 @@ def _validate_lance_shard(
 
     :param shard_path: Local filesystem path to the Lance shard dataset directory.
     :param spec: Dataset spec the shard is expected to conform to.
-    :param expected_shard: Explicit identity for rolling shards outside ``spec.shards``.
+    :param expected_shard: Explicit identity for growing shards outside ``spec.shards``.
     :returns: List of error strings (empty = valid).
     """
     import lance

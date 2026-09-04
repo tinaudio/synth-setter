@@ -219,7 +219,7 @@ def test_branch_overwrite_uses_branch_data_namespace_and_preserves_versions(
     train_uri = tmp_path / "train.lance"
     baseline = _worker_writes_fragment(train_uri, schema, _arange_arrays(0))[0]
     commit_lance_dataset(train_uri, schema, [baseline])
-    branch = lance.dataset(str(train_uri)).create_branch("rolling", 1)
+    branch = lance.dataset(str(train_uri)).create_branch("append-test", 1)
     old_branch_version = branch.version
 
     replacement_arrays = _arange_arrays(_VALUE_STRIDE)

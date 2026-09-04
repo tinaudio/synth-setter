@@ -70,9 +70,9 @@ jobs:
           - name: pipeline-lance
             patterns:
               - synth_setter.pipeline.data.lance_*
-          - name: pipeline-rolling-lance
+          - name: pipeline-growing-lance
             patterns:
-              - synth_setter.pipeline.data.rolling_lance.*
+              - synth_setter.pipeline.data.growing_lance.*
           - name: pipeline-stats
             patterns:
               - synth_setter.pipeline.data.stats.*

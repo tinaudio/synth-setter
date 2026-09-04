@@ -15,8 +15,8 @@ devices: 1
 # perform a validation loop every N training epochs
 check_val_every_n_epoch: null
 
-# Recreate the train loader at rolling snapshot adoption boundaries.
-reload_dataloaders_every_n_epochs: ${oc.select:training.rolling_refresh_epoch_interval,0}
+# Recreate the train loader at growing snapshot adoption boundaries.
+reload_dataloaders_every_n_epochs: ${oc.select:training.growing_refresh_epoch_interval,0}
 
 # set True to to ensure deterministic results
 # makes training slower but gives more reproducibility than just setting seeds

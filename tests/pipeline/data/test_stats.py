@@ -45,6 +45,60 @@ def _existing_from_samples(
     return existing
 
 
+def test_welford_archive_round_trip_is_canonical(tmp_path: Path) -> None:
+    """The public archive helpers preserve strict cumulative state.
+
+    :param tmp_path: Isolated archive directory.
+    """
+    path = tmp_path / "welford.npz"
+    state = (
+        5,
+        np.array([[1.0, 2.0]], dtype=np.float32),
+        np.array([[3.0, 4.0]], dtype=np.float32),
+    )
+
+    _stats_module.save_welford(path, state, expected_shape=(1, 2))
+
+    loaded = _stats_module.load_welford(path, expected_shape=(1, 2))
+    assert loaded[0] == 5
+    np.testing.assert_array_equal(loaded[1], state[1])
+    np.testing.assert_array_equal(loaded[2], state[2])
+    with np.load(path) as archive:
+        assert archive["count"].shape == ()
+        assert archive["count"].dtype == np.dtype(np.int64)
+        assert archive["mean"].dtype == np.dtype(np.float32)
+        assert archive["m2"].dtype == np.dtype(np.float32)
+
+
+def test_load_welford_wrong_shape_fails_closed(tmp_path: Path) -> None:
+    """A cumulative archive cannot be reused with a different mel shape.
+
+    :param tmp_path: Isolated archive directory.
+    """
+    path = tmp_path / "welford.npz"
+    np.savez(
+        path,
+        count=np.int64(5),
+        mean=np.ones((2,), dtype=np.float32),
+        m2=np.ones((2,), dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError, match="mean must have shape"):
+        _stats_module.load_welford(path, expected_shape=(1, 2))
+
+
+def test_load_welford_noncanonical_dtype_fails_closed(tmp_path: Path) -> None:
+    """Archives with promoted floating-point state are rejected.
+
+    :param tmp_path: Isolated archive directory.
+    """
+    path = tmp_path / "welford.npz"
+    np.savez(path, count=np.int64(5), mean=np.ones((2,)), m2=np.ones((2,)))
+
+    with pytest.raises(ValueError, match="mean must have dtype float32"):
+        _stats_module.load_welford(path, expected_shape=(2,))
+
+
 def test_merge_welford_two_states_matches_single_pass_over_all_rows(
     stats_script: ModuleType,
 ) -> None:

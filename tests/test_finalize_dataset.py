@@ -93,13 +93,17 @@ def test_finalize_uploads_stats_then_marker_at_canonical_uris(
 
     finalize_dataset.finalize(cfg)
 
+    welford_uri = spec.r2.welford_uri()
     stats_uri = spec.r2.stats_uri()
     marker_uri = spec.r2.dataset_complete_marker_uri()
+    assert uri_to_local_path(fake_r2_remote, welford_uri).is_file()
     assert uri_to_local_path(fake_r2_remote, stats_uri).is_file()
     assert uri_to_local_path(fake_r2_remote, marker_uri).is_file()
+    assert upload_order.count(welford_uri) == 1
     assert upload_order.count(stats_uri) == 1
     assert upload_order.count(marker_uri) == 1
     assert upload_order.index(marker_uri) == len(upload_order) - 1
+    assert upload_order.index(welford_uri) < upload_order.index(stats_uri)
     assert upload_order.index(stats_uri) < upload_order.index(marker_uri)
 
 
@@ -367,12 +371,13 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
         2,
         3,
         4,
+        5,
     ]
     summary_rows = [row for row in rows if "finalize/elapsed_seconds" in row]
     assert len(summary_rows) == 1
     summary = summary_rows[0]
     assert json.loads(summary["finalize/shards_processed"]) == spec.num_shards
-    assert json.loads(summary["finalize/artifacts_uploaded"]) == 4
+    assert json.loads(summary["finalize/artifacts_uploaded"]) == 5
     assert json.loads(summary["finalize/elapsed_seconds"]) >= 0
 
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
@@ -425,7 +430,7 @@ def test_finalize_keeps_r2_artifacts_when_live_metric_logging_fails(
 
     finalize_dataset.finalize(cfg)
 
-    assert len(metric_calls) == spec.num_shards + 5
+    assert len(metric_calls) == spec.num_shards + 6
     assert uri_to_local_path(fake_r2_remote, spec.r2.stats_uri()).is_file()
     assert uri_to_local_path(fake_r2_remote, spec.r2.dataset_complete_marker_uri()).is_file()
 
