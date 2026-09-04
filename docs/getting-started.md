@@ -140,9 +140,11 @@ call synth-setter's R2 preflight.
 make test-fast
 ```
 
-This runs the quick CPU-only test suite (excludes slow, gpu, mps, and
-requires_vst). All tests should pass. If you see import errors, double-check
-that the virtual environment is active and dependencies installed correctly.
+This runs the curated CPU-only inner-loop suite with a two-minute budget. It
+covers schemas, models, evaluation, features, pipeline configuration, and VST
+logic without hardware-dependent or infrastructure tests. Run `make test-medium` for the complete
+non-slow CPU suite. If you see import errors, double-check that the virtual
+environment is active and dependencies installed correctly.
 
 > **Writing or reading tests?** See
 > [docs/reference/testing.md](reference/testing.md) for the fixtures,

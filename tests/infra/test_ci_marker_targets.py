@@ -27,10 +27,10 @@ TARGET_MARKERS: dict[str, str] = {
 }
 
 # workflow file -> the make target it must invoke instead of inline pytest.
-WORKFLOW_TARGETS: dict[str, str] = {
-    "test.yml": "test-ci-unit",
-    "cpu-slow.yml": "test-ci-slow",
-    "nightly.yml": "test-ci-nightly",
+WORKFLOW_TARGETS: dict[str, tuple[str, ...]] = {
+    "test.yml": ("test-fast", "test-ci-unit"),
+    "cpu-slow.yml": ("test-ci-slow",),
+    "nightly.yml": ("test-ci-nightly",),
 }
 
 
@@ -230,7 +230,12 @@ def test_full_cpu_linux_runs_all_cpu_tests_through_headless_wrapper(
 
 
 @pytest.mark.infra
-@pytest.mark.parametrize(("workflow", "target"), sorted(WORKFLOW_TARGETS.items()))
+@pytest.mark.parametrize(
+    ("workflow", "target"),
+    sorted(
+        (workflow, target) for workflow, targets in WORKFLOW_TARGETS.items() for target in targets
+    ),
+)
 def test_workflow_invokes_make_target(project_root: Path, workflow: str, target: str) -> None:
     """The workflow calls `make <target>` rather than re-spelling pytest markers.
 
@@ -244,6 +249,29 @@ def test_workflow_invokes_make_target(project_root: Path, workflow: str, target:
         f"{workflow} must run `make {target}` so its marker filter stays in the "
         f"Makefile (see #1353)"
     )
+
+
+@pytest.mark.infra
+def test_ci_workflow_fast_lane_exceeds_wall_clock_limit_terminates(project_root: Path) -> None:
+    """CI terminates the fast lane once its 120-second limit expires.
+
+    :param project_root: Session fixture locating the workflow.
+    """
+    text = (project_root / ".github" / "workflows" / "test.yml").read_text()
+
+    assert 'budget_seconds="$(make --no-print-directory -s fast-test-budget)"' in text
+    assert 'timeout --signal=KILL "${budget_seconds}s" make test-fast' in text
+
+
+@pytest.mark.infra
+def test_ci_workflow_test_tiers_change_triggers(project_root: Path) -> None:
+    """Push and pull-request filters include the Makefile tier definitions.
+
+    :param project_root: Session fixture locating the workflow.
+    """
+    text = (project_root / ".github" / "workflows" / "test.yml").read_text()
+
+    assert text.count('      - "Makefile"') == 2
 
 
 @pytest.mark.infra

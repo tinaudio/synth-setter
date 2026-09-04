@@ -42,10 +42,24 @@ PYTEST := ./.venv/bin/pytest
 # (not torch.set_num_threads) so spawned DataLoader children inherit it.
 XDIST_THREAD_CAPS := OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
+# Explicit paths avoid importing the entire medium suite during the inner loop.
+FAST_TEST_BUDGET_SECONDS := 120
+FAST_TEST_PATHS := tests/data/vst tests/evaluation tests/features tests/models tests/pipeline/ci_config tests/pipeline/configs tests/pipeline/schemas tests/schemas
+
 # Wall-clock budgets per lane (enforced by tests/conftest.py, #2274): a run that
-# blows its budget fails even when every test passes, so degraded hosts and
-# slow-test regressions surface in the run itself instead of silently crawling.
-test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
+# blows its budget fails even when every test passes.
+fast-test-budget: ## Print the fast-tier wall-clock budget in seconds.
+	@printf '%s\n' '$(FAST_TEST_BUDGET_SECONDS)'
+
+test-fast: ## Strict inner loop: curated CPU-only tests with a two-minute budget.
+	PATH="$$(pwd)/.venv/bin:$$PATH" \
+	  PYTEST_SESSION_BUDGET_SECONDS=$(FAST_TEST_BUDGET_SECONDS) \
+	  $(XDIST_THREAD_CAPS) \
+	  $(PYTEST) -n auto \
+	  -m "not slow and not gpu and not mps and not requires_vst and not infra" \
+	  $(FAST_TEST_PATHS)
+
+test-medium: ## Complete CPU-only non-slow suite.
 	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=600 $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # Darwin VST editors share AppKit state, so requires_vst tests stay serial.
@@ -94,7 +108,7 @@ codex-doctor: ## Check Codex CLI, repo skill projection, and tinaudio skill plug
 # overrides [tool.coverage.run].source in pyproject.toml.
 CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
 
-test-ci-unit: ## CI fast suite (test.yml): CPU-only, excludes slow/gpu/mps.
+test-ci-unit: ## CI medium suite (test.yml): CPU-only, excludes slow/gpu/mps.
 	PYTEST_SESSION_BUDGET_SECONDS=1500 uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
 
 test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests with live R2, excludes gpu/mps/vst.

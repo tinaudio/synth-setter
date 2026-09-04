@@ -540,7 +540,7 @@ docs:
       - pattern: "tests/helpers/run_if.py"
         covers: "RunIf decorator (min_gpus, etc.)"
       - pattern: ".github/workflows/test.yml"
-        covers: "Default PR CI — runs make test-ci-unit (marker filter centralized in the Makefile, #1353)"
+        covers: "Default PR CI — enforces the curated make test-fast tier within 120 seconds before the complete test-ci-unit coverage suite (#1353)"
       - pattern: ".github/workflows/cpu-slow.yml"
         covers: "Slow CPU lanes: full test-ci-slow with R2 after merge/dispatch; R2-excluded test-ci-slow-pr on qualifying PRs"
       - pattern: ".github/workflows/test-mps.yml"
