@@ -23,6 +23,8 @@ download_dataset_txids: null
 download_dataset_row_limit: null
 # High-memory scanner tuning requires an explicit operational launch override.
 high_memory_materialization: false
+# Optional immutable growing train snapshot pointer; val/test remain under dataset_root.
+growing_active_record: ${oc.select:training.growing_active_record,null}
 # Identity flows from the root synth group (#2565); selecting a VST datamodule
 # without `synth=<name>` fails loudly at first resolution.
 param_spec_name: ${synth.param_spec_name}

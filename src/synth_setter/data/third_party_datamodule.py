@@ -39,7 +39,7 @@ from synth_setter.data.vst.shapes import AUDIO_FIELD, make_spectrogram
 from synth_setter.data.vst_datamodule import load_mel_statistics
 from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
+from synth_setter.pipeline.data.lance_materialize import retry_lance_read
 from synth_setter.sketch import pool_sketch_controls
 
 log = logging.getLogger(__name__)
@@ -288,7 +288,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :returns: Open Lance dataset.
         """
         if self._dataset is None:
-            self._dataset = _retry_lance_read(
+            self._dataset = retry_lance_read(
                 "third_party_worker_open",
                 lambda: lance.dataset(
                     self.uri, version=self.version, storage_options=self.storage_options
@@ -319,7 +319,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :returns: One decoded sample per index in the requested order.
         """
         selected = list(indices)
-        blobs = _retry_lance_read(
+        blobs = retry_lance_read(
             "third_party_blob_read",
             lambda: self._open().read_blobs(
                 self.audio_column,
@@ -511,7 +511,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             if r2_io.is_r2_uri(corpus_uri)
             else (corpus_uri, None)
         )
-        dataset = _retry_lance_read(
+        dataset = retry_lance_read(
             "third_party_corpus_open",
             lambda: lance.dataset(
                 uri,
@@ -529,7 +529,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"column {self.audio_column!r} in {self.dataset_uri} is not blob-encoded, "
                 "so its source containers cannot be read through the blob API"
             )
-        rows = _retry_lance_read("third_party_row_count", dataset.count_rows)
+        rows = retry_lance_read("third_party_row_count", dataset.count_rows)
         if rows == 0:
             raise ValueError(
                 f"corpus {self.dataset_uri} has no rows; an empty sweep writes no "

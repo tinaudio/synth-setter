@@ -25,7 +25,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
+from synth_setter.pipeline.data.lance_materialize import retry_lance_read
 from synth_setter.pipeline.file_uri import file_uri_to_path, is_file_uri
 
 DEFAULT_ROWS = 1_000
@@ -416,7 +416,7 @@ def _open_dataset(dataset_uri: str) -> lance.LanceDataset:
             target, storage_options = str(file_uri_to_path(dataset_uri)), None
         else:
             target, storage_options = dataset_uri, None
-        return _retry_lance_read(
+        return retry_lance_read(
             "conditioning_statistics_open",
             lambda: lance.dataset(target, storage_options=storage_options),
         )
@@ -500,7 +500,7 @@ def _analyse_column(
     :raises RuntimeError: The column cannot be scanned.
     """
     try:
-        return _retry_lance_read(
+        return retry_lance_read(
             "conditioning_statistics_scan",
             lambda: _stream_column(
                 dataset, column, shape, row_limit=row_limit, batch_size=batch_size

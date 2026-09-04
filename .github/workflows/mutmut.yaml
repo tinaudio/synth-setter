@@ -70,6 +70,12 @@ jobs:
           - name: pipeline-lance
             patterns:
               - synth_setter.pipeline.data.lance_*
+          - name: pipeline-growing-lance
+            patterns:
+              - synth_setter.pipeline.data.growing_lance.*
+          - name: pipeline-pyfdn-sketch
+            patterns:
+              - synth_setter.pipeline.data.pyfdn_sketch_worker.*
           - name: pipeline-stats
             patterns:
               - synth_setter.pipeline.data.stats.*

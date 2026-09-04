@@ -906,7 +906,7 @@ def _render_one_owned_shard(
 ) -> tuple[bool, bool, RenderRejectionMetrics]:
     """Render+stage one owned shard, or skip if it is already staged.
 
-    Encapsulates the staging skip-probe + ``_render_and_upload_shard`` invocation
+    Encapsulates the staging skip-probe + ``render_and_upload_shard`` invocation
     so the serial and parallel dispatch arms share one callable. Emits one
     ``shard/bytes`` + ``shard/render_seconds`` history row per call —
     ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
@@ -936,7 +936,7 @@ def _render_one_owned_shard(
         )
         return False, True, RenderRejectionMetrics()
     t0 = time.monotonic()
-    byte_size, rejections = _render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
+    byte_size, rejections = render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
     logger.info(
         "shard {} render rejections: clipped={} non_finite={} silent={}",
         shard_id,
@@ -994,12 +994,14 @@ def _is_badwindow_x_get_property_failure(error: subprocess.CalledProcessError) -
     return _BADWINDOW_SIGNATURE in output and _X_GET_PROPERTY_SIGNATURE in output
 
 
-def _render_and_upload_shard(
+def render_and_upload_shard(
     spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,
     *,
     loggers: list[Logger],
+    target_lance_uri: str | None = None,
+    attempt_staging_dir_uri: str | None = None,
 ) -> tuple[int, RenderRejectionMetrics]:
     """Render a single shard and stage it to R2.
 
@@ -1011,6 +1013,8 @@ def _render_and_upload_shard(
     :param shard: Shard to render; names the output dataset and seeds the renderer.
     :param work_dir: Hydra per-run output dir the shard is written under.
     :param loggers: Receive a metric before a recognized X11 failure propagates.
+    :param target_lance_uri: Growing branch URI receiving uncommitted fragment data.
+    :param attempt_staging_dir_uri: Branch-specific growing sidecar directory.
     :returns: Local shard byte size and validated renderer rejection counts.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -1022,7 +1026,13 @@ def _render_and_upload_shard(
     attempt_uuid = uuid4().hex
     # Attempt start marker — append-only; orphaned without a .valid it is
     # the observable evidence of a crashed attempt (#1776).
-    write_rendering_marker(spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid)
+    write_rendering_marker(
+        spec,
+        shard.shard_id,
+        worker_id=worker_id,
+        attempt_uuid=attempt_uuid,
+        attempt_staging_dir_uri=attempt_staging_dir_uri,
+    )
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
     # loop, and skips materialization on non-Linux.
@@ -1066,14 +1076,34 @@ def _render_and_upload_shard(
     # Worker-side validation gates staging — corrupt renders never earn a
     # .valid marker (design §7.3 shard write protocol).
     with _FULL_SHARD_VALIDATION_LOCK:
-        shard_errors = validate_shard(shard_path, spec)
+        uses_explicit_identity = target_lance_uri is not None or shard.shard_id >= spec.num_shards
+        shard_errors = (
+            validate_shard(shard_path, spec, expected_shard=shard)
+            if uses_explicit_identity
+            else validate_shard(shard_path, spec)
+        )
     if shard_errors:
         raise RuntimeError(
             f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
         )
-    stage_lance_shard_attempt(
-        spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
-    )
+    if target_lance_uri is None:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+        )
+    else:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+            target_lance_uri=target_lance_uri,
+            attempt_staging_dir_uri=attempt_staging_dir_uri,
+        )
     logger.info(
         "shard staged: {} -> {}",
         shard.filename,
