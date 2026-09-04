@@ -1,30 +1,23 @@
-"""Extract decay and modal-excitation descriptors from pyFDN responses.
-
-Typical usage::
-
-    rt60, octave_centres = extract_octave_rt60_seconds(impulse_response, sample_rate)
-    edc_db, _ = extract_octave_edc_db(impulse_response, sample_rate)
-    excitation = extract_modal_excitation_quantiles_db(residue_magnitudes)
-"""
+"""Build normalized temporal control sketches from pyFDN impulse responses."""
 
 import numpy as np
-from pyFDN import edc, estimate_rt_bands, octave_band_filterbank, octave_bands
+from pyFDN import echo_density, edc, octave_band_filterbank, octave_bands
 from scipy.signal import sosfilt
 
-MODAL_EXCITATION_FLOOR_DB = -120.0
-MODAL_EXCITATION_QUANTILE_PROBABILITIES = np.array(
-    [0.05, 0.25, 0.75, 0.90, 0.95, 0.99], dtype=np.float64
-)
-MODAL_EXCITATION_QUANTILE_PROBABILITIES.setflags(write=False)
+_NUM_INTERVALS = 32
+_NUM_OCTAVE_BANDS = 8
+_ECHO_DENSITY_WINDOW = 1_024
+_ECHO_DENSITY_HOP = 500
+_EDC_FLOOR_DB = -60.0
 
 
-def _validated_impulse_response(ir: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Return a finite, non-empty mono impulse response.
+def _peak_normalized_impulse_response(ir: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Validate mono audio and scale it to unit peak.
 
     :param ir: Time-major mono impulse response with shape ``(samples,)``.
-    :param sample_rate: Positive sample rate in Hz.
-    :returns: Float64 impulse response.
-    :raises ValueError: The signal or sample rate violates the descriptor contract.
+    :param sample_rate: Sample rate in Hz; it must support all eight octave bands.
+    :returns: Finite float64 unit-peak impulse response.
+    :raises ValueError: The response or sample rate violates the sketch contract.
     """
     raw_response = np.asarray(ir)
     if np.iscomplexobj(raw_response):
@@ -36,58 +29,36 @@ def _validated_impulse_response(ir: np.ndarray, sample_rate: float) -> np.ndarra
         raise ValueError("impulse response must contain only finite values")
     if not np.isfinite(sample_rate) or sample_rate <= 0.0:
         raise ValueError("sample_rate must be finite and positive")
-    return response
+    if response.size < _ECHO_DENSITY_WINDOW:
+        raise ValueError("impulse response must contain at least 1024 samples")
 
-
-def _peak_normalized_impulse_response(ir: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Return validated audio scaled to unit peak.
-
-    :param ir: Time-major mono impulse response with shape ``(samples,)``.
-    :param sample_rate: Positive sample rate in Hz.
-    :returns: Float64 unit-peak impulse response.
-    :raises ValueError: The signal is silent or otherwise invalid.
-    """
-    response = _validated_impulse_response(ir, sample_rate)
     peak_amplitude = float(np.max(np.abs(response)))
     if peak_amplitude == 0.0:
         raise ValueError("impulse response must have non-zero energy")
     return response / peak_amplitude
 
 
-def extract_octave_rt60_seconds(
-    ir: np.ndarray, sample_rate: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return valid pyFDN T30-extrapolated RT60 values in octave bands.
+def _pool_intervals(track: np.ndarray) -> np.ndarray:
+    """Average a time-major track over equal-duration intervals.
 
-    :param ir: Time-major mono impulse response with shape ``(samples,)``.
-    :param sample_rate: Positive sample rate in Hz.
-    :returns: Float64 RT60 seconds and corresponding octave center frequencies in Hz.
-    :raises ValueError: Input is invalid or any octave band cannot be fitted.
+    :param track: One-dimensional sample-aligned descriptor track.
+    :returns: Float64 interval means with shape ``(32,)``.
     """
-    response = _peak_normalized_impulse_response(ir, sample_rate)
-    rt60, centres_hz = estimate_rt_bands(response, sample_rate)
-    rt60 = np.asarray(rt60, dtype=np.float64)
-    centres_hz = np.asarray(centres_hz, dtype=np.float64)
-    if rt60.size == 0:
-        raise ValueError("sample rate has no supported octave bands")
-    valid = np.isfinite(rt60) & (rt60 > 0.0)
-    if not valid.all():
-        raise ValueError("every octave band must have a valid positive RT60 estimate")
-    return rt60, centres_hz
+    return np.asarray([interval.mean() for interval in np.array_split(track, _NUM_INTERVALS)])
 
 
-def extract_octave_edc_db(ir: np.ndarray, sample_rate: float) -> tuple[np.ndarray, np.ndarray]:
-    """Return per-band normalized Schroeder energy-decay curves in dB.
+def _octave_edc_tracks(response: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Return interval-pooled octave-band EDC tracks normalized to [-1, 1].
 
-    :param ir: Time-major mono impulse response with shape ``(samples,)``.
-    :param sample_rate: Positive sample rate in Hz.
-    :returns: Float64 EDCs with shape ``(bands, samples)`` and octave centers in Hz.
-    :raises ValueError: Input is invalid or a band has no energy to normalize.
+    :param response: Unit-peak mono impulse response.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Float64 normalized EDC tracks with shape ``(8, 32)``.
+    :raises ValueError: The sample rate omits a band or a band has zero energy.
     """
-    response = _peak_normalized_impulse_response(ir, sample_rate)
     bands, centres_hz = octave_bands(fs=sample_rate)
-    if centres_hz.size == 0:
-        raise ValueError("sample rate has no supported octave bands")
+    if centres_hz.size != _NUM_OCTAVE_BANDS:
+        raise ValueError("sample_rate must support all eight octave bands")
+
     filtered = np.stack(
         [sosfilt(sos, response) for sos in octave_band_filterbank(bands, sample_rate)]
     )
@@ -97,39 +68,74 @@ def extract_octave_edc_db(ir: np.ndarray, sample_rate: float) -> tuple[np.ndarra
         raise ValueError("every octave band must have non-zero energy")
 
     normalized = energy_decay / initial_energy
-    finite_floor = np.finfo(np.float64).tiny
-    edc_db = 10.0 * np.log10(np.maximum(normalized, finite_floor))
-    return edc_db, np.asarray(centres_hz, dtype=np.float64)
+    edc_db = 10.0 * np.log10(np.maximum(normalized, np.finfo(np.float64).tiny))
+    pooled_db = np.stack([_pool_intervals(track) for track in edc_db])
+    clipped_db = np.clip(pooled_db, _EDC_FLOOR_DB, 0.0)
+    return 1.0 + clipped_db / 30.0
 
 
-def extract_modal_excitation_quantiles_db(
-    modal_excitation_magnitudes: np.ndarray,
-) -> np.ndarray:
-    """Return median-centered quantiles of modal residue magnitudes.
+def _echo_density_track(response: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Return pyFDN Abel-Huang density with diffuse density 1 mapped to 0.
 
-    The input contains one magnitude per pole, including both members of each
-    conjugate pair. Excitations below :data:`MODAL_EXCITATION_FLOOR_DB` relative
-    to the strongest mode are floored before median centering.
-
-    :param modal_excitation_magnitudes: Non-negative residue magnitudes shaped
-        ``(modes,)``.
-    :returns: Float64 dB quantiles at
-        :data:`MODAL_EXCITATION_QUANTILE_PROBABILITIES`.
-    :raises ValueError: Magnitudes are invalid or every mode is unexcited.
+    :param response: Unit-peak mono impulse response.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Float64 normalized density track with shape ``(32,)``.
     """
-    raw_magnitudes = np.asarray(modal_excitation_magnitudes)
-    if np.iscomplexobj(raw_magnitudes):
-        raise ValueError("modal excitation magnitudes must be real")
-    magnitudes = np.asarray(raw_magnitudes, dtype=np.float64)
-    if magnitudes.ndim != 1 or magnitudes.size == 0:
-        raise ValueError("modal excitation magnitudes must have shape (modes,)")
-    if not np.isfinite(magnitudes).all() or np.any(magnitudes < 0.0):
-        raise ValueError("modal excitation magnitudes must be finite and non-negative")
+    _mixing_time, density = echo_density(
+        response,
+        n=_ECHO_DENSITY_WINDOW,
+        fs=sample_rate,
+        mixing_thresh=-1.0,
+        hop=_ECHO_DENSITY_HOP,
+    )
+    pooled = _pool_intervals(np.asarray(density, dtype=np.float64))
+    return 2.0 * pooled / (1.0 + pooled) - 1.0
 
-    peak_magnitude = float(np.max(magnitudes))
-    if peak_magnitude == 0.0:
-        raise ValueError("at least one mode must have positive excitation")
-    relative_floor = 10.0 ** (MODAL_EXCITATION_FLOOR_DB / 20.0)
-    excitation_db = 20.0 * np.log10(np.maximum(magnitudes / peak_magnitude, relative_floor))
-    excitation_db -= np.median(excitation_db)
-    return np.quantile(excitation_db, MODAL_EXCITATION_QUANTILE_PROBABILITIES)
+
+def _spectral_flatness_track(response: np.ndarray) -> np.ndarray:
+    """Return one spectral-flatness value per temporal interval in [-1, 1].
+
+    :param response: Unit-peak mono impulse response.
+    :returns: Float64 normalized flatness track with shape ``(32,)``.
+    """
+    flatness = []
+    tiny = np.finfo(np.float64).tiny
+    for interval in np.array_split(response, _NUM_INTERVALS):
+        spectrum = np.fft.rfft(interval * np.hanning(interval.size))
+        power = np.square(np.abs(spectrum))
+        arithmetic_mean = float(np.mean(power))
+        if arithmetic_mean == 0.0:
+            flatness.append(0.0)
+            continue
+        geometric_mean = float(np.exp(np.mean(np.log(np.maximum(power, tiny)))))
+        flatness.append(np.clip(geometric_mean / arithmetic_mean, 0.0, 1.0))
+    return 2.0 * np.asarray(flatness) - 1.0
+
+
+def extract_reverb_sketch(ir: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Return canonical temporal pyFDN controls as contiguous ``float32[10, 32]``.
+
+    Rows 0--7 are 62.5 Hz through 8 kHz octave-band EDCs, clamped to
+    ``[-60, 0]`` dB and mapped linearly to ``[-1, 1]``. Row 8 is pyFDN's
+    normalized Abel-Huang echo density mapped by ``2d / (1 + d) - 1``, so the
+    Gaussian diffuse-field reference ``d=1`` maps to zero without clip-specific
+    normalization. Row 9 is spectral flatness mapped linearly from ``[0, 1]``.
+    Every row uses the same 32 equal-duration temporal intervals. Echo density
+    uses pyFDN's fixed 1024-sample Hann window and 500-sample sparse-analysis hop.
+
+    :param ir: Time-major mono impulse response with shape ``(samples,)``.
+    :param sample_rate: Sample rate in Hz; it must support all eight octave bands.
+    :returns: Finite C-contiguous controls with shape ``(10, 32)`` in ``[-1, 1]``.
+    :raises ValueError: The response or sample rate violates the sketch contract.
+    """
+    response = _peak_normalized_impulse_response(ir, sample_rate)
+    sketch = np.vstack(
+        (
+            _octave_edc_tracks(response, sample_rate),
+            _echo_density_track(response, sample_rate),
+            _spectral_flatness_track(response),
+        )
+    )
+    if not np.isfinite(sketch).all():
+        raise ValueError("reverb sketch must contain only finite values")
+    return np.ascontiguousarray(np.clip(sketch, -1.0, 1.0), dtype=np.float32)
