@@ -47,6 +47,33 @@ def _pool_intervals(track: np.ndarray) -> np.ndarray:
     return np.asarray([interval.mean() for interval in np.array_split(track, _NUM_INTERVALS)])
 
 
+def _normalize_edc_db(edc_db: np.ndarray) -> np.ndarray:
+    """Map the fixed EDC decibel range to model space.
+
+    :param edc_db: Energy decay in dB relative to initial band energy.
+    :returns: Values clamped below -60 dB and mapped to ``[-1, 1]``.
+    """
+    return 1.0 + np.clip(edc_db, _EDC_FLOOR_DB, 0.0) / 30.0
+
+
+def _normalize_echo_density(density: np.ndarray) -> np.ndarray:
+    """Map non-negative Abel-Huang density to bounded model space.
+
+    :param density: Echo density normalized to the Gaussian reference.
+    :returns: Values in ``[-1, 1)`` with diffuse density one mapped to zero.
+    """
+    return 2.0 * density / (1.0 + density) - 1.0
+
+
+def _normalize_spectral_flatness(flatness: np.ndarray) -> np.ndarray:
+    """Map spectral flatness to model space.
+
+    :param flatness: Spectral flatness values nominally in ``[0, 1]``.
+    :returns: Clamped values mapped linearly to ``[-1, 1]``.
+    """
+    return 2.0 * np.clip(flatness, 0.0, 1.0) - 1.0
+
+
 def _octave_edc_tracks(response: np.ndarray, sample_rate: float) -> np.ndarray:
     """Return interval-pooled octave-band EDC tracks normalized to [-1, 1].
 
@@ -69,8 +96,7 @@ def _octave_edc_tracks(response: np.ndarray, sample_rate: float) -> np.ndarray:
 
     normalized = energy_decay / initial_energy
     edc_db = 10.0 * np.log10(np.maximum(normalized, np.finfo(np.float64).tiny))
-    normalized_edc = 1.0 + np.clip(edc_db, _EDC_FLOOR_DB, 0.0) / 30.0
-    return np.stack([_pool_intervals(track) for track in normalized_edc])
+    return np.stack([_pool_intervals(track) for track in _normalize_edc_db(edc_db)])
 
 
 def _echo_density_track(response: np.ndarray, sample_rate: float) -> np.ndarray:
@@ -87,7 +113,7 @@ def _echo_density_track(response: np.ndarray, sample_rate: float) -> np.ndarray:
         hop=_ECHO_DENSITY_HOP,
     )
     pooled = _pool_intervals(np.asarray(density, dtype=np.float64))
-    return 2.0 * pooled / (1.0 + pooled) - 1.0
+    return _normalize_echo_density(pooled)
 
 
 def _spectral_flatness_track(response: np.ndarray) -> np.ndarray:
@@ -107,7 +133,7 @@ def _spectral_flatness_track(response: np.ndarray) -> np.ndarray:
             continue
         geometric_mean = float(np.exp(np.mean(np.log(np.maximum(power, tiny)))))
         flatness.append(np.clip(geometric_mean / arithmetic_mean, 0.0, 1.0))
-    return 2.0 * np.asarray(flatness) - 1.0
+    return _normalize_spectral_flatness(np.asarray(flatness))
 
 
 def extract_reverb_sketch(ir: np.ndarray, sample_rate: float) -> np.ndarray:
