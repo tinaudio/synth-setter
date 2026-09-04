@@ -239,6 +239,7 @@ def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
     result = subprocess.run(  # noqa: S603 — literal command and validated fixture URI
         [
             _ADD_EMBEDDINGS_CMD,
+            "logger=[]",
             f"lance_uri={remote_lance_dataset_uri}",
             "embeddings=[matpac_plus]",
             "build_index=false",
@@ -279,6 +280,7 @@ def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
         [
             _ADD_EMBEDDINGS_CMD,
+            "logger=[]",
             f"lance_uri={remote_lance_dataset_uri}",
             "embeddings=[clap,m2l,t5gemma]",
             f"param_spec_name={TEST_PARAM_SPEC_NAME}",
@@ -391,6 +393,7 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
         [
             _ADD_EMBEDDINGS_CMD,
+            "logger=[]",
             f"lance_uri={remote_indexed_lance_dataset_uri}",
             "build_index=true",
             "num_partitions=4",

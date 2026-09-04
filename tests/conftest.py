@@ -1835,6 +1835,7 @@ def augment_lance_splits_with_all_embeddings(
         sys.executable,
         "-m",
         "synth_setter.pipeline.data.add_embeddings",
+        "logger=[]",
         f"lance_uri={train_uri}",
         f"embeddings=[{','.join(_EMBEDDING_KEYS)}]",
         f"param_spec_name={param_spec_name}",

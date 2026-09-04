@@ -187,6 +187,7 @@ def test_add_embeddings_real_meanaudio_lance_conditions_embedding_pool(
     check_call_streamed(
         [
             str(command),
+            "logger=[]",
             f"lance_uri={dataset_path}",
             "embeddings=[meanaudio_16k]",
             f"device={device}",
