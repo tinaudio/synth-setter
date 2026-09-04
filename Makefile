@@ -52,12 +52,7 @@ fast-test-budget: ## Print the fast-tier wall-clock budget in seconds.
 	@printf '%s\n' '$(FAST_TEST_BUDGET_SECONDS)'
 
 test-fast: ## Strict inner loop: curated CPU-only tests with a two-minute budget.
-	PATH="$$(pwd)/.venv/bin:$$PATH" \
-	  PYTEST_SESSION_BUDGET_SECONDS=$(FAST_TEST_BUDGET_SECONDS) \
-	  $(XDIST_THREAD_CAPS) \
-	  $(PYTEST) -n auto \
-	  -m "not slow and not gpu and not mps and not requires_vst and not infra" \
-	  $(FAST_TEST_PATHS)
+	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=$(FAST_TEST_BUDGET_SECONDS) $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst and not infra" $(FAST_TEST_PATHS)
 
 test-medium: ## Complete CPU-only non-slow suite.
 	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=600 $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
