@@ -43,7 +43,7 @@ PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD: str = "spectral_flatness"
 PYFDN_SKETCH_EDC_BANDS: int = 8
 PYFDN_SKETCH_CONTROLS: int = 10
 
-SketchControlProfile = Literal["music", "pyfdn_reverb"]
+type SketchControlProfile = Literal["music", "pyfdn_reverb"]
 
 
 @dataclass(frozen=True)

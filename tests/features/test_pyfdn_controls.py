@@ -3,7 +3,12 @@
 import numpy as np
 import pytest
 
-from synth_setter.features.pyfdn_controls import extract_reverb_sketch
+from synth_setter.features.pyfdn_controls import (
+    _normalize_echo_density,
+    _normalize_edc_db,
+    _normalize_spectral_flatness,
+    extract_reverb_sketch,
+)
 
 _SAMPLE_RATE = 44_100.0
 
@@ -26,6 +31,16 @@ def test_extract_reverb_sketch_broadband_decay_returns_canonical_tensor() -> Non
     assert np.all(sketch <= 1.0)
 
 
+def test_extract_reverb_sketch_minimum_length_returns_all_intervals() -> None:
+    """The pyFDN density interpolation supports 32 intervals at 1024 samples."""
+    response = np.random.default_rng(29).standard_normal(1_024)
+
+    sketch = extract_reverb_sketch(response, _SAMPLE_RATE)
+
+    assert sketch.shape == (10, 32)
+    assert np.isfinite(sketch).all()
+
+
 def test_extract_reverb_sketch_global_gain_is_invariant() -> None:
     """Finite global gain cannot alter normalized temporal controls."""
     response = _broadband_decay()
@@ -42,6 +57,45 @@ def test_extract_reverb_sketch_decay_tracks_are_temporally_monotone() -> None:
 
     assert np.all(np.diff(sketch[:8], axis=1) <= 0.0)
     assert np.any(np.ptp(sketch[:8], axis=1) > 1.0)
+
+
+def test_extract_reverb_sketch_frequency_dependent_decay_preserves_band_order() -> None:
+    """Distinct octave-band decays remain ordered from 62.5 Hz through 8 kHz."""
+    time = np.arange(int(_SAMPLE_RATE), dtype=np.float64) / _SAMPLE_RATE
+    centres_hz = [62.5, 125.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 8_000.0]
+    decay_rates = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+    response = np.sum(
+        [
+            np.sin(2.0 * np.pi * centre_hz * time) * np.exp(-decay_rate * time)
+            for centre_hz, decay_rate in zip(centres_hz, decay_rates, strict=True)
+        ],
+        axis=0,
+    )
+
+    octave_edc = extract_reverb_sketch(response, _SAMPLE_RATE)[:8]
+
+    assert np.all(np.diff(octave_edc[:, 8]) < -0.1)
+
+
+def test_normalize_edc_db_maps_documented_landmarks() -> None:
+    """Zero and minus sixty dB map to the model-space endpoints."""
+    normalized = _normalize_edc_db(np.array([0.0, -30.0, -60.0, -90.0]))
+
+    np.testing.assert_array_equal(normalized, [1.0, 0.0, -1.0, -1.0])
+
+
+def test_normalize_echo_density_maps_diffuse_reference_to_zero() -> None:
+    """The Abel-Huang diffuse-field reference is the model-space midpoint."""
+    normalized = _normalize_echo_density(np.array([0.0, 1.0]))
+
+    np.testing.assert_array_equal(normalized, [-1.0, 0.0])
+
+
+def test_normalize_spectral_flatness_maps_unit_interval_to_model_range() -> None:
+    """Spectral-flatness endpoints map linearly to model-space endpoints."""
+    normalized = _normalize_spectral_flatness(np.array([0.0, 0.5, 1.0]))
+
+    np.testing.assert_array_equal(normalized, [-1.0, 0.0, 1.0])
 
 
 def test_extract_reverb_sketch_echo_density_tracks_diffusion_over_time() -> None:
