@@ -36,6 +36,13 @@ SKETCH_LOUDNESS_ROW: int = 0
 SKETCH_CENTROID_ROW: int = 1
 SKETCH_PITCH_SLICE: slice = slice(NUM_SKETCH_TRACK_ROWS, NUM_SKETCH_CONTROLS)
 
+PYFDN_SKETCH_STRUCT_FIELD: str = "pyfdn_sketch"
+PYFDN_SKETCH_EDC_CHILD: str = "edc"
+PYFDN_SKETCH_ECHO_DENSITY_CHILD: str = "echo_density"
+PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD: str = "spectral_flatness"
+PYFDN_SKETCH_EDC_BANDS: int = 8
+PYFDN_SKETCH_CONTROLS: int = 10
+
 SketchControlProfile = Literal["music", "pyfdn_reverb"]
 
 
@@ -83,8 +90,16 @@ SKETCH_CONTROL_LAYOUTS: Mapping[SketchControlProfile, SketchControlLayout] = {
     ),
     "pyfdn_reverb": SketchControlLayout(
         profile="pyfdn_reverb",
-        group_names=("edc", "echo_density", "spectral_flatness"),
-        group_slices=(slice(0, 8), slice(8, 9), slice(9, 10)),
+        group_names=(
+            PYFDN_SKETCH_EDC_CHILD,
+            PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+            PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
+        ),
+        group_slices=(
+            slice(0, PYFDN_SKETCH_EDC_BANDS),
+            slice(PYFDN_SKETCH_EDC_BANDS, PYFDN_SKETCH_EDC_BANDS + 1),
+            slice(PYFDN_SKETCH_EDC_BANDS + 1, PYFDN_SKETCH_CONTROLS),
+        ),
     ),
 }
 

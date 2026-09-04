@@ -15,20 +15,18 @@ import torch
 from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import (
-    NUM_SKETCH_CONTROLS,
-    NUM_SKETCH_TRACK_ROWS,
     SKETCH_CENTROID_CHILD,
-    SKETCH_CENTROID_ROW,
     SKETCH_CTRL_FIELD,
     SKETCH_LOUDNESS_CHILD,
-    SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_BINS,
     SKETCH_PITCH_CHILD,
     Conditioning,
     EmbeddingConditioningSpec,
     SketchControls,
+    SketchControlProfile,
     SketchControlSpec,
     resolve_embedding_conditioning,
+    sketch_control_layout,
 )
 from synth_setter.data.lance_torch import (
     LanceMapDataset,
@@ -123,38 +121,42 @@ def _validate_embedding_column(
         )
 
 
-def _sketch_child_shapes(num_frames: int) -> dict[str, tuple[int, ...]]:
-    """Return the per-row shape each stored sketch struct child must have.
+def _sketch_child_shapes(sketch: SketchControlSpec) -> dict[str, tuple[int, ...]]:
+    """Return the stored child shapes required by the selected profile.
 
-    :param num_frames: Mel-grid frames per stored control row.
+    :param sketch: Profile and frame-grid contract.
     :returns: Expected shapes keyed by struct child name.
     """
+    if sketch.profile == "music":
+        return {
+            SKETCH_LOUDNESS_CHILD: (sketch.num_frames,),
+            SKETCH_CENTROID_CHILD: (sketch.num_frames,),
+            SKETCH_PITCH_CHILD: (SKETCH_PITCH_BINS, sketch.num_frames),
+        }
     return {
-        SKETCH_LOUDNESS_CHILD: (num_frames,),
-        SKETCH_CENTROID_CHILD: (num_frames,),
-        SKETCH_PITCH_CHILD: (SKETCH_PITCH_BINS, num_frames),
+        name: (group.stop - group.start, sketch.num_frames)
+        if group.stop - group.start > 1
+        else (sketch.num_frames,)
+        for name, group in zip(
+            sketch.layout.group_names, sketch.layout.group_slices, strict=True
+        )
     }
 
 
 def _stack_sketch_children(
-    loudness: np.ndarray, centroid: np.ndarray, pitch: np.ndarray
+    children: dict[str, np.ndarray], profile: SketchControlProfile
 ) -> np.ndarray:
-    """Reassemble stored struct children into the flat model control stack.
+    """Reassemble profile-specific struct children into the model control stack.
 
-    Inverts the write-time split bit-for-bit: loudness and centroid land on
-    their ``SKETCH_*_ROW`` rows, pitch fills the remaining block.
-
-    :param loudness: ``(B, F)`` loudness rows.
-    :param centroid: ``(B, F)`` centroid rows.
-    :param pitch: ``(B, SKETCH_PITCH_BINS, F)`` pitch activations.
-    :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` stacked controls.
+    :param children: Stored child arrays keyed by profile group name.
+    :param profile: Profile defining child order and widths.
+    :returns: ``(B, profile controls, F)`` stacked controls.
     """
-    tracks = np.empty(
-        (len(loudness), NUM_SKETCH_TRACK_ROWS, loudness.shape[-1]), dtype=loudness.dtype
-    )
-    tracks[:, SKETCH_LOUDNESS_ROW] = loudness
-    tracks[:, SKETCH_CENTROID_ROW] = centroid
-    return np.concatenate([tracks, pitch], axis=1)
+    groups = []
+    for name in sketch_control_layout(profile).group_names:
+        values = children[name]
+        groups.append(values[:, None] if values.ndim == 2 else values)
+    return np.concatenate(groups, axis=1)
 
 
 def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None:
@@ -177,7 +179,8 @@ def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None
             f"{field.type}; this dataset stores the pre-#2707 flat layout — "
             "re-run the sketch add-embeddings backfill to rewrite it as a struct"
         )
-    for child, expected_shape in _sketch_child_shapes(sketch.num_frames).items():
+    child_shapes = _sketch_child_shapes(sketch)
+    for child, expected_shape in child_shapes.items():
         child_index = field.type.get_field_index(child)
         if child_index < 0:
             raise ValueError(
@@ -196,10 +199,17 @@ def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None
         )
     sample = dataset.take([0], columns=[sketch.column]).combine_chunks()
     tensors = batch_to_shaped_tensors(sample.to_batches()[0])
-    for child in _sketch_child_shapes(sketch.num_frames):
-        if not torch.isfinite(tensors[f"{sketch.column}.{child}"]).all():
+    for child in child_shapes:
+        values = tensors[f"{sketch.column}.{child}"]
+        if not torch.isfinite(values).all():
             raise ValueError(
                 f"sketch child {child!r} sample in {shard_path} contains non-finite values"
+            )
+        minimum = 0.0 if sketch.profile == "music" and child == SKETCH_PITCH_CHILD else -1.0
+        if torch.any((values < minimum) | (values > 1.0)):
+            raise ValueError(
+                f"sketch child {child!r} sample in {shard_path} has values outside "
+                f"[{minimum:g}, 1]"
             )
 
 
@@ -216,6 +226,7 @@ class PrepareBatchCollate:
         conditioning_column: str | None = None,
         conditioning_shape: tuple[int, ...] | None = None,
         sketch_column: str | None = None,
+        sketch_profile: SketchControlProfile = "music",
         sketch_pitch_zero_threshold: float | None = None,
         preserve_legacy_m2l: bool = False,
     ) -> None:
@@ -229,6 +240,7 @@ class PrepareBatchCollate:
         :param conditioning_shape: Per-row model shape restored from flattened storage.
         :param sketch_column: Stored sketch struct column whose expanded
             children are reassembled into ``sketch_ctrl``.
+        :param sketch_profile: Child layout and numeric contract.
         :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
             or ``None`` to pass activations through unbinned.
         :param preserve_legacy_m2l: Whether ``music2latent`` also populates ``m2l``.
@@ -240,6 +252,7 @@ class PrepareBatchCollate:
         self.conditioning_column = conditioning_column
         self.conditioning_shape = conditioning_shape
         self.sketch_column = sketch_column
+        self.sketch_profile: SketchControlProfile = sketch_profile
         self.sketch_pitch_zero_threshold = sketch_pitch_zero_threshold
         self.preserve_legacy_m2l = preserve_legacy_m2l
         self._rank = (
@@ -294,13 +307,16 @@ class PrepareBatchCollate:
                 del raw_values["music2latent"]
         if self.sketch_column is not None:
             prefix = f"{self.sketch_column}."
-            loudness = raw_values.pop(f"{prefix}{SKETCH_LOUDNESS_CHILD}")
-            centroid = raw_values.pop(f"{prefix}{SKETCH_CENTROID_CHILD}")
-            pitch = raw_values.pop(f"{prefix}{SKETCH_PITCH_CHILD}")
-            # Unread companions (e.g. the vec child) never reach prepare_batch.
+            layout = sketch_control_layout(self.sketch_profile)
+            children = {
+                name: raw_values.pop(f"{prefix}{name}") for name in layout.group_names
+            }
+            # Unread companions (e.g. the music vec child) never reach prepare_batch.
             for key in [key for key in raw_values if key.startswith(prefix)]:
                 del raw_values[key]
-            raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(loudness, centroid, pitch)
+            raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(
+                children, self.sketch_profile
+            )
         raw = cast(RawBatch, raw_values)
         return prepare_batch(
             raw,
@@ -309,6 +325,7 @@ class PrepareBatchCollate:
             rescale_params=self.rescale_params,
             ot=self.ot,
             generator=self._live_generator(),
+            sketch_profile=self.sketch_profile,
             sketch_pitch_zero_threshold=self.sketch_pitch_zero_threshold,
         )
 
@@ -365,9 +382,15 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         )
         m2l = conditioning if self._preserve_legacy_m2l else None
         if self._sketch is not None:
-            # Stored layout: signed-unit loudness/centroid, unit-interval pitch.
-            sketch = torch.rand(num_rows, NUM_SKETCH_CONTROLS, self._sketch.num_frames)
-            sketch[:, :NUM_SKETCH_TRACK_ROWS] = sketch[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
+            sketch = torch.rand(
+                num_rows, self._sketch.layout.num_controls, self._sketch.num_frames
+            )
+            signed_controls = (
+                self._sketch.layout.num_controls
+                if self._sketch.profile == "pyfdn_reverb"
+                else self._sketch.layout.group_slices[1].stop
+            )
+            sketch[:, :signed_controls] = sketch[:, :signed_controls] * 2 - 1
         else:
             sketch = None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
@@ -638,8 +661,11 @@ class LanceVSTDataModule(VSTDataModule):
                 conditioning_column=spec.column if spec is not None else None,
                 conditioning_shape=spec.input_shape if spec is not None else None,
                 sketch_column=sketch.column if sketch is not None else None,
+                sketch_profile=sketch.profile if sketch is not None else "music",
                 sketch_pitch_zero_threshold=(
-                    sketch.pitch_zero_threshold if sketch is not None else None
+                    sketch.pitch_zero_threshold
+                    if sketch is not None and sketch.profile == "music"
+                    else None
                 ),
                 preserve_legacy_m2l=(
                     isinstance(self.conditioning, str) and self.conditioning == "m2l"
