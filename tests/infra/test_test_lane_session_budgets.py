@@ -70,7 +70,9 @@ def test_fast_lane_collects_only_curated_test_paths() -> None:
     selected_paths = {token for token in expanded.split() if token.startswith("tests/")}
 
     assert "tests/_meta" in selected_paths
+    assert "tests/data/vst/test_param_spec.py" in selected_paths
     assert "tests/integration/test_parallel_shard_dispatch.py" in selected_paths
+    assert "tests/models/test_cnn.py" in selected_paths
     assert '-m "not slow and not gpu and not mps and not requires_vst and not infra"' in expanded
     assert " tests " not in f" {expanded} "
 

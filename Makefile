@@ -44,7 +44,27 @@ XDIST_THREAD_CAPS := OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
 # Explicit paths avoid importing the entire medium suite during the inner loop.
 FAST_TEST_BUDGET_SECONDS := 120
-FAST_TEST_PATHS := tests/_meta tests/data/vst tests/evaluation tests/features tests/integration/test_parallel_shard_dispatch.py tests/models tests/pipeline/ci_config tests/pipeline/configs tests/pipeline/schemas tests/schemas
+FAST_TEST_PATHS := \
+	tests/_meta \
+	tests/data/vst/test_core.py \
+	tests/data/vst/test_param_spec.py \
+	tests/data/vst/test_param_spec_registry.py \
+	tests/data/vst/test_renderer_factory.py \
+	tests/data/vst/test_renderers.py \
+	tests/data/vst/test_seeding.py \
+	tests/data/vst/test_shape_helpers.py \
+	tests/evaluation \
+	tests/features \
+	tests/integration/test_parallel_shard_dispatch.py \
+	tests/models/test_audio_distance.py \
+	tests/models/test_cnn.py \
+	tests/models/test_sketch_tokens.py \
+	tests/models/test_spec_encoder.py \
+	tests/models/test_vst_validation_preds_contract.py \
+	tests/pipeline/ci_config \
+	tests/pipeline/configs \
+	tests/pipeline/schemas \
+	tests/schemas
 
 # Wall-clock budgets per lane (enforced by tests/conftest.py, #2274): a run that
 # blows its budget fails even when every test passes.
