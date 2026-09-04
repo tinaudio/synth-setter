@@ -271,6 +271,7 @@ def _stub_render_dependencies(
     load_preset_calls: list[dict[str, object]],
     cached_plugin_holder: list[object] | None = None,
     clipped_rejections: int = 0,
+    non_finite_rejections: int = 0,
     silent_rejections: int = 0,
 ) -> list[dict[str, object]]:
     """Patch ``load_plugin``, ``load_preset``, and ``generate_sample`` for the writer loop.
@@ -285,6 +286,7 @@ def _stub_render_dependencies(
     :param load_preset_calls: List receiving the kwargs of each fake ``load_preset`` call.
     :param cached_plugin_holder: When supplied, receives the fake plugin instance.
     :param clipped_rejections: Clipped count returned by each fake sample.
+    :param non_finite_rejections: Non-finite count returned by each fake sample.
     :param silent_rejections: Silent count returned by each fake sample.
     :return: Kwargs captured from each ``generate_sample`` invocation.
     """
@@ -304,6 +306,7 @@ def _stub_render_dependencies(
         captured.append(dict(kwargs))
         return SimpleNamespace(
             clipped_rejections=clipped_rejections,
+            non_finite_rejections=non_finite_rejections,
             silent_rejections=silent_rejections,
         )
 
@@ -338,6 +341,7 @@ def test_render_in_batches_shard_cadence_reuses_first_sample_params(
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(returned)}")
         sample.clipped_rejections = 0
+        sample.non_finite_rejections = 0
         sample.silent_rejections = 0
         returned.append(sample)
         return sample
@@ -413,6 +417,7 @@ def test_render_in_batches_shard_cadence_seeds_single_patch_from_caller_row_zero
         captured.append(dict(kwargs))
         sample = MagicMock(name=f"sample_{len(captured)}")
         sample.clipped_rejections = 0
+        sample.non_finite_rejections = 0
         sample.silent_rejections = 0
         # Mirror the real renderer: the sample reports the params it rendered with, so shard
         # cadence reuses concrete row-0 values rather than MagicMock placeholder attributes.
@@ -655,7 +660,8 @@ def test_render_in_batches_always_on_runs_loop_via_run_with_editor_held_open(
         load_preset_calls=[],
         cached_plugin_holder=cached_plugin_holder,
         clipped_rejections=1,
-        silent_rejections=2,
+        non_finite_rejections=2,
+        silent_rejections=3,
     )
     held_open_plugins: list[object] = []
 
@@ -674,7 +680,7 @@ def test_render_in_batches_always_on_runs_loop_via_run_with_editor_held_open(
         flush_batch=lambda _batch, _start: None,
     )
 
-    assert metrics == RenderRejectionMetrics(clipped=3, silent=6)
+    assert metrics == RenderRejectionMetrics(clipped=3, non_finite=6, silent=9)
     assert len(held_open_plugins) == 1
     assert held_open_plugins[0] is cached_plugin_holder[0]
     assert len(captured) == n

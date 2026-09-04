@@ -32,11 +32,11 @@ max_attempts = RenderConfig.attempts_per_sample
 seed_for_sample(master_seed, sample_idx, attempt)
 ```
 
-The `attempt` term is the loudness-gate retry number. Attempt 0 is the first
-draw; if that render is silent, attempt 1 gets a new deterministic RNG, and so
-on until an audible sample is accepted or `max_attempts` is exhausted. This makes
-the accepted row deterministic for a fixed loudness threshold while preventing a
-silent row from advancing any global RNG stream.
+The `attempt` term counts sampled draws rejected for clipping, non-finite audio,
+or insufficient loudness. Attempt 0 is the first draw; each rejection advances
+to a new deterministic RNG until a valid sample is accepted or `max_attempts` is
+exhausted. This keeps accepted rows deterministic without advancing a global RNG
+stream.
 
 ## Implementation Status
 

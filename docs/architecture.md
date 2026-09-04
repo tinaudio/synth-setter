@@ -16,8 +16,9 @@ The pipeline is **synth-agnostic**: rendering, storage, features, distributed
 workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
 `RenderConfig` (backend and synth identity) looked up from a registry by name.
 Surge XT is the default and can render through Pedalboard, DawDreamer, or the
-pinned in-process SurgePy engine; OB-Xf is registered as a second VST3 synth,
-and Faust identities compile checked-in source through DawDreamer. SurgePy
+pinned in-process SurgePy engine. OB-Xf and Ultramaster KR-106 are registered
+VST3 synths, while Faust identities compile checked-in source through
+DawDreamer. SurgePy
 recreates the native synth for every row and accepts only
 `plugin_reload_cadence: render`. VST3 plugins can be
 onboarded with **no edits to core pipeline, storage, or model code**. See
@@ -63,10 +64,12 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
 
 2. **Generate** -- Workers render audio samples through the configured synth
-   backend, producing Lance
-   shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
-   and ground-truth parameter arrays. Workers are fully parallel with no shared
-   state.
+   backend, producing Lance shards uploaded to R2. Each shard contains audio
+   waveforms, mel spectrograms, and ground-truth parameter arrays. Offline pyFDN
+   rows deterministically retry complete patches after clipped or quiet renders;
+   native impulse responses are the default, with an in-process canonical chirp
+   available by explicit configuration, so R2 is destination-only.
+   Workers are fully parallel with no shared state.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 3. **Finalize** -- Downloads validated shards, commits their Lance fragments

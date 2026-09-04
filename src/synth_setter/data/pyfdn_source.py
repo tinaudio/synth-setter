@@ -11,13 +11,17 @@ import librosa
 import numpy as np
 from jaxtyping import Float32
 
+from synth_setter.renderer_backend import (
+    PYFDN_CANONICAL_SOURCE_SHA256,
+    PYFDN_SOURCE_CHANNELS,
+    PYFDN_SOURCE_SAMPLE_RATE_HZ,
+    PYFDN_SOURCE_TOTAL_FRAMES,
+)
+
 _SOURCE_IDENTITY = "librosa_log_chirp_v1"
 _FMIN_HZ = 20.0
 _FMAX_HZ = 20_000.0
-PYFDN_SOURCE_SAMPLE_RATE_HZ = 48_000
-PYFDN_SOURCE_CHANNELS = 1
-PYFDN_SOURCE_TOTAL_FRAMES = 192_000
-_CHIRP_FRAMES = 48_000
+_CHIRP_FRAMES = PYFDN_SOURCE_SAMPLE_RATE_HZ
 _LINEAR = False
 _PHI = None
 _AMPLITUDE = 0.1
@@ -25,10 +29,10 @@ _AMPLITUDE = 0.1
 type PyFDNSourceProvenance = dict[str, str | float | int | bool | None]
 
 
-def generate_canonical_pyfdn_source() -> Float32[np.ndarray, "1 192000"]:
+def generate_canonical_pyfdn_source() -> Float32[np.ndarray, "1 176400"]:
     """Generate the immutable canonical F1 pyFDN excitation.
 
-    :returns: Read-only contiguous float32 audio shaped ``(1, 192000)``.
+    :returns: Read-only contiguous float32 audio shaped ``(1, 176400)``.
     :raises ValueError: Librosa returns wrong-shape, non-finite, or out-of-range samples.
     """
     chirp = librosa.chirp(
@@ -53,17 +57,23 @@ def generate_canonical_pyfdn_source() -> Float32[np.ndarray, "1 192000"]:
     )
     source[0, :_CHIRP_FRAMES] = _AMPLITUDE * chirp_array
     immutable_bytes = source.tobytes(order="C")
+    source_digest = hashlib.sha256(immutable_bytes).hexdigest()
+    if source_digest != PYFDN_CANONICAL_SOURCE_SHA256:
+        raise ValueError(
+            "canonical pyFDN source SHA-256 mismatch: "
+            f"expected {PYFDN_CANONICAL_SOURCE_SHA256}, got {source_digest}"
+        )
     return np.frombuffer(immutable_bytes, dtype=np.float32).reshape(
         PYFDN_SOURCE_CHANNELS, PYFDN_SOURCE_TOTAL_FRAMES
     )
 
 
 def _canonical_pyfdn_source_provenance(
-    source: Float32[np.ndarray, "1 192000"],
+    source: Float32[np.ndarray, "1 176400"],
 ) -> PyFDNSourceProvenance:
     """Build provenance for already-generated canonical source bytes.
 
-    :param source: Canonical contiguous float32 audio shaped ``(1, 192000)``.
+    :param source: Canonical contiguous float32 audio shaped ``(1, 176400)``.
     :returns: Complete source fields and the supplied source's SHA-256.
     """
     return {

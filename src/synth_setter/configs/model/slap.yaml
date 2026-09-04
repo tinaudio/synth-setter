@@ -1,0 +1,26 @@
+_target_: synth_setter.models.slap_module.SLAPModule
+
+audio_encoder: ???
+text_encoder: ???
+
+loss_fn:
+  _target_: synth_setter.models.components.slap.BYOLLoss
+  out_key: all_loss
+  unimodal: true
+  ssl_weight: 0.5
+
+ma_callback:
+  _target_: synth_setter.models.components.slap_ema.MovingAverageWeightUpdate
+  initial_tau: 0.995
+  final_tau: 0.995
+  every_n_steps: 1
+  update_method: lin
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.0
+
+scheduler: null
+compile: false

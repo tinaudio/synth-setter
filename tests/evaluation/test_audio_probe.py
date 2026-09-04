@@ -17,14 +17,40 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import NoReturn
 
+import numpy as np
 import pytest
 import torch
 
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.evaluation import audio_probe
 from synth_setter.evaluation.audio_probe import _render_argv, _staged_sample_count, run_audio_probe
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.synth_spec import SynthName, SynthSpec
+
+_PYFDN_SETTINGS = RenderConfig(
+    synth=SynthSpec(
+        name=SynthName("pyfdn_n8_mono_householder"),
+        param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
+        plugin_path="pyfdn",
+        plugin_state_path="",
+        synth_version="0.4.2",
+    ),
+    renderer_backend="pyfdn",
+    pyfdn_excitation="impulse",
+    sample_rate=44_100,
+    channels=1,
+    velocity=0,
+    signal_duration_seconds=4.0,
+    min_loudness=-100.0,
+    audio_dtype="float32",
+    mel_spec_dtype="float32",
+    samples_per_render_batch=1,
+    samples_per_shard=1,
+    param_sample_cadence="sample",
+    plugin_reload_cadence="render",
+    gui_toggle_cadence="never",
+)
 
 _SETTINGS = RenderConfig(
     synth=SynthSpec(
@@ -179,6 +205,76 @@ def test_run_audio_probe_returns_namespaced_metrics_and_uploads(
     assert "metrics/aggregated_metrics.csv" in uploaded
     assert not [p for p in uploaded if p.endswith(".pt")], (
         f"staged tensors must stay local, got {uploaded}"
+    )
+
+
+def test_run_audio_probe_pyfdn_enables_reverb_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The validated pyFDN backend selects specialized metrics in the worker.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces subprocess execution while retaining its argv.
+    """
+    _stage(tmp_path)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(
+        audio_probe.subprocess,
+        "run",
+        _fake_probe_subprocesses(tmp_path, calls),
+    )
+
+    run_audio_probe(tmp_path, 1, settings=_PYFDN_SETTINGS, upload_uri=None)
+
+    metrics_argv = calls[1][0]
+    assert metrics_argv[metrics_argv.index("--renderer-backend") + 1] == "pyfdn"
+
+
+@pytest.mark.slow
+def test_run_audio_probe_pyfdn_real_chain_returns_reverb_metrics(tmp_path: Path) -> None:
+    """The production render-and-score chain emits finite pyFDN reverb metrics.
+
+    :param tmp_path: Isolated probe directory for real subprocess artifacts.
+    """
+    first_params, first_notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(
+        np.random.default_rng(31)
+    )
+    second_params, second_notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(
+        np.random.default_rng(37)
+    )
+    rows = np.stack(
+        [
+            PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_to_model(
+                PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(first_params, first_notes)
+            ),
+            PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_to_model(
+                PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(second_params, second_notes)
+            ),
+        ]
+    )
+    predictions = tmp_path / "predictions"
+    predictions.mkdir()
+    torch.save(torch.from_numpy(rows), predictions / "pred-0.pt")
+    torch.save(torch.from_numpy(rows.copy()), predictions / "target-params-0.pt")
+
+    metrics = run_audio_probe(
+        tmp_path,
+        1,
+        settings=_PYFDN_SETTINGS,
+        upload_uri=None,
+        num_workers=1,
+    )
+
+    reverb_metrics = {
+        key: value for key, value in metrics.items() if key.startswith("val_audio/octave_")
+    }
+    assert reverb_metrics == pytest.approx(
+        {
+            "val_audio/octave_edc_rmse_db_mean": 0.0,
+            "val_audio/octave_edc_rmse_db_std": 0.0,
+            "val_audio/octave_rt60_log_rmse_mean": 0.0,
+            "val_audio/octave_rt60_log_rmse_std": 0.0,
+        }
     )
 
 

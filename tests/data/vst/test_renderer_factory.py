@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.renderers import (
     DawDreamerRenderer,
     PedalboardRenderer,
@@ -40,6 +41,35 @@ def _render_config(**overrides: object) -> RenderConfig:
     }
     values.update(overrides)
     return RenderConfig(**values)  # type: ignore[arg-type]
+
+
+def test_make_audio_renderer_pyfdn_returns_common_renderer() -> None:
+    """The common factory constructs pyFDN with fixed MIDI stubs."""
+    renderer = make_audio_renderer(
+        _render_config(
+            renderer_backend="pyfdn",
+            pyfdn_excitation="impulse",
+            synth={
+                "name": "pyfdn_n8_mono_householder",
+                "param_spec_name": "pyfdn_n8_mono_householder",
+                "plugin_path": "pyfdn",
+                "plugin_state_path": "",
+                "synth_version": "0.4.2",
+            },
+            sample_rate=44_100,
+            channels=1,
+            velocity=0,
+            signal_duration_seconds=4.0,
+            audio_dtype="float32",
+            mel_spec_dtype="float32",
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+    )
+
+    assert isinstance(renderer, PyFDNRenderer)
+    assert renderer.sample_rate == 44_100
+    assert renderer.channels == 1
 
 
 def test_make_audio_renderer_torchsynth_returns_configured_renderer() -> None:

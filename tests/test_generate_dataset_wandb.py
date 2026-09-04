@@ -352,7 +352,7 @@ def test_generate_relay_preserves_nonzero_rejection_counts_offline(
         if args and args[0] != "rclone":
             shard_path = Path(args[find_script_index(args) + 1])
             render_metrics_path(shard_path).write_text(
-                RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
+                RenderRejectionMetrics(clipped=2, non_finite=3, silent=4).model_dump_json()
             )
 
     monkeypatch.setattr(
@@ -377,10 +377,12 @@ def test_generate_relay_preserves_nonzero_rejection_counts_offline(
     )
     shard_rows = [row for row in rows if "shard/bytes" in row]
     assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2]
-    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3]
+    assert [json.loads(row["shard/samples_rejected_non_finite"]) for row in shard_rows] == [3, 3]
+    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [4, 4]
     summary = next(row for row in rows if "shards/rendered" in row)
     assert json.loads(summary["generation/samples_rejected_clipped"]) == 4
-    assert json.loads(summary["generation/samples_rejected_silent"]) == 6
+    assert json.loads(summary["generation/samples_rejected_non_finite"]) == 6
+    assert json.loads(summary["generation/samples_rejected_silent"]) == 8
 
 
 def test_generate_stamps_wandb_provenance_into_run_config_offline(

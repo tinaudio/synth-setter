@@ -105,7 +105,14 @@ def _metadata_mismatch_errors(
     :returns: One error per mismatched field.
     """
     errors: list[str] = []
-    for field in ("base_seed", "sample_offset", "attempts_per_sample"):
+    if "render_contract_digest" not in present_fields:
+        errors.append(f"{source}: render_contract_digest is missing")
+    for field in (
+        "base_seed",
+        "sample_offset",
+        "attempts_per_sample",
+        "render_contract_digest",
+    ):
         if field not in present_fields:
             continue
         observed = getattr(metadata, field)
@@ -142,16 +149,15 @@ def _expected_shard_metadata(
         config.
     :returns: Strict shard metadata expected for rendered shards.
     """
-    return ShardMetadata(
-        velocity=spec.render.velocity,
-        signal_duration_seconds=spec.render.signal_duration_seconds,
-        sample_rate=spec.render.sample_rate,
-        channels=spec.render.channels,
-        min_loudness=spec.render.min_loudness,
-        base_seed=spec.render.base_seed if base_seed is None else base_seed,
-        sample_offset=spec.render.sample_offset if sample_offset is None else sample_offset,
-        attempts_per_sample=spec.render.attempts_per_sample,
+    render = spec.render.model_copy(
+        update={
+            "base_seed": spec.render.base_seed if base_seed is None else base_seed,
+            "sample_offset": (
+                spec.render.sample_offset if sample_offset is None else sample_offset
+            ),
+        }
     )
+    return render.shard_metadata()
 
 
 def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:

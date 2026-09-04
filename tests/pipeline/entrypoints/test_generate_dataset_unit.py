@@ -1425,6 +1425,44 @@ class TestRun(RenderSeamFixtures):
 
         assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
+    def test_generate_pyfdn_resolves_in_process_package_version(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Native pyFDN reaches shard dispatch through its package sentinel.
+
+        :param tmp_path: Per-test shard work directory.
+        """
+        kwargs = _base_spec_kwargs(
+            tmp_path,
+            train_val_test_sizes=[1, 0, 0],
+            render={
+                "synth": SYNTHS[SynthName("pyfdn_n8_mono_householder")].model_dump(mode="json"),
+                "renderer_backend": "pyfdn",
+                "pyfdn_excitation": "impulse",
+                "sample_rate": 44_100,
+                "channels": 1,
+                "velocity": 0,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "audio_dtype": "float32",
+                "mel_spec_dtype": "float32",
+                "samples_per_render_batch": 1,
+                "samples_per_shard": 1,
+                "gui_toggle_cadence": "never",
+                "plugin_reload_cadence": "render",
+            },
+        )
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+        with patch(
+            "synth_setter.cli.generate_dataset._dispatch_shards",
+            return_value=(0, 0, 0, RenderRejectionMetrics()),
+        ) as dispatch:
+            generate(spec, tmp_path, [])
+
+        dispatch.assert_called_once()
+
     def test_synth_version_mismatch_raises_before_uploads(
         self,
         patched_subprocess: MagicMock,
@@ -4194,8 +4232,8 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
         None,
     ]
     outcomes = {
-        0: (True, False, RenderRejectionMetrics(clipped=1, silent=2)),
-        1: (True, False, RenderRejectionMetrics(clipped=3, silent=5)),
+        0: (True, False, RenderRejectionMetrics(clipped=1, non_finite=2, silent=3)),
+        1: (True, False, RenderRejectionMetrics(clipped=4, non_finite=5, silent=6)),
     }
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset._render_one_owned_shard",
@@ -4210,7 +4248,7 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
     )
 
     assert (rendered, skipped) == (2, 0)
-    assert rejections == RenderRejectionMetrics(clipped=4, silent=7)
+    assert rejections == RenderRejectionMetrics(clipped=5, non_finite=7, silent=9)
     assert claims.complete.call_count == 2
 
 

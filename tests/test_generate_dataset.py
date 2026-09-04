@@ -29,6 +29,7 @@ import json
 import math
 import multiprocessing
 import os
+import platform
 import shlex
 import shutil
 import subprocess
@@ -57,6 +58,7 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
+    MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
@@ -89,6 +91,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
     Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
 ).resolve()
+_KR106_PLUGIN_VST3 = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
+_KR106_PRESET = _REPO_ROOT / "presets" / "ultramaster_kr106-base.vstpreset"
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -252,6 +256,55 @@ def test_cfg_dataset_faust_resolves_production_renderer_contract(
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.gui_toggle_cadence == "never"
     assert spec.num_params == 13
+
+
+@pytest.mark.slow
+def test_from_hydra_pyfdn_householder_writes_consumable_shard(
+    cfg_dataset_pyfdn_householder: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The public entrypoint materializes the fixed-Householder 27-coordinate patch.
+
+    :param cfg_dataset_pyfdn_householder: Composed fixed-Householder pyFDN dataset config.
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Configures the single local worker process.
+    :param tmp_path: Finalize workspace.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_pyfdn_householder):
+        cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
+        cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
+        cfg_dataset_pyfdn_householder.r2.prefix = "fake-r2/pyfdn-householder-run/"
+        cfg_dataset_pyfdn_householder.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_pyfdn_householder)
+    from_hydra(cfg_dataset_pyfdn_householder)
+
+    assert spec.render.param_spec_name == "pyfdn_n8_mono_householder"
+    assert spec.num_params == 27
+    shard = spec.shards[0]
+    assert shard_has_complete_attempt(spec, shard.shard_id)
+
+    finalize_dir = tmp_path / "finalize"
+    finalize_dir.mkdir()
+    finalize_lance(spec, finalize_dir)
+    split = split_for_shard(spec, shard.shard_id)
+    dataset_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / f"{split}.lance"
+    table = lance.dataset(dataset_path).to_table(columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD])
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
+
+    assert audio.shape == (2, 1, 176_400)
+    assert params.shape == (2, 27)
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) <= 1.0
+    assert np.any(audio != 0.0)
+    assert np.isfinite(params).all()
+    assert ((params >= 0.0) & (params <= 1.0)).all()
 
 
 @pytest.mark.slow
@@ -807,6 +860,68 @@ def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
     assert validate_all_shards_from_r2(spec) == []
 
 
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
+    cfg_dataset_kr106_2m: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The public operator renders, validates, and finalizes a real KR-106 row.
+
+    :param cfg_dataset_kr106_2m: Composed production-scale KR-106 experiment.
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Configures the single local worker process.
+    :param tmp_path: Render and finalize workspace.
+    """
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _KR106_PLUGIN_VST3.is_dir(), (
+        f"Ultramaster KR-106 is not installed at {_KR106_PLUGIN_VST3}"
+    )
+
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_kr106_2m):
+        cfg_dataset_kr106_2m.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_kr106_2m.mask_degenerate_bins = True
+        cfg_dataset_kr106_2m.synth.plugin_path = str(_KR106_PLUGIN_VST3)
+        cfg_dataset_kr106_2m.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset_kr106_2m.render.samples_per_shard = 2
+        cfg_dataset_kr106_2m.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset_kr106_2m.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_kr106_2m)
+    from_hydra(cfg_dataset_kr106_2m)
+
+    shard = spec.shards[0]
+    assert shard_has_complete_attempt(spec, shard.shard_id)
+    assert validate_all_shards_from_r2(spec) == []
+
+    finalize_dir = tmp_path / "finalize"
+    finalize_dir.mkdir()
+    finalize_lance(spec, finalize_dir)
+    dataset_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "train.lance"
+    table = lance.dataset(dataset_path).to_table(
+        columns=[AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD]
+    )
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    mel_spec = table.column(MEL_SPEC_FIELD).combine_chunks().to_numpy_ndarray()
+    params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
+    expected_shapes = dataset_field_shapes(spec.render, spec.num_params)
+
+    assert audio.shape == expected_shapes[AUDIO_FIELD]
+    assert mel_spec.shape == expected_shapes[MEL_SPEC_FIELD]
+    assert params.shape == expected_shapes[PARAM_ARRAY_FIELD]
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) <= 1.0
+    assert np.any(audio != 0.0)
+    assert np.isfinite(mel_spec).all()
+    assert np.isfinite(params).all()
+    assert ((params >= 0.0) & (params <= 1.0)).all()
+
+
 def test_from_hydra_passes_per_shard_base_seed_to_renderer(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
@@ -993,18 +1108,60 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     assert validate_all_shards_from_r2(spec) == []
 
 
-def test_from_hydra_rejects_online_only_pyfdn_before_generation(
-    cfg_dataset_pyfdn: DictConfig,
+def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The dataset operator rejects pyFDN before offline renderer dispatch.
+    """The Hydra entrypoint renders the pitch-shift identity through real pyFDN.
 
-    :param cfg_dataset_pyfdn: Real Hydra composition selecting the pyFDN synth identity.
+    :param cfg_dataset: Composed dataset configuration changed to pitch-shift pyFDN.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
     """
-    with open_dict(cfg_dataset_pyfdn):
-        cfg_dataset_pyfdn.synth.plugin_path = "plugins/Surge XT.vst3"
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    identity = "pyfdn_pitchshift_n8_mono_householder"
+    with open_dict(cfg_dataset):
+        cfg_dataset.task_name = "pyfdn-pitchshift-entrypoint-e2e"
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.synth.name = identity
+        cfg_dataset.synth.param_spec_name = identity
+        cfg_dataset.synth.plugin_path = "pyfdn"
+        cfg_dataset.synth.plugin_state_path = ""
+        cfg_dataset.synth.synth_version = "0.4.2"
+        cfg_dataset.render.renderer_backend = "pyfdn"
+        cfg_dataset.render.pyfdn_excitation = "impulse"
+        cfg_dataset.render.sample_rate = 44_100
+        cfg_dataset.render.channels = 1
+        cfg_dataset.render.velocity = 0
+        cfg_dataset.render.signal_duration_seconds = 4.0
+        cfg_dataset.render.min_loudness = -100.0
+        cfg_dataset.render.audio_dtype = "float32"
+        cfg_dataset.render.mel_spec_dtype = "float32"
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.render.attempts_per_sample = 100
+        cfg_dataset.render.param_sample_cadence = "sample"
+        cfg_dataset.render.plugin_reload_cadence = "render"
+        cfg_dataset.render.gui_toggle_cadence = "never"
+        cfg_dataset.r2.prefix = "fake-r2/pyfdn-pitchshift-run/"
+        cfg_dataset.logger = None
 
-    with pytest.raises(ValueError, match="pyFDN.*online train/eval only"):
-        from_hydra(cfg_dataset_pyfdn)
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    assert spec.num_params == 45
+    assert spec.render.param_spec_name == identity
+    assert validate_all_shards_from_r2(spec) == []
+    shard = spec.shards[0]
+    uploaded = list(fake_r2_remote.rglob(shard.filename))
+    assert len(uploaded) == 1
+    param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
+    assert isinstance(param_type, pa.FixedShapeTensorType)
+    assert tuple(param_type.shape) == (45,)
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(

@@ -56,27 +56,6 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
-_PYFDN_FLOW_SMOKE_OVERRIDES = (
-    "trainer=cpu",
-    "datamodule.train_val_test_sizes=[1,1,1]",
-    "datamodule.batch_size=1",
-    "datamodule.num_workers=0",
-    "datamodule.val_num_workers=0",
-    "model.encoder.frontend.n_mels=16",
-    "model.encoder.backbone.hidden_dim=2",
-    "model.encoder.backbone.out_dim=8",
-    "model.encoder.backbone.num_blocks=1",
-    "model.encoder.backbone.kernel_size=3",
-    "model.vector_field.d_model=8",
-    "model.vector_field.num_heads=2",
-    "model.vector_field.d_ff=8",
-    "model.vector_field.num_layers=1",
-    "model.vector_field.projection.num_tokens=2",
-    "model.validation_sample_steps=1",
-    "model.test_sample_steps=1",
-    "model.cfg_dropout_rate=0.0",
-)
-
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
 _EMBEDDING_KEYS = (
@@ -402,70 +381,6 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture
-def cfg_pyfdn_flow_train(tmp_path: Path) -> DictConfig:
-    """Compose a one-step production pyFDN flow training configuration.
-
-    :param tmp_path: Parent of the isolated train output directory.
-    :returns: CPU-small configuration retaining real rendering and checkpointing.
-    """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=True,
-            overrides=[
-                "experiment=pyfdn/flow",
-                "logger=csv",
-                *_PYFDN_FLOW_SMOKE_OVERRIDES,
-            ],
-        )
-    with open_dict(cfg):
-        _set_workspace_root(cfg)
-        cfg.paths.output_dir = str(tmp_path / "train")
-        cfg.paths.log_dir = str(tmp_path / "train")
-        cfg.seed = 123
-        cfg.test = False
-        cfg.trainer.max_epochs = 1
-        cfg.trainer.max_steps = 1
-        cfg.trainer.limit_train_batches = 1
-        cfg.trainer.limit_val_batches = 1
-        cfg.trainer.num_sanity_val_steps = 0
-        cfg.trainer.val_check_interval = 1
-        cfg.trainer.log_every_n_steps = 1
-        cfg.callbacks.model_checkpoint.save_top_k = 1
-        cfg.callbacks.model_checkpoint.save_last = True
-    return cfg
-
-
-@pytest.fixture
-def cfg_pyfdn_flow_eval(tmp_path: Path) -> DictConfig:
-    """Compose production pyFDN validation for a train-produced checkpoint.
-
-    :param tmp_path: Parent of the isolated evaluation output directory.
-    :returns: CPU-small validation configuration with real online rendering.
-    """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="eval.yaml",
-            return_hydra_config=True,
-            overrides=[
-                "experiment=pyfdn/flow",
-                "callbacks=log_per_param_mse",
-                "ckpt_path=null",
-                "mode=validate",
-                *_PYFDN_FLOW_SMOKE_OVERRIDES,
-            ],
-        )
-    with open_dict(cfg):
-        _set_workspace_root(cfg)
-        cfg.paths.output_dir = str(tmp_path / "eval")
-        cfg.paths.log_dir = str(tmp_path / "eval")
-        cfg.seed = 123
-        cfg.trainer.max_steps = 1
-        cfg.trainer.limit_val_batches = 1
-    return cfg
-
-
-@pytest.fixture
 def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose a CPU-cheap production TorchSynth config at the entrypoint boundary.
 
@@ -687,7 +602,6 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.encoder.backbone.checkpoint_sha256 = None
         cfg.model.encoder.backbone.backbone_config = tiny_clap_config
         cfg.model.encoder.head.input_dim = 8
-        cfg.model.encoder.head.n_conditioning_outputs = 2
         cfg.model.vector_field.num_layers = 2
     return cfg
 
@@ -725,7 +639,6 @@ def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.encoder.head.embed_dim = TINY_SAME_LATENT_DIM
         cfg.model.encoder.head.max_seq_len = 8
         cfg.model.encoder.head.num_heads = 1
-        cfg.model.encoder.head.n_conditioning_outputs = 2
         cfg.model.vector_field.num_layers = 2
     return cfg
 
@@ -796,6 +709,29 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 
 @pytest.fixture(scope="function")
+def cfg_dataset_kr106_2m(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the production-scale KR-106 dataset experiment with temporary paths.
+
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: KR-106 cfg with ``tmp_path``-pinned paths.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-2m-40k-10k"],
+        )
+        with open_dict(cfg):
+            _set_workspace_root(cfg)
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.work_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+
+    yield cfg
+
+    GlobalHydra.instance().clear()
+
+
+@pytest.fixture(scope="function")
 def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose ``dataset.yaml`` with ``synth=obxf render=vst`` for entrypoint OB-Xf coverage.
 
@@ -854,18 +790,20 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_pyfdn(tmp_path: Path) -> DictConfig:
-    """Compose dataset generation with the online-only pyFDN synth identity.
+def cfg_dataset_pyfdn_householder(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the fixed-Householder pyFDN dataset with temporary local paths.
 
-    :param tmp_path: Per-test output, work, and log root.
-    :returns: pyFDN-selected dataset config for rejection coverage.
+    :param tmp_path: Per-test output/work/log root.
+    :yields DictConfig: PyFDN cfg with ``tmp_path``-pinned paths.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
-                "synth=pyfdn_n8_mono",
+                "synth=pyfdn_n8_mono_householder",
+                "render=pyfdn",
+                "render.gui_toggle_cadence=never",
             ],
         )
         with open_dict(cfg):
@@ -873,10 +811,10 @@ def cfg_dataset_pyfdn(tmp_path: Path) -> DictConfig:
             cfg.paths.output_dir = str(tmp_path)
             cfg.paths.work_dir = str(tmp_path)
             cfg.paths.log_dir = str(tmp_path)
-            cfg.extras.print_config = False
-            cfg.logger = None
 
-    return cfg
+    yield cfg
+
+    GlobalHydra.instance().clear()
 
 
 @pytest.fixture(scope="function")
@@ -2644,6 +2582,101 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 # Lance datamodule smoke fixtures.
 
+_PYFDN_LANCE_SMOKE_MEL_SHAPE = (1, 128, 401)
+_PYFDN_LANCE_SMOKE_NUM_PARAMS = len(param_specs["pyfdn_n8_mono_householder"])
+
+
+def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int) -> None:
+    """Write one fixed-Householder pyFDN split for entrypoint tests.
+
+    :param path: Output ``.lance`` split.
+    :param seed: RNG seed distinguishing splits.
+    """
+    from tests.helpers.lance_fixtures import write_lance_shard
+
+    rng = np.random.default_rng(seed)
+    write_lance_shard(
+        path,
+        {
+            "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
+            "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
+            "param_array": rng.random((1, _PYFDN_LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+        },
+    )
+
+
+@pytest.fixture
+def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfig:
+    """Compose a one-step pyFDN flow run over fixed-Householder Lance rows.
+
+    :param tmp_path: Per-test dataset and output root.
+    :param request: Optional indirect experiment-name parameter.
+    :returns: Ready-to-run training configuration.
+    """
+    experiment = getattr(request, "param", "pyfdn/flow")
+    dataset_root = tmp_path / "pyfdn-lance-data"
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_pyfdn_lance_smoke_split(dataset_root / f"{split}.lance", seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+    (dataset_root / "dataset.complete").touch()
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[f"experiment={experiment}", "trainer=cpu"],
+        )
+        with open_dict(cfg):
+            cfg.paths.root_dir = str(operator_workspace())
+            cfg.paths.output_dir = str(tmp_path)
+            cfg.paths.log_dir = str(tmp_path)
+            cfg.logger = None
+            cfg.training.val_audio_probe = False
+            cfg.test = False
+            cfg.trainer.max_epochs = 1
+            cfg.trainer.max_steps = 1
+            cfg.trainer.limit_train_batches = 1
+            cfg.trainer.limit_val_batches = 0
+            cfg.trainer.num_sanity_val_steps = 0
+            cfg.trainer.log_every_n_steps = 1
+            cfg.datamodule.dataset_root = str(dataset_root)
+            cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+            cfg.datamodule.batch_size = 1
+            cfg.datamodule.ot = False
+            cfg.datamodule.num_workers = 0
+            cfg.datamodule.pin_memory = False
+            cfg.model.compile = False
+            cfg.model.scheduler = None
+            encoder = (
+                cfg.model.encoder.backbone
+                if experiment == "pyfdn/flow_ast_online"
+                else cfg.model.encoder
+            )
+            encoder.d_model = 16
+            encoder.n_heads = 1
+            encoder.n_layers = 1
+            encoder.n_conditioning_outputs = 1
+            cfg.model.vector_field.d_model = 16
+            cfg.model.vector_field.num_heads = 1
+            cfg.model.vector_field.d_ff = 16
+            cfg.model.vector_field.num_layers = 1
+            cfg.model.vector_field.projection.num_tokens = 2
+            cfg.model.validation_sample_steps = 1
+            cfg.model.test_sample_steps = 1
+            cfg.callbacks.model_checkpoint.save_top_k = 0
+            cfg.callbacks.model_checkpoint.save_last = True
+            if "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
+
+    GlobalHydra.instance().clear()
+    return cfg
+
+
 # vst_ffn's AST net hard-codes the production mel shape and channel count, so the
 # Lance smoke fixture must carry production-shaped mel rows; everything else is tiny.
 _LANCE_SMOKE_MEL_SHAPE = (2, 128, 401)
@@ -2678,6 +2711,22 @@ def _write_lance_smoke_split(path: Path, num_rows: int, *, seed: int) -> None:
     )
 
 
+def _materialize_lance_smoke_root(dataset_root: Path) -> None:
+    """Create complete train, validation, and test Lance smoke splits.
+
+    :param dataset_root: Directory receiving the generated split datasets.
+    """
+    dataset_root.mkdir()
+    for seed, split in enumerate(("train", "val", "test")):
+        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
+    np.savez(
+        dataset_root / "stats.npz",
+        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
+    )
+    (dataset_root / "dataset.complete").touch()
+
+
 @pytest.fixture
 def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     """Compose a ``datamodule=surge_lance`` training cfg over a generated Lance dataset.
@@ -2692,15 +2741,7 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     :ytype: DictConfig
     """
     dataset_root = tmp_path / "lance-data"
-    dataset_root.mkdir()
-    for seed, split in enumerate(("train", "val", "test")):
-        _write_lance_smoke_split(dataset_root / f"{split}.lance", _LANCE_SMOKE_ROWS, seed=seed)
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
-    (dataset_root / "dataset.complete").touch()
+    _materialize_lance_smoke_root(dataset_root)
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -2738,6 +2779,74 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     yield cfg
 
     GlobalHydra.instance().clear()
+
+
+def _shrink_slap_ast(cfg: DictConfig) -> None:
+    """Reduce the configured AST depth without relying on its list position.
+
+    :param cfg: Composed SLAP experiment configuration.
+    """
+    target = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
+    ast_configs = [
+        layer
+        for layer in cfg.model.audio_encoder.encoder._args_
+        if layer.get("_target_") == target
+    ]
+    assert len(ast_configs) == 1
+    ast_configs[0].n_layers = 1
+
+
+@pytest.fixture
+def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
+    """Compose a one-step shipped SLAP experiment over local Lance splits.
+
+    The configuration exercises fit, validation, checkpoint reload, and test.
+
+    :param tmp_path: Isolated dataset and training output root.
+    :returns: Ready-to-run SLAP training configuration.
+    """
+    dataset_root = tmp_path / "slap-lance-data"
+    _materialize_lance_smoke_root(dataset_root)
+
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/slap_ast_audio_mlp_param",
+                "trainer=cpu",
+            ],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.seed = 1234
+        cfg.logger = None
+        cfg.test = True
+        cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.datamodule.download_dataset_root_uri = None
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.pin_memory = False
+        _shrink_slap_ast(cfg)
+        cfg.model.compile = False
+        cfg.callbacks.model_checkpoint.every_n_epochs = 1
+        cfg.callbacks.model_checkpoint.every_n_train_steps = None
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.min_steps = None
+        cfg.trainer.max_steps = -1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 1
+        cfg.trainer.limit_test_batches = 1
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.val_check_interval = 1
+        cfg.trainer.enable_model_summary = False
+        cfg.training.val_audio_probe = False
+        if "lr_monitor" in cfg.callbacks:
+            del cfg.callbacks.lr_monitor
+
+    return cfg
 
 
 def _write_sketch_lance_root(dataset_root: Path) -> None:

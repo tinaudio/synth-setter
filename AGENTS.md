@@ -38,8 +38,8 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   `tinaudio/synth-setter`; existing upstream issues may be referenced only
   after verifying that they already exist.
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
-  `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
-  models only. Agent `model` arguments use a fully qualified
+  `openai-codex` or the pinned OpenRouter GLM-5.3-Flash secondary-review model
+  only. Agent `model` arguments use a fully qualified
   `provider/model-id` selector; default to `openai-codex/gpt-5.6-sol`, never
   the provider-only `openai-codex`. Do not select Anthropic models or launch
   Anthropic-backed Pi subagents; keep `.pi/settings.json`,
@@ -93,7 +93,7 @@ full rules in the `comment-hygiene` skill.
 
 ## Testing
 
-- `make test-fast` is the default CPU loop; `@pytest.mark.slow` for slow.
+- `make test-fast` is the curated two-minute CPU loop; `make test-medium` runs all non-slow CPU tests; `@pytest.mark.slow` for slow.
 - Test names: `test_<what>_<condition>_<expected>`.
 - A test must be able to fail for exactly one interesting reason. Don't test
   helpers defined in the test file, freeze config into literals, or assert that
@@ -288,7 +288,8 @@ than "SKIP: requires VST / R2".
 ## Commands
 
 ```bash
-make test-fast       # CPU-only fast tests
+make test-fast       # curated CPU tests, two-minute budget
+make test-medium     # all non-slow CPU tests
 make test-full-cpu   # all CPU tests
 make test-full-gpu   # GPU + CPU, serial
 make format          # pre-commit hooks

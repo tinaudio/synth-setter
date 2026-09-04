@@ -1,15 +1,17 @@
-"""Shared backend selector and plugin-path sentinel for the render config and runtime checks.
+"""Shared renderer contracts for launcher configuration and runtime checks.
 
 Interpreter-only (like ``param_spec_name``) so the launcher-pure
-``pipeline.schemas.spec`` and the render-worker modules can share one
-definition without pulling ``synth_setter.data.vst`` at import time.
+``pipeline.schemas.spec`` and the render-worker modules can share definitions
+without pulling ``synth_setter.data.vst`` at import time.
 """
 
 from pathlib import Path
 from typing import Literal
 
+type PyFDNExcitation = Literal["chirp", "impulse"]
 type RendererBackend = Literal[
     "pedalboard",
+    "pyfdn",
     "dawdreamer",
     "dawdreamer_faust",
     "surgepy",
@@ -23,8 +25,13 @@ FAUST_PLUGIN_NAME = "faust"
 PYFDN_PLUGIN_NAME = "pyfdn"
 SURGEPY_PLUGIN_NAME = "surgepy"
 
+PYFDN_CANONICAL_SOURCE_SHA256 = "5a215ebf9c4f8300774bee0f1e8e6ce5dd4052cb8c422aeeacc16a3d0321e485"
+PYFDN_SOURCE_CHANNELS = 1
+PYFDN_SOURCE_SAMPLE_RATE_HZ = 44_100
+PYFDN_SOURCE_TOTAL_FRAMES = 176_400
+
 IN_PROCESS_PLUGIN_NAMES = frozenset(
-    {TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME}
+    {TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, PYFDN_PLUGIN_NAME, SURGEPY_PLUGIN_NAME}
 )
 
 

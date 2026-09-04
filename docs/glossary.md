@@ -26,7 +26,7 @@ Project terminology for synth-setter. Grouped by domain.
 | Term                                | Definition                                                                                                                                                      |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **VST (Virtual Studio Technology)** | Plugin format for audio synthesizers and effects. Surge XT is loaded as a VST plugin via Spotify's [pedalboard](https://github.com/spotify/pedalboard) library. |
-| **Surge XT**                        | The open-source VST synthesizer used for audio rendering. See [surge-synthesizer.github.io](https://surge-synthesizer.github.io/).                              |
+| **Surge XT**                        | The default open-source VST synthesizer used for audio rendering. See [surge-synthesizer.github.io](https://surge-synthesizer.github.io/).                      |
 | **Mel spectrogram**                 | Frequency-domain audio representation used as neural network input. 128 mel bands, ~100 frames/sec.                                                             |
 | **pedalboard**                      | Spotify's Python library for loading and running VST plugins programmatically.                                                                                  |
 | **Xvfb**                            | X Virtual Framebuffer. Provides a virtual display server on headless Linux machines, required because VST plugins expect a display.                             |

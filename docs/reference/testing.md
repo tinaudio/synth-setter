@@ -40,7 +40,8 @@ ______________________________________________________________________
 
 All common selectors are defined as Makefile targets — read [`Makefile`](../../Makefile) for the exact `pytest` flags each invokes (they evolve; don't memorize). Each lane also enforces a wall-clock session budget (`PYTEST_SESSION_BUDGET_SECONDS`, enforced in `tests/conftest.py`'s `pytest_sessionfinish`) — a run that blows its budget fails even if every test passed; the per-lane values live in the Makefile.
 
-- `make test-fast` — quick CPU-only suite. Excludes slow, gpu, mps, requires_vst.
+- `make test-fast` — curated CPU-only inner loop covering schemas, models, evaluation, features, pipeline configuration, and VST logic. Enforces a two-minute budget and excludes slow, gpu, mps, requires_vst, and infra.
+- `make test-medium` — complete non-slow CPU suite with a ten-minute budget.
 - `make test-full-cpu` — all CPU tests (slow + requires_vst included; gpu/mps excluded). Linux bootstraps Xvfb; Darwin runs the VST subset serially after the parallel non-VST subset.
 - `make test-full-gpu` — GPU + CPU tests on a host with a CUDA GPU. Serial — exclusive device access. Linux: bootstraps Xvfb.
 - `make test-full-mps` — MPS + CPU tests on a host with Apple silicon. Serial — exclusive device access.
@@ -49,7 +50,7 @@ All common selectors are defined as Makefile targets — read [`Makefile`](../..
 
 CI selectors live in [`.github/workflows/`](../../.github/workflows):
 
-- [`test.yml`](../../.github/workflows/test.yml) — fast CPU tests on every PR (runs `make test-ci-unit`; the marker filter lives in the Makefile so CI lanes can't drift — see [#1353](https://github.com/tinaudio/synth-setter/issues/1353)).
+- [`test.yml`](../../.github/workflows/test.yml) — runs `make test-fast` behind a hard 120-second timeout on Ubuntu, then runs the complete non-slow `make test-ci-unit` suite with coverage on Ubuntu and macOS. Marker filters live in the Makefile so CI lanes cannot drift — see [#1353](https://github.com/tinaudio/synth-setter/issues/1353).
 - [`test-gpu.yml`](../../.github/workflows/test-gpu.yml) — GPU-marked tests on a GPU runner. Twice-weekly cron + manual dispatch.
 - [`test-mps.yml`](../../.github/workflows/test-mps.yml) — MPS-marked tests on a `macos-latest` (Apple Silicon) runner. Triggered on push to `main` **and** on PRs that touch `src/` or `src/synth_setter/configs/` — the closest thing to pre-submit coverage for slow Surge tests, since the macOS runner is large enough to host the Surge XT smoke tests (`test-mps-fake-oracle.yaml` / `test-mps-ffn.yaml`) without OOM.
 - [`cpu-slow.yml`](../../.github/workflows/cpu-slow.yml) — slow CPU-only suite on `ubuntu-latest`, serially (no `-n auto`). Pushes to `main` and manual dispatch run the full `make test-ci-slow` lane, including live R2; qualifying same-repo PR paths run reduced `make test-ci-slow-pr`, which excludes `integration_r2` and receives no R2 credentials. VST-marked tests live in [`test-vst-slow.yml`](../../.github/workflows/test-vst-slow.yml). On post-merge failure, `cpu-slow` auto-opens a deduplicated `ci-automation` Bug assigned to `@ktinubu`.

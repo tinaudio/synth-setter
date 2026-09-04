@@ -11,8 +11,10 @@ from scipy.signal import sosfreqz
 
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
 from synth_setter.data.vst.param_spec import ParameterValues
+from synth_setter.data.vst.renderers import NonFiniteAudioError
 
 
 @pytest.fixture
@@ -39,7 +41,7 @@ def test_params_to_fdn_build_reconstructs_exact_native_build(
 
     :param fdn_params: Valid native patch.
     """
-    build = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+    build = params_to_fdn_build(fdn_params, sample_rate=44_100.0)
 
     assert isinstance(build, FDNBuild)
     assert build.A is fdn_params["feedback_matrix"]
@@ -47,7 +49,7 @@ def test_params_to_fdn_build_reconstructs_exact_native_build(
     assert build.C is fdn_params["output_matrix"]
     assert build.D is fdn_params["direct_matrix"]
     assert build.delays is fdn_params["delays"]
-    assert build.fs == 48_000.0
+    assert build.fs == 44_100.0
     post_delay = build.post_delay
     assert post_delay is not None
     assert post_delay.shape == (1, 6, 8)
@@ -64,16 +66,16 @@ def test_params_to_fdn_build_same_controls_reproduce_exact_decay_sos(
 
     :param fdn_params: Valid native patch with unequal endpoint RTs.
     """
-    first = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
-    second = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+    first = params_to_fdn_build(fdn_params, sample_rate=44_100.0)
+    second = params_to_fdn_build(fdn_params, sample_rate=44_100.0)
     expected_end_lines = np.array(
         [
             [
-                [0.9172759353897796, 0.9158909125939455],
-                [0.0131997506097520, 0.0134104340706896],
+                [0.9122841131033455, 0.9108196387460381],
+                [0.07767066820536879, 0.07779384062478191],
                 [0.0, 0.0],
                 [1.0, 1.0],
-                [-0.0143901634181029, -0.0146419555934989],
+                [0.05396512816322539, 0.05369180514782246],
                 [0.0, 0.0],
             ]
         ],
@@ -104,7 +106,7 @@ def test_params_to_fdn_build_unequal_rt_extremes_attenuate_every_delay_line(
     params["post_delay.rt_dc_seconds"] = 0.1
     params["post_delay.rt_nyquist_seconds"] = 4.0
 
-    build = params_to_fdn_build(params, sample_rate=48_000.0)
+    build = params_to_fdn_build(params, sample_rate=44_100.0)
 
     assert build.post_delay is not None
     _, response = sosfreqz(build.post_delay[:, :, delay_line], worN=512)
@@ -123,11 +125,22 @@ def test_params_to_fdn_build_preserves_nonorthogonal_prediction_without_projecti
     feedback = np.ones((8, 8), dtype=np.float64)
     params["feedback_matrix"] = feedback
 
-    build = params_to_fdn_build(params, sample_rate=48_000.0)
+    build = params_to_fdn_build(params, sample_rate=44_100.0)
 
     assert build.A is feedback
     assert build.post_delay is not None
     assert np.isfinite(build.post_delay).all()
+
+
+def test_pyfdn_renderer_fixed_householder_spec_returns_finite_impulse_response() -> None:
+    """The fixed-feedback spec produces complete patches consumed by pyFDN."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+
+    audio = PyFDNRenderer().render(params)
+
+    assert audio.shape == (1, 176_400)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
 
 
 def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
@@ -143,7 +156,7 @@ def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(
     params["post_delay.rt_nyquist_seconds"] = 4.0
 
     with np.errstate(over="ignore", invalid="ignore"):
-        with pytest.raises(ValueError, match="finite"):
+        with pytest.raises(NonFiniteAudioError, match="finite"):
             PyFDNRenderer().render(params)
 
 
@@ -219,7 +232,7 @@ def test_params_to_fdn_build_malformed_derived_hooks_raise(
     monkeypatch.setattr(pyfdn_instrument, "build_set_decay", malformed_decay_build)
 
     with pytest.raises(expected_error, match=match):
-        params_to_fdn_build(fdn_params, sample_rate=48_000.0)
+        params_to_fdn_build(fdn_params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize(
@@ -242,7 +255,7 @@ def test_params_to_fdn_build_out_of_bounds_rt_raises(
     params[control] = bad_rt
 
     with pytest.raises(ValueError, match="between 0.1 and 4.0"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize(
@@ -265,7 +278,7 @@ def test_params_to_fdn_build_nonfinite_rt_raises(
     params[control] = bad_rt
 
     with pytest.raises(ValueError, match="finite"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize(
@@ -288,7 +301,7 @@ def test_params_to_fdn_build_nonreal_rt_raises(
     params[control] = cast(float, bad_rt)
 
     with pytest.raises(TypeError, match="real scalar"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize("bad_keys", ["missing", "extra"])
@@ -307,7 +320,7 @@ def test_params_to_fdn_build_non_exact_keys_raise(
         params["unsupported"] = 0.0
 
     with pytest.raises(ValueError, match="exactly"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize(
@@ -333,7 +346,7 @@ def test_params_to_fdn_build_wrong_shape_raises(
     params[name] = np.asarray(params[name]).reshape(bad_shape)
 
     with pytest.raises(ValueError, match="shape"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize(
@@ -359,7 +372,7 @@ def test_params_to_fdn_build_wrong_dtype_raises(
     params[name] = np.asarray(params[name]).astype(bad_dtype)
 
     with pytest.raises(TypeError, match="dtype"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize(
@@ -382,7 +395,7 @@ def test_params_to_fdn_build_non_finite_matrix_value_raises(
     params[name] = matrix
 
     with pytest.raises(ValueError, match="finite"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
 @pytest.mark.parametrize("bad_delay", [0, -1])
@@ -400,19 +413,19 @@ def test_params_to_fdn_build_nonpositive_delay_raises(
     params["delays"] = delays
 
     with pytest.raises(ValueError, match="positive"):
-        params_to_fdn_build(params, sample_rate=48_000.0)
+        params_to_fdn_build(params, sample_rate=44_100.0)
 
 
-@pytest.mark.parametrize("sample_rate", [44_100.0, 48_000.1, np.nan, np.inf])
-def test_params_to_fdn_build_non_48000_sample_rate_raises(
+@pytest.mark.parametrize("sample_rate", [48_000.0, 44_100.1, np.nan, np.inf])
+def test_params_to_fdn_build_non_44100_sample_rate_raises(
     fdn_params: ParameterValues, sample_rate: float
 ) -> None:
-    """The fixed instrument rejects every rate other than exact 48 kHz.
+    """The fixed instrument rejects every rate other than exact 44.1 kHz.
 
     :param fdn_params: Valid native patch.
     :param sample_rate: Unsupported or non-finite sample rate.
     """
-    with pytest.raises(ValueError, match="48000"):
+    with pytest.raises(ValueError, match="44100"):
         params_to_fdn_build(fdn_params, sample_rate=sample_rate)
 
 
@@ -423,26 +436,28 @@ def test_pyfdn_renderer_rejects_installed_version_mismatch() -> None:
 
 
 def test_pyfdn_renderer_instances_hold_independent_immutable_canonical_bytes() -> None:
-    """Renderer instances use equal source bytes without mutable shared array state."""
-    first = PyFDNRenderer()
-    second = PyFDNRenderer()
+    """Chirp renderer instances do not share mutable source array state."""
+    first = PyFDNRenderer(excitation="chirp")
+    second = PyFDNRenderer(excitation="chirp")
 
+    assert first._source_audio is not None
+    assert second._source_audio is not None
     np.testing.assert_array_equal(first._source_audio, second._source_audio)
     assert not np.shares_memory(first._source_audio, second._source_audio)
     assert not first._source_audio.flags.writeable
     assert not second._source_audio.flags.writeable
 
 
-def test_pyfdn_renderer_exposes_provenance_for_its_canonical_source() -> None:
-    """Renderer provenance identifies the immutable bytes used for processing."""
-    renderer = PyFDNRenderer()
+def test_pyfdn_renderer_exposes_provenance_for_custom_chirp() -> None:
+    """Chirp provenance identifies the immutable bytes used for processing."""
+    renderer = PyFDNRenderer(excitation="chirp")
 
     assert renderer.source_provenance == canonical_pyfdn_source_provenance()
 
 
 def test_pyfdn_renderer_source_provenance_caller_mutation_is_isolated() -> None:
     """Caller annotations cannot alter provenance retained by the renderer."""
-    renderer = PyFDNRenderer()
+    renderer = PyFDNRenderer(excitation="chirp")
     provenance = renderer.source_provenance
 
     provenance["identity"] = "caller-annotation"
@@ -472,7 +487,7 @@ def test_pyfdn_renderer_generates_source_once_for_repeated_renders(
         "generate_canonical_pyfdn_source",
         count_generation,
     )
-    renderer = PyFDNRenderer()
+    renderer = PyFDNRenderer(excitation="chirp")
 
     renderer.render(fdn_params)
     renderer.render(fdn_params)
@@ -503,8 +518,8 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
     changed_params = dict(fdn_params)
     changed_params[control] = changed_rt
 
-    baseline_build = params_to_fdn_build(fdn_params, sample_rate=48_000.0)
-    changed_build = params_to_fdn_build(changed_params, sample_rate=48_000.0)
+    baseline_build = params_to_fdn_build(fdn_params, sample_rate=44_100.0)
+    changed_build = params_to_fdn_build(changed_params, sample_rate=44_100.0)
     renderer = PyFDNRenderer()
     baseline_audio = renderer.render(fdn_params)
     changed_audio = renderer.render(changed_params)
@@ -524,6 +539,32 @@ def test_pyfdn_renderer_rt_control_change_changes_sos_and_audio(
     assert not np.array_equal(changed_audio, baseline_audio)
 
 
+def test_pyfdn_renderer_default_returns_impulse_response(
+    fdn_params: ParameterValues,
+) -> None:
+    """Default rendering exposes the FDN response to a unit impulse.
+
+    :param fdn_params: Valid native patch whose first delayed output starts at frame 400.
+    """
+    audio = PyFDNRenderer().render(fdn_params)
+
+    assert audio[0, 0] == pytest.approx(0.5)
+    np.testing.assert_array_equal(audio[0, 1:400], np.zeros(399, dtype=np.float32))
+
+
+def test_pyfdn_renderer_custom_chirp_changes_excitation(
+    fdn_params: ParameterValues,
+) -> None:
+    """The historical chirp render remains available only by explicit selection.
+
+    :param fdn_params: Valid native patch.
+    """
+    impulse_response = PyFDNRenderer().render(fdn_params)
+    chirp_response = PyFDNRenderer(excitation="chirp").render(fdn_params)
+
+    assert not np.array_equal(chirp_response, impulse_response)
+
+
 def test_pyfdn_renderer_real_process_has_exact_output_contract(
     fdn_params: ParameterValues,
 ) -> None:
@@ -531,11 +572,9 @@ def test_pyfdn_renderer_real_process_has_exact_output_contract(
 
     :param fdn_params: Valid native patch.
     """
-    renderer = PyFDNRenderer()
+    audio = PyFDNRenderer().render(fdn_params)
 
-    audio = renderer.render(fdn_params)
-
-    assert audio.shape == (1, 192_000)
+    assert audio.shape == (1, 176_400)
     assert audio.dtype == np.float32
     assert audio.flags.c_contiguous
     assert np.isfinite(audio).all()
@@ -571,10 +610,15 @@ def test_pyfdn_renderer_does_not_clip_native_output(
     assert np.max(np.abs(audio)) > 1.0
 
 
-def test_pyfdn_renderer_public_signature_has_no_midi_or_effect_options() -> None:
-    """The fixed-source domain API exposes only native patch rendering."""
-    constructor_names = set(inspect.signature(PyFDNRenderer).parameters)
+def test_pyfdn_renderer_implements_common_audio_renderer_signature() -> None:
+    """The fixed-source backend accepts the existing MIDI compatibility inputs."""
     render_names = set(inspect.signature(PyFDNRenderer.render).parameters)
 
-    assert constructor_names == {"synth_version"}
-    assert render_names == {"self", "params"}
+    assert render_names == {
+        "self",
+        "params",
+        "midi_note",
+        "velocity",
+        "note_start_and_end",
+        "warmup",
+    }

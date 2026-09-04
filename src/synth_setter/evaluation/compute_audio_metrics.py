@@ -21,6 +21,8 @@ We compute the following metrics:
     literature for an option here?). cosine sim.
 5. amp env: compute RMS amp envelopes (50ms window, 25ms hop). take cosine similarity
     (i.e. normalized dot prod).
+6. pyFDN only: octave-band RT60 natural-log RMSE.
+7. pyFDN only: octave-band energy-decay-curve RMSE in dB.
 """
 
 import math
@@ -29,6 +31,7 @@ import os
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Literal
 
 import click
 import librosa
@@ -40,10 +43,12 @@ from dtw import dtw
 from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
+from pyFDN import MatchEnergyDecay, Response, estimate_rt_bands
 
 # Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
 # the write sites below still spell them literally.
 AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
+type ReverbMetricBackend = Literal["pyfdn"]
 
 
 def subdir_matches_pattern(sample_dir: Path) -> bool:
@@ -312,6 +317,89 @@ def compute_sot(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     return dists.mean()
 
 
+def _mono_impulse_response(audio: np.ndarray, name: str) -> np.ndarray:
+    """Return one finite mono impulse response as a time-major vector.
+
+    :param audio: Channel-first audio expected to have shape ``(1, samples)``.
+    :param name: Signal name used in validation errors.
+    :returns: The signal's one-dimensional sample vector.
+    :raises ValueError: The signal is not finite mono audio.
+    """
+    array = np.asarray(audio)
+    if array.ndim != 2 or array.shape[0] != 1:
+        raise ValueError(f"{name} impulse response must be mono with shape (1, samples)")
+    if not np.isfinite(array).all():
+        raise ValueError(f"{name} impulse response must contain only finite values")
+    return array[0]
+
+
+def _paired_mono_impulse_responses(
+    target: np.ndarray, pred: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate and return a target/prediction mono impulse-response pair.
+
+    :param target: Target channel-first impulse response.
+    :param pred: Predicted channel-first impulse response.
+    :returns: Time-major target and prediction vectors with equal lengths.
+    :raises ValueError: Either signal is invalid or their lengths differ.
+    """
+    target_ir = _mono_impulse_response(target, "target")
+    pred_ir = _mono_impulse_response(pred, "predicted")
+    if target_ir.shape != pred_ir.shape:
+        raise ValueError("target and predicted impulse responses must have the same sample count")
+    return target_ir, pred_ir
+
+
+def compute_octave_rt60_log_rmse(
+    target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
+) -> float:
+    """Return log-RMSE between valid paired octave-band RT60 estimates.
+
+    pyFDN returns zero when a band's decay cannot be fitted. Such bands and any
+    non-finite estimates are excluded jointly so logarithms cannot contaminate logs.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Root mean squared natural-log RT60 ratio across valid octave bands.
+    :raises ValueError: Shapes, centre frequencies, or fitted bands are invalid.
+    """
+    target_ir, pred_ir = _paired_mono_impulse_responses(target, pred)
+    target_rt, target_centres = estimate_rt_bands(target_ir, sample_rate)
+    pred_rt, pred_centres = estimate_rt_bands(pred_ir, sample_rate)
+    if not np.array_equal(target_centres, pred_centres):
+        raise ValueError("target and predicted octave-band centre frequencies differ")
+
+    valid = np.isfinite(target_rt) & np.isfinite(pred_rt) & (target_rt > 0) & (pred_rt > 0)
+    if not valid.any():
+        raise ValueError("no valid paired octave-band RT60 estimates")
+    log_error = np.log(pred_rt[valid]) - np.log(target_rt[valid])
+    return float(np.sqrt(np.mean(log_error**2)))
+
+
+@torch.no_grad()
+def compute_octave_edc_rmse_db(
+    target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
+) -> float:
+    """Return pyFDN's octave-band energy-decay-curve RMSE in dB.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: RMS dB difference over target-valid octave-band decay frames.
+    :raises ValueError: Shapes are invalid or the resulting score is non-finite.
+    """
+    target_ir, pred_ir = _paired_mono_impulse_responses(target, pred)
+    response = Response(
+        h=torch.as_tensor(pred_ir[:, np.newaxis, np.newaxis]),
+        fs=float(sample_rate),
+    )
+    value = float(MatchEnergyDecay(target_ir)(response).item())
+    if not np.isfinite(value):
+        raise ValueError("octave-band energy-decay RMSE must be finite")
+    return value
+
+
 def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
     """Return the cosine similarity of the RMS amplitude envelopes of ``target`` and ``pred``.
 
@@ -351,36 +439,59 @@ def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     return cosine_sim.mean()
 
 
-def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
-    """Load ``target.wav`` and ``pred.wav`` from ``audio_dir`` and return all metric scores.
+def compute_metrics_on_dir(
+    audio_dir: Path, renderer_backend: ReverbMetricBackend | None = None
+) -> dict[str, float]:
+    """Load one target/prediction pair and return applicable audio metrics.
 
     :param audio_dir: Directory containing ``target.wav`` and ``pred.wav``.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
     :returns: Dict mapping metric name to scalar score.
+    :raises ValueError: The target and predicted WAV files have different sample rates.
     """
     with AudioFile(str(audio_dir / "target.wav")) as target_file:
         target = target_file.read(target_file.frames)
+        target_sample_rate = float(target_file.samplerate)
     with AudioFile(str(audio_dir / "pred.wav")) as pred_file:
         pred = pred_file.read(pred_file.frames)
+        pred_sample_rate = float(pred_file.samplerate)
 
-    mss = compute_mss(target, pred)
-    wmfcc = compute_wmfcc(target, pred)
-    sot = compute_sot(target, pred)
-    rms = compute_rms(target, pred)
+    if target_sample_rate != pred_sample_rate:
+        raise ValueError("target and predicted audio must have the same sample rate")
+    metrics = {
+        "mss": compute_mss(target, pred, target_sample_rate),
+        "wmfcc": compute_wmfcc(target, pred, target_sample_rate),
+        "sot": compute_sot(target, pred, target_sample_rate),
+        "rms": compute_rms(target, pred, target_sample_rate),
+    }
+    if renderer_backend == "pyfdn":
+        metrics.update(
+            {
+                "octave_rt60_log_rmse": compute_octave_rt60_log_rmse(
+                    target, pred, target_sample_rate
+                ),
+                "octave_edc_rmse_db": compute_octave_edc_rmse_db(target, pred, target_sample_rate),
+            }
+        )
+    return metrics
 
-    return dict(mss=mss, wmfcc=wmfcc, sot=sot, rms=rms)
 
-
-def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
+def compute_metrics(
+    audio_dirs: list[Path],
+    output_dir: Path,
+    renderer_backend: ReverbMetricBackend | None = None,
+) -> Path:
     """Score each dir in ``audio_dirs`` and write a per-sample CSV to ``output_dir``.
 
     :param audio_dirs: Sample dirs to score (each must contain ``target.wav`` + ``pred.wav``).
     :param output_dir: Directory for the per-worker ``metrics-<pid>.csv`` output file.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
     :returns: Path to the written CSV file.
     """
     idxs = []
     rows = []
     for sample_dir in audio_dirs:
-        metrics = compute_metrics_on_dir(sample_dir)
+        metrics = compute_metrics_on_dir(sample_dir, renderer_backend)
         rows.append(metrics)
         idxs.append(sample_dir.name.rsplit("_", 1)[-1])
 
@@ -393,7 +504,12 @@ def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
     return metric_file
 
 
-def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int) -> pd.DataFrame:
+def _aggregate_metrics(
+    audio_dirs: list[Path],
+    work_dir: Path,
+    num_workers: int,
+    renderer_backend: ReverbMetricBackend | None = None,
+) -> pd.DataFrame:
     """Run the parallel per-sample metrics pass and return the concatenated DataFrame.
 
     Intermediate per-worker CSVs are written to ``work_dir`` and left there alongside
@@ -403,6 +519,7 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     :param work_dir: Directory for per-worker intermediate ``metrics-<pid>.csv`` files.
     :param num_workers: ProcessPoolExecutor worker count; capped to ``len(audio_dirs)`` to
         avoid spawning idle processes.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
     :returns: Concatenated per-sample metrics DataFrame.
     """
     effective_workers = min(num_workers, len(audio_dirs)) if audio_dirs else 1
@@ -417,7 +534,10 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     ]
     metric_dfs = []
     with ProcessPoolExecutor(max_workers=effective_workers) as executor:
-        futures = [executor.submit(compute_metrics, sublist, work_dir) for sublist in sublists]
+        futures = [
+            executor.submit(compute_metrics, sublist, work_dir, renderer_backend)
+            for sublist in sublists
+        ]
         for future in as_completed(futures):
             metric_file = future.result()
             metric_df = pd.read_csv(metric_file)
@@ -502,7 +622,13 @@ def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
 @click.argument("audio_dir", type=str)
 @click.argument("output_dir", type=str, default="metrics")
 @click.option("--num_workers", "-w", type=click.IntRange(min=1), default=8)
-def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
+@click.option("--renderer-backend", type=click.Choice(["pyfdn"]), default=None)
+def main(
+    audio_dir: str,
+    output_dir: str,
+    num_workers: int,
+    renderer_backend: ReverbMetricBackend | None,
+) -> None:
     """Score rendered audio under ``audio_dir`` and write metrics to ``output_dir``.
 
     Runs the parallel per-sample pass writing ``metrics.csv`` and
@@ -512,6 +638,7 @@ def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
         (each must have ``pred.wav`` and ``target.wav``).
     :param output_dir: Destination for CSV outputs.
     :param num_workers: Number of parallel worker processes.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
     :raises ValueError: when no valid sample dirs are found or the input and output
         directories overlap.
     """
@@ -538,7 +665,7 @@ def main(audio_dir: str, output_dir: str, num_workers: int) -> None:
         )
 
     _remove_deprecated_metric_outputs(output_dir_path)
-    df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers)
+    df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers, renderer_backend)
     df.to_csv(output_dir_path / "metrics.csv")
 
     columnwise_means = df.mean(axis=0)

@@ -126,10 +126,27 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "1.3.master.f7b97c68",
     ),
     "obxf": ("obxf", "plugins/OB-Xf.vst3", "presets/obxf-base.vstpreset", "1.0.3"),
-    "pyfdn_n8_mono": ("pyfdn_n8_mono", "pyfdn", "", "0.4.2"),
+    "pyfdn_n8_mono_householder": (
+        "pyfdn_n8_mono_householder",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
+    "pyfdn_pitchshift_n8_mono_householder": (
+        "pyfdn_pitchshift_n8_mono_householder",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
     "torchsynth_adsr": ("torchsynth_adsr", "torchsynth", "", "1.0.2"),
     "torchsynth_full": ("torchsynth_full", "torchsynth", "", "1.0.2"),
     "torchsynth_simple": ("torchsynth_simple", "torchsynth", "", "1.0.2"),
+    "ultramaster_kr106": (
+        "ultramaster_kr106",
+        "plugins/Ultramaster KR-106.vst3",
+        "presets/ultramaster_kr106-base.vstpreset",
+        "2.5.13",
+    ),
 }
 
 SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(

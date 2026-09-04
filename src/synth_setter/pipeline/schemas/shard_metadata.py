@@ -69,6 +69,11 @@ class ShardMetadata(BaseModel):
         :type: int
 
         Per-row loudness-gate retry budget used during rendering.
+
+    .. attribute :: render_contract_digest
+        :type: str | None
+
+        SHA-256 of the backend-neutral render contract.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -100,6 +105,11 @@ class ShardMetadata(BaseModel):
             f"{DEFAULT_ATTEMPTS_PER_SAMPLE} so sidecars written before this field existed "
             "still validate."
         ),
+    )
+    render_contract_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        description="SHA-256 of the canonical serialized render contract.",
     )
 
     @model_validator(mode="after")

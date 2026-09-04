@@ -14,7 +14,7 @@ import os
 import re
 import shlex
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Literal
@@ -46,6 +46,7 @@ from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.components.transformer import ApproxEquivTransformer
 from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -174,6 +175,103 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+@pytest.mark.slow
+def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train the shipped pyFDN AST on stored mels and write a checkpoint.
+
+    :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
+    """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
+    assert cfg_pyfdn_train.model.num_params == 27
+    assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/delays"])
+    assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+def test_train_pyfdn_online_ast_one_step_uses_waveforms(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train the online-AST comparison from stored pyFDN waveforms.
+
+    :param cfg_pyfdn_train: One-step online-AST pyFDN configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.conditioning == "audio"
+    assert objects["trainer"].global_step == 1
+
+
+def _assert_slap_train_artifacts(
+    cfg: DictConfig,
+    metric_dict: Mapping[str, torch.Tensor],
+    object_dict: Mapping[str, object],
+) -> Trainer:
+    """Assert finite SLAP fit, validation, checkpoint reload, and test outputs.
+
+    :param cfg: Training configuration carrying the output directory.
+    :param metric_dict: Metrics returned by the training entrypoint.
+    :param object_dict: Runtime objects returned by the training entrypoint.
+    :returns: Trainer that executed the SLAP run.
+    """
+    trainer = object_dict["trainer"]
+    assert isinstance(trainer, Trainer)
+    assert trainer.global_step == 1
+    assert isinstance(object_dict["model"], SLAPModule)
+    for metric_name in (
+        "loss/train/total_loss",
+        "loss/val/total_loss",
+        "loss/test/total_loss",
+    ):
+        assert metric_name in metric_dict
+        assert torch.isfinite(metric_dict[metric_name])
+
+    checkpoint_callback = trainer.checkpoint_callback
+    assert isinstance(checkpoint_callback, ValidationAlignedModelCheckpoint)
+    best_checkpoint = Path(checkpoint_callback.best_model_path)
+    assert best_checkpoint.parent == Path(cfg.paths.output_dir) / "checkpoints"
+    assert best_checkpoint.stat().st_size > 0
+    return trainer
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+@pytest.mark.slow
+def test_train_slap_ast_audio_mlp_param_experiment_end_to_end(
+    cfg_slap_train_lance: DictConfig,
+) -> None:
+    """Run the shipped SLAP experiment through fit, reload, and test on one GPU.
+
+    :param cfg_slap_train_lance: Tiny real Lance training configuration.
+    """
+    with open_dict(cfg_slap_train_lance):
+        cfg_slap_train_lance.trainer.accelerator = "gpu"
+        cfg_slap_train_lance.trainer.devices = 1
+        cfg_slap_train_lance.trainer.precision = "32-true"
+    HydraConfig().set_config(cfg_slap_train_lance)
+
+    metric_dict, object_dict = train(cfg_slap_train_lance)
+
+    trainer = _assert_slap_train_artifacts(
+        cfg_slap_train_lance,
+        metric_dict,
+        object_dict,
+    )
+    assert trainer.strategy.root_device.type == "cuda"
+
+
 @pytest.mark.parametrize(
     ("received_sigterm", "expected_exit_code"),
     [(True, 143), (False, 7)],
@@ -203,64 +301,6 @@ def test_train_fit_system_exit_uses_signal_status_only_for_sigterm(
         train(cfg_train)
 
     assert exc_info.value.code == expected_exit_code
-
-
-@pytest.mark.slow
-def test_train_pyfdn_flow_advances_on_real_online_batch(
-    cfg_pyfdn_flow_train: DictConfig,
-) -> None:
-    """Train one flow step on a real pyFDN-rendered batch.
-
-    :param cfg_pyfdn_flow_train: Tiny production pyFDN flow configuration.
-    """
-    HydraConfig().set_config(cfg_pyfdn_flow_train)
-    with open_dict(cfg_pyfdn_flow_train):
-        cfg_pyfdn_flow_train.datamodule.num_workers = 2
-
-    metric_dict, object_dict = train(cfg_pyfdn_flow_train)
-
-    assert object_dict["trainer"].global_step == 1
-    assert_finite_train_loss(metric_dict)
-    assert torch.isfinite(metric_dict["val/param_mse"])
-
-    datamodule = object_dict["datamodule"]
-    assert cfg_pyfdn_flow_train.datamodule.param_spec_name == "pyfdn_n8_mono"
-    assert datamodule.param_spec_name == "pyfdn_n8_mono"
-    assert "source_audio_path" not in cfg_pyfdn_flow_train.datamodule
-    assert "source_audio_sha256" not in cfg_pyfdn_flow_train.datamodule
-    source_provenance = datamodule.source_provenance
-    assert source_provenance["identity"] == "librosa_log_chirp_v1"
-    assert source_provenance["librosa_version"] == "0.11.0"
-    datamodule.setup("fit")
-    batch = next(iter(datamodule.train_dataloader()))
-    assert batch["audio"].shape == (1, 192_000)
-    assert batch["params"].shape == (1, 91)
-    assert torch.isfinite(batch["audio"]).all()
-    assert torch.isfinite(batch["params"]).all()
-    assert batch["audio"].abs().max() > 0
-
-    model = object_dict["model"].eval()
-    zero_audio_batch = {**batch, "audio": torch.zeros_like(batch["audio"])}
-    with torch.inference_mode(), torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
-        conditioned_prediction, conditioned_batch = model.predict_step(batch, batch_idx=0)
-        torch.manual_seed(0)
-        zero_audio_prediction, returned_zero_audio_batch = model.predict_step(
-            zero_audio_batch, batch_idx=0
-        )
-    assert conditioned_prediction.shape == zero_audio_prediction.shape == (1, 91)
-    assert conditioned_prediction.dtype == zero_audio_prediction.dtype == torch.float32
-    assert conditioned_batch is batch
-    assert returned_zero_audio_batch is zero_audio_batch
-    assert not torch.allclose(conditioned_prediction, zero_audio_prediction)
-
-    checkpoint_dir = Path(cfg_pyfdn_flow_train.paths.output_dir) / "checkpoints"
-    checkpoint_path = checkpoint_dir / "last.ckpt"
-    assert checkpoint_path.stat().st_size > 0
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    assert checkpoint["PyFDNDataModule"] == {
-        "source_provenance": source_provenance,
-    }
 
 
 def test_train_torchsynth_experiment_renders_audio_online(
@@ -424,7 +464,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
-    assert torch.isfinite(metric_dict["per_param_mse_number_group_swap/adsr_1.attack"]).all()
+    assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
@@ -681,6 +721,28 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["params"].shape == (2, expected_width)
+    datamodule.teardown("fit")
+
+
+@pytest.mark.slow
+def test_train_pyfdn_pitchshift_identity_uses_45_coordinate_batches(tmp_path: Path) -> None:
+    """The train entrypoint resolves the pitch-shift synth and model width.
+
+    :param tmp_path: Pinned as the one-step training output directory.
+    """
+    identity = "pyfdn_pitchshift_n8_mono_householder"
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1
+    assert_log_per_param_mse_wired(trainer, identity)
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["params"].shape == (2, 45)
     datamodule.teardown("fit")
 
 
@@ -962,7 +1024,7 @@ def test_train_runpod_experiment_default_datamodule_advances(
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
     assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
-    assert torch.isfinite(metric_dict["per_param_mse/a_amp_eg_attack"])
+    assert torch.isfinite(metric_dict["val/per_param_mse/a_amp_eg_attack"])
 
 
 @pytest.mark.slow
@@ -1866,7 +1928,12 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
         cfg_surge_real_train.trainer.num_sanity_val_steps = 0
 
     HydraConfig().set_config(cfg_surge_real_train)
-    _, object_dict = train(cfg_surge_real_train)
+    metric_dict, object_dict = train(cfg_surge_real_train)
+
+    assert metric_dict["val/param_mse_spec_quantized"].item() == pytest.approx(0.0, abs=1e-12)
+    assert metric_dict["val/per_param_mse_spec_quantized/a_amp_eg_attack"].item() == pytest.approx(
+        0.0, abs=1e-12
+    )
 
     probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
     assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"
@@ -1888,6 +1955,10 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             wav = sample_dir / wav_name
             assert wav.is_file(), f"{wav} was not rendered"
             assert wav.stat().st_size > 0, f"{wav} is empty"
+        rendered_params = pd.read_csv(sample_dir / "params.csv", index_col=0)
+        assert rendered_params.at["a_amp_eg_attack", "pred_effective"] == pytest.approx(
+            rendered_params.at["a_amp_eg_attack", "target"]
+        )
 
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"

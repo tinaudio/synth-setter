@@ -11,6 +11,8 @@ when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -27,6 +29,7 @@ from pydantic import (
     model_validator,
 )
 
+import synth_setter.renderer_backend as renderer_backend_contract
 from synth_setter.param_spec_name import ValidatedParamSpecName
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
@@ -41,11 +44,13 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
+    PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
+    PyFDNExcitation,
     RendererBackend,
 )
-from synth_setter.synth_spec import SynthSpec
+from synth_setter.synth_spec import SYNTHS, SynthSpec
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -59,6 +64,13 @@ __all__ = [
     "Split",
     "StorageDType",
 ]
+
+_PYFDN_SYNTH_NAMES = frozenset(
+    name for name, synth in SYNTHS.items() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
+_PYFDN_PARAM_SPEC_NAMES = frozenset(
+    synth.param_spec_name for synth in SYNTHS.values() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
 
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
 # Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
@@ -250,6 +262,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         description=(
             "Audio host used to render each sample; Faust compiles checked-in source "
             "through DawDreamer and torchsynth renders in-process."
+        ),
+    )
+    pyfdn_excitation: PyFDNExcitation | None = Field(
+        default=None,
+        description=(
+            "Input used by pyFDN: its impulse response by default, or the canonical "
+            "chirp when explicitly selected."
         ),
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
@@ -459,14 +478,53 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return self
 
     @model_validator(mode="after")
-    def _reject_online_only_pyfdn(self) -> RenderConfig:
-        """Reject pyFDN from the unsupported offline dataset-rendering path.
+    def _validate_pyfdn_backend(self) -> RenderConfig:
+        """Require canonical pyFDN geometry and fixed compatibility stubs.
 
-        :return: ``self`` unchanged for renderable synth identities.
-        :raises ValueError: The online-only pyFDN identity is selected.
+        :returns: ``self`` unchanged for other backends or valid pyFDN configuration.
+        :raises ValueError: The pyFDN identity or fixed render contract drifts.
         """
-        if self.synth.name == "pyfdn_n8_mono":
-            raise ValueError("pyFDN offline generation is unsupported; use online train/eval only")
+        registered_pyfdn = (
+            self.synth.name in _PYFDN_SYNTH_NAMES
+            and SYNTHS[self.synth.name].param_spec_name == self.param_spec_name
+        )
+        pyfdn_identity = (
+            self.synth.name in _PYFDN_SYNTH_NAMES
+            or self.param_spec_name in _PYFDN_PARAM_SPEC_NAMES
+            or self.plugin_path == PYFDN_PLUGIN_NAME
+        )
+        if self.renderer_backend != "pyfdn":
+            if pyfdn_identity:
+                raise ValueError("all pyFDN identities require renderer_backend='pyfdn'")
+            if self.pyfdn_excitation is not None:
+                raise ValueError("pyfdn_excitation requires renderer_backend='pyfdn'")
+            return self
+        if not registered_pyfdn:
+            raise ValueError("pyfdn requires a registered pyfdn synth identity")
+        if self.plugin_path != PYFDN_PLUGIN_NAME or self.plugin_state_path:
+            raise ValueError('pyfdn requires plugin_path="pyfdn" and no plugin_state_path')
+        expected_rate = renderer_backend_contract.PYFDN_SOURCE_SAMPLE_RATE_HZ
+        expected_channels = renderer_backend_contract.PYFDN_SOURCE_CHANNELS
+        expected_duration = renderer_backend_contract.PYFDN_SOURCE_TOTAL_FRAMES / expected_rate
+        if (self.sample_rate, self.channels, self.signal_duration_seconds) != (
+            expected_rate,
+            expected_channels,
+            expected_duration,
+        ):
+            raise ValueError(
+                f"pyfdn requires sample_rate={expected_rate}, channels={expected_channels}, "
+                f"and signal_duration_seconds={expected_duration}"
+            )
+        if self.velocity != 0:
+            raise ValueError("pyfdn requires velocity=0")
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('pyfdn requires plugin_reload_cadence="render"')
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('pyfdn requires gui_toggle_cadence="never"')
+        if self.audio_dtype != "float32" or self.mel_spec_dtype != "float32":
+            raise ValueError("pyfdn requires audio_dtype=float32 and mel_spec_dtype=float32")
+        if self.param_sample_cadence != "sample":
+            raise ValueError('pyfdn requires param_sample_cadence="sample"')
         return self
 
     @model_validator(mode="after")
@@ -580,6 +638,19 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
         :returns: Strict ``ShardMetadata`` with every render-derived field filled.
         """
+        contract = self.model_dump(
+            mode="json",
+            exclude={"base_seed", "retain_local_shards", "sample_offset"},
+            exclude_none=True,
+        )
+        if self.renderer_backend == "pyfdn":
+            excitation = self.pyfdn_excitation or "impulse"
+            contract["pyfdn_excitation"] = excitation
+            if excitation == "chirp":
+                contract["canonical_source_sha256"] = (
+                    renderer_backend_contract.PYFDN_CANONICAL_SOURCE_SHA256
+                )
+        canonical_contract = json.dumps(contract, sort_keys=True, separators=(",", ":"))
         return ShardMetadata(
             velocity=self.velocity,
             signal_duration_seconds=self.signal_duration_seconds,
@@ -589,6 +660,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             base_seed=self.base_seed,
             sample_offset=self.sample_offset,
             attempts_per_sample=self.attempts_per_sample,
+            render_contract_digest=hashlib.sha256(canonical_contract.encode()).hexdigest(),
         )
 
 

@@ -34,8 +34,9 @@ al.](https://benhayes.net). The original code is available
 [here](https://github.com/ben-hayes/synth-permutations).
 
 [Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
-Synth Team, is the synthesizer used for dataset generation and is integrated
-under the GPL-3.0 license.
+Synth Team, is the default synthesizer for dataset generation and is integrated
+under the GPL-3.0 license. Additional synth identities are registered in
+[`SYNTHS`](src/synth_setter/synth_spec.py).
 
 ## Features
 
@@ -128,8 +129,11 @@ in [docs/reference/dependency-management.md](docs/reference/dependency-managemen
 # Render a CLAP-conditioned Surge patch and upload the WAV to R2
 synth-setter-clap "frog croak"
 
-# Run tests
+# Run the strict two-minute test tier
 make test-fast
+
+# Run the complete non-slow CPU suite
+make test-medium
 
 # Run all pre-commit hooks (formatting + linting)
 make format

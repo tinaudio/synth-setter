@@ -1,0 +1,31 @@
+# @package _global_
+
+defaults:
+  - /experiment/surge/base
+  - override /model: slap_ast_audio_mlp_param
+  - override /datamodule: surge_lance
+  - override /synth: surge_4
+  - override /callbacks: default_slap
+  - _self_
+
+experiment_name: surge-4-slap
+run_name: slap_ast_audio_mlp_param
+
+datamodule:
+  conditioning: mel
+  download_dataset_root_uri: r2://experiments/data/surge-4-lance-50k-2k-2k/surge-4-lance-50k-2k-2k-20260717T042205123Z/
+  ot: false
+
+# The evaluation workflow owns held-out testing after training.
+test: false
+
+callbacks:
+  model_checkpoint:
+    every_n_epochs: null
+    every_n_train_steps: 1000
+    save_top_k: 1
+
+trainer:
+  min_steps: 100000
+  max_steps: 100000
+  val_check_interval: 1000

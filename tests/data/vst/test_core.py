@@ -81,6 +81,10 @@ class TestExtractRendererVersion:
             "dawdreamer"
         )
 
+    def test_pyfdn_backend_name_reads_installed_package_version(self) -> None:
+        """The pyFDN sentinel resolves provenance from the installed package."""
+        assert extract_renderer_version(Path("pyfdn")) == importlib.metadata.version("pyFDN")
+
     @pytest.mark.slow
     @pytest.mark.requires_surgepy
     def test_surgepy_backend_name_reads_live_engine_version(self) -> None:

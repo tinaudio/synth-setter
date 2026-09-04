@@ -118,7 +118,7 @@ jobs:
           PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
         run: |
           set -euo pipefail
-          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.83.0
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4
           pi install npm:@tintinweb/pi-subagents@0.14.1
           uv python install 3.12.13
           uv venv --python 3.12.13

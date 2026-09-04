@@ -19,15 +19,18 @@ from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
 )
 from synth_setter.conditioning import NUM_SKETCH_CONTROLS
+from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
+from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
 )
+from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.resources import configs_dir
 from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
@@ -207,7 +210,11 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
     [
         pytest.param(
             "train.yaml",
-            ["datamodule=pyfdn", "synth=pyfdn_n8_mono", "model=vst_flow"],
+            [
+                "datamodule=pyfdn",
+                "synth=pyfdn_n8_mono_householder",
+                "model=vst_flow",
+            ],
             id="datamodule",
         ),
         pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
@@ -231,7 +238,58 @@ def test_pyfdn_configs_compose_without_external_source(
 
     assert "source_audio_path" not in cfg.datamodule
     assert "source_audio_sha256" not in cfg.datamodule
-    hydra.utils.instantiate(cfg.datamodule)
+    assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
+
+
+@pytest.mark.parametrize(
+    ("config_name", "overrides"),
+    [
+        pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
+        pytest.param(
+            "eval.yaml",
+            ["experiment=pyfdn/flow", "ckpt_path=null"],
+            id="eval",
+        ),
+        pytest.param(
+            "train.yaml",
+            [
+                "experiment=pyfdn/flow",
+                "synth=pyfdn_pitchshift_n8_mono_householder",
+            ],
+            id="pitchshift",
+        ),
+    ],
+)
+def test_pyfdn_flow_composition_enables_per_param_metrics(
+    config_name: str, overrides: list[str]
+) -> None:
+    """The pyFDN recipe labels per-parameter graphs with its active synth identity.
+
+    :param config_name: Top-level Hydra config composed with the pyFDN recipe.
+    :param overrides: Hydra selections required by the top-level config.
+    """
+    cfg = _compose(config_name, overrides)
+
+    assert cfg.callbacks.log_per_param_mse.param_spec == cfg.synth.param_spec_name
+
+
+def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
+    """The pitch-shift synth group reaches its native renderer through Hydra."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=pyfdn/flow", "synth=pyfdn_pitchshift_n8_mono_householder"],
+    )
+    render_values = OmegaConf.to_container(cfg.render, resolve=True)
+    assert isinstance(render_values, dict)
+    render_values["synth"] = OmegaConf.to_container(cfg.synth, resolve=True)
+
+    render = RenderConfig.model_validate(render_values)
+    renderer = make_audio_renderer(render)
+
+    assert cfg.datamodule.param_spec_name == "pyfdn_pitchshift_n8_mono_householder"
+    assert cfg.model.param_spec == "pyfdn_pitchshift_n8_mono_householder"
+    assert isinstance(renderer, PyFDNRenderer)
+    assert renderer.source_provenance["implementation"] == "pyFDN.process_fdn"
 
 
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
@@ -261,7 +319,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         pytest.param("meanaudio_16k", (MEANAUDIO_EMBEDDING_DIM, 125), id="meanaudio_16k"),
     ],
 )
-def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
+def test_sequence_conditioning_profile_fake_batch_routes_through_encoder(
     profile: str, input_shape: tuple[int, int]
 ) -> None:
     """A sequence profile routes its declared fake batch through the encoder.
@@ -294,8 +352,12 @@ def test_sequence_conditioning_profile_fake_batch_pools_through_encoder(
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["conditioning"].shape == (2, *input_shape)
-    pooled = encoder(batch["conditioning"])
-    assert pooled.shape == (2, cfg.model.vector_field.d_model)
+    encoded = encoder(batch["conditioning"])
+    assert encoded.shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.vector_field.d_model,
+    )
     assert cfg.model.conditioning.column == profile
 
 
@@ -427,6 +489,53 @@ def test_t5gemma_conditioning_profile_cached_batch_trains(
     assert torch.isfinite(loss)
 
 
+@pytest.mark.parametrize("profile", ["clap", "m2l"])
+def test_cached_conditioning_defaults_to_vector_field_layer_count(profile: str) -> None:
+    """Cached conditioning emits one slot per vector-field layer by default.
+
+    :param profile: Cached vector or sequence encoder profile under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            f"conditioning={profile}",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "model.vector_field.num_layers=2",
+        ],
+    )
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    encoded = encoder(torch.randn(2, *cfg.model.conditioning.input_shape))
+
+    assert cfg.model.encoder.n_conditioning_outputs == 2
+    assert encoded.shape == (2, 2, cfg.model.encoder_output_dim)
+
+
+def test_cached_conditioning_explicit_output_count_overrides_default() -> None:
+    """An explicit conditioning output count preserves pooled encoder output."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "conditioning=clap",
+            "trainer=cpu",
+            "paths.output_dir=/tmp/synth-setter-test",
+            "model.encoder.n_conditioning_outputs=1",
+        ],
+    )
+    encoder = hydra.utils.instantiate(cfg.model.encoder)
+
+    encoded = encoder(torch.randn(2, *cfg.model.conditioning.input_shape))
+
+    assert encoded.shape == (2, cfg.model.encoder_output_dim)
+
+
 def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
     """A CLAP spec selects generic routing and the vector projection encoder."""
     cfg = _compose(
@@ -448,7 +557,7 @@ def test_clap_conditioning_overrides_compose_and_instantiate() -> None:
 
     assert datamodule.embedding_conditioning is not None
     assert datamodule.embedding_conditioning.column == "clap"
-    assert encoder(torch.randn(2, 512)).shape == (2, 512)
+    assert encoder(torch.randn(2, 512)).shape == (2, 8, 512)
     assert cfg.model.vector_field.conditioning_dim == 512
 
 
@@ -470,7 +579,11 @@ def test_ssondo_conditioning_profile_projects_960_vector() -> None:
 
     assert cfg.datamodule.conditioning.column == "ssondo"
     assert tuple(cfg.datamodule.conditioning.input_shape) == (960,)
-    assert encoder(torch.randn(2, 960)).shape == (2, cfg.model.encoder_output_dim)
+    assert encoder(torch.randn(2, 960)).shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.encoder_output_dim,
+    )
 
 
 def _conditioning_profile_names() -> list[str]:
@@ -505,14 +618,22 @@ _CACHED_CONDITIONING_PROFILES = [
 
 
 @pytest.mark.parametrize("profile", _CACHED_CONDITIONING_PROFILES)
-@pytest.mark.parametrize("model_name", ["vst_ffn", "vst_flow", "vst_flowmlp"])
+@pytest.mark.parametrize(
+    ("model_name", "conditioning_shape"),
+    [
+        pytest.param("vst_ffn", (), id="feed-forward"),
+        pytest.param("vst_flow", (8,), id="transformer-flow"),
+        pytest.param("vst_flowmlp", (9,), id="mlp-flow"),
+    ],
+)
 def test_embedding_conditioning_profile_encoder_matches_model_output(
-    profile: str, model_name: str
+    profile: str, model_name: str, conditioning_shape: tuple[int, ...]
 ) -> None:
-    """Every cached profile produces the output width its VST model owns.
+    """Every cached profile produces the output shape its VST model owns.
 
     :param profile: Conditioning profile under test.
     :param model_name: VST architecture consuming the profile.
+    :param conditioning_shape: Model-specific conditioning slot dimensions.
     """
     cfg = _compose(
         "train.yaml",
@@ -530,7 +651,7 @@ def test_embedding_conditioning_profile_encoder_matches_model_output(
 
     encoded = encoder(torch.randn(2, *input_shape))
 
-    assert encoded.shape == (2, cfg.model.encoder_output_dim)
+    assert encoded.shape == (2, *conditioning_shape, cfg.model.encoder_output_dim)
 
 
 @pytest.mark.parametrize("profile", _conditioning_profile_names())
@@ -575,7 +696,11 @@ def test_pupujepa_tiny_cached_profile_instantiates_100_patch_pool() -> None:
     encoder = hydra.utils.instantiate(cfg.model.encoder)
 
     assert tuple(cfg.model.conditioning.input_shape) == (1536, 100)
-    assert encoder(torch.randn(2, 1536, 100)).shape == (2, cfg.model.encoder_output_dim)
+    assert encoder(torch.randn(2, 1536, 100)).shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.encoder_output_dim,
+    )
 
 
 def test_pupujepa_large_cached_profile_instantiates_100_patch_pool() -> None:
@@ -588,7 +713,11 @@ def test_pupujepa_large_cached_profile_instantiates_100_patch_pool() -> None:
     encoder = hydra.utils.instantiate(cfg.model.encoder)
 
     assert tuple(cfg.model.conditioning.input_shape) == (8192, 100)
-    assert encoder(torch.randn(2, 8192, 100)).shape == (2, cfg.model.encoder_output_dim)
+    assert encoder(torch.randn(2, 8192, 100)).shape == (
+        2,
+        cfg.model.vector_field.num_layers,
+        cfg.model.encoder_output_dim,
+    )
 
 
 def test_pupujepa_large_online_profile_pins_variant_and_width() -> None:
@@ -1258,6 +1387,33 @@ def test_surge_experiment_resolves_identity_with_audio_datamodule(
     assert "param_spec_name" not in cfg.datamodule
     assert OmegaConf.select(cfg, width_path) == resolve_param_spec_width("surge_xt")
     assert OmegaConf.select(cfg, spec_path) == "surge_xt"
+
+
+def test_pyfdn_flow_resolves_stored_mel_ast_conditioning() -> None:
+    """The production pyFDN recipe feeds stored mels through layerwise AST."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow"])
+
+    assert cfg.datamodule._target_.endswith("LanceVSTDataModule")
+    assert cfg.datamodule.conditioning == "mel"
+    assert cfg.model.conditioning == "mel"
+    assert cfg.model.encoder._target_.endswith("AudioSpectrogramTransformer")
+    assert cfg.model.encoder.input_channels == 1
+    assert cfg.model.encoder.n_conditioning_outputs == 8
+
+
+def test_pyfdn_flow_ast_online_resolves_waveform_ast_conditioning() -> None:
+    """The online-AST comparison computes mono mels from stored waveforms."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_ast_online"])
+
+    hydra.utils.instantiate(cfg.model.encoder)
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.conditioning == "audio"
+    assert cfg.model.encoder._target_.endswith("SpecEncoder")
+    assert cfg.model.encoder.frontend.in_dim == 176_400
+    assert cfg.model.encoder.frontend.sample_rate == 44_100
+    assert cfg.model.encoder.backbone._target_.endswith("AudioSpectrogramTransformer")
+    assert cfg.model.encoder.backbone.input_channels == 1
+    assert cfg.model.encoder.backbone.n_conditioning_outputs == 8
 
 
 def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:

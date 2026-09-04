@@ -19,7 +19,10 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import cast
 
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+)
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
@@ -34,6 +37,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
     TORCHSYNTH_FULL_PARAM_SPEC,
     TORCHSYNTH_SIMPLE_PARAM_SPEC,
 )
+from synth_setter.data.vst.ultramaster_kr106_param_spec import ULTRAMASTER_KR106_PARAM_SPEC
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS
 
@@ -51,10 +55,14 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
     ParamSpecName("obxf"): OBXF_PARAM_SPEC,
-    ParamSpecName("pyfdn_n8_mono"): PYFDN_N8_MONO_PARAM_SPEC,
+    ParamSpecName("pyfdn_n8_mono_householder"): PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    ParamSpecName(
+        "pyfdn_pitchshift_n8_mono_householder"
+    ): PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     ParamSpecName("torchsynth_adsr"): TORCHSYNTH_ADSR_PARAM_SPEC,
     ParamSpecName("torchsynth_full"): TORCHSYNTH_FULL_PARAM_SPEC,
     ParamSpecName("torchsynth_simple"): TORCHSYNTH_SIMPLE_PARAM_SPEC,
+    ParamSpecName("ultramaster_kr106"): ULTRAMASTER_KR106_PARAM_SPEC,
 }
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 

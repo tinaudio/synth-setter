@@ -140,9 +140,11 @@ call synth-setter's R2 preflight.
 make test-fast
 ```
 
-This runs the quick CPU-only test suite (excludes slow, gpu, mps, and
-requires_vst). All tests should pass. If you see import errors, double-check
-that the virtual environment is active and dependencies installed correctly.
+This runs the curated CPU-only inner-loop suite with a two-minute budget. It
+covers schemas, models, evaluation, features, pipeline configuration, and VST
+logic without hardware-dependent or infrastructure tests. Run `make test-medium` for the complete
+non-slow CPU suite. If you see import errors, double-check that the virtual
+environment is active and dependencies installed correctly.
 
 > **Writing or reading tests?** See
 > [docs/reference/testing.md](reference/testing.md) for the fixtures,
@@ -191,9 +193,10 @@ experiments. **None of these are needed for the TorchSynth quickstart above.**
 
 ### 4a. Surge XT (VST Plugin)
 
-[Surge XT](https://surge-synthesizer.github.io/) is the open-source synthesizer
-used for audio dataset generation. The data pipeline renders audio by
-programmatically driving this plugin.
+[Surge XT](https://surge-synthesizer.github.io/) is the default managed VST3
+for audio dataset generation. Other registered synths may require separate
+plugin installation; see [`SYNTHS`](../src/synth_setter/synth_spec.py) and
+[Adding a new synth](guides/adding-a-new-synth.md).
 
 Installation is covered in [section 2d](#2d-install-the-surge-xt-vst3).
 `make install-surge-xt` provisions the pinned package; `make link-plugins`

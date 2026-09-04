@@ -194,7 +194,7 @@ def test_pi_review_workflow_pins_runtime_and_uploads_follow_up_audit(
     install_command = str(install_step["run"])
     upload_inputs = cast(dict[str, object], upload_step["with"])
 
-    assert "@earendil-works/pi-coding-agent@0.83.0" in install_command
+    assert "@earendil-works/pi-coding-agent@0.84.4" in install_command
     assert "@tintinweb/pi-subagents@0.14.1" in install_command
     assert "pydantic==2.13.4" in install_command
     assert "sh==2.2.2" in install_command

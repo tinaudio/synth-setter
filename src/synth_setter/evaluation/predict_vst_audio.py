@@ -1,7 +1,7 @@
 """Render predicted-parameter and target audio from a trained model for offline evaluation."""
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import librosa
@@ -17,16 +17,17 @@ from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import run_with_editor_held_open
 from synth_setter.data.vst.param_spec import (
     NoteParams,
+    ParameterValue,
     ParamSpec,
     decode_model_output,
     require_note_params,
-    require_scalar_synth_params,
+    spec_quantize_model_output,
 )
 from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 
-RenderFn = Callable[[dict[str, float], int, tuple[float, float]], np.ndarray]
+RenderFn = Callable[[Mapping[str, ParameterValue], int, tuple[float, float]], np.ndarray]
 
 
 class _PredictAudioCliArgs(RenderConfig, BaseSettings):
@@ -141,13 +142,15 @@ def write_spectrograms(
 
 
 def params_to_csv(
-    target_synth_params: dict[str, float] | None,
+    target_synth_params: Mapping[str, ParameterValue] | None,
     target_note_params: NoteParams | None,
-    pred_synth_params: dict[str, float],
+    pred_synth_params: Mapping[str, ParameterValue],
     pred_note_params: NoteParams,
     save_path: str,
     param_spec: ParamSpec,
     *,
+    pred_effective_synth_params: Mapping[str, ParameterValue] | None = None,
+    pred_effective_note_params: NoteParams | None = None,
     pred_effective_note_window: tuple[float, float],
 ) -> None:
     """Write raw, target, and effective rendered parameters to a CSV file.
@@ -158,14 +161,54 @@ def params_to_csv(
     :param pred_note_params: Raw decoded prediction note values.
     :param save_path: Destination CSV path.
     :param param_spec: Parameter ordering contract for the rendered synth.
-    :param pred_effective_note_window: Note window used to render ``pred.wav``.
+    :param pred_effective_synth_params: Quantized synth values used to render ``pred.wav``.
+    :param pred_effective_note_params: Quantized note values used to render ``pred.wav``.
+    :param pred_effective_note_window: Canonical note window used to render ``pred.wav``.
     """
-    row_names = list(pred_synth_params.keys()) + list(pred_note_params.keys())
 
-    synth_df = pd.DataFrame({"pred": pred_synth_params, "target": target_synth_params})
-    note_df = pd.DataFrame({"pred": pred_note_params, "target": target_note_params})
+    def flatten_synth_params(
+        params: Mapping[str, ParameterValue] | None,
+    ) -> dict[str, float] | None:
+        if params is None:
+            return None
+        flattened: dict[str, float] = {}
+        for parameter in param_spec.synth_params:
+            value = params[parameter.name]
+            if not isinstance(value, np.ndarray):
+                flattened[parameter.name] = float(value)
+                continue
+            flattened.update(
+                zip(
+                    parameter.encoded_names(),
+                    (float(item) for item in value.reshape(-1)),
+                    strict=True,
+                )
+            )
+        return flattened
+
+    pred_synth_coordinates = flatten_synth_params(pred_synth_params)
+    target_synth_coordinates = flatten_synth_params(target_synth_params)
+    effective_synth_coordinates = flatten_synth_params(
+        pred_synth_params if pred_effective_synth_params is None else pred_effective_synth_params
+    )
+    effective_note_params = (
+        pred_note_params if pred_effective_note_params is None else pred_effective_note_params
+    )
+    synth_df = pd.DataFrame(
+        {
+            "pred": pred_synth_coordinates,
+            "target": target_synth_coordinates,
+            "pred_effective": effective_synth_coordinates,
+        }
+    )
+    note_df = pd.DataFrame(
+        {
+            "pred": pred_note_params,
+            "target": target_note_params,
+            "pred_effective": effective_note_params,
+        }
+    )
     df = pd.concat([synth_df, note_df])
-    df["pred_effective"] = df["pred"]
     df.at["note_start_and_end", "pred_effective"] = pred_effective_note_window
 
     df.to_csv(save_path)
@@ -209,7 +252,7 @@ def _make_render_fn(args: _PredictAudioCliArgs, renderer: AudioRenderer) -> Rend
     warmup_pending = args.gui_toggle_cadence == "once"
 
     def render(
-        synth_params: dict[str, float],
+        synth_params: Mapping[str, ParameterValue],
         pitch: int,
         note_start_and_end: tuple[float, float],
     ) -> np.ndarray:
@@ -293,24 +336,25 @@ def _render_prediction_artifacts(
             os.makedirs(sample_dir, exist_ok=True)
 
             row_params = pred_params[j].float().numpy()
-            synth_values, note_values = decode_model_output(row_params, spec)
-            synth_params = require_scalar_synth_params(synth_values)
+            synth_params, note_values = decode_model_output(row_params, spec)
             note_params = require_note_params(note_values)
-            note_params["note_start_and_end"] = tuple(
-                float(value) for value in note_params["note_start_and_end"]
+            effective_row_params = spec_quantize_model_output(row_params, spec)
+            effective_synth_params, effective_note_values = decode_model_output(
+                effective_row_params, spec
             )
+            effective_note_params = require_note_params(effective_note_values)
             render_note_window = _canonicalize_prediction_note_window(
-                note_params["note_start_and_end"],
+                effective_note_params["note_start_and_end"],
                 signal_duration_seconds=args.signal_duration_seconds,
                 sample_rate=args.sample_rate,
             )
             pred_audio = render(
-                synth_params,
-                int(note_params["pitch"]),
+                effective_synth_params,
+                int(effective_note_params["pitch"]),
                 render_note_window,
             )
 
-            target_synth_params: dict[str, float] | None = None
+            target_synth_params: Mapping[str, ParameterValue] | None = None
             target_note_params: NoteParams | None = None
             # Dataset audio when staged; the rerender branch fills it only when absent,
             # so a staged tensor keeps the spectrogram on dataset audio.
@@ -320,8 +364,7 @@ def _render_prediction_artifacts(
             if rerender_target and target_params is not None:
                 # .float() aligns the target path with the pred path's float32 contract.
                 target_params_ = target_params[j].float().numpy()
-                target_synth_values, target_note_values = decode_model_output(target_params_, spec)
-                target_synth_params = require_scalar_synth_params(target_synth_values)
+                target_synth_params, target_note_values = decode_model_output(target_params_, spec)
                 target_note_params = require_note_params(target_note_values)
 
                 new_target = render(
@@ -357,6 +400,8 @@ def _render_prediction_artifacts(
                 note_params,
                 os.path.join(sample_dir, "params.csv"),
                 spec,
+                pred_effective_synth_params=effective_synth_params,
+                pred_effective_note_params=effective_note_params,
                 pred_effective_note_window=render_note_window,
             )
 
