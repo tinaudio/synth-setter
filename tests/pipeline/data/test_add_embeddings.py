@@ -411,6 +411,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "param_shift",
         "pupujepa_large",
         "pupujepa_tiny",
+        "pyfdn_sketch",
         "same_l",
         "same_s",
         "sketch",
