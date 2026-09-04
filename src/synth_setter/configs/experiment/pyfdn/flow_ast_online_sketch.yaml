@@ -1,0 +1,9 @@
+# @package _global_
+
+defaults:
+  - /experiment/pyfdn/flow_ast_online
+  - override /sketch: pyfdn_reverb
+  - _self_
+
+run_name: flow-ast-online-sketch
+tags: [pyfdn, flow, ast-online, sketch]

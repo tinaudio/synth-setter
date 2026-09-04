@@ -1416,6 +1416,30 @@ def test_pyfdn_flow_ast_online_resolves_waveform_ast_conditioning() -> None:
     assert cfg.model.encoder.backbone.n_conditioning_outputs == 8
 
 
+def test_pyfdn_flow_sketch_resolves_stored_temporal_reverb_conditioning() -> None:
+    """The stored-mel pyFDN variant reads the persisted temporal reverb sketch."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_sketch"])
+
+    assert cfg.datamodule.conditioning == "mel"
+    assert cfg.model.conditioning == "mel"
+    assert cfg.model.sketch_controls.profile == "pyfdn_reverb"
+    assert cfg.model.sketch_controls.column == "pyfdn_sketch"
+    assert cfg.model.sketch_controls.num_frames == 32
+    assert cfg.model.sketch_controls.num_control_tokens == 32
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
+
+
+def test_pyfdn_flow_ast_online_sketch_reads_sketch_from_lance() -> None:
+    """The online-content pyFDN variant still reads its temporal sketch from Lance."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_ast_online_sketch"])
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.conditioning == "audio"
+    assert cfg.model.sketch_controls.profile == "pyfdn_reverb"
+    assert cfg.model.sketch_controls.column == "pyfdn_sketch"
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
+
+
 def test_extras_rejects_pyfdn_datamodule_spec_skewed_from_synth_selection() -> None:
     """The shipped pyFDN identity field exposes CLI-forced skew to ``extras``."""
     cfg = _compose(
