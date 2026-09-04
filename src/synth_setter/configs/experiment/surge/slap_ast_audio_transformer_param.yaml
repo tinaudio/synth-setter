@@ -1,0 +1,8 @@
+# @package _global_
+
+defaults:
+  - /experiment/surge/slap_ast_audio_mlp_param
+  - override /model: slap_ast_audio_transformer_param
+  - _self_
+
+run_name: slap_ast_audio_transformer_param

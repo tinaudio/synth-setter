@@ -1,0 +1,93 @@
+defaults:
+  - slap
+  - _self_
+
+audio_input_key: mel
+
+audio_encoder:
+  _target_: synth_setter.models.components.slap.SiameseArm
+  encoder:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: synth_setter.models.components.transformer.AudioSpectrogramTransformer
+        d_model: 512
+        n_heads: 8
+        n_layers: 8
+        n_conditioning_outputs: 1
+        patch_size: 16
+        patch_stride: 10
+        input_channels: 2
+        spec_shape: [128, 401]
+      - _target_: torch.nn.Flatten
+        start_dim: 1
+  projector:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+  transform:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 4096
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Dropout
+        p: 0.1
+      - _target_: torch.nn.Linear
+        in_features: 4096
+        out_features: 512
+  normalize_projections: true
+
+text_encoder:
+  _target_: synth_setter.models.components.slap.SiameseArm
+  encoder:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: synth_setter.models.components.transformer.AudioSpectrogramTransformer
+        d_model: 512
+        n_heads: 8
+        n_layers: 6
+        n_conditioning_outputs: 1
+        token_embed:
+          _target_: synth_setter.models.components.transformer.ParamTokenEmbed
+          projection:
+            _target_: synth_setter.models.components.transformer.LearntProjection
+            d_model: 512
+            d_token: 512
+            num_params: ${param_spec_width:${synth.param_spec_name}}
+            num_tokens: 16
+            initial_ffn: true
+            final_ffn: false
+      - _target_: torch.nn.Flatten
+        start_dim: 1
+  projector:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+      - _target_: torch.nn.BatchNorm1d
+        num_features: 512
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+  transform:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 4096
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Dropout
+        p: 0.1
+      - _target_: torch.nn.Linear
+        in_features: 4096
+        out_features: 512
+  normalize_projections: true

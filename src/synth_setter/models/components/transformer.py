@@ -5,7 +5,8 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
-from jaxtyping import Bool, Float, Shaped
+from beartype import beartype
+from jaxtyping import Bool, Float, Shaped, jaxtyped
 from torch import Tensor
 
 _BATCH_ANY_SHAPE = "batch ..."
@@ -114,6 +115,38 @@ class LearntProjection(nn.Module):
         penalty = self.assignment.abs().mean()
 
         return penalty
+
+
+class ParamTokenEmbed(nn.Module):
+    """Expose a ``LearntProjection``'s parameter-to-token half as a token-embed module.
+
+    Freezes the decoder-side weights (``out_projection`` and any ``final_ffn``) so an
+    encoder built on top of this embed carries no dead trainable parameters.
+    """
+
+    @jaxtyped(typechecker=beartype)
+    def __init__(self, projection: LearntProjection):
+        """Wrap the projection and freeze its unused token-to-parameter half.
+
+        :param projection: Parameter-token soft assignment shared with the flow models.
+        """
+        super().__init__()
+        self.projection = projection
+        self.projection.out_projection.requires_grad_(False)
+        if self.projection.final_ffn is not None:
+            self.projection.final_ffn.requires_grad_(False)
+        self.num_tokens = projection.assignment.shape[0]
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, params: Float[Tensor, "batch num_params"]
+    ) -> Float[Tensor, "batch num_tokens d_model"]:
+        """Return one token sequence per flat parameter vector.
+
+        :param params: Batch of flat parameter vectors.
+        :returns: Tokens shaped ``(batch, num_tokens, d_model)``.
+        """
+        return self.projection.param_to_token(params)
 
 
 class AdaptiveLayerNorm(nn.LayerNorm):
@@ -581,6 +614,11 @@ class AudioSpectrogramTransformer(nn.Module):
         3. class (embedding) token
         4. transformer encoder
         5. output linear projection
+
+    An injected ``token_embed`` — any module exposing ``num_tokens`` and mapping inputs
+    to ``(batch, tokens, d_model)`` — replaces the spectrogram patch embed (whose
+    ``patch_*``/``spec_shape`` arguments are then ignored), turning this into a generic
+    token-sequence encoder.
     """
 
     def __init__(
@@ -593,15 +631,34 @@ class AudioSpectrogramTransformer(nn.Module):
         patch_stride: int = 10,
         input_channels: int = 2,
         spec_shape: tuple[int] = (128, 401),
+        token_embed: nn.Module | None = None,
     ):
+        """Build the token embed, positional encoding, class tokens, and encoder stack.
+
+        :param d_model: Transformer width shared by tokens and outputs.
+        :param n_heads: Attention heads per encoder layer.
+        :param n_layers: Encoder layer count.
+        :param n_conditioning_outputs: Class tokens returned as the encoded output.
+        :param patch_size: Square spectrogram patch edge, ignored with ``token_embed``.
+        :param patch_stride: Overlapping patch stride, ignored with ``token_embed``.
+        :param input_channels: Spectrogram channels, ignored with ``token_embed``.
+        :param spec_shape: Mel-by-frames input shape, ignored with ``token_embed``.
+        :param token_embed: Replacement input tokenizer exposing ``num_tokens`` and
+            mapping inputs to ``(batch, tokens, d_model)``.
+        """
         super().__init__()
 
-        self.patch_embed = PatchEmbed(
-            patch_size=patch_size,
-            stride=patch_stride,
-            in_channels=input_channels,
-            d_model=d_model,
-            spec_shape=spec_shape,
+        # Attribute stays "patch_embed" so existing AST checkpoint state dicts keep loading.
+        self.patch_embed = (
+            token_embed
+            if token_embed is not None
+            else PatchEmbed(
+                patch_size=patch_size,
+                stride=patch_stride,
+                in_channels=input_channels,
+                d_model=d_model,
+                spec_shape=spec_shape,
+            )
         )
 
         self.positional_encoding = PositionalEncoding(

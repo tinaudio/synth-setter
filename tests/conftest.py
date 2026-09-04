@@ -2800,22 +2800,28 @@ def _shrink_slap_ast(cfg: DictConfig) -> None:
     target = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
     ast_configs = [
         layer
-        for layer in cfg.model.audio_encoder.encoder._args_
+        for arm in (cfg.model.audio_encoder, cfg.model.text_encoder)
+        if "_args_" in arm.encoder
+        for layer in arm.encoder._args_
         if layer.get("_target_") == target
     ]
-    assert len(ast_configs) == 1
-    ast_configs[0].n_layers = 1
+    assert ast_configs
+    for ast_config in ast_configs:
+        ast_config.n_layers = 1
 
 
 @pytest.fixture
-def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
+def cfg_slap_train_lance(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfig:
     """Compose a one-step shipped SLAP experiment over local Lance splits.
 
-    The configuration exercises fit, validation, checkpoint reload, and test.
+    The configuration exercises fit, validation, checkpoint reload, and test. Indirect
+    parametrization selects the experiment; the default is the MLP baseline.
 
     :param tmp_path: Isolated dataset and training output root.
+    :param request: Fixture request optionally carrying an experiment name.
     :returns: Ready-to-run SLAP training configuration.
     """
+    experiment = getattr(request, "param", "surge/slap_ast_audio_mlp_param")
     dataset_root = tmp_path / "slap-lance-data"
     _materialize_lance_smoke_root(dataset_root)
 
@@ -2824,7 +2830,7 @@ def cfg_slap_train_lance(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=surge/slap_ast_audio_mlp_param",
+                f"experiment={experiment}",
                 "trainer=cpu",
             ],
         )
