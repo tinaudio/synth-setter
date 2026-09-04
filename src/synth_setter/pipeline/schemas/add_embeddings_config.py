@@ -17,6 +17,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
+    SKETCH_ENCODE_MAX_BATCH,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -52,6 +53,10 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: batch_size
 
         Rows per Lance UDF call.
+
+    .. attribute :: sketch_encode_chunk
+
+        Rows per sketch extractor invocation.
 
     .. attribute :: build_index
 
@@ -107,6 +112,11 @@ class AddEmbeddingsConfig(BaseModel):
     device: str | None = Field(default=None, description="Torch device; null auto-selects.")
     batch_size: int = Field(
         default=DEFAULT_LANCE_BATCH_SIZE, ge=1, description="Rows per Lance UDF call."
+    )
+    sketch_encode_chunk: int = Field(
+        default=SKETCH_ENCODE_MAX_BATCH,
+        ge=1,
+        description="Rows per sketch extractor invocation; sizes memory and GPU utilization.",
     )
     build_index: bool = Field(
         default=True, description="Build indexes declared by selected embedding specs."
