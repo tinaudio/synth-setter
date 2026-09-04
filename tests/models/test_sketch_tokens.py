@@ -297,10 +297,10 @@ class TestSketchControlTokens:
 
 
 class TestPyFDNReverbSketchControlTokens:
-    """Temporal reverb profile behavior."""
+    """Validate pyFDN temporal alignment and CFG dropout invariants."""
 
     def test_forward_returns_one_token_per_reverb_frame(self) -> None:
-        """Reverb channels produce a same-length token sequence."""
+        """Token count equals the canonical reverb frame count."""
         module = _reverb_tokens_module()
         controls = torch.randn(_BATCH, 10, _REVERB_FRAMES, dtype=torch.float32)
 
