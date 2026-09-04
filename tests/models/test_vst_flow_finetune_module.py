@@ -494,6 +494,28 @@ def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:
     assert outputs.audio_term is None
 
 
+def test_finetune_train_step_unequal_column_errors_remain_distinct(tmp_path: Path) -> None:
+    """The finetuning diagnostic preserves each column instead of repeating scalar loss.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    base = _base_module()
+    for parameter in base.parameters():
+        torch.nn.init.zeros_(parameter)
+    module = _finetune(_base_checkpoint(tmp_path, base), control_mode="null")
+    noise = torch.zeros(_BATCH, _WIDTH)
+    noise[:, :3] = torch.tensor([1.0, 2.0, 3.0])
+    batch = {
+        "params": torch.zeros_like(noise),
+        "noise": noise,
+        "audio": torch.zeros(_BATCH, _SIGNAL_LENGTH),
+    }
+
+    outputs = module._train_step(batch)
+
+    assert torch.equal(outputs.per_param_flow_mse[:4], torch.tensor([1.0, 4.0, 9.0, 0.0]))
+
+
 @pytest.mark.slow
 def test_finetune_fit_from_a_trained_base_moves_only_the_control(tmp_path: Path) -> None:
     """A real fit over a real trained base moves the control and leaves that base untouched.

@@ -72,6 +72,7 @@ Logged via `self.log()` in each LightningModule:
 |                         | `train/audio_grad_cosine` (gradient alignment)      | yes  | —     |
 |                         | `train/slot_cosine` (layerwise conditioning only)   | yes  | —     |
 |                         | `train/penalty`                                     | yes  | yes   |
+|                         | `train/per_param_flow_mse/{name}` (with ParamSpec)  | —    | yes   |
 |                         | `val/param_mse`                                     | —    | yes   |
 |                         | `test/param_mse`                                    | —    | yes   |
 |                         | `val/param_mse_best_swap`                           | —    | yes   |
@@ -95,6 +96,8 @@ The two audio-gradient diagnostics are emitted only when audio feedback is enabl
 when the encoder returns more than one conditioning slot; it is the mean off-diagonal cosine
 similarity between those slots, so a value approaching one means they have collapsed to one read.
 All three are step-only metrics and have no epoch aggregate.
+`train/per_param_flow_mse/{name}` is the weighted velocity-field objective grouped by ParamSpec
+parameter; it is distinct from `val/per_param_mse/{name}`, which measures sampled endpoint error.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
