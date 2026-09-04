@@ -2586,23 +2586,32 @@ _PYFDN_LANCE_SMOKE_MEL_SHAPE = (1, 128, 401)
 _PYFDN_LANCE_SMOKE_NUM_PARAMS = len(param_specs["pyfdn_n8_mono_householder"])
 
 
-def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int) -> None:
+def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int, include_sketch: bool) -> None:
     """Write one fixed-Householder pyFDN split for entrypoint tests.
 
     :param path: Output ``.lance`` split.
     :param seed: RNG seed distinguishing splits.
+    :param include_sketch: Whether to persist the temporal reverb profile.
     """
-    from tests.helpers.lance_fixtures import write_lance_shard
+    from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
+    from synth_setter.pipeline.data.lance_shard import (
+        pyfdn_sketch_struct_array,
+        write_lance_dataset,
+    )
+    from tests.helpers.lance_fixtures import shard_record_batch
 
     rng = np.random.default_rng(seed)
-    write_lance_shard(
-        path,
-        {
-            "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
-            "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
-            "param_array": rng.random((1, _PYFDN_LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
-        },
-    )
+    columns = {
+        "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
+        "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
+        "param_array": rng.random((1, _PYFDN_LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+    }
+    batch = shard_record_batch(columns)
+    if include_sketch:
+        controls = rng.random((1, PYFDN_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES), dtype=np.float32)
+        controls[:, :8] = np.sort(controls[:, :8], axis=-1)[:, :, ::-1]
+        batch = batch.append_column("pyfdn_sketch", pyfdn_sketch_struct_array(controls))
+    write_lance_dataset(path, batch.schema, [batch])
 
 
 @pytest.fixture
@@ -2617,7 +2626,11 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
     dataset_root = tmp_path / "pyfdn-lance-data"
     dataset_root.mkdir()
     for seed, split in enumerate(("train", "val", "test")):
-        _write_pyfdn_lance_smoke_split(dataset_root / f"{split}.lance", seed=seed)
+        _write_pyfdn_lance_smoke_split(
+            dataset_root / f"{split}.lance",
+            seed=seed,
+            include_sketch="sketch" in experiment,
+        )
     np.savez(
         dataset_root / "stats.npz",
         mean=np.zeros(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
@@ -2653,9 +2666,7 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             cfg.model.compile = False
             cfg.model.scheduler = None
             encoder = (
-                cfg.model.encoder.backbone
-                if experiment == "pyfdn/flow_ast_online"
-                else cfg.model.encoder
+                cfg.model.encoder.backbone if "ast_online" in experiment else cfg.model.encoder
             )
             encoder.d_model = 16
             encoder.n_heads = 1
