@@ -67,6 +67,9 @@ jobs:
           - name: pipeline-add-private-n-z
             patterns:
               - synth_setter.pipeline.data.add_*.x__[n-z]*
+          - name: pipeline-backfill
+            patterns:
+              - synth_setter.pipeline.data.backfill_*
           - name: pipeline-lance
             patterns:
               - synth_setter.pipeline.data.lance_*

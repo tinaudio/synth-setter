@@ -270,18 +270,40 @@ def test_encode_meanaudio_chunk_invalid_output_raises(vae: _ChunkVAE, message: s
         )
 
 
-def test_encode_meanaudio_column_valid_output_returns_fixed_shape_tensor() -> None:
-    """Registry persistence retains MeanAudio's channel-major latent orientation."""
-    audio = np.zeros((2, 1, _FOUR_SECONDS), dtype=np.float32)
+def test_encode_meanaudio_column_asymmetric_stereo_preserves_channel_order() -> None:
+    """The column transform forwards distinct left and right channels unchanged."""
+    audio = np.zeros((1, 2, _FOUR_SECONDS), dtype=np.float32)
+    audio[0, 0, :3] = [-1.0, -0.5, 0.0]
+    audio[0, 1, :3] = [0.25, 0.5, 1.0]
+    received: list[np.ndarray] = []
 
     def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
-        assert source is audio
-        assert sample_rate == _SAMPLE_RATE
-        return np.ones((2, MEANAUDIO_EMBEDDING_DIM, 125), dtype=np.float32)
+        del sample_rate
+        received.append(source.copy())
+        return np.zeros((1, MEANAUDIO_EMBEDDING_DIM, 125), dtype=np.float32)
+
+    encode_meanaudio_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
+
+    assert received[0].shape == (1, 2, _FOUR_SECONDS)
+    np.testing.assert_array_equal(received[0][0, 0, :3], [-1.0, -0.5, 0.0])
+    np.testing.assert_array_equal(received[0][0, 1, :3], [0.25, 0.5, 1.0])
+
+
+def test_encode_meanaudio_column_returns_encoder_values() -> None:
+    """Registry persistence retains MeanAudio's channel-major latent values."""
+    audio = np.zeros((2, 2, _FOUR_SECONDS), dtype=np.float32)
+    expected = np.broadcast_to(
+        np.array([0.25, 0.75], dtype=np.float32)[:, None, None],
+        (2, MEANAUDIO_EMBEDDING_DIM, 125),
+    ).copy()
+
+    def encode(source: np.ndarray, sample_rate: int) -> np.ndarray:
+        del source, sample_rate
+        return expected
 
     encoded = encode_meanaudio_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
 
-    assert encoded.to_numpy_ndarray().shape == (2, MEANAUDIO_EMBEDDING_DIM, 125)
+    np.testing.assert_array_equal(encoded.to_numpy_ndarray(), expected)
 
 
 @pytest.mark.parametrize(

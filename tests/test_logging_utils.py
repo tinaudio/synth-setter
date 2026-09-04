@@ -29,6 +29,7 @@ from synth_setter.utils.logging_utils import (
     mark_lineage_incomplete,
     pin_wandb_run_id,
     record_input_lineage,
+    resolve_git_sha,
     resolve_run_config_id,
     use_input_artifacts,
 )
@@ -114,6 +115,28 @@ def test_log_hyperparameters_unlogged_interpolation_does_not_block_logging() -> 
 # ---------------------------------------------------------------------------
 # Happy-path behavior tests (real subprocess, fake wandb only)
 # ---------------------------------------------------------------------------
+
+
+def test_resolve_git_sha_repo_root_uses_requested_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit repo root must anchor git resolution independently of caller CWD.
+
+    :param tmp_path: Requested repository root.
+    :param monkeypatch: Captures the existing subprocess boundary.
+    """
+    calls: list[tuple[list[str], str | Path | None]] = []
+
+    def resolve(command: list[str], *, cwd: str | Path | None, stderr: object) -> bytes:
+        del stderr
+        calls.append((command, cwd))
+        return b"a" * 40
+
+    monkeypatch.setattr("synth_setter.utils.logging_utils.subprocess.check_output", resolve)
+
+    assert resolve_git_sha(tmp_path) == "a" * 40
+    assert calls == [(["git", "rev-parse", "HEAD"], tmp_path)]
 
 
 class TestLogWandbProvenanceHappyPath:

@@ -5,7 +5,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from importlib.util import find_spec
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hydra.core.hydra_config import HydraConfig
@@ -231,19 +231,20 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         logger.log_hyperparams(hparams)
 
 
-def resolve_git_sha() -> str:
-    """Return the current ``HEAD`` commit SHA, or ``"unknown"`` outside a git tree.
+def resolve_git_sha(repo_root: str | Path | None = None) -> str:
+    """Return ``HEAD`` from the requested repository or caller working tree.
 
-    Shared by :func:`log_wandb_provenance` (writes ``github_sha`` to
-    ``wandb.config``) and the train CLI's model-artifact metadata so both record
-    the same provenance value, per storage-provenance-spec.md §6.
+    Shared by :func:`log_wandb_provenance` and artifact metadata writers so both
+    record the same provenance value, per storage-provenance-spec.md §6.
 
+    :param repo_root: Optional repository root; ``None`` uses the caller working directory.
     :returns: The 40-char ``HEAD`` SHA, or ``"unknown"`` when git is unavailable.
     """
     try:
         return (
             subprocess.check_output(
                 ["git", "rev-parse", "HEAD"],  # noqa: S603, S607
+                cwd=repo_root,
                 stderr=subprocess.DEVNULL,
             )
             .decode()
