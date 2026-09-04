@@ -242,7 +242,7 @@ def test_pyfdn_pitchshift_lance_reader_rerender_round_trip(tmp_path: Path) -> No
 def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
     tmp_path: Path,
 ) -> None:
-    """Drive a generated pyFDN row through sketch-conditioned checkpoint sampling.
+    """Verify persisted reverb sketches survive augmentation, checkpoint loading, and sampling.
 
     :param tmp_path: Isolated root for generated Lance data and training artifacts.
     """
@@ -403,9 +403,12 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
     model.train()
     loss = model.training_step(batch, 0)
     loss.backward()
-    gradients = [parameter.grad for parameter in model.parameters() if parameter.grad is not None]
-    assert gradients
-    assert all(torch.isfinite(gradient).all() for gradient in gradients)
+    projection_parameters = list(model.sketch_tokens.projections.parameters())
+    assert projection_parameters
+    for parameter in projection_parameters:
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
+        assert torch.count_nonzero(parameter.grad)
 
     model.eval()
     predictions = model.sample_batch(
