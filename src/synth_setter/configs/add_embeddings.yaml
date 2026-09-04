@@ -19,6 +19,8 @@ checkpoints: {}
 device: null
 # Rows per Lance UDF call (ignored for legacy v1 datasets).
 batch_size: 128
+# Worker processes for CPU-bound encoders (pyfdn_sketch); 1 keeps encoding in-process.
+num_workers: 1
 # Build IVF_PQ indexes on selected global vectors and pooled sequence companions.
 build_index: true
 # IVF partition count; null uses round(sqrt(rows)).

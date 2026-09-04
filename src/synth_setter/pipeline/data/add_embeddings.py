@@ -767,17 +767,73 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
+def _require_stored_mono(audio: np.ndarray) -> None:
+    """Reject audio the per-row pyFDN extractor cannot consume.
+
+    :param audio: Decoded stored-audio batch.
+    :raises ValueError: The batch is not ``(B, 1, T)`` mono.
+    """
+    if audio.ndim != 3 or audio.shape[1] != 1:
+        raise ValueError(
+            f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}"
+        )
+
+
+class PyFDNSketchPoolEncoder:
+    """Fan per-row pyFDN sketch extraction across a process pool, bit-exact vs serial.
+
+    The context must be non-fork: lance is live in the backfill process and is not
+    fork-safe. Workers unpickle only the lance-free worker module.
+    """
+
+    def __init__(self, num_workers: int) -> None:
+        """Build the pool once at encoder-load time.
+
+        :param num_workers: Worker processes; the extractor is bandwidth-bound, so returns are sub-
+            linear past a few workers.
+        """
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        self._num_workers = num_workers
+        self._pool = ProcessPoolExecutor(
+            max_workers=num_workers, mp_context=multiprocessing.get_context("spawn")
+        )
+
+    def __call__(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Extract one batch of temporal sketches through the pool.
+
+        :param audio: Stored ``(B, 1, T)`` mono audio batch.
+        :param sample_rate: Source sample rate in Hz.
+        :returns: ``(B, controls, frames)`` float32 control stack.
+        """
+        from synth_setter.pipeline.data.pyfdn_sketch_worker import (
+            extract_reverb_sketch_row,
+        )
+
+        _require_stored_mono(audio)
+        extract = functools.partial(extract_reverb_sketch_row, sample_rate=float(sample_rate))
+        chunksize = max(1, len(audio) // (self._num_workers * 4))
+        rows = self._pool.map(extract, (row[0] for row in audio), chunksize=chunksize)
+        return np.stack(list(rows)).astype(np.float32, copy=False)
+
+    def close(self) -> None:
+        """Release the worker processes."""
+        self._pool.shutdown()
+
+
 def _load_pyfdn_sketch_encoder(
     checkpoint: str, config: AddEmbeddingsConfig
 ) -> Encoder:
     """Bind the canonical checkpoint-free pyFDN sketch extractor.
 
     :param checkpoint: Empty registry placeholder.
-    :param config: Uniform registry config; no device is needed.
+    :param config: Uniform registry config supplying the worker count; no device is needed.
     :returns: Batch adapter over stored mono waveform audio.
     """
     _pyfdn_sketch_artifact_identity(checkpoint)
-    del config
+    if config.num_workers > 1:
+        return PyFDNSketchPoolEncoder(config.num_workers)
 
     def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
         from synth_setter.features import pyfdn_controls
@@ -786,10 +842,7 @@ def _load_pyfdn_sketch_encoder(
             "Callable[[np.ndarray, float], np.ndarray]",
             pyfdn_controls.extract_reverb_sketch,
         )
-        if audio.ndim != 3 or audio.shape[1] != 1:
-            raise ValueError(
-                f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}"
-            )
+        _require_stored_mono(audio)
         return np.stack(
             [extract(row[0], sample_rate) for row in audio]
         ).astype(np.float32, copy=False)
@@ -1547,6 +1600,11 @@ def _write_columns(
         rows_processed=rows_processed,
         committed_version=dataset.version,
     )
+    # Pool-backed encoders hold worker processes; release them with the pass.
+    for encoder in encoders:
+        closer = getattr(encoder, "close", None)
+        if callable(closer):
+            closer()
     encoders.clear()
 
 
