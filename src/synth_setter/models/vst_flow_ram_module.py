@@ -193,6 +193,15 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
         return self
 
     @jaxtyped(typechecker=beartype)
+    def on_train_start(self) -> None:
+        """Reject a multi-device fit: the render reward mutates one shared voice (#2585)."""
+        from synth_setter.models.components.audio_feedback import (
+            validate_audio_feedback_runtime,
+        )
+
+        validate_audio_feedback_runtime(compiled=False, world_size=self.trainer.world_size)
+
+    @jaxtyped(typechecker=beartype)
     def _freeze_modes(self) -> None:
         """Hold the encoder, reference, sampler, and reward in eval mode."""
         for module in (self.encoder, self.reference_field, self.old_field, self.reward):

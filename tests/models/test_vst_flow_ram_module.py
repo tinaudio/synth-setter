@@ -5,6 +5,8 @@ in a fixed scorer, to isolate the loss algebra from the reward's variance.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import PropertyMock, patch
 
 import pytest
 import torch
@@ -286,3 +288,20 @@ def test_ram_module_rejects_configurations_it_cannot_serve(
     """
     with pytest.raises(ValueError, match=match):
         _ram(_base_checkpoint(tmp_path), overrides=overrides)
+
+
+def test_ram_on_train_start_rejects_multi_device_runs(tmp_path: Path) -> None:
+    """The render reward mutates one shared voice, so a multi-rank fit is refused up front.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path))
+    two_ranks = SimpleNamespace(world_size=2)
+
+    with (
+        patch.object(
+            VSTFlowRAMModule, "trainer", new_callable=PropertyMock, return_value=two_ranks
+        ),
+        pytest.raises(ValueError, match="single-device"),
+    ):
+        module.on_train_start()
