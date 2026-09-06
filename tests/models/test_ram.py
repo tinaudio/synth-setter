@@ -28,6 +28,16 @@ def test_group_relative_advantages_identical_rewards_yield_zero_without_nan() ->
     torch.testing.assert_close(advantages, torch.zeros(4))
 
 
+@pytest.mark.parametrize("group_size", [0, -2])
+def test_group_relative_advantages_rejects_non_positive_group_size(group_size: int) -> None:
+    """A zero or negative group is a caller bug and names ``group_size`` rather than dividing by it.
+
+    :param group_size: Invalid group size under test.
+    """
+    with pytest.raises(ValueError, match="group_size must be positive"):
+        group_relative_advantages(torch.zeros(4), group_size=group_size)
+
+
 def test_group_relative_advantages_rejects_batch_not_divisible_by_group() -> None:
     """A batch that cannot be split into whole groups is a caller bug, not a silent truncation."""
     with pytest.raises(ValueError, match="group_size"):

@@ -36,8 +36,11 @@ def group_relative_advantages(
     :param group_size: Endpoints sampled per conditioning row.
     :param eps: Added to the pooled std so identical rewards give zero, not NaN.
     :returns: Advantages shaped like ``rewards``.
-    :raises ValueError: The batch does not split into whole groups.
+    :raises ValueError: ``group_size`` is not positive, or the batch does not split into
+        whole groups.
     """
+    if group_size < 1:
+        raise ValueError(f"group_size must be positive, got {group_size}")
     if rewards.shape[0] % group_size != 0:
         raise ValueError(
             f"{rewards.shape[0]} rewards do not split into groups of group_size={group_size}"

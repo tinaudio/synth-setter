@@ -343,6 +343,7 @@ def test_ram_overfits_a_fixed_sampled_batch(tmp_path: Path) -> None:
 
     :param tmp_path: Directory for the base checkpoint.
     """
+    torch.manual_seed(29)
     module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
     module.log = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
     optimizer = torch.optim.Adam(module.vector_field.parameters(), lr=1e-2)
