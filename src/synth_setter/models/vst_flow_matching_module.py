@@ -294,6 +294,35 @@ def rk4_step(
     return x + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
+@jaxtyped(typechecker=beartype)
+def integrate_flow(
+    velocity: _TimeField,
+    noise: Float[torch.Tensor, "batch params"],
+    steps: int,
+    *,
+    warp_time: Callable[[Float[torch.Tensor, "batch 1"]], Float[torch.Tensor, "batch 1"]],
+) -> Float[torch.Tensor, "batch params"]:
+    """Integrate a velocity field from noise at t=0 to a sample at t=1 with fixed-step RK4.
+
+    :param velocity: Two-argument time field over parameter state and time.
+    :param noise: Initial state shaped ``(batch, params)``.
+    :param steps: Number of equal steps in unwarped time.
+    :param warp_time: Monotone map applied to the time grid before each step.
+    :returns: Terminal parameter state.
+    """
+    t = torch.zeros(noise.shape[0], 1, device=noise.device)
+    dt = 1.0 / steps
+    sample = noise
+
+    for _ in range(steps):
+        warped_t = warp_time(t)
+        warped_dt = warp_time(t + dt) - warped_t
+        sample = rk4_step(velocity, sample, warped_t, warped_dt)
+        t = t + dt
+
+    return sample
+
+
 class VSTFlowMatchingModule(LightningModule):
     """Flow-matching LightningModule for VST parameter prediction (CFG + RK4 sampling)."""
 
@@ -810,19 +839,7 @@ class VSTFlowMatchingModule(LightningModule):
             control_tokens,
             sketch_cfg_strength=sketch_cfg_strength,
         )
-        t = torch.zeros(noise.shape[0], 1, device=noise.device)
-        dt = 1.0 / steps
-        sample = noise
-
-        for _ in range(steps):
-            warped_t = self._warp_time(t)
-            warped_t_plus_dt = self._warp_time(t + dt)
-            warped_dt = warped_t_plus_dt - warped_t
-
-            sample = rk4_step(guided_velocity, sample, warped_t, warped_dt)
-            t = t + dt
-
-        return sample
+        return integrate_flow(guided_velocity, noise, steps, warp_time=self._warp_time)
 
     @torch.inference_mode()
     @jaxtyped(typechecker=beartype)

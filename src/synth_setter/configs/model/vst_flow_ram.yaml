@@ -1,0 +1,47 @@
+defaults:
+  - vst_flow
+  - _self_
+
+_target_: synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule
+
+# No default: post-training is defined relative to a pretrained flow, and the module logs
+# this file's sha256 so two runs cannot silently differ behind one path.
+base_checkpoint: ???
+
+# Black-box: the reward is scored, never differentiated, so any renderer-backed distance fits.
+reward:
+  _target_: synth_setter.models.components.rendered_reward.RenderedAudioReward
+  sample_rate: ${datamodule.sample_rate}
+  signal_length: ${datamodule.signal_length}
+  # The renderer's voice is allocated once at this size; the sampled group renders in chunks.
+  render_batch_size: ${datamodule.batch_size}
+  distance:
+    _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
+    sample_rate: ${datamodule.sample_rate}
+
+# Endpoints per target row form the advantage group; each is noised this many times, so one
+# optimizer step regresses batch_size * 8 * 4 states from batch_size * 8 renders.
+num_samples_per_row: 8
+num_targets_per_sample: 4
+# Scale on the normalised advantage: larger chases reward harder at the cost of drifting
+# from the pretrained field (paper: 100 for GenEval/OCR, 1000 for PickScore).
+reward_multiplier: 100.0
+sampling_steps: 20
+sampling_cfg_strength: 2.0
+ema_decay: 0.9
+ema_warmup_rate: 0.01
+# Flow-time density (1 - t)^alpha; 1 biases toward the noise end that shapes trajectories.
+time_power_law_alpha: 1.0
+
+# Paper appendix D: AdamW, no LR schedule, beta2 lowered for a short run.
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 3e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.01
+scheduler: null
+warmup_steps: 0
+
+# The reward renders through torchsynth, which graph-breaks under torch.compile (#2585).
+compile: false

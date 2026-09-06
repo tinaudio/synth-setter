@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -413,13 +413,16 @@ def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
-@pytest.fixture
-def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
-    """Compose a one-step CPU smoke config for the production TorchSynth audio-loss flow.
+def _compose_one_step_torchsynth_flow(
+    experiment: str, tmp_path: Path, extra_overrides: Sequence[str] = ()
+) -> DictConfig:
+    """Compose a one-step CPU smoke config for a production TorchSynth flow experiment.
 
     Keeps checkpointing and CSV logging enabled while shrinking only render and model capacity.
 
+    :param experiment: ``experiment=torchsynth/...`` name to compose.
     :param tmp_path: Pinned Hydra output and log directory.
+    :param extra_overrides: Experiment-specific overrides appended to the shared geometry.
     :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -427,7 +430,7 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=torchsynth/flow_audio",
+                f"experiment=torchsynth/{experiment}",
                 "trainer=cpu",
                 "logger=csv",
                 "datamodule.sample_rate=8000",
@@ -448,7 +451,7 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
                 "model.validation_sample_steps=1",
                 "model.test_sample_steps=1",
                 "model.cfg_dropout_rate=0.0",
-                "model.audio_loss.t_min=0.0",
+                *extra_overrides,
             ],
         )
     with open_dict(cfg):
@@ -468,6 +471,48 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
         cfg.callbacks.model_checkpoint.save_last = True
         cfg.training.val_audio_probe = False
     return cfg
+
+
+@pytest.fixture
+def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step CPU smoke config for the production TorchSynth audio-loss flow.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
+    """
+    return _compose_one_step_torchsynth_flow(
+        "flow_audio", tmp_path, ["model.audio_loss.t_min=0.0"]
+    )
+
+
+@pytest.fixture
+def cfg_torchsynth_flow_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step CPU smoke config for the production TorchSynth flow.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
+    """
+    return _compose_one_step_torchsynth_flow("flow", tmp_path)
+
+
+@pytest.fixture
+def cfg_torchsynth_flow_ram_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step CPU smoke config for RAM post-training of a TorchSynth flow.
+
+    ``model.base_checkpoint`` is left mandatory; the test supplies the checkpoint it trains.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run post-training configuration with checkpoint and CSV artifacts enabled.
+    """
+    return _compose_one_step_torchsynth_flow(
+        "flow_ram",
+        tmp_path,
+        [
+            "model.num_samples_per_row=2",
+            "model.num_targets_per_sample=2",
+            "model.sampling_steps=1",
+        ],
+    )
 
 
 def _configure_online_conditioning_smoke(cfg: DictConfig, tmp_path: Path) -> None:

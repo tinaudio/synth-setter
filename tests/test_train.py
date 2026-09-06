@@ -49,6 +49,7 @@ from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_ram_module import VSTFlowRAMModule
 from synth_setter.pipeline import r2_io
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
@@ -506,6 +507,61 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         logged_values = values[~np.isnan(values)]
         assert logged_values.size > 0
         assert np.isfinite(logged_values).all()
+
+
+@pytest.mark.slow
+def test_train_torchsynth_flow_ram_post_trains_a_trained_flow_checkpoint(
+    cfg_torchsynth_flow_train: DictConfig,
+    cfg_torchsynth_flow_ram_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Pretrain one flow step, then post-train its checkpoint with one real RAM step.
+
+    Chains the two entrypoint runs the operator would: the checkpoint the first run writes is
+    the ``base_checkpoint`` the second consumes, so the post-training path is exercised against
+    a Lightning-produced checkpoint rather than a hand-saved state dict.
+
+    :param cfg_torchsynth_flow_train: Composed tiny production flow config.
+    :param cfg_torchsynth_flow_ram_train: Composed tiny production RAM post-training config.
+    :param tmp_path: Output root for both runs.
+    """
+    with open_dict(cfg_torchsynth_flow_train):
+        cfg_torchsynth_flow_train.paths.output_dir = str(tmp_path / "base")
+        cfg_torchsynth_flow_train.paths.log_dir = str(tmp_path / "base")
+    HydraConfig().set_config(cfg_torchsynth_flow_train)
+    train(cfg_torchsynth_flow_train)
+    base_checkpoint = tmp_path / "base" / "checkpoints" / "last.ckpt"
+    assert base_checkpoint.is_file()
+
+    with open_dict(cfg_torchsynth_flow_ram_train):
+        cfg_torchsynth_flow_ram_train.paths.output_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.paths.log_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.model.base_checkpoint = str(base_checkpoint)
+    HydraConfig().set_config(cfg_torchsynth_flow_ram_train)
+    metric_dict, object_dict = train(cfg_torchsynth_flow_ram_train)
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowRAMModule)
+    assert object_dict["trainer"].global_step == 1
+    for prefix in ("train/loss", "train/reward"):
+        values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
+        assert values, f"no {prefix} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert torch.isfinite(metric_dict["val/param_mse"]).all()
+
+    # The frozen anchor is the trained flow, not a fresh initialisation.
+    pretrained = torch.load(base_checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+    for name, value in model.reference_field.state_dict().items():
+        torch.testing.assert_close(value, pretrained[f"vector_field.{name}"], msg=name)
+
+    assert (tmp_path / "ram" / "checkpoints" / "last.ckpt").is_file()
+    metrics_files = list((tmp_path / "ram").glob("csv/**/metrics.csv"))
+    assert len(metrics_files) == 1
+    logged = pd.read_csv(metrics_files[0])
+    reward_columns = [column for column in logged if column.startswith("train/reward")]
+    assert reward_columns, f"no train/reward column in {list(logged)}"
+    rewards = logged[reward_columns].to_numpy(dtype=float)
+    assert np.isfinite(rewards[~np.isnan(rewards)]).all()
 
 
 @pytest.mark.dataloader_multiprocess
