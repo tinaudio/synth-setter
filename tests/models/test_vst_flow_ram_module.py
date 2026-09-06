@@ -363,3 +363,24 @@ def test_ram_overfits_a_fixed_sampled_batch(tmp_path: Path) -> None:
 
     assert initial > 0
     assert final < initial * 0.05
+
+
+def test_ram_training_step_depends_on_the_target_audio(tmp_path: Path) -> None:
+    """With every random draw replayed, changing only the target audio changes the RAM loss.
+
+    The scorer here ignores audio, so any difference can come only from the conditioning the
+    encoder feeds to the sampler and the policy.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    module.log = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
+    batch = _batch(2)
+    swapped = {**batch, "audio": batch["audio"].flip(0)}
+
+    torch.manual_seed(31)
+    original = module.training_step(batch, 0)
+    torch.manual_seed(31)
+    with_other_audio = module.training_step(swapped, 0)
+
+    assert not torch.isclose(original, with_other_audio)
