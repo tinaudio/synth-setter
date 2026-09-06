@@ -19,18 +19,17 @@ reward:
     _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
     sample_rate: ${datamodule.sample_rate}
 
-# Endpoints per target row form the advantage group; each is noised this many times, so one
-# optimizer step regresses batch_size * 8 * 4 states from batch_size * 8 renders.
+# Endpoints per target row form the advantage group; each is noised independently before the
+# policy regression, so renders amortise over the noise draws.
 num_samples_per_row: 8
 num_targets_per_sample: 4
-# Scale on the normalised advantage: larger chases reward harder at the cost of drifting
-# from the pretrained field (paper: 100 for GenEval/OCR, 1000 for PickScore).
+# Scales normalised advantages, trading reward pursuit against reference-field drift.
 reward_multiplier: 100.0
 sampling_steps: 20
 sampling_cfg_strength: 2.0
 ema_decay: 0.9
 ema_warmup_rate: 0.01
-# Flow-time density (1 - t)^alpha; 1 biases toward the noise end that shapes trajectories.
+# Biases flow-time samples toward the noise end, which shapes trajectories.
 time_power_law_alpha: 1.0
 
 # Paper appendix D: AdamW, no LR schedule, beta2 lowered for a short run.

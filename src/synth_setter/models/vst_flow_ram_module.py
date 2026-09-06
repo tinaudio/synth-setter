@@ -47,6 +47,7 @@ def _validate_ram_settings(
     num_targets_per_sample: int,
     reward_multiplier: float,
     sampling_steps: int,
+    sampling_cfg_strength: float,
     ema_decay: float,
     ema_warmup_rate: float | None,
     time_power_law_alpha: float,
@@ -58,6 +59,7 @@ def _validate_ram_settings(
     :param num_targets_per_sample: Noise draws per endpoint.
     :param reward_multiplier: Scale applied to normalised advantages.
     :param sampling_steps: RK4 steps used to draw endpoints.
+    :param sampling_cfg_strength: Guidance scale used to draw endpoints.
     :param ema_decay: Lag of the sampling copy toward the policy.
     :param ema_warmup_rate: Per-step ramp of the lag, or ``None`` for a fixed lag.
     :param time_power_law_alpha: Exponent of the flow-time law.
@@ -76,12 +78,22 @@ def _validate_ram_settings(
         raise ValueError(f"reward_multiplier must be finite and positive, got {reward_multiplier}")
     if sampling_steps < 1:
         raise ValueError(f"sampling_steps must be positive, got {sampling_steps}")
+    if not math.isfinite(sampling_cfg_strength) or sampling_cfg_strength < 0.0:
+        raise ValueError(
+            f"sampling_cfg_strength must be finite and non-negative, got {sampling_cfg_strength}"
+        )
     if not 0.0 <= ema_decay < 1.0:
         raise ValueError(f"ema_decay must lie in [0, 1), got {ema_decay}")
-    if ema_warmup_rate is not None and ema_warmup_rate <= 0.0:
-        raise ValueError(f"ema_warmup_rate must be positive or None, got {ema_warmup_rate}")
-    if time_power_law_alpha < 0.0:
-        raise ValueError(f"time_power_law_alpha must be non-negative, got {time_power_law_alpha}")
+    if ema_warmup_rate is not None and not (
+        math.isfinite(ema_warmup_rate) and ema_warmup_rate > 0.0
+    ):
+        raise ValueError(
+            f"ema_warmup_rate must be finite and positive or None, got {ema_warmup_rate}"
+        )
+    if not math.isfinite(time_power_law_alpha) or time_power_law_alpha < 0.0:
+        raise ValueError(
+            f"time_power_law_alpha must be finite and non-negative, got {time_power_law_alpha}"
+        )
     if base_kwargs.get("audio_loss") is not None:
         raise ValueError(
             "audio_loss cannot be combined with RAM; the reward carries the audio term"
@@ -149,6 +161,7 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
             num_targets_per_sample=num_targets_per_sample,
             reward_multiplier=reward_multiplier,
             sampling_steps=sampling_steps,
+            sampling_cfg_strength=sampling_cfg_strength,
             ema_decay=ema_decay,
             ema_warmup_rate=ema_warmup_rate,
             time_power_law_alpha=time_power_law_alpha,

@@ -275,6 +275,13 @@ def test_ram_ema_warmup_copies_the_policy_on_the_first_step(tmp_path: Path) -> N
         pytest.param({"num_samples_per_row": 1}, "num_samples_per_row", id="single-sample"),
         pytest.param({"reward_multiplier": 0.0}, "reward_multiplier", id="zero-multiplier"),
         pytest.param({"ema_decay": 1.0}, "ema_decay", id="frozen-ema"),
+        pytest.param({"ema_warmup_rate": float("nan")}, "ema_warmup_rate", id="nan-warmup"),
+        pytest.param(
+            {"time_power_law_alpha": float("nan")}, "time_power_law_alpha", id="nan-alpha"
+        ),
+        pytest.param(
+            {"sampling_cfg_strength": float("nan")}, "sampling_cfg_strength", id="nan-cfg"
+        ),
     ],
 )
 def test_ram_module_rejects_configurations_it_cannot_serve(
@@ -305,3 +312,53 @@ def test_ram_on_train_start_rejects_multi_device_runs(tmp_path: Path) -> None:
         pytest.raises(ValueError, match="single-device"),
     ):
         module.on_train_start()
+
+
+def test_ram_loss_reaches_every_policy_parameter(tmp_path: Path) -> None:
+    """A rewarded step sends finite, non-zero gradient to every trainable parameter.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    torch.manual_seed(19)
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    module.log = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
+
+    module.training_step(_batch(), 0).backward()
+
+    for name, parameter in module.named_parameters():
+        # RAM never drops conditioning, so the CFG token is exercised only by the sampler.
+        if not parameter.requires_grad or name.endswith("cfg_dropout_token"):
+            continue
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
+        assert parameter.grad.abs().sum() > 0, name
+
+
+@pytest.mark.slow
+def test_ram_overfits_a_fixed_sampled_batch(tmp_path: Path) -> None:
+    """Repeated steps on one frozen draw of endpoints, times, and noise drive the loss toward zero.
+
+    Reseeding before every step replays the same endpoints, rewards, flow times, and noise, and the
+    lagged sampler is left un-updated, so the target is a fixed regression the policy must fit.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    module.log = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
+    optimizer = torch.optim.Adam(module.vector_field.parameters(), lr=1e-2)
+    batch = _batch()
+
+    def step() -> float:
+        torch.manual_seed(23)
+        loss = module.training_step(batch, 0)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        return loss.item()
+
+    initial = step()
+    for _ in range(299):
+        final = step()
+
+    assert initial > 0
+    assert final < initial * 0.05

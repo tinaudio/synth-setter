@@ -55,6 +55,7 @@ from synth_setter.models.components.transformer import ASTWithProjectionHead
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.models.vst_flow_ram_module import VSTFlowRAMModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -893,6 +894,49 @@ def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
         GlobalHydra.instance().clear()
 
     assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
+
+
+@pytest.mark.slow
+def test_eval_torchsynth_flow_ram_validates_a_post_trained_checkpoint(
+    cfg_torchsynth_flow_train: DictConfig,
+    cfg_torchsynth_flow_ram_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Pretrain, post-train with RAM, then validate the post-trained checkpoint through eval.
+
+    :param cfg_torchsynth_flow_train: Composed tiny production flow config.
+    :param cfg_torchsynth_flow_ram_train: Composed tiny production RAM post-training config.
+    :param tmp_path: Output root for all three runs.
+    """
+    with open_dict(cfg_torchsynth_flow_train):
+        cfg_torchsynth_flow_train.paths.output_dir = str(tmp_path / "base")
+        cfg_torchsynth_flow_train.paths.log_dir = str(tmp_path / "base")
+    HydraConfig().set_config(cfg_torchsynth_flow_train)
+    train(cfg_torchsynth_flow_train)
+
+    with open_dict(cfg_torchsynth_flow_ram_train):
+        cfg_torchsynth_flow_ram_train.paths.output_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.paths.log_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.model.base_checkpoint = str(
+            tmp_path / "base" / "checkpoints" / "last.ckpt"
+        )
+    HydraConfig().set_config(cfg_torchsynth_flow_ram_train)
+    train(cfg_torchsynth_flow_ram_train)
+
+    with open_dict(cfg_torchsynth_flow_ram_train):
+        cfg_torchsynth_flow_ram_train.mode = "validate"
+        cfg_torchsynth_flow_ram_train.ckpt_path = str(
+            tmp_path / "ram" / "checkpoints" / "last.ckpt"
+        )
+        cfg_torchsynth_flow_ram_train.logger = None
+    HydraConfig().set_config(cfg_torchsynth_flow_ram_train)
+    try:
+        metric_dict, object_dict = evaluate(cfg_torchsynth_flow_ram_train)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(object_dict["model"], VSTFlowRAMModule)
+    assert torch.isfinite(metric_dict["val/param_mse"])
 
 
 @pytest.mark.slow

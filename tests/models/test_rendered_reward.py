@@ -61,3 +61,16 @@ def test_rendered_audio_reward_carries_no_gradient() -> None:
     rewards = _reward(render_batch_size=2)(rows, target)
 
     assert not rewards.requires_grad
+
+
+def test_rendered_audio_reward_scores_each_row_against_its_own_target() -> None:
+    """Swapping one row's target changes only that row's reward."""
+    rows = _audible_model_rows(3, seed=6)
+    targets = _target_audio(rows)
+    reward = _reward(render_batch_size=3)
+
+    aligned = reward(rows, targets)
+    swapped = reward(rows, torch.stack([targets[0], targets[2], targets[2]]))
+
+    torch.testing.assert_close(aligned[[0, 2]], swapped[[0, 2]])
+    assert swapped[1] < aligned[1]

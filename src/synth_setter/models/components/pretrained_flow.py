@@ -25,7 +25,8 @@ def load_pretrained_flow(module: torch.nn.Module, checkpoint: str | Path) -> Non
     :param checkpoint: Path to a Lightning checkpoint of the base run.
     :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
     """
-    digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
+    with Path(checkpoint).open("rb") as file:
+        digest = hashlib.file_digest(file, "sha256").hexdigest()
     # The config records a mutable path, so without this two arms started from
     # different flows would still read as comparable runs.
     logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
