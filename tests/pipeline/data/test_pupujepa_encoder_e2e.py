@@ -157,6 +157,7 @@ def test_real_pupujepa_weights_add_embeddings_and_online_consumers_match(
     subprocess.run(  # noqa: S603 — installed public CLI with test-owned arguments
         [
             str(command),
+            "logger=[]",
             f"lance_uri={dataset_path}",
             f"embeddings=[{profile}]",
             f"checkpoints.{profile}={checkpoint}",

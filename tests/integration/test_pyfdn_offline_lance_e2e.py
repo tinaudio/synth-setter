@@ -303,6 +303,7 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
             sys.executable,
             "-m",
             "synth_setter.pipeline.data.add_embeddings",
+            "logger=[]",
             f"lance_uri={generated_lance}",
             "embeddings=[pyfdn_sketch]",
             "batch_size=1",

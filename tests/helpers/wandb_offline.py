@@ -1,15 +1,10 @@
 """Helpers for asserting on wandb offline-run artifacts.
 
 The wandb offline runtime writes one binary protobuf file per run
-(``run-*.wandb``) using ``wandb.sdk.internal.datastore`` — JSON history
-mirrors only materialize after ``wandb sync``. Tests that need to assert on
-``log_metrics`` payloads in an offline run therefore have to decode the
-binary directly.
-
-Both ``tests/test_generate_dataset_wandb.py`` and
-``tests/integration/test_generate_dataset_cli_wandb_e2e.py`` need this
-decoder; this module is the single owner so a wandb upgrade only requires
-updating one site.
+(``run-*.wandb``) using ``wandb.sdk.internal.datastore`` — JSON mirrors only
+materialize after ``wandb sync``. Tests assert on offline run payloads and
+lifecycle records by decoding that binary directly. This module is the single
+owner so a wandb upgrade only requires updating one site.
 """
 
 from __future__ import annotations
@@ -93,6 +88,24 @@ def read_run_binary(
     return _poll_until(wandb_binary.read_bytes, until, timeout_s)
 
 
+def read_run_exit_code(
+    wandb_binary: Path,
+    *,
+    timeout_s: float = _FLUSH_TIMEOUT_S,
+) -> int | None:
+    """Decode the terminal exit code from an offline run record.
+
+    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
+    :param timeout_s: Upper bound while waiting for the exit record to flush.
+    :returns: Process-style exit code, or ``None`` when no exit record appears.
+    """
+    return _poll_until(
+        lambda: _scan_run_exit_code(wandb_binary),
+        lambda exit_code: exit_code is not None,
+        timeout_s,
+    )
+
+
 def read_run_project(
     wandb_binary: Path,
     *,
@@ -159,6 +172,19 @@ def _iter_records(wandb_binary: Path) -> Iterator[Iterator[Any]]:
         yield _records()
     finally:
         ds.close()
+
+
+def _scan_run_exit_code(wandb_binary: Path) -> int | None:
+    """Read the exit code from the datastore's terminal record.
+
+    :param wandb_binary: Path to an offline ``run-*.wandb`` file.
+    :returns: Exit code when present, otherwise ``None``.
+    """
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if record.WhichOneof("record_type") == "exit":
+                return record.exit.exit_code
+    return None
 
 
 def _scan_run_project(wandb_binary: Path) -> str | None:
