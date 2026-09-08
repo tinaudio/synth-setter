@@ -3844,8 +3844,8 @@ def test_sketch_spec_encoder_binds_config_batch_and_logs_device(
 
 
 @pytest.mark.slow
-def test_sketch_encode_batched_batch_matches_single_pass() -> None:
-    """Memory-capped chunking preserves control values within float32 kernel jitter.
+def test_sketch_encode_sub_batched_matches_single_pass() -> None:
+    """Memory-capped sub-batching preserves control values within float32 kernel jitter.
 
     Torch reduction kernels can vary by batch shape at approximately 1e-6.
     """
