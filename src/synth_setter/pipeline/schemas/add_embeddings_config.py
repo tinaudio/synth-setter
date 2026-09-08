@@ -50,7 +50,7 @@ class AddEmbeddingsConfig(BaseModel):
 
         Torch device, or ``None`` for automatic selection.
 
-    .. attribute :: batch_size
+    .. attribute :: lance_batch_size
 
         Rows per Lance UDF call.
 
@@ -58,7 +58,7 @@ class AddEmbeddingsConfig(BaseModel):
 
         Worker processes for CPU-bound registry encoders; ``1`` keeps them in-process.
 
-    .. attribute :: sketch_encode_chunk
+    .. attribute :: sketch_encode_batch
 
         Rows per sketch extractor invocation.
 
@@ -114,7 +114,7 @@ class AddEmbeddingsConfig(BaseModel):
         description="Checkpoint overrides keyed by registry name; checkpoint-free entries reject them.",
     )
     device: str | None = Field(default=None, description="Torch device; null auto-selects.")
-    batch_size: int = Field(
+    lance_batch_size: int = Field(
         default=DEFAULT_LANCE_BATCH_SIZE, ge=1, description="Rows per Lance UDF call."
     )
     num_workers: int = Field(
@@ -122,7 +122,7 @@ class AddEmbeddingsConfig(BaseModel):
         ge=1,
         description="Worker processes for CPU-bound encoders; torch/GPU encoders ignore it.",
     )
-    sketch_encode_chunk: int = Field(
+    sketch_encode_batch: int = Field(
         default=SKETCH_ENCODE_MAX_BATCH,
         ge=1,
         description="Rows per sketch extractor invocation; sizes memory and GPU utilization.",
