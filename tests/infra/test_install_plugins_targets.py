@@ -69,6 +69,26 @@ class _Kr106InstallFakes:
     tool_log: Path
 
 
+def _write_fake_uname(fake_bin: Path, os_name: str, architecture: str) -> None:
+    """Write a deterministic uname command.
+
+    :param fake_bin: Directory receiving the executable.
+    :param os_name: Value emitted for the operating system.
+    :param architecture: Value emitted for ``uname -m``.
+    """
+    _write_executable(
+        fake_bin / "uname",
+        f"""#!/bin/bash
+set -eu
+if [[ "${{1:-}}" == "-m" ]]; then
+  printf '{architecture}\\n'
+else
+  printf '{os_name}\\n'
+fi
+""",
+    )
+
+
 def _write_kr106_install_fakes(checkout: Path) -> _Kr106InstallFakes:
     """Provide offline git, CMake, npm, and plugin-manager boundaries.
 
@@ -118,17 +138,7 @@ fi
         fake_bin / "flock",
         "#!/bin/bash\nset -eu\nprintf 'flock %s\\n' \"$*\" >> \"$TOOL_LOG\"\nprintf 'locked\\n' >&9\n",
     )
-    _write_executable(
-        fake_bin / "uname",
-        """#!/bin/bash
-set -eu
-if [[ "${1:-}" == "-m" ]]; then
-  printf 'x86_64\n'
-else
-  printf 'Linux\n'
-fi
-""",
-    )
+    _write_fake_uname(fake_bin, "Linux", "x86_64")
     manager = fake_bin / "synth-setter-plugins"
     _write_executable(
         manager,
@@ -440,6 +450,40 @@ def test_install_ultramaster_kr106_builds_adopts_and_links_source(tmp_path: Path
     assert "plugins adopt --plugin kayrockscreenprinting/ultramaster-kr106" in events
     assert "plugins link --plugin kayrockscreenprinting/ultramaster-kr106" in events
     assert "plugins install --plugin kayrockscreenprinting/ultramaster-kr106" not in events
+
+
+def test_install_ultramaster_kr106_on_macos_delegates_to_registry(tmp_path: Path) -> None:
+    """The supported macOS path retains the locked registry installation.
+
+    :param tmp_path: Isolated checkout and command-fake root.
+    """
+    shutil.copy(MAKEFILE, tmp_path / "Makefile")
+    fakes = _write_kr106_install_fakes(tmp_path)
+    _write_fake_uname(fakes.manager.parent, "Darwin", "arm64")
+
+    result = _run_make_target(tmp_path, "install-ultramaster-kr106", fakes)
+
+    assert result.returncode == 0, result.stderr
+    events = fakes.tool_log.read_text()
+    assert "plugins install --plugin kayrockscreenprinting/ultramaster-kr106" in events
+    assert "git -C" not in events
+    assert "cmake " not in events
+
+
+def test_install_ultramaster_kr106_on_unsupported_host_fails(tmp_path: Path) -> None:
+    """Unsupported hosts fail before source or package installation.
+
+    :param tmp_path: Isolated checkout and command-fake root.
+    """
+    shutil.copy(MAKEFILE, tmp_path / "Makefile")
+    fakes = _write_kr106_install_fakes(tmp_path)
+    _write_fake_uname(fakes.manager.parent, "Linux", "aarch64")
+
+    result = _run_make_target(tmp_path, "install-ultramaster-kr106", fakes)
+
+    assert result.returncode != 0
+    assert "supports macOS or Linux x86_64 (host: Linux/aarch64)" in result.stderr
+    assert not fakes.tool_log.exists()
 
 
 def test_install_ultramaster_kr106_partial_cache_reinitializes_checkout(
