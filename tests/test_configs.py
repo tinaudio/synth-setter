@@ -605,7 +605,9 @@ _WAVEFORM_CONDITIONING_PROFILES = frozenset(
         "clap_online",
         "log_mel",
         "pupujepa_large_online",
+        "pupujepa_large_scratch",
         "pupujepa_tiny_online",
+        "pupujepa_tiny_scratch",
         "same_l_online",
         "same_s_online",
     }
@@ -754,6 +756,48 @@ def test_pupujepa_tiny_online_profile_pins_checkpoint_identity() -> None:
     assert cfg.model.encoder.backbone.revision == PUPUJEPA_CHECKPOINT_REVISION
     assert cfg.model.encoder.backbone.variant == "tiny"
     assert cfg.model.encoder.head.embed_dim == 1536
+
+
+@pytest.mark.parametrize(
+    ("profile", "variant", "embed_dim"),
+    [("pupujepa_tiny_scratch", "tiny", 1536), ("pupujepa_large_scratch", "large", 8192)],
+)
+def test_pupujepa_scratch_profile_builds_trainable_variant_without_checkpoint(
+    profile: str, variant: str, embed_dim: int
+) -> None:
+    """From-scratch composition selects a released geometry and pins no checkpoint.
+
+    :param profile: Conditioning profile under test.
+    :param variant: Released teacher geometry the profile reuses.
+    :param embed_dim: Frequency-concatenated teacher width the pool consumes.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", f"conditioning={profile}", "trainer=cpu"],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.conditioning == "audio"
+    assert cfg.model.encoder._target_.endswith("PupuJepaConditioningEncoder")
+    assert cfg.model.encoder.backbone._target_.endswith("PupuJepaAudioEncoder.from_scratch")
+    assert cfg.model.encoder.backbone.variant == variant
+    assert "checkpoint" not in cfg.model.encoder.backbone
+    assert cfg.model.encoder.head.embed_dim == embed_dim
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+
+
+def test_pupujepa_scratch_head_pools_the_same_span_as_the_online_profile() -> None:
+    """From-scratch and online PupuJEPA profiles share the four-second pooling span."""
+    online = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny_online", "trainer=cpu"],
+    )
+    scratch = _compose(
+        "eval.yaml",
+        ["experiment=surge/flow_simple", "conditioning=pupujepa_tiny_scratch", "trainer=cpu"],
+    )
+
+    assert scratch.model.encoder.head.max_seq_len == online.model.encoder.head.max_seq_len
 
 
 def test_pupujepa_online_head_pools_the_same_span_as_the_cached_profile() -> None:

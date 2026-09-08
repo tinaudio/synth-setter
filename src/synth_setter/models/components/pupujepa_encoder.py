@@ -1,13 +1,16 @@
-"""Frozen PupuJEPA teachers from waveform to frequency-concatenated sequences.
+"""PupuJEPA teachers from waveform to frequency-concatenated sequences.
 
 The architecture is adapted from PupuJEPA commit
 ``54a621e9f879be7659d81b6a3c493bba855cc85f`` under the MIT license retained in
 ``LICENSES/PupuJEPA-MIT.txt``. Only the patch embed and EMA teacher inference path are included.
+The teacher serves either as a frozen pretrained backbone or, through ``from_scratch``, as a
+randomly initialised backbone trained end to end like the AST.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import nullcontext
 from typing import Protocol, cast
 
 import numpy as np
@@ -254,7 +257,7 @@ class _PupuJepaTeacherModel(nn.Module):
 
 
 class PupuJepaAudioEncoder(nn.Module):
-    """Frozen PupuJEPA teacher shared by online and offline conditioning."""
+    """PupuJEPA teacher shared by online, offline, and from-scratch conditioning."""
 
     @jaxtyped(typechecker=beartype)
     def __init__(
@@ -263,13 +266,16 @@ class PupuJepaAudioEncoder(nn.Module):
         sample_rate: int,
         config: PupuJepaConfig = PUPUJEPA_TINY_CONFIG,
         max_batch_size: int | None = None,
+        trainable: bool = False,
     ) -> None:
-        """Build a frozen teacher for waveforms arriving at ``sample_rate``.
+        """Build a teacher for waveforms arriving at ``sample_rate``.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param config: Explicit PupuJEPA frontend and teacher geometry.
         :param max_batch_size: Maximum waveforms per teacher forward; released variant cap when
             omitted.
+        :param trainable: Leave the teacher's parameters trainable and its train mode under the
+            parent's control instead of freezing it in eval mode.
         :raises ValueError: The source rate or batch cap is non-positive.
         """
         super().__init__()
@@ -290,10 +296,36 @@ class PupuJepaAudioEncoder(nn.Module):
         self.max_batch_size = max_batch_size
         self.config = config
         self.out_dim = config.output_dim
+        self.trainable = trainable
         self.frontend = PupuJepaMelFrontend(config)
         self.teacher_model = _PupuJepaTeacherModel(config)
-        self.requires_grad_(False)
-        self.eval()
+        if not trainable:
+            self.requires_grad_(False)
+            self.eval()
+
+    @classmethod
+    @jaxtyped(typechecker=beartype)
+    def from_scratch(
+        cls,
+        *,
+        sample_rate: int,
+        variant: PupuJepaVariant = "tiny",
+        max_batch_size: int | None = None,
+    ) -> PupuJepaAudioEncoder:
+        """Build a randomly initialised trainable teacher with a released variant's geometry.
+
+        :param sample_rate: Default source waveform rate in Hz.
+        :param variant: Released teacher size whose architecture is reused.
+        :param max_batch_size: Maximum waveforms per teacher forward; released variant cap when
+            omitted.
+        :returns: Trainable PupuJEPA audio encoder without checkpoint weights.
+        """
+        return cls(
+            sample_rate=sample_rate,
+            config=PUPUJEPA_CHECKPOINT_SPECS[variant].config,
+            max_batch_size=max_batch_size,
+            trainable=True,
+        )
 
     @classmethod
     @jaxtyped(typechecker=beartype)
@@ -344,13 +376,12 @@ class PupuJepaAudioEncoder(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     def train(self, mode: bool = True) -> PupuJepaAudioEncoder:
-        """Keep the frozen teacher in eval mode regardless of its parent module.
+        """Follow the parent's train mode only when trainable; a frozen teacher stays in eval.
 
-        :param mode: Parent training mode request, ignored for the frozen backbone.
-        :returns: This encoder in eval mode.
+        :param mode: Parent training mode request.
+        :returns: This encoder in the resulting mode.
         """
-        del mode
-        super().train(False)
+        super().train(mode and self.trainable)
         return self
 
     @jaxtyped(typechecker=beartype)
@@ -401,6 +432,8 @@ class PupuJepaAudioEncoder(nn.Module):
             raise ValueError(f"PupuJEPA needs a positive sample_rate, got {source_rate}")
         audio = self._validate_and_downmix(audio)
         expected_patches = pupujepa_num_time_patches(audio.shape[-1], source_rate, self.config)
+        # The STFT frontend always runs in float32; only a frozen teacher forces it too, so
+        # its embedding space is invariant to the trainer's precision.
         with torch.autocast(device_type=audio.device.type, enabled=False):
             waveform = audio.float()
             if source_rate != self.config.sample_rate:
@@ -409,11 +442,15 @@ class PupuJepaAudioEncoder(nn.Module):
                     source_rate,
                     self.config.sample_rate,
                 )
+            features = self.frontend(waveform)
+        teacher_precision = (
+            nullcontext()
+            if self.trainable
+            else torch.autocast(device_type=audio.device.type, enabled=False)
+        )
+        with teacher_precision:
             sequence = torch.cat(
-                [
-                    self.teacher_model(self.frontend(chunk))
-                    for chunk in waveform.split(self.max_batch_size)
-                ]
+                [self.teacher_model(chunk) for chunk in features.split(self.max_batch_size)]
             )
         expected_shape = (len(audio), self.out_dim, expected_patches)
         if tuple(sequence.shape) != expected_shape:
@@ -424,3 +461,48 @@ class PupuJepaAudioEncoder(nn.Module):
         if not torch.isfinite(sequence).all():
             raise ValueError("PupuJEPA teacher produced non-finite values")
         return sequence
+
+
+class PupuJepaConditioningEncoder(nn.Module):
+    """Trainable PupuJEPA teacher and pooling head trained end to end like the AST.
+
+    Deliberately not a ``PretrainedConditioningEncoder``: the flow module strips that class's
+    backbone from Lightning checkpoints, which would discard a backbone trained from scratch.
+    """
+
+    @jaxtyped(typechecker=beartype)
+    def __init__(
+        self,
+        *,
+        backbone: PupuJepaAudioEncoder,
+        head: nn.Module,
+        out_dim: int,
+    ) -> None:
+        """Pair a trainable teacher with the head that adapts it to the flow's width.
+
+        :param backbone: Trainable waveform-in PupuJEPA teacher.
+        :param head: Trainable module mapping ``backbone.out_dim`` to ``out_dim``.
+        :param out_dim: Conditioning width Hydra resolves ``${model.encoder.out_dim}`` to.
+        :raises ValueError: The backbone is frozen or the head's input width differs from it.
+        """
+        super().__init__()
+        if not backbone.trainable:
+            raise ValueError("PupuJepaConditioningEncoder requires a trainable backbone")
+        head_input_dim = getattr(head, "input_dim", None)
+        if head_input_dim != backbone.out_dim:
+            raise ValueError(
+                f"head input width {head_input_dim} does not match backbone out_dim "
+                f"{backbone.out_dim}"
+            )
+        self.backbone = backbone
+        self.head = head
+        self.out_dim = out_dim
+
+    @jaxtyped(typechecker=beartype)
+    def forward(self, audio: Float[Tensor, _BATCH_AUDIO]) -> Float[Tensor, "batch ..."]:
+        """Encode waveforms into per-layer conditioning tokens.
+
+        :param audio: Waveform batch shaped ``(B, T)`` or ``(B, C, T)``.
+        :returns: Conditioning shaped ``(batch, out_dim)`` or ``(batch, outputs, out_dim)``.
+        """
+        return self.head(self.backbone(audio))

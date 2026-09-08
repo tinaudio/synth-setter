@@ -1,0 +1,19 @@
+# A randomly initialised PupuJEPA teacher trained end to end with its pool, like ast_online.
+# The checkpoint-free backbone keeps a released variant's geometry so the head and the
+# cached profiles' sequence contract carry over unchanged.
+_target_: synth_setter.models.components.pupujepa_encoder.PupuJepaConditioningEncoder
+out_dim: 512
+backbone:
+  _target_: synth_setter.models.components.pupujepa_encoder.PupuJepaAudioEncoder.from_scratch
+  sample_rate: ${datamodule.sample_rate}
+  variant: ???
+  # Chunking cannot bound activation memory during training; null keeps the variant cap.
+  max_batch_size: null
+head:
+  _target_: synth_setter.models.components.embed_pool.EmbeddingPool
+  embed_dim: ???
+  d_model: ${model.encoder.out_dim}
+  num_heads: ${model.encoder_num_heads}
+  n_conditioning_outputs: ${oc.select:model.vector_field.num_layers,1}
+  pos_enc: sin
+  max_seq_len: 100

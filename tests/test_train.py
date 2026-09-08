@@ -42,6 +42,7 @@ from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
     PretrainedConditioningEncoder,
 )
+from synth_setter.models.components.pupujepa_encoder import PupuJepaConditioningEncoder
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.components.transformer import ApproxEquivTransformer
@@ -2659,6 +2660,30 @@ def test_train_pupujepa_large_online_conditioning_returns_finite_loss(
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_change_with_conditioning(object_dict)
+
+
+def test_train_pupujepa_tiny_scratch_conditioning_trains_backbone_and_checkpoints_it(
+    cfg_torchsynth_pupujepa_tiny_scratch_train: DictConfig, tmp_path: Path
+) -> None:
+    """One step through from-scratch PupuJEPA moves the teacher and keeps it in the checkpoint.
+
+    :param cfg_torchsynth_pupujepa_tiny_scratch_train: Two-row checkpoint-free config.
+    :param tmp_path: Checkpoint output directory.
+    """
+    cfg = cfg_torchsynth_pupujepa_tiny_scratch_train
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    model = object_dict["model"]
+    assert isinstance(model.encoder, PupuJepaConditioningEncoder)
+    assert all(parameter.requires_grad for parameter in model.encoder.backbone.parameters())
+    checkpoint_path = tmp_path / "scratch.ckpt"
+    object_dict["trainer"].save_checkpoint(checkpoint_path)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)["state_dict"]
+    assert any(key.startswith("encoder.backbone.teacher_model.") for key in state)
     _assert_model_predictions_change_with_conditioning(object_dict)
 
 
