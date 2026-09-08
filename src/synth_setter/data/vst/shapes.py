@@ -158,7 +158,18 @@ def mel_n_frames_from_samples(num_samples: int, sample_rate: float) -> int:
     :returns: ``1 + num_samples // hop_length`` frames.
     :rtype: int
     """
-    return 1 + num_samples // mel_hop_length(sample_rate)
+    return stft_n_frames_from_samples(num_samples, mel_hop_length(sample_rate))
+
+
+def stft_n_frames_from_samples(num_samples: int, hop_length: int) -> int:
+    """Return the frame count a ``center=True`` short-time transform produces.
+
+    :param num_samples: Waveform length in samples.
+    :param hop_length: Frame stride in samples.
+    :returns: ``1 + num_samples // hop_length`` frames.
+    :rtype: int
+    """
+    return 1 + num_samples // hop_length
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:

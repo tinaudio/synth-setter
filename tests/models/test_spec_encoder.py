@@ -1,7 +1,9 @@
 """Behavioral tests for the log-mel front end and the frontend/backbone composition."""
 
+import math
 from collections.abc import Callable
 from functools import partial
+from typing import Any
 
 import jaxtyping
 import librosa
@@ -10,9 +12,28 @@ import pytest
 import torch
 
 from synth_setter.models.components.cnn import MelCNN
-from synth_setter.models.components.spec_encoder import LogMelFrontend, SpecEncoder
+from synth_setter.models.components.spec_encoder import (
+    CepstrogramFrontend,
+    LogMelFrontend,
+    SpecEncoder,
+)
 
 _frontend = partial(LogMelFrontend, in_dim=4_410, sample_rate=44_100)
+# 44.1k samples, 4096-point window, 11025 hop: five centered frames, quefrencies to 800.
+_cepstrum = partial(CepstrogramFrontend, in_dim=44_100, n_fft=4_096, hop_length=11_025, q_max=800)
+
+
+def _echo(delay: int, gain: float) -> torch.Tensor:
+    """Build a unit impulse plus one scaled echo at the cepstrum fixture length.
+
+    :param delay: Echo position in samples.
+    :param gain: Echo amplitude relative to the unit impulse.
+    :returns: One waveform shaped ``(1, 44_100)``.
+    """
+    audio = torch.zeros(1, 44_100)
+    audio[0, 0] = 1.0
+    audio[0, delay] = gain
+    return audio
 
 
 @pytest.fixture(autouse=True)
@@ -282,3 +303,110 @@ def test_spec_encoder_backward_reaches_the_backbone_and_the_waveform() -> None:
     for name, parameter in encoder.named_parameters():
         assert parameter.grad is not None, name
         assert torch.count_nonzero(parameter.grad), name
+
+
+def test_cepstrogram_frontend_returns_quefrency_grid() -> None:
+    """The front end emits ``(batch, 1, q_max, frames)`` for the backbone."""
+    features = _cepstrum()(torch.randn(2, 44_100))
+
+    assert features.shape == (2, 1, 800, 5)
+
+
+def test_cepstrogram_frontend_echo_peaks_at_delay_row() -> None:
+    """One echo at delay ``d`` is a cepstral spike at quefrency row ``d``."""
+    features = _cepstrum()(_echo(300, 0.6))
+
+    first_frame = features[0, 0, :, 0]
+    assert int(torch.argmax(first_frame[50:])) + 50 == 300
+
+
+def test_cepstrogram_frontend_rows_above_q_max_are_dropped() -> None:
+    """An echo beyond the quefrency window leaves no spike inside it."""
+    frontend = _cepstrum(q_max=250)
+
+    first_frame = frontend(_echo(300, 0.6))[0, 0, :, 0]
+
+    assert first_frame.shape == (250,)
+    assert first_frame[50:].abs().max() < 1.0
+
+
+def test_cepstrogram_frontend_gain_invariant() -> None:
+    """A positive waveform gain lands in the discarded absolute level only."""
+    frontend = _cepstrum()
+    audio = torch.randn(2, 44_100)
+
+    torch.testing.assert_close(frontend(3.0 * audio), frontend(audio))
+
+
+def test_cepstrogram_frontend_bin_zero_drop_tracks_decay_rate() -> None:
+    """Doubling an exponential decay doubles the frame-to-frame fall of quefrency 0."""
+    frontend = _cepstrum()
+    noise = torch.randn(1, 44_100)
+    ramp = torch.arange(44_100, dtype=torch.float32)
+    slow = frontend(noise * torch.exp(-ramp / 20_000.0))[0, 0, 0]
+    fast = frontend(noise * torch.exp(-ramp / 10_000.0))[0, 0, 0]
+
+    slow_drop = float(slow[1] - slow[3])
+    fast_drop = float(fast[1] - fast[3])
+
+    assert slow_drop > 0
+    assert fast_drop / slow_drop == pytest.approx(2.0, rel=0.1)
+
+
+def test_cepstrogram_frontend_output_is_zero_mean_per_clip() -> None:
+    """Clip-mean subtraction removes the level offset without a per-clip rescale."""
+    features = _cepstrum()(torch.randn(3, 44_100))
+
+    torch.testing.assert_close(features.mean(dim=(1, 2, 3)), torch.zeros(3), atol=1e-4, rtol=0)
+
+
+def test_cepstrogram_frontend_scale_multiplies_output() -> None:
+    """``scale`` is a fixed dataset-constant multiplier on the normalized grid."""
+    audio = torch.randn(1, 44_100)
+
+    torch.testing.assert_close(_cepstrum(scale=0.25)(audio), 0.25 * _cepstrum()(audio))
+
+
+@pytest.mark.parametrize("audio", [torch.zeros(2, 1, 44_100), torch.zeros(2, 44_099)])
+def test_cepstrogram_frontend_invalid_waveform_shape_raises(audio: torch.Tensor) -> None:
+    """Malformed waveform batches fail at the front-end boundary.
+
+    :param audio: Wrong-rank or wrong-length waveform batch.
+    """
+    with pytest.raises(ValueError, match="Expected waveform shape"):
+        _cepstrum()(audio)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"q_max": 0},
+        {"q_max": 4_097},
+        {"hop_length": 0},
+        {"n_fft": 0},
+        {"floor_db": -1.0},
+        {"floor_db": math.inf},
+        {"scale": 0.0},
+    ],
+)
+def test_cepstrogram_frontend_invalid_geometry_raises(kwargs: dict[str, Any]) -> None:
+    """Out-of-range quefrency, framing, floor, or scale settings are rejected.
+
+    :param kwargs: One invalid constructor argument.
+    """
+    with pytest.raises(ValueError):
+        _cepstrum(**kwargs)
+
+
+def test_spec_encoder_cepstrum_backward_reaches_the_waveform() -> None:
+    """Gradients survive the cepstral front end's log and inverse transform."""
+    encoder = SpecEncoder(
+        frontend=_cepstrum(),
+        backbone=MelCNN(hidden_dim=4, out_dim=5, num_blocks=1, kernel_size=3),
+    )
+    audio = torch.randn(2, 44_100, requires_grad=True)
+
+    encoder(audio).square().mean().backward()
+
+    assert audio.grad is not None
+    assert torch.count_nonzero(audio.grad)

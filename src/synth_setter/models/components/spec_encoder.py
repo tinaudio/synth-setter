@@ -1,4 +1,4 @@
-"""Waveform-to-spectrogram front end and the encoder pairing it with a backbone.
+"""Waveform-to-feature-grid front ends and the encoder pairing one with a backbone.
 
 Online-render synths have no stored mel column, so their conditioning encoder computes
 features from the waveform. Keeping the front end separate from the backbone lets the
@@ -28,6 +28,7 @@ from synth_setter.data.vst.shapes import MEL_N_MELS, mel_hop_length, mel_n_fft
 # beartype's, which cannot report the expected sample count.
 _BATCH_AUDIO_SHAPE: Final = "batch ... samples"
 _BATCH_GRID_SHAPE: Final = "batch 1 mels frames"
+_BATCH_QUEFRENCY_SHAPE: Final = "batch 1 quefrencies frames"
 _BATCH_ANY_SHAPE: Final = "batch ..."
 
 
@@ -128,6 +129,92 @@ class LogMelFrontend(nn.Module):
         if self.top_db is not None:
             log_mel = torch.clamp(log_mel, min=-self.top_db)
         return log_mel.unsqueeze(1)
+
+
+class CepstrogramFrontend(nn.Module):
+    """Convert fixed-length waveforms into a real-cepstrum grid indexed by quefrency in samples.
+
+    A comb of period ``sr/d`` Hz in the log spectrum becomes a spike at quefrency ``d``, so
+    delay-line lengths land on the row axis at single-sample resolution (#3159).
+    """
+
+    @jaxtyped(typechecker=beartype)
+    def __init__(
+        self,
+        in_dim: int,
+        *,
+        n_fft: int = 32_768,
+        hop_length: int = 11_025,
+        q_max: int = 2_500,
+        window: Literal["hamming", "hann"] = "hamming",
+        floor_db: float = 100.0,
+        scale: float = 1.0,
+        amin: float = 1e-10,
+    ) -> None:
+        """Build the magnitude STFT whose peak-relative log spectrum is inverse-transformed.
+
+        :param in_dim: Expected waveform length in samples.
+        :param n_fft: Window and transform length in samples; sets the finest resolvable
+            comb spacing (``sample_rate / n_fft`` Hz) and bounds ``q_max``.
+        :param hop_length: Frame stride in samples.
+        :param q_max: Exclusive upper quefrency row, in samples; rows start at quefrency 0
+            so the spectral envelope and per-frame level stay visible.
+        :param window: Window function applied before each Fourier transform.
+        :param floor_db: Clamp below the clip peak, in dB, applied before the inverse transform.
+        :param scale: Fixed multiplier on the mean-subtracted grid; invertible, so lossless.
+        :param amin: Lower magnitude bound used before converting to decibels.
+        :raises ValueError: If any numeric bound is unsupported.
+        """
+        super().__init__()
+        for name, value in (("n_fft", n_fft), ("hop_length", hop_length), ("q_max", q_max)):
+            if value <= 0:
+                raise ValueError(f"{name} must be positive, got {value}")
+        if q_max > n_fft // 2 + 1:
+            raise ValueError(
+                f"q_max must not exceed n_fft // 2 + 1 = {n_fft // 2 + 1}, got {q_max}"
+            )
+        if not math.isfinite(floor_db) or floor_db < 0:
+            raise ValueError(f"floor_db must be non-negative and finite, got {floor_db}")
+        if not math.isfinite(scale) or scale == 0:
+            raise ValueError(f"scale must be non-zero and finite, got {scale}")
+        if not math.isfinite(amin) or amin <= 0:
+            raise ValueError(f"amin must be positive and finite, got {amin}")
+        window_fn = {"hamming": torch.hamming_window, "hann": torch.hann_window}[window]
+
+        self.in_dim = in_dim
+        self.n_fft = n_fft
+        self.q_max = q_max
+        self.floor_db = floor_db
+        self.scale = scale
+        self.amin = amin
+        self.spectrogram = torchaudio.transforms.Spectrogram(
+            n_fft=n_fft,
+            hop_length=hop_length,
+            window_fn=window_fn,
+            power=1.0,
+            pad_mode="constant",
+        )
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[Tensor, _BATCH_AUDIO_SHAPE]
+    ) -> Float[Tensor, _BATCH_QUEFRENCY_SHAPE]:
+        """Return each waveform's clip-mean-subtracted real cepstrogram.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Quefrency grids shaped ``(batch, 1, q_max, frames)``.
+        :raises ValueError: If the waveform shape differs from the configured input length.
+        """
+        if x.ndim != 2 or x.shape[-1] != self.in_dim:
+            raise ValueError(
+                f"Expected waveform shape (batch, {self.in_dim}), got {tuple(x.shape)}"
+            )
+        log_spec = 20.0 * torch.log10(torch.clamp(self.spectrogram(x), min=self.amin))
+        log_spec = log_spec - log_spec.amax(dim=(-2, -1), keepdim=True)
+        log_spec = torch.clamp(log_spec, min=-self.floor_db)
+        cepstrum = torch.fft.irfft(log_spec, n=self.n_fft, dim=-2)[:, : self.q_max]
+        cepstrum = cepstrum - cepstrum.mean(dim=(-2, -1), keepdim=True)
+        return (self.scale * cepstrum).unsqueeze(1)
 
 
 class SpecEncoder(nn.Module):

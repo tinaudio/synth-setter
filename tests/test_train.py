@@ -199,13 +199,17 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train",
+    ["pyfdn/flow_ast_online", "pyfdn/flow_cepstrum_online"],
+    indirect=True,
+)
 def test_train_pyfdn_online_ast_one_step_uses_waveforms(
     cfg_pyfdn_train: DictConfig,
 ) -> None:
-    """Train the online-AST comparison from stored pyFDN waveforms.
+    """Train each waveform-in AST front end from stored pyFDN waveforms.
 
-    :param cfg_pyfdn_train: One-step online-AST pyFDN configuration.
+    :param cfg_pyfdn_train: One-step online-AST or cepstral-AST pyFDN configuration.
     """
     HydraConfig().set_config(cfg_pyfdn_train)
 
