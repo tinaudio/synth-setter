@@ -775,6 +775,21 @@ docs:
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
+  # ── RIR corpus publication runbook ───────────────────────────────
+  - doc: docs/operations/rir-corpora-publication.md
+    description: Third-party RIR corpus publication procedure and invariants
+    sources:
+      - pattern: "scripts/data_publication/rir_corpora/rirpub.py"
+        covers: "extract / build / upload / verify stages and the completion-marker-last invariant"
+      - pattern: "scripts/data_publication/rir_corpora/fetch_sources.py"
+        covers: "Acquisition families and the aria2 requirement for Zenodo"
+      - pattern: "scripts/data_publication/rir_corpora/specs.py"
+        covers: "Per-corpus Spec descriptors registered before publication"
+      - pattern: "scripts/data_publication/rir_corpora/drive.sh"
+        covers: "Ordered stage driver with post-verification disk reclaim"
+      - pattern: "scripts/data_publication/rir_corpora/post_evidence.sh"
+        covers: "Issue evidence posting"
+
   # ── Credential rotation guide ────────────────────────────────────
   - doc: docs/operations/credential-rotation-guide.md
     description: Credential inventory + rotation/verification procedures
