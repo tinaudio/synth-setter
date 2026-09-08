@@ -554,12 +554,15 @@ class Corpus:
         scripts.mkdir(exist_ok=True)
         for name in TOOL_FILES:
             shutil.copyfile(Path(__file__).resolve().parent / name, scripts / name)
-        rclone_version = subprocess.run(  # noqa: S603 — args are literal strings
-            [executable("rclone"), "version"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.splitlines()[0]
+        # build runs without rclone (tests, offline hosts); upload/verify still require it.
+        rclone_path = shutil.which("rclone")
+        rclone_version = (
+            subprocess.run(  # noqa: S603 — args are literal strings
+                [rclone_path, "version"], capture_output=True, text=True, check=True
+            ).stdout.splitlines()[0]
+            if rclone_path
+            else "not installed at build time"
+        )
         tool_versions = {
             "python": sys.version.split()[0],
             "pylance": lance.__version__,
