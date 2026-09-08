@@ -98,7 +98,7 @@ fi
     _write_executable(fake_bin / "npm", "#!/bin/bash\nset -eu\n")
     _write_executable(
         fake_bin / "flock",
-        '#!/bin/bash\nset -eu\nprintf \'flock %s %s\\n\' "$*" "$(readlink /proc/$$/fd/9)" >> "$TOOL_LOG"\n',
+        "#!/bin/bash\nset -eu\nprintf 'flock %s\\n' \"$*\" >> \"$TOOL_LOG\"\nprintf 'locked\\n' >&9\n",
     )
     _write_executable(
         fake_bin / "uname",
@@ -417,7 +417,8 @@ def test_install_ultramaster_kr106_builds_adopts_and_links_source(tmp_path: Path
         / "synth-setter"
         / f"ultramaster-kr106-{_makefile_variable('ULTRAMASTER_KR106_VERSION')}"
     )
-    assert f"flock 9 {source_root}/.install.lock" in events
+    assert "flock 9" in events
+    assert (source_root / ".install.lock").read_text() == "locked\n"
     assert f"fetch --depth 1 origin {expected_ref}" in events
     assert "--target KR106_VST3" in events
     assert "plugins adopt --plugin kayrockscreenprinting/ultramaster-kr106" in events
