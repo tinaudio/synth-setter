@@ -3150,14 +3150,14 @@ class TestMainDispatchBranches:
         with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
             _call_hydra_main(gd.main)
 
-    def test_main_finalize_inline_true_invokes_finalize_from_spec(
+    def test_main_finalize_inline_true_invokes_finalize_tracked(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """finalize_inline=true on the local-run branch invokes finalize_from_spec.
+        """finalize_inline=true on the local-run branch invokes finalize_tracked.
 
         Composes a real ``smoke-shard`` experiment with the new flag set,
-        stubs ``generate`` to a no-op, and replaces ``finalize_from_spec``
+        stubs ``generate`` to a no-op, and replaces ``finalize_tracked``
         with a mock so the test pins the wire (call + spec identity)
         without needing real rclone against a finalize-shaped remote. The
         end-to-end marker upload is already covered by the Phase 1
@@ -3165,7 +3165,7 @@ class TestMainDispatchBranches:
         sibling test.
 
         :param monkeypatch: Pytest fixture used to patch argv +
-            ``generate`` + ``finalize_from_spec``.
+            ``generate`` + ``finalize_tracked``.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -3184,12 +3184,12 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "generate", _capture_spec)
         finalize_mock = MagicMock()
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
 
         _call_hydra_main(gd.main)
 
         finalize_mock.assert_called_once()
-        called_spec, called_work_dir = finalize_mock.call_args[0]
+        _cfg, called_spec, called_work_dir = finalize_mock.call_args[0]
         assert isinstance(called_spec, DatasetSpec)
         assert called_spec is captured["spec"]
         assert isinstance(called_work_dir, Path)
@@ -3204,7 +3204,7 @@ class TestMainDispatchBranches:
         omits the override.
 
         :param monkeypatch: Pytest fixture used to patch argv +
-            ``generate`` + ``finalize_from_spec``.
+            ``generate`` + ``finalize_tracked``.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -3216,7 +3216,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         finalize_mock = MagicMock()
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
 
         _call_hydra_main(gd.main)
 
@@ -3233,13 +3233,13 @@ class TestMainDispatchBranches:
 
         SkyPilot delegation hands the run to a worker pod; finalize must
         run out-of-band via the finalize-dataset workflow rather than fire
-        from the launcher process. Pins both halves: ``finalize_from_spec``
+        from the launcher process. Pins both halves: ``finalize_tracked``
         is not called, and an INFO log fires (wording unpinned).
 
         :param mock_logger: Patched ``generate_dataset.logger`` — the
             established loguru capture pattern in this file.
         :param monkeypatch: Pytest fixture used to patch argv + dispatch +
-            ``finalize_from_spec`` (asserted unreached).
+            ``finalize_tracked`` (asserted unreached).
         :param tmp_path: Pytest fixture providing a fresh test directory for
             the minimal compute template.
         """
@@ -3261,7 +3261,7 @@ class TestMainDispatchBranches:
             lambda *_a, **_k: pytest.fail("generate must not fire on dispatch branch"),
         )
         finalize_mock = MagicMock()
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
 
         _call_hydra_main(gd.main)
 
@@ -3301,7 +3301,7 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
-        monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        monkeypatch.setattr(gd, "finalize_tracked", MagicMock())
         # finalize writes each split to R2; ``main`` materializes them locally for
         # the eval. Stub that download so no real rclone runs against a bare remote.
         monkeypatch.setattr(gd.r2_io, "download_dir_no_overwrite", MagicMock())
@@ -3622,7 +3622,7 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
-        monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        monkeypatch.setattr(gd, "finalize_tracked", MagicMock())
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
@@ -3685,7 +3685,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "generate", generate_mock)
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="requires finalize_inline=true"):
@@ -3704,7 +3704,7 @@ class TestMainDispatchBranches:
         regardless of stage, so any zero-size split would FileNotFoundError
         deep inside Lightning. The launcher catches the misconfig up front.
 
-        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_from_spec``
+        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_tracked``
             / oracle-eval seams; the test asserts none of them is reached.
         """
         import synth_setter.cli.generate_dataset as gd
@@ -3724,7 +3724,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "generate", generate_mock)
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="train_val_test_sizes > 0"):

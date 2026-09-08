@@ -43,7 +43,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from pydantic import ValidationError
 
-from synth_setter.cli.finalize_dataset import finalize_from_spec
+from synth_setter.cli.finalize_dataset import finalize_tracked
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.pipeline import r2_io
@@ -1316,10 +1316,10 @@ def main(cfg: DictConfig) -> None:
 
     if sky_cfg.compute is None:
         loggers = _loggers_pinned_to_spec(cfg, spec)
-        # finalize runs outside the wandb-tracked region — see #1289.
         generate(spec, Path(cfg.paths.output_dir), loggers)
         if cfg.finalize_inline:
-            finalize_from_spec(spec, Path(cfg.paths.output_dir))
+            # generate() closed its run; finalize gets its own <run_id>-finalize run.
+            finalize_tracked(cfg, spec, Path(cfg.paths.output_dir))
         if cfg.oracle_eval_inline:
             output_dir = Path(cfg.paths.output_dir)
             splits: tuple[Split, ...] = ("train", "val", "test")
