@@ -97,7 +97,7 @@ make install-surge-xt
 > available for unmanaged and legacy Surge installs. See
 > [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
-> **Prefer pip or conda?** If you'd rather manage the Python interpreter and
+> **Prefer plain pip?** If you'd rather manage the Python interpreter and
 > venv yourself, see
 > [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
 > for a walkthrough using `uv pip install --group dev -e .` inside your own
