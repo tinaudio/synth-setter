@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -173,4 +174,4 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     assert {resource.memory for resource in task.resources} == {memory_floor}
     assert "datamodule.high_memory_materialization=" not in train_args
     assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
-    assert "high_memory_materialization:" in result.stdout
+    assert re.search(r"(?m)^\s*high_memory_materialization: (?:true|false)$", result.stdout)
