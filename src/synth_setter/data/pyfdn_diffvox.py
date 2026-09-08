@@ -13,6 +13,7 @@ import numpy as np
 from pyFDN import decay_to_geq, process_fdn
 from pyFDN.td import SOSBank
 from scipy.linalg import expm
+from scipy.signal import sosfreqz
 
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_DIFFVOX_DELAY_EVEN_PAN_NAME,
@@ -45,6 +46,8 @@ from synth_setter.data.vst.param_spec import (
 # Equal-power panning law with a sqrt(2) makeup so a centre pan passes unity gain.
 _PAN_NORM = float(np.sqrt(2.0))
 _DIFFVOX_REQUIRED_KEYS = frozenset(PYFDN_DIFFVOX_PARAM_SPEC.synth_param_names)
+# Dense enough to resolve the narrowest GEQ ripple when probing the absorption peak.
+_ABSORPTION_PROBE_BINS = 8192
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,27 @@ def diffvox_feedback_matrix(skew: np.ndarray) -> np.ndarray:
     return np.asarray(expm(upper - upper.T), dtype=np.float64)
 
 
+def _unity_capped_absorption(rt_seconds: np.ndarray, delays: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Design the per-line GEQ absorption and cap each line's peak gain at unity.
+
+    The ten-band fit can ripple a fraction of a dB above 0 dB where a short RT band
+    meets long ones; with an orthogonal feedback matrix that loop gain diverges, so
+    the first section of any offending line is scaled down by its peak magnitude.
+
+    :param rt_seconds: Ten-band reverberation times in seconds.
+    :param delays: Delay-line lengths in samples.
+    :param sample_rate: Processing rate in Hz.
+    :returns: Bank shaped ``(sections, 6, lines)`` whose magnitude never exceeds one.
+    """
+    bank = np.array(decay_to_geq(rt_seconds, delays, sample_rate), dtype=np.float64)
+    for line in range(bank.shape[2]):
+        _, response = sosfreqz(np.ascontiguousarray(bank[:, :, line]), worN=_ABSORPTION_PROBE_BINS)
+        peak = float(np.abs(response).max())
+        if peak > 1.0:
+            bank[0, :3, line] /= peak
+    return bank
+
+
 def _ping_pong_delay(mono: np.ndarray, controls: _Controls, *, sample_rate: float) -> np.ndarray:
     """Run the cross-fed two-line delay whose taps alternate between two panners.
 
@@ -287,7 +311,9 @@ def _fdn_reverb(stereo_in: np.ndarray, controls: _Controls, *, sample_rate: floa
         B=arrays[PYFDN_DIFFVOX_REVERB_INPUT_NAME],
         C=arrays[PYFDN_DIFFVOX_REVERB_OUTPUT_NAME],
         D=np.zeros((2, 2)),
-        post_delay=SOSBank(decay_to_geq(arrays[PYFDN_DIFFVOX_REVERB_RT_NAME], delays, sample_rate)),
+        post_delay=SOSBank(
+            _unity_capped_absorption(arrays[PYFDN_DIFFVOX_REVERB_RT_NAME], delays, sample_rate)
+        ),
         post_output=SOSBank(
             _band_sections(
                 PYFDN_DIFFVOX_TONE_BANDS, controls.scalars, sample_rate=sample_rate, channels=2

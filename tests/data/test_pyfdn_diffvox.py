@@ -208,6 +208,20 @@ def test_diffvox_render_longer_reverb_time_keeps_more_late_energy() -> None:
     assert np.square(long_tail).sum() > 10.0 * np.square(short_tail).sum()
 
 
+def test_diffvox_render_steep_reverb_profile_stays_bounded() -> None:
+    """A short RT band beside long ones must not push the FDN loop past unity gain."""
+    params = _dry_params()
+    params[PYFDN_DIFFVOX_REVERB_OUTPUT_NAME] = np.full((2, 6), 0.3, dtype=np.float64)
+    params[PYFDN_DIFFVOX_REVERB_RT_NAME] = np.array(
+        [0.11, 3.66, 1.6, 2.79, 2.74, 3.12, 2.69, 4.97, 4.42, 4.79], dtype=np.float64
+    )
+
+    output = render_diffvox_chain(params, _impulse(), sample_rate=_SAMPLE_RATE)
+
+    assert np.abs(output).max() < 10.0
+    assert np.abs(output[132_300:]).max() < np.abs(output[44_100:88_200]).max()
+
+
 def test_diffvox_render_send_routes_delay_output_into_reverb() -> None:
     """The delay-to-reverb send only matters when the delay is audible."""
     silent_delay = _dry_params()

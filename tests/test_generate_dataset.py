@@ -1217,10 +1217,13 @@ def test_from_hydra_pyfdn_diffvox_writes_stereo_82_coordinate_shard(
     schema = lance.dataset(str(uploaded[0])).schema
     param_type = schema.field(PARAM_ARRAY_FIELD).type
     audio_type = schema.field("audio").type
+    mel_type = schema.field("mel_spec").type
     assert isinstance(param_type, pa.FixedShapeTensorType)
     assert isinstance(audio_type, pa.FixedShapeTensorType)
+    assert isinstance(mel_type, pa.FixedShapeTensorType)
     assert tuple(param_type.shape) == (82,)
     assert tuple(audio_type.shape) == (2, 176_400)
+    assert tuple(mel_type.shape) == (2, 128, 401)
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
