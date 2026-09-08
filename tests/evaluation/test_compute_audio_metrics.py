@@ -541,12 +541,21 @@ def test_compute_mldr_grows_with_modulation_depth() -> None:
     assert compute_mldr(steady, _tremolo(depth=0.3)) < compute_mldr(steady, _tremolo(depth=0.9))
 
 
-def test_compute_mldr_duplicated_channels_match_mono() -> None:
-    """Channels are scored as independent rows, so a stereo copy equals its mono source."""
-    target = _sine(seconds=2.0)
-    pred = _tremolo(depth=0.5)
-    stereo = compute_mldr(np.repeat(target, 2, axis=0), np.repeat(pred, 2, axis=0))
-    assert stereo == pytest.approx(compute_mldr(target, pred), rel=1e-6)
+def test_compute_mldr_stereo_equals_mean_of_independent_channel_scores() -> None:
+    """Channels are scored as independent rows, so a stereo pair averages its two mono scores.
+
+    The channels differ so that a flattened alignment roll, which would leak the left tail into the
+    right head, cannot reproduce the per-channel result.
+    """
+    left = (_sine(seconds=2.0), _tremolo(depth=0.9))
+    right = (_tremolo(depth=0.3, rate_hz=1.5), _sine(seconds=2.0, freq=880.0))
+    stereo_target = np.concatenate([left[0], right[0]], axis=0)
+    stereo_pred = np.concatenate([left[1], right[1]], axis=0)
+
+    stereo = compute_mldr(stereo_target, stereo_pred)
+
+    per_channel_mean = (compute_mldr(*left) + compute_mldr(*right)) / 2
+    assert stereo == pytest.approx(per_channel_mean, rel=1e-6)
 
 
 def test_compute_mldr_matches_diffvox_reference_value() -> None:

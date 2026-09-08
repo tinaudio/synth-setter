@@ -1268,6 +1268,9 @@ def test_train_eval_surge_xt(
         assert per_sample["rms"].min() > bounds.rms_min, (
             f"oracle rms too low: {per_sample['rms'].tolist()}"
         )
+        assert per_sample["mldr"].max() < bounds.mldr_max, (
+            f"oracle mldr too high: {per_sample['mldr'].tolist()}"
+        )
 
 
 @pytest.mark.requires_vst
@@ -1999,6 +2002,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     assert metrics["val_audio/wmfcc_mean"] < bounds.wmfcc_max
     assert metrics["val_audio/sot_mean"] < bounds.sot_max
     assert metrics["val_audio/rms_mean"] > bounds.rms_min
+    assert metrics["val_audio/mldr_mean"] < bounds.mldr_max
 
     uploaded = fake_r2_remote / cfg_surge_real_train.r2.bucket / "probes"
     landed = sorted(p.relative_to(uploaded).as_posix() for p in uploaded.rglob("*") if p.is_file())

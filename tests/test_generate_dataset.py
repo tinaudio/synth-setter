@@ -1991,6 +1991,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert metrics[f"{metric_prefix}audio/wmfcc_mean"] < bounds.wmfcc_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/mldr_mean"] < bounds.mldr_max, (split, metrics)
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 
