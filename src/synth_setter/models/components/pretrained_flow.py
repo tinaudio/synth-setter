@@ -1,8 +1,9 @@
-"""Strict restoration of a pretrained flow's weights into a module of the same shape."""
+"""Restoring a pretrained flow into a post-training module, and remembering which one it was."""
 
 import hashlib
 import logging
 from pathlib import Path
+from typing import Any
 
 import torch
 from beartype import beartype
@@ -46,3 +47,60 @@ def load_pretrained_flow(module: torch.nn.Module, checkpoint: str | Path) -> str
             f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
         )
     return digest
+
+
+class PretrainedBaseMixin:
+    """Lightning hooks that tie a post-training module to the base checkpoint it refines.
+
+    Mix in ahead of the LightningModule. The module sets ``base_checkpoint_sha256`` in its
+    constructor (``None`` when no base was loaded), and the hooks then refuse a fresh fit
+    without any weight source, record the base identity in every saved checkpoint, and reject
+    a checkpoint refined from a different base.
+
+    .. attribute :: base_checkpoint_sha256
+
+       SHA-256 of the loaded base, or ``None`` until a saved checkpoint supplies it.
+    """
+
+    base_checkpoint_sha256: str | None
+
+    @jaxtyped(typechecker=beartype)
+    def on_fit_start(self) -> None:
+        """Refuse a fresh fit that has no pretrained weights to refine.
+
+        :raises ValueError: Neither ``base_checkpoint`` nor a resume checkpoint supplies them.
+        """
+        trainer: Any = self.trainer  # pyright: ignore[reportAttributeAccessIssue]
+        if self.base_checkpoint_sha256 is None and not trainer.ckpt_path:
+            raise ValueError(
+                "base_checkpoint is required to start post-training; omit it only when "
+                "ckpt_path restores a saved run"
+            )
+
+    @jaxtyped(typechecker=beartype)
+    def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Record which base this run refines, so a swapped base file cannot resume it.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        """
+        super().on_save_checkpoint(checkpoint)  # pyright: ignore[reportAttributeAccessIssue]
+        checkpoint["base_checkpoint_sha256"] = self.base_checkpoint_sha256
+
+    @jaxtyped(typechecker=beartype)
+    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Adopt the saved base identity, refusing a checkpoint refined from another base.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises ValueError: The configured base differs from the one the checkpoint records.
+        """
+        super().on_load_checkpoint(checkpoint)  # pyright: ignore[reportAttributeAccessIssue]
+        saved = checkpoint.get("base_checkpoint_sha256")
+        if not isinstance(saved, str):
+            return
+        if self.base_checkpoint_sha256 is None:
+            self.base_checkpoint_sha256 = saved
+        elif saved != self.base_checkpoint_sha256:
+            raise ValueError(
+                "base_checkpoint does not match the base this checkpoint was refined from "
+                f"(configured sha256 {self.base_checkpoint_sha256[:12]}…, saved {saved[:12]}…)"
+            )

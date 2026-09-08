@@ -27,7 +27,10 @@ from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
-from synth_setter.models.components.pretrained_flow import load_pretrained_flow
+from synth_setter.models.components.pretrained_flow import (
+    PretrainedBaseMixin,
+    load_pretrained_flow,
+)
 from synth_setter.models.components.simulator_control import (
     DEFAULT_CONTROL_T_MIN,
     ControlledFlow,
@@ -110,7 +113,7 @@ def _validate_arm(
         validate_audio_feedback_runtime(compiled=True, world_size=1)
 
 
-class VSTFlowFinetuneModule(VSTFlowMatchingModule):
+class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
     """Pretrained flow whose velocity a simulator-fed control network learns to correct."""
 
     @jaxtyped(typechecker=beartype)
@@ -228,46 +231,6 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         """Hold the pretrained encoder and field in eval mode."""
         self.encoder.eval()
         self.vector_field.flow.eval()
-
-    @jaxtyped(typechecker=beartype)
-    def on_fit_start(self) -> None:
-        """Refuse a fresh fit that has no pretrained weights to refine.
-
-        :raises ValueError: Neither ``base_checkpoint`` nor a resume checkpoint supplies them.
-        """
-        if self.base_checkpoint_sha256 is None and not self.trainer.ckpt_path:
-            raise ValueError(
-                "base_checkpoint is required to start a finetune; omit it only when ckpt_path "
-                "restores a saved finetune"
-            )
-
-    @jaxtyped(typechecker=beartype)
-    def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Record which base this run refines, so a swapped base file cannot resume it.
-
-        :param checkpoint: Mutable Lightning checkpoint payload.
-        """
-        super().on_save_checkpoint(checkpoint)
-        checkpoint["base_checkpoint_sha256"] = self.base_checkpoint_sha256
-
-    @jaxtyped(typechecker=beartype)
-    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Adopt the saved base identity, refusing a checkpoint refined from another base.
-
-        :param checkpoint: Mutable Lightning checkpoint payload.
-        :raises ValueError: The configured base differs from the one the checkpoint records.
-        """
-        super().on_load_checkpoint(checkpoint)
-        saved = checkpoint.get("base_checkpoint_sha256")
-        if not isinstance(saved, str):
-            return
-        if self.base_checkpoint_sha256 is None:
-            self.base_checkpoint_sha256 = saved
-        elif saved != self.base_checkpoint_sha256:
-            raise ValueError(
-                "base_checkpoint does not match the base this checkpoint was refined from "
-                f"(configured sha256 {self.base_checkpoint_sha256[:12]}…, saved {saved[:12]}…)"
-            )
 
     @jaxtyped(typechecker=beartype)
     def _control_signal_width(self) -> int:
