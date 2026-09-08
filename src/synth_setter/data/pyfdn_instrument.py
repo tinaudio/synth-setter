@@ -4,7 +4,7 @@ Example:
     ``PyFDNRenderer().render(native_params)`` returns a channel-first impulse response.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from importlib.metadata import version
 from numbers import Integral, Real
 from typing import cast
@@ -16,6 +16,7 @@ from pyFDN.td import PitchShift, SOSBank, Series
 
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_GEQ_RT_MAX_SECONDS,
+    PYFDN_HOUSEHOLDER_VECTOR_NAME,
     PYFDN_KRONECKER_ANGLES_NAME,
     PYFDN_KRONECKER_REFLECT_NAME,
     PYFDN_ORDER,
@@ -32,6 +33,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_MAX_SECONDS,
     PYFDN_RT_MIN_SECONDS,
     PYFDN_RT_NYQUIST_NAME,
+    householder_feedback_matrix,
     kronecker_feedback_matrix,
 )
 from synth_setter.data.pyfdn_source import (
@@ -57,6 +59,7 @@ PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES = 3
 PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER = 2
 _PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder")
 _KRONECKER_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_kronecker")
+_HOUSEHOLDER_VECTOR_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder_vector")
 _PITCHSHIFT_PARAM_SPEC = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
@@ -66,12 +69,47 @@ _ARRAY_CONTRACTS = (
     ("delays", (PYFDN_ORDER,), np.dtype(np.int64)),
 )
 _BASE_KEYS = frozenset(name for name, _, _ in _ARRAY_CONTRACTS)
-_KRONECKER_CONTROL_KEYS = frozenset(
-    {PYFDN_KRONECKER_ANGLES_NAME, PYFDN_KRONECKER_REFLECT_NAME}
-)
-# Decoded angles and their matrix come from the same float64 pass; anything beyond
+
+
+def _kronecker_feedback(params: Mapping[str, ParameterValue]) -> np.ndarray:
+    """Rebuild the feedback matrix a Kronecker patch's kernel controls describe.
+
+    :param params: Native patch carrying the angle and reflect arrays.
+    :returns: The orthogonal matrix those controls describe.
+    """
+    return kronecker_feedback_matrix(
+        np.asarray(params[PYFDN_KRONECKER_ANGLES_NAME]),
+        np.asarray(params[PYFDN_KRONECKER_REFLECT_NAME]),
+    )
+
+
+def _householder_vector_feedback(params: Mapping[str, ParameterValue]) -> np.ndarray:
+    """Rebuild the feedback matrix a learnable-Householder patch's vector describes.
+
+    :param params: Native patch carrying the reflection vector.
+    :returns: The reflection matrix that vector describes.
+    """
+    return householder_feedback_matrix(np.asarray(params[PYFDN_HOUSEHOLDER_VECTOR_NAME]))
+
+
+# Specs whose feedback matrix is derived from learned controls: the control keys the
+# patch must carry and the rule that rebuilds the matrix from them.
+_DERIVED_FEEDBACK: dict[
+    ParamSpecName,
+    tuple[frozenset[str], Callable[[Mapping[str, ParameterValue]], np.ndarray]],
+] = {
+    _KRONECKER_PARAM_SPEC: (
+        frozenset({PYFDN_KRONECKER_ANGLES_NAME, PYFDN_KRONECKER_REFLECT_NAME}),
+        _kronecker_feedback,
+    ),
+    _HOUSEHOLDER_VECTOR_PARAM_SPEC: (
+        frozenset({PYFDN_HOUSEHOLDER_VECTOR_NAME}),
+        _householder_vector_feedback,
+    ),
+}
+# Decoded controls and their matrix come from the same float64 pass; anything beyond
 # float32 round-off between them means a caller edited one without the other.
-_KRONECKER_FEEDBACK_ATOL = 1e-6
+_DERIVED_FEEDBACK_ATOL = 1e-5
 _REQUIRED_KEYS = _BASE_KEYS.union({PYFDN_RT_DC_NAME, PYFDN_RT_NYQUIST_NAME})
 _PITCHSHIFT_REQUIRED_KEYS = _BASE_KEYS.union(
     {
@@ -186,30 +224,27 @@ def _build_decay_fdn(
     return decay_build
 
 
-def _kronecker_plain_params(
+def _verified_plain_params(
     params: Mapping[str, ParameterValue],
+    param_spec_name: ParamSpecName,
 ) -> dict[str, ParameterValue]:
-    """Fold verified kernel controls out of a Kronecker patch into a plain patch.
+    """Fold verified feedback controls out of a derived-feedback patch into a plain patch.
 
-    :param params: Native Kronecker patch carrying angle and reflect arrays.
+    :param params: Native patch carrying the spec's feedback controls.
+    :param param_spec_name: Derived-feedback spec that names those controls.
     :returns: Plain-topology mapping whose feedback matrix the controls describe.
     :raises ValueError: A control is missing or the embedded matrix is stale.
     """
-    missing = sorted(_KRONECKER_CONTROL_KEYS.difference(params))
+    control_keys, rebuild = _DERIVED_FEEDBACK[param_spec_name]
+    missing = sorted(control_keys.difference(params))
     if missing:
-        raise ValueError(f"kronecker params must contain {missing}")
-    expected = kronecker_feedback_matrix(
-        np.asarray(params[PYFDN_KRONECKER_ANGLES_NAME]),
-        np.asarray(params[PYFDN_KRONECKER_REFLECT_NAME]),
-    )
+        raise ValueError(f"{param_spec_name} params must contain {missing}")
     supplied = params["feedback_matrix"]
     if not isinstance(supplied, np.ndarray) or not np.allclose(
-        supplied, expected, rtol=0.0, atol=_KRONECKER_FEEDBACK_ATOL
+        supplied, rebuild(params), rtol=0.0, atol=_DERIVED_FEEDBACK_ATOL
     ):
-        raise ValueError("feedback_matrix does not match the kronecker kernel controls")
-    return {
-        name: value for name, value in params.items() if name not in _KRONECKER_CONTROL_KEYS
-    }
+        raise ValueError(f"feedback_matrix does not match the {param_spec_name} controls")
+    return {name: value for name, value in params.items() if name not in control_keys}
 
 
 def _validate_base_params(
@@ -465,7 +500,7 @@ class PyFDNRenderer(AudioRenderer):
         """Configure impulse-response rendering or the optional canonical chirp.
 
         :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the custom source.
-        :param param_spec_name: Registered plain, Kronecker, or pitch-shift pyFDN topology.
+        :param param_spec_name: Registered plain, derived-feedback, or pitch-shift topology.
         :param synth_version: Required installed pyFDN version.
         :param plugin_path: Required in-process backend sentinel.
         :param sample_rate: Required sample rate.
@@ -479,8 +514,8 @@ class PyFDNRenderer(AudioRenderer):
             raise ValueError("pyFDN excitation must be 'impulse' or 'chirp'")
         if param_spec_name not in (
             _PLAIN_PARAM_SPEC,
-            _KRONECKER_PARAM_SPEC,
             _PITCHSHIFT_PARAM_SPEC,
+            *_DERIVED_FEEDBACK,
         ):
             raise ValueError(f"unsupported pyFDN param spec {param_spec_name!r}")
         if (
@@ -564,8 +599,8 @@ class PyFDNRenderer(AudioRenderer):
                 _pitchshift_post_delay(build, params),
             )
         else:
-            if self._param_spec_name == _KRONECKER_PARAM_SPEC:
-                params = _kronecker_plain_params(params)
+            if self._param_spec_name in _DERIVED_FEEDBACK:
+                params = _verified_plain_params(params, self._param_spec_name)
             build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
             if self._excitation == "impulse":
                 impulse_response = np.asarray(build_to_impz(build, ir_len=_SIGNAL_LENGTH))

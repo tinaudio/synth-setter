@@ -25,6 +25,9 @@ PYFDN_ORDER = 8
 PYFDN_KRONECKER_LEVELS = PYFDN_ORDER.bit_length() - 1
 PYFDN_KRONECKER_ANGLES_NAME = "kronecker_angles"
 PYFDN_KRONECKER_REFLECT_NAME = "kronecker_reflect"
+PYFDN_HOUSEHOLDER_VECTOR_NAME = "householder_vector"
+# Below this norm the reflection direction is numerically meaningless.
+PYFDN_HOUSEHOLDER_MIN_NORM = 1e-6
 PYFDN_RT_CROSSOVER_HZ = 6_000.0
 PYFDN_RT_DC_NAME = "post_delay.rt_dc_seconds"
 PYFDN_RT_MAX_SECONDS = 4.0
@@ -74,6 +77,22 @@ def kronecker_feedback_matrix(angles: np.ndarray, reflect: np.ndarray) -> np.nda
         )
         feedback = np.kron(kernel, feedback)
     return feedback
+
+
+def householder_feedback_matrix(vector: np.ndarray) -> np.ndarray:
+    """Build the Householder reflection ``I - 2uu^T/(u^T u)`` for one delay-line vector.
+
+    Only the direction matters: ``u``, ``-u``, and any rescaling give the same matrix.
+
+    :param vector: Reflection direction shaped ``(PYFDN_ORDER,)``; need not be unit length.
+    :returns: Float64 orthogonal symmetric matrix shaped ``(PYFDN_ORDER, PYFDN_ORDER)``.
+    :raises ValueError: The vector has the wrong length or a vanishing norm.
+    """
+    if vector.shape != (PYFDN_ORDER,):
+        raise ValueError(f"householder vector must be shaped ({PYFDN_ORDER},), got {vector.shape}")
+    if np.linalg.norm(vector) < PYFDN_HOUSEHOLDER_MIN_NORM:
+        raise ValueError(f"householder vector norm must be at least {PYFDN_HOUSEHOLDER_MIN_NORM}")
+    return householder_matrix(np.asarray(vector, dtype=np.float64))
 
 
 class PyFDNParamSpec(ParamSpec):
@@ -127,6 +146,15 @@ def _kronecker_feedback_from_params(synth_params: ParameterValues) -> np.ndarray
     )
 
 
+def _householder_vector_feedback_from_params(synth_params: ParameterValues) -> np.ndarray:
+    """Read the learned reflection vector off one decoded patch.
+
+    :param synth_params: Decoded fields carrying the reflection vector.
+    :returns: The Householder feedback matrix that vector describes.
+    """
+    return householder_feedback_matrix(np.asarray(synth_params[PYFDN_HOUSEHOLDER_VECTOR_NAME]))
+
+
 def _fdn_matrix_parameters(*, delay_min: int, delay_max: int) -> list[Parameter]:
     """Build fresh common FDN parameters in renderer encoding order.
 
@@ -150,7 +178,7 @@ def _fdn_matrix_parameters(*, delay_min: int, delay_max: int) -> list[Parameter]
     ]
 
 
-_PYFDN_N8_HOUSEHOLDER_FEEDBACK = householder_matrix(np.ones(PYFDN_ORDER, dtype=np.float64))
+_PYFDN_N8_HOUSEHOLDER_FEEDBACK = householder_feedback_matrix(np.ones(PYFDN_ORDER))
 
 
 def _householder_feedback(synth_params: ParameterValues) -> np.ndarray:
@@ -205,6 +233,29 @@ PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = PyFDNParamSpec(
         ),
     ],
     feedback_matrix=_kronecker_feedback_from_params,
+)
+
+PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC = PyFDNParamSpec(
+    synth_params=[
+        *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
+        ContinuousParameter(
+            name=PYFDN_RT_DC_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_NYQUIST_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+        ContinuousArrayParameter(
+            name=PYFDN_HOUSEHOLDER_VECTOR_NAME,
+            shape=(PYFDN_ORDER,),
+            min=-1.0,
+            max=1.0,
+        ),
+    ],
+    feedback_matrix=_householder_vector_feedback_from_params,
 )
 
 PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC = PyFDNParamSpec(

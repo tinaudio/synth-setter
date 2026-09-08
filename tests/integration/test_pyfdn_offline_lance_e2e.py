@@ -23,6 +23,7 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
     PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
@@ -56,6 +57,11 @@ from synth_setter.workspace import operator_workspace
             "pyfdn_n8_mono_kronecker",
             PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
             id="kronecker",
+        ),
+        pytest.param(
+            "pyfdn_n8_mono_householder_vector",
+            PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+            id="householder_vector",
         ),
     ],
 )

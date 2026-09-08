@@ -200,14 +200,21 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "cfg_pyfdn_train", [("pyfdn/flow", "pyfdn_n8_mono_kronecker")], indirect=True
+    ("cfg_pyfdn_train", "width", "control"),
+    [
+        (("pyfdn/flow", "pyfdn_n8_mono_kronecker"), 36, "kronecker_angles"),
+        (("pyfdn/flow", "pyfdn_n8_mono_householder_vector"), 35, "householder_vector"),
+    ],
+    indirect=["cfg_pyfdn_train"],
 )
-def test_train_pyfdn_kronecker_one_step_predicts_36_coordinates(
-    cfg_pyfdn_train: DictConfig,
+def test_train_pyfdn_derived_feedback_one_step_predicts_widened_row(
+    cfg_pyfdn_train: DictConfig, width: int, control: str
 ) -> None:
-    """Selecting the Kronecker synth widens the model head and its per-param metrics.
+    """Selecting a derived-feedback synth widens the model head and its per-param metrics.
 
-    :param cfg_pyfdn_train: One-step Kronecker pyFDN configuration.
+    :param cfg_pyfdn_train: One-step configuration for the selected pyFDN identity.
+    :param width: Encoded row width the model head must predict.
+    :param control: Learned feedback-control group that must appear in the metrics.
     """
     with open_dict(cfg_pyfdn_train):
         cfg_pyfdn_train.trainer.limit_val_batches = 1
@@ -216,10 +223,10 @@ def test_train_pyfdn_kronecker_one_step_predicts_36_coordinates(
 
     metrics, objects = train(cfg_pyfdn_train)
 
-    assert cfg_pyfdn_train.model.num_params == 36
+    assert cfg_pyfdn_train.model.num_params == width
     assert objects["trainer"].global_step == 1
-    assert torch.isfinite(metrics["train/per_param_flow_mse/kronecker_angles"])
-    assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/kronecker_reflect"])
+    assert torch.isfinite(metrics[f"train/per_param_flow_mse/{control}"])
+    assert torch.isfinite(metrics[f"val/per_param_mse_spec_quantized/{control}"])
 
 
 @pytest.mark.slow
