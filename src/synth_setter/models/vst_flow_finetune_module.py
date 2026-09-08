@@ -13,7 +13,6 @@ Typical usage:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -28,6 +27,7 @@ from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
+from synth_setter.models.components.pretrained_flow import load_pretrained_flow
 from synth_setter.models.components.simulator_control import (
     DEFAULT_CONTROL_T_MIN,
     ControlledFlow,
@@ -47,7 +47,6 @@ logger = logging.getLogger(__name__)
 
 type ControlMode = Literal["gradient_spectral", "learned_audio", "null"]
 
-_FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_TIME_SHAPE = "batch 1"
@@ -122,7 +121,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., object] | None,
         *,
-        base_checkpoint: str | Path,
+        base_checkpoint: str | Path | None,
         num_params: int,
         sample_rate: int,
         signal_length: int,
@@ -140,7 +139,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param vector_field: Velocity field of the same shape the base run trained.
         :param optimizer: ``functools.partial``-style optimizer factory.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param base_checkpoint: Checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint: Checkpoint holding the pretrained flow to refine, or ``None``
+            when a Lightning checkpoint of this finetune supplies every weight (eval, resume).
         :param num_params: Parameter-vector width the field operates on.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row; must match the target audio.
@@ -177,7 +177,9 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        self._load_pretrained(base_checkpoint)
+        self.base_checkpoint_sha256 = (
+            load_pretrained_flow(self, base_checkpoint) if base_checkpoint is not None else None
+        )
         self.requires_grad_(False)
 
         self.control_mode: ControlMode = control_mode
@@ -228,33 +230,43 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         self.vector_field.flow.eval()
 
     @jaxtyped(typechecker=beartype)
-    def _load_pretrained(self, checkpoint: str | Path) -> None:
-        """Restore every pretrained weight, refusing a checkpoint that does not fit.
+    def on_fit_start(self) -> None:
+        """Refuse a fresh fit that has no pretrained weights to refine.
 
-        Runs before the control is attached, so the module's own shape is exactly the base
-        run's: any missing or unexpected key means the wrong checkpoint, and a silent
-        ``strict=False`` here would "finetune" a randomly initialised field.
-
-        :param checkpoint: Path to a Lightning checkpoint of the base run.
-        :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
+        :raises ValueError: Neither ``base_checkpoint`` nor a resume checkpoint supplies them.
         """
-        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
-        # The config records a mutable path, so without this two arms started from
-        # different flows would still read as comparable runs.
-        logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        state = payload.get("state_dict") if isinstance(payload, dict) else None
-        if not isinstance(state, dict):
-            raise ValueError(f"{checkpoint} holds no Lightning state_dict")
-        result = self.load_state_dict(state, strict=False)
-        # A frozen pretrained backbone is stripped on save and re-resolved from its own
-        # weights, so its absence is expected; nothing else may be.
-        missing = [k for k in result.missing_keys if not k.startswith(_FROZEN_BACKBONE_PREFIX)]
-        if missing or result.unexpected_keys:
+        if self.base_checkpoint_sha256 is None and not self.trainer.ckpt_path:
             raise ValueError(
-                f"{checkpoint} does not match this model: "
-                f"{len(missing)} missing key(s) {missing[:5]}, "
-                f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
+                "base_checkpoint is required to start a finetune; omit it only when ckpt_path "
+                "restores a saved finetune"
+            )
+
+    @jaxtyped(typechecker=beartype)
+    def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Record which base this run refines, so a swapped base file cannot resume it.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        """
+        super().on_save_checkpoint(checkpoint)
+        checkpoint["base_checkpoint_sha256"] = self.base_checkpoint_sha256
+
+    @jaxtyped(typechecker=beartype)
+    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Adopt the saved base identity, refusing a checkpoint refined from another base.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises ValueError: The configured base differs from the one the checkpoint records.
+        """
+        super().on_load_checkpoint(checkpoint)
+        saved = checkpoint.get("base_checkpoint_sha256")
+        if not isinstance(saved, str):
+            return
+        if self.base_checkpoint_sha256 is None:
+            self.base_checkpoint_sha256 = saved
+        elif saved != self.base_checkpoint_sha256:
+            raise ValueError(
+                "base_checkpoint does not match the base this checkpoint was refined from "
+                f"(configured sha256 {self.base_checkpoint_sha256[:12]}…, saved {saved[:12]}…)"
             )
 
     @jaxtyped(typechecker=beartype)
