@@ -11,10 +11,14 @@ from scipy.signal import sosfreqz
 
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
+)
 from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
 from synth_setter.data.vst.param_spec import ParameterValues
 from synth_setter.data.vst.renderers import NonFiniteAudioError
+from synth_setter.param_spec_name import ParamSpecName
 
 
 @pytest.fixture
@@ -622,3 +626,16 @@ def test_pyfdn_renderer_implements_common_audio_renderer_signature() -> None:
         "note_start_and_end",
         "warmup",
     }
+
+
+def test_pyfdn_renderer_kronecker_spec_returns_finite_impulse_response() -> None:
+    """Kronecker patches carry kernel controls the renderer accepts alongside the matrix."""
+    params, _ = PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.sample(np.random.default_rng(123))
+
+    audio = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_n8_mono_kronecker")).render(
+        params
+    )
+
+    assert audio.shape == (1, 176_400)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()

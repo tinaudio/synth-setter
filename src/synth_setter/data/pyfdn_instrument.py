@@ -16,6 +16,8 @@ from pyFDN.td import PitchShift, SOSBank, Series
 
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_GEQ_RT_MAX_SECONDS,
+    PYFDN_KRONECKER_ANGLES_NAME,
+    PYFDN_KRONECKER_REFLECT_NAME,
     PYFDN_ORDER,
     PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
     PYFDN_PITCHSHIFT_TRANSPOSE_CENTS_MAX,
@@ -53,6 +55,7 @@ _PITCHSHIFT_GEQ_SOS_SHAPE = (11, 6, PYFDN_ORDER)
 PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES = 3
 PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER = 2
 _PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder")
+_KRONECKER_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_kronecker")
 _PITCHSHIFT_PARAM_SPEC = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
@@ -62,6 +65,9 @@ _ARRAY_CONTRACTS = (
     ("delays", (PYFDN_ORDER,), np.dtype(np.int64)),
 )
 _BASE_KEYS = frozenset(name for name, _, _ in _ARRAY_CONTRACTS)
+_KRONECKER_CONTROL_KEYS = frozenset(
+    {PYFDN_KRONECKER_ANGLES_NAME, PYFDN_KRONECKER_REFLECT_NAME}
+)
 _REQUIRED_KEYS = _BASE_KEYS.union({PYFDN_RT_DC_NAME, PYFDN_RT_NYQUIST_NAME})
 _PITCHSHIFT_REQUIRED_KEYS = _BASE_KEYS.union(
     {
@@ -429,7 +435,7 @@ class PyFDNRenderer(AudioRenderer):
         """Configure impulse-response rendering or the optional canonical chirp.
 
         :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the custom source.
-        :param param_spec_name: Registered plain or pitch-shift pyFDN topology.
+        :param param_spec_name: Registered plain, Kronecker, or pitch-shift pyFDN topology.
         :param synth_version: Required installed pyFDN version.
         :param plugin_path: Required in-process backend sentinel.
         :param sample_rate: Required sample rate.
@@ -441,7 +447,11 @@ class PyFDNRenderer(AudioRenderer):
         _validate_version(synth_version)
         if excitation not in ("chirp", "impulse"):
             raise ValueError("pyFDN excitation must be 'impulse' or 'chirp'")
-        if param_spec_name not in (_PLAIN_PARAM_SPEC, _PITCHSHIFT_PARAM_SPEC):
+        if param_spec_name not in (
+            _PLAIN_PARAM_SPEC,
+            _KRONECKER_PARAM_SPEC,
+            _PITCHSHIFT_PARAM_SPEC,
+        ):
             raise ValueError(f"unsupported pyFDN param spec {param_spec_name!r}")
         if (
             plugin_path != "pyfdn"
@@ -524,6 +534,13 @@ class PyFDNRenderer(AudioRenderer):
                 _pitchshift_post_delay(build, params),
             )
         else:
+            if self._param_spec_name == _KRONECKER_PARAM_SPEC:
+                # The spec already folded the kernel controls into feedback_matrix.
+                params = {
+                    name: value
+                    for name, value in params.items()
+                    if name not in _KRONECKER_CONTROL_KEYS
+                }
             build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
             if self._excitation == "impulse":
                 impulse_response = np.asarray(build_to_impz(build, ir_len=_SIGNAL_LENGTH))
