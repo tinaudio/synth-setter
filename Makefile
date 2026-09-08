@@ -201,6 +201,14 @@ install-six-sines: install-studiorack ## Install pinned Six Sines through Studio
 install-ultramaster-kr106: SHELL := /bin/bash
 install-ultramaster-kr106: install-studiorack ## Build and install pinned Ultramaster KR-106
 	@set -e; \
+	retry_external_io() { \
+		local attempt; \
+		for attempt in 1 2 3; do \
+			if "$$@"; then return 0; fi; \
+			if (( attempt == 3 )); then return 1; fi; \
+			sleep "$$attempt"; \
+		done; \
+	}; \
 	os="$$(uname -s)"; arch="$$(uname -m)"; \
 	if [[ "$$os" == "Darwin" ]]; then \
 		$(STUDIORACK) install --plugin kayrockscreenprinting/ultramaster-kr106; \
@@ -221,14 +229,14 @@ install-ultramaster-kr106: install-studiorack ## Build and install pinned Ultram
 		git -C "$$src" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
 	fi; \
 	git -C "$$src" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
-	git -C "$$src" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
+	retry_external_io git -C "$$src" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
 	git -C "$$src" checkout --detach FETCH_HEAD; \
 	git -C "$$src" reset --hard FETCH_HEAD; \
 	git -C "$$src" clean -ffd; \
-	git -C "$$src" submodule update --init --recursive --depth 1 --force; \
+	retry_external_io git -C "$$src" submodule update --init --recursive --depth 1 --force; \
 	git -C "$$src" submodule foreach --recursive 'git reset --hard && git clean -ffd'; \
 	cmake -S "$$src" -B "$$build" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
-	MAKEFLAGS= cmake --build "$$build" --config Release --target KR106_VST3 --parallel "$$(nproc)"; \
+	MAKEFLAGS= cmake --build "$$build" --config Release --target KR106_VST3 --parallel; \
 	bundle="$$build/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3"; \
 	if [[ ! -d "$$bundle" ]]; then \
 		echo "ERROR: $$bundle not found after build." >&2; \

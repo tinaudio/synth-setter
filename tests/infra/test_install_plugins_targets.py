@@ -74,6 +74,10 @@ if [[ "$1 ${2:-}" == "rev-parse --git-dir" ]]; then
   [[ -d "$workdir/.git" ]]
   exit
 fi
+if [[ "$1" == "fetch" && ! -e "$HOME/first-fetch-failed" ]]; then
+  touch "$HOME/first-fetch-failed"
+  exit 75
+fi
 if [[ "$1" == "init" ]]; then
   mkdir -p "$workdir/.git"
 fi
@@ -90,6 +94,7 @@ fi
 """,
     )
     _write_executable(fake_bin / "npm", "#!/bin/bash\nset -eu\n")
+    _write_executable(fake_bin / "sleep", "#!/bin/bash\nset -eu\n")
     _write_executable(
         fake_bin / "uname",
         """#!/bin/bash
