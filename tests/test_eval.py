@@ -1422,6 +1422,7 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
     with open_dict(cfg):
         cfg.datamodule.download_dataset_root_uri = source.as_uri()
         cfg.datamodule.download_dataset_row_limit = 2
+        cfg.datamodule.high_memory_materialization = False
 
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = evaluate(cfg)

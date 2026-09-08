@@ -9,6 +9,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+import psutil
 import torch
 from lightning import LightningModule
 from lightning.pytorch.loggers import Logger, WandbLogger
@@ -24,6 +25,7 @@ log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 # Cap the readable cache-key slug so "<slug>-<sha256[:12]>" stays within the
 # common 255-byte filename limit; the hash suffix preserves uniqueness.
 _MAX_SLUG_LEN = 200
+_BYTES_PER_GIB = 1024**3
 
 
 def register_resolvers() -> None:
@@ -36,8 +38,21 @@ def register_resolvers() -> None:
         OmegaConf.register_new_resolver("mel_n_frames", mel_n_frames_from_samples)
     if not OmegaConf.has_resolver("param_spec_width"):
         OmegaConf.register_new_resolver("param_spec_width", resolve_param_spec_width)
+    if not OmegaConf.has_resolver("available_memory_exceeds_gib"):
+        OmegaConf.register_new_resolver(
+            "available_memory_exceeds_gib", _available_memory_exceeds_gib
+        )
     if not OmegaConf.has_resolver("wandb"):
         OmegaConf.register_new_resolver("wandb", _resolve_wandb_checkpoint)
+
+
+def _available_memory_exceeds_gib(threshold_gib: float) -> bool:
+    """Return whether currently available system memory exceeds a GiB threshold.
+
+    :param threshold_gib: Exclusive available-memory threshold in GiB.
+    :returns: Whether available memory is strictly greater than the threshold.
+    """
+    return psutil.virtual_memory().available > threshold_gib * _BYTES_PER_GIB
 
 
 def _resolve_wandb_checkpoint(ref: str) -> str:
