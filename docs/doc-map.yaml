@@ -70,8 +70,9 @@ docs:
       - pattern: "src/synth_setter/configs/conditioning/pupujepa_*.yaml"
         covers: "PupuJEPA conditioning profiles"
       - pattern: "src/synth_setter/configs/model/encoder/pupujepa_online.yaml"
-      - pattern: "src/synth_setter/configs/model/encoder/pupujepa_scratch.yaml"
         covers: "Online head sizing (max_seq_len) and backbone wiring"
+      - pattern: "src/synth_setter/configs/model/encoder/pupujepa_scratch.yaml"
+        covers: "From-scratch trainable backbone and head wiring"
       - pattern: "pyproject.toml"
         covers: "Exact timm runtime pin"
 
