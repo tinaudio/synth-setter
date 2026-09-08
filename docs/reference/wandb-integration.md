@@ -230,6 +230,13 @@ runs accept `WANDB_PROJECT`. Training and standalone evaluation retain the
 `synth-setter` default. Reusable dataset workflows and generation sweeps use
 the dataset project too; CI callers explicitly select `synth-setter-citest`.
 
+To resume a legacy generation run or finalize its dataset, set
+`WANDB_PROJECT=synth-setter` (or the original custom project). Run IDs are
+project-scoped; inline oracle evaluation requires the original run to exist.
+Cross-project dataset artifact lineage in training/evaluation is not yet
+resolved automatically; data loading is unaffected, but W&B can report a missing
+input artifact edge ([#3205](https://github.com/tinaudio/synth-setter/issues/3205)).
+
 ### 5a. Hyperparameters and artifact (logged once at run start)
 
 | Key / artifact           | Source                                                                                                       |
