@@ -5,6 +5,7 @@ Interpreter-only (like ``param_spec_name``) so the launcher-pure
 without pulling ``synth_setter.data.vst`` at import time.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +30,45 @@ PYFDN_CANONICAL_SOURCE_SHA256 = "5a215ebf9c4f8300774bee0f1e8e6ce5dd4052cb8c422ae
 PYFDN_SOURCE_CHANNELS = 1
 PYFDN_SOURCE_SAMPLE_RATE_HZ = 44_100
 PYFDN_SOURCE_TOTAL_FRAMES = 176_400
+
+
+@dataclass(frozen=True)
+class FlushBlocks:
+    """Silent host blocks processed after preset load, parameter writes, and the note render.
+
+    A block is the host's audio callback (2048 samples for both Pedalboard and DawDreamer). Zero
+    skips that step entirely, including any host reset.
+
+    .. attribute :: post_load
+
+       Blocks after the preset loads, before parameter writes.
+
+    .. attribute :: post_param
+
+       Blocks after parameter writes, before the note is scheduled.
+
+    .. attribute :: post_render
+
+       Blocks after the note render, scrubbing voice state.
+    """
+
+    post_load: int
+    post_param: int
+    post_render: int
+
+
+# 32 s of silence at 44.1 kHz rounded up to whole 2048-sample callbacks (#489 preset determinism).
+PEDALBOARD_FLUSH_BLOCKS = FlushBlocks(post_load=690, post_param=690, post_render=690)
+# Compatibility window measured against Surge identity and Cardinal audio-thread restoration.
+DAWDREAMER_PRESET_SETTLE_BLOCKS = 8
+DAWDREAMER_FLUSH_BLOCKS = FlushBlocks(
+    post_load=DAWDREAMER_PRESET_SETTLE_BLOCKS, post_param=0, post_render=0
+)
+NO_FLUSH_BLOCKS = FlushBlocks(post_load=0, post_param=0, post_render=0)
+FLUSH_BLOCK_DEFAULTS: dict[str, FlushBlocks] = {
+    "pedalboard": PEDALBOARD_FLUSH_BLOCKS,
+    "dawdreamer": DAWDREAMER_FLUSH_BLOCKS,
+}
 
 IN_PROCESS_PLUGIN_NAMES = frozenset(
     {TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, PYFDN_PLUGIN_NAME, SURGEPY_PLUGIN_NAME}

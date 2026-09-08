@@ -20,6 +20,7 @@ from synth_setter.pipeline.schemas.spec import (
     RenderConfig,
     ShardSpec,
 )
+from synth_setter.renderer_backend import FlushBlocks
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 
@@ -1440,3 +1441,44 @@ class TestFromHydraCfg:
 
         with pytest.raises(TypeError):
             DatasetSpec.from_hydra_cfg(cfg)  # type: ignore[arg-type]
+
+
+class TestFlushBlocks:
+    """Per-step host flush-block counts resolve per backend and reject unsupported backends."""
+
+    def test_flush_blocks_default_pedalboard_matches_historical_flushes(self) -> None:
+        """Pedalboard keeps its three 32 s flushes (690 blocks of 2048 at 44.1 kHz)."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.flush_blocks == FlushBlocks(post_load=690, post_param=690, post_render=690)
+
+    def test_flush_blocks_default_dawdreamer_settles_only_after_preset_load(self) -> None:
+        """DawDreamer keeps its eight-callback preset settle and no later flushes."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "renderer_backend": "dawdreamer",
+                "gui_toggle_cadence": "never",
+            }
+        )
+        assert cfg.flush_blocks == FlushBlocks(post_load=8, post_param=0, post_render=0)
+
+    def test_flush_blocks_explicit_values_override_backend_defaults(self) -> None:
+        """Each explicit field replaces only its own backend default."""
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "post_param_flush_blocks": 0})
+        assert cfg.flush_blocks == FlushBlocks(post_load=690, post_param=0, post_render=690)
+
+    def test_flush_blocks_negative_rejected(self) -> None:
+        """A negative block count fails validation."""
+        with pytest.raises(ValidationError):
+            RenderConfig(**{**_valid_render_kwargs(), "post_load_flush_blocks": -1})
+
+    def test_flush_blocks_rejected_for_backend_without_host_flushes(self) -> None:
+        """Backends that never flush reject an explicit count instead of ignoring it."""
+        with pytest.raises(ValidationError, match="flush_blocks"):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs("torchsynth"),
+                    "renderer_backend": "torchsynth",
+                    "post_render_flush_blocks": 1,
+                }
+            )

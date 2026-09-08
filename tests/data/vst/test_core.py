@@ -20,6 +20,7 @@ from synth_setter.data.vst.core import (
     render_params,
     warmup_plugin,
 )
+from synth_setter.renderer_backend import FlushBlocks
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 
 if TYPE_CHECKING:
@@ -500,3 +501,72 @@ class TestRenderParamsPreloadedPlugin:
         )
 
         assert warmup_calls == [cached]
+
+
+class _FlushRecordingPlugin(FakeVST3Plugin):
+    """Fake plugin recording every empty-MIDI flush duration and each reset."""
+
+    def __init__(self) -> None:
+        super().__init__("plugins/Surge XT.vst3")
+        self.flush_durations: list[float] = []
+        self.reset_count = 0
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+    def process(self, midi_events, duration_seconds, sample_rate, channels, block_size, tail):  # type: ignore[override]  # noqa: PLR0913
+        if not list(midi_events):
+            self.flush_durations.append(duration_seconds)
+        return super().process(midi_events, duration_seconds, sample_rate, channels, block_size, tail)
+
+
+class TestRenderParamsFlushBlocks:
+    """``render_params`` runs one host flush per configured non-zero block count."""
+
+    @staticmethod
+    def _render(plugin: _FlushRecordingPlugin, **kwargs: object) -> np.ndarray:
+        return render_params(
+            "plugins/Surge XT.vst3",
+            params={},
+            midi_note=60,
+            velocity=100,
+            note_start_and_end=(0.0, 1.0),
+            signal_duration_seconds=1.0,
+            sample_rate=44100,
+            channels=2,
+            plugin=cast("VST3Plugin", plugin),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def test_default_flush_blocks_run_three_32_second_flushes(self) -> None:
+        """The default flushes match the historical post-load, post-param, post-render 32 s calls."""
+        plugin = _FlushRecordingPlugin()
+
+        self._render(plugin)
+
+        assert plugin.flush_durations == [pytest.approx(690 * 2048 / 44100)] * 3
+        assert plugin.reset_count == 3
+
+    def test_zero_flush_blocks_skip_flush_and_reset(self) -> None:
+        """A zero count skips that step's flush and its reset entirely."""
+        plugin = _FlushRecordingPlugin()
+
+        output = self._render(
+            plugin, flush_blocks=FlushBlocks(post_load=0, post_param=0, post_render=0)
+        )
+
+        assert plugin.flush_durations == []
+        assert plugin.reset_count == 0
+        assert np.any(output)
+
+    def test_flush_blocks_scale_each_step_by_host_block_size(self) -> None:
+        """Each step flushes ``blocks * 2048`` samples at the render sample rate."""
+        plugin = _FlushRecordingPlugin()
+
+        self._render(plugin, flush_blocks=FlushBlocks(post_load=2, post_param=0, post_render=5))
+
+        assert plugin.flush_durations == [
+            pytest.approx(2 * 2048 / 44100),
+            pytest.approx(5 * 2048 / 44100),
+        ]
+        assert plugin.reset_count == 2
