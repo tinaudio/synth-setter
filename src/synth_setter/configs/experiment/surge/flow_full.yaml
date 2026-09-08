@@ -10,6 +10,3 @@ defaults:
 
 run_name: flow
 experiment_name: surge-full-onehot
-
-tags:
-  - surge

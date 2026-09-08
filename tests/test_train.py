@@ -1464,6 +1464,41 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
         object_dict["datamodule"].test_dataloader()
 
 
+def test_train_experiment_labels_offline_run_preserves_display_metadata(
+    cfg_train_lance: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real training step logs the selected experiment's name and tags.
+
+    :param cfg_train_lance: Tiny real Lance training workload.
+    :param monkeypatch: Forces offline W&B for the training run.
+    """
+    import wandb
+    from hydra import compose, initialize_config_module
+
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    wandb.teardown()
+    with initialize_config_module(config_module="synth_setter.configs", version_base="1.3"):
+        experiment = compose(
+            config_name="train", overrides=["experiment=surge/ffn_simple", "logger=wandb"]
+        )
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.logger = experiment.logger
+        cfg_train_lance.logger.wandb.offline = True
+        cfg_train_lance.experiment_name = experiment.experiment_name
+        cfg_train_lance.run_name = experiment.run_name
+        cfg_train_lance.tags = experiment.tags
+    HydraConfig().set_config(cfg_train_lance)
+    try:
+        _, objects = train(cfg_train_lance)
+        run = objects["logger"][0].experiment
+        assert objects["trainer"].global_step == 1
+        assert run.name == "surge-simple-onehot_ffn"
+        assert {"surge", "surge-simple-onehot", "ffn"} <= set(run.tags)
+    finally:
+        wandb.finish()
+        wandb.teardown()
+
+
 def test_train_wandb_config_resolves_scheduler_max_steps(
     cfg_train_lance: DictConfig,
 ) -> None:

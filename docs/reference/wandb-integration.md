@@ -32,6 +32,16 @@ ______________________________________________________________________
 | Console capture   | `wandb.Settings(console="wrap", console_multipart=True)` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (#1465); `wrap` reaches the server but sees only this process's Python-level writes. Subprocess tee + multipart semantics: see the note below this table | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings`   |
 | Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                                                                                                                                  | `src/synth_setter/utils/utils.py` § `task_wrapper`                |
 
+**Display names and tags.** The shared logger uses `<experiment_name>-<run_name>`
+(e.g. `pyfdn-flow-ast-online` or `torchsynth-flow_audio_same`), falling back to
+`task_name` and `default` when those fields are absent. Surge retains its
+`<experiment_name>_<run_name>` convention. Dataset generation uses
+`generate-dataset-<task_name>`. Top-level `tags` are forwarded to W&B; Surge tags
+include its dataset family and variant, and dataset-generation tags identify the
+task. Override these with `logger.wandb.name=custom-name` and
+`tags=[custom-tag]` (or `logger.wandb.tags=[custom-tag]`). Display metadata does
+not change canonical run IDs, checkpoint paths, or artifact names.
+
 **Subprocess console capture.** `generate_dataset` tees the children it spawns — the renderer, the per-shard rclone upload, and the inline oracle eval — through `sys.stderr` via `check_call_streamed` (`src/synth_setter/pipeline/subprocess_stream.py`, exit-keyed so a pipe-holding descendant can't stall it). Other rclone call sites (spec upload, `finalize_from_spec`'s `r2_io` transfers) still write to the inherited fd and bypass capture. `console_multipart=True` gives each resumed session (generate → finalize → oracle eval) its own `logs/output_*.log` instead of overwriting one `output.log`.
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
