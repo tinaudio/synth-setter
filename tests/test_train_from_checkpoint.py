@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -22,6 +23,8 @@ def _continuation_cfg(source: DictConfig, output_dir: Path, max_epochs: int) -> 
         cfg.paths.output_dir = str(output_dir)
         cfg.paths.log_dir = str(output_dir)
         cfg.trainer.max_epochs = max_epochs
+        cfg.trainer.limit_train_batches = 0
+        cfg.trainer.limit_val_batches = 0
         cfg.test = False
     return cast(DictConfig, cfg)
 
@@ -101,22 +104,41 @@ def test_train_from_checkpoint_modes_resume_or_start_new_optimizer_state(
     _, initial_objects = train(cfg_slap_train_lance)
     checkpoint = Path(cfg_slap_train_lance.paths.output_dir) / "checkpoints" / "last.ckpt"
     assert initial_objects["trainer"].global_step == 1
+    source_checkpoint = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    source_checkpoint["state_dict"]["audio_encoder.projector.0.weight"].fill_(0.125)
+    source_checkpoint["state_dict"]["audio_ema.projector.0.weight"].fill_(0.75)
+    torch.save(source_checkpoint, checkpoint)
 
     full_cfg = _continuation_cfg(cfg_slap_train_lance, tmp_path / "full", max_epochs=2)
     _, full_objects = train_from_checkpoint(full_cfg, checkpoint, mode="full-resume")
 
     weights_cfg = _continuation_cfg(cfg_slap_train_lance, tmp_path / "weights", max_epochs=1)
-    _, weights_objects = train_from_checkpoint(weights_cfg, checkpoint, mode="weights-only")
+    with patch(
+        "synth_setter.models.checkpoint_bundle.torch.load",
+        wraps=torch.load,
+    ) as checkpoint_load:
+        _, weights_objects = train_from_checkpoint(weights_cfg, checkpoint, mode="weights-only")
+
+    assert checkpoint_load.call_count == 1
 
     full_trainer = cast(Trainer, full_objects["trainer"])
     weights_trainer = cast(Trainer, weights_objects["trainer"])
+    full_model = cast(torch.nn.Module, full_objects["model"])
+    weights_model = cast(torch.nn.Module, weights_objects["model"])
+    full_state = full_model.state_dict()
+    weights_state = weights_model.state_dict()
     full_optimizer_state = next(iter(full_trainer.optimizers[0].state.values()))
-    weights_optimizer_state = next(iter(weights_trainer.optimizers[0].state.values()))
 
-    assert full_trainer.global_step == 2
-    assert weights_trainer.global_step == 1
-    assert int(full_optimizer_state["step"].item()) == 2
-    assert int(weights_optimizer_state["step"].item()) == 1
+    assert full_trainer.global_step == 1
+    assert weights_trainer.global_step == 0
+    assert int(full_optimizer_state["step"].item()) == 1
+    assert not weights_trainer.optimizers[0].state
+    for state_key in (
+        "audio_encoder.projector.0.weight",
+        "audio_ema.projector.0.weight",
+    ):
+        assert torch.equal(full_state[state_key], source_checkpoint["state_dict"][state_key])
+        assert torch.equal(weights_state[state_key], source_checkpoint["state_dict"][state_key])
 
 
 @pytest.mark.slow
@@ -131,9 +153,15 @@ def test_train_from_checkpoint_cli_real_slap_checkpoint_starts_weights_only_run(
     """
     with open_dict(cfg_slap_train_lance):
         cfg_slap_train_lance.test = False
+        cfg_slap_train_lance.model.optimizer.lr = 0.0
+        cfg_slap_train_lance.model.ma_callback.every_n_steps = 999
     HydraConfig().set_config(cfg_slap_train_lance)
     train(cfg_slap_train_lance)
     checkpoint = Path(cfg_slap_train_lance.paths.output_dir) / "checkpoints" / "last.ckpt"
+    source_checkpoint = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    source_checkpoint["state_dict"]["audio_encoder.projector.0.weight"].fill_(0.25)
+    source_checkpoint["state_dict"]["audio_ema.projector.0.weight"].fill_(0.625)
+    torch.save(source_checkpoint, checkpoint)
     output_dir = tmp_path / "cli-run"
     command = [
         str(Path(sys.executable).with_name("synth-setter-train-from-checkpoint")),
@@ -153,6 +181,8 @@ def test_train_from_checkpoint_cli_real_slap_checkpoint_starts_weights_only_run(
         "datamodule.num_workers=0",
         "++datamodule.pin_memory=false",
         "model.audio_encoder.encoder._args_.0.n_layers=1",
+        "model.optimizer.lr=0.0",
+        "model.ma_callback.every_n_steps=999",
         "model.compile=false",
         "callbacks.model_checkpoint.every_n_epochs=1",
         "callbacks.model_checkpoint.every_n_train_steps=null",
@@ -183,3 +213,11 @@ def test_train_from_checkpoint_cli_real_slap_checkpoint_starts_weights_only_run(
         weights_only=False,
     )
     assert cli_checkpoint["global_step"] == 1
+    for state_key in (
+        "audio_encoder.projector.0.weight",
+        "audio_ema.projector.0.weight",
+    ):
+        assert torch.equal(
+            cli_checkpoint["state_dict"][state_key],
+            source_checkpoint["state_dict"][state_key],
+        )

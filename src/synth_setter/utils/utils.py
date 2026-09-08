@@ -231,10 +231,13 @@ def task_wrapper(task_func: Callable) -> Callable:
     :return: The wrapped task function.
     """
 
-    def wrap(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
+    def wrap(
+        cfg: DictConfig,
+        **task_kwargs: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         # execute the task
         try:
-            metric_dict, object_dict = task_func(cfg=cfg)
+            metric_dict, object_dict = task_func(cfg=cfg, **task_kwargs)
 
         # things to do if exception occurs
         except Exception as ex:

@@ -1,5 +1,6 @@
 """Behavioral tests for self-describing model checkpoints."""
 
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,10 @@ from lightning.pytorch.demos.boring_classes import BoringModel
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.train import train
-from synth_setter.models.checkpoint_bundle import load_model_checkpoint
+from synth_setter.models.checkpoint_bundle import (
+    canonical_model_config,
+    load_model_checkpoint,
+)
 from synth_setter.models.slap_module import SLAPModule
 
 
@@ -46,6 +50,57 @@ def test_load_model_checkpoint_missing_state_tensor_fails_strictly(tmp_path: Pat
 
     with pytest.raises(RuntimeError, match="Missing key"):
         load_model_checkpoint(checkpoint_path)
+
+
+def test_load_model_checkpoint_uses_state_replaced_by_load_hook(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Load the post-migration state mapping supplied by a Lightning hook.
+
+    :param tmp_path: Temporary checkpoint destination.
+    :param monkeypatch: Replaces the demo model checkpoint migration hook.
+    """
+    checkpoint_path = tmp_path / "migrated.ckpt"
+    source_model = BoringModel()
+    source_state = source_model.state_dict()
+    migrated_state = {name: torch.full_like(value, 7) for name, value in source_state.items()}
+
+    def _replace_state(
+        _model: BoringModel,
+        checkpoint: dict[str, object],
+    ) -> None:
+        checkpoint["state_dict"] = migrated_state
+
+    monkeypatch.setattr(BoringModel, "on_load_checkpoint", _replace_state)
+    torch.save(
+        {
+            "state_dict": source_state,
+            "synth_setter_model_bundle": {
+                "schema_version": 1,
+                "model": {"_target_": "lightning.pytorch.demos.boring_classes.BoringModel"},
+            },
+        },
+        checkpoint_path,
+    )
+
+    loaded = load_model_checkpoint(checkpoint_path)
+
+    assert all(
+        torch.equal(value, migrated_state[name]) for name, value in loaded.state_dict().items()
+    )
+
+
+def test_canonical_model_config_rejects_enum_values() -> None:
+    """Reject enum values that would change type across the checkpoint boundary."""
+
+    class Choice(Enum):
+        FIRST = "first"
+
+    model_config = OmegaConf.create({"_target_": "package.Model", "choice": Choice.FIRST})
+
+    with pytest.raises(TypeError, match="enum values are unsupported"):
+        canonical_model_config(model_config)
 
 
 def test_load_model_checkpoint_unknown_schema_version_fails(tmp_path: Path) -> None:

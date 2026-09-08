@@ -21,6 +21,7 @@ from synth_setter.cli.train import train
 from synth_setter.models.checkpoint_bundle import (
     assert_model_config_compatible,
     load_model_config,
+    load_trusted_model_checkpoint,
 )
 from synth_setter.utils import extras, get_metric_value
 
@@ -67,7 +68,8 @@ def train_from_checkpoint(
     if OmegaConf.select(cfg, "training.resume") not in _DISABLED_RESUME_VALUES:
         raise ValueError("checkpoint_path argument and training.resume are mutually exclusive")
 
-    bundled_model = load_model_config(checkpoint_path)
+    loaded_checkpoint = load_trusted_model_checkpoint(checkpoint_path)
+    bundled_model = load_model_config(loaded_checkpoint)
     assert_model_config_compatible(cfg.model, bundled_model)
     with open_dict(cfg):
         cfg.model = bundled_model
@@ -75,7 +77,13 @@ def train_from_checkpoint(
             cfg.ckpt_path = str(checkpoint_path)
         else:
             cfg.training.weights_only_checkpoint = str(checkpoint_path)
-    return cast(TrainingResult, train(cfg))
+    return cast(
+        TrainingResult,
+        train(
+            cfg,
+            loaded_model_checkpoint=(loaded_checkpoint if mode == "weights-only" else None),
+        ),
+    )
 
 
 @hydra.main(

@@ -141,6 +141,38 @@ def _record_successful_r2_uploads(
     return uploads
 
 
+@pytest.mark.parametrize(
+    ("weights_checkpoint", "ckpt_path", "resume", "error"),
+    [
+        (" ", None, None, "non-blank local path"),
+        ("weights.ckpt", "resume.ckpt", None, "ckpt_path are mutually exclusive"),
+        ("weights.ckpt", None, "auto", "training.resume are mutually exclusive"),
+    ],
+)
+def test_train_weights_only_checkpoint_invalid_selection_fails_before_instantiation(
+    cfg_train: DictConfig,
+    weights_checkpoint: str,
+    ckpt_path: str | None,
+    resume: str | None,
+    error: str,
+) -> None:
+    """Reject ambiguous main-entrypoint checkpoint selections before construction.
+
+    :param cfg_train: Complete training config that must fail before construction.
+    :param weights_checkpoint: Weights-only path under test.
+    :param ckpt_path: Optional full-resume path under test.
+    :param resume: Optional automatic resume mode under test.
+    :param error: Expected validation error fragment.
+    """
+    with open_dict(cfg_train):
+        cfg_train.training.weights_only_checkpoint = weights_checkpoint
+        cfg_train.training.resume = resume
+        cfg_train.ckpt_path = ckpt_path
+
+    with pytest.raises(ValueError, match=error):
+        train(cfg_train)
+
+
 def test_train_eval_only_experiment_raises_before_instantiation() -> None:
     """The training entrypoint rejects prediction-only experiment presets."""
     GlobalHydra.instance().clear()

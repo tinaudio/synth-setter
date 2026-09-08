@@ -19,6 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import run_audio_probe
 from synth_setter.models.checkpoint_bundle import (
+    LoadedModelCheckpoint,
     ModelCheckpointBundleCallback,
     load_model_checkpoint,
 )
@@ -492,13 +493,18 @@ def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
 
 
 @task_wrapper
-def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
+def train(
+    cfg: DictConfig,
+    *,
+    loaded_model_checkpoint: LoadedModelCheckpoint | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Train the model and optionally evaluate on a testset using best-checkpoint weights.
 
     Wrapped in the optional ``@task_wrapper`` decorator, which controls behaviour on
     failure — useful for multiruns, saving info about crashes, etc.
 
     :param cfg: A DictConfig configuration composed by Hydra.
+    :param loaded_model_checkpoint: Optional already-deserialized weights-only checkpoint.
     :return: A tuple with metrics and dict with all instantiated objects.
     :raises SystemExit: With status 143 after Lightning handles SIGTERM during fit.
     :raises ValueError: If an evaluation-only experiment reaches the training entrypoint.
@@ -512,6 +518,11 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     # Before any instantiation work: checkpoint intent errors must fail the launch fast.
     weights_only_checkpoint = _weights_only_checkpoint(cfg)
+    if loaded_model_checkpoint is not None and (
+        weights_only_checkpoint is None
+        or loaded_model_checkpoint.checkpoint_path != weights_only_checkpoint
+    ):
+        raise ValueError("loaded model checkpoint must match training.weights_only_checkpoint")
     config_id = resolve_run_config_id(cfg)
     recovered_run_id = _apply_auto_resume(cfg, config_id)
     run_id = recovered_run_id or make_wandb_run_id(config_id)
@@ -526,7 +537,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         model = hydra.utils.instantiate(cfg.model)
     else:
         model = load_model_checkpoint(
-            weights_only_checkpoint,
+            loaded_model_checkpoint or weights_only_checkpoint,
             expected_model_config=cfg.model,
         )
     log.info("Instantiating callbacks...")
