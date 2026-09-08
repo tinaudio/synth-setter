@@ -23,12 +23,18 @@ We compute the following metrics:
     (i.e. normalized dot prod).
 6. pyFDN only: octave-band RT60 natural-log RMSE.
 7. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+8. pyFDN only (Götz et al., arXiv:2510.23158): octave-band T30 mean absolute
+    percentage error and C50 mean absolute error in dB per sample, plus per-band
+    Pearson correlation of both parameters across the dataset.
+9. ``--fad``: Fréchet Audio Distance between the target and predicted sets on
+    CLAP embeddings (dataset-level, one row in the aggregate).
 """
 
 import math
 import multiprocessing
 import os
 import shutil
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
@@ -45,10 +51,37 @@ from loguru import logger
 from pedalboard.io import AudioFile
 from pyFDN import MatchEnergyDecay, Response, estimate_rt_bands
 
+from synth_setter.evaluation import acoustic_parameters
+
 # Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
 # the write sites below still spell them literally.
 AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 type ReverbMetricBackend = Literal["pyfdn"]
+type AudioEncodeFn = Callable[[np.ndarray, int], np.ndarray]
+
+# Per-sample columns holding raw octave-band parameters; they feed the dataset-level
+# Pearson rows instead of the mean/std aggregate.
+_ACOUSTIC_PARAMETER_PREFIX = "acoustic_param/"
+_ACOUSTIC_PARAMETER_NAMES: tuple[str, ...] = ("t30", "c50")
+
+
+def _acoustic_parameter_column(name: str, centre_hz: int, side: str) -> str:
+    """Return the per-sample column holding one side's octave-band parameter.
+
+    :param name: Parameter name, ``"t30"`` or ``"c50"``.
+    :param centre_hz: Octave-band centre frequency in Hz.
+    :param side: ``"target"`` or ``"pred"``.
+    :returns: Column name under :data:`_ACOUSTIC_PARAMETER_PREFIX`.
+    """
+    return f"{_ACOUSTIC_PARAMETER_PREFIX}{name}/{centre_hz}hz/{side}"
+
+
+ACOUSTIC_PARAMETER_COLUMNS: tuple[str, ...] = tuple(
+    _acoustic_parameter_column(name, centre, side)
+    for name in _ACOUSTIC_PARAMETER_NAMES
+    for centre in acoustic_parameters.BAND_CENTRES_HZ
+    for side in ("target", "pred")
+)
 
 
 def subdir_matches_pattern(sample_dir: Path) -> bool:
@@ -400,6 +433,84 @@ def compute_octave_edc_rmse_db(
     return value
 
 
+def compute_acoustic_parameter_metrics(
+    target: np.ndarray, pred: np.ndarray, sample_rate: float
+) -> dict[str, float]:
+    """Return Götz et al. T30/C50 errors plus the raw per-band parameters of both sides.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: ``t30_mape``, ``c50_mae_db`` and one ``acoustic_param/...`` entry per
+        parameter, octave band and side; unfittable T30 bands read ``NaN``. Invalid
+        shapes and a T30 that fits on no band on both sides raise ``ValueError``.
+    """
+    target_ir, pred_ir = _paired_mono_impulse_responses(target, pred)
+    target_t30, _ = acoustic_parameters.octave_band_t30(target_ir, sample_rate)
+    pred_t30, _ = acoustic_parameters.octave_band_t30(pred_ir, sample_rate)
+    target_c50, _ = acoustic_parameters.octave_band_c50(target_ir, sample_rate)
+    pred_c50, _ = acoustic_parameters.octave_band_c50(pred_ir, sample_rate)
+    metrics = {
+        "t30_mape": acoustic_parameters.t30_mape(target_t30, pred_t30),
+        "c50_mae_db": acoustic_parameters.c50_mae_db(target_c50, pred_c50),
+    }
+    per_band = {"t30": (target_t30, pred_t30), "c50": (target_c50, pred_c50)}
+    for name, (target_values, pred_values) in per_band.items():
+        bands = zip(acoustic_parameters.BAND_CENTRES_HZ, target_values, pred_values, strict=True)
+        for centre, target_value, pred_value in bands:
+            metrics[_acoustic_parameter_column(name, centre, "target")] = float(target_value)
+            metrics[_acoustic_parameter_column(name, centre, "pred")] = float(pred_value)
+    return metrics
+
+
+def compute_acoustic_parameter_pcc(per_sample: pd.DataFrame) -> dict[str, float]:
+    """Return per-band Pearson correlation between target and predicted parameters.
+
+    :param per_sample: Per-sample metrics frame carrying ``acoustic_param/`` columns.
+    :returns: ``{"<param>_pcc_<centre>hz": r}`` for every band present in the frame.
+    """
+    pcc: dict[str, float] = {}
+    for name in _ACOUSTIC_PARAMETER_NAMES:
+        for centre in acoustic_parameters.BAND_CENTRES_HZ:
+            target_column = _acoustic_parameter_column(name, centre, "target")
+            if target_column not in per_sample.columns:
+                continue
+            pred_column = _acoustic_parameter_column(name, centre, "pred")
+            pcc[f"{name}_pcc_{centre}hz"] = acoustic_parameters.pearson_correlation(
+                per_sample[target_column].to_numpy(dtype=float),
+                per_sample[pred_column].to_numpy(dtype=float),
+            )
+    return pcc
+
+
+def _load_fad_encoder() -> AudioEncodeFn:
+    """Load the repo's CLAP audio encoder for Fréchet Audio Distance.
+
+    :returns: Encoder mapping ``(B, T)`` mono audio at a sample rate to ``(B, D)``.
+    """
+    from synth_setter.pipeline.data.add_embeddings import load_clap_audio_encoder
+
+    return load_clap_audio_encoder()
+
+
+def compute_fad(audio_dirs: list[Path], encode: AudioEncodeFn) -> float:
+    """Return the Fréchet Audio Distance between the target and predicted sets.
+
+    :param audio_dirs: Sample dirs each containing ``target.wav`` and ``pred.wav``.
+    :param encode: Audio encoder mapping ``(B, T)`` mono audio to ``(B, D)`` embeddings.
+    :returns: Fréchet distance between Gaussian fits of the two embedding sets.
+    """
+    embeddings: dict[str, list[np.ndarray]] = {"target": [], "pred": []}
+    for sample_dir in audio_dirs:
+        for side, rows in embeddings.items():
+            with AudioFile(str(sample_dir / f"{side}.wav")) as audio_file:
+                mono = audio_file.read(audio_file.frames).mean(axis=0, keepdims=True)
+                rows.append(encode(mono, int(audio_file.samplerate)))
+    return acoustic_parameters.frechet_distance(
+        np.concatenate(embeddings["target"]), np.concatenate(embeddings["pred"])
+    )
+
+
 def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
     """Return the cosine similarity of the RMS amplitude envelopes of ``target`` and ``pred``.
 
@@ -473,6 +584,7 @@ def compute_metrics_on_dir(
                 "octave_edc_rmse_db": compute_octave_edc_rmse_db(target, pred, target_sample_rate),
             }
         )
+        metrics.update(compute_acoustic_parameter_metrics(target, pred, target_sample_rate))
     return metrics
 
 
@@ -623,22 +735,26 @@ def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
 @click.argument("output_dir", type=str, default="metrics")
 @click.option("--num_workers", "-w", type=click.IntRange(min=1), default=8)
 @click.option("--renderer-backend", type=click.Choice(["pyfdn"]), default=None)
+@click.option("--fad", is_flag=True, help="Add CLAP Fréchet Audio Distance (loads CLAP).")
 def main(
     audio_dir: str,
     output_dir: str,
     num_workers: int,
     renderer_backend: ReverbMetricBackend | None,
+    fad: bool,
 ) -> None:
     """Score rendered audio under ``audio_dir`` and write metrics to ``output_dir``.
 
     Runs the parallel per-sample pass writing ``metrics.csv`` and
-    ``aggregated_metrics.csv``.
+    ``aggregated_metrics.csv``. Dataset-level rows (per-band Pearson correlation,
+    ``fad_clap``) carry the statistic as ``mean`` and ``NaN`` as ``std``.
 
     :param audio_dir: Root containing per-sample subdirectories
         (each must have ``pred.wav`` and ``target.wav``).
     :param output_dir: Destination for CSV outputs.
     :param num_workers: Number of parallel worker processes.
     :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
+    :param fad: Add the CLAP Fréchet Audio Distance between the target and predicted sets.
     :raises ValueError: when no valid sample dirs are found or the input and output
         directories overlap.
     """
@@ -668,8 +784,16 @@ def main(
     df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers, renderer_backend)
     df.to_csv(output_dir_path / "metrics.csv")
 
-    columnwise_means = df.mean(axis=0)
-    columnwise_stds = df.std(axis=0)
+    is_parameter_column = df.columns.str.startswith(_ACOUSTIC_PARAMETER_PREFIX)
+    scalar_metrics = df.loc[:, ~is_parameter_column]
+    columnwise_means = scalar_metrics.mean(axis=0)
+    columnwise_stds = scalar_metrics.std(axis=0)
+    dataset_level = compute_acoustic_parameter_pcc(df.loc[:, is_parameter_column])
+    if fad:
+        dataset_level["fad_clap"] = compute_fad(audio_dirs, _load_fad_encoder())
+    for name, value in dataset_level.items():
+        columnwise_means[name] = value
+        columnwise_stds[name] = float("nan")
     logger.info("metric means:\n{m}", m=columnwise_means.to_string())
     logger.info("metric stds:\n{s}", s=columnwise_stds.to_string())
 
