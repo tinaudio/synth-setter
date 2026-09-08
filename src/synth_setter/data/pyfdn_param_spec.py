@@ -329,6 +329,18 @@ PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC = PyFDNParamSpec(
 )
 
 
+def _band_controls(bands: tuple[EqBand, ...]) -> list[Parameter]:
+    """Expand EQ bands into their learned controls in cascade order.
+
+    :param bands: Bands in cascade order.
+    :returns: Frequency, gain, and Q controls band by band.
+    """
+    controls: list[Parameter] = []
+    for band in bands:
+        controls.extend(band.parameters())
+    return controls
+
+
 def _diffvox_parameters() -> list[Parameter]:
     """Build the DiffVox chain controls in renderer encoding order.
 
@@ -336,7 +348,7 @@ def _diffvox_parameters() -> list[Parameter]:
     """
     unit = {"min": 0.0, "max": 1.0}
     return [
-        *(control for band in PYFDN_DIFFVOX_PEQ_BANDS for control in band.parameters()),
+        *_band_controls(PYFDN_DIFFVOX_PEQ_BANDS),
         ContinuousParameter(name=PYFDN_DIFFVOX_DIRECT_PAN_NAME, **unit),
         ContinuousParameter(
             name=PYFDN_DIFFVOX_DELAY_TIME_NAME,
@@ -375,7 +387,7 @@ def _diffvox_parameters() -> list[Parameter]:
             min=PYFDN_RT_MIN_SECONDS,
             max=PYFDN_GEQ_RT_MAX_SECONDS,
         ),
-        *(control for band in PYFDN_DIFFVOX_TONE_BANDS for control in band.parameters()),
+        *_band_controls(PYFDN_DIFFVOX_TONE_BANDS),
     ]
 
 

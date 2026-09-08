@@ -222,21 +222,31 @@ def test_diffvox_render_steep_reverb_profile_stays_bounded() -> None:
     assert np.abs(output[132_300:]).max() < np.abs(output[44_100:88_200]).max()
 
 
-def test_diffvox_render_send_routes_delay_output_into_reverb() -> None:
-    """The delay-to-reverb send only matters when the delay is audible."""
-    silent_delay = _dry_params()
-    silent_delay[PYFDN_DIFFVOX_REVERB_OUTPUT_NAME] = np.full((2, 6), 0.3, dtype=np.float64)
-    sent = dict(silent_delay)
+def test_diffvox_render_send_feeds_delay_echoes_into_reverb_after_first_echo() -> None:
+    """Raising the send changes the reverb only once the first echo has reached it."""
+    unsent = _dry_params()
+    unsent[PYFDN_DIFFVOX_REVERB_OUTPUT_NAME] = np.full((2, 6), 0.3, dtype=np.float64)
+    unsent[PYFDN_DIFFVOX_DELAY_GAIN_NAME] = 0.5
+    unsent[PYFDN_DIFFVOX_SEND_NAME] = 0.0
+    sent = dict(unsent)
     sent[PYFDN_DIFFVOX_SEND_NAME] = 1.0
-    audible = dict(sent)
-    audible[PYFDN_DIFFVOX_DELAY_GAIN_NAME] = 0.5
+    delay_samples = 11_025
 
-    unsent_render = render_diffvox_chain(silent_delay, _impulse(), sample_rate=_SAMPLE_RATE)
-    sent_render = render_diffvox_chain(sent, _impulse(), sample_rate=_SAMPLE_RATE)
-    audible_render = render_diffvox_chain(audible, _impulse(), sample_rate=_SAMPLE_RATE)
+    difference = render_diffvox_chain(
+        sent, _impulse(), sample_rate=_SAMPLE_RATE
+    ) - render_diffvox_chain(unsent, _impulse(), sample_rate=_SAMPLE_RATE)
 
-    np.testing.assert_array_equal(sent_render, unsent_render)
-    assert not np.array_equal(audible_render, sent_render)
+    np.testing.assert_array_equal(difference[:delay_samples], 0.0)
+    assert np.abs(difference[delay_samples + 997 : delay_samples + 44_100]).max() > 1e-3
+
+
+def test_diffvox_render_rejects_non_finite_source() -> None:
+    """A source containing NaN is refused instead of propagating through the chain."""
+    source = _impulse()
+    source[10] = np.nan
+
+    with pytest.raises(ValueError, match="finite mono waveform"):
+        render_diffvox_chain(_dry_params(), source, sample_rate=_SAMPLE_RATE)
 
 
 def test_diffvox_render_rejects_missing_control() -> None:

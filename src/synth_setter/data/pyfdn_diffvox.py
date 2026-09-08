@@ -355,14 +355,18 @@ def render_diffvox_chain(
     :param source: Mono source waveform shaped ``(frames,)``.
     :param sample_rate: Processing rate in Hz.
     :returns: Float64 stereo output shaped ``(frames, 2)``.
+    :raises ValueError: The source is not a finite one-dimensional waveform.
     """
     _require_sample_rate(sample_rate)
     controls = _validate_params(params)
+    mono = np.asarray(source, dtype=np.float64)
+    if mono.ndim != 1 or not np.isfinite(mono).all():
+        raise ValueError("source must be a finite mono waveform shaped (frames,)")
     equalised = SOSBank(
         _band_sections(
             PYFDN_DIFFVOX_PEQ_BANDS, controls.scalars, sample_rate=sample_rate, channels=1
         )
-    ).process(np.asarray(source, dtype=np.float64))
+    ).process(mono)
     direct = equalised * _pan_column(controls.scalars[PYFDN_DIFFVOX_DIRECT_PAN_NAME])
     delayed = _ping_pong_delay(equalised, controls, sample_rate=sample_rate)
     reverb_in = equalised + controls.scalars[PYFDN_DIFFVOX_SEND_NAME] * delayed
