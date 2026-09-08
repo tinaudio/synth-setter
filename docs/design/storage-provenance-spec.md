@@ -156,7 +156,7 @@ ______________________________________________________________________
 
 ```
 dataset config
-  → [data-generation run] → dataset artifact
+  → [data-generation run] → [finalize run] → dataset artifact
                                ├→ [training run] → model artifact
                                │                      │
 eval dataset artifact ─────────┴→ [evaluation run] ←───┘
@@ -188,11 +188,12 @@ ______________________________________________________________________
 
 ## 7. `job_type` Values
 
-| `job_type`        | Stage         | Script                            |
-| ----------------- | ------------- | --------------------------------- |
-| `data-generation` | Data pipeline | `pipeline.cli finalize` (planned) |
-| `training`        | Training      | `src/synth_setter/cli/train.py`   |
-| `evaluation`      | Evaluation    | `src/synth_setter/cli/eval.py`    |
+| `job_type`        | Stage         | Script                                     |
+| ----------------- | ------------- | ------------------------------------------ |
+| `data-generation` | Data pipeline | `src/synth_setter/cli/generate_dataset.py` |
+| `finalize`        | Data pipeline | `src/synth_setter/cli/finalize_dataset.py` |
+| `training`        | Training      | `src/synth_setter/cli/train.py`            |
+| `evaluation`      | Evaluation    | `src/synth_setter/cli/eval.py`             |
 
 > **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
