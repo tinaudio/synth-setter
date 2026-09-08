@@ -20,6 +20,8 @@ from types import MappingProxyType
 from typing import cast
 
 from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
+    PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
@@ -55,6 +57,10 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
     ParamSpecName("obxf"): OBXF_PARAM_SPEC,
+    ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays"): PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
+    ParamSpecName(
+        "pyfdn_gotz_n8_mono_learned_delays"
+    ): PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC,
     ParamSpecName("pyfdn_n8_mono_householder"): PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     ParamSpecName(
         "pyfdn_pitchshift_n8_mono_householder"

@@ -258,6 +258,16 @@ def test_pyfdn_configs_compose_without_external_source(
             ],
             id="pitchshift",
         ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_fixed_delays"],
+            id="gotz_fixed_delays",
+        ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_learned_delays"],
+            id="gotz_learned_delays",
+        ),
     ],
 )
 def test_pyfdn_flow_composition_enables_per_param_metrics(
