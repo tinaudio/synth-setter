@@ -2817,7 +2817,8 @@ def cfg_slap_train_lance(tmp_path: Path, request: pytest.FixtureRequest) -> Dict
     """Compose a one-step shipped SLAP experiment over local Lance splits.
 
     The configuration exercises fit, validation, checkpoint reload, and test. Indirect
-    parametrization selects the experiment; the default is the canonical SLAP pair.
+    parametrization selects the experiment; the default is the canonical SLAP pair. Both backbones
+    use one layer; random mel/parameter pairs prove wiring, not sound quality.
 
     :param tmp_path: Isolated dataset and training output root.
     :param request: Fixture request optionally carrying an experiment name.
@@ -2856,8 +2857,8 @@ def cfg_slap_train_lance(tmp_path: Path, request: pytest.FixtureRequest) -> Dict
         cfg.trainer.min_steps = None
         cfg.trainer.max_steps = -1
         cfg.trainer.limit_train_batches = 1
-        cfg.trainer.limit_val_batches = 1
-        cfg.trainer.limit_test_batches = 1
+        cfg.trainer.limit_val_batches = 1.0
+        cfg.trainer.limit_test_batches = 1.0
         cfg.trainer.num_sanity_val_steps = 0
         cfg.trainer.val_check_interval = 1
         cfg.trainer.enable_model_summary = False
