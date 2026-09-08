@@ -74,12 +74,14 @@ if [[ "$1 ${2:-}" == "rev-parse --git-dir" ]]; then
   [[ -d "$workdir/.git" ]]
   exit
 fi
-if [[ "$1" == "fetch" && ! -e "$HOME/first-fetch-failed" ]]; then
-  touch "$HOME/first-fetch-failed"
-  exit 75
+if [[ "$1 ${2:-}" == "remote get-url" || "$1 ${2:-}" == "remote set-url" ]]; then
+  [[ -e "$workdir/.git/origin" ]]
+  exit
 fi
 if [[ "$1" == "init" ]]; then
   mkdir -p "$workdir/.git"
+elif [[ "$1 ${2:-}" == "remote add" ]]; then
+  touch "$workdir/.git/origin"
 fi
 """,
     )
@@ -94,7 +96,6 @@ fi
 """,
     )
     _write_executable(fake_bin / "npm", "#!/bin/bash\nset -eu\n")
-    _write_executable(fake_bin / "sleep", "#!/bin/bash\nset -eu\n")
     _write_executable(
         fake_bin / "uname",
         """#!/bin/bash
@@ -410,6 +411,26 @@ def test_install_ultramaster_kr106_builds_adopts_and_links_source(tmp_path: Path
     assert "plugins adopt --plugin kayrockscreenprinting/ultramaster-kr106" in events
     assert "plugins link --plugin kayrockscreenprinting/ultramaster-kr106" in events
     assert "plugins install --plugin kayrockscreenprinting/ultramaster-kr106" not in events
+
+
+def test_install_ultramaster_kr106_partial_cache_reinitializes_checkout(
+    tmp_path: Path,
+) -> None:
+    """A cache interrupted before origin creation is rebuilt automatically.
+
+    :param tmp_path: Isolated checkout and command-fake root.
+    """
+    shutil.copy(MAKEFILE, tmp_path / "Makefile")
+    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+    version = _makefile_variable("ULTRAMASTER_KR106_VERSION")
+    source = tmp_path / "home" / ".cache" / "synth-setter" / f"ultramaster-kr106-{version}" / "src"
+    (source / ".git").mkdir(parents=True)
+
+    result = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+
+    assert result.returncode == 0, result.stderr
+    assert f"git -C {source} init" in tool_log.read_text()
+    assert (tmp_path / "plugins" / "Ultramaster KR-106.vst3").is_dir()
 
 
 def test_install_ultramaster_kr106_existing_source_install_succeeds(tmp_path: Path) -> None:
