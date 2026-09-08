@@ -71,7 +71,7 @@ active record:
 
 ```bash
 synth-setter-train experiment=<exp> \
-  training.growing_active_record=~/growing/local/active.json \
+  training.growing_active_record="$HOME/growing/local/active.json" \
   training.growing_refresh_epoch_interval=1 \
   datamodule.persistent_workers=false
 ```
