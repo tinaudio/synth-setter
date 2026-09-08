@@ -162,12 +162,9 @@ def _householder_feedback(synth_params: ParameterValues) -> np.ndarray:
     return _PYFDN_N8_HOUSEHOLDER_FEEDBACK.copy()
 
 
-def _plain_rt_parameters() -> list[Parameter]:
-    """Build fresh DC and Nyquist reverberation-time parameters.
-
-    :returns: The two-band decay controls shared by the plain topologies.
-    """
-    return [
+PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = PyFDNParamSpec(
+    synth_params=[
+        *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
         ContinuousParameter(
             name=PYFDN_RT_DC_NAME,
             min=PYFDN_RT_MIN_SECONDS,
@@ -178,13 +175,6 @@ def _plain_rt_parameters() -> list[Parameter]:
             min=PYFDN_RT_MIN_SECONDS,
             max=PYFDN_RT_MAX_SECONDS,
         ),
-    ]
-
-
-PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = PyFDNParamSpec(
-    synth_params=[
-        *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
-        *_plain_rt_parameters(),
     ],
     feedback_matrix=_householder_feedback,
 )
@@ -194,7 +184,16 @@ PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = PyFDNParamSpec(
 PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = PyFDNParamSpec(
     synth_params=[
         *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
-        *_plain_rt_parameters(),
+        ContinuousParameter(
+            name=PYFDN_RT_DC_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
+        ContinuousParameter(
+            name=PYFDN_RT_NYQUIST_NAME,
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_RT_MAX_SECONDS,
+        ),
         ContinuousArrayParameter(
             name=PYFDN_KRONECKER_ANGLES_NAME,
             shape=(PYFDN_KRONECKER_LEVELS,),
