@@ -2,7 +2,7 @@
 defaults:
   - paths: default
   - hydra: default
-  - logger: wandb
+  - logger: wandb_dataset
   - _self_
 
 # Run-prefix dir containing `input_spec.json`; finalize joins the filename and

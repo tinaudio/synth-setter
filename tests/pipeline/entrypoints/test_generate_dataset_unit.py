@@ -792,7 +792,7 @@ class TestRunFromSpecUri:
         mock_wandb_logger.assert_called_once_with(
             save_dir=str(work_dir),
             name=f"resume-{spec.task_name}-{spec.run_id}",
-            project="synth-setter",
+            project="synth-setter-generate-dataset",
             entity=None,
             group=spec.run_id,
             job_type="data-generation-resume",
@@ -3421,7 +3421,7 @@ class TestMainDispatchBranches:
         assert "ckpt_path=null" in called_argv
         # The eval resumes the generate run rather than opening a fresh one, so
         # its audio/* metrics share the run id (logger=null crashed Hydra — see #1331).
-        assert "logger=wandb" in called_argv
+        assert "logger=wandb_dataset" in called_argv
         # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv

@@ -217,11 +217,18 @@ ______________________________________________________________________
 ## 5. Dataset Generation Runs
 
 `src/synth_setter/cli/generate_dataset.py` instantiates a `WandbLogger` via Hydra
-(`configs/dataset.yaml` includes `- logger: wandb` in its defaults list) and pins
+(`configs/dataset.yaml` includes `- logger: wandb_dataset` in its defaults list) and pins
 `logger.wandb.id` to `spec.run_id` — derived deterministically by
 `make_dataset_wandb_run_id` (`src/synth_setter/pipeline/schemas/prefix.py`) — so
 the W&B run ID matches the R2 prefix under `data/<task_name>/<run_id>/`. This is
 the single binding point: re-running with the same `spec` resumes the same W&B run.
+
+Generation, spec-URI repair, finalization, inline oracle evaluation, and
+add-embeddings runs default to the `synth-setter-generate-dataset` project.
+`WANDB_PROJECT` or `logger.wandb.project` overrides the Hydra default; repair
+runs accept `WANDB_PROJECT`. Training and standalone evaluation retain the
+`synth-setter` default. Reusable dataset workflows and generation sweeps use
+the dataset project too; CI callers explicitly select `synth-setter-citest`.
 
 ### 5a. Hyperparameters and artifact (logged once at run start)
 

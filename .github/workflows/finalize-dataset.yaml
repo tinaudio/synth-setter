@@ -47,7 +47,7 @@ on:
         description: "W&B project for the finalized run and dataset artifact."
         required: false
         type: string
-        default: "synth-setter"
+        default: "synth-setter-generate-dataset"
   workflow_dispatch:
     inputs:
       provider:
@@ -80,7 +80,7 @@ on:
         description: "W&B project for the finalized run and dataset artifact."
         required: false
         type: string
-        default: "synth-setter"
+        default: "synth-setter-generate-dataset"
 
 permissions:
   contents: read
