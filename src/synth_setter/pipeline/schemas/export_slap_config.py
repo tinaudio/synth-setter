@@ -1,4 +1,7 @@
-"""Strict configuration boundary for SLAP retrieval export."""
+"""Strict configuration boundary for SLAP retrieval export.
+
+Compose Hydra settings with ``ExportSlapConfig.from_hydra_cfg(cfg)`` before export.
+"""
 
 from __future__ import annotations
 

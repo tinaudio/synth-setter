@@ -38,8 +38,10 @@ snapshots without UUIDs cannot be retroactively changed. Keep the referenced
 source version available: the retrieval table contains no audio or parameters
 from which to reconstruct a deleted source snapshot.
 
-Publication is per split, not an atomic transaction across all splits or both
-datasets. A failed pointer update can leave a complete retrieval dataset with
+Run only one writer per source split and output table. Native Lance commit
+conflicts are surfaced; the exporter does not retry mutating transactions
+blindly. Publication is per split, not an atomic transaction across all splits
+or both datasets. A failed pointer update can leave a complete retrieval dataset with
 no source-side discovery pointer. Matching reruns should repair publication,
 not duplicate rows; a conflicting export must not silently overwrite the
 existing table.
@@ -73,6 +75,9 @@ python -m synth_setter.cli.export_slap \
 Use the exact source versions you intend to export. If a selected head lacks
 UUIDs, the exporter adds them and records both the requested version and the
 resulting UUID-bearing input snapshot. Reuse the same request on reruns.
+When exporting a historical UUID-bearing snapshot, the discovery pointer still
+records that historical input version; it does not assert freshness against
+the current source head.
 
 To select only train, also remove the unused version entries:
 

@@ -1,10 +1,14 @@
-"""Stream SLAP EMA projections into split retrieval datasets."""
+"""Stream SLAP EMA projections into split retrieval datasets.
+
+Typical use is ``export_slap(ExportSlapConfig.from_hydra_cfg(cfg))``.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from collections.abc import Iterator, Mapping
+from functools import partial
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -35,6 +39,7 @@ IS_PARAM_EMBEDDING_FIELD = "is_param_embedding"
 SLAP_FIELD = "slap"
 SLAP_EXPORT_METADATA_KEY = b"synth_setter.slap_export"
 SLAP_SOURCE_POINTER_KEY = b"synth_setter.slap_retrieval"
+_UUID_MIGRATION_METADATA_KEY = b"synth_setter.row_uuid_migration"
 _SCHEMA_VERSION = 1
 _POLICY_VERSION = 1
 
@@ -97,6 +102,24 @@ class _ExportMetadata(BaseModel):
     num_sub_vectors: int
     index_built: bool
     output_version: int | None
+
+
+class _UuidMigration(BaseModel):
+    """Validate the identity attached atomically to a UUID migration field.
+
+    .. attribute :: model_config
+    .. attribute :: schema_version
+    .. attribute :: policy_version
+    .. attribute :: requested_source_version
+    .. attribute :: requested_source_transaction_uuid
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    schema_version: int
+    policy_version: int
+    requested_source_version: int
+    requested_source_transaction_uuid: str
 
 
 class _SourcePointer(BaseModel):
@@ -229,6 +252,7 @@ def _request_hash(payload: Mapping[str, object]) -> str:
 
 def _static_request(
     config: ExportSlapConfig,
+    *,
     split: str,
     checkpoint_sha256: str,
     requested_source_transaction_uuid: str,
@@ -280,15 +304,15 @@ def _existing_completed(
     :param output_uri: Output dataset URI.
     :param request_hash: Expected request identity.
     :returns: Existing output and metadata, or ``None``.
-    :raises OSError: Existing output cannot be opened for a reason other than absence.
     :raises ValueError: Existing output metadata conflicts or is inconsistent.
     """
     try:
         dataset = _open(output_uri)
     except FileNotFoundError:
         return None
-    except (OSError, ValueError) as exc:
-        if "not found" in str(exc).casefold():
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith("Dataset at path ") and " was not found: Not found: " in message:
             return None
         raise
     metadata = _load_metadata(dataset)
@@ -323,6 +347,56 @@ def _validate_row_uuids(dataset: lance.LanceDataset) -> None:
             seen.add(value)
 
 
+def _uuid_migration_field(migration: _UuidMigration) -> pa.Field:
+    """Build the UUID field carrying its source-snapshot identity.
+
+    :param migration: Original source identity and migration policy.
+    :returns: Nullable UUID field for Lance column creation.
+    """
+    return pa.field(
+        ROW_UUID_FIELD,
+        pa.string(),
+        nullable=True,
+        metadata={_UUID_MIGRATION_METADATA_KEY: migration.model_dump_json().encode()},
+    )
+
+
+def _add_uuid_column(batch: pa.RecordBatch, *, field: pa.Field) -> pa.RecordBatch:
+    """Generate one UUID batch with migration field metadata.
+
+    :param batch: Source batch determining output cardinality.
+    :param field: UUID field carrying migration identity.
+    :returns: UUID-only record batch.
+    """
+    values = pa.array([str(uuid4()) for _ in range(batch.num_rows)], type=pa.string())
+    return pa.RecordBatch.from_arrays([values], schema=pa.schema([field]))
+
+
+def _attributable_uuid_migration(
+    head: lance.LanceDataset, *, requested_version: int, migration: _UuidMigration
+) -> lance.LanceDataset | None:
+    """Return only the exact next commit carrying the requested migration identity.
+
+    :param head: Current source head.
+    :param requested_version: Original UUID-less source version.
+    :param migration: Expected migration provenance.
+    :returns: Attributable migration snapshot, or ``None``.
+    """
+    migration_version = requested_version + 1
+    if migration_version > head.version:
+        return None
+    candidate = head.checkout_version(migration_version)
+    if ROW_UUID_FIELD not in candidate.schema.names:
+        return None
+    raw = (candidate.schema.field(ROW_UUID_FIELD).metadata or {}).get(
+        _UUID_MIGRATION_METADATA_KEY
+    )
+    if raw is None or _UuidMigration.model_validate_json(raw) != migration:
+        return None
+    _validate_row_uuids(candidate)
+    return candidate
+
+
 def _ensure_row_uuids(
     source_uri: str, requested_version: int, batch_size: int
 ) -> lance.LanceDataset:
@@ -332,50 +406,102 @@ def _ensure_row_uuids(
     :param requested_version: Explicit source pin.
     :param batch_size: UUID UDF batch size.
     :returns: UUID-bearing pinned source.
-    :raises ValueError: The pin is absent or historical without UUIDs.
+    :raises ValueError: The pin is absent or historical without an attributable migration.
+    :raises RuntimeError: The committed migration provenance cannot be verified.
     """
     head = _open(source_uri)
     if requested_version > head.version:
         raise ValueError(f"source version {requested_version} does not exist")
-    pinned = _open(source_uri).checkout_version(requested_version)
+    pinned = head.checkout_version(requested_version)
+    requested_transaction_uuid = _transaction_uuid(pinned, requested_version)
     if ROW_UUID_FIELD in pinned.schema.names:
         _validate_row_uuids(pinned)
         return pinned
+
+    migration = _UuidMigration(
+        schema_version=_SCHEMA_VERSION,
+        policy_version=_POLICY_VERSION,
+        requested_source_version=requested_version,
+        requested_source_transaction_uuid=requested_transaction_uuid,
+    )
+    attributable = _attributable_uuid_migration(
+        head, requested_version=requested_version, migration=migration
+    )
+    if attributable is not None:
+        return attributable
     if requested_version != head.version:
         raise ValueError("historical pinned source lacks row_uuid; refusing to mutate newer head")
 
+    field = _uuid_migration_field(migration)
     if head.count_rows() == 0:
-        head.add_columns(pa.field(ROW_UUID_FIELD, pa.string(), nullable=True))
+        head.add_columns(field)
     else:
+        head.add_columns(
+            partial(_add_uuid_column, field=field),
+            read_columns=[],
+            batch_size=batch_size,
+        )
+    migrated = head.checkout_version(requested_version + 1)
+    raw = (migrated.schema.field(ROW_UUID_FIELD).metadata or {}).get(
+        _UUID_MIGRATION_METADATA_KEY
+    )
+    if raw is None or _UuidMigration.model_validate_json(raw) != migration:
+        raise RuntimeError("UUID migration commit has unexpected provenance")
+    _validate_row_uuids(migrated)
+    return migrated
 
-        def add_uuid(batch: pa.RecordBatch) -> pa.RecordBatch:
-            return pa.record_batch(
-                {ROW_UUID_FIELD: pa.array([str(uuid4()) for _ in range(batch.num_rows)])}
-            )
 
-        head.add_columns(add_uuid, read_columns=[], batch_size=batch_size)
-    _validate_row_uuids(head)
-    return head
+def _input_field(model: SLAPModule) -> str:
+    """Return the stored source field consumed by the configured audio arm.
+
+    :param model: Loaded SLAP module.
+    :returns: Audio or mel source field name.
+    """
+    return AUDIO_FIELD if model.audio_input_key == "audio" else MEL_SPEC_FIELD
 
 
-def _decoded(column: pa.Array) -> np.ndarray:
-    """Decode an Arrow column while preserving tensor shape.
+def _decoded(column: pa.Array, *, field: str) -> np.ndarray:
+    """Decode one supported fixed-shape tensor column.
 
     :param column: Arrow array.
-    :returns: NumPy rows.
+    :param field: Source field name for error context.
+    :returns: NumPy tensor rows.
+    :raises ValueError: The column is not a fixed-shape tensor extension array.
     """
-    if isinstance(column, pa.FixedShapeTensorArray):
-        return column.to_numpy_ndarray()
-    return column.to_numpy(zero_copy_only=False)
+    if not isinstance(column, pa.FixedShapeTensorArray):
+        raise ValueError(f"source field {field!r} must be a FixedShapeTensor column")
+    return column.to_numpy_ndarray()
+
+
+def _validate_source_inputs(source: lance.LanceDataset, *, input_field: str) -> None:
+    """Validate stored model inputs before any source mutation or inference.
+
+    :param source: Explicitly pinned source snapshot.
+    :param input_field: Audio or mel source field selected by the model.
+    :raises ValueError: A required field, tensor type, finite value, or audio bound is invalid.
+    """
+    required_fields = (input_field, PARAM_ARRAY_FIELD)
+    for field in required_fields:
+        if field not in source.schema.names:
+            raise ValueError(f"source is missing required field {field!r}")
+        if not isinstance(source.schema.field(field).type, pa.FixedShapeTensorType):
+            raise ValueError(f"source field {field!r} must be a FixedShapeTensor column")
+    for batch in source.to_batches(columns=list(required_fields)):
+        for field in required_fields:
+            values = _decoded(batch.column(field), field=field)
+            if not np.isfinite(values).all():
+                raise ValueError(f"source field {field!r} contains nonfinite values")
+            if field == AUDIO_FIELD and np.any(np.abs(values) > 1.0):
+                raise ValueError("source audio values must be within [-1, 1]")
 
 
 def _normalize(vectors: torch.Tensor, modality: str) -> np.ndarray:
-    """Validate and L2-normalize projection rows.
+    """Normalize finite projection tensors shaped ``(batch, dimension)``.
 
-    :param vectors: Projection tensor.
+    :param vectors: Projection tensor with one nonempty row per source row.
     :param modality: Error-context label.
     :returns: Contiguous float32 unit vectors.
-    :raises ValueError: Shape, values, or norms are invalid.
+    :raises ValueError: Rank, width, values, or norms are invalid.
     """
     values = vectors.detach().float().cpu().numpy()
     if values.ndim != 2 or values.shape[1] < 1:
@@ -386,6 +512,32 @@ def _normalize(vectors: torch.Tensor, modality: str) -> np.ndarray:
     if np.any(~np.isfinite(norms)) or np.any(norms == 0):
         raise ValueError(f"{modality} projection contains zero or invalid vectors")
     return np.ascontiguousarray(values / norms, dtype=np.float32)
+
+
+def _validate_projection_pair(
+    audio_projection: torch.Tensor,
+    param_projection: torch.Tensor,
+    *,
+    batch_rows: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate matching ``(batch, dimension)`` EMA projections.
+
+    :param audio_projection: Audio-arm EMA projection.
+    :param param_projection: Parameter-arm EMA projection.
+    :param batch_rows: Source record-batch cardinality.
+    :returns: Normalized audio and parameter vectors.
+    :raises ValueError: Rank, width, cardinality, values, or norms differ from the contract.
+    """
+    audio_vectors = _normalize(audio_projection, "audio EMA")
+    param_vectors = _normalize(param_projection, "parameter EMA")
+    if audio_vectors.shape[0] != batch_rows or param_vectors.shape[0] != batch_rows:
+        raise ValueError("SLAP EMA projection batch cardinality differs from source batch")
+    if audio_vectors.shape[1] != param_vectors.shape[1]:
+        raise ValueError(
+            "SLAP EMA projection dimensions differ: "
+            f"audio {audio_vectors.shape}, params {param_vectors.shape}"
+        )
+    return audio_vectors, param_vectors
 
 
 def _project_batch(
@@ -399,12 +551,18 @@ def _project_batch(
     :returns: Audio vectors, parameter vectors, and source UUIDs.
     :raises ValueError: EMA outputs are absent or incompatible.
     """
-    input_field = AUDIO_FIELD if model.audio_input_key == "audio" else MEL_SPEC_FIELD
+    input_field = _input_field(model)
     audio_values = np.array(
-        _decoded(batch.column(input_field)), dtype=np.float32, order="C", copy=True
+        _decoded(batch.column(input_field), field=input_field),
+        dtype=np.float32,
+        order="C",
+        copy=True,
     )
     param_values = np.array(
-        _decoded(batch.column(PARAM_ARRAY_FIELD)), dtype=np.float32, order="C", copy=True
+        _decoded(batch.column(PARAM_ARRAY_FIELD), field=PARAM_ARRAY_FIELD),
+        dtype=np.float32,
+        order="C",
+        copy=True,
     )
     audio = torch.from_numpy(audio_values).to(device)
     params = torch.from_numpy(param_values).to(device)
@@ -413,17 +571,15 @@ def _project_batch(
         _, param_projection, _ = model.text_ema(params)
     if audio_projection is None or param_projection is None:
         raise ValueError("SLAP EMA arms must provide projection outputs")
-    audio_vectors = _normalize(audio_projection, "audio EMA")
-    param_vectors = _normalize(param_projection, "parameter EMA")
-    if audio_vectors.shape != param_vectors.shape:
-        raise ValueError(
-            f"SLAP EMA projection dimensions differ: audio {audio_vectors.shape}, params {param_vectors.shape}"
-        )
+    audio_vectors, param_vectors = _validate_projection_pair(
+        audio_projection, param_projection, batch_rows=batch.num_rows
+    )
     return audio_vectors, param_vectors, batch.column(ROW_UUID_FIELD).to_pylist()
 
 
 def _output_batches(
     source: lance.LanceDataset,
+    *,
     model: SLAPModule,
     device: torch.device,
     batch_size: int,
@@ -439,14 +595,14 @@ def _output_batches(
     :param vector_dimension: Required output width.
     :raises ValueError: Projection dimensions change.
     """
-    input_field = AUDIO_FIELD if model.audio_input_key == "audio" else MEL_SPEC_FIELD
+    input_field = _input_field(model)
     columns = [ROW_UUID_FIELD, input_field, PARAM_ARRAY_FIELD]
     for batch in source.to_batches(columns=columns, batch_size=batch_size):
         audio, params, row_uuids = _project_batch(model, batch, device)
         if audio.shape[1] != vector_dimension:
             raise ValueError("SLAP projection dimension changed between batches")
         vectors = np.stack((params, audio), axis=1).reshape(-1, vector_dimension)
-        repeated_uuids = [value for value in row_uuids for _ in range(2)]
+        repeated_uuids = np.repeat(row_uuids, 2).tolist()
         yield pa.record_batch(
             [
                 pa.array(repeated_uuids, pa.string()),
@@ -490,7 +646,7 @@ def _infer_vector_dimension(
     :returns: Shared vector dimension.
     :raises ValueError: EMA projection outputs are absent or incompatible.
     """
-    input_field = AUDIO_FIELD if model.audio_input_key == "audio" else MEL_SPEC_FIELD
+    input_field = _input_field(model)
     audio_shape = tuple(source.schema.field(input_field).type.shape)
     param_shape = tuple(source.schema.field(PARAM_ARRAY_FIELD).type.shape)
     audio = torch.zeros((1, *audio_shape), dtype=torch.float32, device=device)
@@ -563,6 +719,7 @@ def _validate_index(dataset: lance.LanceDataset, metadata: _ExportMetadata) -> b
 def _complete_output(
     dataset: lance.LanceDataset,
     metadata: _ExportMetadata,
+    *,
     config: ExportSlapConfig,
     output_uri: str,
 ) -> tuple[lance.LanceDataset, _ExportMetadata]:
@@ -606,19 +763,47 @@ def _complete_output(
     return dataset, completed
 
 
+def _validate_source_identity(
+    source: lance.LanceDataset, metadata: _ExportMetadata
+) -> lance.LanceDataset:
+    """Validate both requested and selected snapshots in the current source history.
+
+    :param source: Current source dataset.
+    :param metadata: Export provenance naming exact source transactions.
+    :returns: Selected source snapshot.
+    :raises ValueError: Either source transaction or selected cardinality differs.
+    """
+    requested = source.checkout_version(metadata.requested_source_version)
+    requested_uuid = _transaction_uuid(requested, metadata.requested_source_version)
+    if requested_uuid != metadata.requested_source_transaction_uuid:
+        raise ValueError("requested source transaction identity differs from output provenance")
+    selected = source.checkout_version(metadata.source_version)
+    selected_uuid = _transaction_uuid(selected, metadata.source_version)
+    if selected_uuid != metadata.source_transaction_uuid:
+        raise ValueError("source transaction identity differs from output provenance")
+    if selected.count_rows() != metadata.source_row_count:
+        raise ValueError("source row count differs from output provenance")
+    _validate_row_uuids(selected)
+    read_shard_metadata(selected.schema)
+    return selected
+
+
 def _update_source_pointer(
-    source_uri: str, metadata: _ExportMetadata, output_uri: str, output_version: int
+    source_uri: str,
+    metadata: _ExportMetadata,
+    *,
+    output_uri: str,
+    output_version: int,
 ) -> None:
-    """Publish or repair a source pointer after output completion.
+    """Publish a pointer to an exact historical or current source snapshot.
 
     :param source_uri: Source dataset URI.
     :param metadata: Completed export provenance.
     :param output_uri: Completed output URI.
     :param output_version: Exact completed output version.
-    :raises RuntimeError: Source data advanced before pointer publication.
     """
     source = _open(source_uri)
-    raw = (source.schema.metadata or {}).get(SLAP_SOURCE_POINTER_KEY)
+    _validate_source_identity(source, metadata)
     pointer = _SourcePointer(
         schema_version=_SCHEMA_VERSION,
         output_uri=output_uri,
@@ -626,19 +811,10 @@ def _update_source_pointer(
         input_source_version=metadata.source_version,
         request_hash=metadata.request_hash,
     )
+    raw = (source.schema.metadata or {}).get(SLAP_SOURCE_POINTER_KEY)
     existing_pointer = None if raw is None else _SourcePointer.model_validate_json(raw)
     if existing_pointer == pointer:
         return
-    repairs_prior_pointer = (
-        existing_pointer is not None
-        and existing_pointer.request_hash == pointer.request_hash
-        and existing_pointer.output_uri == pointer.output_uri
-        and existing_pointer.input_source_version == pointer.input_source_version
-    )
-    if source.version != metadata.source_version and not repairs_prior_pointer:
-        raise RuntimeError(
-            "source advanced after export; completed output retained without publishing pointer"
-        )
     source.update_schema_metadata(
         {SLAP_SOURCE_POINTER_KEY.decode(): pointer.model_dump_json()}, replace=False
     )
@@ -662,19 +838,7 @@ def _validate_reusable_output(
     if output.count_rows() != metadata.output_row_count:
         raise ValueError("existing output row count differs from completed provenance")
 
-    source_head = _open(source_uri)
-    requested = source_head.checkout_version(metadata.requested_source_version)
-    requested_uuid = _transaction_uuid(requested, metadata.requested_source_version)
-    if requested_uuid != metadata.requested_source_transaction_uuid:
-        raise ValueError("requested source transaction identity differs from output provenance")
-    pinned = source_head.checkout_version(metadata.source_version)
-    source_uuid = _transaction_uuid(pinned, metadata.source_version)
-    if source_uuid != metadata.source_transaction_uuid:
-        raise ValueError("source transaction identity differs from output provenance")
-    if pinned.count_rows() != metadata.source_row_count:
-        raise ValueError("source row count differs from output provenance")
-    _validate_row_uuids(pinned)
-    read_shard_metadata(pinned.schema)
+    _validate_source_identity(_open(source_uri), metadata)
 
 
 def _result(metadata: _ExportMetadata, output_uri: str) -> SlapExportResult:
@@ -683,8 +847,10 @@ def _result(metadata: _ExportMetadata, output_uri: str) -> SlapExportResult:
     :param metadata: Completed export provenance.
     :param output_uri: Output dataset URI.
     :returns: Public split result.
+    :raises ValueError: Completed provenance lacks an output version.
     """
-    assert metadata.output_version is not None
+    if metadata.output_version is None:
+        raise ValueError("completed export metadata is missing output_version")
     return SlapExportResult(
         split=metadata.split,
         output_uri=output_uri,
@@ -696,9 +862,187 @@ def _result(metadata: _ExportMetadata, output_uri: str) -> SlapExportResult:
     )
 
 
+def _resume_output(
+    existing: tuple[lance.LanceDataset, _ExportMetadata],
+    *,
+    config: ExportSlapConfig,
+    source_uri: str,
+    output_uri: str,
+) -> SlapExportResult:
+    """Validate and complete or reuse one existing output.
+
+    :param existing: Matching output dataset and persisted provenance.
+    :param config: Export configuration.
+    :param source_uri: Source split URI.
+    :param output_uri: Output split URI.
+    :returns: Completed split identity.
+    """
+    output, metadata = existing
+    _validate_reusable_output(source_uri, output, metadata)
+    index_missing = metadata.build_index and output.count_rows() > 0 and not output.list_indices()
+    if not metadata.completed or index_missing:
+        resumable = metadata.model_copy(
+            update={"completed": False, "index_built": False, "output_version": None}
+        )
+        output, metadata = _complete_output(
+            output, resumable, config=config, output_uri=output_uri
+        )
+    else:
+        _validate_index(output, metadata)
+    _update_source_pointer(
+        source_uri, metadata, output_uri=output_uri, output_version=output.version
+    )
+    return _result(metadata, output_uri)
+
+
+def _new_export_metadata(
+    source: lance.LanceDataset,
+    *,
+    config: ExportSlapConfig,
+    model: SLAPModule,
+    device: torch.device,
+    static: Mapping[str, object],
+    request_hash: str,
+) -> _ExportMetadata:
+    """Build incomplete provenance for one validated source snapshot.
+
+    :param source: UUID-bearing source snapshot.
+    :param config: Export configuration.
+    :param model: Loaded SLAP module.
+    :param device: Inference device.
+    :param static: Request fields independent of migration.
+    :param request_hash: Canonical request identity.
+    :returns: Incomplete output provenance.
+    :raises ValueError: Requested PQ subdivisions cannot represent the vector width.
+    """
+    source_rows = source.count_rows()
+    vector_dimension = _infer_vector_dimension(source, model, device)
+    if config.build_index and source_rows > 0 and vector_dimension % config.num_sub_vectors != 0:
+        raise ValueError("num_sub_vectors must divide the SLAP vector dimension")
+    return _ExportMetadata.model_validate(
+        {
+            **static,
+            "completed": False,
+            "request_hash": request_hash,
+            "source_version": source.version,
+            "source_transaction_uuid": _transaction_uuid(source, source.version),
+            "vector_dimension": vector_dimension,
+            "source_row_count": source_rows,
+            "output_row_count": source_rows * 2,
+            "num_partitions": _index_partitions(config, source_rows * 2),
+            "index_built": False,
+            "output_version": None,
+        }
+    )
+
+
+def _write_new_output(
+    source: lance.LanceDataset,
+    metadata: _ExportMetadata,
+    *,
+    config: ExportSlapConfig,
+    model: SLAPModule,
+    device: torch.device,
+    output_uri: str,
+) -> tuple[lance.LanceDataset, _ExportMetadata]:
+    """Write retrieval rows and commit completion metadata.
+
+    :param source: UUID-bearing source snapshot.
+    :param metadata: Incomplete export provenance.
+    :param config: Export configuration.
+    :param model: Loaded SLAP module.
+    :param device: Inference device.
+    :param output_uri: Output split URI.
+    :returns: Completed output dataset and provenance.
+    """
+    schema = _schema(metadata.vector_dimension, metadata)
+    reader = pa.RecordBatchReader.from_batches(
+        schema,
+        _output_batches(
+            source,
+            model=model,
+            device=device,
+            batch_size=config.batch_size,
+            vector_dimension=metadata.vector_dimension,
+        ),
+    )
+    target, storage_options = _lance_target(output_uri)
+    output = lance.write_dataset(
+        reader,
+        target,
+        schema=schema,
+        mode="create",
+        storage_options=storage_options,
+        data_storage_version=LANCE_DATA_STORAGE_VERSION,
+    )
+    return _complete_output(output, metadata, config=config, output_uri=output_uri)
+
+
+def _create_output(
+    *,
+    config: ExportSlapConfig,
+    split: str,
+    model: SLAPModule,
+    device: torch.device,
+    source_uri: str,
+    output_uri: str,
+    requested_version: int,
+    requested_transaction_uuid: str,
+    static: Mapping[str, object],
+    request_hash: str,
+) -> SlapExportResult:
+    """Create and publish one previously absent split output.
+
+    :param config: Export configuration.
+    :param split: Split name.
+    :param model: Loaded SLAP module.
+    :param device: Inference device.
+    :param source_uri: Source split URI.
+    :param output_uri: Output split URI.
+    :param requested_version: Explicit original source pin.
+    :param requested_transaction_uuid: Original source transaction identity.
+    :param static: Request fields independent of migration.
+    :param request_hash: Canonical request identity.
+    :returns: Completed split identity.
+    :raises ValueError: The requested transaction changes during migration.
+    """
+    source = _ensure_row_uuids(source_uri, requested_version, config.batch_size)
+    requested = source.checkout_version(requested_version)
+    if _transaction_uuid(requested, requested_version) != requested_transaction_uuid:
+        raise ValueError("requested source transaction changed during UUID migration")
+    read_shard_metadata(source.schema)
+    metadata = _new_export_metadata(
+        source,
+        config=config,
+        model=model,
+        device=device,
+        static=static,
+        request_hash=request_hash,
+    )
+    output, completed = _write_new_output(
+        source,
+        metadata,
+        config=config,
+        model=model,
+        device=device,
+        output_uri=output_uri,
+    )
+    _update_source_pointer(
+        source_uri, completed, output_uri=output_uri, output_version=output.version
+    )
+    logger.info(
+        "slap_split_exported",
+        split=split,
+        rows=metadata.source_row_count,
+        output_uri=output_uri,
+    )
+    return _result(completed, output_uri)
+
+
 def _export_split(
     config: ExportSlapConfig,
     split: str,
+    *,
     model: SLAPModule,
     device: torch.device,
     checkpoint_sha256: str,
@@ -711,84 +1055,37 @@ def _export_split(
     :param device: Inference device.
     :param checkpoint_sha256: Checkpoint content hash.
     :returns: Completed split identity.
-    :raises ValueError: Persisted source or output identity is inconsistent.
     """
     source_uri = _split_uri(config.source_root_uri, split)
     output_uri = _split_uri(config.output_root_uri, split)
     requested_version = config.source_versions[split]
     requested_source = _open(source_uri).checkout_version(requested_version)
+    _validate_source_inputs(requested_source, input_field=_input_field(model))
     requested_transaction_uuid = _transaction_uuid(requested_source, requested_version)
-    static = _static_request(config, split, checkpoint_sha256, requested_transaction_uuid)
+    static = _static_request(
+        config,
+        split=split,
+        checkpoint_sha256=checkpoint_sha256,
+        requested_source_transaction_uuid=requested_transaction_uuid,
+    )
     request_hash = _request_hash(static)
     existing = _existing_completed(output_uri, request_hash)
-    if existing is not None and existing[1].completed:
-        output, completed = existing
-        _validate_reusable_output(source_uri, output, completed)
-        index_missing = (
-            completed.build_index and output.count_rows() > 0 and not output.list_indices()
-        )
-        if index_missing:
-            resumable = completed.model_copy(
-                update={"completed": False, "index_built": False, "output_version": None}
-            )
-            output, completed = _complete_output(output, resumable, config, output_uri)
-        else:
-            _validate_index(output, completed)
-        _update_source_pointer(source_uri, completed, output_uri, output.version)
-        return _result(completed, output_uri)
-
     if existing is not None:
-        output, persisted = existing
-        _validate_reusable_output(source_uri, output, persisted)
-        output, completed = _complete_output(output, persisted, config, output_uri)
-        _update_source_pointer(source_uri, completed, output_uri, output.version)
-        return _result(completed, output_uri)
-
-    source = _ensure_row_uuids(source_uri, requested_version, config.batch_size)
-    requested_after_migration = source.checkout_version(requested_version)
-    if _transaction_uuid(requested_after_migration, requested_version) != requested_transaction_uuid:
-        raise ValueError("requested source transaction changed during UUID migration")
-    read_shard_metadata(source.schema)
-    source_version = source.version
-    source_transaction_uuid = _transaction_uuid(source, source_version)
-    source_rows = source.count_rows()
-    vector_dimension = _infer_vector_dimension(source, model, device)
-    partitions = _index_partitions(config, source_rows * 2)
-    if config.build_index and source_rows > 0 and vector_dimension % config.num_sub_vectors != 0:
-        raise ValueError("num_sub_vectors must divide the SLAP vector dimension")
-    metadata = _ExportMetadata.model_validate(
-        {
-            **static,
-            "completed": False,
-            "request_hash": request_hash,
-            "source_version": source_version,
-            "source_transaction_uuid": source_transaction_uuid,
-            "vector_dimension": vector_dimension,
-            "source_row_count": source_rows,
-            "output_row_count": source_rows * 2,
-            "num_partitions": partitions,
-            "index_built": False,
-            "output_version": None,
-        }
+        return _resume_output(
+            existing, config=config, source_uri=source_uri, output_uri=output_uri
+        )
+    return _create_output(
+        config=config,
+        split=split,
+        model=model,
+        device=device,
+        source_uri=source_uri,
+        output_uri=output_uri,
+        requested_version=requested_version,
+        requested_transaction_uuid=requested_transaction_uuid,
+        static=static,
+        request_hash=request_hash,
     )
-    schema = _schema(vector_dimension, metadata)
-    reader = pa.RecordBatchReader.from_batches(
-        schema,
-        _output_batches(source, model, device, config.batch_size, vector_dimension),
-    )
-    target, storage_options = _lance_target(output_uri)
-    output = lance.write_dataset(
-        reader,
-        target,
-        schema=schema,
-        mode="create",
-        storage_options=storage_options,
-        data_storage_version=LANCE_DATA_STORAGE_VERSION,
-    )
-    output, completed = _complete_output(output, metadata, config, output_uri)
-    _update_source_pointer(source_uri, completed, output_uri, output.version)
-    logger.info("slap_split_exported", split=split, rows=source_rows, output_uri=output_uri)
-    return _result(completed, output_uri)
 
 
 def export_slap(config: ExportSlapConfig) -> dict[str, SlapExportResult]:
@@ -800,6 +1097,12 @@ def export_slap(config: ExportSlapConfig) -> dict[str, SlapExportResult]:
     checkpoint_sha256 = _checkpoint_sha256(config.ckpt_path)
     model, device = _load_model(config)
     return {
-        split: _export_split(config, split, model, device, checkpoint_sha256)
+        split: _export_split(
+            config,
+            split,
+            model=model,
+            device=device,
+            checkpoint_sha256=checkpoint_sha256,
+        )
         for split in config.splits
     }

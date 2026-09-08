@@ -8,7 +8,8 @@ import subprocess
 import sys
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Literal, cast
 from uuid import UUID, uuid4
 
 import lance
@@ -27,7 +28,11 @@ from synth_setter.pipeline.data import export_slap as export_slap_module
 from synth_setter.pipeline.data.export_slap import (
     SLAP_EXPORT_METADATA_KEY,
     SLAP_SOURCE_POINTER_KEY,
+    _ExportMetadata,
     _ensure_row_uuids,
+    _existing_completed,
+    _normalize,
+    _validate_projection_pair,
     export_slap,
 )
 from synth_setter.pipeline.data.lance_shard import SHARD_METADATA_SCHEMA_KEY
@@ -44,16 +49,21 @@ def _arm(input_dim: int, output_dim: int = 2) -> SiameseArm:
     )
 
 
-def _model(output_dim: int = 2) -> SLAPModule:
+def _model(
+    output_dim: int = 2, *, audio_input_key: Literal["audio", "mel"] = "audio"
+) -> SLAPModule:
     return SLAPModule(
         audio_encoder=_arm(5, output_dim),
         text_encoder=_arm(2, output_dim),
         loss_fn=BYOLLoss(),
         optimizer=partial(torch.optim.SGD, lr=0.1),
+        audio_input_key=audio_input_key,
     )
 
 
-def _model_config(output_dim: int = 2) -> dict[str, object]:
+def _model_config(
+    output_dim: int = 2, *, audio_input_key: Literal["audio", "mel"] = "audio"
+) -> dict[str, object]:
     def arm(input_dim: int) -> dict[str, object]:
         return {
             "_target_": "synth_setter.models.components.slap.SiameseArm",
@@ -82,7 +92,7 @@ def _model_config(output_dim: int = 2) -> dict[str, object]:
         "loss_fn": {"_target_": "synth_setter.models.components.slap.BYOLLoss"},
         "optimizer": {"_target_": "torch.optim.SGD", "_partial_": True, "lr": 0.1},
         "compile": False,
-        "audio_input_key": "audio",
+        "audio_input_key": audio_input_key,
     }
 
 
@@ -92,16 +102,23 @@ def _source(
     *,
     row_uuid: list[str] | None = None,
     payload_offset: int = 0,
+    audio_row: list[float] | None = None,
+    mel_row: list[float] | None = None,
+    param_row: list[float] | None = None,
 ) -> int:
-    audio = np.tile(np.array([[1, 2, 3, 4, 5]], dtype=np.float32), (rows, 1))
-    params = np.tile(np.array([[2, 1]], dtype=np.float32), (rows, 1))
+    audio_row = audio_row or [0.1, 0.2, 0.3, 0.4, 0.5]
+    mel_row = mel_row or [-0.5, -0.4, -0.3, -0.2, -0.1]
+    param_row = param_row or [2.0, 1.0]
+    audio = np.tile(np.array([audio_row], dtype=np.float32), (rows, 1))
+    mel = np.tile(np.array([mel_row], dtype=np.float32), (rows, 1))
+    params = np.tile(np.array([param_row], dtype=np.float32), (rows, 1))
     if rows:
         audio_column = pa.FixedShapeTensorArray.from_numpy_ndarray(audio)
-        mel_column = pa.FixedShapeTensorArray.from_numpy_ndarray(audio[:, None, :])
+        mel_column = pa.FixedShapeTensorArray.from_numpy_ndarray(mel)
         param_column = pa.FixedShapeTensorArray.from_numpy_ndarray(params)
     else:
         audio_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [5]))
-        mel_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [1, 5]))
+        mel_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [5]))
         param_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [2]))
     columns: dict[str, pa.Array] = {
         "audio": audio_column,
@@ -125,19 +142,33 @@ def _source(
     return lance.write_dataset(pa.table(columns).replace_schema_metadata(metadata), path).version
 
 
-def _checkpoint(path: Path, output_dim: int = 2) -> SLAPModule:
-    model = _model(output_dim)
-    trainer = Trainer(
-        max_epochs=1,
-        accelerator="cpu",
-        logger=False,
-        enable_checkpointing=False,
-        enable_model_summary=False,
-    )
-    rows = [{"audio": torch.arange(5, dtype=torch.float32), "params": torch.tensor([2.0, 1.0])}]
-    loader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], rows), batch_size=1)
-    trainer.fit(model, train_dataloaders=loader)
-    trainer.save_checkpoint(path)
+def _checkpoint(
+    path: Path,
+    output_dim: int = 2,
+    *,
+    audio_input_key: Literal["audio", "mel"] = "audio",
+) -> SLAPModule:
+    with torch.random.fork_rng():
+        torch.manual_seed(0)
+        model = _model(output_dim, audio_input_key=audio_input_key)
+        trainer = Trainer(
+            max_epochs=1,
+            accelerator="cpu",
+            logger=False,
+            enable_checkpointing=False,
+            enable_model_summary=False,
+        )
+        rows = [
+            {
+                audio_input_key: torch.tensor([-0.5, -0.4, -0.3, -0.2, -0.1])
+                if audio_input_key == "mel"
+                else torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5]),
+                "params": torch.tensor([2.0, 1.0]),
+            }
+        ]
+        loader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], rows), batch_size=1)
+        trainer.fit(model, train_dataloaders=loader)
+        trainer.save_checkpoint(path)
     return model
 
 
@@ -174,18 +205,25 @@ def test_export_slap_real_checkpoint_writes_linked_normalized_ema_rows(tmp_path:
     trained = _checkpoint(checkpoint)
     with torch.inference_mode():
         _, expected_audio, _ = trained.audio_ema(
-            torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.float32)
+            torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5]], dtype=torch.float32)
         )
         _, expected_param, _ = trained.text_ema(torch.tensor([[2, 1]], dtype=torch.float32))
         _, online_audio, _ = trained.audio_encoder(
-            torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.float32)
+            torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5]], dtype=torch.float32)
         )
 
     result = export_slap(_config(source, output, checkpoint, version))["train"]
 
     exported = lance.dataset(output / "train.lance")
     table = exported.to_table()
-    assert exported.schema.names == ["row_uuid", "is_param_embedding", "slap"]
+    expected_schema = pa.schema(
+        [
+            pa.field("row_uuid", pa.string(), nullable=False),
+            pa.field("is_param_embedding", pa.bool_(), nullable=False),
+            pa.field("slap", pa.list_(pa.float32(), 2), nullable=False),
+        ]
+    )
+    assert exported.schema.remove_metadata().equals(expected_schema)
     assert table.num_rows == 4
     assert table["is_param_embedding"].to_pylist() == [True, False, True, False]
     uuids = table["row_uuid"].to_pylist()
@@ -204,6 +242,41 @@ def test_export_slap_real_checkpoint_writes_linked_normalized_ema_rows(tmp_path:
     assert pointer["output_version"] == exported.version == result.output_version
     assert provenance["source_version"] == result.source_version
     assert provenance["checkpoint_sha256"]
+
+
+def test_export_slap_real_mel_checkpoint_uses_stored_mel_for_ema_projection(
+    tmp_path: Path,
+) -> None:
+    """Mel-configured exports ignore distinct stored waveform values.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    mel = [-0.5, -0.4, -0.3, -0.2, -0.1]
+    audio = [0.5, 0.4, 0.3, 0.2, 0.1]
+    version = _source(source / "train.lance", rows=1, audio_row=audio, mel_row=mel)
+    checkpoint = tmp_path / "model.ckpt"
+    trained = _checkpoint(checkpoint, audio_input_key="mel")
+    config = _config(source, output, checkpoint, version).model_copy(
+        update={"model": _model_config(audio_input_key="mel")}
+    )
+    with torch.inference_mode():
+        _, expected_mel, _ = trained.audio_ema(torch.tensor([mel]))
+        _, waveform_projection, _ = trained.audio_ema(torch.tensor([audio]))
+
+    export_slap(config)
+
+    vectors = (
+        lance.dataset(output / "train.lance")
+        .to_table(columns=["slap"])["slap"]
+        .combine_chunks()
+        .values.to_numpy()
+        .reshape(2, 2)
+    )
+    np.testing.assert_allclose(vectors[1], expected_mel.numpy()[0], atol=1e-6)
+    assert not np.allclose(vectors[1], waveform_projection.numpy()[0])
 
 
 def test_export_slap_no_index_allows_width_not_divisible_by_pq_subvectors(
@@ -228,6 +301,71 @@ def test_export_slap_no_index_allows_width_not_divisible_by_pq_subvectors(
     assert lance.dataset(output / "train.lance").schema.field("slap").type.list_size == 3
 
 
+def test_export_slap_uuid_migration_failure_same_request_retry_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed first export can reuse its attributable UUID migration.
+
+    :param tmp_path: Isolated dataset root.
+    :param monkeypatch: Pytest patching fixture.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    path = source / "train.lance"
+    version = _source(path)
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+    config = _config(source, output, checkpoint, version)
+    original_project_batch = export_slap_module._project_batch
+
+    def fail_projection_once(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RuntimeError("transient projection failure")
+
+    with monkeypatch.context() as context:
+        context.setattr(export_slap_module, "_project_batch", fail_projection_once)
+        with pytest.raises(OSError, match="transient projection failure"):
+            export_slap(config)
+
+    migrated = lance.dataset(path)
+    migrated_uuids = migrated.to_table(columns=["row_uuid"])["row_uuid"].to_pylist()
+    assert not (output / "train.lance").exists()
+
+    export_slap(config)
+
+    assert export_slap_module._project_batch is original_project_batch
+    assert lance.dataset(path).to_table(columns=["row_uuid"])["row_uuid"].to_pylist() == migrated_uuids
+    assert lance.dataset(output / "train.lance").count_rows() == 4
+
+
+def test_export_slap_historical_uuid_snapshot_publishes_selected_version_pointer(
+    tmp_path: Path,
+) -> None:
+    """A historical UUID snapshot remains a deliberate export source.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    path = source / "train.lance"
+    historical_version = _source(path, row_uuid=[str(uuid4()), str(uuid4())])
+    lance.dataset(path).update_schema_metadata({"later": "metadata"})
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+    config = _config(source, output, checkpoint, historical_version)
+
+    first = export_slap(config)["train"]
+    second = export_slap(config)["train"]
+
+    source_dataset = lance.dataset(path)
+    pointer = json.loads(source_dataset.schema.metadata[SLAP_SOURCE_POINTER_KEY])
+    assert first == second
+    assert pointer["input_source_version"] == historical_version
+    assert source_dataset.schema.metadata[b"later"] == b"metadata"
+
+
 def test_export_slap_identical_rerun_reuses_output_and_source_versions(tmp_path: Path) -> None:
     """An identical completed request changes neither dataset.
 
@@ -248,6 +386,47 @@ def test_export_slap_identical_rerun_reuses_output_and_source_versions(tmp_path:
     assert second == first
     assert lance.dataset(source / "train.lance").version == source_version
     assert lance.dataset(output / "train.lance").version == first.output_version
+
+
+def test_export_slap_source_recreated_before_pointer_rejects_wrong_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pointer publication rejects a source recreated after output creation.
+
+    :param tmp_path: Isolated dataset root.
+    :param monkeypatch: Pytest patching fixture.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    path = source / "train.lance"
+    version = _source(path, row_uuid=[str(uuid4()), str(uuid4())])
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+    config = _config(source, output, checkpoint, version)
+    original_complete = export_slap_module._complete_output
+
+    def complete_then_recreate(
+        dataset: lance.LanceDataset,
+        metadata: _ExportMetadata,
+        *,
+        config: ExportSlapConfig,
+        output_uri: str,
+    ) -> tuple[lance.LanceDataset, _ExportMetadata]:
+        completed = original_complete(
+            dataset, metadata, config=config, output_uri=output_uri
+        )
+        shutil.rmtree(path)
+        _source(path, row_uuid=[str(uuid4()), str(uuid4())], payload_offset=100)
+        return completed
+
+    monkeypatch.setattr(export_slap_module, "_complete_output", complete_then_recreate)
+
+    with pytest.raises(ValueError, match="transaction identity"):
+        export_slap(config)
+
+    assert SLAP_SOURCE_POINTER_KEY not in (lance.dataset(path).schema.metadata or {})
+    assert lance.dataset(output / "train.lance").count_rows() == 4
 
 
 def test_export_slap_completed_reuse_rejects_recreated_source_identity(tmp_path: Path) -> None:
@@ -289,10 +468,27 @@ def test_ensure_row_uuids_returns_uuid_commit_not_concurrent_latest(
     head = lance.dataset(path)
     original_add_columns = head.add_columns
 
-    def add_then_advance(*args: object, **kwargs: object) -> object:
-        result = cast(Any, original_add_columns)(*args, **kwargs)
+    def add_then_advance(
+        transforms: (
+            dict[str, str]
+            | Callable[[pa.RecordBatch], pa.RecordBatch]
+            | pa.RecordBatchReader
+            | pa.Table
+            | pa.Field
+            | list[pa.Field]
+            | pa.Schema
+        ),
+        read_columns: list[str] | None = None,
+        reader_schema: pa.Schema | None = None,
+        batch_size: int | None = None,
+    ) -> None:
+        original_add_columns(
+            transforms,
+            read_columns=read_columns,
+            reader_schema=reader_schema,
+            batch_size=batch_size,
+        )
         lance.dataset(path).update_schema_metadata({"concurrent": "metadata"})
-        return result
 
     monkeypatch.setattr(head, "add_columns", add_then_advance)
     open_count = 0
@@ -356,6 +552,30 @@ def test_export_slap_rejects_null_or_invalid_existing_uuid(
         export_slap(_config(source, output, checkpoint, lance.dataset(path).version))
 
 
+def test_export_slap_historical_source_rejects_unattributed_uuid_head(
+    tmp_path: Path,
+) -> None:
+    """An unrelated UUID-bearing successor is not adopted as a migration retry.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    path = source / "train.lance"
+    historical_version = _source(path)
+    head = lance.dataset(path)
+    head.add_columns(pa.field("row_uuid", pa.string(), nullable=True))
+    head.update({"row_uuid": f"'{uuid4()}'"})
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+
+    with pytest.raises(ValueError, match="historical pinned source lacks row_uuid"):
+        export_slap(_config(source, output, checkpoint, historical_version))
+
+    assert not (output / "train.lance").exists()
+
+
 def test_export_slap_historical_source_without_uuid_refuses_new_head_mutation(
     tmp_path: Path,
 ) -> None:
@@ -402,6 +622,43 @@ def test_export_slap_index_failure_retains_incomplete_output_without_pointer(
     )
 
 
+def test_export_slap_index_failure_same_request_retry_builds_real_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An incomplete 256-row output resumes through real index construction.
+
+    :param tmp_path: Isolated dataset root.
+    :param monkeypatch: Pytest patching fixture.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    version = _source(source / "train.lance", rows=256)
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+    config = _config(source, output, checkpoint, version, build_index=True)
+
+    def fail_index(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("transient index failure")
+
+    with monkeypatch.context() as context:
+        context.setattr(lance.LanceDataset, "create_index", fail_index)
+        with pytest.raises(RuntimeError, match="transient index failure"):
+            export_slap(config)
+
+    incomplete = lance.dataset(output / "train.lance")
+    assert incomplete.count_rows() == 512
+    assert json.loads(incomplete.schema.metadata[SLAP_EXPORT_METADATA_KEY])["completed"] is False
+
+    export_slap(config)
+
+    completed = lance.dataset(output / "train.lance")
+    assert completed.count_rows() == 512
+    assert completed.list_indices()[0]["fields"] == ["slap"]
+    assert json.loads(completed.schema.metadata[SLAP_EXPORT_METADATA_KEY])["completed"] is True
+
+
 def test_export_slap_missing_checkpoint_state_fails_before_source_mutation(tmp_path: Path) -> None:
     """Strict checkpoint loading precedes source mutation.
 
@@ -419,6 +676,132 @@ def test_export_slap_missing_checkpoint_state_fails_before_source_mutation(tmp_p
     torch.save(payload, checkpoint)
 
     with pytest.raises(RuntimeError, match="Missing key"):
+        export_slap(_config(source, output, checkpoint, version))
+
+    assert "row_uuid" not in lance.dataset(path).schema.names
+
+
+@pytest.mark.parametrize("modality", ["audio EMA", "parameter EMA"])
+@pytest.mark.parametrize(
+    ("projection", "message"),
+    [
+        (torch.ones(2), "invalid shape"),
+        (torch.empty((1, 0)), "invalid shape"),
+        (torch.tensor([[float("nan"), 1.0]]), "nonfinite"),
+        (torch.zeros((1, 2)), "zero or invalid"),
+    ],
+)
+def test_normalize_invalid_projection_rejects_modality_contract(
+    modality: str, projection: torch.Tensor, message: str
+) -> None:
+    """Both EMA modalities enforce rank, width, finiteness, and nonzero norms.
+
+    :param modality: Projection arm under test.
+    :param projection: Invalid projection tensor.
+    :param message: Expected validation category.
+    """
+    with pytest.raises(ValueError, match=message):
+        _normalize(projection, modality)
+
+
+def test_validate_projection_pair_different_width_rejects_batch() -> None:
+    """EMA modalities must share a projection width."""
+    with pytest.raises(ValueError, match="dimensions differ"):
+        _validate_projection_pair(torch.ones((1, 2)), torch.ones((1, 3)), batch_rows=1)
+
+
+def test_validate_projection_pair_wrong_cardinality_rejects_batch() -> None:
+    """EMA modalities must preserve source batch cardinality."""
+    with pytest.raises(ValueError, match="cardinality"):
+        _validate_projection_pair(torch.ones((1, 2)), torch.ones((1, 2)), batch_rows=2)
+
+
+@pytest.mark.parametrize("missing_field", ["audio", "param_array"])
+def test_export_slap_missing_input_field_fails_before_uuid_mutation(
+    tmp_path: Path, missing_field: str
+) -> None:
+    """Required model inputs are checked before UUID migration.
+
+    :param tmp_path: Isolated dataset root.
+    :param missing_field: Required field removed from the source.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    path = source / "train.lance"
+    _source(path)
+    table = lance.dataset(path).to_table().drop([missing_field])
+    shutil.rmtree(path)
+    version = lance.write_dataset(table, path).version
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+
+    with pytest.raises(ValueError, match=missing_field):
+        export_slap(_config(source, output, checkpoint, version))
+
+    assert "row_uuid" not in lance.dataset(path).schema.names
+
+
+@pytest.mark.parametrize("wrong_field", ["audio", "param_array"])
+def test_export_slap_plain_list_input_field_fails_before_uuid_mutation(
+    tmp_path: Path, wrong_field: str
+) -> None:
+    """Plain Arrow lists are not accepted as shaped model tensors.
+
+    :param tmp_path: Isolated dataset root.
+    :param wrong_field: Tensor field replaced by a plain list field.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    path = source / "train.lance"
+    _source(path)
+    table = lance.dataset(path).to_table()
+    index = table.schema.get_field_index(wrong_field)
+    width = 5 if wrong_field == "audio" else 2
+    plain_lists = pa.array([[0.1] * width, [0.2] * width])
+    table = table.set_column(index, wrong_field, plain_lists)
+    shutil.rmtree(path)
+    version = lance.write_dataset(table, path).version
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+
+    with pytest.raises(ValueError, match=f"{wrong_field}.*FixedShapeTensor"):
+        export_slap(_config(source, output, checkpoint, version))
+
+    assert "row_uuid" not in lance.dataset(path).schema.names
+
+
+@pytest.mark.parametrize(
+    ("audio_row", "param_row", "message"),
+    [
+        ([float("nan"), 0.0, 0.0, 0.0, 0.0], None, "audio.*nonfinite"),
+        (None, [float("inf"), 0.0], "param_array.*nonfinite"),
+        ([1.01, 0.0, 0.0, 0.0, 0.0], None, "within.*1"),
+    ],
+)
+def test_export_slap_invalid_stored_input_fails_before_uuid_mutation(
+    tmp_path: Path,
+    audio_row: list[float] | None,
+    param_row: list[float] | None,
+    message: str,
+) -> None:
+    """Nonfinite tensors and out-of-range waveforms never reach inference.
+
+    :param tmp_path: Isolated dataset root.
+    :param audio_row: Optional invalid waveform row.
+    :param param_row: Optional invalid parameter row.
+    :param message: Expected validation category.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    path = source / "train.lance"
+    version = _source(path, audio_row=audio_row, param_row=param_row)
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+
+    with pytest.raises(ValueError, match=message):
         export_slap(_config(source, output, checkpoint, version))
 
     assert "row_uuid" not in lance.dataset(path).schema.names
@@ -446,6 +829,23 @@ def test_export_slap_zero_ema_projection_publishes_no_output_pointer(tmp_path: P
 
     assert not (output / "train.lance").exists()
     assert SLAP_SOURCE_POINTER_KEY not in (lance.dataset(path).schema.metadata or {})
+
+
+def test_existing_completed_unrelated_not_found_error_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An arbitrary storage error mentioning not found is not treated as absence.
+
+    :param monkeypatch: Pytest patching fixture.
+    """
+
+    def fail_open(uri: str) -> lance.LanceDataset:
+        raise ValueError(f"credentials not found while opening {uri}")
+
+    monkeypatch.setattr(export_slap_module, "_open", fail_open)
+
+    with pytest.raises(ValueError, match="credentials not found"):
+        _existing_completed("unused", "request")
 
 
 def test_export_slap_conflicting_destination_is_never_overwritten(tmp_path: Path) -> None:
