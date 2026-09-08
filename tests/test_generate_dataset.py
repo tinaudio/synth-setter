@@ -892,7 +892,12 @@ def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
         cfg_dataset_kr106_2m.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
         cfg_dataset_kr106_2m.logger = None
 
+    from synth_setter.pipeline.shard_claims import ShardClaims
+
     spec = spec_from_cfg(cfg_dataset_kr106_2m)
+    # The 2M experiment claims shards from a queue that only the launcher seeds.
+    claims = ShardClaims.for_run(*r2_io.lance_target(spec.r2.shard_claims_uri()))
+    claims.populate(shard.shard_id for shard in spec.shards)
     from_hydra(cfg_dataset_kr106_2m)
 
     shard = spec.shards[0]
