@@ -6,6 +6,31 @@ import torch
 from torch import Tensor
 from torch.nn import functional as F
 
+# Only detached CPU predictions and split-local IDs cross rank boundaries.
+type RetrievalBatches = dict[int, list[tuple[Tensor, Tensor, Tensor]]]
+
+
+def gathered_retrieval_metrics(batches: RetrievalBatches) -> dict[int, dict[str, float]]:
+    """Gather variable-length rank observations and score each loader independently.
+
+    :param batches: CPU audio predictions, parameter predictions, and int64 IDs per loader.
+    :returns: Full-gallery metrics keyed by loader index, identical on every rank.
+    """
+    ranks = [batches]
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        ranks = [{} for _ in range(torch.distributed.get_world_size())]
+        torch.distributed.all_gather_object(ranks, batches)
+    loader_ids = sorted({index for rank in ranks for index in rank})
+    result = {}
+    for index in loader_ids:
+        rows = [batch for rank in ranks for batch in rank.get(index, [])]
+        if not rows:
+            result[index] = {"gallery_size": 0.0}
+            continue
+        audio, params, ids = (torch.cat(values) for values in zip(*rows, strict=True))
+        result[index] = paired_retrieval_metrics(audio, params, ids.tolist())
+    return result
+
 
 def _direction_metrics(query: Tensor, gallery: Tensor, chunk_size: int) -> dict[str, float]:
     """Average retrieval scores with uniform tie-breaking over equal cosine scores.
@@ -43,9 +68,10 @@ def paired_retrieval_metrics(
     """Score paired online predictions against the complete held-out gallery.
 
     Exact cosine ties receive expected Recall/MRR under uniform tie-breaking. Each unique ID
-    contributes one query and one candidate; identical repeated observations (including distributed
-    sampler padding) are removed. Distinct IDs remain negatives even when their vectors coincide.
-    The caller must aggregate every rank's observations before calling this function.
+    contributes one query and one candidate. Repeats retain the first rank/batch observation;
+    normalized L2 distances up to 0.01 (cosine distance 5e-5 for unit vectors) allow bf16 batch-
+    shape roundoff even when arms return float32. Larger conflicts fail. Distinct IDs remain
+    negatives. The caller must aggregate every rank's observations before calling this function.
 
     :param audio: Audio predictor outputs, one row per observation.
     :param params: Parameter predictor outputs paired row-for-row with audio.
@@ -72,8 +98,9 @@ def paired_retrieval_metrics(
     for row, identity in enumerate(sample_ids):
         if identity in first_rows:
             first = first_rows[identity]
-            if not torch.equal(audio[row], audio[first]) or not torch.equal(
-                params[row], params[first]
+            if any(
+                torch.linalg.vector_norm(values[row] - values[first]) > 0.01
+                for values in (audio, params)
             ):
                 raise ValueError(f"sample ID {identity} has conflicting predictions")
         else:
