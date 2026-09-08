@@ -22,7 +22,10 @@ from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor
 
-from synth_setter.models.components.pretrained_flow import load_pretrained_flow
+from synth_setter.models.components.pretrained_flow import (
+    PretrainedBaseMixin,
+    load_pretrained_flow,
+)
 from synth_setter.models.components.ram import (
     group_relative_advantages,
     power_law_flow_time,
@@ -113,7 +116,7 @@ def _validate_ram_settings(
         raise ValueError("RAM post-training is incompatible with torch.compile; set compile=false")
 
 
-class VSTFlowRAMModule(VSTFlowMatchingModule):
+class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
     """Pretrained flow post-trained toward a black-box reward with the RAM regression."""
 
     @jaxtyped(typechecker=beartype)
@@ -124,7 +127,7 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., object] | None,
         *,
-        base_checkpoint: str | Path,
+        base_checkpoint: str | Path | None,
         num_params: int,
         reward: torch.nn.Module,
         num_samples_per_row: int = 8,
@@ -143,7 +146,8 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
         :param vector_field: Velocity field of the same shape the base run trained; the policy.
         :param optimizer: ``functools.partial``-style optimizer factory.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param base_checkpoint: Checkpoint holding the pretrained flow to post-train.
+        :param base_checkpoint: Checkpoint holding the pretrained flow to post-train, or ``None``
+            when a Lightning checkpoint of this run supplies every weight (eval, resume).
         :param num_params: Parameter-vector width the field operates on.
         :param reward: Module mapping ``(sampled_params, target)`` to a per-row reward, where
             the target is the batch column its ``target_key`` names; higher is better, and it
@@ -184,7 +188,9 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
         # Lightning collects this frame's init args too; the base already recorded the encoder
         # under its own rules, and the reward is training-time only.
         self.save_hyperparameters(ignore=["encoder", "reward"], logger=False)
-        load_pretrained_flow(self, base_checkpoint)
+        self.base_checkpoint_sha256 = (
+            load_pretrained_flow(self, base_checkpoint) if base_checkpoint is not None else None
+        )
         self.num_params = num_params
         self.num_samples_per_row = num_samples_per_row
         self.num_targets_per_sample = num_targets_per_sample

@@ -930,6 +930,8 @@ def test_eval_torchsynth_flow_ram_validates_a_post_trained_checkpoint(
         cfg_torchsynth_flow_ram_train.ckpt_path = str(
             tmp_path / "ram" / "checkpoints" / "last.ckpt"
         )
+        # The saved run holds every weight, so eval needs no base file.
+        cfg_torchsynth_flow_ram_train.model.base_checkpoint = None
         cfg_torchsynth_flow_ram_train.logger = None
     HydraConfig().set_config(cfg_torchsynth_flow_ram_train)
     try:
@@ -975,6 +977,8 @@ def test_eval_surge_flow_ram_validates_a_post_trained_checkpoint(
     with open_dict(ram_cfg):
         ram_cfg.mode = "validate"
         ram_cfg.ckpt_path = str(tmp_path / "ram" / "checkpoints" / "last.ckpt")
+        # The saved run holds every weight, so eval needs no base file.
+        ram_cfg.model.base_checkpoint = None
         ram_cfg.logger = None
     HydraConfig().set_config(ram_cfg)
     try:

@@ -398,3 +398,14 @@ def test_ram_training_step_depends_on_the_target_audio(tmp_path: Path) -> None:
     with_other_audio = module.training_step(swapped, 0)
 
     assert not torch.isclose(original, with_other_audio)
+
+
+def test_ram_fit_without_base_or_resume_checkpoint_raises(tmp_path: Path) -> None:
+    """A fresh post-training fit with neither weight source would tilt a random field.
+
+    :param tmp_path: Unused output directory.
+    """
+    module = _ram(None, overrides={"reward": _NormReward()})  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(ValueError, match="base_checkpoint"):
+        _trainer().fit(module, datamodule=_data())
