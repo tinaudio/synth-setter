@@ -1,5 +1,7 @@
 """Behaviour tests for the renderer-backed reward that scores sampled rows against target rows."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -10,16 +12,30 @@ from synth_setter.models.components.rendered_reward import SynthRenderedReward
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.synth_spec import SYNTHS
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _SAMPLE_RATE = 16_000
 _SIGNAL_DURATION_SECONDS = 1.0
+
+
+def _surgepy_synth() -> dict[str, object]:
+    """Return the surge_simple surgepy identity with its preset pinned to this checkout.
+
+    The registry row names the preset relative to the operator workspace, which another test in the
+    same worker may have pointed elsewhere; an absolute path keeps this module independent of that
+    process-wide state.
+
+    :returns: SynthSpec fields for the surgepy surge_simple row.
+    """
+    synth = next(spec for spec in SYNTHS.values() if spec.name == "surge_simple_surgepy")
+    values = synth.model_dump()
+    values["plugin_state_path"] = str(_REPO_ROOT / synth.plugin_state_path)
+    return values
 
 
 def _reward() -> SynthRenderedReward:
     render = RenderConfig.model_validate(
         {
-            "synth": next(
-                spec for spec in SYNTHS.values() if spec.name == "surge_simple_surgepy"
-            ).model_dump(),
+            "synth": _surgepy_synth(),
             "renderer_backend": "surgepy",
             "sample_rate": _SAMPLE_RATE,
             "channels": 1,

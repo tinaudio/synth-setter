@@ -560,6 +560,12 @@ def compose_one_step_surge_flow(
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(dataset_root)
+        # Pin the surgepy preset to this checkout: the registry names it relative to the
+        # operator workspace, which another test in the worker may have redirected.
+        if not Path(cfg.synth.plugin_state_path).is_absolute():
+            cfg.synth.plugin_state_path = str(
+                Path(__file__).resolve().parent.parent / cfg.synth.plugin_state_path
+            )
         cfg.seed = 123
         cfg.test = False
         cfg.trainer.precision = "32-true"
