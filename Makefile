@@ -177,6 +177,8 @@ install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, se
 	@echo "Next: source .venv/bin/activate"
 
 STUDIORACK := uv run synth-setter-plugins
+ULTRAMASTER_KR106_VERSION := v2.5.13
+ULTRAMASTER_KR106_GIT_REF := bc15caee5843ab238a25d0969e68d57db2b1615f
 
 install-studiorack: ## Install the pinned Studiorack CLI and its locked dependencies
 	npm ci
@@ -196,11 +198,48 @@ install-obxf: install-studiorack ## Install pinned OB-Xf through Studiorack
 install-six-sines: install-studiorack ## Install pinned Six Sines through Studiorack
 	$(STUDIORACK) install --plugin baconpaul/six-sines
 
-install-ultramaster-kr106: install-studiorack ## Install pinned Ultramaster KR-106 through Studiorack
-	$(STUDIORACK) install --plugin kayrockscreenprinting/ultramaster-kr106
+install-ultramaster-kr106: SHELL := /bin/bash
+install-ultramaster-kr106: install-studiorack ## Build and install pinned Ultramaster KR-106
+	@set -e; \
+	os="$$(uname -s)"; arch="$$(uname -m)"; \
+	if [[ "$$os" == "Darwin" ]]; then \
+		$(STUDIORACK) install --plugin kayrockscreenprinting/ultramaster-kr106; \
+		exit 0; \
+	fi; \
+	if [[ "$$os" != "Linux" || "$$arch" != "x86_64" ]]; then \
+		echo "ERROR: Ultramaster KR-106 supports macOS or Linux x86_64 (host: $$os/$$arch)." >&2; \
+		exit 1; \
+	fi; \
+	command -v cmake >/dev/null 2>&1 || { echo "ERROR: cmake is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	command -v git >/dev/null 2>&1 || { echo "ERROR: git is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	cache="$$HOME/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
+	src="$$cache/src"; build="$$cache/build"; \
+	if ! git -C "$$src" rev-parse --git-dir >/dev/null 2>&1; then \
+		rm -rf "$$src" "$$build"; \
+		mkdir -p "$$src"; \
+		git -C "$$src" init; \
+		git -C "$$src" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	fi; \
+	git -C "$$src" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	git -C "$$src" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
+	git -C "$$src" checkout --detach FETCH_HEAD; \
+	git -C "$$src" reset --hard FETCH_HEAD; \
+	git -C "$$src" clean -ffd; \
+	git -C "$$src" submodule update --init --recursive --depth 1 --force; \
+	git -C "$$src" submodule foreach --recursive 'git reset --hard && git clean -ffd'; \
+	cmake -S "$$src" -B "$$build" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
+	MAKEFLAGS= cmake --build "$$build" --config Release --target KR106_VST3 --parallel "$$(nproc)"; \
+	bundle="$$build/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3"; \
+	if [[ ! -d "$$bundle" ]]; then \
+		echo "ERROR: $$bundle not found after build." >&2; \
+		exit 1; \
+	fi; \
+	$(STUDIORACK) adopt \
+		--plugin kayrockscreenprinting/ultramaster-kr106 \
+		--bundle-path "$$bundle"; \
+	$(STUDIORACK) link --plugin kayrockscreenprinting/ultramaster-kr106
 
-install-plugins: install-studiorack ## Install every VST3 pinned in studiorack.json
-	$(STUDIORACK) install
+install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 pinned in studiorack.json
 
 link-plugins: SHELL := /bin/bash
 link-plugins: ## Link installed Studiorack packages into the checkout's plugins/ namespace

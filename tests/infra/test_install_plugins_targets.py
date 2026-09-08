@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -48,6 +49,149 @@ def _write_executable(path: Path, body: str) -> None:
     """
     path.write_text(body)
     path.chmod(0o755)
+
+
+def _write_kr106_install_fakes(checkout: Path) -> tuple[Path, Path]:
+    """Provide offline git, CMake, npm, and plugin-manager boundaries.
+
+    :param checkout: Isolated checkout receiving the fake executables.
+    :returns: Plugin-manager executable and shared event log.
+    """
+    fake_bin = checkout / "bin"
+    fake_bin.mkdir()
+    tool_log = checkout / "tool.log"
+    _write_executable(
+        fake_bin / "git",
+        """#!/bin/bash
+set -eu
+workdir="$PWD"
+if [[ "$1" == "-C" ]]; then
+  workdir="$2"
+  shift 2
+fi
+printf 'git -C %s %s\n' "$workdir" "$*" >> "$TOOL_LOG"
+if [[ "$1 ${2:-}" == "rev-parse --git-dir" ]]; then
+  [[ -d "$workdir/.git" ]]
+  exit
+fi
+if [[ "$1" == "init" ]]; then
+  mkdir -p "$workdir/.git"
+fi
+""",
+    )
+    _write_executable(
+        fake_bin / "cmake",
+        """#!/bin/bash
+set -eu
+printf 'cmake %s\n' "$*" >> "$TOOL_LOG"
+if [[ "$1" == "--build" ]]; then
+  mkdir -p "$2/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3/Contents"
+fi
+""",
+    )
+    _write_executable(fake_bin / "npm", "#!/bin/bash\nset -eu\n")
+    _write_executable(
+        fake_bin / "uname",
+        """#!/bin/bash
+set -eu
+if [[ "${1:-}" == "-m" ]]; then
+  printf 'x86_64\n'
+else
+  printf 'Linux\n'
+fi
+""",
+    )
+    manager = fake_bin / "synth-setter-plugins"
+    _write_executable(
+        manager,
+        """#!/bin/bash
+set -eu
+printf 'plugins %s\n' "$*" >> "$TOOL_LOG"
+command="$1"
+shift
+case "$command" in
+  install)
+    [[ "$#" -gt 0 ]]
+    ;;
+  adopt)
+    while [[ "$#" -gt 0 ]]; do
+      if [[ "$1" == "--bundle-path" ]]; then
+        source_bundle="$2"
+        break
+      fi
+      shift
+    done
+    [[ -d "$source_bundle" ]]
+    managed="$HOME/managed-kr106.vst3"
+    if [[ -L "$managed" && "$(readlink "$managed")" == "$source_bundle" ]]; then
+      exit 0
+    fi
+    [[ ! -e "$managed" && ! -L "$managed" ]]
+    ln -s "$source_bundle" "$managed"
+    ;;
+  link)
+    mkdir -p plugins
+    alias="plugins/Ultramaster KR-106.vst3"
+    managed="$HOME/managed-kr106.vst3"
+    if [[ -L "$alias" && "$(readlink "$alias")" == "$managed" ]]; then
+      exit 0
+    fi
+    [[ ! -e "$alias" && ! -L "$alias" ]]
+    ln -s "$managed" "$alias"
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+""",
+    )
+    return manager, tool_log
+
+
+def _run_make_target(
+    checkout: Path,
+    target: str,
+    manager: Path,
+    tool_log: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Run one plugin target against isolated external-command fakes.
+
+    :param checkout: Isolated checkout containing the Makefile.
+    :param target: Public Make target to invoke.
+    :param manager: Fake plugin-manager executable.
+    :param tool_log: Event log shared by the command fakes.
+    :returns: Completed Make invocation with captured output.
+    """
+    env = {
+        **os.environ,
+        "HOME": str(checkout / "home"),
+        "PATH": f"{manager.parent}:{os.defpath}",
+        "TOOL_LOG": str(tool_log),
+    }
+    return subprocess.run(  # noqa: S603 -- fixed make target in an isolated checkout
+        [
+            shutil.which("make", path=os.defpath) or "make",
+            target,
+            f"STUDIORACK={manager}",
+        ],
+        cwd=checkout,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _makefile_variable(name: str) -> str:
+    match = re.search(rf"^{name} := (.+)$", MAKEFILE.read_text(), re.MULTILINE)
+    assert match, f"Makefile does not define {name}"
+    return match.group(1)
+
+
+def _dockerfile_argument(name: str) -> str:
+    match = re.search(rf"^ARG {name}=(.+)$", DOCKERFILE.read_text(), re.MULTILINE)
+    assert match, f"Dockerfile does not define ARG {name}"
+    return match.group(1)
 
 
 def _run_setup_surge_script(script: str, fake_bin: Path, managed_root: Path) -> None:
@@ -209,16 +353,102 @@ def test_package_lock_pins_studiorack_cli_and_core() -> None:
     assert lock["packages"]["node_modules/@open-audio-stack/core"]["version"] == "0.1.55"
 
 
-def test_make_plugin_targets_delegate_to_studiorack_cli() -> None:
-    """Every public Make target delegates package installation to Studiorack."""
+def test_make_registry_plugin_targets_delegate_to_studiorack_cli() -> None:
+    """Registry-backed public Make targets delegate installation to Studiorack."""
     makefile = MAKEFILE.read_text()
 
     assert "install-studiorack:" in makefile
     assert "npm ci" in makefile
-    for package in _EXPECTED_PLUGINS:
+    registry_packages = set(_EXPECTED_PLUGINS) - {"kayrockscreenprinting/ultramaster-kr106"}
+    for package in registry_packages:
         assert f"install --plugin {package}" in makefile
-    plugin_section = makefile[makefile.index("STUDIORACK :=") : makefile.index("link-thoughts:")]
-    assert not re.search(r"\b(curl|wget|git clone|tar -|unzip)\b", plugin_section)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["ULTRAMASTER_KR106_GIT_REF", "ULTRAMASTER_KR106_VERSION"],
+)
+def test_makefile_kr106_source_pin_matches_dockerfile(name: str) -> None:
+    """Local and image source builds share each KR-106 pin.
+
+    :param name: Build identity variable present in both recipes.
+    """
+    assert _makefile_variable(name) == _dockerfile_argument(name)
+
+
+def test_makefile_kr106_source_identity_is_immutable_and_manifest_pinned() -> None:
+    """The source fallback names the manifest version and a complete Git SHA."""
+    manifest_version = (
+        PluginManifest.load(MANIFEST).resolve("kayrockscreenprinting/ultramaster-kr106").version
+    )
+
+    assert _makefile_variable("ULTRAMASTER_KR106_VERSION") == f"v{manifest_version}"
+    assert re.fullmatch(r"[0-9a-f]{40}", _makefile_variable("ULTRAMASTER_KR106_GIT_REF"))
+
+
+def test_install_ultramaster_kr106_builds_adopts_and_links_source(tmp_path: Path) -> None:
+    """One Make command provisions a checkout alias from the pinned source build.
+
+    :param tmp_path: Isolated checkout and command-fake root.
+    """
+    shutil.copy(MAKEFILE, tmp_path / "Makefile")
+    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+
+    result = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "plugins" / "Ultramaster KR-106.vst3").is_dir()
+    events = tool_log.read_text()
+    expected_ref = _makefile_variable("ULTRAMASTER_KR106_GIT_REF")
+    assert f"fetch --depth 1 origin {expected_ref}" in events
+    assert "--target KR106_VST3" in events
+    assert "plugins adopt --plugin kayrockscreenprinting/ultramaster-kr106" in events
+    assert "plugins link --plugin kayrockscreenprinting/ultramaster-kr106" in events
+    assert "plugins install --plugin kayrockscreenprinting/ultramaster-kr106" not in events
+
+
+def test_install_ultramaster_kr106_existing_source_install_succeeds(tmp_path: Path) -> None:
+    """Repeated source installs preserve one usable checkout alias.
+
+    :param tmp_path: Isolated checkout and command-fake root.
+    """
+    shutil.copy(MAKEFILE, tmp_path / "Makefile")
+    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+
+    first = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+    second = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+    third = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert third.returncode == 0, third.stderr
+    alias = tmp_path / "plugins" / "Ultramaster KR-106.vst3"
+    assert alias.is_dir()
+    assert not (alias / "Ultramaster KR-106.vst3").exists()
+    assert not (alias / "managed-kr106.vst3").exists()
+
+
+def test_install_plugins_routes_kr106_through_source_fallback(tmp_path: Path) -> None:
+    """Aggregate installation avoids the KR-106 registry artifact.
+
+    :param tmp_path: Isolated checkout and command-fake root.
+    """
+    shutil.copy(MAKEFILE, tmp_path / "Makefile")
+    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+
+    result = _run_make_target(tmp_path, "install-plugins", manager, tool_log)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "plugins" / "Ultramaster KR-106.vst3").is_dir()
+    install_events = {
+        event for event in tool_log.read_text().splitlines() if event.startswith("plugins install")
+    }
+    assert install_events == {
+        "plugins install --plugin asb2m10/dexed",
+        "plugins install --plugin baconpaul/six-sines",
+        "plugins install --plugin surge-synthesizer/ob-xf",
+        "plugins install --plugin surge-synthesizer/surge",
+    }
 
 
 def test_docker_plugin_stage_uses_locked_studiorack_cli() -> None:

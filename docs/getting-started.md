@@ -112,6 +112,13 @@ privilege mechanism. Unsupported package/host combinations and registry
 URL/digest drift fail rather than falling back to an unpinned download. Re-run
 the install command to repair an empty, partial, or modified managed bundle.
 
+On Linux x86_64, `make install-ultramaster-kr106` builds KR-106 from the source
+revision pinned in the Makefile, then asks Studiorack to seal and link the
+bundle. This avoids the release binary's glibc requirement on Ubuntu 22.04.
+The build requires CMake, a C++17 compiler, and the ALSA, X11, FreeType,
+WebKitGTK, and OpenGL development packages. Its reusable checkout and build
+artifacts live under `~/.cache/synth-setter/ultramaster-kr106-<version>/`.
+
 If a manifest package has a valid completion seal in Studiorack storage,
 refresh its checkout alias without reinstalling it:
 
