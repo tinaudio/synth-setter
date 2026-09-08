@@ -186,6 +186,18 @@ class SLAPModule(LightningModule):
         for name in tuple(state_dict):
             if name.startswith(predictor_prefixes):
                 state_dict.pop(name)
+        for arm_name in ("audio_encoder", "param_encoder", "audio_ema", "param_ema"):
+            arm = getattr(self, arm_name)
+            if hasattr(arm, "_orig_mod"):
+                continue
+            compiled_prefix = f"{arm_name}._orig_mod."
+            for name in tuple(state_dict):
+                if not name.startswith(compiled_prefix):
+                    continue
+                eager_name = f"{arm_name}." + name.removeprefix(compiled_prefix)
+                if eager_name in state_dict:
+                    raise ValueError(f"ambiguous compiled checkpoint state: {eager_name}")
+                state_dict[eager_name] = state_dict.pop(name)
         if "_ema_optimizer_steps" not in state_dict:
             global_step = checkpoint.get("global_step", 0)
             completed_steps = global_step if isinstance(global_step, int) else 0

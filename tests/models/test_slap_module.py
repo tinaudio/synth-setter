@@ -85,18 +85,27 @@ def test_constructor_both_param_names_rejects_ambiguous_architecture() -> None:
         )
 
 
+@pytest.mark.parametrize("compiled", [False, True])
 def test_legacy_checkpoint_reload_preserves_encoder_architecture_and_outputs(
     tmp_path: Path,
+    compiled: bool,
 ) -> None:
     """Reload serialized legacy modules and reproduce their EMA projections.
 
     :param tmp_path: Checkpoint destination.
+    :param compiled: Whether the saved state uses compiled arm prefixes.
     """
     import lightning
 
     model = _model().eval()
+    audio_arm, param_arm = model.audio_encoder, model.param_encoder
     params = torch.randn(2, 2)
     expected = model.text_ema(params)[1]
+    if compiled:
+        model.audio_encoder = torch.compile(model.audio_encoder, backend="eager")
+        model.param_encoder = torch.compile(model.param_encoder, backend="eager")
+        model.audio_ema = torch.compile(model.audio_ema, backend="eager")
+        model.param_ema = torch.compile(model.param_ema, backend="eager")
     checkpoint_path = tmp_path / "legacy.ckpt"
     torch.save(
         {
@@ -108,8 +117,8 @@ def test_legacy_checkpoint_reload_preserves_encoder_architecture_and_outputs(
                 for key, value in model.state_dict().items()
             },
             "hyper_parameters": {
-                "audio_encoder": model.audio_encoder,
-                "text_encoder": model.text_encoder,
+                "audio_encoder": audio_arm,
+                "text_encoder": param_arm,
                 "loss_fn": model.loss_fn,
                 "optimizer": partial(torch.optim.SGD, lr=0.1),
             },
