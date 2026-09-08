@@ -14,6 +14,7 @@ from jaxtyping import Float32
 from pyFDN import FDNBuild, build_set_decay, build_to_impz, decay_to_geq, process_fdn
 from pyFDN.td import PitchShift, SOSBank, Series
 
+from synth_setter.data.pyfdn_diffvox import render_diffvox_chain
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_GEQ_RT_MAX_SECONDS,
     PYFDN_ORDER,
@@ -42,7 +43,7 @@ from synth_setter.data.pyfdn_source import (
 from synth_setter.data.vst.param_spec import ParameterValue
 from synth_setter.data.vst.renderers import AudioRenderer, NonFiniteAudioError
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import PyFDNExcitation
+from synth_setter.renderer_backend import PyFDNExcitation, pyfdn_output_channels
 
 _PYFDN_VERSION = "0.4.2"
 _SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
@@ -54,6 +55,8 @@ PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES = 3
 PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER = 2
 _PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder")
 _PITCHSHIFT_PARAM_SPEC = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
+_DIFFVOX_PARAM_SPEC = ParamSpecName("pyfdn_diffvox")
+_PARAM_SPECS = (_PLAIN_PARAM_SPEC, _PITCHSHIFT_PARAM_SPEC, _DIFFVOX_PARAM_SPEC)
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
     ("input_matrix", (PYFDN_ORDER, _CHANNELS), np.dtype(np.float64)),
@@ -412,7 +415,7 @@ def _validate_version(synth_version: str) -> None:
 
 
 class PyFDNRenderer(AudioRenderer):
-    """Render an FDN impulse response or an explicitly selected custom source."""
+    """Render a pyFDN topology's impulse response or an explicitly selected custom source."""
 
     def __init__(
         self,
@@ -429,11 +432,11 @@ class PyFDNRenderer(AudioRenderer):
         """Configure impulse-response rendering or the optional canonical chirp.
 
         :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the custom source.
-        :param param_spec_name: Registered plain or pitch-shift pyFDN topology.
+        :param param_spec_name: Registered plain, pitch-shift, or DiffVox pyFDN topology.
         :param synth_version: Required installed pyFDN version.
         :param plugin_path: Required in-process backend sentinel.
         :param sample_rate: Required sample rate.
-        :param channels: Required mono output channel count.
+        :param channels: Required output channel count of the selected topology.
         :param signal_duration_seconds: Required render duration.
         :param plugin_state_path: Required empty preset path.
         :raises ValueError: The excitation, geometry, or artifact identity drifts.
@@ -441,12 +444,12 @@ class PyFDNRenderer(AudioRenderer):
         _validate_version(synth_version)
         if excitation not in ("chirp", "impulse"):
             raise ValueError("pyFDN excitation must be 'impulse' or 'chirp'")
-        if param_spec_name not in (_PLAIN_PARAM_SPEC, _PITCHSHIFT_PARAM_SPEC):
+        if param_spec_name not in _PARAM_SPECS:
             raise ValueError(f"unsupported pyFDN param spec {param_spec_name!r}")
         if (
             plugin_path != "pyfdn"
             or sample_rate != _SAMPLE_RATE
-            or channels != _CHANNELS
+            or channels != pyfdn_output_channels(param_spec_name)
             or signal_duration_seconds != _SIGNAL_LENGTH / _SAMPLE_RATE
             or plugin_state_path not in (None, "")
         ):
@@ -469,9 +472,9 @@ class PyFDNRenderer(AudioRenderer):
             else {
                 "identity": "unit_impulse_v1",
                 "implementation": (
-                    "pyFDN.process_fdn"
-                    if param_spec_name == _PITCHSHIFT_PARAM_SPEC
-                    else "pyFDN.build_to_impz"
+                    "pyFDN.build_to_impz"
+                    if param_spec_name == _PLAIN_PARAM_SPEC
+                    else "pyFDN.process_fdn"
                 ),
                 "sample_rate_hz": PYFDN_SOURCE_SAMPLE_RATE_HZ,
                 "total_frames": PYFDN_SOURCE_TOTAL_FRAMES,
@@ -480,6 +483,17 @@ class PyFDNRenderer(AudioRenderer):
                 "layout": "channel_first",
             }
         )
+
+    def _source(self) -> np.ndarray:
+        """Return the mono excitation for one render.
+
+        :returns: A fresh unit impulse, or the shared canonical chirp.
+        """
+        if self._source_audio is not None:
+            return self._source_audio[0]
+        source = np.zeros(_SIGNAL_LENGTH, dtype=np.float32)
+        source[0] = 1.0
+        return source
 
     @property
     def source_provenance(self) -> PyFDNSourceProvenance:
@@ -497,27 +511,27 @@ class PyFDNRenderer(AudioRenderer):
         note_start_and_end: tuple[float, float] = (0.0, 0.0),
         *,
         warmup: bool = False,
-    ) -> Float32[np.ndarray, "1 176400"]:
+    ) -> Float32[np.ndarray, "channels 176400"]:
         """Render the configured excitation through one patch with fresh recursion state.
 
-        :param params: Native order-8 mono pyFDN arrays.
+        :param params: Native controls of the configured pyFDN topology.
         :param midi_note: Ignored compatibility stub.
         :param velocity: Ignored compatibility stub.
         :param note_start_and_end: Ignored compatibility stub.
         :param warmup: Ignored compatibility stub.
-        :returns: Contiguous finite channel-first float32 audio shaped ``(1, 176400)``; native
-            amplitude is preserved without clipping or normalization.
+        :returns: Contiguous finite channel-first float32 audio shaped ``(channels, 176400)``;
+            native amplitude is preserved without clipping or normalization.
         :raises ValueError: The patch or rendered shape violates the fixed contract.
         :raises NonFiniteAudioError: The rendered audio contains NaN or infinity.
         """
         del midi_note, velocity, note_start_and_end, warmup
-        if self._param_spec_name == _PITCHSHIFT_PARAM_SPEC:
+        if self._param_spec_name == _DIFFVOX_PARAM_SPEC:
+            output_array = render_diffvox_chain(
+                params, self._source(), sample_rate=_SAMPLE_RATE
+            ).T
+        elif self._param_spec_name == _PITCHSHIFT_PARAM_SPEC:
             build = params_to_pitchshift_fdn_build(params, sample_rate=_SAMPLE_RATE)
-            if self._excitation == "impulse":
-                source = np.zeros(_SIGNAL_LENGTH, dtype=np.float32)
-                source[0] = 1.0
-            else:
-                source = cast(np.ndarray, self._source_audio)[0]
+            source = self._source()
             output_array = _process_source(
                 build,
                 source,
@@ -538,16 +552,16 @@ class PyFDNRenderer(AudioRenderer):
                 post_delay = cast(np.ndarray, build.post_delay)
                 source = cast(np.ndarray, self._source_audio)[0]
                 output_array = _process_source(build, source, SOSBank(post_delay))
-        if output_array.shape != (_SIGNAL_LENGTH,):
+        expected_shape = (self.channels, _SIGNAL_LENGTH)
+        output_array = np.atleast_2d(output_array)
+        if output_array.shape != expected_shape:
             raise ValueError(
-                f"pyFDN output must have shape {(_SIGNAL_LENGTH,)}, got {output_array.shape}"
+                f"pyFDN output must have shape {expected_shape}, got {output_array.shape}"
             )
         if not np.isfinite(output_array).all():
             raise NonFiniteAudioError("pyFDN output must contain only finite values")
         with np.errstate(over="ignore"):
-            audio = np.ascontiguousarray(output_array, dtype=np.float32).reshape(
-                _CHANNELS, _SIGNAL_LENGTH
-            )
+            audio = np.ascontiguousarray(output_array, dtype=np.float32).reshape(expected_shape)
         if not np.isfinite(audio).all():
             raise NonFiniteAudioError("float32 pyFDN output must contain only finite values")
         return audio

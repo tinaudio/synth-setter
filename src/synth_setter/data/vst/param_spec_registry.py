@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import cast
 
 from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_DIFFVOX_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
@@ -59,6 +60,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName(
         "pyfdn_pitchshift_n8_mono_householder"
     ): PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    ParamSpecName("pyfdn_diffvox"): PYFDN_DIFFVOX_PARAM_SPEC,
     ParamSpecName("torchsynth_adsr"): TORCHSYNTH_ADSR_PARAM_SPEC,
     ParamSpecName("torchsynth_full"): TORCHSYNTH_FULL_PARAM_SPEC,
     ParamSpecName("torchsynth_simple"): TORCHSYNTH_SIMPLE_PARAM_SPEC,

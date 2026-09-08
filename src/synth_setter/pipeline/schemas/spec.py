@@ -504,7 +504,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         if self.plugin_path != PYFDN_PLUGIN_NAME or self.plugin_state_path:
             raise ValueError('pyfdn requires plugin_path="pyfdn" and no plugin_state_path')
         expected_rate = renderer_backend_contract.PYFDN_SOURCE_SAMPLE_RATE_HZ
-        expected_channels = renderer_backend_contract.PYFDN_SOURCE_CHANNELS
+        expected_channels = renderer_backend_contract.pyfdn_output_channels(self.param_spec_name)
         expected_duration = renderer_backend_contract.PYFDN_SOURCE_TOTAL_FRAMES / expected_rate
         if (self.sample_rate, self.channels, self.signal_duration_seconds) != (
             expected_rate,

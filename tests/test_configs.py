@@ -292,6 +292,24 @@ def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
     assert renderer.source_provenance["implementation"] == "pyFDN.process_fdn"
 
 
+def test_pyfdn_diffvox_experiment_dispatches_stereo_renderer() -> None:
+    """The DiffVox experiment composes a stereo render contract and its renderer."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/diffvox_flow"])
+    render_values = OmegaConf.to_container(cfg.render, resolve=True)
+    assert isinstance(render_values, dict)
+    render_values["synth"] = OmegaConf.to_container(cfg.synth, resolve=True)
+
+    render = RenderConfig.model_validate(render_values)
+    renderer = make_audio_renderer(render)
+
+    assert render.channels == 2
+    assert cfg.datamodule.param_spec_name == "pyfdn_diffvox"
+    assert cfg.model.param_spec == "pyfdn_diffvox"
+    assert cfg.model.encoder.input_channels == 2
+    assert isinstance(renderer, PyFDNRenderer)
+    assert renderer.channels == 2
+
+
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
     """Compose a top-level config with overrides, clearing GlobalHydra around it.
 

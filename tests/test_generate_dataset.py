@@ -1164,6 +1164,65 @@ def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
     assert tuple(param_type.shape) == (45,)
 
 
+def test_from_hydra_pyfdn_diffvox_writes_stereo_82_coordinate_shard(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Hydra entrypoint renders the DiffVox chain through real pyFDN to stereo rows.
+
+    :param cfg_dataset: Composed dataset configuration changed to the DiffVox identity.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    identity = "pyfdn_diffvox"
+    with open_dict(cfg_dataset):
+        cfg_dataset.task_name = "pyfdn-diffvox-entrypoint-e2e"
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.synth.name = identity
+        cfg_dataset.synth.param_spec_name = identity
+        cfg_dataset.synth.plugin_path = "pyfdn"
+        cfg_dataset.synth.plugin_state_path = ""
+        cfg_dataset.synth.synth_version = "0.4.2"
+        cfg_dataset.render.renderer_backend = "pyfdn"
+        cfg_dataset.render.pyfdn_excitation = "impulse"
+        cfg_dataset.render.sample_rate = 44_100
+        cfg_dataset.render.channels = 2
+        cfg_dataset.render.velocity = 0
+        cfg_dataset.render.signal_duration_seconds = 4.0
+        cfg_dataset.render.min_loudness = -100.0
+        cfg_dataset.render.audio_dtype = "float32"
+        cfg_dataset.render.mel_spec_dtype = "float32"
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.render.attempts_per_sample = 100
+        cfg_dataset.render.param_sample_cadence = "sample"
+        cfg_dataset.render.plugin_reload_cadence = "render"
+        cfg_dataset.render.gui_toggle_cadence = "never"
+        cfg_dataset.r2.prefix = "fake-r2/pyfdn-diffvox-run/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    assert spec.num_params == 82
+    assert validate_all_shards_from_r2(spec) == []
+    shard = spec.shards[0]
+    uploaded = list(fake_r2_remote.rglob(shard.filename))
+    assert len(uploaded) == 1
+    schema = lance.dataset(str(uploaded[0])).schema
+    param_type = schema.field(PARAM_ARRAY_FIELD).type
+    audio_type = schema.field("audio").type
+    assert isinstance(param_type, pa.FixedShapeTensorType)
+    assert isinstance(audio_type, pa.FixedShapeTensorType)
+    assert tuple(param_type.shape) == (82,)
+    assert tuple(audio_type.shape) == (2, 176_400)
+
+
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
     cfg_dataset_torchsynth: DictConfig,
     fake_r2_remote: Path,

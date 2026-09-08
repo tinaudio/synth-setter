@@ -1,8 +1,12 @@
-"""Fixed parameter distributions for order-8 mono pyFDN instruments.
+"""Fixed parameter distributions for the pyFDN instruments.
 
 Example:
     ``PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(rng)`` draws one native patch.
 """
+
+import math
+from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from pyFDN import householder_matrix
@@ -34,6 +38,123 @@ PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN = 256
 PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX = 4096
 PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME = "post_delay.pitch_shift.active_channels"
 
+# DiffVox vocal chain (arXiv:2504.14735): PEQ -> direct panner + ping-pong delay send
+# -> six-line FDN send with a tone PEQ. Bounds follow the reference ``fx_config.yaml``.
+PYFDN_DIFFVOX_ORDER = 6
+PYFDN_DIFFVOX_REVERB_DELAYS = (997, 1153, 1327, 1559, 1801, 2099)
+PYFDN_DIFFVOX_EQ_GAIN_DB_MAX = 20.0
+PYFDN_DIFFVOX_DIRECT_PAN_NAME = "direct.pan"
+PYFDN_DIFFVOX_DELAY_TIME_NAME = "delay.time_seconds"
+PYFDN_DIFFVOX_DELAY_TIME_MIN_SECONDS = 0.1
+PYFDN_DIFFVOX_DELAY_TIME_MAX_SECONDS = 1.0
+PYFDN_DIFFVOX_DELAY_FEEDBACK_NAME = "delay.feedback"
+PYFDN_DIFFVOX_DELAY_FEEDBACK_MAX = 0.95
+PYFDN_DIFFVOX_DELAY_GAIN_NAME = "delay.gain"
+PYFDN_DIFFVOX_DELAY_LP_FREQ_NAME = "delay.lp.freq_hz"
+PYFDN_DIFFVOX_DELAY_ODD_PAN_NAME = "delay.odd_pan"
+PYFDN_DIFFVOX_DELAY_EVEN_PAN_NAME = "delay.even_pan"
+PYFDN_DIFFVOX_SEND_NAME = "send.delay_to_reverb"
+PYFDN_DIFFVOX_REVERB_INPUT_NAME = "reverb.input_matrix"
+PYFDN_DIFFVOX_REVERB_OUTPUT_NAME = "reverb.output_matrix"
+PYFDN_DIFFVOX_REVERB_SKEW_NAME = "reverb.feedback_skew"
+PYFDN_DIFFVOX_REVERB_SKEW_SIZE = PYFDN_DIFFVOX_ORDER * (PYFDN_DIFFVOX_ORDER - 1) // 2
+PYFDN_DIFFVOX_REVERB_RT_NAME = "reverb.geq.rt_seconds"
+
+type EqBandKind = Literal["peak", "lowshelf", "highshelf", "lowpass", "highpass"]
+
+
+@dataclass(frozen=True)
+class EqBand:
+    """One Audio-EQ-Cookbook biquad band and the learned controls it exposes.
+
+    .. attribute :: prefix
+
+       Control-name prefix, e.g. ``peq.pk1``.
+
+    .. attribute :: kind
+
+       Cookbook section type.
+
+    .. attribute :: freq_min_hz
+
+       Inclusive lower bound of the frequency control in Hz.
+
+    .. attribute :: freq_max_hz
+
+       Inclusive upper bound of the frequency control in Hz.
+
+    .. attribute :: q_range
+
+       Inclusive Q bounds, or ``None`` for a fixed 0.707 shelf slope.
+    """
+
+    prefix: str
+    kind: EqBandKind
+    freq_min_hz: float
+    freq_max_hz: float
+    q_range: tuple[float, float] | None
+
+    @property
+    def freq_name(self) -> str:
+        """Return the cutoff / centre frequency control name in Hz."""
+        return f"{self.prefix}.freq_hz"
+
+    @property
+    def gain_name(self) -> str:
+        """Return the gain control name in dB; shelves and peaks only."""
+        return f"{self.prefix}.gain_db"
+
+    @property
+    def q_name(self) -> str:
+        """Return the Q control name; fixed at 0.707 when ``q_range`` is ``None``."""
+        return f"{self.prefix}.q"
+
+    @property
+    def has_gain(self) -> bool:
+        """Return whether the band kind carries a dB gain."""
+        return self.kind in ("peak", "lowshelf", "highshelf")
+
+    def parameters(self) -> list[Parameter]:
+        """Build fresh learned controls for this band.
+
+        :returns: Frequency, then gain and Q when the band exposes them.
+        """
+        controls: list[Parameter] = [
+            ContinuousParameter(
+                name=self.freq_name, min=self.freq_min_hz, max=self.freq_max_hz
+            )
+        ]
+        if self.has_gain:
+            controls.append(
+                ContinuousParameter(
+                    name=self.gain_name,
+                    min=-PYFDN_DIFFVOX_EQ_GAIN_DB_MAX,
+                    max=PYFDN_DIFFVOX_EQ_GAIN_DB_MAX,
+                )
+            )
+        if self.q_range is not None:
+            controls.append(
+                ContinuousParameter(name=self.q_name, min=self.q_range[0], max=self.q_range[1])
+            )
+        return controls
+
+
+PYFDN_DIFFVOX_PEQ_BANDS = (
+    EqBand("peq.pk1", "peak", 33.0, 5_400.0, (0.2, 20.0)),
+    EqBand("peq.pk2", "peak", 200.0, 17_500.0, (0.2, 20.0)),
+    EqBand("peq.ls", "lowshelf", 30.0, 200.0, None),
+    EqBand("peq.hs", "highshelf", 750.0, 8_300.0, None),
+    EqBand("peq.lp", "lowpass", 200.0, 18_000.0, (0.5, 10.0)),
+    EqBand("peq.hp", "highpass", 16.0, 5_300.0, (0.5, 10.0)),
+)
+PYFDN_DIFFVOX_DELAY_LP_BAND = EqBand("delay.lp", "lowpass", 200.0, 16_000.0, (0.5, 2.0))
+PYFDN_DIFFVOX_TONE_BANDS = (
+    EqBand("reverb.eq.pk1", "peak", 200.0, 2_500.0, (0.1, 3.0)),
+    EqBand("reverb.eq.pk2", "peak", 600.0, 7_000.0, (0.1, 3.0)),
+    EqBand("reverb.eq.ls", "lowshelf", 30.0, 450.0, None),
+    EqBand("reverb.eq.hs", "highshelf", 1_500.0, 16_000.0, None),
+)
+
 
 _PYFDN_MIDI_STUBS: ParameterValues = {
     "pitch": 0,
@@ -47,15 +168,21 @@ class PyFDNParamSpec(ParamSpec):
     def __init__(
         self,
         synth_params: list[Parameter],
-        feedback_matrix: np.ndarray,
+        feedback_matrix: np.ndarray | None,
     ) -> None:
         """Bind learned parameters to one renderer-native feedback matrix.
 
         :param synth_params: Parameters represented in each encoded row.
-        :param feedback_matrix: Fixed order-8 feedback matrix restored after decoding.
+        :param feedback_matrix: Fixed feedback matrix restored after decoding, or
+            ``None`` when the topology learns its own feedback.
         """
         super().__init__(synth_params=synth_params, note_params=[])
-        self._feedback_matrix = feedback_matrix.copy()
+        self._feedback_matrix = None if feedback_matrix is None else feedback_matrix.copy()
+
+    def _restore_fixed(self, synth_params: ParameterValues) -> ParameterValues:
+        if self._feedback_matrix is not None:
+            synth_params["feedback_matrix"] = self._feedback_matrix.copy()
+        return synth_params
 
     def sample(
         self, rng: np.random.Generator | None = None
@@ -66,8 +193,7 @@ class PyFDNParamSpec(ParamSpec):
         :returns: Complete native FDN values and fixed MIDI compatibility values.
         """
         synth_params, _ = super().sample(rng)
-        synth_params["feedback_matrix"] = self._feedback_matrix.copy()
-        return synth_params, _PYFDN_MIDI_STUBS.copy()
+        return self._restore_fixed(synth_params), _PYFDN_MIDI_STUBS.copy()
 
     def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode learned fields and restore fixed renderer values.
@@ -76,8 +202,7 @@ class PyFDNParamSpec(ParamSpec):
         :returns: Complete native FDN values and fixed MIDI compatibility values.
         """
         synth_params, _ = super().decode(params)
-        synth_params["feedback_matrix"] = self._feedback_matrix.copy()
-        return synth_params, _PYFDN_MIDI_STUBS.copy()
+        return self._restore_fixed(synth_params), _PYFDN_MIDI_STUBS.copy()
 
 
 def _fdn_matrix_parameters(*, delay_min: int, delay_max: int) -> list[Parameter]:
@@ -149,4 +274,60 @@ PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC = PyFDNParamSpec(
         ),
     ],
     feedback_matrix=_PYFDN_N8_HOUSEHOLDER_FEEDBACK,
+)
+
+
+def _diffvox_parameters() -> list[Parameter]:
+    """Build the DiffVox chain controls in renderer encoding order.
+
+    :returns: PEQ, direct panner, ping-pong delay, send, and FDN reverb controls.
+    """
+    unit = {"min": 0.0, "max": 1.0}
+    return [
+        *(control for band in PYFDN_DIFFVOX_PEQ_BANDS for control in band.parameters()),
+        ContinuousParameter(name=PYFDN_DIFFVOX_DIRECT_PAN_NAME, **unit),
+        ContinuousParameter(
+            name=PYFDN_DIFFVOX_DELAY_TIME_NAME,
+            min=PYFDN_DIFFVOX_DELAY_TIME_MIN_SECONDS,
+            max=PYFDN_DIFFVOX_DELAY_TIME_MAX_SECONDS,
+        ),
+        ContinuousParameter(
+            name=PYFDN_DIFFVOX_DELAY_FEEDBACK_NAME, min=0.0, max=PYFDN_DIFFVOX_DELAY_FEEDBACK_MAX
+        ),
+        ContinuousParameter(name=PYFDN_DIFFVOX_DELAY_GAIN_NAME, **unit),
+        *PYFDN_DIFFVOX_DELAY_LP_BAND.parameters(),
+        ContinuousParameter(name=PYFDN_DIFFVOX_DELAY_ODD_PAN_NAME, **unit),
+        ContinuousParameter(name=PYFDN_DIFFVOX_DELAY_EVEN_PAN_NAME, **unit),
+        ContinuousParameter(name=PYFDN_DIFFVOX_SEND_NAME, **unit),
+        ContinuousArrayParameter(
+            name=PYFDN_DIFFVOX_REVERB_INPUT_NAME,
+            shape=(PYFDN_DIFFVOX_ORDER, 2),
+            min=-1.0,
+            max=1.0,
+        ),
+        ContinuousArrayParameter(
+            name=PYFDN_DIFFVOX_REVERB_OUTPUT_NAME,
+            shape=(2, PYFDN_DIFFVOX_ORDER),
+            min=-1.0,
+            max=1.0,
+        ),
+        ContinuousArrayParameter(
+            name=PYFDN_DIFFVOX_REVERB_SKEW_NAME,
+            shape=(PYFDN_DIFFVOX_REVERB_SKEW_SIZE,),
+            min=-math.pi,
+            max=math.pi,
+        ),
+        ContinuousArrayParameter(
+            name=PYFDN_DIFFVOX_REVERB_RT_NAME,
+            shape=(10,),
+            min=PYFDN_RT_MIN_SECONDS,
+            max=PYFDN_GEQ_RT_MAX_SECONDS,
+        ),
+        *(control for band in PYFDN_DIFFVOX_TONE_BANDS for control in band.parameters()),
+    ]
+
+
+PYFDN_DIFFVOX_PARAM_SPEC = PyFDNParamSpec(
+    synth_params=_diffvox_parameters(),
+    feedback_matrix=None,
 )
