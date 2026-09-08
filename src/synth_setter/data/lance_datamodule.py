@@ -602,8 +602,12 @@ class LanceVSTDataModule(VSTDataModule):
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
         self._setup_stage: str | None = None
+        # expanduser: Hydra overrides reach us with a literal ``~`` because bash
+        # does not tilde-expand ``training.growing_active_record=~/...``.
         self.growing_active_record = (
-            Path(growing_active_record) if growing_active_record is not None else None
+            Path(growing_active_record).expanduser()
+            if growing_active_record is not None
+            else None
         )
         if self.growing_active_record is not None and persistent_workers:
             raise ValueError("growing_active_record requires persistent_workers=false")
@@ -908,12 +912,26 @@ class LanceVSTDataModule(VSTDataModule):
 
     def _refresh_growing_train(self) -> None:
         """Rebuild train only when every rank can adopt a newer exact snapshot."""
-        if self.growing_active_record is None or "train" not in self._splits:
+        if not self._growing_train_built():
             return
         previous = self._growing_snapshot
         train_shard = self._active_train_shard()
         if previous == self._growing_snapshot:
             return
+        self._rebuild_growing_train(train_shard)
+
+    def _growing_train_built(self) -> bool:
+        """Report whether a growing-capable train split already exists.
+
+        :returns: ``True`` once setup built train under an active record.
+        """
+        return self.growing_active_record is not None and "train" in self._splits
+
+    def _rebuild_growing_train(self, train_shard: Path) -> None:
+        """Replace the train split with the currently selected snapshot's data.
+
+        :param train_shard: Active train dataset path.
+        """
         stats = None
         if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
             stats = load_dataset_statistics(self._active_stats_shard(train_shard))
@@ -934,7 +952,17 @@ class LanceVSTDataModule(VSTDataModule):
         """Build the sample-indexed splits required by a Lightning stage.
 
         :param stage: Lightning stage hint; ``None`` retains eager all-split setup.
+        :raises ValueError: The active record's directory does not exist, so the
+            materializer was never started and the run could never grow.
         """
+        if (
+            self.growing_active_record is not None
+            and not self.growing_active_record.parent.is_dir()
+        ):
+            raise ValueError(
+                "growing_active_record directory does not exist: "
+                f"{self.growing_active_record}"
+            )
         # getattr: the attribute is set dynamically in Trainer.__init__, so
         # static type checkers do not see it on the class.
         if (
@@ -964,6 +992,10 @@ class LanceVSTDataModule(VSTDataModule):
         else:
             self._splits = self._build_real_splits(split_names)
         self._setup_stage = stage
+        self._release_growing_resume_pin()
+
+    def _release_growing_resume_pin(self) -> None:
+        """Let the next loader build after a resume keep the restored snapshot."""
         if self._growing_resume_snapshot is not None:
             self._growing_resume_snapshot = None
             self._growing_skip_refresh_once = True
@@ -1028,6 +1060,9 @@ class LanceVSTDataModule(VSTDataModule):
     def load_state_dict(self, state_dict: dict[str, object]) -> None:
         """Restore the exact growing identity before loader construction.
 
+        Lightning restores checkpoints after ``setup("fit")``, so an already-built
+        train split is rebuilt from the restored snapshot here.
+
         :param state_dict: DataModule checkpoint state.
         :raises ValueError: Checkpoint history or snapshot identity is invalid.
         """
@@ -1047,6 +1082,9 @@ class LanceVSTDataModule(VSTDataModule):
         self._growing_snapshot = snapshot
         self._growing_resume_snapshot = snapshot
         self._growing_history = list(history)
+        if self._growing_train_built():
+            self._rebuild_growing_train(self._active_train_shard())
+            self._release_growing_resume_pin()
 
     def val_dataloader(self) -> DataLoader:
         """Return the ordered validation loader, retaining a ragged tail.

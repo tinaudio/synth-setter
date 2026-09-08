@@ -93,14 +93,22 @@ def _active_snapshot(tmp_path: Path, baseline: Path) -> tuple[Path, ActiveGrowin
     return active_path, active
 
 
-def _newer_identity(active_path: Path, active: ActiveGrowingSnapshot) -> ActiveGrowingSnapshot:
+def _newer_identity(
+    active_path: Path, active: ActiveGrowingSnapshot, *, mean: float | None = None
+) -> ActiveGrowingSnapshot:
     old_root = Path(active.version_stats_path)
     version_root = old_root.parent / "8"
     shutil.copytree(old_root, version_root)
     remote = GrowingSnapshot.model_validate_json((version_root / "snapshot.json").read_bytes())
-    remote = remote.model_copy(
-        update={"version": 8, "transaction": "remote-transaction-8", "high_watermark": 8}
-    )
+    update: dict[str, object] = {
+        "version": 8,
+        "transaction": "remote-transaction-8",
+        "high_watermark": 8,
+    }
+    if mean is not None:
+        write_mel_stats(version_root, mean=mean, std=1.0)
+        update["stats_sha256"] = _sha(version_root / "stats.npz")
+    remote = remote.model_copy(update=update)
     (version_root / "snapshot.json").write_text(remote.model_dump_json())
     newer = active.model_copy(
         update={
@@ -108,13 +116,24 @@ def _newer_identity(active_path: Path, active: ActiveGrowingSnapshot) -> ActiveG
             "remote_transaction": remote.transaction,
             "version_stats_path": str(version_root),
             "high_watermark": 8,
+            "stats_sha256": remote.stats_sha256,
         }
     )
     active_path.write_text(newer.model_dump_json())
     return newer
 
 
-def _module(baseline: Path, active_path: Path) -> LanceVSTDataModule:
+def _sorted_train_mel(module: LanceVSTDataModule) -> np.ndarray:
+    """Order-invariant view of one shuffled train epoch's normalized mel values.
+
+    :param module: Set-up datamodule whose train loader is materialized.
+    :returns: Sorted normalized mel values across the epoch.
+    """
+    loader = module.train_dataloader()
+    return np.sort(np.concatenate([batch["mel"].numpy().ravel() for batch in loader]))
+
+
+def _module(baseline: Path, active_path: str | Path) -> LanceVSTDataModule:
     return LanceVSTDataModule(
         dataset_root=baseline,
         growing_active_record=active_path,
@@ -158,10 +177,10 @@ def test_checkpoint_resume_rejects_corrupt_version_statistics(tmp_path: Path) ->
         _module(baseline, active_path).load_state_dict(state)
 
 
-def test_checkpoint_resume_restores_recorded_snapshot_before_newer_active(
+def test_checkpoint_resume_before_setup_restores_recorded_snapshot_before_newer_active(
     tmp_path: Path,
 ) -> None:
-    """Resume builds the checkpoint version before adopting a newer active record.
+    """State loaded before setup builds the checkpoint version, then adopts newer.
 
     :param tmp_path: Isolated baseline and growing roots.
     """
@@ -181,6 +200,96 @@ def test_checkpoint_resume_restores_recorded_snapshot_before_newer_active(
     assert resumed.state_dict()["growing_history"] == (7,)
     resumed.train_dataloader()
     assert resumed.state_dict()["growing_history"] == (7, newer.remote_version)
+
+
+def test_checkpoint_resume_after_setup_rebuilds_train_from_recorded_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Lightning loads state after setup; the loader must still serve the checkpoint version.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, active = _active_snapshot(tmp_path, baseline)
+    source = _module(baseline, active_path)
+    source.setup("fit")
+    state = source.state_dict()
+    recorded_mel = _sorted_train_mel(source)
+    _newer_identity(active_path, active, mean=1.0)
+    resumed = _module(baseline, active_path)
+    resumed.setup("fit")
+
+    resumed.load_state_dict(state)
+
+    assert np.array_equal(_sorted_train_mel(resumed), recorded_mel)
+    assert resumed.state_dict()["growing_history"] == (7,)
+
+
+def test_checkpoint_resume_after_setup_adopts_newer_active_on_next_refresh(
+    tmp_path: Path,
+) -> None:
+    """The resume pin releases after one loader build so growth continues.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, active = _active_snapshot(tmp_path, baseline)
+    source = _module(baseline, active_path)
+    source.setup("fit")
+    state = source.state_dict()
+    newer = _newer_identity(active_path, active)
+    resumed = _module(baseline, active_path)
+    resumed.setup("fit")
+    resumed.load_state_dict(state)
+    resumed.train_dataloader()
+
+    resumed.train_dataloader()
+
+    assert resumed.state_dict()["growing_history"] == (7, newer.remote_version)
+
+
+def test_growing_active_record_tilde_expands_to_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shell-unexpanded ``~`` launch override still resolves under the home directory.
+
+    :param tmp_path: Stands in for the home directory.
+    :param monkeypatch: Redirects ``HOME``.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    module = _module(tmp_path / "baseline", "~/growing/local/active.json")
+
+    assert module.growing_active_record == tmp_path / "growing/local/active.json"
+
+
+def test_setup_rejects_active_record_without_parent_directory(tmp_path: Path) -> None:
+    """A record whose directory was never created fails loudly instead of never growing.
+
+    :param tmp_path: Isolated baseline root.
+    """
+    baseline = _baseline(tmp_path)
+    module = _module(baseline, tmp_path / "never-materialized/active.json")
+
+    with pytest.raises(ValueError, match="never-materialized"):
+        module.setup("fit")
+
+
+def test_active_record_unreadable_after_setup_retains_prior_data(tmp_path: Path) -> None:
+    """A record that disappears mid-run keeps the adopted snapshot and its rows.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, _ = _active_snapshot(tmp_path, baseline)
+    module = _module(baseline, active_path)
+    module.setup("fit")
+    active_path.unlink()
+
+    loader = module.train_dataloader()
+
+    assert module.state_dict()["growing_history"] == (7,)
+    assert len(cast("Sized", loader.dataset)) == 16
 
 
 def test_refresh_rebuilds_train_loader_with_appended_rows_and_new_statistics(
