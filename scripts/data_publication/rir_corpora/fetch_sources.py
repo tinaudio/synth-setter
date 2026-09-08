@@ -236,6 +236,30 @@ def direct(name: str, urls: list[str]) -> None:
     (directory / "acquisition.json").write_text(json.dumps({"files": records}, indent=2) + "\n")
 
 
+def _require_clean_checkout(checkout: Path, revision: str) -> None:
+    """Refuse to record provenance for a checkout that is not exactly the pinned revision.
+
+    :param checkout: Git worktree directory.
+    :param revision: Expected ``HEAD`` commit.
+    :raises RuntimeError: ``HEAD`` differs from the pin or the tree has local changes.
+    """
+    git = executable("git")
+    head = subprocess.run(  # noqa: S603 — args are literal strings
+        [git, "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    status = subprocess.run(  # noqa: S603 — args are literal strings
+        [git, "-C", str(checkout), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if head != revision or status:
+        raise RuntimeError(
+            f"checkout {checkout} is at {head} with {'local changes' if status else 'no changes'}; "
+            f"expected a clean tree at {revision}"
+        )
+
+
 def ashir() -> None:
     """Mirror the ASH-IR repository and check out the pinned revision."""
     directory = ROOT / "ASHIR"
@@ -260,6 +284,7 @@ def ashir() -> None:
             ],
             check=True,
         )
+    _require_clean_checkout(checkout, ASHIR_REV)
     (directory / "acquisition.json").write_text(
         json.dumps(
             {"repository": ASHIR_REPOSITORY, "revision": ASHIR_REV, "fetched_at": now()},
@@ -275,7 +300,10 @@ def openair() -> None:
     directory = ROOT / "OpenAIR" / "source"
     directory.mkdir(parents=True, exist_ok=True)
     started = now()
-    subprocess.run(  # noqa: S603 — args are literal strings
+    # A mirror crawl exits nonzero on any 404 among thousands of objects, so the
+    # exit code is recorded rather than treated as failure; completeness is
+    # established by re-running the resumable crawl until the inventory is stable.
+    crawl = subprocess.run(  # noqa: S603 — args are literal strings
         [
             executable("wget"),
             "-q",
@@ -298,6 +326,7 @@ def openair() -> None:
             {
                 "url": OPENAIR_STORE,
                 "method": "wget -m -np",
+                "wget_exit_code": crawl.returncode,
                 "started_at": started,
                 "finished_at": now(),
             },

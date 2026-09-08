@@ -855,9 +855,9 @@ Local build validation: {local["rows"]:,} rows, zero nulls in every non-nullable
         }
         validation_dir = self.publication / "metadata" / "validation"
         write_json(validation_dir / "remote-validation.json", report)
-        rclone(
-            "copy", str(validation_dir), f"{self.rclone_prefix}/metadata/validation", "--immutable"
-        )
+        # Not --immutable: a marker upload that fails after this copy must be retryable,
+        # and the prefix is not COMPLETE until the marker lands.
+        rclone("copy", str(validation_dir), f"{self.rclone_prefix}/metadata/validation")
         card = self.publication / "README.md"
         marker = {
             "status": "COMPLETE",

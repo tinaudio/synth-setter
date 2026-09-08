@@ -7,7 +7,7 @@ name=$1
 root=${RIR_CORPORA_ROOT:-"$HOME/datasets/rir-corpora"}
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 acquisition="$root/$name/source/acquisition.json"
-if [[ "$name" == OpenAIR ]]; then
+if [[ "$name" == OpenAIR || "$name" == ASHIR ]]; then
   acquisition="$root/$name/acquisition.json"
 fi
 while [[ ! -f "$acquisition" ]]; do

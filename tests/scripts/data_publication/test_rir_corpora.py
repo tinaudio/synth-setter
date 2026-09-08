@@ -116,3 +116,113 @@ def test_corpus_root_honours_env_override(monkeypatch: pytest.MonkeyPatch, tmp_p
     """
     monkeypatch.setenv("RIR_CORPORA_ROOT", str(tmp_path))
     assert rirpub.corpora_root() == tmp_path
+
+
+def _tiny_corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[specs.Spec, Path]:
+    """Lay out a three-object corpus (two WAVs, one licence) under a temp root.
+
+    :param tmp_path: Temp root.
+    :param monkeypatch: Environment patcher.
+    :returns: The descriptor and the corpus root.
+    """
+    monkeypatch.setenv("RIR_CORPORA_ROOT", str(tmp_path))
+    root = tmp_path / "Tiny"
+    source = root / "source"
+    source.mkdir(parents=True)
+    payload = source / "loose"
+    (payload / "b").mkdir(parents=True)
+    (payload / "a.wav").write_bytes(_wav_bytes(sample_rate=8_000, channels=1, frames=16))
+    (payload / "b" / "c.wav").write_bytes(_wav_bytes(sample_rate=8_000, channels=2, frames=8))
+    (payload / "LICENSE.txt").write_text("cc by\n", encoding="utf-8")
+    (payload / ".DS_Store").write_bytes(b"junk")
+    (source / "acquisition.json").write_text("{}\n", encoding="utf-8")
+    spec = specs.Spec(
+        name="Tiny",
+        title="Tiny corpus",
+        summary="s",
+        source_urls=["https://example.invalid"],
+        pin="pinned",
+        license="CC BY 4.0",
+        license_note="n",
+        citation="c",
+        acquisition_commands=["echo fetched"],
+        payload_root="source/loose",
+    )
+    return spec, root
+
+
+def test_extract_and_build_publish_exact_bytes_in_row_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The extract/build stages write one blob row per non-litter object with exact bytes.
+
+    :param tmp_path: Temp root.
+    :param monkeypatch: Environment patcher.
+    """
+    import lance
+
+    spec, root = _tiny_corpus(tmp_path, monkeypatch)
+    monkeypatch.setattr(rirpub, "MIN_FREE_BYTES", 0)
+    corpus = rirpub.Corpus(spec)
+    corpus.extract()
+    corpus.build()
+    dataset = lance.dataset(str(root / "publication" / "all.lance"))
+    rows = dataset.scanner(columns=rirpub.META_COLUMNS).to_table().to_pylist()
+    assert [r["source_path"] for r in rows] == ["LICENSE.txt", "a.wav", "b/c.wav"]
+    assert [r["audio_decodable"] for r in rows] == [False, True, True]
+    assert [r["channels"] for r in rows] == [None, 1, 2]
+    blobs = dataset.take_blobs("source_bytes", indices=[0, 1, 2])
+    payload = root / "source" / "loose"
+    assert [b.read() for b in blobs] == [
+        (payload / "LICENSE.txt").read_bytes(),
+        (payload / "a.wav").read_bytes(),
+        (payload / "b" / "c.wav").read_bytes(),
+    ]
+    assert (root / "publication" / "source" / "LICENSE.txt").read_text() == "cc by\n"
+    assert dataset.schema.metadata[b"source_pin"] == b"pinned"
+    assert "## Schema" in (root / "publication" / "README.md").read_text()
+
+
+def test_batches_split_at_row_bound_and_keep_oversized_object_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batches close at the row bound and a single object may exceed the byte bound.
+
+    :param tmp_path: Temp root.
+    :param monkeypatch: Environment patcher.
+    """
+    spec, root = _tiny_corpus(tmp_path, monkeypatch)
+    monkeypatch.setattr(rirpub, "MIN_FREE_BYTES", 0)
+    monkeypatch.setattr(rirpub, "BATCH_ROWS", 2)
+    monkeypatch.setattr(rirpub, "BATCH_BYTES", 1)
+    corpus = rirpub.Corpus(spec)
+    corpus.extract()
+    inventory = corpus.load_inventory()
+    sizes = [b.num_rows for b in corpus.batches(inventory, corpus.schema([]))]
+    assert sizes == [1, 1, 1]
+
+
+def test_build_rejects_source_object_changed_after_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A payload edited between extract and build fails the build instead of publishing.
+
+    :param tmp_path: Temp root.
+    :param monkeypatch: Environment patcher.
+    """
+    spec, root = _tiny_corpus(tmp_path, monkeypatch)
+    monkeypatch.setattr(rirpub, "MIN_FREE_BYTES", 0)
+    corpus = rirpub.Corpus(spec)
+    corpus.extract()
+    (root / "source" / "loose" / "LICENSE.txt").write_text("changed\n", encoding="utf-8")
+    # Lance surfaces the generator's RuntimeError through its C-data bridge as OSError.
+    with pytest.raises((RuntimeError, OSError), match="changed since inventory"):
+        corpus.build()
+
+
+def test_main_rejects_unknown_stage_and_corpus() -> None:
+    """The dispatcher refuses unknown stages and corpora before touching disk."""
+    with pytest.raises(SystemExit, match="usage"):
+        rirpub.main(["publish", "MITIRSurvey"])
+    with pytest.raises(SystemExit, match="unknown corpus"):
+        rirpub.main(["extract", "Nope"])
