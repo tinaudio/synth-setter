@@ -31,6 +31,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_MAX_SECONDS,
     PYFDN_RT_MIN_SECONDS,
     PYFDN_RT_NYQUIST_NAME,
+    require_array,
 )
 from synth_setter.data.pyfdn_source import (
     PYFDN_SOURCE_CHANNELS,
@@ -43,7 +44,11 @@ from synth_setter.data.pyfdn_source import (
 from synth_setter.data.vst.param_spec import ParameterValue
 from synth_setter.data.vst.renderers import AudioRenderer, NonFiniteAudioError
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import PyFDNExcitation, pyfdn_output_channels
+from synth_setter.renderer_backend import (
+    PYFDN_DIFFVOX_PARAM_SPEC_NAME,
+    PyFDNExcitation,
+    pyfdn_output_channels,
+)
 
 _PYFDN_VERSION = "0.4.2"
 _SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
@@ -55,7 +60,7 @@ PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES = 3
 PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER = 2
 _PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder")
 _PITCHSHIFT_PARAM_SPEC = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
-_DIFFVOX_PARAM_SPEC = ParamSpecName("pyfdn_diffvox")
+_DIFFVOX_PARAM_SPEC = ParamSpecName(PYFDN_DIFFVOX_PARAM_SPEC_NAME)
 _PARAM_SPECS = (_PLAIN_PARAM_SPEC, _PITCHSHIFT_PARAM_SPEC, _DIFFVOX_PARAM_SPEC)
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
@@ -74,34 +79,6 @@ _PITCHSHIFT_REQUIRED_KEYS = _BASE_KEYS.union(
         PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
     }
 )
-
-
-def _require_array(
-    name: str,
-    value: ParameterValue,
-    *,
-    shape: tuple[int, ...],
-    dtype: np.dtype[np.generic],
-) -> np.ndarray:
-    """Validate one native array without coercing or copying it.
-
-    :param name: Patch field name used in validation errors.
-    :param value: Native patch value to validate.
-    :param shape: Required array shape.
-    :param dtype: Required NumPy dtype.
-    :returns: The original validated array.
-    :raises TypeError: The value is not an array or has the wrong dtype.
-    :raises ValueError: The array has the wrong shape or non-finite values.
-    """
-    if not isinstance(value, np.ndarray):
-        raise TypeError(f"{name} must be a NumPy array")
-    if value.shape != shape:
-        raise ValueError(f"{name} must have shape {shape}, got {value.shape}")
-    if value.dtype != dtype:
-        raise TypeError(f"{name} must have dtype {dtype}, got {value.dtype}")
-    if not np.isfinite(value).all():
-        raise ValueError(f"{name} must contain only finite values")
-    return value
 
 
 def _require_rt_seconds(name: str, value: ParameterValue) -> float:
@@ -200,7 +177,7 @@ def _validate_base_params(
     if sample_rate != _SAMPLE_RATE:
         raise ValueError("sample_rate must be exactly 44100.0")
     arrays = {
-        name: _require_array(name, params[name], shape=shape, dtype=dtype)
+        name: require_array(name, params[name], shape=shape, dtype=dtype)
         for name, shape, dtype in _ARRAY_CONTRACTS
     }
     if np.any(arrays["delays"] <= 0):
@@ -261,7 +238,7 @@ def params_to_pitchshift_fdn_build(
         topology="pitch-shift",
     )
     _pitchshift_controls(params)
-    rt_seconds = _require_array(
+    rt_seconds = require_array(
         PYFDN_RT_GEQ_SECONDS_NAME,
         params[PYFDN_RT_GEQ_SECONDS_NAME],
         shape=(10,),
@@ -330,7 +307,7 @@ def _pitchshift_controls(
             f"{PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN} and "
             f"{PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX}"
         )
-    active_mask = _require_array(
+    active_mask = require_array(
         PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
         params[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME],
         shape=(PYFDN_ORDER,),
@@ -541,17 +518,16 @@ class PyFDNRenderer(AudioRenderer):
             build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
             if self._excitation == "impulse":
                 impulse_response = np.asarray(build_to_impz(build, ir_len=_SIGNAL_LENGTH))
-                expected_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
-                if impulse_response.shape != expected_shape:
+                impulse_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
+                if impulse_response.shape != impulse_shape:
                     raise ValueError(
-                        f"pyFDN impulse response must have shape {expected_shape}, "
+                        f"pyFDN impulse response must have shape {impulse_shape}, "
                         f"got {impulse_response.shape}"
                     )
                 output_array = impulse_response[:, 0, 0]
             else:
                 post_delay = cast(np.ndarray, build.post_delay)
-                source = cast(np.ndarray, self._source_audio)[0]
-                output_array = _process_source(build, source, SOSBank(post_delay))
+                output_array = _process_source(build, self._source(), SOSBank(post_delay))
         expected_shape = (self.channels, _SIGNAL_LENGTH)
         output_array = np.atleast_2d(output_array)
         if output_array.shape != expected_shape:
@@ -561,7 +537,7 @@ class PyFDNRenderer(AudioRenderer):
         if not np.isfinite(output_array).all():
             raise NonFiniteAudioError("pyFDN output must contain only finite values")
         with np.errstate(over="ignore"):
-            audio = np.ascontiguousarray(output_array, dtype=np.float32).reshape(expected_shape)
+            audio = np.ascontiguousarray(output_array, dtype=np.float32)
         if not np.isfinite(audio).all():
             raise NonFiniteAudioError("float32 pyFDN output must contain only finite values")
         return audio

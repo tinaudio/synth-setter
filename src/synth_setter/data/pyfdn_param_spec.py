@@ -5,6 +5,7 @@ Example:
 """
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -17,6 +18,7 @@ from synth_setter.data.vst.param_spec import (
     DiscreteArrayParameter,
     DiscreteLiteralParameter,
     Parameter,
+    ParameterValue,
     ParameterValues,
     ParamSpec,
 )
@@ -43,6 +45,7 @@ PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME = "post_delay.pitch_shift.active_channels"
 PYFDN_DIFFVOX_ORDER = 6
 PYFDN_DIFFVOX_REVERB_DELAYS = (997, 1153, 1327, 1559, 1801, 2099)
 PYFDN_DIFFVOX_EQ_GAIN_DB_MAX = 20.0
+PYFDN_FIXED_SHELF_Q = 0.707
 PYFDN_DIFFVOX_DIRECT_PAN_NAME = "direct.pan"
 PYFDN_DIFFVOX_DELAY_TIME_NAME = "delay.time_seconds"
 PYFDN_DIFFVOX_DELAY_TIME_MIN_SECONDS = 0.1
@@ -61,6 +64,34 @@ PYFDN_DIFFVOX_REVERB_SKEW_SIZE = PYFDN_DIFFVOX_ORDER * (PYFDN_DIFFVOX_ORDER - 1)
 PYFDN_DIFFVOX_REVERB_RT_NAME = "reverb.geq.rt_seconds"
 
 type EqBandKind = Literal["peak", "lowshelf", "highshelf", "lowpass", "highpass"]
+
+
+def require_array(
+    name: str,
+    value: ParameterValue,
+    *,
+    shape: tuple[int, ...],
+    dtype: np.dtype[np.generic],
+) -> np.ndarray:
+    """Validate one native array without coercing or copying it.
+
+    :param name: Patch field name used in validation errors.
+    :param value: Native patch value to validate.
+    :param shape: Required array shape.
+    :param dtype: Required NumPy dtype.
+    :returns: The original validated array.
+    :raises TypeError: The value is not an array or has the wrong dtype.
+    :raises ValueError: The array has the wrong shape or non-finite values.
+    """
+    if not isinstance(value, np.ndarray):
+        raise TypeError(f"{name} must be a NumPy array")
+    if value.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}, got {value.shape}")
+    if value.dtype != dtype:
+        raise TypeError(f"{name} must have dtype {dtype}, got {value.dtype}")
+    if not np.isfinite(value).all():
+        raise ValueError(f"{name} must contain only finite values")
+    return value
 
 
 @dataclass(frozen=True)
@@ -113,6 +144,22 @@ class EqBand:
     def has_gain(self) -> bool:
         """Return whether the band kind carries a dB gain."""
         return self.kind in ("peak", "lowshelf", "highshelf")
+
+    def gain_db(self, scalars: Mapping[str, float]) -> float:
+        """Read the band gain from validated controls.
+
+        :param scalars: Validated scalar controls keyed by name.
+        :returns: Gain in dB; ``0.0`` for pass filters, which carry none.
+        """
+        return scalars[self.gain_name] if self.has_gain else 0.0
+
+    def q(self, scalars: Mapping[str, float]) -> float:
+        """Read the band Q from validated controls.
+
+        :param scalars: Validated scalar controls keyed by name.
+        :returns: Learned Q, or the fixed 0.707 shelf slope when the band exposes none.
+        """
+        return scalars[self.q_name] if self.q_range is not None else PYFDN_FIXED_SHELF_Q
 
     def parameters(self) -> list[Parameter]:
         """Build fresh learned controls for this band.
@@ -180,6 +227,11 @@ class PyFDNParamSpec(ParamSpec):
         self._feedback_matrix = None if feedback_matrix is None else feedback_matrix.copy()
 
     def _restore_fixed(self, synth_params: ParameterValues) -> ParameterValues:
+        """Re-inject the fixed feedback matrix when the topology has one.
+
+        :param synth_params: Learned native values to extend in place.
+        :returns: The same mapping.
+        """
         if self._feedback_matrix is not None:
             synth_params["feedback_matrix"] = self._feedback_matrix.copy()
         return synth_params

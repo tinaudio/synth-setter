@@ -33,6 +33,8 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_DIFFVOX_SEND_NAME,
     PYFDN_DIFFVOX_TONE_BANDS,
     EqBand,
+    EqBandKind,
+    require_array,
 )
 from synth_setter.data.vst.param_spec import (
     ContinuousArrayParameter,
@@ -42,8 +44,7 @@ from synth_setter.data.vst.param_spec import (
 
 # Equal-power panning law with a sqrt(2) makeup so a centre pan passes unity gain.
 _PAN_NORM = float(np.sqrt(2.0))
-_FIXED_SHELF_Q = 0.707
-_REQUIRED_KEYS = frozenset(PYFDN_DIFFVOX_PARAM_SPEC.synth_param_names)
+_DIFFVOX_REQUIRED_KEYS = frozenset(PYFDN_DIFFVOX_PARAM_SPEC.synth_param_names)
 
 
 @dataclass(frozen=True)
@@ -69,17 +70,11 @@ def _validated_array(parameter: ContinuousArrayParameter, value: ParameterValue)
     :param parameter: Array control definition.
     :param value: Native value supplied for it.
     :returns: The same array, unchanged.
-    :raises TypeError: The value is not a float64 NumPy array.
-    :raises ValueError: The shape, finiteness, or bounds violate the ParamSpec.
+    :raises ValueError: The bounds violate the ParamSpec.
     """
-    if not isinstance(value, np.ndarray):
-        raise TypeError(f"{parameter.name} must be a NumPy array")
-    if value.shape != parameter.shape:
-        raise ValueError(f"{parameter.name} must have shape {parameter.shape}, got {value.shape}")
-    if value.dtype != np.float64:
-        raise TypeError(f"{parameter.name} must have dtype float64, got {value.dtype}")
-    if not np.isfinite(value).all():
-        raise ValueError(f"{parameter.name} must contain only finite values")
+    value = require_array(
+        parameter.name, value, shape=parameter.shape, dtype=np.dtype(np.float64)
+    )
     if np.any((value < parameter.min) | (value > parameter.max)):
         raise ValueError(f"{parameter.name} must be within [{parameter.min}, {parameter.max}]")
     return value
@@ -110,8 +105,10 @@ def _validate_params(params: Mapping[str, ParameterValue]) -> _Controls:
     :raises TypeError: The ParamSpec holds a control kind the chain cannot validate.
     :raises ValueError: The key set differs from the ParamSpec.
     """
-    if set(params) != _REQUIRED_KEYS:
-        raise ValueError(f"diffvox params must contain exactly {sorted(_REQUIRED_KEYS)}")
+    if set(params) != _DIFFVOX_REQUIRED_KEYS:
+        raise ValueError(
+            f"diffvox params must contain exactly {sorted(_DIFFVOX_REQUIRED_KEYS)}"
+        )
     scalars: dict[str, float] = {}
     arrays: dict[str, np.ndarray] = {}
     for parameter in PYFDN_DIFFVOX_PARAM_SPEC.synth_params:
@@ -124,21 +121,21 @@ def _validate_params(params: Mapping[str, ParameterValue]) -> _Controls:
     return _Controls(scalars=scalars, arrays=arrays)
 
 
-def biquad_section(
-    kind: str,
+def _biquad_section(
+    kind: EqBandKind,
     *,
     sample_rate: float,
     freq_hz: float,
-    gain_db: float = 0.0,
-    q: float = _FIXED_SHELF_Q,
+    gain_db: float,
+    q: float,
 ) -> np.ndarray:
     """Design one Audio EQ Cookbook section as a normalised SOS row.
 
-    :param kind: ``peak``, ``lowshelf``, ``highshelf``, ``lowpass``, or ``highpass``.
+    :param kind: Cookbook section type.
     :param sample_rate: Processing rate in Hz.
     :param freq_hz: Centre or cutoff frequency in Hz.
     :param gain_db: Peak or shelf gain in dB; ignored by pass filters.
-    :param q: Quality factor; shelves use the cookbook ``S = 1`` slope at 0.707.
+    :param q: Quality factor; shelves pass the cookbook ``S = 1`` slope of 0.707.
     :returns: ``[b0, b1, b2, 1, a1, a2]`` float64 coefficients.
     :raises ValueError: ``kind`` is not a cookbook section.
     """
@@ -202,12 +199,12 @@ def _band_sections(
     """
     sections = np.stack(
         [
-            biquad_section(
+            _biquad_section(
                 band.kind,
                 sample_rate=sample_rate,
                 freq_hz=scalars[band.freq_name],
-                gain_db=scalars[band.gain_name] if band.has_gain else 0.0,
-                q=scalars[band.q_name] if band.q_range is not None else _FIXED_SHELF_Q,
+                gain_db=band.gain_db(scalars),
+                q=band.q(scalars),
             )
             for band in bands
         ]
