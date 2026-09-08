@@ -2800,7 +2800,8 @@ def _shrink_slap_ast(cfg: DictConfig) -> None:
     """
     target = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
     ast_configs = []
-    for arm in (cfg.model.audio_encoder, cfg.model.text_encoder):
+    cfg.model.param_encoder.encoder.n_layers = 1
+    for arm in (cfg.model.audio_encoder,):
         if "_args_" not in arm.encoder:
             continue
         ast_configs.extend(
@@ -2816,13 +2817,13 @@ def cfg_slap_train_lance(tmp_path: Path, request: pytest.FixtureRequest) -> Dict
     """Compose a one-step shipped SLAP experiment over local Lance splits.
 
     The configuration exercises fit, validation, checkpoint reload, and test. Indirect
-    parametrization selects the experiment; the default is the MLP baseline.
+    parametrization selects the experiment; the default is the canonical SLAP pair.
 
     :param tmp_path: Isolated dataset and training output root.
     :param request: Fixture request optionally carrying an experiment name.
     :returns: Ready-to-run SLAP training configuration.
     """
-    experiment = getattr(request, "param", "surge/slap_ast_audio_mlp_param")
+    experiment = getattr(request, "param", "surge/slap_ast_audio_vst_ff_param")
     dataset_root = tmp_path / "slap-lance-data"
     _materialize_lance_smoke_root(dataset_root)
 
