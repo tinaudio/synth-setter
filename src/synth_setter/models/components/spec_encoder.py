@@ -187,11 +187,14 @@ class CepstrogramFrontend(nn.Module):
         self.floor_db = floor_db
         self.scale = scale
         self.amin = amin
+        # center=True is what stft_n_frames_from_samples counts; pin it so the AST grid
+        # cannot drift from the front end if the torchaudio default ever changes.
         self.spectrogram = torchaudio.transforms.Spectrogram(
             n_fft=n_fft,
             hop_length=hop_length,
             window_fn=window_fn,
             power=1.0,
+            center=True,
             pad_mode="constant",
         )
 

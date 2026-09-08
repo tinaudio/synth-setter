@@ -124,6 +124,19 @@ def test_stft_n_frames_from_samples_matches_centered_frame_count() -> None:
     assert stft_n_frames_from_samples(44_100, 11_025) == 5
 
 
+@pytest.mark.parametrize(("num_samples", "hop_length"), [(176_400, 0), (176_400, -1), (-1, 441)])
+def test_stft_n_frames_from_samples_invalid_geometry_raises(
+    num_samples: int, hop_length: int
+) -> None:
+    """A non-positive hop or negative length fails loudly at resolver time.
+
+    :param num_samples: Waveform length under test.
+    :param hop_length: Frame stride under test.
+    """
+    with pytest.raises(ValueError):
+        stft_n_frames_from_samples(num_samples, hop_length)
+
+
 def test_audio_dataset_shape_matches_legacy_inline_calc() -> None:
     """Pins ``(num_samples, channels, int(sample_rate * signal_duration_seconds))``."""
     assert audio_dataset_shape(2, 2, 16000, 4.0) == (2, 2, 64000)
