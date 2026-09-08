@@ -3,7 +3,6 @@
 import math
 from collections.abc import Callable
 from functools import partial
-from typing import Any
 
 import jaxtyping
 import librosa
@@ -19,7 +18,7 @@ from synth_setter.models.components.spec_encoder import (
 )
 
 _frontend = partial(LogMelFrontend, in_dim=4_410, sample_rate=44_100)
-# 44.1k samples, 4096-point window, 11025 hop: five centered frames, quefrencies to 800.
+# Fixed geometry makes the cepstral grid deterministic for these tests.
 _cepstrum = partial(CepstrogramFrontend, in_dim=44_100, n_fft=4_096, hop_length=11_025, q_max=800)
 
 
@@ -320,14 +319,29 @@ def test_cepstrogram_frontend_echo_peaks_at_delay_row() -> None:
     assert int(torch.argmax(first_frame[50:])) + 50 == 300
 
 
-def test_cepstrogram_frontend_rows_above_q_max_are_dropped() -> None:
-    """An echo beyond the quefrency window leaves no spike inside it."""
-    frontend = _cepstrum(q_max=250)
+def test_cepstrogram_frontend_q_max_keeps_the_lowest_quefrency_rows() -> None:
+    """A smaller window is the full grid's first rows, so an echo past it leaves no spike."""
+    audio = _echo(300, 0.6)
+    full = _cepstrum()(audio)[0, 0]
 
-    first_frame = frontend(_echo(300, 0.6))[0, 0, :, 0]
+    truncated = _cepstrum(q_max=250)(audio)[0, 0]
 
-    assert first_frame.shape == (250,)
-    assert first_frame[50:].abs().max() < 1.0
+    torch.testing.assert_close(truncated - truncated.mean(), full[:250] - full[:250].mean())
+    assert int(torch.argmax(truncated[50:, 0])) + 50 != 300 - 250
+
+
+def test_cepstrogram_frontend_zero_floor_flattens_the_grid() -> None:
+    """``floor_db=0`` clamps every log-spectrum bin to the peak, leaving no cepstral structure."""
+    features = _cepstrum(floor_db=0.0)(_echo(300, 0.6))
+
+    torch.testing.assert_close(features, torch.zeros_like(features))
+
+
+def test_cepstrogram_frontend_positive_floor_keeps_the_echo_spike() -> None:
+    """A floor below the echo's spectral valleys leaves its quefrency spike intact."""
+    first_frame = _cepstrum(floor_db=100.0)(_echo(300, 0.6))[0, 0, :, 0]
+
+    assert int(torch.argmax(first_frame[50:])) + 50 == 300
 
 
 def test_cepstrogram_frontend_gain_invariant() -> None:
@@ -378,24 +392,27 @@ def test_cepstrogram_frontend_invalid_waveform_shape_raises(audio: torch.Tensor)
 
 
 @pytest.mark.parametrize(
-    "kwargs",
+    "build",
     [
-        {"q_max": 0},
-        {"q_max": 4_097},
-        {"hop_length": 0},
-        {"n_fft": 0},
-        {"floor_db": -1.0},
-        {"floor_db": math.inf},
-        {"scale": 0.0},
+        pytest.param(lambda: _cepstrum(q_max=0), id="q_max_zero"),
+        pytest.param(lambda: _cepstrum(q_max=4_097), id="q_max_past_nyquist_bin"),
+        pytest.param(lambda: _cepstrum(hop_length=0), id="hop_zero"),
+        pytest.param(lambda: _cepstrum(n_fft=0), id="n_fft_zero"),
+        pytest.param(lambda: _cepstrum(n_fft=4_095), id="n_fft_odd"),
+        pytest.param(lambda: _cepstrum(floor_db=-1.0), id="floor_negative"),
+        pytest.param(lambda: _cepstrum(floor_db=math.inf), id="floor_infinite"),
+        pytest.param(lambda: _cepstrum(scale=0.0), id="scale_zero"),
     ],
 )
-def test_cepstrogram_frontend_invalid_geometry_raises(kwargs: dict[str, Any]) -> None:
+def test_cepstrogram_frontend_invalid_geometry_raises(
+    build: Callable[[], CepstrogramFrontend],
+) -> None:
     """Out-of-range quefrency, framing, floor, or scale settings are rejected.
 
-    :param kwargs: One invalid constructor argument.
+    :param build: Constructor call carrying one invalid argument.
     """
     with pytest.raises(ValueError):
-        _cepstrum(**kwargs)
+        build()
 
 
 def test_spec_encoder_cepstrum_backward_reaches_the_waveform() -> None:

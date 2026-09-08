@@ -154,8 +154,8 @@ class CepstrogramFrontend(nn.Module):
         """Build the magnitude STFT whose peak-relative log spectrum is inverse-transformed.
 
         :param in_dim: Expected waveform length in samples.
-        :param n_fft: Window and transform length in samples; sets the finest resolvable
-            comb spacing (``sample_rate / n_fft`` Hz) and bounds ``q_max``.
+        :param n_fft: Even window and transform length in samples; sets the finest
+            resolvable comb spacing (``sample_rate / n_fft`` Hz) and bounds ``q_max``.
         :param hop_length: Frame stride in samples.
         :param q_max: Exclusive upper quefrency row, in samples; rows start at quefrency 0
             so the spectral envelope and per-frame level stay visible.
@@ -169,6 +169,8 @@ class CepstrogramFrontend(nn.Module):
         for name, value in (("n_fft", n_fft), ("hop_length", hop_length), ("q_max", q_max)):
             if value <= 0:
                 raise ValueError(f"{name} must be positive, got {value}")
+        if n_fft % 2:
+            raise ValueError(f"n_fft must be even so centered framing is exact, got {n_fft}")
         if q_max > n_fft // 2 + 1:
             raise ValueError(
                 f"q_max must not exceed n_fft // 2 + 1 = {n_fft // 2 + 1}, got {q_max}"
