@@ -15,7 +15,7 @@ from scipy.signal import sosfilt
 
 _COVARIANCE_JITTER = 1e-6
 BAND_CENTRES_HZ: tuple[int, ...] = (125, 250, 500, 1000, 2000, 4000, 8000)
-# pyFDN addresses the bands as octave offsets from 1 kHz: 2**-3 kHz … 2**3 kHz.
+# pyFDN indexes these bands as octave offsets from 1 kHz.
 _BAND_START_OCTAVE = -3.0
 _BAND_COUNT = len(BAND_CENTRES_HZ)
 

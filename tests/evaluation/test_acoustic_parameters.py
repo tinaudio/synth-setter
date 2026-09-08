@@ -26,11 +26,6 @@ def _decaying_noise(rt60: float, seconds: float = 1.5, seed: int = 0) -> np.ndar
     return (noise(1, samples, seed=seed) * envelope).astype(np.float32)
 
 
-# ---------------------------------------------------------------------------
-# octave-band T30 / C50 estimates
-# ---------------------------------------------------------------------------
-
-
 def test_octave_band_t30_reports_paper_band_centres() -> None:
     """The seven octave bands of Götz et al.
 
@@ -64,11 +59,6 @@ def test_octave_band_c50_known_decay_matches_analytic_clarity() -> None:
     c50, _centres = ap.octave_band_c50(_decaying_noise(0.5)[0], _SR)
 
     assert c50 == pytest.approx(np.full(7, 4.74), abs=3.0)
-
-
-# ---------------------------------------------------------------------------
-# per-sample errors
-# ---------------------------------------------------------------------------
 
 
 def test_t30_mape_identical_bands_returns_zero() -> None:
@@ -107,11 +97,6 @@ def test_c50_mae_db_identical_bands_returns_zero() -> None:
 def test_c50_mae_db_handcrafted_case() -> None:
     """|1−3| and |−2−(−1)| average to 1.5 dB."""
     assert ap.c50_mae_db(np.array([3.0, -1.0]), np.array([1.0, -2.0])) == pytest.approx(1.5)
-
-
-# ---------------------------------------------------------------------------
-# dataset-level statistics
-# ---------------------------------------------------------------------------
 
 
 def test_pearson_correlation_perfectly_linear_pairs_returns_one() -> None:

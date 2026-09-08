@@ -897,8 +897,25 @@ def test_main_pyfdn_end_to_end_writes_pcc_rows_from_raw_parameters(
     per_sample = pd.read_csv(metrics_dir / "metrics.csv", index_col=0)
     assert "acoustic_param/t30/125hz/target" in per_sample.columns
     aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
-    assert aggregate.loc["t30_pcc_125hz", "mean"] == pytest.approx(1.0)
-    assert aggregate.loc["c50_pcc_8000hz", "mean"] == pytest.approx(1.0)
+    pcc_rows = aggregate.loc[aggregate.index.str.contains("_pcc_")]
+    assert list(pcc_rows.index) == [
+        "t30_pcc_125hz",
+        "t30_pcc_250hz",
+        "t30_pcc_500hz",
+        "t30_pcc_1000hz",
+        "t30_pcc_2000hz",
+        "t30_pcc_4000hz",
+        "t30_pcc_8000hz",
+        "c50_pcc_125hz",
+        "c50_pcc_250hz",
+        "c50_pcc_500hz",
+        "c50_pcc_1000hz",
+        "c50_pcc_2000hz",
+        "c50_pcc_4000hz",
+        "c50_pcc_8000hz",
+    ]
+    assert pcc_rows["mean"].to_numpy() == pytest.approx(np.ones(14))
+    assert pcc_rows["std"].isna().all()
     assert aggregate.loc["t30_mape", "mean"] == pytest.approx(0.0)
     assert not aggregate.index.str.startswith("acoustic_param/").any()
 
@@ -979,6 +996,40 @@ def test_main_fad_option_writes_fad_clap_row(
     assert result.exit_code == 0, result.output
     aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
     assert aggregate.loc["fad_clap", "mean"] == pytest.approx(0.0, abs=1e-9)
+    assert np.isnan(aggregate.loc["fad_clap", "std"])
+
+
+@pytest.mark.slow
+def test_main_fad_option_with_real_clap_loader_writes_finite_row(tmp_path: Path) -> None:
+    """``--fad`` through the real CLAP checkpoint loader yields a finite, non-negative row.
+
+    Guards the loader/encoder contract the fake-encoder tests cannot: the checkpoint
+    resolves, the encoder accepts the CLI's mono ``(1, T)`` batches, and the
+    embeddings feed the Fréchet distance.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    for index, freq in enumerate((220.0, 440.0)):
+        _make_sample_dir(
+            audio_root,
+            str(index),
+            _sine(seconds=0.5, freq=freq),
+            _sine(seconds=0.5, freq=2 * freq),
+        )
+    metrics_dir = tmp_path / "metrics"
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--fad"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    assert np.isfinite(aggregate.loc["fad_clap", "mean"])
+    assert aggregate.loc["fad_clap", "mean"] >= 0.0
 
 
 @pytest.mark.slow
