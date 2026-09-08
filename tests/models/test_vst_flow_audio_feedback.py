@@ -323,7 +323,8 @@ def _overfit_one_fixed_example() -> tuple[float, float, float]:
 
     final = module._train_step(batch)
     assert final.audio_term is not None
-    return totals[0], min(totals), (final.loss + final.audio_term).item()
+    final_total = (final.loss + final.audio_term).item()
+    return totals[0], min(*totals, final_total), final_total
 
 
 @pytest.mark.slow
