@@ -1108,79 +1108,27 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     assert validate_all_shards_from_r2(spec) == []
 
 
-def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
-    cfg_dataset: DictConfig,
-    fake_r2_remote: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The Hydra entrypoint renders the pitch-shift identity through real pyFDN.
-
-    :param cfg_dataset: Composed dataset configuration changed to pitch-shift pyFDN.
-    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
-    :param monkeypatch: Pins the worker contract.
-    """
-    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
-    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    identity = "pyfdn_pitchshift_n8_mono_householder"
-    with open_dict(cfg_dataset):
-        cfg_dataset.task_name = "pyfdn-pitchshift-entrypoint-e2e"
-        cfg_dataset.output_format = "lance"
-        cfg_dataset.train_val_test_sizes = [1, 0, 0]
-        cfg_dataset.synth.name = identity
-        cfg_dataset.synth.param_spec_name = identity
-        cfg_dataset.synth.plugin_path = "pyfdn"
-        cfg_dataset.synth.plugin_state_path = ""
-        cfg_dataset.synth.synth_version = "0.4.2"
-        cfg_dataset.render.renderer_backend = "pyfdn"
-        cfg_dataset.render.pyfdn_excitation = "impulse"
-        cfg_dataset.render.sample_rate = 44_100
-        cfg_dataset.render.channels = 1
-        cfg_dataset.render.velocity = 0
-        cfg_dataset.render.signal_duration_seconds = 4.0
-        cfg_dataset.render.min_loudness = -100.0
-        cfg_dataset.render.audio_dtype = "float32"
-        cfg_dataset.render.mel_spec_dtype = "float32"
-        cfg_dataset.render.samples_per_render_batch = 1
-        cfg_dataset.render.samples_per_shard = 1
-        cfg_dataset.render.attempts_per_sample = 100
-        cfg_dataset.render.param_sample_cadence = "sample"
-        cfg_dataset.render.plugin_reload_cadence = "render"
-        cfg_dataset.render.gui_toggle_cadence = "never"
-        cfg_dataset.r2.prefix = "fake-r2/pyfdn-pitchshift-run/"
-        cfg_dataset.logger = None
-
-    spec = spec_from_cfg(cfg_dataset)
-
-    from_hydra(cfg_dataset)
-
-    assert spec.num_params == 45
-    assert spec.render.param_spec_name == identity
-    assert validate_all_shards_from_r2(spec) == []
-    shard = spec.shards[0]
-    uploaded = list(fake_r2_remote.rglob(shard.filename))
-    assert len(uploaded) == 1
-    param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
-    assert isinstance(param_type, pa.FixedShapeTensorType)
-    assert tuple(param_type.shape) == (45,)
-
-
 @pytest.mark.parametrize(
     ("identity", "width"),
-    [("pyfdn_gotz_n8_mono_fixed_delays", 144), ("pyfdn_gotz_n8_mono_learned_delays", 152)],
+    [
+        ("pyfdn_pitchshift_n8_mono_householder", 45),
+        ("pyfdn_gotz_n8_mono_fixed_delays", 144),
+        ("pyfdn_gotz_n8_mono_learned_delays", 152),
+    ],
 )
-def test_from_hydra_pyfdn_gotz_writes_shard_at_spec_width(
+def test_from_hydra_pyfdn_identity_writes_shard_at_spec_width(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
     identity: str,
     width: int,
 ) -> None:
-    """The Hydra entrypoint renders both Götz identities through real pyFDN.
+    """The Hydra entrypoint renders each non-default pyFDN identity through real pyFDN.
 
-    :param cfg_dataset: Composed dataset configuration changed to the Götz identity.
+    :param cfg_dataset: Composed dataset configuration changed to the identity.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
     :param monkeypatch: Pins the worker contract.
-    :param identity: Registered Götz synth and ParamSpec name.
+    :param identity: Registered pyFDN synth and ParamSpec name.
     :param width: Encoded width the written shard must carry.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")

@@ -97,17 +97,12 @@ class PyFDNParamSpec(ParamSpec):
         return synth_params, _PYFDN_MIDI_STUBS.copy()
 
 
-def _fdn_matrix_parameters(*, delay_min: int, delay_max: int) -> list[Parameter]:
-    """Build fresh common FDN parameters in renderer encoding order.
+def _fdn_io_parameters() -> list[Parameter]:
+    """Build fresh input, output, and direct gain parameters shared by every topology.
 
-    :param delay_min: Inclusive delay-line lower bound in samples.
-    :param delay_max: Inclusive delay-line upper bound in samples.
-    :returns: Delay and A/B/C/D parameter definitions excluding fixed feedback.
+    :returns: B, C, and D parameter definitions in renderer encoding order.
     """
     return [
-        DiscreteArrayParameter(
-            name="delays", shape=(PYFDN_ORDER,), min=delay_min, max=delay_max
-        ),
         ContinuousArrayParameter(
             name="input_matrix", shape=(PYFDN_ORDER, 1), min=-1.0, max=1.0
         ),
@@ -117,6 +112,21 @@ def _fdn_matrix_parameters(*, delay_min: int, delay_max: int) -> list[Parameter]
         ContinuousArrayParameter(
             name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0
         ),
+    ]
+
+
+def _fdn_matrix_parameters(*, delay_min: int, delay_max: int) -> list[Parameter]:
+    """Build fresh common FDN parameters in renderer encoding order.
+
+    :param delay_min: Inclusive delay-line lower bound in samples.
+    :param delay_max: Inclusive delay-line upper bound in samples.
+    :returns: Delay and B/C/D parameter definitions excluding fixed feedback.
+    """
+    return [
+        DiscreteArrayParameter(
+            name="delays", shape=(PYFDN_ORDER,), min=delay_min, max=delay_max
+        ),
+        *_fdn_io_parameters(),
     ]
 
 
@@ -232,7 +242,7 @@ class PyFDNGotzParamSpec(ParamSpec):
 def _gotz_parameters() -> list[Parameter]:
     """Build fresh Götz-topology parameters shared by both delay variants.
 
-    :returns: Skew feedback coordinates, gains, per-line attenuation, and tone GEQ.
+    :returns: Skew feedback coordinates, B/C/D gains, per-line attenuation, and tone GEQ.
     """
     return [
         ContinuousArrayParameter(
@@ -241,15 +251,7 @@ def _gotz_parameters() -> list[Parameter]:
             min=-PYFDN_FEEDBACK_SKEW_MAX,
             max=PYFDN_FEEDBACK_SKEW_MAX,
         ),
-        ContinuousArrayParameter(
-            name="input_matrix", shape=(PYFDN_ORDER, 1), min=-1.0, max=1.0
-        ),
-        ContinuousArrayParameter(
-            name="output_matrix", shape=(1, PYFDN_ORDER), min=-1.0, max=1.0
-        ),
-        ContinuousArrayParameter(
-            name="direct_matrix", shape=(1, 1), min=-1.0, max=1.0
-        ),
+        *_fdn_io_parameters(),
         ContinuousArrayParameter(
             name=PYFDN_GEQ_GAIN_DB_NAME,
             shape=(PYFDN_ORDER,),

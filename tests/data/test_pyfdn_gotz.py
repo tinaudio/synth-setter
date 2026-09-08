@@ -11,6 +11,7 @@ import pytest
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_gotz_fdn_build
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_FEEDBACK_SKEW_NAME,
+    skew_to_orthogonal,
     PYFDN_GEQ_BAND_GAIN_DB_NAME,
     PYFDN_GEQ_GAIN_DB_NAME,
     PYFDN_GOTZ_DELAYS,
@@ -239,6 +240,36 @@ def test_gotz_build_rejects_feedback_matrix_that_disagrees_with_skew() -> None:
         params_to_gotz_fdn_build(params, sample_rate=44_100.0)
 
 
+def test_gotz_build_uses_feedback_regenerated_from_skew_not_the_supplied_copy() -> None:
+    """Within tolerance, the rendered matrix is still the exact skew image, not the input."""
+    params = _reference_params()
+    skew = cast(np.ndarray, params[PYFDN_FEEDBACK_SKEW_NAME])
+    params["feedback_matrix"] = skew_to_orthogonal(skew) + 5e-7
+
+    build = params_to_gotz_fdn_build(params, sample_rate=44_100.0)
+
+    np.testing.assert_array_equal(build.A, skew_to_orthogonal(skew))
+
+
+def test_gotz_build_fixed_delays_rejects_other_delay_lengths() -> None:
+    """The fixed-delay identity cannot render with delays that differ from the paper's."""
+    params = _reference_params()
+    params["delays"] = np.ones((8,), dtype=np.int64)
+
+    with pytest.raises(ValueError, match="delays must equal the fixed lengths"):
+        params_to_gotz_fdn_build(params, sample_rate=44_100.0, fixed_delays=PYFDN_GOTZ_DELAYS)
+
+
+def test_gotz_renderer_fixed_identity_rejects_other_delay_lengths() -> None:
+    """The fixed-delay renderer enforces the paper's delays on every patch it renders."""
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays"))
+    params = _reference_params()
+    params["delays"] = np.array([900, 1000, 1100, 1200, 1300, 1400, 1450, 1499], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="delays must equal the fixed lengths"):
+        renderer.render(params)
+
+
 def test_gotz_build_accepts_feedback_matrix_rebuilt_from_float32_codec() -> None:
     """A row decoded from float32 coordinates still passes the skew consistency check."""
     params, notes = _LEARNED.sample(np.random.default_rng(29))
@@ -299,8 +330,8 @@ def test_gotz_renderer_direct_path_arrives_two_samples_late() -> None:
     np.testing.assert_allclose(audio[0, 3:], 0.0, atol=1e-7)
 
 
-def test_gotz_renderer_tone_geq_changes_real_audio() -> None:
-    """The tone-correction GEQ is in the signal path."""
+def test_gotz_renderer_tone_geq_at_minus_12_db_attenuates_real_audio() -> None:
+    """Negative tone-correction commands lower the rendered energy, so polarity is right."""
     renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays"))
     params = _reference_params()
     reference = renderer.render(params)
@@ -308,7 +339,22 @@ def test_gotz_renderer_tone_geq_changes_real_audio() -> None:
 
     changed = renderer.render(params)
 
-    assert not np.allclose(reference, changed)
+    assert np.sqrt(np.mean(changed**2)) < 0.5 * np.sqrt(np.mean(reference**2))
+
+
+def test_gotz_renderer_flat_attenuation_controls_the_wet_tail() -> None:
+    """Per-line attenuation reaches the render: -20 dB per pass leaves a far quieter tail."""
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays"))
+    params = _reference_params()
+    params["direct_matrix"] = np.zeros((1, 1), dtype=np.float64)
+    params[PYFDN_GEQ_GAIN_DB_NAME] = np.full((8,), -0.3, dtype=np.float64)
+    slow_decay = renderer.render(params)
+    params[PYFDN_GEQ_GAIN_DB_NAME] = np.full((8,), -20.0, dtype=np.float64)
+
+    fast_decay = renderer.render(params)
+
+    late = slice(44_100, 88_200)
+    assert np.sum(fast_decay[0, late] ** 2) < 1e-6 * np.sum(slow_decay[0, late] ** 2)
 
 
 def test_gotz_renderer_learned_delays_change_real_audio() -> None:
