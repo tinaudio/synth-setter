@@ -32,6 +32,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_MAX_SECONDS,
     PYFDN_RT_MIN_SECONDS,
     PYFDN_RT_NYQUIST_NAME,
+    kronecker_feedback_matrix,
 )
 from synth_setter.data.pyfdn_source import (
     PYFDN_SOURCE_CHANNELS,
@@ -68,6 +69,9 @@ _BASE_KEYS = frozenset(name for name, _, _ in _ARRAY_CONTRACTS)
 _KRONECKER_CONTROL_KEYS = frozenset(
     {PYFDN_KRONECKER_ANGLES_NAME, PYFDN_KRONECKER_REFLECT_NAME}
 )
+# Decoded angles and their matrix come from the same float64 pass; anything beyond
+# float32 round-off between them means a caller edited one without the other.
+_KRONECKER_FEEDBACK_ATOL = 1e-6
 _REQUIRED_KEYS = _BASE_KEYS.union({PYFDN_RT_DC_NAME, PYFDN_RT_NYQUIST_NAME})
 _PITCHSHIFT_REQUIRED_KEYS = _BASE_KEYS.union(
     {
@@ -180,6 +184,32 @@ def _build_decay_fdn(
     )
     _validate_decay_hooks(decay_build)
     return decay_build
+
+
+def _kronecker_plain_params(
+    params: Mapping[str, ParameterValue],
+) -> dict[str, ParameterValue]:
+    """Fold verified kernel controls out of a Kronecker patch into a plain patch.
+
+    :param params: Native Kronecker patch carrying angle and reflect arrays.
+    :returns: Plain-topology mapping whose feedback matrix the controls describe.
+    :raises ValueError: A control is missing or the embedded matrix is stale.
+    """
+    missing = sorted(_KRONECKER_CONTROL_KEYS.difference(params))
+    if missing:
+        raise ValueError(f"kronecker params must contain {missing}")
+    expected = kronecker_feedback_matrix(
+        np.asarray(params[PYFDN_KRONECKER_ANGLES_NAME]),
+        np.asarray(params[PYFDN_KRONECKER_REFLECT_NAME]),
+    )
+    supplied = params["feedback_matrix"]
+    if not isinstance(supplied, np.ndarray) or not np.allclose(
+        supplied, expected, rtol=0.0, atol=_KRONECKER_FEEDBACK_ATOL
+    ):
+        raise ValueError("feedback_matrix does not match the kronecker kernel controls")
+    return {
+        name: value for name, value in params.items() if name not in _KRONECKER_CONTROL_KEYS
+    }
 
 
 def _validate_base_params(
@@ -535,12 +565,7 @@ class PyFDNRenderer(AudioRenderer):
             )
         else:
             if self._param_spec_name == _KRONECKER_PARAM_SPEC:
-                # The spec already folded the kernel controls into feedback_matrix.
-                params = {
-                    name: value
-                    for name, value in params.items()
-                    if name not in _KRONECKER_CONTROL_KEYS
-                }
+                params = _kronecker_plain_params(params)
             build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
             if self._excitation == "impulse":
                 impulse_response = np.asarray(build_to_impz(build, ir_len=_SIGNAL_LENGTH))

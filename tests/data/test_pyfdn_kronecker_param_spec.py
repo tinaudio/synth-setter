@@ -3,6 +3,7 @@
 from typing import cast
 
 import numpy as np
+import pytest
 
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
@@ -144,3 +145,13 @@ def test_kronecker_spec_encoding_round_trips_feedback_through_kernel_controls() 
     np.testing.assert_allclose(decoded["kronecker_angles"], params["kronecker_angles"], atol=1e-6)
     np.testing.assert_allclose(decoded["feedback_matrix"], params["feedback_matrix"], atol=1e-6)
     assert decoded_notes == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
+
+
+@pytest.mark.parametrize("levels", [2, 4])
+def test_kronecker_feedback_matrix_wrong_control_length_raises(levels: int) -> None:
+    """Only exactly three kernels describe an order-8 matrix; other counts are rejected.
+
+    :param levels: Number of kernel controls supplied instead of three.
+    """
+    with pytest.raises(ValueError, match="3"):
+        kronecker_feedback_matrix(np.zeros(levels), np.zeros(levels, dtype=np.int64))

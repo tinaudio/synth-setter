@@ -57,7 +57,14 @@ def kronecker_feedback_matrix(angles: np.ndarray, reflect: np.ndarray) -> np.nda
     :param reflect: Per-level flags shaped like ``angles``; 1 selects ``Ref(theta)``
         over ``Rot(theta)``.
     :returns: Float64 orthogonal matrix shaped ``(PYFDN_ORDER, PYFDN_ORDER)``.
+    :raises ValueError: Either control array does not hold exactly one entry per level.
     """
+    expected_shape = (PYFDN_KRONECKER_LEVELS,)
+    if angles.shape != expected_shape or reflect.shape != expected_shape:
+        raise ValueError(
+            f"kronecker controls must be shaped {expected_shape}, "
+            f"got angles {angles.shape} and reflect {reflect.shape}"
+        )
     feedback = np.eye(1, dtype=np.float64)
     for theta, flag in zip(angles, reflect, strict=True):
         cos, sin = np.cos(theta), np.sin(theta)

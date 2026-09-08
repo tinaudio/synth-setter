@@ -639,3 +639,23 @@ def test_pyfdn_renderer_kronecker_spec_returns_finite_impulse_response() -> None
     assert audio.shape == (1, 176_400)
     assert audio.dtype == np.float32
     assert np.isfinite(audio).all()
+
+
+def test_pyfdn_renderer_kronecker_spec_rejects_patch_without_kernel_controls() -> None:
+    """A Householder patch carries no kernel controls, so the Kronecker topology is unprovable."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_n8_mono_kronecker"))
+
+    with pytest.raises(ValueError, match="kronecker"):
+        renderer.render(params)
+
+
+def test_pyfdn_renderer_kronecker_spec_rejects_stale_feedback_matrix() -> None:
+    """Kernel controls edited after decoding must not render the stale embedded matrix."""
+    params, _ = PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.sample(np.random.default_rng(123))
+    params = dict(params)
+    params["kronecker_angles"] = np.asarray(params["kronecker_angles"]) + 0.5
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_n8_mono_kronecker"))
+
+    with pytest.raises(ValueError, match="feedback_matrix"):
+        renderer.render(params)
