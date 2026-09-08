@@ -549,6 +549,32 @@ def test_compute_mldr_duplicated_channels_match_mono() -> None:
     assert stereo == pytest.approx(compute_mldr(target, pred), rel=1e-6)
 
 
+def test_compute_mldr_matches_diffvox_reference_value() -> None:
+    """A frozen value from DiffVox's ``MLDRLoss`` pins the coefficients, alignment, and reduction.
+
+    Reference: ``loss/ldr.py`` of github.com/SonyResearch/diffvox with ``torchcomp==0.2.1`` and
+    ``torchlpc==0.7.2``, ``s_taus=[50, 100]``, ``l_taus=[1000, 2000]``, on this exact signal
+    pair. The tolerance covers the reference's float32 ``ms2coef`` coefficient.
+    """
+    sr = 44100
+    t = np.arange(3 * sr) / sr
+    target = (0.5 * np.sin(2 * np.pi * 220 * t) * (1 + 0.5 * np.sin(2 * np.pi * 3 * t)))[None]
+    noise = np.random.default_rng(0).standard_normal(3 * sr)
+    pred = (target[0] * np.exp(-t) + 0.05 * noise)[None]
+
+    dist = compute_mldr(target.astype(np.float32), pred.astype(np.float32), sr)
+
+    assert dist == pytest.approx(1.9981863186, rel=1e-4)
+
+
+def test_compute_mldr_mismatched_shapes_raise() -> None:
+    """A mono target against a stereo prediction is rejected instead of broadcast."""
+    target = _sine(seconds=1.0)
+    pred = np.repeat(target, 2, axis=0)
+    with pytest.raises(ValueError, match="shape"):
+        compute_mldr(target, pred)
+
+
 def test_compute_mldr_silent_inputs_are_finite() -> None:
     """Digital silence is floored before the logarithm instead of producing NaN."""
     silence = np.zeros((1, 2 * _SR), dtype=np.float32)

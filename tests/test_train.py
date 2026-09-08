@@ -88,7 +88,6 @@ from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _Record
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
-# Rows of aggregated_metrics.csv: mss, wmfcc, sot, rms, mldr.
 NUM_AUDIO_METRICS = 5
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so

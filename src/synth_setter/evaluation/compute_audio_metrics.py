@@ -449,7 +449,7 @@ def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
 LDR_SCALES_MS: tuple[tuple[float, float], ...] = ((50.0, 1000.0), (100.0, 2000.0))
 # Energy floor before the log, matching the reference implementation's ``clamp_min``.
 _LDR_ENERGY_FLOOR = 1e-8
-# torchcomp's ``ms2coef`` numerator: coefficient ``1 - exp(-2200 / (ms * sr))``.
+# Numerator used by torchcomp's ``ms2coef``.
 _TORCHCOMP_MS_TO_COEF = 2200.0
 
 
@@ -498,8 +498,13 @@ def compute_mldr(target: np.ndarray, pred: np.ndarray, sample_rate: float = 4410
     :param pred: Predicted audio, same shape as ``target``.
     :param sample_rate: Sample rate in Hz; governs the envelope time constants.
     :returns: Non-negative distance in natural-log units.
+    :raises ValueError: ``target`` and ``pred`` are not two-dimensional arrays of one shape.
     """
     logger.info("Computing MLDR...")
+    if target.ndim != 2 or target.shape != pred.shape:
+        raise ValueError(
+            f"target and pred must share one (C, T) shape; got {target.shape} and {pred.shape}"
+        )
     target_energy = np.maximum(np.square(target, dtype=np.float64), _LDR_ENERGY_FLOOR)
     pred_energy = np.maximum(np.square(pred, dtype=np.float64), _LDR_ENERGY_FLOOR)
 
