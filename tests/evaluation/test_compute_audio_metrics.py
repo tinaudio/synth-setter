@@ -23,6 +23,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_metrics,
     compute_metrics_on_dir,
     compute_mfcc,
+    compute_mldr,
     compute_mss,
     compute_rms,
     compute_sot,
@@ -486,6 +487,76 @@ def test_compute_mss_grows_with_frequency_separation() -> None:
 
 
 # ---------------------------------------------------------------------------
+# compute_mldr
+# ---------------------------------------------------------------------------
+
+
+def _tremolo(depth: float, rate_hz: float = 4.0, seconds: float = 2.0) -> np.ndarray:
+    """Amplitude-modulated 440 Hz tone with the given modulation ``depth`` in ``[0, 1]``.
+
+    :param depth: Fraction of the carrier amplitude swept by the modulator.
+    :param rate_hz: Modulation rate in Hz.
+    :param seconds: Length in seconds.
+    :return: ``(1, N)`` float32 array.
+    """
+    carrier = _sine(seconds=seconds)
+    t = np.arange(carrier.shape[-1], dtype=np.float32) / _SR
+    envelope = 1.0 - depth * 0.5 * (1.0 + np.sin(2 * np.pi * rate_hz * t))
+    return (carrier * envelope).astype(np.float32)
+
+
+def test_compute_mldr_identical_inputs_returns_zero() -> None:
+    """``compute_mldr(x, x)`` is exactly 0."""
+    audio = _tremolo(depth=0.5)
+    assert compute_mldr(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_mldr_steady_tone_vs_tremolo_is_positive() -> None:
+    """A modulated envelope differs in loudness dynamic range from a steady one."""
+    dist = compute_mldr(_sine(seconds=2.0), _tremolo(depth=0.9))
+    assert np.isfinite(dist)
+    assert dist > 0
+
+
+def test_compute_mldr_is_symmetric() -> None:
+    """``compute_mldr(a, b) == compute_mldr(b, a)``."""
+    a = _sine(seconds=2.0)
+    b = _tremolo(depth=0.9)
+    assert compute_mldr(a, b) == pytest.approx(compute_mldr(b, a), abs=1e-9)
+
+
+def test_compute_mldr_is_invariant_to_overall_gain() -> None:
+    """LDR is a ratio of envelopes, so a global gain change nearly cancels.
+
+    Not exactly zero: the energy floor applied before the log bites at zero crossings, and
+    which samples it floors depends on the gain.
+    """
+    audio = _tremolo(depth=0.5)
+    assert compute_mldr(audio, 0.25 * audio) == pytest.approx(0.0, abs=1e-3)
+
+
+def test_compute_mldr_grows_with_modulation_depth() -> None:
+    """Deeper tremolo sits further from a steady tone than shallow tremolo."""
+    steady = _sine(seconds=2.0)
+    assert compute_mldr(steady, _tremolo(depth=0.3)) < compute_mldr(steady, _tremolo(depth=0.9))
+
+
+def test_compute_mldr_duplicated_channels_match_mono() -> None:
+    """Channels are scored as independent rows, so a stereo copy equals its mono source."""
+    target = _sine(seconds=2.0)
+    pred = _tremolo(depth=0.5)
+    stereo = compute_mldr(np.repeat(target, 2, axis=0), np.repeat(pred, 2, axis=0))
+    assert stereo == pytest.approx(compute_mldr(target, pred), rel=1e-6)
+
+
+def test_compute_mldr_silent_inputs_are_finite() -> None:
+    """Digital silence is floored before the logarithm instead of producing NaN."""
+    silence = np.zeros((1, 2 * _SR), dtype=np.float32)
+    dist = compute_mldr(_sine(seconds=2.0), silence)
+    assert np.isfinite(dist)
+
+
+# ---------------------------------------------------------------------------
 # compute_mfcc
 # ---------------------------------------------------------------------------
 
@@ -653,13 +724,13 @@ def test_compute_sot_grows_with_frequency_separation() -> None:
 
 
 def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:
-    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms``.
+    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms/mldr``.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     sample_dir = _make_sample_dir(tmp_path, "0", _sine(seconds=0.5), _sine(seconds=0.5))
     metrics = compute_metrics_on_dir(sample_dir)
-    assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms"}
+    assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms", "mldr"}
     for value in metrics.values():
         assert np.isfinite(value)
 
@@ -677,6 +748,7 @@ def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> Non
     metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
 
     assert set(metrics) == {
+        "mldr",
         "mss",
         "octave_edc_rmse_db",
         "octave_rt60_log_rmse",

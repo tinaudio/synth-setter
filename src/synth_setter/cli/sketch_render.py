@@ -57,6 +57,7 @@ _METRIC_FIELDS = (
     "wmfcc",
     "sot",
     "rms",
+    "mldr",
     "r2_uri",
 )
 

@@ -168,7 +168,7 @@ _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 # 0/0 → NaN (see ``compute_rms`` in ``synth_setter.evaluation.compute_audio_metrics``).
 SILENCE_PEAK_THRESHOLD = 1e-4
 
-_METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
+_METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms", "mldr"})
 
 
 # External I/O seams keep tests state-based without patching module globals (#844).

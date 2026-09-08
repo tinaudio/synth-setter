@@ -1170,7 +1170,7 @@ def test_train_eval_surge_xt(
     """
     from pedalboard.io import AudioFile
 
-    NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
+    NUM_AUDIO_METRICS = 5  # mss, wmfcc, sot, rms, mldr
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
             "rows": NUM_AUDIO_METRICS,
@@ -1178,7 +1178,7 @@ def test_train_eval_surge_xt(
         },
         "metrics.csv": {
             "rows": NUM_FIXTURE_SAMPLES,
-            "columns": {"mss", "wmfcc", "sot", "rms"},
+            "columns": {"mss", "wmfcc", "sot", "rms", "mldr"},
         },
     }
 
@@ -1990,7 +1990,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
 
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
-        for name in ("mss", "wmfcc", "sot", "rms")
+        for name in ("mss", "wmfcc", "sot", "rms", "mldr")
         for stat in ("mean", "std")
     }
     bounds = ORACLE_AUDIO_METRIC_BOUNDS
