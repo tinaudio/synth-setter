@@ -1,6 +1,8 @@
 """Projection encoder for fixed-width conditioning vectors."""
 
 import torch
+from beartype import beartype
+from jaxtyping import jaxtyped
 from torch import nn
 
 
@@ -25,6 +27,17 @@ class VectorProjection(nn.Module):
         self.d_model = d_model
         self.n_conditioning_outputs = n_conditioning_outputs
         self.projection = nn.Linear(input_dim, n_conditioning_outputs * d_model)
+
+    @jaxtyped(typechecker=beartype)
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore instances pickled before the conditioning-rank attributes existed.
+
+        :param state: Pickled module state; legacy checkpoints carry only ``input_dim``
+            and a ``(input_dim, d_model)`` projection, which is one shared slot.
+        """
+        super().__setstate__(state)
+        self.__dict__.setdefault("d_model", self.projection.out_features)
+        self.__dict__.setdefault("n_conditioning_outputs", 1)
 
     def forward(self, embedding: torch.Tensor) -> torch.Tensor:
         """Project ``(batch, input_dim)`` embeddings to the configured conditioning rank.
