@@ -126,7 +126,6 @@ def test_param_encoder_shared_head_matches_injected_ast(
     params = torch.rand(3, 7)
 
     torch.testing.assert_close(encoder(params), reference(params), rtol=0, atol=0)
-    assert VSTFeedForwardParamEncoder.forward is ASTWithProjectionHead.forward
 
 
 def test_ast_without_token_embed_strict_roundtrip_preserves_spectrogram_output() -> None:
@@ -171,8 +170,8 @@ def test_param_encoder_composed_config_resolves_real_dimensions_and_runs() -> No
     assert output.shape == (2, 512)
 
 
-def test_param_encoder_composed_small_backbone_trains_on_real_params() -> None:
-    """Drive Hydra's real encoder through an optimizer step without model doubles."""
+def test_param_encoder_composed_small_backbone_overfits_distinct_targets() -> None:
+    """Fit distinct row targets through the real composed encoder, not just its bias."""
     register_resolvers()
     with initialize_config_module("synth_setter.configs", version_base="1.3"):
         cfg = compose(
@@ -190,11 +189,18 @@ def test_param_encoder_composed_small_backbone_trains_on_real_params() -> None:
             ],
         )
     model = instantiate(cfg.model.encoder)
-    params = torch.rand(2, resolve_param_spec_width("obxf"))
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    initial = model(params).square().mean()
-    initial.backward()
-    optimizer.step()
+    params = torch.stack(
+        (
+            torch.zeros(resolve_param_spec_width("obxf")),
+            torch.ones(resolve_param_spec_width("obxf")),
+        )
+    )
+    targets = torch.stack((torch.full((512,), -1.0), torch.ones(512)))
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+    for _ in range(100):
+        optimizer.zero_grad()
+        loss = (model(params) - targets).square().mean()
+        loss.backward()
+        optimizer.step()
 
-    assert model(params).shape == (2, 512)
-    assert model(params).square().mean() < initial
+    assert (model(params) - targets).square().mean() < 1e-3

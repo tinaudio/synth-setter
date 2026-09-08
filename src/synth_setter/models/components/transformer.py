@@ -728,7 +728,7 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
         input_channels: int = 2,
         spec_shape: tuple[int] = (128, 401),
         token_embed: nn.Module | None = None,
-    ):
+    ) -> None:
         """Encode inputs into one vector through the residual projection head.
 
         :param d_model: Transformer and hidden projection width.

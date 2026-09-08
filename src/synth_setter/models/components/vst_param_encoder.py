@@ -1,4 +1,11 @@
-"""Parameter-vector embeddings with the feed-forward AST projection head."""
+"""Parameter-vector embeddings with the feed-forward AST projection head.
+
+Example::
+
+    projection = LearntProjection(768, 768, num_params=300, num_tokens=128)
+    encoder = VSTFeedForwardParamEncoder(projection)
+    embeddings = encoder(params)
+"""
 
 from beartype import beartype
 from jaxtyping import jaxtyped
