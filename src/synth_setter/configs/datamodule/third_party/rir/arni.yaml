@@ -1,0 +1,11 @@
+defaults:
+  - /datamodule/third_party/base@_here_
+  - _self_
+
+# 132k mono float WAV responses, four sweeps per (panel configuration, microphone);
+# the setup CSV, layout image, and panel PDF are the only non-audio rows.
+dataset_uri: r2://experiments/third_party/Arni/all.lance
+dataset_version: 1
+audio_column: source_bytes
+row_filter: "audio_decodable = true"
+downmix: true
