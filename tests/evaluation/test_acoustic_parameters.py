@@ -159,3 +159,20 @@ def test_frechet_distance_fewer_than_two_embeddings_raises() -> None:
     """A covariance needs at least two embeddings per set."""
     with pytest.raises(ValueError, match="at least two embeddings"):
         ap.frechet_distance(np.zeros((1, 2)), np.zeros((3, 2)))
+
+
+def test_frechet_distance_singular_covariances_returns_finite_nonnegative() -> None:
+    """Collinear embeddings give rank-deficient covariances; the distance stays a valid one."""
+    line = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])
+
+    distance = ap.frechet_distance(line, line + [0.5, 0.5])
+
+    assert np.isfinite(distance)
+    assert distance == pytest.approx(0.5, abs=1e-6)
+
+
+def test_frechet_distance_never_negative_from_rounding() -> None:
+    """Near-identical sets round to a tiny negative trace; the result is clamped to zero."""
+    embeddings = np.array([[0.0, 1.0], [1.0, 0.0], [2.0, 3.0], [1.0, 1.0]])
+
+    assert ap.frechet_distance(embeddings, embeddings + 1e-9) >= 0.0

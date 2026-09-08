@@ -13,6 +13,7 @@ from pyFDN import estimate_rt_bands, octave_band_filterbank, octave_bands
 from scipy.linalg import sqrtm
 from scipy.signal import sosfilt
 
+_COVARIANCE_JITTER = 1e-6
 BAND_CENTRES_HZ: tuple[int, ...] = (125, 250, 500, 1000, 2000, 4000, 8000)
 # pyFDN addresses the bands as octave offsets from 1 kHz: 2**-3 kHz … 2**3 kHz.
 _BAND_START_OCTAVE = -3.0
@@ -96,8 +97,24 @@ def frechet_distance(target: np.ndarray, pred: np.ndarray) -> float:
     if target.shape[0] < 2 or pred.shape[0] < 2:
         raise ValueError("Fréchet distance needs at least two embeddings per set")
     mean_diff = target.mean(axis=0) - pred.mean(axis=0)
-    target_cov = np.cov(target, rowvar=False)
-    pred_cov = np.cov(pred, rowvar=False)
-    # Singular covariances (few samples) yield tiny imaginary parts; drop them.
-    cov_sqrt = np.real(np.asarray(sqrtm(target_cov @ pred_cov)))
-    return float(mean_diff @ mean_diff + np.trace(target_cov + pred_cov - 2.0 * cov_sqrt))
+    target_cov = np.atleast_2d(np.cov(target, rowvar=False))
+    pred_cov = np.atleast_2d(np.cov(pred, rowvar=False))
+    cov_sqrt = _real_matrix_sqrt(target_cov @ pred_cov)
+    if not np.isfinite(cov_sqrt).all():
+        # Rank-deficient covariances (few samples) can defeat sqrtm; a diagonal
+        # jitter is the standard FID/FAD fallback.
+        offset = _COVARIANCE_JITTER * np.eye(target_cov.shape[0])
+        cov_sqrt = _real_matrix_sqrt((target_cov + offset) @ (pred_cov + offset))
+    distance = mean_diff @ mean_diff + np.trace(target_cov + pred_cov - 2.0 * cov_sqrt)
+    # Rounding can push a zero distance a hair negative; a distance is never negative.
+    return max(0.0, float(distance))
+
+
+def _real_matrix_sqrt(matrix: np.ndarray) -> np.ndarray:
+    """Return the principal square root of ``matrix`` with any spurious imaginary part dropped.
+
+    :param matrix: Square matrix, a product of two covariance matrices.
+    :returns: Real-valued square root; non-finite entries signal a failed decomposition.
+    """
+    # Singular covariances yield tiny imaginary parts that carry no information.
+    return np.real(np.asarray(sqrtm(matrix)))
