@@ -58,9 +58,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
     ParamSpecName("obxf"): OBXF_PARAM_SPEC,
     ParamSpecName("pyfdn_n8_mono_householder"): PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
-    ParamSpecName(
-        "pyfdn_n8_mono_householder_vector"
-    ): PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+    ParamSpecName("pyfdn_n8_mono_householder_vector"): PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
     ParamSpecName("pyfdn_n8_mono_kronecker"): PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     ParamSpecName(
         "pyfdn_pitchshift_n8_mono_householder"
