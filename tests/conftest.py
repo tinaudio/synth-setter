@@ -2587,12 +2587,21 @@ _PYFDN_LANCE_SMOKE_MEL_SHAPE = (1, 128, 401)
 _PYFDN_LANCE_SMOKE_NUM_PARAMS = len(param_specs["pyfdn_n8_mono_householder"])
 
 
-def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int, include_sketch: bool) -> None:
-    """Write one fixed-Householder pyFDN split for entrypoint tests.
+def _write_pyfdn_lance_smoke_split(
+    path: Path,
+    *,
+    seed: int,
+    include_sketch: bool,
+    channels: int = 1,
+    num_params: int = _PYFDN_LANCE_SMOKE_NUM_PARAMS,
+) -> None:
+    """Write one pyFDN split for entrypoint tests.
 
     :param path: Output ``.lance`` split.
     :param seed: RNG seed distinguishing splits.
     :param include_sketch: Whether to persist the temporal reverb profile.
+    :param channels: Audio and mel channel count of the identity under test.
+    :param num_params: Encoded parameter width of the identity under test.
     """
     from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
     from synth_setter.pipeline.data.lance_shard import (
@@ -2603,9 +2612,11 @@ def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int, include_sketch: boo
 
     rng = np.random.default_rng(seed)
     columns = {
-        "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
-        "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
-        "param_array": rng.random((1, _PYFDN_LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+        "audio": rng.uniform(-1.0, 1.0, (1, channels, 176_400)).astype(np.float16),
+        "mel_spec": rng.standard_normal((1, channels, *_PYFDN_LANCE_SMOKE_MEL_SHAPE[1:])).astype(
+            np.float32
+        ),
+        "param_array": rng.random((1, num_params)).astype(np.float32),
     }
     batch = shard_record_batch(columns)
     if include_sketch:
@@ -2626,18 +2637,6 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
     experiment = getattr(request, "param", "pyfdn/flow")
     dataset_root = tmp_path / "pyfdn-lance-data"
     dataset_root.mkdir()
-    for seed, split in enumerate(("train", "val", "test")):
-        _write_pyfdn_lance_smoke_split(
-            dataset_root / f"{split}.lance",
-            seed=seed,
-            include_sketch="sketch" in experiment,
-        )
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
-    (dataset_root / "dataset.complete").touch()
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -2645,6 +2644,22 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             return_hydra_config=True,
             overrides=[f"experiment={experiment}", "trainer=cpu"],
         )
+        channels = int(cfg.render.channels)
+        mel_shape = (channels, *_PYFDN_LANCE_SMOKE_MEL_SHAPE[1:])
+        for seed, split in enumerate(("train", "val", "test")):
+            _write_pyfdn_lance_smoke_split(
+                dataset_root / f"{split}.lance",
+                seed=seed,
+                include_sketch="sketch" in experiment,
+                channels=channels,
+                num_params=len(param_specs[cfg.datamodule.param_spec_name]),
+            )
+        np.savez(
+            dataset_root / "stats.npz",
+            mean=np.zeros(mel_shape, dtype=np.float32),
+            std=np.ones(mel_shape, dtype=np.float32),
+        )
+        (dataset_root / "dataset.complete").touch()
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
             cfg.paths.output_dir = str(tmp_path)

@@ -266,6 +266,39 @@ def test_diffvox_render_rejects_out_of_range_feedback() -> None:
         render_diffvox_chain(params, _impulse(), sample_rate=_SAMPLE_RATE)
 
 
+def test_diffvox_render_rejects_sample_rate_below_twice_the_highest_eq_bound() -> None:
+    """A rate whose Nyquist limit an 18 kHz cutoff could exceed is refused."""
+    with pytest.raises(ValueError, match="Nyquist"):
+        render_diffvox_chain(_dry_params(), _impulse(), sample_rate=32_000.0)
+
+
+def test_diffvox_render_rejects_float32_reverb_matrix() -> None:
+    """Array controls must arrive as float64 like every other pyFDN native array."""
+    params = _dry_params()
+    params[PYFDN_DIFFVOX_REVERB_OUTPUT_NAME] = np.zeros((2, 6), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="dtype float64"):
+        render_diffvox_chain(params, _impulse(), sample_rate=_SAMPLE_RATE)
+
+
+def test_diffvox_render_rejects_list_for_array_control() -> None:
+    """A Python list is not accepted where a native array is required."""
+    params = _dry_params()
+    params[PYFDN_DIFFVOX_REVERB_RT_NAME] = [1.0] * 10  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="NumPy array"):
+        render_diffvox_chain(params, _impulse(), sample_rate=_SAMPLE_RATE)
+
+
+def test_diffvox_render_rejects_non_real_scalar_control() -> None:
+    """A string where a real scalar is required is refused before processing."""
+    params = _dry_params()
+    params[PYFDN_DIFFVOX_DIRECT_PAN_NAME] = "centre"  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="real scalar"):
+        render_diffvox_chain(params, _impulse(), sample_rate=_SAMPLE_RATE)
+
+
 def test_diffvox_renderer_returns_stereo_float32_and_is_repeatable() -> None:
     """Fresh filter state per render makes the stereo output identical each call."""
     renderer = PyFDNRenderer(param_spec_name=_DIFFVOX, channels=2)

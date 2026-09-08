@@ -220,6 +220,27 @@ def test_evaluate_pyfdn_householder_checkpoint_logs_param_mse(
     assert torch.isfinite(metrics["test/param_mse"])
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/diffvox_flow"], indirect=True)
+def test_evaluate_pyfdn_diffvox_checkpoint_logs_param_mse(cfg_pyfdn_train: DictConfig) -> None:
+    """Evaluate a real checkpoint through the stereo DiffVox pyFDN recipe.
+
+    :param cfg_pyfdn_train: One-step DiffVox configuration over stereo Lance rows.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+    train(cfg_pyfdn_train)
+    checkpoint = Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.ckpt_path = str(checkpoint)
+        cfg_pyfdn_train.mode = "test"
+        cfg_pyfdn_train.trainer.limit_test_batches = 1
+
+    HydraConfig().set_config(cfg_pyfdn_train)
+    metrics, _ = evaluate(cfg_pyfdn_train)
+
+    assert torch.isfinite(metrics["test/param_mse"])
+
+
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
     """The evaluation entrypoint rejects a config without checkpoint provenance."""
     GlobalHydra.instance().clear()

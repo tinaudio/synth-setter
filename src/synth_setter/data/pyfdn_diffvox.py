@@ -48,6 +48,10 @@ _PAN_NORM = float(np.sqrt(2.0))
 _DIFFVOX_REQUIRED_KEYS = frozenset(PYFDN_DIFFVOX_PARAM_SPEC.synth_param_names)
 # Dense enough to resolve the narrowest GEQ ripple when probing the absorption peak.
 _ABSORPTION_PROBE_BINS = 8192
+_HIGHEST_EQ_FREQ_HZ = max(
+    band.freq_max_hz
+    for band in (*PYFDN_DIFFVOX_PEQ_BANDS, PYFDN_DIFFVOX_DELAY_LP_BAND, *PYFDN_DIFFVOX_TONE_BANDS)
+)
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,19 @@ def _validated_scalar(parameter: ContinuousParameter, value: ParameterValue) -> 
     if not np.isfinite(scalar) or not parameter.min <= scalar <= parameter.max:
         raise ValueError(f"{parameter.name} must be within [{parameter.min}, {parameter.max}]")
     return scalar
+
+
+def _require_sample_rate(sample_rate: float) -> None:
+    """Reject rates whose Nyquist limit an EQ band bound could exceed.
+
+    :param sample_rate: Processing rate in Hz.
+    :raises ValueError: The cookbook design would alias a cutoff above Nyquist.
+    """
+    if not np.isfinite(sample_rate) or sample_rate <= 2.0 * _HIGHEST_EQ_FREQ_HZ:
+        raise ValueError(
+            f"sample_rate must exceed {2.0 * _HIGHEST_EQ_FREQ_HZ} Hz so every EQ band "
+            f"bound stays below Nyquist, got {sample_rate}"
+        )
 
 
 def _validate_params(params: Mapping[str, ParameterValue]) -> _Controls:
@@ -339,6 +356,7 @@ def render_diffvox_chain(
     :param sample_rate: Processing rate in Hz.
     :returns: Float64 stereo output shaped ``(frames, 2)``.
     """
+    _require_sample_rate(sample_rate)
     controls = _validate_params(params)
     equalised = SOSBank(
         _band_sections(
