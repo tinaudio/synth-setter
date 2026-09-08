@@ -9,6 +9,12 @@ defaults:
 # loads the spec from there (see `spec_io.load_spec_from_root`).
 dataset_root_uri: ???
 
+# Opt in to recomputing normalization statistics from a deterministic uniform
+# sample of at most 10,000 committed training waveforms. The seed is ignored
+# while estimation is disabled.
+estimate_normalization_stats: false
+seed: 1234
+
 # Logger group resumes the data-generation run (id pinned to spec.run_id,
 # resume=allow forced in `finalize`) so the canonical `data-{config_id}`
 # dataset artifact lands on the producer node of the W&B lineage DAG.

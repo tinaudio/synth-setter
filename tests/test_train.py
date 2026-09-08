@@ -156,6 +156,35 @@ def test_train_eval_only_experiment_raises_before_instantiation() -> None:
         train(cfg)
 
 
+def test_train_enabled_estimation_negative_seed_raises_before_instantiation(
+    cfg_train: DictConfig,
+) -> None:
+    """Calibration rejects a negative subset seed at the runtime boundary.
+
+    :param cfg_train: Valid training configuration mutated with an invalid seed.
+    """
+    with open_dict(cfg_train):
+        cfg_train.estimate_normalization_stats = True
+        cfg_train.seed = -1
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        train(cfg_train)
+
+
+def test_train_string_estimate_normalization_stats_raises_before_instantiation(
+    cfg_train: DictConfig,
+) -> None:
+    """The entrypoint rejects quoted booleans instead of enabling calibration.
+
+    :param cfg_train: Valid training configuration mutated with an invalid flag.
+    """
+    with open_dict(cfg_train):
+        cfg_train.estimate_normalization_stats = "false"
+
+    with pytest.raises(ValueError, match="must be a boolean"):
+        train(cfg_train)
+
+
 @pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
@@ -213,6 +242,45 @@ def test_train_pyfdn_online_ast_one_step_uses_waveforms(
 
     assert cfg_pyfdn_train.model.conditioning == "audio"
     assert objects["trainer"].global_step == 1
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+def test_train_online_ast_estimates_stats_and_checkpoint_resume_reuses_them(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """The real entrypoint calibrates online AST and restores its checkpointed buffers.
+
+    :param cfg_pyfdn_train: Tiny waveform-conditioned pyFDN AST configuration.
+    """
+    import lance
+
+    dataset_root = Path(cfg_pyfdn_train.datamodule.dataset_root)
+    train_split = dataset_root / "train.lance"
+    lance.write_dataset(lance.dataset(str(train_split)).to_table(), train_split, mode="append")
+    dataset_stats = dataset_root / "stats.npz"
+    dataset_stats.unlink()
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.estimate_normalization_stats = True
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, first_objects = train(cfg_pyfdn_train)
+
+    output_stats = Path(cfg_pyfdn_train.paths.output_dir) / "stats.npz"
+    checkpoint = Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    assert output_stats.is_file()
+    assert first_objects["model"].encoder.frontend.normalization_enabled
+    assert checkpoint.is_file()
+
+    output_stats.unlink()
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.ckpt_path = str(checkpoint)
+        cfg_pyfdn_train.trainer.max_steps = 2
+
+    _, resumed_objects = train(cfg_pyfdn_train)
+
+    assert resumed_objects["model"].encoder.frontend.normalization_enabled
+    assert not output_stats.exists()
 
 
 @pytest.mark.slow

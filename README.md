@@ -148,7 +148,8 @@ files under `r2://experiments/clap-renders/`; the CSV records the prompt-to-rend
 CLAP cosine similarity and distance. Run `synth-setter-clap --help` for checkpoint,
 device, output, seed, and upload overrides.
 
-See the project documentation for a full walkthrough.
+See the project documentation for a full walkthrough. For stored/online AST
+comparisons and calibration, see [online AST normalization](docs/reference/ast-normalization.md).
 
 ## Project Structure
 
