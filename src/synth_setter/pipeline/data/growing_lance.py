@@ -24,6 +24,7 @@ from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
     LANCE_MAX_BYTES_PER_FILE,
     fragment_schema_matches,
+    lance_schema,
 )
 from synth_setter.pipeline.data.stats import (
     WelfordState,
@@ -546,6 +547,18 @@ def initialize_growing_branch(
     """
     dataset = _open_train(train_uri)
     baseline = dataset.checkout_version(baseline_version)
+    # Growing shards carry the spec schema only, so a baseline widened by
+    # add-embeddings would reject every staged shard (#3251); refuse it here.
+    spec_fields = lance_schema(
+        dataset_field_shapes(spec.render, spec.num_params), spec.render.shard_metadata()
+    ).names
+    extra_columns = [name for name in baseline.schema.names if name not in spec_fields]
+    if extra_columns:
+        raise ValueError(
+            f"baseline train version {baseline_version} carries post-finalize columns "
+            f"{extra_columns} absent from the spec schema; pass --baseline-version "
+            "pointing at the finalized pre-embedding version"
+        )
     baseline_transaction = _transaction(dataset, baseline_version)
     baseline_train_shards = len(baseline.get_fragments())
     expected_train_shards = spec.train_val_test_sizes[0] // spec.render.samples_per_shard

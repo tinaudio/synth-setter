@@ -95,6 +95,36 @@ def test_initialize_recovers_branch_created_without_contract_metadata(
     assert snapshot.high_watermark == 2
 
 
+def test_initialize_widened_baseline_rejects_post_finalize_columns(tmp_path: Path) -> None:
+    """A baseline carrying add-embeddings columns cannot fork a growing branch.
+
+    Growing shards are rendered with the spec schema only, so a wider baseline would reject every
+    staged shard; init must fail early and name the columns.
+
+    :param tmp_path: Isolated Lance and metadata roots.
+    """
+    spec, train_uri, metadata_root = _baseline_dataset(tmp_path)
+    widened = lance.dataset(str(train_uri))
+    widened.add_columns({"clap": "cast(1.0 as float)"})
+    (metadata_root / "versions/2").mkdir()
+    for name in ("welford.npz", "stats.npz"):
+        (metadata_root / "versions/2" / name).write_bytes(
+            (metadata_root / "versions/1" / name).read_bytes()
+        )
+
+    with pytest.raises(ValueError, match=r"clap.*--baseline-version"):
+        initialize_growing_branch(
+            train_uri,
+            spec=spec,
+            branch="growing",
+            baseline_version=widened.version,
+            metadata_root=metadata_root,
+            max_train_shards=5,
+            num_extra_shards=2,
+        )
+    assert "growing" not in lance.dataset(str(train_uri)).branches.list()
+
+
 def _append_fragments(
     snapshot: GrowingSnapshot, count: int
 ) -> tuple[lance.fragment.FragmentMetadata, ...]:

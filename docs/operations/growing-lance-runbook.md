@@ -18,7 +18,9 @@ export BRANCH="growing-a"
 
 Requires a finalized dataset (`dataset.complete` present). The baseline pins
 to the finalized train dataset's current version automatically; pass
-`--baseline-version N` only to pin an older manifest.
+`--baseline-version N` only to pin an older manifest. `init` refuses a baseline
+that `add-embeddings` widened past the spec schema (growing shards carry spec
+columns only; #3251), so on such datasets pass the pre-embedding version.
 
 ```bash
 synth-setter-growing-lance init "$SPEC_URI" \
