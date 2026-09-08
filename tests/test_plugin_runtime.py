@@ -913,7 +913,9 @@ def test_adopt_plugin_bundle_changed_source_recorded_as_alias_completes_without_
         args=((manifest_path, managed_root, source), result),
     )
     process.start()
-    process.join(5)
+    # A spawn-context child cold-imports the package; under CI load that alone can
+    # exceed a few seconds, while a genuine lock deadlock never returns at all.
+    process.join(60)
     timed_out = process.is_alive()
     if timed_out:
         process.terminate()
