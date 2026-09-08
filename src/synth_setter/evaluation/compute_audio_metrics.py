@@ -21,11 +21,13 @@ We compute the following metrics:
     literature for an option here?). cosine sim.
 5. amp env: compute RMS amp envelopes (50ms window, 25ms hop). take cosine similarity
     (i.e. normalized dot prod).
-6. MLDR: multi-scale loudness dynamic range (DiffVox, arXiv:2504.14735 eq. 14-15) —
+6. SOT: spectral optimal transport — per-frame Wasserstein-1 distance between
+    sum-normalised STFT magnitudes (50ms window, 20ms hop), averaged over frames.
+7. MLDR: multi-scale loudness dynamic range (DiffVox, arXiv:2504.14735 eq. 14-15) —
     L1 distance of the log ratio between short- and long-window energy envelopes at
     (50ms, 1s) and (100ms, 2s) integration times.
-7. pyFDN only: octave-band RT60 natural-log RMSE.
-8. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+8. pyFDN only: octave-band RT60 natural-log RMSE.
+9. pyFDN only: octave-band energy-decay-curve RMSE in dB.
 """
 
 import math
@@ -470,6 +472,8 @@ def _loudness_dynamic_range(
 
     The long envelope is advanced by half the integration-time gap (circularly, as the
     reference implementation's ``roll`` does) so both envelopes centre on the same instant.
+    The roll is per row: DiffVox rolls the flattened tensor, which bleeds each channel's
+    tail into the next channel and departs from the paper's per-signal definition.
 
     :param energy: Floored squared signal, shape ``(rows, T)``.
     :param short_ms: Short integration time in ms.

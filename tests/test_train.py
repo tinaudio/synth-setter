@@ -88,6 +88,9 @@ from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _Record
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
+# Rows of aggregated_metrics.csv: mss, wmfcc, sot, rms, mldr.
+NUM_AUDIO_METRICS = 5
+
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
@@ -1170,7 +1173,6 @@ def test_train_eval_surge_xt(
     """
     from pedalboard.io import AudioFile
 
-    NUM_AUDIO_METRICS = 5  # mss, wmfcc, sot, rms, mldr
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
             "rows": NUM_AUDIO_METRICS,
@@ -1651,7 +1653,7 @@ def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
 
     metrics_dir = tmp_path / "metrics"
     for metrics_file, expected_rows in {
-        "aggregated_metrics.csv": 4,
+        "aggregated_metrics.csv": NUM_AUDIO_METRICS,
         "metrics.csv": NUM_FIXTURE_SAMPLES,
     }.items():
         assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"
