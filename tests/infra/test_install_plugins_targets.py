@@ -97,6 +97,10 @@ fi
     )
     _write_executable(fake_bin / "npm", "#!/bin/bash\nset -eu\n")
     _write_executable(
+        fake_bin / "flock",
+        '#!/bin/bash\nset -eu\nprintf \'flock %s %s\\n\' "$*" "$(readlink /proc/$$/fd/9)" >> "$TOOL_LOG"\n',
+    )
+    _write_executable(
         fake_bin / "uname",
         """#!/bin/bash
 set -eu
@@ -406,6 +410,14 @@ def test_install_ultramaster_kr106_builds_adopts_and_links_source(tmp_path: Path
     assert (tmp_path / "plugins" / "Ultramaster KR-106.vst3").is_dir()
     events = tool_log.read_text()
     expected_ref = _makefile_variable("ULTRAMASTER_KR106_GIT_REF")
+    source_root = (
+        tmp_path
+        / "home"
+        / ".cache"
+        / "synth-setter"
+        / f"ultramaster-kr106-{_makefile_variable('ULTRAMASTER_KR106_VERSION')}"
+    )
+    assert f"flock 9 {source_root}/.install.lock" in events
     assert f"fetch --depth 1 origin {expected_ref}" in events
     assert "--target KR106_VST3" in events
     assert "plugins adopt --plugin kayrockscreenprinting/ultramaster-kr106" in events

@@ -212,7 +212,11 @@ install-ultramaster-kr106: install-studiorack ## Build and install pinned Ultram
 	fi; \
 	command -v cmake >/dev/null 2>&1 || { echo "ERROR: cmake is required to build Ultramaster KR-106." >&2; exit 1; }; \
 	command -v git >/dev/null 2>&1 || { echo "ERROR: git is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	command -v flock >/dev/null 2>&1 || { echo "ERROR: flock is required to build Ultramaster KR-106." >&2; exit 1; }; \
 	cache="$$HOME/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
+	mkdir -p "$$cache"; \
+	exec 9>"$$cache/.install.lock"; \
+	flock 9; \
 	src="$$cache/src"; build="$$cache/build"; \
 	if ! git -C "$$src" rev-parse --git-dir >/dev/null 2>&1 || \
 		! git -C "$$src" remote get-url origin >/dev/null 2>&1; then \
