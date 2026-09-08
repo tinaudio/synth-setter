@@ -27,7 +27,10 @@ from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
-from synth_setter.models.components.pretrained_flow import load_pretrained_flow
+from synth_setter.models.components.pretrained_flow import (
+    PretrainedBaseMixin,
+    load_pretrained_flow,
+)
 from synth_setter.models.components.simulator_control import (
     DEFAULT_CONTROL_T_MIN,
     ControlledFlow,
@@ -110,7 +113,7 @@ def _validate_arm(
         validate_audio_feedback_runtime(compiled=True, world_size=1)
 
 
-class VSTFlowFinetuneModule(VSTFlowMatchingModule):
+class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
     """Pretrained flow whose velocity a simulator-fed control network learns to correct."""
 
     @jaxtyped(typechecker=beartype)
@@ -121,7 +124,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., object] | None,
         *,
-        base_checkpoint: str | Path,
+        base_checkpoint: str | Path | None,
         num_params: int,
         sample_rate: int,
         signal_length: int,
@@ -139,7 +142,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param vector_field: Velocity field of the same shape the base run trained.
         :param optimizer: ``functools.partial``-style optimizer factory.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param base_checkpoint: Checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint: Checkpoint holding the pretrained flow to refine, or ``None``
+            when a Lightning checkpoint of this finetune supplies every weight (eval, resume).
         :param num_params: Parameter-vector width the field operates on.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row; must match the target audio.
@@ -176,7 +180,9 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        load_pretrained_flow(self, base_checkpoint)
+        self.base_checkpoint_sha256 = (
+            load_pretrained_flow(self, base_checkpoint) if base_checkpoint is not None else None
+        )
         self.requires_grad_(False)
 
         self.control_mode: ControlMode = control_mode
