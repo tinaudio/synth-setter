@@ -1,7 +1,9 @@
 # Real cepstrogram: quefrency rows are delay lengths in samples, so FDN delay lines show
-# as spikes. 32768-point frames (743 ms at 44.1 kHz) resolve modes ~1.3 Hz apart; the
-# 11025 hop keeps a coarse time axis so decay is read from frame levels and stays above
-# the AST patch height under the #3160 padding swap. q_max covers
+# as spikes. A spike at quefrency q needs the log spectrum to sample its ripple period
+# (sample_rate / q Hz) with >= 4 bins, the Hamming main-lobe width, so n_fft >= 4 * q_max.
+# 32768 gives ~13 bins per ripple at q_max; 16384 meets the bound and is the planned
+# ablation. The 11025 hop keeps a coarse time axis so decay is read from frame levels
+# and stays above the AST patch height under the #3160 padding swap. q_max covers
 # the 400-1200 Householder delays plus their pair sums.
 _target_: synth_setter.models.components.spec_encoder.CepstrogramFrontend
 in_dim: ${datamodule.signal_length}
