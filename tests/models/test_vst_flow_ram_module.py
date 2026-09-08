@@ -38,7 +38,13 @@ class _NormReward(torch.nn.Module):
 
     Rows a tiny untrained flow samples render silence, and silence scores identically under the
     spectral reward, which would zero every advantage and leave the fit tests vacuous.
+
+    .. attribute :: target_key
+
+       Batch column the module hands over as the (ignored) target.
     """
+
+    target_key = "audio"
 
     def forward(self, theta: torch.Tensor, target_audio: torch.Tensor) -> torch.Tensor:
         """Return the negative row norm.
@@ -51,7 +57,14 @@ class _NormReward(torch.nn.Module):
 
 
 class _ConstantReward(torch.nn.Module):
-    """Scorer that rates every row identically, so no advantage survives normalisation."""
+    """Scorer that rates every row identically, so no advantage survives normalisation.
+
+    .. attribute :: target_key
+
+       Batch column the module hands over as the (ignored) target.
+    """
+
+    target_key = "audio"
 
     def forward(self, theta: torch.Tensor, target_audio: torch.Tensor) -> torch.Tensor:
         """Return one identical reward per row.
@@ -282,6 +295,7 @@ def test_ram_ema_warmup_copies_the_policy_on_the_first_step(tmp_path: Path) -> N
         pytest.param(
             {"sampling_cfg_strength": float("nan")}, "sampling_cfg_strength", id="nan-cfg"
         ),
+        pytest.param({"reward": torch.nn.Identity()}, "target_key", id="reward-without-target"),
     ],
 )
 def test_ram_module_rejects_configurations_it_cannot_serve(

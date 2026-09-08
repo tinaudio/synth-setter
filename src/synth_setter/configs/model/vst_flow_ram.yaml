@@ -1,5 +1,7 @@
 defaults:
   - vst_flow
+  # Black-box: the reward is scored, never differentiated; the group picks the renderer.
+  - reward: torchsynth
   - _self_
 
 _target_: synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule
@@ -7,17 +9,6 @@ _target_: synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule
 # No default: post-training is defined relative to a pretrained flow, and the module logs
 # this file's sha256 so two runs cannot silently differ behind one path.
 base_checkpoint: ???
-
-# Black-box: the reward is scored, never differentiated, so any renderer-backed distance fits.
-reward:
-  _target_: synth_setter.models.components.rendered_reward.RenderedAudioReward
-  sample_rate: ${datamodule.sample_rate}
-  signal_length: ${datamodule.signal_length}
-  # The renderer's voice is allocated once at this size; the sampled group renders in chunks.
-  render_batch_size: ${datamodule.batch_size}
-  distance:
-    _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
-    sample_rate: ${datamodule.sample_rate}
 
 # Endpoints per target row form the advantage group; each is noised independently before the
 # policy regression, so renders amortise over the noise draws.

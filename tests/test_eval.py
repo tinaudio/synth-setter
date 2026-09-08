@@ -50,6 +50,7 @@ from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
     PretrainedConditioningEncoder,
 )
+from synth_setter.models.components.rendered_reward import SynthRenderedReward
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.transformer import ASTWithProjectionHead
 from synth_setter.models.components.vector_projection import VectorProjection
@@ -70,6 +71,7 @@ from tests.conftest import (
     augment_lance_splits_with_same,
     augment_lance_splits_with_ssondo,
     build_surge_xt_embedding_train_cfg,
+    compose_one_step_surge_flow,
     flatten_lance_embedding_column,
 )
 from tests.helpers.eval_fakes import (
@@ -936,6 +938,52 @@ def test_eval_torchsynth_flow_ram_validates_a_post_trained_checkpoint(
         GlobalHydra.instance().clear()
 
     assert isinstance(object_dict["model"], VSTFlowRAMModule)
+    assert torch.isfinite(metric_dict["val/param_mse"])
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_eval_surge_flow_ram_validates_a_post_trained_checkpoint(
+    fake_surge_smoke_datasets: Path, tmp_path: Path
+) -> None:
+    """Pretrain, post-train with surgepy-scored RAM, then validate the checkpoint through eval.
+
+    :param fake_surge_smoke_datasets: Tiny loadable Lance train/validation/test splits.
+    :param tmp_path: Output root for all three runs.
+    """
+    base_cfg = compose_one_step_surge_flow(
+        "flow_simple", fake_surge_smoke_datasets, tmp_path / "base"
+    )
+    HydraConfig().set_config(base_cfg)
+    train(base_cfg)
+
+    ram_cfg = compose_one_step_surge_flow(
+        "flow_ram_simple",
+        fake_surge_smoke_datasets,
+        tmp_path / "ram",
+        [
+            f"model.base_checkpoint={tmp_path / 'base' / 'checkpoints' / 'last.ckpt'}",
+            "model.num_samples_per_row=2",
+            "model.num_targets_per_sample=2",
+            "model.sampling_steps=1",
+        ],
+    )
+    HydraConfig().set_config(ram_cfg)
+    train(ram_cfg)
+
+    with open_dict(ram_cfg):
+        ram_cfg.mode = "validate"
+        ram_cfg.ckpt_path = str(tmp_path / "ram" / "checkpoints" / "last.ckpt")
+        ram_cfg.logger = None
+    HydraConfig().set_config(ram_cfg)
+    try:
+        metric_dict, object_dict = evaluate(ram_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(object_dict["model"], VSTFlowRAMModule)
+    assert isinstance(object_dict["model"].reward, SynthRenderedReward)
     assert torch.isfinite(metric_dict["val/param_mse"])
 
 

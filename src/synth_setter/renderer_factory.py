@@ -6,6 +6,7 @@ evaluation before calling ``renderer.render(...)``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import assert_never
 
 from synth_setter.data.vst.renderers import (
@@ -17,6 +18,22 @@ from synth_setter.data.vst.renderers import (
     TorchSynthRenderer,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthSpec
+from synth_setter.workspace import operator_workspace
+
+
+def anchor_render_preset(render: RenderConfig) -> RenderConfig:
+    """Anchor a relative preset path to the operator workspace.
+
+    :param render: Composed render configuration.
+    :returns: Configuration with a concrete preset path.
+    """
+    preset = Path(render.plugin_state_path).expanduser()
+    if preset.is_absolute() or not render.plugin_state_path:
+        return render
+    synth_values = render.synth.model_dump()
+    synth_values["plugin_state_path"] = str(operator_workspace() / preset)
+    return render.model_copy(update={"synth": SynthSpec.model_validate(synth_values)})
 
 
 def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:

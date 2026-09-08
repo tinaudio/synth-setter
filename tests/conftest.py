@@ -515,6 +515,68 @@ def cfg_torchsynth_flow_ram_train(tmp_path: Path) -> DictConfig:
     )
 
 
+def compose_one_step_surge_flow(
+    experiment: str, dataset_root: Path, tmp_path: Path, extra_overrides: Sequence[str] = ()
+) -> DictConfig:
+    """Compose a one-step CPU smoke config for a Surge flow experiment on local Lance splits.
+
+    Shrinks the AST encoder and the field so a pretrain and a post-train run finish in
+    seconds; the experiment's own render, synth, and reward selections are kept.
+
+    :param experiment: ``experiment=surge/...`` name to compose.
+    :param dataset_root: Directory holding ``{train,val,test}.lance``.
+    :param tmp_path: Pinned Hydra output and log directory.
+    :param extra_overrides: Experiment-specific overrides appended to the shared geometry.
+    :returns: Ready-to-run configuration with checkpoint and CSV artifacts enabled.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                f"experiment=surge/{experiment}",
+                "trainer=cpu",
+                "logger=csv",
+                "datamodule.download_dataset_root_uri=null",
+                "datamodule.batch_size=1",
+                "datamodule.num_workers=0",
+                "datamodule.ot=false",
+                "model.encoder.n_layers=1",
+                "model.encoder.d_model=32",
+                "model.encoder.n_heads=1",
+                "model.vector_field.num_layers=1",
+                "model.vector_field.d_model=32",
+                "model.vector_field.d_ff=32",
+                "model.vector_field.projection.num_tokens=4",
+                "model.validation_sample_steps=1",
+                "model.test_sample_steps=1",
+                "model.cfg_dropout_rate=0.0",
+                "model.compile=false",
+                *extra_overrides,
+            ],
+        )
+    with open_dict(cfg):
+        _set_workspace_root(cfg)
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.seed = 123
+        cfg.test = False
+        cfg.trainer.precision = "32-true"
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.max_steps = 1
+        cfg.trainer.min_steps = 1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 1
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.val_check_interval = 1
+        cfg.trainer.log_every_n_steps = 1
+        cfg.callbacks.model_checkpoint.save_top_k = 1
+        cfg.callbacks.model_checkpoint.save_last = True
+        cfg.training.val_audio_probe = False
+    return cfg
+
+
 def _configure_online_conditioning_smoke(cfg: DictConfig, tmp_path: Path) -> None:
     """Apply the shared one-step CPU geometry for online conditioning tests.
 

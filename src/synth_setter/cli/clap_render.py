@@ -37,8 +37,7 @@ from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
-from synth_setter.renderer_factory import make_audio_renderer
-from synth_setter.synth_spec import SynthSpec
+from synth_setter.renderer_factory import anchor_render_preset, make_audio_renderer
 from synth_setter.workspace import operator_workspace
 
 _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
@@ -506,20 +505,6 @@ def _predict_patch(
     return prediction.detach().cpu()
 
 
-def _workspace_render_config(render: RenderConfig) -> RenderConfig:
-    """Anchor a relative preset path to the operator workspace.
-
-    :param render: Composed render configuration.
-    :returns: Configuration with a concrete preset path.
-    """
-    preset = Path(render.plugin_state_path).expanduser()
-    if preset.is_absolute():
-        return render
-    synth_values = render.synth.model_dump()
-    synth_values["plugin_state_path"] = str(operator_workspace() / preset)
-    return render.model_copy(update={"synth": SynthSpec.model_validate(synth_values)})
-
-
 def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) -> np.ndarray:
     """Decode one prediction and persist its production Surge render.
 
@@ -669,7 +654,7 @@ def main(
     click.echo("Loading inverse checkpoint...", err=True)
     expected_inverse_sha256 = settings.inverse_checkpoint_sha256 if checkpoint is None else None
     inverse_checkpoint = resolve_inverse_checkpoint(inverse_source, expected_inverse_sha256)
-    render = _workspace_render_config(settings.render)
+    render = anchor_render_preset(settings.render)
     prediction = _predict_patch(
         embedding,
         inverse_checkpoint,

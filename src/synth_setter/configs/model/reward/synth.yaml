@@ -1,0 +1,8 @@
+# Re-renders both the sampled row and its target row through the root render/synth groups
+# (e.g. `render=surgepy synth=surge_simple_surgepy`), so no stored target audio is needed.
+_target_: synth_setter.models.components.rendered_reward.SynthRenderedReward.from_cfg_nodes
+render: ${render}
+synth: ${synth}
+distance:
+  _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
+  sample_rate: ${render.sample_rate}

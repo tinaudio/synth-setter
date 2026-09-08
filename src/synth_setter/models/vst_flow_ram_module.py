@@ -51,6 +51,7 @@ def _validate_ram_settings(
     ema_decay: float,
     ema_warmup_rate: float | None,
     time_power_law_alpha: float,
+    reward: torch.nn.Module,
     base_kwargs: dict[str, object],
 ) -> None:
     """Reject settings under which the RAM loss is undefined or degenerate.
@@ -63,9 +64,10 @@ def _validate_ram_settings(
     :param ema_decay: Lag of the sampling copy toward the policy.
     :param ema_warmup_rate: Per-step ramp of the lag, or ``None`` for a fixed lag.
     :param time_power_law_alpha: Exponent of the flow-time law.
+    :param reward: Scorer, which must declare ``target_key``.
     :param base_kwargs: Remaining :class:`VSTFlowMatchingModule` arguments.
-    :raises ValueError: Any setting is out of range, or the base run carries a term the RAM
-        loss cannot combine with.
+    :raises ValueError: Any setting is out of range, the reward declares no target, or the
+        base run carries a term the RAM loss cannot combine with.
     """
     if num_samples_per_row < 2:
         raise ValueError(
@@ -104,6 +106,8 @@ def _validate_ram_settings(
         raise ValueError(
             "RAM's reward direction assumes the sigma-free path; set rectified_sigma_min=0"
         )
+    if not isinstance(getattr(reward, "target_key", None), str):
+        raise ValueError("reward must declare the batch column it scores against as target_key")
     if base_kwargs.get("compile"):
         # The reward renders through torchsynth, which graph-breaks under compile (#2585).
         raise ValueError("RAM post-training is incompatible with torch.compile; set compile=false")
@@ -141,8 +145,9 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param base_checkpoint: Checkpoint holding the pretrained flow to post-train.
         :param num_params: Parameter-vector width the field operates on.
-        :param reward: Module mapping ``(sampled_params, target_audio)`` to a per-row reward;
-            higher is better, and it is never differentiated.
+        :param reward: Module mapping ``(sampled_params, target)`` to a per-row reward, where
+            the target is the batch column its ``target_key`` names; higher is better, and it
+            is never differentiated.
         :param num_samples_per_row: Endpoints sampled per target row; the advantage group.
         :param num_targets_per_sample: Independent noise draws per endpoint.
         :param reward_multiplier: Scale on the normalised advantage; the paper's reward
@@ -165,6 +170,7 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
             ema_decay=ema_decay,
             ema_warmup_rate=ema_warmup_rate,
             time_power_law_alpha=time_power_law_alpha,
+            reward=reward,
             base_kwargs=base_kwargs,
         )
         super().__init__(
@@ -189,6 +195,7 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
         self.ema_warmup_rate = ema_warmup_rate
         self.time_power_law_alpha = time_power_law_alpha
         self.reward = reward.requires_grad_(False)
+        self._reward_target_key = str(reward.target_key)
         self.encoder.requires_grad_(False)
         self.reference_field = copy.deepcopy(self.vector_field).requires_grad_(False)
         self.old_field = copy.deepcopy(self.vector_field).requires_grad_(False)
@@ -259,7 +266,8 @@ class VSTFlowRAMModule(VSTFlowMatchingModule):
             conditioning = self.encoder(self._get_conditioning_from_batch(batch))  # pyright: ignore[reportArgumentType]
             conditioning = conditioning.repeat_interleave(group, dim=0)
             endpoints = self._sample_endpoints(conditioning)
-            rewards = self.reward(endpoints, batch["audio"].repeat_interleave(group, dim=0))
+            target = batch[self._reward_target_key].repeat_interleave(group, dim=0)
+            rewards = self.reward(endpoints, target)
             advantages = self.reward_multiplier * group_relative_advantages(rewards, group)
 
             conditioning = conditioning.repeat_interleave(repeats, dim=0)
