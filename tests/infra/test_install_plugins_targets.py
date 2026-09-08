@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -51,7 +52,24 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _write_kr106_install_fakes(checkout: Path) -> tuple[Path, Path]:
+@dataclass(frozen=True)
+class _Kr106InstallFakes:
+    """Group external command fakes for the KR-106 Make targets.
+
+    .. attribute :: manager
+
+        Fake plugin-manager executable.
+
+    .. attribute :: tool_log
+
+        Event log shared by the command fakes.
+    """
+
+    manager: Path
+    tool_log: Path
+
+
+def _write_kr106_install_fakes(checkout: Path) -> _Kr106InstallFakes:
     """Provide offline git, CMake, npm, and plugin-manager boundaries.
 
     :param checkout: Isolated checkout receiving the fake executables.
@@ -155,34 +173,32 @@ case "$command" in
 esac
 """,
     )
-    return manager, tool_log
+    return _Kr106InstallFakes(manager=manager, tool_log=tool_log)
 
 
 def _run_make_target(
     checkout: Path,
     target: str,
-    manager: Path,
-    tool_log: Path,
+    fakes: _Kr106InstallFakes,
 ) -> subprocess.CompletedProcess[str]:
     """Run one plugin target against isolated external-command fakes.
 
     :param checkout: Isolated checkout containing the Makefile.
     :param target: Public Make target to invoke.
-    :param manager: Fake plugin-manager executable.
-    :param tool_log: Event log shared by the command fakes.
+    :param fakes: Fake plugin-manager executable and shared event log.
     :returns: Completed Make invocation with captured output.
     """
     env = {
         **os.environ,
         "HOME": str(checkout / "home"),
-        "PATH": f"{manager.parent}:{os.defpath}",
-        "TOOL_LOG": str(tool_log),
+        "PATH": f"{fakes.manager.parent}:{os.defpath}",
+        "TOOL_LOG": str(fakes.tool_log),
     }
     return subprocess.run(  # noqa: S603 -- fixed make target in an isolated checkout
         [
             shutil.which("make", path=os.defpath) or "make",
             target,
-            f"STUDIORACK={manager}",
+            f"STUDIORACK={fakes.manager}",
         ],
         cwd=checkout,
         env=env,
@@ -402,13 +418,13 @@ def test_install_ultramaster_kr106_builds_adopts_and_links_source(tmp_path: Path
     :param tmp_path: Isolated checkout and command-fake root.
     """
     shutil.copy(MAKEFILE, tmp_path / "Makefile")
-    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+    fakes = _write_kr106_install_fakes(tmp_path)
 
-    result = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+    result = _run_make_target(tmp_path, "install-ultramaster-kr106", fakes)
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "plugins" / "Ultramaster KR-106.vst3").is_dir()
-    events = tool_log.read_text()
+    events = fakes.tool_log.read_text()
     expected_ref = _makefile_variable("ULTRAMASTER_KR106_GIT_REF")
     source_root = (
         tmp_path
@@ -434,15 +450,15 @@ def test_install_ultramaster_kr106_partial_cache_reinitializes_checkout(
     :param tmp_path: Isolated checkout and command-fake root.
     """
     shutil.copy(MAKEFILE, tmp_path / "Makefile")
-    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+    fakes = _write_kr106_install_fakes(tmp_path)
     version = _makefile_variable("ULTRAMASTER_KR106_VERSION")
     source = tmp_path / "home" / ".cache" / "synth-setter" / f"ultramaster-kr106-{version}" / "src"
     (source / ".git").mkdir(parents=True)
 
-    result = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+    result = _run_make_target(tmp_path, "install-ultramaster-kr106", fakes)
 
     assert result.returncode == 0, result.stderr
-    assert f"git -C {source} init" in tool_log.read_text()
+    assert f"git -C {source} init" in fakes.tool_log.read_text()
     assert (tmp_path / "plugins" / "Ultramaster KR-106.vst3").is_dir()
 
 
@@ -452,11 +468,11 @@ def test_install_ultramaster_kr106_existing_source_install_succeeds(tmp_path: Pa
     :param tmp_path: Isolated checkout and command-fake root.
     """
     shutil.copy(MAKEFILE, tmp_path / "Makefile")
-    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+    fakes = _write_kr106_install_fakes(tmp_path)
 
-    first = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
-    second = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
-    third = _run_make_target(tmp_path, "install-ultramaster-kr106", manager, tool_log)
+    first = _run_make_target(tmp_path, "install-ultramaster-kr106", fakes)
+    second = _run_make_target(tmp_path, "install-ultramaster-kr106", fakes)
+    third = _run_make_target(tmp_path, "install-ultramaster-kr106", fakes)
 
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
@@ -473,14 +489,16 @@ def test_install_plugins_routes_kr106_through_source_fallback(tmp_path: Path) ->
     :param tmp_path: Isolated checkout and command-fake root.
     """
     shutil.copy(MAKEFILE, tmp_path / "Makefile")
-    manager, tool_log = _write_kr106_install_fakes(tmp_path)
+    fakes = _write_kr106_install_fakes(tmp_path)
 
-    result = _run_make_target(tmp_path, "install-plugins", manager, tool_log)
+    result = _run_make_target(tmp_path, "install-plugins", fakes)
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "plugins" / "Ultramaster KR-106.vst3").is_dir()
     install_events = {
-        event for event in tool_log.read_text().splitlines() if event.startswith("plugins install")
+        event
+        for event in fakes.tool_log.read_text().splitlines()
+        if event.startswith("plugins install")
     }
     assert install_events == {
         "plugins install --plugin asb2m10/dexed",
