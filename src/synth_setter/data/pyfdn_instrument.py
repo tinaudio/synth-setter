@@ -29,8 +29,10 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_FEEDBACK_SKEW_NAME,
     PYFDN_FEEDBACK_SKEW_SIZE,
     PYFDN_GEQ_BAND_GAIN_DB_MAX,
+    PYFDN_GEQ_BAND_GAIN_DB_MIN,
     PYFDN_GEQ_BAND_GAIN_DB_NAME,
     PYFDN_GEQ_GAIN_DB_MAX,
+    PYFDN_GEQ_GAIN_DB_MIN,
     PYFDN_GEQ_GAIN_DB_NAME,
     PYFDN_GEQ_RT_MAX_SECONDS,
     PYFDN_GEQ_SECTIONS,
@@ -50,6 +52,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_NYQUIST_NAME,
     PYFDN_TONE_GEQ_GAIN_DB_MAX,
     PYFDN_TONE_GEQ_GAIN_DB_NAME,
+    skew_to_orthogonal,
 )
 from synth_setter.data.pyfdn_source import (
     PYFDN_SOURCE_CHANNELS,
@@ -81,6 +84,8 @@ _GOTZ_PARAM_SPECS = frozenset(
     }
 )
 _GOTZ_GEQ_SOS_SHAPE = (PYFDN_GEQ_SECTIONS, 6, PYFDN_ORDER)
+# Tolerance for a feedback matrix regenerated from float32-encoded skew coordinates.
+_FEEDBACK_SKEW_ATOL = 1e-6
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
     ("input_matrix", (PYFDN_ORDER, _CHANNELS), np.dtype(np.float64)),
@@ -411,7 +416,8 @@ def params_to_gotz_fdn_build(
     :param sample_rate: Processing rate in Hz; exactly ``44100.0``.
     :returns: Native build carrying the per-line eleven-section attenuation SOS bank; the
         tone GEQ and delayed direct path are applied by the renderer outside the build.
-    :raises ValueError: Keys, shapes, values, or sample rate violate the contract.
+    :raises ValueError: Keys, shapes, values, or sample rate violate the contract, or
+        ``feedback_matrix`` is not the orthogonal matrix encoded by ``feedback_skew``.
     """
     arrays = _validate_base_params(
         params,
@@ -419,23 +425,27 @@ def params_to_gotz_fdn_build(
         sample_rate=sample_rate,
         topology="gotz",
     )
-    _require_array(
+    skew = _require_array(
         PYFDN_FEEDBACK_SKEW_NAME,
         params[PYFDN_FEEDBACK_SKEW_NAME],
         shape=(PYFDN_FEEDBACK_SKEW_SIZE,),
         dtype=np.dtype(np.float64),
     )
+    if not np.allclose(
+        arrays["feedback_matrix"], skew_to_orthogonal(skew), rtol=0.0, atol=_FEEDBACK_SKEW_ATOL
+    ):
+        raise ValueError("feedback_matrix must be the orthogonal matrix encoded by feedback_skew")
     gain_db = _require_gain_db(
         PYFDN_GEQ_GAIN_DB_NAME,
         params[PYFDN_GEQ_GAIN_DB_NAME],
         shape=(PYFDN_ORDER,),
-        bounds=(-np.inf, PYFDN_GEQ_GAIN_DB_MAX),
+        bounds=(PYFDN_GEQ_GAIN_DB_MIN, PYFDN_GEQ_GAIN_DB_MAX),
     )
     band_gain_db = _require_gain_db(
         PYFDN_GEQ_BAND_GAIN_DB_NAME,
         params[PYFDN_GEQ_BAND_GAIN_DB_NAME],
         shape=(PYFDN_GEQ_SECTIONS - 1, PYFDN_ORDER),
-        bounds=(-np.inf, PYFDN_GEQ_BAND_GAIN_DB_MAX),
+        bounds=(PYFDN_GEQ_BAND_GAIN_DB_MIN, PYFDN_GEQ_BAND_GAIN_DB_MAX),
     )
     _require_tone_gain_db(params)
     post_delay = _command_gains_to_geq_sos(

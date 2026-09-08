@@ -204,6 +204,51 @@ def test_gotz_build_rejects_missing_tone_key() -> None:
         params_to_gotz_fdn_build(params, sample_rate=44_100.0)
 
 
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        (PYFDN_GEQ_GAIN_DB_NAME, np.full((8,), -20.5), "gain_db must be at least -20 dB"),
+        (PYFDN_GEQ_BAND_GAIN_DB_NAME, np.full((10, 8), -6.5), "band_gain_db must be at least -6 dB"),
+        (PYFDN_TONE_GEQ_GAIN_DB_NAME, np.full((11,), -12.5), "command_gain_db must be at least -12 dB"),
+        (PYFDN_TONE_GEQ_GAIN_DB_NAME, np.full((11,), 12.5), "command_gain_db must be at most 12 dB"),
+    ],
+    ids=["flat_below", "band_below", "tone_below", "tone_above"],
+)
+def test_gotz_build_rejects_gain_outside_spec_bounds(
+    name: str, value: np.ndarray, message: str
+) -> None:
+    """Every dB control is rejected just past its ParamSpec bound.
+
+    :param name: Native control to violate.
+    :param value: Out-of-bounds float64 array for that control.
+    :param message: Expected diagnostic fragment.
+    """
+    params = _reference_params()
+    params[name] = value
+
+    with pytest.raises(ValueError, match=message):
+        params_to_gotz_fdn_build(params, sample_rate=44_100.0)
+
+
+def test_gotz_build_rejects_feedback_matrix_that_disagrees_with_skew() -> None:
+    """A tampered feedback matrix cannot bypass the orthogonality encoded by the skew."""
+    params = _reference_params()
+    params["feedback_matrix"] = 2.0 * np.eye(8, dtype=np.float64)
+
+    with pytest.raises(ValueError, match="orthogonal matrix encoded by feedback_skew"):
+        params_to_gotz_fdn_build(params, sample_rate=44_100.0)
+
+
+def test_gotz_build_accepts_feedback_matrix_rebuilt_from_float32_codec() -> None:
+    """A row decoded from float32 coordinates still passes the skew consistency check."""
+    params, notes = _LEARNED.sample(np.random.default_rng(29))
+    decoded, _ = _LEARNED.decode(_LEARNED.encode(params, notes))
+
+    build = params_to_gotz_fdn_build(decoded, sample_rate=44_100.0)
+
+    np.testing.assert_allclose(build.A.T @ build.A, np.eye(8), atol=1e-12)
+
+
 def test_gotz_build_rejects_positive_attenuation_gain() -> None:
     """An attenuation command gain above 0 dB breaks the stability guarantee."""
     params = _reference_params()
