@@ -1,12 +1,20 @@
-"""Train from a trusted self-describing checkpoint with explicit state semantics."""
+"""Train from a trusted self-describing checkpoint with explicit state semantics.
+
+Typical usage::
+
+    synth-setter-train-from-checkpoint checkpoint_path=/trusted/model.ckpt \\
+      checkpoint_mode=weights-only experiment=surge/slap_ast_audio_mlp_param
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, cast
 
 import hydra
 import torch
+from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.train import train
@@ -16,7 +24,13 @@ from synth_setter.models.checkpoint_bundle import (
 )
 from synth_setter.utils import extras, get_metric_value
 
-CheckpointMode = Literal["full-resume", "weights-only"]
+type CheckpointMode = Literal["full-resume", "weights-only"]
+type MetricValue = torch.Tensor | float
+type TrainingObject = (
+    DictConfig | LightningDataModule | LightningModule | Trainer | list[Callback] | list[Logger]
+)
+type TrainingResult = tuple[dict[str, MetricValue], dict[str, TrainingObject]]
+
 _DISABLED_RESUME_VALUES = (None, False, "off")
 
 
@@ -25,7 +39,7 @@ def train_from_checkpoint(
     checkpoint_path: Path,
     *,
     mode: CheckpointMode,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> TrainingResult:
     """Run training with explicit full-resume or weights-only/new-run semantics.
 
     The checkpoint pickle and bundled Hydra targets are executable input. Use
@@ -42,6 +56,8 @@ def train_from_checkpoint(
     """
     if mode not in ("full-resume", "weights-only"):
         raise ValueError(f"checkpoint mode must be full-resume or weights-only; got {mode!r}")
+    if mode == "full-resume" and not cfg.get("train"):
+        raise ValueError("full-resume mode requires train=true")
     if cfg.get("ckpt_path") is not None:
         raise ValueError("checkpoint_path argument and cfg.ckpt_path are mutually exclusive")
     if OmegaConf.select(cfg, "training.weights_only_checkpoint") is not None:
@@ -59,7 +75,7 @@ def train_from_checkpoint(
             cfg.ckpt_path = str(checkpoint_path)
         else:
             cfg.training.weights_only_checkpoint = str(checkpoint_path)
-    return train(cfg)
+    return cast(TrainingResult, train(cfg))
 
 
 @hydra.main(

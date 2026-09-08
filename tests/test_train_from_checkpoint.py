@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 import torch
 from hydra.core.hydra_config import HydraConfig
+from lightning import Trainer
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.train import train
@@ -53,6 +54,37 @@ def test_train_from_checkpoint_incompatible_model_config_fails(tmp_path: Path) -
         train_from_checkpoint(cfg, checkpoint, mode="weights-only")
 
 
+def test_train_from_checkpoint_full_resume_without_fit_fails(tmp_path: Path) -> None:
+    """Reject full resume when no fit loop would restore trainer state.
+
+    :param tmp_path: Temporary checkpoint destination.
+    """
+    checkpoint = tmp_path / "model.ckpt"
+    model_config = {"_target_": "package.Model"}
+    torch.save(
+        {
+            "state_dict": {},
+            "synth_setter_model_bundle": {
+                "schema_version": 1,
+                "model": model_config,
+            },
+        },
+        checkpoint,
+    )
+    cfg = OmegaConf.create(
+        {
+            "model": model_config,
+            "train": False,
+            "test": True,
+            "ckpt_path": None,
+            "training": {"resume": None, "weights_only_checkpoint": None},
+        }
+    )
+
+    with pytest.raises(ValueError, match="full-resume mode requires train=true"):
+        train_from_checkpoint(cfg, checkpoint, mode="full-resume")
+
+
 @pytest.mark.slow
 def test_train_from_checkpoint_modes_resume_or_start_new_optimizer_state(
     cfg_slap_train_lance: DictConfig,
@@ -76,8 +108,15 @@ def test_train_from_checkpoint_modes_resume_or_start_new_optimizer_state(
     weights_cfg = _continuation_cfg(cfg_slap_train_lance, tmp_path / "weights", max_epochs=1)
     _, weights_objects = train_from_checkpoint(weights_cfg, checkpoint, mode="weights-only")
 
-    assert full_objects["trainer"].global_step == 2
-    assert weights_objects["trainer"].global_step == 1
+    full_trainer = cast(Trainer, full_objects["trainer"])
+    weights_trainer = cast(Trainer, weights_objects["trainer"])
+    full_optimizer_state = next(iter(full_trainer.optimizers[0].state.values()))
+    weights_optimizer_state = next(iter(weights_trainer.optimizers[0].state.values()))
+
+    assert full_trainer.global_step == 2
+    assert weights_trainer.global_step == 1
+    assert int(full_optimizer_state["step"].item()) == 2
+    assert int(weights_optimizer_state["step"].item()) == 1
 
 
 @pytest.mark.slow

@@ -3,13 +3,17 @@
 A checkpoint and its bundled Hydra ``_target_`` graph are executable input. Load
 only artifacts from trusted sources; validation checks the bundle contract, not
 whether imported targets or pickle payloads are safe.
+
+Typical usage::
+
+    model = load_model_checkpoint(Path("/trusted/model.ckpt"))
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 import hydra
 import torch
@@ -21,6 +25,10 @@ from pydantic import BaseModel, ValidationError
 
 MODEL_BUNDLE_KEY = "synth_setter_model_bundle"
 MODEL_BUNDLE_SCHEMA_VERSION = 1
+
+type ModelConfigValue = (
+    str | int | float | bool | None | list[ModelConfigValue] | dict[str, ModelConfigValue]
+)
 
 
 class ModelCheckpointBundle(BaseModel, strict=True, extra="forbid"):
@@ -36,7 +44,7 @@ class ModelCheckpointBundle(BaseModel, strict=True, extra="forbid"):
     """
 
     schema_version: Literal[1]
-    model: dict[str, Any]
+    model: dict[str, ModelConfigValue]
 
 
 class ModelCheckpointBundleCallback(Callback):
@@ -55,7 +63,7 @@ class ModelCheckpointBundleCallback(Callback):
         self,
         trainer: Trainer,
         pl_module: LightningModule,
-        checkpoint: dict[str, Any],
+        checkpoint: dict[str, object],
     ) -> None:
         """Add versioned, resolved model construction metadata.
 
@@ -75,13 +83,13 @@ class ModelCheckpointBundleCallback(Callback):
             raise TypeError("model config must resolve to a string-keyed mapping")
         checkpoint[MODEL_BUNDLE_KEY] = ModelCheckpointBundle(
             schema_version=MODEL_BUNDLE_SCHEMA_VERSION,
-            model=cast(dict[str, Any], resolved),
+            model=cast(dict[str, ModelConfigValue], resolved),
         ).model_dump(mode="python")
 
 
 @jaxtyped(typechecker=beartype)
 def _validated_bundle(
-    checkpoint: Mapping[str, Any], checkpoint_path: Path
+    checkpoint: Mapping[str, object], checkpoint_path: Path
 ) -> ModelCheckpointBundle:
     payload = checkpoint.get(MODEL_BUNDLE_KEY)
     if payload is None:
@@ -99,7 +107,7 @@ def _validated_bundle(
 
 
 @jaxtyped(typechecker=beartype)
-def _load_trusted_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
+def _load_trusted_checkpoint(checkpoint_path: Path) -> dict[str, object]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if not isinstance(checkpoint, dict):
         raise ValueError(f"Checkpoint {checkpoint_path} must contain a mapping")
@@ -175,5 +183,5 @@ def load_model_checkpoint(  # noqa: DOC503 — RuntimeError propagates from stri
     if not isinstance(state_dict, Mapping):
         raise ValueError(f"Checkpoint {checkpoint_path} has no mapping state_dict")
     model.on_load_checkpoint(checkpoint)
-    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    model.load_state_dict(cast(Mapping[str, torch.Tensor], state_dict), strict=True)
     return model

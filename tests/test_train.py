@@ -29,7 +29,7 @@ import torch
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 from omegaconf.errors import InterpolationKeyError
 
 from synth_setter.cli.eval import evaluate
@@ -596,6 +596,10 @@ def test_train_cpu_compile_writes_clean_checkpoint(
     state_dict = checkpoint["state_dict"]
     assert state_dict
     assert all("_orig_mod" not in key for key in state_dict)
+    assert checkpoint["synth_setter_model_bundle"] == {
+        "schema_version": 1,
+        "model": OmegaConf.to_container(cfg_train.model, resolve=True),
+    }
 
 
 @pytest.mark.gpu

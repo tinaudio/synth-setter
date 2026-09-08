@@ -413,8 +413,9 @@ synth-setter-train-from-checkpoint \
 
 The current resolved `cfg.model` must equal the bundled model config. Model overrides, an existing
 `ckpt_path`, `training.resume`, or `training.weights_only_checkpoint` that make intent ambiguous are
-rejected; data, trainer, callback, and logger overrides remain current-run inputs. Full resume keeps
-the existing `trainer.fit(..., ckpt_path=..., weights_only=False)` path unchanged. Weights-only mode
+rejected; data, trainer, callback, and logger overrides remain current-run inputs. Full resume
+requires `train=true` and keeps the existing
+`trainer.fit(..., ckpt_path=..., weights_only=False)` path unchanged. Weights-only mode
 reuses `train()` with `training.weights_only_checkpoint` and never presents itself as a resume.
 
 ### 6.4 Validation Audio Probe
