@@ -18,6 +18,10 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import run_audio_probe
+from synth_setter.models.checkpoint_bundle import (
+    ModelCheckpointBundleCallback,
+    load_model_checkpoint,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
@@ -425,6 +429,31 @@ def _log_model_artifact(
             log.warning(f"_log_model_artifact failed on {type(lg).__name__}: {exc}")
 
 
+def _weights_only_checkpoint(cfg: DictConfig) -> Path | None:
+    """Validate and return the explicit weights-only initialization checkpoint.
+
+    :param cfg: Training config carrying checkpoint selection fields.
+    :returns: Local checkpoint path, or ``None`` for normal construction.
+    :raises ValueError: If weights-only initialization is ambiguous with resume.
+    """
+    checkpoint = OmegaConf.select(cfg, "training.weights_only_checkpoint")
+    if checkpoint is None:
+        return None
+    if not isinstance(checkpoint, str) or not checkpoint.strip():
+        raise ValueError("training.weights_only_checkpoint must be a non-blank local path")
+    if OmegaConf.select(cfg, "ckpt_path") is not None:
+        raise ValueError(
+            "training.weights_only_checkpoint and ckpt_path are mutually exclusive; "
+            "choose weights-only initialization or full resume"
+        )
+    if resolve_resume_mode(cfg) is not None:
+        raise ValueError(
+            "training.weights_only_checkpoint and training.resume are mutually exclusive; "
+            "choose weights-only initialization or full resume"
+        )
+    return Path(checkpoint)
+
+
 def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
     """Discover the ``training.resume`` checkpoint and point ``cfg.ckpt_path`` at it.
 
@@ -481,8 +510,8 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
-    # Before any instantiation work: a require-mode miss or a resume/ckpt_path
-    # config error must fail the launch fast.
+    # Before any instantiation work: checkpoint intent errors must fail the launch fast.
+    weights_only_checkpoint = _weights_only_checkpoint(cfg)
     config_id = resolve_run_config_id(cfg)
     recovered_run_id = _apply_auto_resume(cfg, config_id)
     run_id = recovered_run_id or make_wandb_run_id(config_id)
@@ -492,9 +521,17 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.model)
+    model: LightningModule
+    if weights_only_checkpoint is None:
+        model = hydra.utils.instantiate(cfg.model)
+    else:
+        model = load_model_checkpoint(
+            weights_only_checkpoint,
+            expected_model_config=cfg.model,
+        )
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
+    callbacks.append(ModelCheckpointBundleCallback(cfg.model))
     _configure_checkpoint_durability(cfg, callbacks, launch_namespace)
     _configure_val_audio_probe(cfg, callbacks, launch_namespace)
 

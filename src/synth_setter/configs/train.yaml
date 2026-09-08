@@ -66,6 +66,9 @@ ckpt_path: null
 seed: null
 
 training:
+  # Start a new run from bundled model weights only; mutually exclusive with both
+  # ckpt_path (full Lightning resume) and training.resume (checkpoint discovery).
+  weights_only_checkpoint: null
   # Auto-resume from the newest last.ckpt: null/"off" | "auto" | "require" (errors when
   # none found); excludes explicit `ckpt_path`. See docs/design/training-pipeline.md §6.2.
   resume: null

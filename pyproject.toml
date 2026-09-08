@@ -54,6 +54,7 @@ cu128 = [
 
 [project.scripts]
 synth-setter-train = "synth_setter.cli.train:main"
+synth-setter-train-from-checkpoint = "synth_setter.cli.train_from_checkpoint:main"
 synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"

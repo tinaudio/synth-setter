@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - train
+  - _self_
+
+# Trusted self-describing checkpoint. Its pickle and Hydra targets are executable input.
+checkpoint_path: ???
+# Required: full-resume restores trainer state; weights-only starts a new run.
+checkpoint_mode: ???

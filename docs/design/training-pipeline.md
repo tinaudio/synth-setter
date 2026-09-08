@@ -381,6 +381,42 @@ Resolution behavior:
 
 A `make resume` target resolves the W&B artifact from experiment and run ID to avoid manual path assembly.
 
+Every checkpoint written by `synth-setter-train` also carries a versioned
+`synth_setter_model_bundle` containing only the fully resolved `cfg.model` construction graph.
+The bundle resolves dynamic values such as synth parameter width before save; it deliberately
+excludes the surrounding datamodule, logger, storage, and runtime configuration so credentials and
+other run-only settings are not copied into the artifact. `load_model_checkpoint(Path(...))` in
+`synth_setter.models.checkpoint_bundle` validates schema version 1, instantiates the bundled Hydra
+`_target_` graph, runs the model checkpoint hook, and loads the complete state dict strictly. SLAP
+online and EMA arms therefore load from their named checkpoint tensors rather than architecture
+inference. A checkpoint without a bundle fails with a legacy-checkpoint explanation; smoke-only
+legacy SLAP artifacts are not migrated or modified.
+
+Checkpoint pickle payloads and bundled Hydra `_target_` graphs are executable input. The loader
+validates the bundle contract but does not sandbox pickle or imported targets, so callers must use
+only trusted checkpoint sources.
+
+For a current data/trainer/logger configuration, checkpoint-based training requires an explicit
+state policy:
+
+```bash
+# Restore epoch, global step, optimizer, scheduler, and all model state through Lightning.
+synth-setter-train-from-checkpoint \
+  checkpoint_path=/trusted/last.ckpt checkpoint_mode=full-resume \
+  experiment=surge/slap_ast_audio_mlp_param
+
+# Load strict model weights (including SLAP EMA) but start a new run with fresh trainer state.
+synth-setter-train-from-checkpoint \
+  checkpoint_path=/trusted/model.ckpt checkpoint_mode=weights-only \
+  experiment=surge/slap_ast_audio_mlp_param
+```
+
+The current resolved `cfg.model` must equal the bundled model config. Model overrides, an existing
+`ckpt_path`, `training.resume`, or `training.weights_only_checkpoint` that make intent ambiguous are
+rejected; data, trainer, callback, and logger overrides remain current-run inputs. Full resume keeps
+the existing `trainer.fit(..., ckpt_path=..., weights_only=False)` path unchanged. Weights-only mode
+reuses `train()` with `training.weights_only_checkpoint` and never presents itself as a resume.
+
 ### 6.4 Validation Audio Probe
 
 `training.val_audio_probe` (default `"auto"`: wired whenever a `render` group is composed, validation runs, and R2 is reachable, with an INFO reason when it stays unwired; `true` requires those and fails fast when they don't hold — see `_configure_val_audio_probe`'s raise conditions in `cli/train.py`; `false` disables) wires a rank-0 `ValAudioProbe` callback (`_configure_val_audio_probe` in `cli/train.py`, implementation in `utils/callbacks.py`). Once per validation epoch it stages the first val batch's leading `training.val_audio_probe_samples` predictions, renders and scores them on a worker thread off the training step, logs `val_audio/*` scalars at the *next* validation, and archives the wav snapshot to a second R2 output stream under `probes/` (layout owned by [storage-provenance-spec](storage-provenance-spec.md) §2). pyFDN probes add octave-band RT60 log-RMSE and energy-decay RMSE in dB to the generic audio metrics; both are evaluation-only and run without gradients. The VST modules' `validation_step` returns a `preds` key specifically to feed this callback. Probe failures are logged and skipped — the probe can never take a training run down.
