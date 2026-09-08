@@ -8,8 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterator, Mapping
-from functools import partial
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -22,9 +22,16 @@ import torch
 from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    MEL_SPEC_FIELD,
+    PARAM_ARRAY_FIELD,
+    audio_dataset_shape,
+    mel_dataset_shape,
+)
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
     read_shard_metadata,
@@ -199,7 +206,9 @@ def _open(uri: str) -> lance.LanceDataset:
     :returns: Open dataset.
     """
     target, storage_options = _lance_target(uri)
-    return lance.dataset(target, storage_options=storage_options)
+    return _retry_lance_read(
+        "slap_dataset_open", lambda: lance.dataset(target, storage_options=storage_options)
+    )
 
 
 def _transaction_uuid(dataset: lance.LanceDataset, version: int) -> str:
@@ -210,7 +219,9 @@ def _transaction_uuid(dataset: lance.LanceDataset, version: int) -> str:
     :returns: Transaction UUID.
     :raises ValueError: The version has no transaction.
     """
-    transaction = dataset.read_transaction(version)
+    transaction = _retry_lance_read(
+        "slap_transaction_read", lambda: dataset.read_transaction(version)
+    )
     if transaction is None:
         raise ValueError(f"Lance version {version} has no transaction UUID")
     return transaction.uuid
@@ -480,12 +491,19 @@ def _validate_source_inputs(source: lance.LanceDataset, *, input_field: str) -> 
     :param input_field: Audio or mel source field selected by the model.
     :raises ValueError: A required field, tensor type, finite value, or audio bound is invalid.
     """
+    metadata = read_shard_metadata(source.schema)
+    shape_fn = audio_dataset_shape if input_field == AUDIO_FIELD else mel_dataset_shape
+    expected_shape = shape_fn(
+        1, metadata.channels, metadata.sample_rate, metadata.signal_duration_seconds
+    )[1:]
     required_fields = (input_field, PARAM_ARRAY_FIELD)
     for field in required_fields:
         if field not in source.schema.names:
             raise ValueError(f"source is missing required field {field!r}")
         if not isinstance(source.schema.field(field).type, pa.FixedShapeTensorType):
             raise ValueError(f"source field {field!r} must be a FixedShapeTensor column")
+    if tuple(source.schema.field(input_field).type.shape) != expected_shape:
+        raise ValueError(f"source field {input_field!r} shape disagrees with shard metadata")
     for batch in source.to_batches(columns=list(required_fields)):
         for field in required_fields:
             values = _decoded(batch.column(field), field=field)
@@ -660,6 +678,8 @@ def _infer_vector_dimension(
         raise ValueError("SLAP EMA projections must be rank-two")
     if audio_projection.shape[1] != param_projection.shape[1]:
         raise ValueError("SLAP EMA projection dimensions differ")
+    if audio_projection.shape[1] < 1:
+        raise ValueError("SLAP EMA projection dimension must be positive")
     return audio_projection.shape[1]
 
 
@@ -1093,9 +1113,12 @@ def export_slap(config: ExportSlapConfig) -> dict[str, SlapExportResult]:
 
     :param config: Validated split, model, checkpoint, and index policy.
     :returns: Completed output identity keyed by split.
+    :raises ValueError: The checkpoint changes while loading the model.
     """
     checkpoint_sha256 = _checkpoint_sha256(config.ckpt_path)
     model, device = _load_model(config)
+    if _checkpoint_sha256(config.ckpt_path) != checkpoint_sha256:
+        raise ValueError("checkpoint changed while loading; use an immutable checkpoint file")
     return {
         split: _export_split(
             config,

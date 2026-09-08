@@ -61,7 +61,7 @@ them for training-time retrieval unless cross-split access is deliberate.
 ## Running an export
 
 ```bash
-python -m synth_setter.cli.export_slap \
+synth-setter-export-slap \
   model=slap_ast_audio_mlp_param \
   synth=surge_xt \
   source_root_uri=r2://bucket/source \
@@ -82,7 +82,7 @@ the current source head.
 To select only train, also remove the unused version entries:
 
 ```bash
-python -m synth_setter.cli.export_slap \
+synth-setter-export-slap \
   source_root_uri=/data/source output_root_uri=/data/slap \
   ckpt_path=/path/to/model.ckpt \
   'splits=[train]' source_versions.train=12 \
@@ -106,15 +106,10 @@ backend, not arbitrary AWS credentials.
 
 ## Checkpoint configuration
 
-The initial exporter requires the checkpoint and its matching Hydra model
+The exporter requires the checkpoint and its matching Hydra model
 configuration explicitly. The model configuration includes architecture
 settings and resolved synth parameter dimensions; choosing the same model
 name with different training overrides is not sufficient.
-
-Self-describing checkpoint support is tracked in #3207. After that and the
-exporter merge, #3208 will switch export model construction to the shared
-checkpoint loader and register the `synth-setter-export-slap` console command.
-Until then, the exporter is invoked as a Python module.
 
 Only load trusted checkpoints and model configurations. Hydra model targets
 instantiate Python code; these inputs are not a safe format for untrusted

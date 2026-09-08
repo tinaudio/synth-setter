@@ -6,9 +6,9 @@ import json
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from collections.abc import Callable
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
@@ -42,7 +42,7 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 def _arm(input_dim: int, output_dim: int = 2) -> SiameseArm:
     return SiameseArm(
-        encoder=nn.Linear(input_dim, 4),
+        encoder=nn.Sequential(nn.Flatten(start_dim=1), nn.Linear(input_dim, 4)),
         projector=nn.Linear(4, output_dim),
         transform=nn.Linear(output_dim, output_dim),
         normalize_projections=True,
@@ -53,7 +53,7 @@ def _model(
     output_dim: int = 2, *, audio_input_key: Literal["audio", "mel"] = "audio"
 ) -> SLAPModule:
     return SLAPModule(
-        audio_encoder=_arm(5, output_dim),
+        audio_encoder=_arm(128 if audio_input_key == "mel" else 5, output_dim),
         text_encoder=_arm(2, output_dim),
         loss_fn=BYOLLoss(),
         optimizer=partial(torch.optim.SGD, lr=0.1),
@@ -68,9 +68,11 @@ def _model_config(
         return {
             "_target_": "synth_setter.models.components.slap.SiameseArm",
             "encoder": {
-                "_target_": "torch.nn.Linear",
-                "in_features": input_dim,
-                "out_features": 4,
+                "_target_": "torch.nn.Sequential",
+                "_args_": [
+                    {"_target_": "torch.nn.Flatten", "start_dim": 1},
+                    {"_target_": "torch.nn.Linear", "in_features": input_dim, "out_features": 4},
+                ],
             },
             "projector": {
                 "_target_": "torch.nn.Linear",
@@ -87,7 +89,7 @@ def _model_config(
 
     return {
         "_target_": "synth_setter.models.slap_module.SLAPModule",
-        "audio_encoder": arm(5),
+        "audio_encoder": arm(128 if audio_input_key == "mel" else 5),
         "text_encoder": arm(2),
         "loss_fn": {"_target_": "synth_setter.models.components.slap.BYOLLoss"},
         "optimizer": {"_target_": "torch.optim.SGD", "_partial_": True, "lr": 0.1},
@@ -107,18 +109,18 @@ def _source(
     param_row: list[float] | None = None,
 ) -> int:
     audio_row = audio_row or [0.1, 0.2, 0.3, 0.4, 0.5]
-    mel_row = mel_row or [-0.5, -0.4, -0.3, -0.2, -0.1]
+    mel_row = mel_row or [-0.5] * 128
     param_row = param_row or [2.0, 1.0]
-    audio = np.tile(np.array([audio_row], dtype=np.float32), (rows, 1))
-    mel = np.tile(np.array([mel_row], dtype=np.float32), (rows, 1))
+    audio = np.tile(np.array([[audio_row]], dtype=np.float32), (rows, 1, 1))
+    mel = np.tile(np.array(mel_row, dtype=np.float32).reshape(1, 1, 128, 1), (rows, 1, 1, 1))
     params = np.tile(np.array([param_row], dtype=np.float32), (rows, 1))
     if rows:
         audio_column = pa.FixedShapeTensorArray.from_numpy_ndarray(audio)
         mel_column = pa.FixedShapeTensorArray.from_numpy_ndarray(mel)
         param_column = pa.FixedShapeTensorArray.from_numpy_ndarray(params)
     else:
-        audio_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [5]))
-        mel_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [5]))
+        audio_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [1, 5]))
+        mel_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [1, 128, 1]))
         param_column = pa.array([], pa.fixed_shape_tensor(pa.float32(), [2]))
     columns: dict[str, pa.Array] = {
         "audio": audio_column,
@@ -130,7 +132,7 @@ def _source(
         columns["row_uuid"] = pa.array(row_uuid, pa.string())
     shard_metadata = ShardMetadata(
         velocity=100,
-        signal_duration_seconds=1.0,
+        signal_duration_seconds=5 / 16_000,
         sample_rate=16_000,
         channels=1,
         min_loudness=-60.0,
@@ -160,7 +162,7 @@ def _checkpoint(
         )
         rows = [
             {
-                audio_input_key: torch.tensor([-0.5, -0.4, -0.3, -0.2, -0.1])
+                audio_input_key: torch.full((1, 128, 1), -0.5)
                 if audio_input_key == "mel"
                 else torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5]),
                 "params": torch.tensor([2.0, 1.0]),
@@ -254,7 +256,7 @@ def test_export_slap_real_mel_checkpoint_uses_stored_mel_for_ema_projection(
     source = tmp_path / "source"
     output = tmp_path / "output"
     source.mkdir()
-    mel = [-0.5, -0.4, -0.3, -0.2, -0.1]
+    mel = [-0.5] * 128
     audio = [0.5, 0.4, 0.3, 0.2, 0.1]
     version = _source(source / "train.lance", rows=1, audio_row=audio, mel_row=mel)
     checkpoint = tmp_path / "model.ckpt"
@@ -263,8 +265,7 @@ def test_export_slap_real_mel_checkpoint_uses_stored_mel_for_ema_projection(
         update={"model": _model_config(audio_input_key="mel")}
     )
     with torch.inference_mode():
-        _, expected_mel, _ = trained.audio_ema(torch.tensor([mel]))
-        _, waveform_projection, _ = trained.audio_ema(torch.tensor([audio]))
+        _, expected_mel, _ = trained.audio_ema(torch.tensor(mel).reshape(1, 1, 128, 1))
 
     export_slap(config)
 
@@ -276,7 +277,6 @@ def test_export_slap_real_mel_checkpoint_uses_stored_mel_for_ema_projection(
         .reshape(2, 2)
     )
     np.testing.assert_allclose(vectors[1], expected_mel.numpy()[0], atol=1e-6)
-    assert not np.allclose(vectors[1], waveform_projection.numpy()[0])
 
 
 def test_export_slap_no_index_allows_width_not_divisible_by_pq_subvectors(
@@ -947,7 +947,7 @@ def test_export_slap_empty_split_publishes_completed_empty_dataset(tmp_path: Pat
 def test_export_slap_cli_trained_checkpoint_supports_ann_search_and_source_join(
     tmp_path: Path,
 ) -> None:
-    """The module CLI produces an ANN-searchable, source-joinable export.
+    """The installed CLI produces an ANN-searchable, source-joinable export.
 
     :param tmp_path: Isolated dataset root.
     """
@@ -966,9 +966,7 @@ def test_export_slap_cli_trained_checkpoint_supports_ann_search_and_source_join(
 
     completed = subprocess.run(  # noqa: S603 - trusted interpreter and fixed module
         [
-            sys.executable,
-            "-m",
-            "synth_setter.cli.export_slap",
+            str(Path(sys.executable).with_name("synth-setter-export-slap")),
             "--config-dir",
             str(tmp_path),
             "--config-name",
@@ -1014,3 +1012,66 @@ def test_export_slap_cli_shipped_model_resolves_parameter_dimensions(model: str)
 
     assert completed.returncode == 0, completed.stderr
     assert "${param_spec_width:" not in completed.stdout
+
+
+@pytest.mark.parametrize("audio_input_key", ["audio", "mel"])
+def test_export_slap_metadata_shape_mismatch_rejects_before_uuid_migration(
+    tmp_path: Path, audio_input_key: Literal["audio", "mel"]
+) -> None:
+    """Source tensor geometry must agree with its declared audio frontend.
+
+    :param tmp_path: Isolated dataset root.
+    :param audio_input_key: Stored model input under test.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    path = source / "train.lance"
+    _source(path, rows=1)
+    dataset = lance.dataset(path)
+    metadata = json.loads(dataset.schema.metadata[SHARD_METADATA_SCHEMA_KEY])
+    metadata["signal_duration_seconds"] = 1.0
+    dataset.update_schema_metadata({SHARD_METADATA_SCHEMA_KEY.decode(): json.dumps(metadata)})
+    version = dataset.version
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint, audio_input_key=audio_input_key)
+    config = _config(source, tmp_path / "output", checkpoint, version).model_copy(
+        update={"model": _model_config(audio_input_key=audio_input_key)}
+    )
+
+    with pytest.raises(ValueError, match="shape.*metadata"):
+        export_slap(config)
+
+    unchanged = lance.dataset(path)
+    assert unchanged.version == version
+    assert "row_uuid" not in unchanged.schema.names
+
+
+def test_export_slap_transient_source_open_retries_to_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient source read failure does not abort a valid export.
+
+    :param tmp_path: Isolated dataset root.
+    :param monkeypatch: Scoped object-store boundary failure injection.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    version = _source(source / "train.lance")
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+    config = _config(source, tmp_path / "output", checkpoint, version)
+    open_dataset = cast(Callable[..., lance.LanceDataset], lance.dataset)
+    failed = False
+
+    def transient_open(*args: object, **kwargs: object) -> lance.LanceDataset:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise TimeoutError("transient object-store read")
+        return open_dataset(*args, **kwargs)
+
+    monkeypatch.setattr(lance, "dataset", transient_open)
+
+    result = export_slap(config)["train"]
+
+    assert lance.dataset(result.output_uri).count_rows() == 4
