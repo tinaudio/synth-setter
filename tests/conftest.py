@@ -2793,6 +2793,26 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture
+def cfg_train_wandb_labels(cfg_train_lance: DictConfig) -> DictConfig:
+    """Attach shipped experiment metadata to a tiny real Lance training workload.
+
+    :param cfg_train_lance: CPU-fast training configuration over generated Lance splits.
+    :returns: Training configuration with the production W&B name and tag wiring.
+    """
+    with initialize_config_module(config_module="synth_setter.configs", version_base="1.3"):
+        experiment = compose(
+            config_name="train", overrides=["experiment=surge/ffn_simple", "logger=wandb"]
+        )
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.logger = experiment.logger
+        cfg_train_lance.logger.wandb.offline = True
+        cfg_train_lance.experiment_name = experiment.experiment_name
+        cfg_train_lance.run_name = experiment.run_name
+        cfg_train_lance.tags = experiment.tags
+    return cfg_train_lance
+
+
 def _shrink_slap_ast(cfg: DictConfig) -> None:
     """Reduce the configured AST depth without relying on its list position.
 
