@@ -1619,6 +1619,76 @@ def test_third_party_eval_config_resolves_per_corpus(corpus: str, audio_column: 
     assert cfg.datamodule.conditioning == "mel"
 
 
+@pytest.mark.parametrize(
+    ("corpus", "prefix", "path_rule"),
+    [
+        pytest.param("mit_ir_survey", "MITIRSurvey", None, id="mit"),
+        pytest.param("echothief", "EchoThief", None, id="echothief"),
+        pytest.param("ashir", "ASHIR", "BRIRs/%", id="ashir"),
+        pytest.param("openair", "OpenAIR", "IRs/%", id="openair"),
+        pytest.param("thkoeln_omni", "THKoelnSRIR", "Omni_ir_%", id="thkoeln"),
+    ],
+)
+def test_rir_corpus_config_serves_decodable_rows_downmixed_onto_pyfdn(
+    corpus: str, prefix: str, path_rule: str | None
+) -> None:
+    """Each published RIR corpus composes onto the mono pyFDN contract through config alone.
+
+    :param corpus: Corpus config under ``datamodule/third_party/rir``.
+    :param prefix: Published R2 prefix the corpus reads in place.
+    :param path_rule: Path pattern the predicate must carry, or ``None`` when every
+        decodable row is an impulse response.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=pyfdn/eval_flow_rir",
+            f"datamodule=third_party/rir/{corpus}",
+            "trainer=cpu",
+            "ckpt_path=/tmp/none.ckpt",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    assert cfg.datamodule.dataset_uri == f"r2://experiments/third_party/{prefix}/all.lance"
+    assert cfg.datamodule.audio_column == "source_bytes"
+    assert cfg.datamodule.channels == 1
+    assert cfg.datamodule.downmix is True
+    assert "audio_decodable = true" in cfg.datamodule.row_filter
+    if path_rule is not None:
+        assert path_rule in cfg.datamodule.row_filter
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    assert datamodule.row_filter == cfg.datamodule.row_filter
+
+
+def test_pyfdn_rir_eval_experiment_pins_statistics_and_parameterless_prediction() -> None:
+    """The RIR eval experiment scores rendered audio without ground-truth parameters."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=pyfdn/eval_flow_rir",
+            "trainer=cpu",
+            "ckpt_path=/tmp/none.ckpt",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    assert cfg.mode == "predict"
+    assert cfg.evaluation.no_params is True
+    assert cfg.evaluation.rerender_target is False
+    assert cfg.evaluation.render_vst is True
+    assert cfg.render.renderer_backend == "pyfdn"
+    assert cfg.synth.param_spec_name == "pyfdn_n8_mono_householder"
+    assert cfg.datamodule.mel_stats_uri.endswith(
+        "pyfdn-householder-lance-131k-616k-8k-256-20260904T065718759Z/stats.npz"
+    )
+    assert cfg.datamodule.mel_stats_sha256 == (
+        "db418cbe3e8fa29bfeb1d13a9f64e87352277ab1c1dc5f6bae896ee8f4f34ebc"
+    )
+    assert cfg.datamodule.sample_rate == cfg.render.sample_rate
+    assert cfg.datamodule.signal_duration_seconds == cfg.render.signal_duration_seconds
+
+
 def test_nsynth_sketch_eval_config_pins_corpus_controls_and_training_statistics() -> None:
     """The dedicated NSynth config composes the held-out corpus onto the sketch contract."""
     cfg = _compose(
