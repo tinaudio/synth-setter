@@ -1,6 +1,4 @@
-# A randomly initialised PupuJEPA teacher trained end to end with its pool, like ast_online.
-# The checkpoint-free backbone keeps a released variant's geometry so the head and the
-# cached profiles' sequence contract carry over unchanged.
+# Checkpoint-free PupuJEPA teacher and pool train jointly with released variant geometry.
 _target_: synth_setter.models.components.pupujepa_encoder.PupuJepaConditioningEncoder
 out_dim: 512
 backbone:

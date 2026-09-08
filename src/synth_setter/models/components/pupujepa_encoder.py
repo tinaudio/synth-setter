@@ -116,12 +116,13 @@ class PupuJepaMelFrontend(nn.Module):
             (config.reflection_padding, config.reflection_padding),
             mode="reflect",
         ).squeeze(1)
+        # Buffers follow a true-low-precision module cast, but the STFT stays float32.
         spectrum = torch.stft(
             waveform,
             config.n_fft,
             hop_length=config.hop_length,
             win_length=config.win_length,
-            window=self.window,
+            window=self.window.float(),
             center=False,
             pad_mode="reflect",
             normalized=False,
@@ -129,7 +130,7 @@ class PupuJepaMelFrontend(nn.Module):
             return_complex=True,
         )
         magnitude = spectrum.abs()
-        mel_spectrum = torch.matmul(self.mel_filter, magnitude)
+        mel_spectrum = torch.matmul(self.mel_filter.float(), magnitude)
         log_mel = torch.log(torch.clamp(mel_spectrum, min=1e-5))
         normalized = (log_mel - config.mel_mean) / (config.mel_std + 1e-8)
         return normalized.transpose(-2, -1).unsqueeze(1)
@@ -443,11 +444,13 @@ class PupuJepaAudioEncoder(nn.Module):
                     self.config.sample_rate,
                 )
             features = self.frontend(waveform)
-        teacher_precision = (
-            nullcontext()
-            if self.trainable
-            else torch.autocast(device_type=audio.device.type, enabled=False)
-        )
+        if self.trainable:
+            # Match the teacher's own dtype so true-low-precision trainers (bf16-true) keep
+            # working; ambient autocast then handles mixed-precision modes as usual.
+            features = features.to(self.teacher_model.patch_embed.proj.weight.dtype)
+            teacher_precision = nullcontext()
+        else:
+            teacher_precision = torch.autocast(device_type=audio.device.type, enabled=False)
         with teacher_precision:
             sequence = torch.cat(
                 [self.teacher_model(chunk) for chunk in features.split(self.max_batch_size)]

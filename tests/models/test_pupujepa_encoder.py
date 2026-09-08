@@ -506,6 +506,48 @@ def test_trainable_encoder_runs_teacher_at_ambient_autocast_precision() -> None:
     assert sequence.dtype == torch.bfloat16
 
 
+def test_trainable_encoder_cast_to_bfloat16_still_encodes_float32_waveforms() -> None:
+    """A true-low-precision trainer casts the module; float32 audio must still flow through."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config, trainable=True)
+    encoder.to(torch.bfloat16)
+
+    sequence = encoder(torch.randn(2, 256).clamp(-1.0, 1.0))
+
+    assert sequence.dtype == torch.bfloat16
+    assert sequence.shape == (2, 48, 4)
+
+
+@pytest.mark.slow
+def test_conditioning_encoder_from_scratch_overfits_fixed_batch() -> None:
+    """A randomly initialised teacher and pool learn a fixed mapping when trained jointly."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PupuJepaConditioningEncoder(
+        backbone=PupuJepaAudioEncoder(
+            sample_rate=config.sample_rate, config=config, trainable=True
+        ),
+        head=EmbeddingPool(embed_dim=config.output_dim, d_model=8, num_heads=1, max_seq_len=4),
+        out_dim=8,
+    )
+    predictor = torch.nn.Linear(8, 2)
+    audio = torch.randn(2, 256).clamp(-1.0, 1.0)
+    targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
+    optimizer = torch.optim.Adam((*encoder.parameters(), *predictor.parameters()), lr=3e-3)
+
+    initial_loss = torch.nn.functional.mse_loss(predictor(encoder(audio)), targets)
+    loss = initial_loss
+    for _ in range(1_000):
+        optimizer.zero_grad()
+        loss = torch.nn.functional.mse_loss(predictor(encoder(audio)), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert loss.item() < initial_loss.item() / 100
+    assert loss.item() < 0.01
+
+
 def test_conditioning_encoder_training_step_updates_backbone_and_head() -> None:
     """One optimizer step moves both the from-scratch teacher and the pool."""
     torch.manual_seed(0)
