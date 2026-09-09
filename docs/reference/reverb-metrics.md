@@ -75,6 +75,9 @@ relative energy between frequencies and times. It does not align away onset
 shifts. Both-silent inputs score zero; a single silent input has no normalized
 energy distribution and raises an error.
 
+Each non-silent response is peak-scaled before analysis to avoid energy overflow
+or underflow. One-sided interior FFT bins receive twice their squared magnitude;
+DC and Nyquist do not. Channel energies are summed without phase cancellation.
 The representation uses a 2048-sample Hann STFT with 512-sample hop, pooled by
 energy sum into 32 log-frequency bands and at most 64 time cells. At 44.1 kHz,
 positive-frequency bins span approximately 21.53 Hz to 22.05 kHz; DC energy is
