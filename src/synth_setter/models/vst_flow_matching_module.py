@@ -19,6 +19,12 @@ from synth_setter.conditioning import (
     conditioning_batch_key,
     resolve_sketch_controls,
 )
+from synth_setter.data.vst.param_spec import (
+    CategoricalParameter,
+    DiscreteLiteralParameter,
+    Parameter,
+    ParamSpec,
+)
 from synth_setter.metrics import (
     BestSwapParamMSE,
     NumberGroupSwapParamMSE,
@@ -35,13 +41,17 @@ _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _PARAM_SHAPE = "params"
-# Stored outside hyper_parameters because Lightning overwrites those with load-time
-# kwargs before the load hook runs; a checkpoint without the key trained a velocity field.
+# Stored outside hyper_parameters because Lightning replaces those with load-time kwargs
+# before the hook runs; missing keys retain their legacy velocity/MSE meanings.
+_ENDPOINT_LOSS_KEY = "endpoint_loss"
+_LEGACY_ENDPOINT_LOSS = "mse"
 _PARAMETERIZATION_KEY = "parameterization"
 _LEGACY_PARAMETERIZATION = "velocity"
 
+EndpointLoss = Literal["mse", "mixed"]
 Parameterization = Literal["velocity", "endpoint"]
-_PARAMETERIZATIONS: frozenset[str] = frozenset(("velocity", "endpoint"))
+_ENDPOINT_LOSSES: frozenset[str] = frozenset(("mixed", "mse"))
+_PARAMETERIZATIONS: frozenset[str] = frozenset(("endpoint", "velocity"))
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -121,7 +131,7 @@ class TrainStepOutputs:
 
     .. attribute :: per_param_flow_mse
 
-       Training objective error for each encoded parameter column.
+       Weighted model-space MSE diagnostic for each encoded parameter column.
 
     .. attribute :: audio_term
 
@@ -153,7 +163,67 @@ class TrainStepOutputs:
     conditioning_keep: ConditioningKeepMasks
 
 
+type _FieldTransform = Callable[
+    [Shaped[torch.Tensor, "batch ..."]], Shaped[torch.Tensor, "batch ..."]
+]
 type _TimeField = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+
+
+@jaxtyped(typechecker=beartype)
+def _uses_onehot_classification(parameter: Parameter) -> bool:
+    """Return whether a parameter span represents one categorical draw.
+
+    :param parameter: Typed logical parameter.
+    :returns: True only for one-hot categorical or integer-literal spans.
+    """
+    return isinstance(parameter, (CategoricalParameter, DiscreteLiteralParameter)) and (
+        parameter.encoding == "onehot"
+    )
+
+
+@jaxtyped(typechecker=beartype)
+def endpoint_prediction_to_model(
+    prediction: Float[torch.Tensor, "batch params"],
+    param_spec: ParamSpec,
+) -> Float[torch.Tensor, "batch params"]:
+    """Convert one-hot logits to model-space probabilities without changing numerical spans.
+
+    :param prediction: Raw endpoint output; one-hot spans are logits.
+    :param param_spec: Parameter layout defining typed encoded spans.
+    :returns: Endpoint in model space, with categorical probabilities mapped to ``[-1, 1]``.
+    """
+    endpoint = prediction.clone()
+    for parameter, span in param_spec.encoded_slices():
+        if _uses_onehot_classification(parameter):
+            endpoint[:, span] = 2 * torch.softmax(prediction[:, span], dim=-1) - 1
+    return endpoint
+
+
+@jaxtyped(typechecker=beartype)
+def mixed_endpoint_row_loss(
+    prediction: Float[torch.Tensor, "batch params"],
+    target: Float[torch.Tensor, "batch params"],
+    param_spec: ParamSpec,
+) -> Float[torch.Tensor, "batch 1"]:
+    """Average one classification or regression term per logical parameter and row.
+
+    :param prediction: Raw endpoint output; one-hot spans are logits.
+    :param target: Clean model-space endpoint.
+    :param param_spec: Parameter layout defining typed encoded spans.
+    :returns: Unweighted per-row mixed objective shaped ``(batch, 1)``.
+    """
+    terms: list[Float[torch.Tensor, _BATCH_SHAPE]] = []
+    for parameter, span in param_spec.encoded_slices():
+        predicted_span = prediction[:, span]
+        target_span = target[:, span]
+        if _uses_onehot_classification(parameter):
+            term = torch.nn.functional.cross_entropy(
+                predicted_span, target_span.argmax(dim=-1), reduction="none"
+            )
+        else:
+            term = (predicted_span - target_span).square().mean(dim=-1)
+        terms.append(term)
+    return torch.stack(terms, dim=-1).mean(dim=-1, keepdim=True)
 
 
 @jaxtyped(typechecker=beartype)
@@ -224,6 +294,7 @@ def build_guided_velocity(
     *,
     sketch_cfg_strength: float | None = None,
     control_tokens: ControlTokenBranches | None = None,
+    output_transform: _FieldTransform | None = None,
 ) -> _TimeField:
     """Bind content and optional control tokens into classifier-free-guidance branches.
 
@@ -233,24 +304,25 @@ def build_guided_velocity(
     :param sketch_cfg_strength: Guidance scale for sketch controls; defaults to
         ``cfg_strength`` for joint-CFG compatibility.
     :param control_tokens: Complete full-sketch and PE-only control-token state.
+    :param output_transform: Optional branch-local conversion applied before guidance.
     :returns: Two-argument guided velocity field.
     """
     if control_tokens is None:
         return joint_cfg_velocity(
-            _bind_branch(field, conditioning, None),
-            _bind_branch(field, None, None),
+            _bind_branch(field, conditioning, None, output_transform),
+            _bind_branch(field, None, None, output_transform),
             cfg_strength,
         )
 
     sketch_strength = cfg_strength if sketch_cfg_strength is None else sketch_cfg_strength
-    unconditional = _bind_branch(field, None, control_tokens.unconditional)
-    sketch = _bind_branch(field, None, control_tokens.conditional)
+    unconditional = _bind_branch(field, None, control_tokens.unconditional, output_transform)
+    sketch = _bind_branch(field, None, control_tokens.conditional, output_transform)
     if conditioning is None:
         return joint_cfg_velocity(sketch, unconditional, sketch_strength)
     return multi_cfg_velocity(
         unconditional,
         sketch,
-        _bind_branch(field, conditioning, control_tokens.conditional),
+        _bind_branch(field, conditioning, control_tokens.conditional, output_transform),
         sketch_cfg_strength=sketch_strength,
         content_cfg_strength=cfg_strength,
     )
@@ -261,6 +333,7 @@ def _bind_branch(
     field: torch.nn.Module,
     conditioning: Shaped[torch.Tensor, "batch ..."] | None,
     control_tokens: Float[torch.Tensor, "batch tokens d_model"] | None,
+    output_transform: _FieldTransform | None = None,
 ) -> _TimeField:
     """Bind one CFG branch's conditioning into a two-argument time field.
 
@@ -271,11 +344,29 @@ def _bind_branch(
     :param conditioning: Encoded content conditioning, or ``None`` for the
         unconditional branch.
     :param control_tokens: This branch's control tokens, or ``None`` without sketch support.
+    :param output_transform: Optional conversion applied to this branch's raw output.
     :returns: Two-argument velocity field over parameter state and time.
     """
-    if control_tokens is None:
-        return lambda x, t: field(x, t, conditioning)
-    return lambda x, t: field(x, t, conditioning, control_tokens=control_tokens)
+
+    @jaxtyped(typechecker=beartype)
+    def evaluate(
+        x: Shaped[torch.Tensor, "batch ..."],
+        t: Shaped[torch.Tensor, "batch 1"],
+    ) -> Shaped[torch.Tensor, "batch ..."]:
+        """Evaluate and optionally convert one bound guidance branch.
+
+        :param x: Shared trajectory point.
+        :param t: Shared flow time.
+        :returns: Raw or converted field output.
+        """
+        output = (
+            field(x, t, conditioning)
+            if control_tokens is None
+            else field(x, t, conditioning, control_tokens=control_tokens)
+        )
+        return output if output_transform is None else output_transform(output)
+
+    return evaluate
 
 
 @jaxtyped(typechecker=beartype)
@@ -325,6 +416,7 @@ class VSTFlowMatchingModule(LightningModule):
         cfg_dropout_rate: float = 0.1,
         rectified_sigma_min: float = 0.0,
         parameterization: Parameterization = "velocity",
+        endpoint_loss: EndpointLoss = "mse",
         validation_sample_steps: int = 50,
         validation_cfg_strength: float = 4.0,
         validation_sketch_cfg_strength: float | None = None,
@@ -358,6 +450,7 @@ class VSTFlowMatchingModule(LightningModule):
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
         :param parameterization: What the field predicts: the velocity ``x1 - x0`` or the
             clean endpoint ``x1``; the sampler converts an endpoint to a velocity.
+        :param endpoint_loss: Flat endpoint MSE, or per-parameter MSE/CE for one-hot spans.
         :param validation_sample_steps: RK4 integration steps used at validation.
         :param validation_cfg_strength: Content guidance strength at validation.
         :param validation_sketch_cfg_strength: Sketch guidance strength at validation;
@@ -367,9 +460,10 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
-        :raises ValueError: The ParamSpec width differs from ``num_params``,
-            ``parameterization`` is not a known value, or ``audio_loss`` is combined with
-            a nonzero ``rectified_sigma_min`` or ``compile=True`` (#2585).
+        :raises ValueError: The ParamSpec width differs from ``num_params``, an objective
+            option is invalid, mixed loss lacks endpoint parameterization or a ParamSpec,
+            or ``audio_loss`` is combined with a nonzero ``rectified_sigma_min`` or
+            ``compile=True`` (#2585).
         """
         super().__init__()
         if parameterization not in _PARAMETERIZATIONS:
@@ -378,6 +472,14 @@ class VSTFlowMatchingModule(LightningModule):
                 f"parameterization must be one of {sorted(_PARAMETERIZATIONS)}, "
                 f"got {parameterization!r}"
             )
+        if endpoint_loss not in _ENDPOINT_LOSSES:
+            raise ValueError(
+                f"endpoint_loss must be one of {sorted(_ENDPOINT_LOSSES)}, got {endpoint_loss!r}"
+            )
+        if endpoint_loss == "mixed" and parameterization != "endpoint":
+            raise ValueError("endpoint_loss='mixed' requires parameterization='endpoint'")
+        if endpoint_loss == "mixed" and param_spec is None:
+            raise ValueError("endpoint_loss='mixed' requires param_spec")
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not
@@ -456,11 +558,12 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Stamp the parameterization and exclude re-resolvable frozen CLAP state.
+        """Stamp output semantics and exclude re-resolvable frozen CLAP state.
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises TypeError: A pretrained-encoder checkpoint has malformed state metadata.
         """
+        checkpoint[_ENDPOINT_LOSS_KEY] = self.hparams.endpoint_loss
         checkpoint[_PARAMETERIZATION_KEY] = self.hparams.parameterization
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
@@ -481,14 +584,20 @@ class VSTFlowMatchingModule(LightningModule):
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises TypeError: A pretrained-encoder checkpoint has a malformed state dictionary.
-        :raises ValueError: The checkpoint trained the other parameterization; its weights would
-            load cleanly and then sample nonsense.
+        :raises ValueError: The checkpoint trained another parameterization or endpoint loss; same-
+            shaped weights would load but carry incompatible output semantics.
         """
         stored_parameterization = checkpoint.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
         if stored_parameterization != self.hparams.parameterization:
             raise ValueError(
                 f"checkpoint trained parameterization={stored_parameterization!r}, "
                 f"module expects {self.hparams.parameterization!r}"
+            )
+        stored_endpoint_loss = checkpoint.get(_ENDPOINT_LOSS_KEY, _LEGACY_ENDPOINT_LOSS)
+        if stored_endpoint_loss != self.hparams.endpoint_loss:
+            raise ValueError(
+                f"checkpoint trained endpoint_loss={stored_endpoint_loss!r}, "
+                f"module expects {self.hparams.endpoint_loss!r}"
             )
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
@@ -705,9 +814,15 @@ class VSTFlowMatchingModule(LightningModule):
         else:
             prediction = self.vector_field(x_t, t, z, control_tokens=control_tokens)
 
-        squared_flow_error = (prediction - target).square()
+        endpoint_prediction = self._endpoint_prediction_to_model(prediction)
+        squared_flow_error = (endpoint_prediction - target).square()
         per_param_flow_mse = (squared_flow_error * w).mean(dim=0)
-        loss = (squared_flow_error.mean(dim=-1) * w).mean()
+        if self.hparams.endpoint_loss == "mixed":
+            assert self._metric_param_spec is not None
+            row_loss = mixed_endpoint_row_loss(prediction, target, self._metric_param_spec)
+        else:
+            row_loss = squared_flow_error.mean(dim=-1, keepdim=True)
+        loss = (row_loss * w).mean()
 
         audio_term = None
         grad_balance = None
@@ -816,18 +931,35 @@ class VSTFlowMatchingModule(LightningModule):
         :param sketch_cfg_strength: Guidance scale for sketch controls.
         :returns: Two-argument velocity field over parameter state and time.
         """
+        output_transform = (
+            self._endpoint_prediction_to_model if self.hparams.endpoint_loss == "mixed" else None
+        )
         guided = build_guided_velocity(
             self.vector_field,
             conditioning,
             cfg_strength,
             sketch_cfg_strength=sketch_cfg_strength,
             control_tokens=control_tokens,
+            output_transform=output_transform,
         )
         if self.hparams.parameterization != "endpoint":
             return guided
-        # Guidance mixes raw predictions before the conversion so it stays linear in the
-        # endpoint; the straight-line path then makes (x1 - x_t) / (1 - t) the velocity.
         return lambda x, t: (guided(x, t) - x) / (1 - t)
+
+    @jaxtyped(typechecker=beartype)
+    def _endpoint_prediction_to_model(
+        self,
+        prediction: Float[torch.Tensor, "batch params"],
+    ) -> Float[torch.Tensor, "batch params"]:
+        """Interpret raw field output as the configured endpoint representation.
+
+        :param prediction: Raw field output.
+        :returns: Model-space endpoint, converting mixed one-hot logits exactly once.
+        """
+        if self.hparams.endpoint_loss == "mse":
+            return prediction
+        assert self._metric_param_spec is not None
+        return endpoint_prediction_to_model(prediction, self._metric_param_spec)
 
     @jaxtyped(typechecker=beartype)
     def _one_step_estimate(
@@ -844,7 +976,7 @@ class VSTFlowMatchingModule(LightningModule):
         :returns: Estimate of ``x1``.
         """
         if self.hparams.parameterization == "endpoint":
-            return prediction
+            return self._endpoint_prediction_to_model(prediction)
         return x_t + (1 - t) * prediction
 
     def _sample(

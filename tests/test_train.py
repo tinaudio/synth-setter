@@ -1183,6 +1183,34 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
 
 
 @pytest.mark.slow
+def test_train_cardinal_mixed_endpoint_loss_advances_real_entrypoint(tmp_path: Path) -> None:
+    """A real optimizer step runs the opt-in CE objective from Hydra configuration.
+
+    :param tmp_path: Hydra output and log directory; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="cardinal",
+        model_group="vst_flow",
+    )
+    with open_dict(cfg):
+        cfg.model.compile = False
+        cfg.model.endpoint_loss = "mixed"
+        cfg.model.parameterization = "endpoint"
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 32
+        cfg.model.vector_field.d_ff = 32
+        cfg.model.vector_field.projection.num_tokens = 8
+        cfg.test = False
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("experiment", ["surge/ffn_simple", "surge/flow_simple"])
 @pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
 def test_train_runpod_experiment_default_datamodule_advances(
