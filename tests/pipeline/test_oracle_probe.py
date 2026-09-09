@@ -127,7 +127,7 @@ def test_upload_oracle_probe_roles_preserve_both_renderer_results(
     candidate_eval_dir = tmp_path / "candidate"
     _write_eval_artifacts(source_eval_dir, metric=1.0)
     _write_eval_artifacts(candidate_eval_dir, metric=2.0)
-    candidate_render = spec.render.model_copy(update={"renderer_backend": "pedalboard"})
+    candidate_render = spec.render.model_copy(update={"renderer_backend": "dawdreamer"})
 
     source_uri = upload_oracle_probe(
         source_eval_dir,
