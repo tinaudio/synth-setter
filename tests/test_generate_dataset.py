@@ -1163,22 +1163,29 @@ def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
     assert tuple(param_type.shape) == (45,)
 
 
-def test_from_hydra_pyfdn_kronecker_writes_36_coordinate_shard(
+@pytest.mark.parametrize(
+    ("identity", "width"),
+    [("pyfdn_n8_mono_kronecker", 36), ("pyfdn_n8_mono_householder_vector", 35)],
+)
+def test_from_hydra_pyfdn_derived_feedback_writes_widened_shard(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+    width: int,
 ) -> None:
-    """The Hydra entrypoint renders the Kronecker identity through real pyFDN.
+    """The Hydra entrypoint renders a derived-feedback identity through real pyFDN.
 
-    :param cfg_dataset: Composed dataset configuration changed to Kronecker pyFDN.
+    :param cfg_dataset: Composed dataset configuration changed to the selected pyFDN identity.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
     :param monkeypatch: Pins the worker contract.
+    :param identity: Registered derived-feedback pyFDN identity.
+    :param width: Encoded row width that identity must materialize.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    identity = "pyfdn_n8_mono_kronecker"
     with open_dict(cfg_dataset):
-        cfg_dataset.task_name = "pyfdn-kronecker-entrypoint-e2e"
+        cfg_dataset.task_name = f"{identity}-entrypoint-e2e"
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.synth.name = identity
@@ -1201,14 +1208,14 @@ def test_from_hydra_pyfdn_kronecker_writes_36_coordinate_shard(
         cfg_dataset.render.param_sample_cadence = "sample"
         cfg_dataset.render.plugin_reload_cadence = "render"
         cfg_dataset.render.gui_toggle_cadence = "never"
-        cfg_dataset.r2.prefix = "fake-r2/pyfdn-kronecker-run/"
+        cfg_dataset.r2.prefix = f"fake-r2/{identity}-run/"
         cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
 
     from_hydra(cfg_dataset)
 
-    assert spec.num_params == 36
+    assert spec.num_params == width
     assert spec.render.param_spec_name == identity
     assert validate_all_shards_from_r2(spec) == []
     shard = spec.shards[0]
@@ -1216,7 +1223,7 @@ def test_from_hydra_pyfdn_kronecker_writes_36_coordinate_shard(
     assert len(uploaded) == 1
     param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
     assert isinstance(param_type, pa.FixedShapeTensorType)
-    assert tuple(param_type.shape) == (36,)
+    assert tuple(param_type.shape) == (width,)
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(

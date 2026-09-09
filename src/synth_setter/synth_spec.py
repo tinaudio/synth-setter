@@ -132,6 +132,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "",
         "0.4.2",
     ),
+    "pyfdn_n8_mono_householder_vector": (
+        "pyfdn_n8_mono_householder_vector",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
     "pyfdn_n8_mono_kronecker": (
         "pyfdn_n8_mono_kronecker",
         "pyfdn",
