@@ -84,33 +84,6 @@ def _normalized_mass_grid(mass: np.ndarray, name: str) -> np.ndarray:
     return grid / total
 
 
-def _append_directed_edge(
-    rows: list[int],
-    columns: list[int],
-    values: list[float],
-    costs: list[float],
-    first_node: int,
-    second_node: int,
-    edge_cost: float,
-) -> None:
-    """Append both nonnegative flow variables for one undirected edge.
-
-    :param rows: Incidence-matrix row indices, updated in place.
-    :param columns: Incidence-matrix column indices, updated in place.
-    :param values: Incidence-matrix values, updated in place.
-    :param costs: Directed-edge costs, updated in place.
-    :param first_node: First endpoint's flattened grid index.
-    :param second_node: Second endpoint's flattened grid index.
-    :param edge_cost: Transport cost in either direction.
-    """
-    for source, destination in ((first_node, second_node), (second_node, first_node)):
-        edge_index = len(costs)
-        rows.extend((source, destination))
-        columns.extend((edge_index, edge_index))
-        values.extend((1.0, -1.0))
-        costs.append(edge_cost)
-
-
 def _grid_flow_problem(
     shape: tuple[int, int],
     time_coordinates: np.ndarray,
@@ -129,19 +102,25 @@ def _grid_flow_problem(
     values: list[float] = []
     costs: list[float] = []
 
+    def append_edge(first_node: int, second_node: int, edge_cost: float) -> None:
+        """Append both nonnegative flow variables for an undirected edge.
+
+        :param first_node: First endpoint's flattened grid index.
+        :param second_node: Second endpoint's flattened grid index.
+        :param edge_cost: Transport cost in either direction.
+        """
+        for source, destination in ((first_node, second_node), (second_node, first_node)):
+            edge_index = len(costs)
+            rows.extend((source, destination))
+            columns.extend((edge_index, edge_index))
+            values.extend((1.0, -1.0))
+            costs.append(edge_cost)
+
     for frequency_index in range(frequency_cells):
         row_offset = frequency_index * time_cells
         for time_index in range(time_cells - 1):
             cost = time_coordinates[time_index + 1] - time_coordinates[time_index]
-            _append_directed_edge(
-                rows,
-                columns,
-                values,
-                costs,
-                row_offset + time_index,
-                row_offset + time_index + 1,
-                cost,
-            )
+            append_edge(row_offset + time_index, row_offset + time_index + 1, cost)
 
     for frequency_index in range(frequency_cells - 1):
         cost = (
@@ -151,15 +130,7 @@ def _grid_flow_problem(
         for time_index in range(time_cells):
             first_node = frequency_index * time_cells + time_index
             second_node = first_node + time_cells
-            _append_directed_edge(
-                rows,
-                columns,
-                values,
-                costs,
-                first_node,
-                second_node,
-                cost,
-            )
+            append_edge(first_node, second_node, cost)
 
     incidence = coo_matrix(
         (values, (rows, columns)),
@@ -236,7 +207,7 @@ def _pool_time_cells(energy: np.ndarray, times: np.ndarray) -> tuple[np.ndarray,
 
     :param energy: Frequency-bin energy by STFT frame.
     :param times: STFT frame centres in seconds.
-    :return: Energy and coordinates on at most 64 time cells.
+    :return: Energy and coordinates on at most ``_MAX_TIME_CELLS`` time cells.
     """
     if energy.shape[1] <= _MAX_TIME_CELLS:
         return energy, times

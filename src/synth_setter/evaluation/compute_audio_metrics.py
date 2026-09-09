@@ -394,6 +394,8 @@ def compute_octave_edc_rmse_db(
 ) -> float:
     """Return pyFDN's octave-band energy-decay-curve RMSE in dB.
 
+    Invalid inputs and failed or non-finite upstream losses propagate ``ValueError``.
+
     :param target: Target mono impulse response, shape ``(1, samples)``.
     :param pred: Predicted mono impulse response, same shape as ``target``.
     :param sample_rate: Sample rate in Hz.

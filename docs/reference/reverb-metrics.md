@@ -60,9 +60,9 @@ is not necessarily a better match to a deliberately colored target.
 `joint_time_frequency_ot` compares globally normalized linear STFT-energy maps.
 It is balanced Wasserstein-1 on a time/log-frequency grid, with ground cost
 
-\[
-c((t,f),(t',f')) = \\frac{|t-t'|}{0.1,\\mathrm{s}} + |\\log_2(f/f')|.
-\]
+```math
+c((t,f),(t',f')) = \frac{|t-t'|}{0.1\,\mathrm{s}} + |\log_2(f/f')|.
+```
 
 Thus 100 ms of temporal displacement costs as much as one octave of frequency
 displacement. The score is dimensionless and lower is better. This weighting is
