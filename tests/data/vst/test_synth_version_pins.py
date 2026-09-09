@@ -216,10 +216,18 @@ def test_vst_synth_group_pins_the_installed_plugin_version(group: str) -> None:
     """Each VST synth's pin matches the version read from its plugin bundle.
 
     :param group: Synth group name under test.
+    :raises AssertionError: If the probe fails outside the quarantined Cardinal crash.
     """
     plugin_path, synth_version = _composed_synth(group)
 
-    assert _probe_installed_plugin_version(Path(plugin_path)) == synth_version
+    try:
+        installed_version = _probe_installed_plugin_version(Path(plugin_path))
+    except AssertionError as exc:
+        if group == "cardinal" and "signal SIGSEGV" in str(exc):
+            pytest.xfail("#3308: Cardinal's isolated version probe still segfaults")
+        raise
+
+    assert installed_version == synth_version
 
 
 @pytest.mark.parametrize("group", _TORCHSYNTH_SYNTHS)
