@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import math
 from collections import OrderedDict
 from typing import Protocol, runtime_checkable
 
 import torch
 from beartype import beartype
+from flamo.functional import prop_shelving_filter
 from flamo.processor import dsp, system
 from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
@@ -139,6 +139,10 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     def _build_flamo_core(self) -> system.Series:
+        """Place the shelf after each delay, matching pyFDN's post-delay hook.
+
+        :returns: B → recursive delay/shelf/feedback → C network.
+        """
         geometry = {"nfft": self.fft_size, "alias_decay_db": 0.0, "device": "cpu"}
         delay = dsp.parallelDelay(
             **geometry,
@@ -180,6 +184,11 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
         Float[Tensor, _SCALAR],
         Float[Tensor, _SCALAR],
     ]:
+        """Decode the fixed-Householder layout without crossing the NumPy boundary.
+
+        :param params: Validated model-space row.
+        :returns: Delays in samples, B/C/D gains, and DC/Nyquist RT60 in seconds.
+        """
         encoded = ((params + 1.0) / 2.0).clamp(0.0, 1.0)
         delays = torch.round(400.0 + 800.0 * encoded[:8])
         input_gain = -1.0 + 2.0 * encoded[8:16]
@@ -209,20 +218,35 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
         rt_dc: Float[Tensor, _SCALAR],
         rt_nyquist: Float[Tensor, _SCALAR],
     ) -> Float[Tensor, "one coefficients order"]:
-        gain_dc = torch.pow(10.0, -3.0 * delays / (rt_dc * self.sample_rate))
-        gain_nyquist = torch.pow(10.0, -3.0 * delays / (rt_nyquist * self.sample_rate))
-        tangent = math.tan(math.pi * PYFDN_RT_CROSSOVER_HZ / self.sample_rate)
-        sqrt_ratio = torch.sqrt(gain_dc / gain_nyquist)
-        a0 = tangent / sqrt_ratio + 1.0
-        b0 = (tangent * sqrt_ratio + 1.0) * gain_nyquist / a0
-        b1 = (tangent * sqrt_ratio - 1.0) * gain_nyquist / a0
-        a1 = (tangent / sqrt_ratio - 1.0) / a0
-        zeros = torch.zeros_like(b0)
-        ones = torch.ones_like(b0)
-        return torch.stack((b0, b1, zeros, ones, a1, zeros), dim=0).unsqueeze(0)
+        """Convert decay times into normalized proportional-shelf SOS.
+
+        :param delays: Delay-line lengths in samples.
+        :param rt_dc: Low-frequency RT60 in seconds.
+        :param rt_nyquist: Nyquist RT60 in seconds.
+        :returns: One six-coefficient SOS per delay line.
+        """
+        gain_dc_db = -60.0 * delays / (rt_dc * self.sample_rate)
+        gain_nyquist_db = -60.0 * delays / (rt_nyquist * self.sample_rate)
+        numerator, denominator = prop_shelving_filter(
+            torch.full_like(delays, PYFDN_RT_CROSSOVER_HZ),
+            gain_dc_db - gain_nyquist_db,
+            fs=self.sample_rate,
+            device=str(delays.device),
+            dtype=delays.dtype,
+        )
+        numerator = numerator * torch.pow(10.0, gain_nyquist_db / 20.0)
+        # FLAMO's SOS interface needs three coefficients for each first-order polynomial.
+        zeros = torch.zeros_like(delays).unsqueeze(0)
+        sos = torch.cat((numerator, zeros, denominator, zeros), dim=0)
+        return (sos / denominator[0]).unsqueeze(0)
 
     @jaxtyped(typechecker=beartype)
     def _render_row(self, params: Float[Tensor, _ROW_PARAMS]) -> Float[Tensor, _ROW_AUDIO]:
+        """Pass one patch externally because FLAMO shares parameters across its batch.
+
+        :param params: Validated model-space row.
+        :returns: Truncated mono impulse response, including the direct path.
+        """
         delays, input_gain, output_gain, direct_gain, rt_dc, rt_nyquist = self._decode(params)
         impulse = torch.zeros(1, self.fft_size, 1, dtype=params.dtype, device=params.device)
         impulse[:, 0, 0] = 1.0
