@@ -194,6 +194,27 @@ def test_cpu_slow_r2_steps_restrict_pr_secrets_to_same_repo(project_root: Path) 
 
 
 @pytest.mark.infra
+def test_cpu_slow_pr_e2e_runs_after_prior_failure_when_r2_setup_succeeds(
+    project_root: Path,
+) -> None:
+    """The targeted E2E ignores prior failures but requires successful R2 setup.
+
+    :param project_root: session fixture from ``tests/infra/conftest.py``.
+    """
+    setup_step = _setup_r2_step(project_root)
+    assert setup_step.get("id") == "setup_r2"
+
+    e2e_step = next(
+        step
+        for step in _load_workflow_steps(project_root)
+        if step.get("name") == PR_R2_E2E_STEP_NAME
+    )
+    e2e_guard = cast(str, e2e_step.get("if", ""))
+    assert "!cancelled()" in e2e_guard
+    assert "steps.setup_r2.outcome == 'success'" in e2e_guard
+
+
+@pytest.mark.infra
 @pytest.mark.parametrize(
     "expected_path", [INSTALL_RCLONE_ACTION_PATH, WORKFLOW_SELF_PATH, TESTS_PATH]
 )

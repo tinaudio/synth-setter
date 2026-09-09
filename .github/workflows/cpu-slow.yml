@@ -91,6 +91,7 @@ jobs:
       # Fork PRs are excluded at the job boundary; this guard keeps secrets
       # limited to push/dispatch and trusted same-repository pull requests.
       - name: Set up R2
+        id: setup_r2
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/setup-r2
         with:
@@ -116,10 +117,10 @@ jobs:
           WANDB__SERVICE_WAIT: "120"
         run: make test-ci-slow-pr
 
-      # Exercise only the real growing-data path instead of enabling the full
-      # integration_r2 suite on every trusted pull request.
+      # !cancelled() preserves this targeted signal after broad slow failures.
+      # Requiring setup success prevents missing credentials from becoming a test skip.
       - name: Run growing Lance R2 E2E
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.setup_r2.outcome == 'success' }}
         env:
           HYDRA_FULL_ERROR: "1"
           WANDB__SERVICE_WAIT: "120"
