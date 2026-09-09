@@ -78,7 +78,7 @@ not present in the runtime manifest.
 
 7. Run one final read-only `pr-review-filter` judge over all retained late
    findings before rendering or delivery. Pin the agent exactly to
-   `openai-codex/gpt-6-astra` with `high` thinking and at most 8 turns. Worker
+   `openai-codex/gpt-6-astra` with `medium` thinking and at most 8 turns. Worker
    severity is advisory; the judge may promote or demote it.
    Skip the call when there are no late findings. Otherwise, write the same
    immutable top-level shape used by the foreground filter:

@@ -270,6 +270,54 @@ def test_review_adjudication_pr_health_block_requests_changes() -> None:
     assert payload.event == "REQUEST_CHANGES"
 
 
+def test_review_adjudication_drop_audit_tags_do_not_count_as_delivered() -> None:
+    """Keep quoted severity tags in DROP audit evidence non-gating."""
+    adjudications = parse_review_filter_report(
+        json.dumps(
+            {
+                "target": "PR #3013",
+                "decisions": [
+                    {
+                        "id": "1" * 64,
+                        "disposition": "drop",
+                        "rationale": "Quoted [correctness:block] text is not a defect.",
+                    },
+                    {
+                        "id": "2" * 64,
+                        "disposition": "drop",
+                        "rationale": "Optional preference rather than a defect.",
+                    },
+                ],
+            }
+        ),
+        filter_input=_filter_input(),
+    )
+    payload = build_adjudicated_review(
+        pr_number=3013,
+        repo="tinaudio/synth-setter",
+        review_body="Review lead-in.",
+        adjudications=adjudications,
+    )
+
+    rendered = render_markdown(
+        payload,
+        context=RenderContext(
+            target="PR #3013",
+            head_sha="b" * 40,
+            head_ref="feature/review",
+            upstream_sha="b" * 40,
+            worktree_state="clean",
+            unchanged_count=0,
+            skill_count=2,
+            next_step="No remediation required.",
+        ),
+    )
+
+    assert payload.event == "APPROVE"
+    assert "[correctness:block]" in rendered
+    assert "0 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE" in rendered
+
+
 def test_review_adjudication_optional_only_is_body_only_comment() -> None:
     """Keep NIT and low-confidence observations visible but explicitly ignorable."""
     report = json.dumps(
@@ -451,6 +499,7 @@ def test_review_filter_is_final_astra_pass_in_foreground_and_follow_up() -> None
     )
     for brief in (analysis, follow_up):
         assert "pr-review-filter" in brief
+        assert "`openai-codex/gpt-6-astra` with `medium` thinking" in brief
         assert REVIEW_FILTER_MODEL in brief
         assert '"candidates": [' in brief
         assert "validate-filter-report" in brief

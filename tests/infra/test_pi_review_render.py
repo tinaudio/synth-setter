@@ -93,7 +93,7 @@ def test_render_markdown_counts_pr_health_severities() -> None:
     payload = {
         "pr_number": 2174,
         "repo": "tinaudio/synth-setter",
-        "review_body": "**[repo-review-full:block]** [pr-health] Merge conflict.",
+        "review_body": "- **[repo-review-full:block]** [pr-health] Merge conflict.",
         "findings": [],
     }
     context = RenderContext(

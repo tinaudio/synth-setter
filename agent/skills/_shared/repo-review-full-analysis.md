@@ -565,7 +565,7 @@ Do not deterministically dedupe findings across skills during aggregation. Prese
 
 ### Final review judge
 
-After aggregation, but before rendering any finding or calculating the review event, run one final read-only `pr-review-filter` agent pinned exactly to `openai-codex/gpt-6-astra` with `high` thinking and at most 8 turns. This judge may promote or demote worker severity based on the diff.
+After aggregation, but before rendering any finding or calculating the review event, run one final read-only `pr-review-filter` agent pinned exactly to `openai-codex/gpt-6-astra` with `medium` thinking and at most 8 turns. This judge may promote or demote worker severity based on the diff.
 
 If there are no checklist findings, skip the model call and continue with PR-health output. Otherwise, write an immutable filter-input JSON file under the assignment directory using this exact top-level shape; `candidates` contains every BLOCK, WARN, and NIT:
 

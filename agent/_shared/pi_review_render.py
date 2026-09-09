@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,7 +40,13 @@ _SKILL_TAGS = {
     "tdd-implementation": "tdd-impl",
     "tdd-refactor": "tdd-refactor",
 }
-assert _SKILL_TAGS.keys() == SUPPORTED_SKILLS
+if _SKILL_TAGS.keys() != SUPPORTED_SKILLS:
+    raise RuntimeError("Review skill tags must cover every supported review skill")
+_DELIVERED_FINDING_RE = re.compile(
+    r"^- (?:\*\*L\d+\*\* — )?\*\*\[[a-z][a-z0-9-]*:"
+    r"(block|warn|nit|low-confidence)\]\*\*",
+    re.MULTILINE,
+)
 
 
 class ReviewFinding(BaseModel, strict=True, extra="forbid"):
@@ -231,7 +238,7 @@ def build_adjudicated_review(
     )
     final_classes = {item.final_disposition for item in adjudications}
     event: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"]
-    if "block" in final_classes or ":block]" in review_body:
+    if "block" in final_classes or _delivered_counts((review_body,))["block"]:
         event = "REQUEST_CHANGES"
     elif final_classes - {"drop"}:
         event = "COMMENT"
@@ -276,6 +283,19 @@ def _finding_lines(findings: tuple[ReviewFinding, ...]) -> list[str]:
     return lines
 
 
+def _delivered_counts(texts: Sequence[str]) -> dict[str, int]:
+    """Count only rendered finding markers that create delivery semantics.
+
+    :param texts: Markdown bodies or inline finding strings.
+    :returns: Counts keyed by final delivered disposition.
+    """
+    counts = dict.fromkeys(("block", "warn", "nit", "low-confidence"), 0)
+    for text in texts:
+        for match in _DELIVERED_FINDING_RE.finditer(text):
+            counts[match.group(1)] += 1
+    return counts
+
+
 def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
     """Render deterministic severity and progress summary lines.
 
@@ -283,11 +303,9 @@ def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
     :param context: Reviewed Git and progress state.
     :returns: Markdown lines for the summary section.
     """
-    counts = {
-        severity: review.review_body.count(f":{severity}]")
-        + sum(f":{severity}]" in finding.body for finding in review.findings)
-        for severity in ("block", "warn", "nit", "low-confidence")
-    }
+    counts = _delivered_counts(
+        (review.review_body, *(f"- {finding.body}" for finding in review.findings))
+    )
     lines = [
         "## Summary",
         "",

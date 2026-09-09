@@ -417,7 +417,7 @@ fi
 # Match the bracketed tag, not the bare skill name the PASS template uses; body-only
 # NIT and LOW CONFIDENCE stay outside the alternation. `|| true`: no-match is 1.
 if [[ "$REVIEW_COMMENT_GATE" != "off" ]]; then
-  comment_findings=$(grep -oE '\[comment-hygiene:(warn|block)\]' "$REVIEW_PATH" || true)
+  comment_findings=$(grep -E '^- (\*\*L[0-9]+\*\* — )?\*\*\[comment-hygiene:(warn|block)\]\*\*' "$REVIEW_PATH" || true)
   comment_count=$(printf '%s' "$comment_findings" | grep -c . || true)
   if [[ "$comment_count" -gt 0 ]]; then
     remediation="run /fix-review-comments, then refresh the sentinel with /repo-review-full-no-comments (REVIEW_COMMENT_GATE=off bypasses for an intentional finding)"
@@ -437,7 +437,7 @@ fi
 # gates don't overlap and REVIEW_COMMENT_GATE=off fully owns comment-hygiene.
 # `|| true`: tolerate grep's no-match exit-1, like the comment sub-gate above.
 if [[ "$REVIEW_BLOCK_GATE" != "off" ]]; then
-  block_findings=$(grep -oE '\[[a-z][a-z0-9-]*:block\]' "$REVIEW_PATH" \
+  block_findings=$(grep -E '^- (\*\*L[0-9]+\*\* — )?\*\*\[[a-z][a-z0-9-]*:block\]\*\*' "$REVIEW_PATH" \
     | grep -vF '[comment-hygiene:block]' || true)
   block_count=$(printf '%s' "$block_findings" | grep -c . || true)
   if [[ "$block_count" -gt 0 ]]; then
