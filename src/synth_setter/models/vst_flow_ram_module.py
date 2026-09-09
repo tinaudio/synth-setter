@@ -1,7 +1,8 @@
 """Reinforce Adjoint Matching post-training of a pretrained flow (arXiv 2605.10759).
 
 A frozen copy of the pretrained field anchors the regression, a lagged EMA copy draws the
-on-policy endpoints, and a black-box reward scores them. Each step samples
+on-policy endpoints, a fixed-decay EMA copy serves evaluation, and a black-box reward scores
+them. Each step samples
 ``num_samples_per_row`` endpoints per target audio, normalises their rewards within the
 group, noises every endpoint ``num_targets_per_sample`` times, and regresses the policy
 onto the RAM target; no reward gradient and no SDE rollout are involved.
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import torch
@@ -32,7 +33,9 @@ from synth_setter.models.components.ram import (
     ram_velocity_target,
 )
 from synth_setter.models.vst_flow_matching_module import (
+    ControlTokenBranches,
     VSTFlowMatchingModule,
+    _TimeField,
     build_guided_velocity,
     integrate_flow,
 )
@@ -41,6 +44,7 @@ _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
+_EVAL_EMA_DECAY = 0.9
 
 
 @jaxtyped(typechecker=beartype)
@@ -140,7 +144,7 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         time_power_law_alpha: float = 1.0,
         **base_kwargs: object,
     ) -> None:
-        r"""Load the pretrained flow and clone it into the frozen reference and lagged sampler.
+        r"""Load the pretrained flow and clone its frozen reference, sampler, and eval EMA.
 
         :param encoder: Conditioning encoder of the same shape the base run trained; frozen.
         :param vector_field: Velocity field of the same shape the base run trained; the policy.
@@ -205,6 +209,7 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         self.encoder.requires_grad_(False)
         self.reference_field = copy.deepcopy(self.vector_field).requires_grad_(False)
         self.old_field = copy.deepcopy(self.vector_field).requires_grad_(False)
+        self.eval_field = copy.deepcopy(self.vector_field).requires_grad_(False)
         self._freeze_modes()
 
     @jaxtyped(typechecker=beartype)
@@ -219,6 +224,23 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         return self
 
     @jaxtyped(typechecker=beartype)
+    def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Refuse checkpoints that predate the evaluation EMA trajectory.
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises ValueError: The checkpoint has no saved evaluation EMA state.
+        """
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, Mapping) or not any(
+            isinstance(name, str) and name.startswith("eval_field.") for name in state
+        ):
+            raise ValueError(
+                "checkpoint is missing the eval EMA trajectory; legacy RAM checkpoints "
+                "cannot reconstruct it from final policy weights"
+            )
+        super().on_load_checkpoint(checkpoint)
+
+    @jaxtyped(typechecker=beartype)
     def on_train_start(self) -> None:
         """Reject a multi-device fit: the render reward mutates one shared voice (#2585)."""
         from synth_setter.models.components.audio_feedback import (
@@ -229,8 +251,14 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
 
     @jaxtyped(typechecker=beartype)
     def _freeze_modes(self) -> None:
-        """Hold the encoder, reference, sampler, and reward in eval mode."""
-        for module in (self.encoder, self.reference_field, self.old_field, self.reward):
+        """Hold the encoder, frozen fields, and reward in eval mode."""
+        for module in (
+            self.encoder,
+            self.reference_field,
+            self.old_field,
+            self.eval_field,
+            self.reward,
+        ):
             module.eval()
 
     @jaxtyped(typechecker=beartype)
@@ -242,6 +270,31 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         :returns: Flow times shaped ``(n, 1)``.
         """
         return power_law_flow_time(torch.rand(n, 1, device=device), self.time_power_law_alpha)
+
+    @jaxtyped(typechecker=beartype)
+    def _velocity_field(
+        self,
+        conditioning: Shaped[Tensor, _BATCH_ANY_SHAPE] | None,
+        cfg_strength: float,
+        control_tokens: ControlTokenBranches | None,
+        *,
+        sketch_cfg_strength: float | None = None,
+    ) -> _TimeField:
+        """Build the evaluation sampler from the fixed-decay EMA field.
+
+        :param conditioning: Encoded content conditioning for the conditional branch.
+        :param cfg_strength: Classifier-free-guidance scale for content conditioning.
+        :param control_tokens: Complete control-token state; RAM rejects sketch controls.
+        :param sketch_cfg_strength: Guidance scale for sketch controls.
+        :returns: Two-argument velocity field over parameter state and time.
+        """
+        return build_guided_velocity(
+            self.eval_field,
+            conditioning,
+            cfg_strength,
+            sketch_cfg_strength=sketch_cfg_strength,
+            control_tokens=control_tokens,
+        )
 
     @jaxtyped(typechecker=beartype)
     def _sample_endpoints(
@@ -308,13 +361,14 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
 
     @jaxtyped(typechecker=beartype)
     def optimizer_step(self, *args: object, **kwargs: object) -> None:
-        r"""Step the optimizer, then lag the sampling copy toward the updated policy.
+        r"""Step the optimizer, then update the independent sampling and evaluation EMAs.
 
         :param \*args: Lightning's positional ``optimizer_step`` arguments.
         :param \*\*kwargs: Lightning's keyword ``optimizer_step`` arguments.
         """
         super().optimizer_step(*args, **kwargs)  # pyright: ignore[reportArgumentType]
         self._update_old_field()
+        self._update_eval_field()
 
     @jaxtyped(typechecker=beartype)
     @torch.no_grad()
@@ -326,3 +380,12 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
             self.vector_field.parameters(), self.old_field.parameters(), strict=True
         ):
             target.mul_(mix).add_(source.detach(), alpha=1.0 - mix)
+
+    @jaxtyped(typechecker=beartype)
+    @torch.no_grad()
+    def _update_eval_field(self) -> None:
+        """Move the evaluation copy toward the policy with fixed decay from step one."""
+        for source, target in zip(
+            self.vector_field.parameters(), self.eval_field.parameters(), strict=True
+        ):
+            target.mul_(_EVAL_EMA_DECAY).add_(source.detach(), alpha=1.0 - _EVAL_EMA_DECAY)

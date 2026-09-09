@@ -4,10 +4,12 @@ Rewards come from the production render and spectral distance; only the constant
 in a fixed scorer, to isolate the loss algebra from the reward's variance.
 """
 
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
+import lightning
 import pytest
 import torch
 from lightning import Trainer
@@ -133,10 +135,10 @@ def _trainer(max_steps: int = 1) -> Trainer:
     )
 
 
-def test_ram_module_from_base_checkpoint_seeds_policy_reference_and_old_fields(
+def test_ram_module_from_base_checkpoint_seeds_all_policy_copies(
     tmp_path: Path,
 ) -> None:
-    """Policy, frozen reference, and lagged sampler all start as the pretrained field.
+    """Policy, reference, sampling EMA, and eval EMA all start from pretrained weights.
 
     :param tmp_path: Directory for the base checkpoint.
     """
@@ -145,7 +147,12 @@ def test_ram_module_from_base_checkpoint_seeds_policy_reference_and_old_fields(
     module = _ram(_base_checkpoint(tmp_path, base))
 
     _assert_same(_state(module.encoder), _state(base.encoder))
-    for field in (module.vector_field, module.reference_field, module.old_field):
+    for field in (
+        module.vector_field,
+        module.reference_field,
+        module.old_field,
+        module.eval_field,
+    ):
         _assert_same(_state(field), _state(base.vector_field))
 
 
@@ -174,6 +181,46 @@ def test_ram_module_trains_only_the_policy_field(tmp_path: Path) -> None:
 
     assert trainable
     assert all(name.startswith("vector_field.") for name in trainable)
+
+
+def test_ram_train_mode_keeps_eval_field_frozen_in_eval_mode(tmp_path: Path) -> None:
+    """Training mode applies only to the policy while evaluation weights remain deterministic.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path))
+
+    module.train()
+
+    assert module.vector_field.training
+    assert not module.eval_field.training
+    assert all(not parameter.requires_grad for parameter in module.eval_field.parameters())
+
+
+def test_ram_evaluation_sampling_uses_eval_field_not_policy_or_old(tmp_path: Path) -> None:
+    """Public inference integrates the eval EMA even when policy and old fields disagree.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path))
+    with torch.no_grad():
+        for parameter in module.eval_field.parameters():
+            parameter.zero_()
+        for parameter in module.vector_field.parameters():
+            parameter.fill_(0.25)
+        for parameter in module.old_field.parameters():
+            parameter.fill_(-0.25)
+    noise = torch.zeros(2, _WIDTH)
+
+    sampled = module.sample_batch(
+        _batch(2),
+        noise=noise,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+
+    torch.testing.assert_close(sampled, noise)
 
 
 def test_ram_training_step_with_constant_reward_has_zero_loss_at_initialisation(
@@ -249,6 +296,44 @@ def test_ram_optimizer_step_moves_the_old_field_toward_the_policy_by_ema_decay(
     for name, old in module.old_field.named_parameters():
         expected = _EMA_DECAY * before[name] + (1 - _EMA_DECAY) * policy[name].detach()
         torch.testing.assert_close(old, expected, msg=name)
+
+
+@pytest.mark.parametrize(
+    ("steps", "eval_base_weight"),
+    [pytest.param(1, 0.9, id="first-step"), pytest.param(3, 0.729, id="third-step")],
+)
+def test_ram_eval_ema_uses_fixed_decay_independently_of_old_warmup(
+    tmp_path: Path, steps: int, eval_base_weight: float
+) -> None:
+    """The eval copy compounds fixed decay 0.9 while the warmed sampler copies policy.
+
+    :param tmp_path: Directory for the base checkpoint.
+    :param steps: Number of optimizer steps.
+    :param eval_base_weight: Expected contribution from the initial evaluation weights.
+    """
+    torch.manual_seed(17)
+    base = _base_module()
+    module = _ram(
+        _base_checkpoint(tmp_path, base),
+        overrides={
+            "ema_decay": 0.5,
+            "ema_warmup_rate": 0.01,
+            "optimizer": partial(torch.optim.SGD, lr=0.0),
+            "reward": _NormReward(),
+        },
+    )
+    before = {name: p.detach().clone() for name, p in base.vector_field.named_parameters()}
+    with torch.no_grad():
+        for parameter in module.vector_field.parameters():
+            parameter.add_(0.01)
+
+    _trainer(max_steps=steps).fit(module, datamodule=_data())
+
+    policy = dict(module.vector_field.named_parameters())
+    _assert_same(_state(module.old_field), _state(module.vector_field))
+    for name, evaluation in module.eval_field.named_parameters():
+        expected = eval_base_weight * before[name] + (1 - eval_base_weight) * policy[name].detach()
+        torch.testing.assert_close(evaluation, expected, rtol=1e-6, atol=1e-8, msg=name)
 
 
 def test_ram_ema_warmup_copies_the_policy_on_the_first_step(tmp_path: Path) -> None:
@@ -398,6 +483,74 @@ def test_ram_training_step_depends_on_the_target_audio(tmp_path: Path) -> None:
     with_other_audio = module.training_step(swapped, 0)
 
     assert not torch.isclose(original, with_other_audio)
+
+
+def test_ram_fit_checkpoint_load_preserves_eval_prediction(tmp_path: Path) -> None:
+    """A fit checkpoint restores the eval EMA used by public prediction.
+
+    :param tmp_path: Directory for the base and RAM checkpoints.
+    """
+    torch.manual_seed(37)
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    trainer = _trainer()
+    trainer.fit(module, datamodule=_data())
+    noise = torch.randn(2, _WIDTH)
+    expected = module.sample_batch(
+        _batch(2),
+        noise=noise,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=2,
+    )
+    checkpoint = tmp_path / "ram.ckpt"
+    trainer.save_checkpoint(checkpoint)
+
+    loaded = VSTFlowRAMModule.load_from_checkpoint(
+        checkpoint,
+        encoder=_WaveformEncoder(),
+        reward=_NormReward(),
+        base_checkpoint=None,
+        weights_only=False,
+    )
+    actual = loaded.sample_batch(
+        _batch(2),
+        noise=noise,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=2,
+    )
+
+    _assert_same(_state(loaded.eval_field), _state(module.eval_field))
+    torch.testing.assert_close(actual, expected)
+
+
+def test_ram_legacy_checkpoint_without_eval_ema_raises(tmp_path: Path) -> None:
+    """A checkpoint without the EMA trajectory is refused instead of inventing eval weights.
+
+    :param tmp_path: Directory for the legacy checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path))
+    checkpoint: dict[str, object] = {
+        "state_dict": {
+            name: value
+            for name, value in module.state_dict().items()
+            if not name.startswith("eval_field.")
+        },
+        "hyper_parameters": dict(module.hparams),
+        "pytorch-lightning_version": lightning.__version__,
+    }
+    module.on_save_checkpoint(checkpoint)
+    path = tmp_path / "legacy-ram.ckpt"
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="eval EMA trajectory"):
+        VSTFlowRAMModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            reward=_NormReward(),
+            base_checkpoint=None,
+            weights_only=False,
+        )
 
 
 def test_ram_fit_without_base_or_resume_checkpoint_raises(tmp_path: Path) -> None:
