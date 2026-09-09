@@ -413,13 +413,15 @@ def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
-@pytest.fixture
-def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
-    """Compose a one-step CPU smoke config for the production TorchSynth audio-loss flow.
+def _compose_torchsynth_flow_smoke(tmp_path: Path, experiment: str, *overrides: str) -> DictConfig:
+    r"""Compose a one-step CPU smoke config for a production TorchSynth flow experiment.
 
-    Keeps checkpointing and CSV logging enabled while shrinking only render and model capacity.
+    Keeps checkpointing and CSV logging enabled while shrinking only render and model
+    capacity, so every flow smoke leg runs the same harness.
 
     :param tmp_path: Pinned Hydra output and log directory.
+    :param experiment: ``experiment=`` group value to compose.
+    :param \*overrides: Experiment-specific Hydra overrides appended after the shared ones.
     :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -427,7 +429,7 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=torchsynth/flow_audio",
+                f"experiment={experiment}",
                 "trainer=cpu",
                 "logger=csv",
                 "datamodule.sample_rate=8000",
@@ -445,10 +447,7 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
                 "model.vector_field.d_ff=8",
                 "model.vector_field.num_layers=1",
                 "model.vector_field.projection.num_tokens=2",
-                "model.validation_sample_steps=1",
-                "model.test_sample_steps=1",
-                "model.cfg_dropout_rate=0.0",
-                "model.audio_loss.t_min=0.0",
+                *overrides,
             ],
         )
     with open_dict(cfg):
@@ -468,61 +467,38 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
         cfg.callbacks.model_checkpoint.save_last = True
         cfg.training.val_audio_probe = False
     return cfg
+
+
+@pytest.fixture
+def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step CPU smoke config for the production TorchSynth audio-loss flow.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
+    """
+    return _compose_torchsynth_flow_smoke(
+        tmp_path,
+        "torchsynth/flow_audio",
+        "model.validation_sample_steps=1",
+        "model.test_sample_steps=1",
+        "model.cfg_dropout_rate=0.0",
+        "model.audio_loss.t_min=0.0",
+    )
 
 
 @pytest.fixture
 def cfg_torchsynth_flow_endpoint_train(tmp_path: Path) -> DictConfig:
     """Compose a one-step CPU smoke config for the endpoint-parameterized TorchSynth flow.
 
-    Keeps checkpointing and CSV logging enabled while shrinking only render and model capacity.
-
     :param tmp_path: Pinned Hydra output and log directory.
     :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
     """
-    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=True,
-            overrides=[
-                "experiment=torchsynth/flow_endpoint",
-                "trainer=cpu",
-                "logger=csv",
-                "datamodule.sample_rate=8000",
-                "datamodule.signal_length=800",
-                "datamodule.train_val_test_sizes=[1,1,1]",
-                "datamodule.batch_size=1",
-                "datamodule.num_workers=0",
-                "model.encoder.frontend.n_mels=16",
-                "model.encoder.backbone.hidden_dim=2",
-                "model.encoder.backbone.out_dim=8",
-                "model.encoder.backbone.num_blocks=1",
-                "model.encoder.backbone.kernel_size=3",
-                "model.vector_field.d_model=8",
-                "model.vector_field.num_heads=2",
-                "model.vector_field.d_ff=8",
-                "model.vector_field.num_layers=1",
-                "model.vector_field.projection.num_tokens=2",
-                "model.validation_sample_steps=2",
-                "model.test_sample_steps=2",
-            ],
-        )
-    with open_dict(cfg):
-        _set_workspace_root(cfg)
-        cfg.paths.output_dir = str(tmp_path)
-        cfg.paths.log_dir = str(tmp_path)
-        cfg.seed = 123
-        cfg.test = False
-        cfg.trainer.max_epochs = 1
-        cfg.trainer.max_steps = 1
-        cfg.trainer.limit_train_batches = 1
-        cfg.trainer.limit_val_batches = 1
-        cfg.trainer.num_sanity_val_steps = 0
-        cfg.trainer.val_check_interval = 1
-        cfg.trainer.log_every_n_steps = 1
-        cfg.callbacks.model_checkpoint.save_top_k = 1
-        cfg.callbacks.model_checkpoint.save_last = True
-        cfg.training.val_audio_probe = False
-    return cfg
+    return _compose_torchsynth_flow_smoke(
+        tmp_path,
+        "torchsynth/flow_endpoint",
+        "model.validation_sample_steps=2",
+        "model.test_sample_steps=2",
+    )
 
 
 def _configure_online_conditioning_smoke(cfg: DictConfig, tmp_path: Path) -> None:

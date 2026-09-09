@@ -223,8 +223,13 @@ def test_module_unknown_parameterization_raises() -> None:
         _module("midpoint")
 
 
-def test_train_step_endpoint_parameterization_loss_decreases_on_one_fixed_batch() -> None:
-    """Fitting one batch under endpoint prediction drives the loss well below its start."""
+# Endpoint MSE the best row-independent predictor reaches on rows targeting +0.5, -0.5, 0.0:
+# the variance of those targets. Beating it proves the field reads its per-row input.
+_CONSTANT_PREDICTOR_FLOOR = 1 / 6
+
+
+def test_train_step_endpoint_parameterization_fits_distinct_rows_on_one_fixed_batch() -> None:
+    """Fitting one batch with distinct per-row targets beats any input-blind predictor."""
     from synth_setter.models.components.vector_field import VectorField
 
     torch.manual_seed(0)
@@ -234,10 +239,12 @@ def test_train_step_endpoint_parameterization_loss_decreases_on_one_fixed_batch(
             field_dim=_WIDTH, hidden_dim=32, conditioning_dim=_CONDITIONING_DIM, num_blocks=2
         ),
     )
-    batch = _batch(params_value=0.5, noise_value=-0.5)
+    batch = _batch(params_value=0.0, noise_value=0.0)
+    batch["params"] = torch.tensor([0.5, -0.5, 0.0]).unsqueeze(1).expand(_BATCH, _WIDTH).clone()
+    batch["noise"] = torch.randn(_BATCH, _WIDTH)
     optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
     initial = module._train_step(batch).loss.item()  # noqa: SLF001
-    for _ in range(200):
+    for _ in range(300):
         loss = module._train_step(batch).loss  # noqa: SLF001
         optimizer.zero_grad()
         loss.backward()
@@ -246,6 +253,7 @@ def test_train_step_endpoint_parameterization_loss_decreases_on_one_fixed_batch(
     final = module._train_step(batch).loss.item()  # noqa: SLF001
 
     assert final < initial * 0.1
+    assert final < _CONSTANT_PREDICTOR_FLOOR * 0.1
 
 
 def test_audio_term_endpoint_parameterization_receives_the_raw_prediction() -> None:
@@ -260,11 +268,11 @@ def test_audio_term_endpoint_parameterization_receives_the_raw_prediction() -> N
 
 
 def _save_checkpoint(module: VSTFlowMatchingModule, path: Path, *, legacy: bool) -> Path:
-    """Persist a module in Lightning's layout, optionally as a checkpoint predating the flag.
+    """Persist a Lightning checkpoint, optionally omitting its parameterization stamp.
 
     :param module: Module whose weights and hyperparameters are written.
     :param path: Destination file.
-    :param legacy: Skip the module's save hook, as checkpoints written before it existed.
+    :param legacy: Whether to omit the parameterization stamp.
     :returns: ``path``.
     """
     checkpoint = {

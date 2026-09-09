@@ -836,12 +836,12 @@ class VSTFlowMatchingModule(LightningModule):
         t: Float[torch.Tensor, _BATCH_TIME_SHAPE],
         prediction: Float[torch.Tensor, "batch params"],
     ) -> Float[torch.Tensor, "batch params"]:
-        """Project the field's prediction to the clean endpoint the audio term renders.
+        """Return the endpoint prediction, or extrapolate it from a velocity prediction.
 
-        :param x_t: Trajectory point shaped ``(batch, params)``.
-        :param t: Flow time shaped ``(batch, 1)``.
+        :param x_t: Trajectory point.
+        :param t: Flow time.
         :param prediction: Field output at ``(x_t, t)`` under the configured parameterization.
-        :returns: Estimate of ``x1`` shaped ``(batch, params)``.
+        :returns: Estimate of ``x1``.
         """
         if self.hparams.parameterization == "endpoint":
             return prediction
