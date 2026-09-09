@@ -223,6 +223,71 @@ def test_evaluate_pyfdn_householder_checkpoint_logs_param_mse(
     assert torch.isfinite(metrics["test/param_mse"])
 
 
+@pytest.mark.slow
+def test_train_eval_pyfdn_predict_writes_response_metrics(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train, reload, render, and score a pyFDN checkpoint through real entrypoints.
+
+    :param cfg_pyfdn_train: One-step flow model and tiny Lance train/predict splits.
+    """
+    cfg_pyfdn_train.seed = 17
+    HydraConfig().set_config(cfg_pyfdn_train)
+    train(cfg_pyfdn_train)
+    output_dir = Path(cfg_pyfdn_train.paths.output_dir)
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.ckpt_path = str(output_dir / "checkpoints" / "last.ckpt")
+        cfg_pyfdn_train.mode = "predict"
+        cfg_pyfdn_train.trainer.limit_predict_batches = 1
+        cfg_pyfdn_train.callbacks = {
+            "prediction_writer": {
+                "_target_": "synth_setter.utils.callbacks.PredictionWriter",
+                "output_dir": str(output_dir / "predictions"),
+                "write_interval": "batch",
+            }
+        }
+        cfg_pyfdn_train.evaluation = {
+            "render_vst": True,
+            "compute_metrics": True,
+            "rerender_target": True,
+            "num_workers": 1,
+        }
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, _ = evaluate(cfg_pyfdn_train)
+
+    per_sample = pd.read_csv(output_dir / "metrics" / "metrics.csv", index_col=0)
+    expected_metrics = [
+        "joint_time_frequency_ot",
+        "pyfdn_match_impulse_response",
+        "pyfdn_match_magnitude",
+        "pyfdn_match_spectrogram",
+        "pyfdn_match_mel_spectrogram",
+        "pyfdn_match_energy_decay",
+        "pyfdn_match_cumulative_energy",
+        "pyfdn_flat_magnitude_target",
+        "pyfdn_flat_magnitude_pred",
+        "pyfdn_asymmetric_flat_magnitude_target",
+        "pyfdn_asymmetric_flat_magnitude_pred",
+        "pyfdn_flat_spectrogram_target",
+        "pyfdn_flat_spectrogram_pred",
+        "pyfdn_energy_target",
+        "pyfdn_energy_pred",
+        "t30_mape",
+        "c50_mae_db",
+    ]
+    assert len(per_sample) == 1
+    assert np.isfinite(per_sample[expected_metrics].to_numpy()).all()
+    aggregate = pd.read_csv(output_dir / "metrics" / "aggregated_metrics.csv", index_col=0)
+    assert np.isfinite(aggregate.loc[expected_metrics, "mean"].to_numpy()).all()
+    persisted_metrics = json.loads((output_dir / "metrics" / "metrics.json").read_text())
+    mean_keys = [f"audio/{name}_mean" for name in expected_metrics]
+    assert np.isfinite([metrics[key] for key in mean_keys]).all()
+    assert {key: persisted_metrics[key] for key in mean_keys} == {
+        key: metrics[key] for key in mean_keys
+    }
+
+
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
     """The evaluation entrypoint rejects a config without checkpoint provenance."""
     GlobalHydra.instance().clear()

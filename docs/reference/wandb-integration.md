@@ -123,8 +123,12 @@ metric set under the `val_audio/` prefix. pyFDN probes additionally log
 `val_audio/octave_edc_rmse_db_{mean,std}`, `val_audio/t30_mape_{mean,std}`,
 `val_audio/c50_mae_db_{mean,std}` and the per-band
 `val_audio/<param>_pcc_<fc>hz_{mean,std}` rows (std is NaN: Pearson is
-dataset-level) from their impulse responses. The wav/spectrogram snapshot goes
-to R2, not W&B (free-tier storage budget).
+dataset-level) from their impulse responses. Joint time–frequency transport and
+all public pyFDN response losses use the same prefix convention; see
+[reverb metric columns and semantics](reverb-metrics.md). Standalone flatness
+and energy objectives have separate `_target` and `_pred` columns. Predict-mode
+evaluation exposes these under `audio/`. The wav/spectrogram snapshot goes to
+R2, not W&B (free-tier storage budget).
 
 ### 2d. Callbacks — Non-W&B
 
