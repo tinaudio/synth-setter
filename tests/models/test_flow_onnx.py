@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import onnxruntime as ort
 import pytest
 import torch
 from hydra.utils import instantiate
@@ -67,8 +68,6 @@ def test_exported_velocity_same_inputs_matches_production(
     :param flow_model: Small production architecture with nonzero sketch projections.
     :param strengths: Independent content and sketch guidance strengths.
     """
-    import onnxruntime as ort
-
     assert flow_model.sketch_tokens is not None
     batch = {
         "mel": torch.randn(1, 2, 8, 8),
@@ -99,6 +98,8 @@ def test_exported_velocity_same_inputs_matches_production(
             sketch_cfg_strength=strengths[1],
         )(x, t)
     assert isinstance(actual, np.ndarray)
+    assert actual.shape == expected.shape
+    assert actual.dtype == np.float32
     np.testing.assert_allclose(actual, expected.numpy(), rtol=2e-5, atol=2e-5)
 
 
@@ -120,6 +121,21 @@ def test_export_nonfinite_input_rejected_before_writing(
     with pytest.raises(ValueError, match="finite CPU float32"):
         export_flow_onnx(flow_model, batch, tmp_path)
     assert not list(tmp_path.iterdir())
+
+
+def test_export_nonempty_destination_preserves_existing_artifacts(
+    tmp_path: Path, flow_model: VSTFlowMatchingModule
+) -> None:
+    """Refuse overwriting an existing bundle rather than mixing graph generations.
+
+    :param tmp_path: Existing export destination.
+    :param flow_model: Supported model.
+    """
+    existing = tmp_path / "conditioning.onnx"
+    existing.write_bytes(b"existing bundle")
+    with pytest.raises(FileExistsError):
+        export_flow_onnx(flow_model, {}, tmp_path)
+    assert existing.read_bytes() == b"existing bundle"
 
 
 def test_export_endpoint_checkpoint_rejected_before_writing(

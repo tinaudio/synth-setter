@@ -75,6 +75,14 @@ def test_pool_sketch_controls_uses_track_means_and_pitch_maxima() -> None:
     torch.testing.assert_close(pooled[0, SKETCH_PITCH_SLICE.start], torch.ones(32), rtol=0, atol=0)
 
 
+def test_pool_sketch_controls_equal_frames_keeps_input_storage_independent() -> None:
+    """Editing pooled controls must not overwrite the source controls."""
+    controls = torch.ones(1, NUM_SKETCH_CONTROLS, 32)
+    pooled = pool_sketch_controls(controls)
+    pooled.zero_()
+    torch.testing.assert_close(controls, torch.ones_like(controls), rtol=0, atol=0)
+
+
 def test_pool_sketch_controls_nondivisible_windows_overlap_at_boundaries() -> None:
     """Adaptive pooling covers every source frame when windows do not divide evenly."""
     controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)

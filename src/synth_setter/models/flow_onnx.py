@@ -1,5 +1,12 @@
-"""Export mel/sketch flow conditioning and guided velocity for host-side RK4."""
+"""Export mel/sketch flow conditioning and guided velocity for host-side RK4.
 
+Typical usage::
+
+    export_flow_onnx(model.cpu().eval(), batch, Path("flow-bundle"))
+"""
+
+import os
+import tempfile
 from pathlib import Path
 
 import torch
@@ -8,6 +15,8 @@ from jaxtyping import Float, Shaped, jaxtyped
 from torch import nn
 
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+
+_OPSET_VERSION = 18
 
 
 class FlowConditioning(nn.Module):
@@ -62,6 +71,7 @@ class FlowVelocity(nn.Module):
         self,
         x: Float[torch.Tensor, "batch params"],
         t: Float[torch.Tensor, "batch 1"],
+        *,
         conditioning: Float[torch.Tensor, "batch slots dim"],
         controls: Float[torch.Tensor, "batch tokens dim"],
         null_controls: Float[torch.Tensor, "batch tokens dim"],
@@ -94,10 +104,14 @@ def export_flow_onnx(
     """Export fixed-shape float32 graphs without unrolling the integration loop.
 
     :param model: CPU evaluation model using mel/sketch velocity parameterization.
-    :param batch: Representative normalized mel and pooled sketch inputs.
-    :param output_dir: Destination for conditioning.onnx and velocity.onnx.
+    :param batch: CPU float32 ``mel`` shaped ``(batch, channels, bins, frames)``
+        and ``sketch_ctrl`` shaped ``(batch, controls, control_tokens)`` matching the checkpoint.
+    :param output_dir: Empty or absent destination, atomically populated with both graphs.
+    :raises FileExistsError: The destination already contains artifacts.
     :raises ValueError: Model type, conditioning, parameterization, or inputs are unsupported.
     """
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(f"ONNX destination is not empty: {output_dir}")
     if type(model) is not VSTFlowMatchingModule or model.hparams["parameterization"] != "velocity":
         raise ValueError("ONNX export requires the standard velocity-parameterized flow model")
     if model.hparams["conditioning"] != "mel" or model.sketch_tokens is None:
@@ -112,38 +126,60 @@ def export_flow_onnx(
         for value in inputs
     ):
         raise ValueError("ONNX inputs must be finite CPU float32 tensors")
+    if inputs[0].ndim != 4 or inputs[1].ndim != 3 or inputs[0].shape[0] == 0:
+        raise ValueError("ONNX export requires nonempty rank-4 mel and rank-3 sketch inputs")
+    if inputs[0].shape[0] != inputs[1].shape[0]:
+        raise ValueError("ONNX mel and sketch batch sizes must match")
     if inputs[1].shape[-1] != model.sketch_tokens.positional_encoding.shape[1]:
         raise ValueError("ONNX sketch inputs must already use the control-token temporal grid")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output_dir.parent) as temporary:
+        staged = Path(temporary)
+        _export_graphs(model, inputs, staged)
+        os.replace(staged, output_dir)
+
+
+@jaxtyped(typechecker=beartype)
+def _export_graphs(
+    model: VSTFlowMatchingModule,
+    inputs: tuple[Shaped[torch.Tensor, "batch ..."], Shaped[torch.Tensor, "batch ..."]],
+    output_dir: Path,
+) -> None:
+    """Write both graphs to an unpublished staging directory.
+
+    :param model: Validated CPU evaluation checkpoint.
+    :param inputs: Validated normalized mel and pooled sketch inputs.
+    :param output_dir: Temporary export directory.
+    """
     conditioning = FlowConditioning(model).eval()
     velocity = FlowVelocity(model).eval()
-    fastpath = torch.backends.mha.get_fastpath_enabled()
-    try:
-        # Fused native attention has no portable ONNX Runtime Web kernel.
-        torch.backends.mha.set_fastpath_enabled(False)
-        with torch.no_grad():
-            encoded = conditioning(*inputs)
-            torch.onnx.export(
-                conditioning,
-                inputs,
-                output_dir / "conditioning.onnx",
-                input_names=["mel", "sketch_ctrl"],
-                output_names=["conditioning", "controls", "null_controls"],
-                opset_version=18,
-                dynamo=True,
-                external_data=False,
-            )
-            state = torch.zeros(inputs[0].shape[0], model.hparams["num_params"])
-            time = torch.zeros(inputs[0].shape[0], 1)
-            torch.onnx.export(
-                velocity,
-                (state, time, *encoded, torch.ones(2)),
-                output_dir / "velocity.onnx",
-                input_names=["x", "t", "conditioning", "controls", "null_controls", "guidance"],
-                output_names=["velocity"],
-                opset_version=18,
-                dynamo=True,
-                external_data=False,
-            )
-    finally:
-        torch.backends.mha.set_fastpath_enabled(fastpath)
+    with torch.no_grad():
+        encoded = conditioning(*inputs)
+        torch.onnx.export(
+            conditioning,
+            inputs,
+            output_dir / "conditioning.onnx",
+            input_names=["mel", "sketch_ctrl"],
+            output_names=["conditioning", "controls", "null_controls"],
+            opset_version=_OPSET_VERSION,
+            dynamo=True,
+            external_data=False,
+        )
+        state = inputs[0].new_zeros(inputs[0].shape[0], model.hparams["num_params"])
+        time = inputs[0].new_zeros(inputs[0].shape[0], 1)
+        torch.onnx.export(
+            velocity,
+            (state, time),
+            output_dir / "velocity.onnx",
+            kwargs={
+                "conditioning": encoded[0],
+                "controls": encoded[1],
+                "null_controls": encoded[2],
+                "guidance": inputs[0].new_ones(2),
+            },
+            input_names=["x", "t", "conditioning", "controls", "null_controls", "guidance"],
+            output_names=["velocity"],
+            opset_version=_OPSET_VERSION,
+            dynamo=True,
+            external_data=False,
+        )
