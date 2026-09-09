@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `5b785f1` (2026-07-15, `feat/val-audio-probe`)
+> **Code version**: `3949374` (2026-09-09, `internal-feat/endpoint-parameterization`)
 > **PyTorch**: see `pyproject.toml` (`[dependency-groups].torch`) · **Lightning**: see `pyproject.toml` (`[dependency-groups].torch`)
 > **Tracking**: #252, #263
 
@@ -74,32 +74,33 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                  | Metric                                              | Step | Epoch |
-| ----------------------- | --------------------------------------------------- | ---- | ----- |
-| `VSTFlowMatchingModule` | `train/loss`                                        | yes  | yes   |
-|                         | `train/audio_loss` (when `model/audio_loss` is set) | yes  | yes   |
-|                         | `train/audio_grad_ratio` (audio/flow gradient norm) | yes  | —     |
-|                         | `train/audio_grad_cosine` (gradient alignment)      | yes  | —     |
-|                         | `train/slot_cosine` (layerwise conditioning only)   | yes  | —     |
-|                         | `train/penalty`                                     | yes  | yes   |
-|                         | `train/per_param_flow_mse/{name}` (with ParamSpec)  | —    | yes   |
-|                         | `val/param_mse`                                     | —    | yes   |
-|                         | `test/param_mse`                                    | —    | yes   |
-|                         | `val/param_mse_best_swap`                           | —    | yes   |
-|                         | `test/param_mse_best_swap`                          | —    | yes   |
-|                         | `val/param_mse_number_group_swap` (with ParamSpec)  | —    | yes   |
-|                         | `test/param_mse_number_group_swap` (with ParamSpec) | —    | yes   |
-|                         | `vector_field/*_norm`                               | yes  | —     |
-|                         | `encoder/*_norm`                                    | yes  | —     |
-| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std` | yes  | yes   |
-|                         | `train/{reconstruction,latent,param}_loss`          | yes  | yes   |
-|                         | `train/beta`                                        | yes  | —     |
-|                         | `val/{reconstruction,latent,param}_loss`            | —    | yes   |
-|                         | `val/param_mean`, `val/param_std`                   | —    | yes   |
-|                         | `test/{reconstruction,latent,param}_loss`           | —    | yes   |
-|                         | `net/*` gradient norms                              | yes  | —     |
-| `VSTFeedForwardModule`  | `train/loss`                                        | yes  | yes   |
-|                         | `val/param_mse`, `test/param_mse`                   | —    | yes   |
+| Module                  | Metric                                                            | Step | Epoch |
+| ----------------------- | ----------------------------------------------------------------- | ---- | ----- |
+| `VSTFlowMatchingModule` | `train/loss`                                                      | yes  | yes   |
+|                         | `train/audio_loss` (when `model/audio_loss` is set)               | yes  | yes   |
+|                         | `train/audio_grad_ratio` (audio/flow gradient norm)               | yes  | —     |
+|                         | `train/audio_grad_cosine` (gradient alignment)                    | yes  | —     |
+|                         | `train/slot_cosine` (layerwise conditioning only)                 | yes  | —     |
+|                         | `train/penalty`                                                   | yes  | yes   |
+|                         | `train/per_param_flow_mse/{name}` (with ParamSpec)                | —    | yes   |
+|                         | `train/per_param_endpoint_mse/{name}` (endpoint parameterization) | —    | yes   |
+|                         | `val/param_mse`                                                   | —    | yes   |
+|                         | `test/param_mse`                                                  | —    | yes   |
+|                         | `val/param_mse_best_swap`                                         | —    | yes   |
+|                         | `test/param_mse_best_swap`                                        | —    | yes   |
+|                         | `val/param_mse_number_group_swap` (with ParamSpec)                | —    | yes   |
+|                         | `test/param_mse_number_group_swap` (with ParamSpec)               | —    | yes   |
+|                         | `vector_field/*_norm`                                             | yes  | —     |
+|                         | `encoder/*_norm`                                                  | yes  | —     |
+| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`               | yes  | yes   |
+|                         | `train/{reconstruction,latent,param}_loss`                        | yes  | yes   |
+|                         | `train/beta`                                                      | yes  | —     |
+|                         | `val/{reconstruction,latent,param}_loss`                          | —    | yes   |
+|                         | `val/param_mean`, `val/param_std`                                 | —    | yes   |
+|                         | `test/{reconstruction,latent,param}_loss`                         | —    | yes   |
+|                         | `net/*` gradient norms                                            | yes  | —     |
+| `VSTFeedForwardModule`  | `train/loss`                                                      | yes  | yes   |
+|                         | `val/param_mse`, `test/param_mse`                                 | —    | yes   |
 
 The two audio-gradient diagnostics are emitted only when audio feedback is enabled, once per
 `trainer.log_every_n_steps` cadence. `train/slot_cosine` rides the same cadence but is emitted only
@@ -107,7 +108,10 @@ when the encoder returns more than one conditioning slot; it is the mean off-dia
 similarity between those slots, so a value approaching one means they have collapsed to one read.
 All three are step-only metrics and have no epoch aggregate.
 `train/per_param_flow_mse/{name}` is the weighted velocity-field objective grouped by ParamSpec
-parameter; it is distinct from `val/per_param_mse/{name}`, which measures sampled endpoint error.
+parameter; `train/per_param_endpoint_mse/{name}` is the same objective when
+`model.parameterization=endpoint` scores the predicted `x1` directly, logged under its own key so
+the two are never overlaid. Both are distinct from `val/per_param_mse/{name}`, which measures
+sampled endpoint error under either parameterization.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 

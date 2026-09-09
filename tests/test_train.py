@@ -595,6 +595,46 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert np.isfinite(logged_values).all()
 
 
+@pytest.mark.slow
+def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
+    cfg_torchsynth_flow_endpoint_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Train one endpoint-parameterized step, then evaluate the stamped checkpoint it wrote.
+
+    :param cfg_torchsynth_flow_endpoint_train: Composed tiny endpoint flow config.
+    :param tmp_path: Output root containing the checkpoint and evaluation artifacts.
+    """
+    HydraConfig().set_config(cfg_torchsynth_flow_endpoint_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_flow_endpoint_train)
+
+    assert object_dict["trainer"].global_step == 1
+    for key in ("train/loss", "val/param_mse"):
+        values = [value for name, value in metric_dict.items() if name.startswith(key)]
+        assert values, f"no {key} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert any(name.startswith("train/per_param_endpoint_mse/") for name in metric_dict), sorted(
+        metric_dict
+    )
+
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["parameterization"] == "endpoint"
+
+    eval_cfg = cfg_torchsynth_flow_endpoint_train.copy()
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(tmp_path / "evaluation")
+        eval_cfg.paths.log_dir = str(tmp_path / "evaluation")
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+    HydraConfig().set_config(eval_cfg)
+    eval_metric_dict, eval_object_dict = evaluate(eval_cfg)
+
+    assert eval_object_dict["model"].hparams["parameterization"] == "endpoint"
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 @pytest.mark.slow
