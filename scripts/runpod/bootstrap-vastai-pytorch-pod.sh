@@ -84,11 +84,17 @@ die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 sha_check() { echo "$1  $2" | sha256sum -c - >/dev/null || die "checksum mismatch for $2"; }
 
 # apt package names drift between 22.04 and 24.04; install what exists and
-# report the rest instead of failing the whole step on one rename.
+# report the rest instead of failing the whole step on one rename. `apt-cache
+# policy` is the reliable probe: pure-virtual packages (libasound2 on 24.04)
+# and obsoleted ones (libgl1-mesa-glx) still print via `apt-cache show`.
 apt_install() {
   local pkg present=() missing=()
   for pkg in "$@"; do
-    if apt-cache show "$pkg" >/dev/null 2>&1; then present+=("$pkg"); else missing+=("$pkg"); fi
+    if apt-cache policy "$pkg" 2>/dev/null | grep -q '^ *Candidate: [^(]'; then
+      present+=("$pkg")
+    else
+      missing+=("$pkg")
+    fi
   done
   if (( ${#missing[@]} )); then warn "apt packages unavailable on this Ubuntu: ${missing[*]}"; fi
   apt-get install -y --no-install-recommends "${present[@]}"
@@ -99,6 +105,15 @@ apt_install() {
 [[ "$(uname -m)" == x86_64 ]] || die "only x86_64 is supported (KR-106/pueue/zellij pins)"
 . /etc/os-release
 log "Ubuntu ${VERSION_ID} on $(uname -m); repo=$SS_REPO_DIR ref=$SS_GIT_REF venv=$SS_VENV"
+
+# RunPod injects PUBLIC_KEY into /root/.ssh with modes sshd refuses ("bad
+# ownership or modes for file authorized_keys"). Normalise first so SSH works
+# even if a later step fails.
+if [[ -d /root/.ssh ]]; then
+  chown -R root:root /root/.ssh
+  chmod 700 /root/.ssh
+  [[ -f /root/.ssh/authorized_keys ]] && chmod 600 /root/.ssh/authorized_keys
+fi
 
 # ------------------------------------------------------- 1. apt layer ----
 log "1/12 apt: build toolchain, VST runtime, headless X stack, CLI tools"
@@ -113,8 +128,11 @@ apt_install libx11-dev libxcb-cursor-dev libxcb-keysyms1-dev libxcb-util-dev \
   libfreetype-dev libfontconfig1-dev libxinerama-dev libxrandr-dev libgl-dev \
   libgl1-mesa-dev mesa-common-dev libxcursor-dev
 # Runtime libs for headless VST3 loading + the Xvfb/xsettingsd/openbox stack.
-apt_install dbus-x11 libasound2 libcairo2 libcurl4 libfontconfig1 libfreetype6 \
-  libgl1-mesa-dri libgl1-mesa-glx libgl1 libgtk-3-0 libjack-jackd2-0 libx11-6 \
+# 24.04 renamed several to *t64; both spellings are listed and the probe above
+# keeps whichever exists.
+apt_install dbus-x11 libasound2 libasound2t64 libcairo2 libcurl4 libcurl4t64 \
+  libfontconfig1 libfreetype6 libgl1-mesa-dri libgl1-mesa-glx libgl1 \
+  libgtk-3-0 libgtk-3-0t64 libjack-jackd2-0 libjack-jackd2-0t64 libx11-6 \
   libxcb-cursor0 libxcb-keysyms1 libxcb-util1 libxcursor1 libxinerama1 \
   libxkbcommon-x11-0 libxrandr2 mesa-utils openbox x11-utils x11-xserver-utils \
   xauth xclip xdg-utils xsettingsd xvfb
