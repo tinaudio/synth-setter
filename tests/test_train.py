@@ -36,7 +36,6 @@ from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
 from PIL import Image
-from wandb.sdk.lib.service.service_token import WandbServiceConnectionError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
@@ -1816,11 +1815,6 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
         object_dict["datamodule"].test_dataloader()
 
 
-@pytest.mark.xfail(
-    raises=WandbServiceConnectionError,
-    reason="#2564: shared offline W&B service sockets can disappear during the full suite",
-    strict=False,
-)
 def test_train_experiment_labels_offline_run_preserves_display_metadata(
     cfg_train_wandb_labels: DictConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
