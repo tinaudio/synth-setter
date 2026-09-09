@@ -311,7 +311,7 @@ def _assert_slap_train_artifacts(
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "cfg_slap_train_lance",
-    ["surge/slap_ast_audio_mlp_param", "surge/slap_ast_audio_transformer_param"],
+    ["surge/slap_ast_audio_vst_ff_param"],
     indirect=True,
 )
 def test_train_slap_experiment_end_to_end(
