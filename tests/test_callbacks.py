@@ -693,3 +693,22 @@ def test_plot_learnt_projection_logs_similarity_for_projection_attribute() -> No
     PlotLearntProjection().on_validation_epoch_end(_trainer([wandb_logger]), module)
 
     assert [call["key"] for call in wandb_logger.image_calls] == ["assignment", "value"]
+
+
+def test_plot_learnt_projection_logs_bfloat16_projection() -> None:
+    """Bfloat16 training parameters are converted before plotting."""
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    ).to(dtype=torch.bfloat16)
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    wandb_logger = _RecordingWandbLogger()
+
+    PlotLearntProjection().on_validation_epoch_end(_trainer([wandb_logger]), module)
+
+    assert [call["key"] for call in wandb_logger.image_calls] == ["assignment", "value"]

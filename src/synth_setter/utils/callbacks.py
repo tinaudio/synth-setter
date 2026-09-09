@@ -482,7 +482,7 @@ class PlotLearntProjection(Callback):
 
         maxval = assignment.abs().max().item()
         img = ax.imshow(
-            assignment.detach().cpu().numpy(),
+            assignment.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-maxval,
             vmax=maxval,
@@ -523,7 +523,7 @@ class PlotLearntProjection(Callback):
         out_max = out_sim.abs().max().item()
 
         val_im = ax[0].imshow(
-            val_sim.detach().cpu().numpy(),
+            val_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-val_max,
             vmax=val_max,
@@ -534,7 +534,7 @@ class PlotLearntProjection(Callback):
         ax[0].set_ylabel("params")
 
         out_im = ax[1].imshow(
-            out_sim.detach().cpu().numpy(),
+            out_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-out_max,
             vmax=out_max,
