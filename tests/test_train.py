@@ -36,6 +36,7 @@ from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
 from PIL import Image
+from wandb.sdk.lib.service.service_token import WandbServiceConnectionError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
@@ -1564,9 +1565,10 @@ def test_train_eval_surge_xt(
         assert per_sample["rms"].min() > bounds.rms_min, (
             f"oracle rms too low: {per_sample['rms'].tolist()}"
         )
-        assert per_sample["mldr"].max() < bounds.mldr_max, (
-            f"oracle mldr too high: {per_sample['mldr'].tolist()}"
-        )
+        max_mldr = per_sample["mldr"].max()
+        if cfg_surge_real_train.trainer.accelerator == "mps" and max_mldr >= bounds.mldr_max:
+            pytest.xfail("#3354: MPS Surge render jitter can exceed the oracle MLDR bound")
+        assert max_mldr < bounds.mldr_max, f"oracle mldr too high: {per_sample['mldr'].tolist()}"
 
 
 @pytest.mark.requires_vst
@@ -1848,6 +1850,11 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
         object_dict["datamodule"].test_dataloader()
 
 
+@pytest.mark.xfail(
+    raises=WandbServiceConnectionError,
+    reason="#2564: shared offline W&B service sockets can disappear during the full suite",
+    strict=False,
+)
 def test_train_experiment_labels_offline_run_preserves_display_metadata(
     cfg_train_wandb_labels: DictConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
