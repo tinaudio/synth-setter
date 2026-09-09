@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788933316796,
+  "lastUpdate": 1788933319316,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -32211,6 +32211,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.000004291534423828125,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "42fe3966d263547dc84b5c364d1d4744d092859b",
+          "message": "internal-feat(evaluation): add MLDR loudness dynamic range audio metric (#3199)\n\n* internal-feat(evaluation): add MLDR loudness dynamic range audio metric\n\nAdd compute_mldr, the DiffVox (arXiv:2504.14735, eq. 14-15) loss, as a\nper-sample \"mldr\" column: L1 distance of the log ratio between a short and a\ndelayed long one-pole energy envelope, summed over the (50 ms, 1 s) and\n(100 ms, 2 s) scales. Constants (torchcomp ms2coef, 1e-8 energy floor,\ncircular alignment roll) mirror the reference implementation so values are\ncomparable to the paper.\n\nEvery consumer that enumerates the metric column set (interactive tool,\nsketch-render CSV, pin snapshots, e2e tests, docs) now carries five metrics.\n\nRefs #3196\n\n* test(evaluation): carry mldr through eval fakes and the metric-list docs\n\nThe shared eval fakes and the fake-plugin train->eval test still modelled\nfour aggregated rows; widen them to the five compute_audio_metrics now\nemits. Also list SOT in the module docstring and MLDR in the glossary.\n\nRefs #3196\n\n* internal-fix(evaluation): pin compute_mldr to DiffVox and check shapes\n\nAddress review: a frozen MLDRLoss value now pins the envelope coefficients,\nhalf-gap alignment, and reduction; a mono target against a stereo prediction\nraises instead of broadcasting; two comments that restated their literals are\ntrimmed.\n\nRefs #3196\n\n* test(evaluation): bound oracle mldr and use distinct stereo channels\n\nAddress review: ORACLE_AUDIO_METRIC_BOUNDS gains mldr_max (4.0, ~3.5x the\nobserved Surge XT oracle maximum) asserted at every oracle gate, and the\nstereo test now feeds different left/right signals so a flattened alignment\nroll cannot pass it.\n\nRefs #3196",
+          "timestamp": "2026-09-09T00:26:03-04:00",
+          "tree_id": "260c01d5565ba0d21ebf7b809ba27aa7c9bb8071",
+          "url": "https://github.com/tinaudio/synth-setter/commit/42fe3966d263547dc84b5c364d1d4744d092859b"
+        },
+        "date": 1788933318898,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/repeated-patch/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-seconds-per-render",
+            "value": 12.802977121066666,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-realtime-factor",
+            "value": 3.2007442802666666,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-seconds-per-render",
+            "value": 5.8155443907333355,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-realtime-factor",
+            "value": 1.4538860976833339,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-seconds-per-render",
+            "value": 0.29105904046666636,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-realtime-factor",
+            "value": 0.07276476011666659,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 2.07307767868042,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mss-max",
+            "value": 0.585638165473938,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.006242726929485798,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 1.3159790495643393,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.000008344650268554688,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 2.059471607208252,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mss-max",
+            "value": 0.5883281230926514,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/sot-max",
+            "value": 0.006096158176660538,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 1.2691080063336995,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000010967254638671875,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 1.9956811666488647,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mss-max",
+            "value": 0.5374898314476013,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.00594698078930378,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 1.2250860634702259,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000004649162292480469,
             "unit": "1-cos"
           }
         ]
