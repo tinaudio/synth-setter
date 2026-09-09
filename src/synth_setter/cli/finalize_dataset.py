@@ -192,6 +192,18 @@ def finalize_from_spec(
     else:
         raise ValueError(f"unsupported output_format: {spec.output_format!r}")
 
+    if spec.param_language_dimension is not None:
+        from synth_setter.pipeline.data.param_language import prepare_param_language
+
+        language_path = prepare_param_language(
+            work_dir,
+            str(spec.render.param_spec_name),
+            spec.render.synth.name,
+            dimension=spec.param_language_dimension,
+        )
+        r2_io.upload(language_path, f"r2://{spec.r2.bucket}/{spec.r2.prefix}{language_path.name}")
+        report_finalize_progress(progress_callback, "artifact_uploaded")
+
     marker_local = work_dir / DATASET_COMPLETE_FILENAME
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
@@ -213,7 +225,12 @@ def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
         for split, (lo, hi) in spec.split_shard_ranges.items()
         if lo < hi
     ]
-    return [*split_uris, spec.r2.welford_uri(), spec.r2.stats_uri()]
+    references = [*split_uris, spec.r2.welford_uri(), spec.r2.stats_uri()]
+    if spec.param_language_dimension is not None:
+        from synth_setter.pipeline.data.param_language import PARAM_LANGUAGE_FILENAME
+
+        references.append(f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_LANGUAGE_FILENAME}")
+    return references
 
 
 def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
