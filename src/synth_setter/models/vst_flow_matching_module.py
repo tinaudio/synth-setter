@@ -44,8 +44,10 @@ _PARAMETERIZATION_KEY = "parameterization"
 _LEGACY_PARAMETERIZATION = "velocity"
 
 EndpointLoss = Literal["mse", "mixed"]
+EndpointTimeWeighting = Literal["uniform", "flowmol3"]
 Parameterization = Literal["velocity", "endpoint"]
 _ENDPOINT_LOSSES: frozenset[str] = frozenset(("mixed", "mse"))
+_ENDPOINT_TIME_WEIGHTINGS: frozenset[str] = frozenset(("flowmol3", "uniform"))
 _PARAMETERIZATIONS: frozenset[str] = frozenset(("endpoint", "velocity"))
 _EVAL_BATCH_SEED_STRIDE = 2**16
 _EVAL_SEED_MODULUS = 2**63 - 1
@@ -468,6 +470,7 @@ class VSTFlowMatchingModule(LightningModule):
         rectified_sigma_min: float = 0.0,
         parameterization: Parameterization = "velocity",
         endpoint_loss: EndpointLoss = "mse",
+        endpoint_time_weighting: EndpointTimeWeighting = "uniform",
         seeded_evaluation: bool = False,
         validation_sample_steps: int = 50,
         validation_cfg_strength: float = 4.0,
@@ -503,6 +506,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param parameterization: What the field predicts: the velocity ``x1 - x0`` or the
             clean endpoint ``x1``; the sampler converts an endpoint to a velocity.
         :param endpoint_loss: Flat endpoint MSE, or per-parameter MSE/CE for one-hot spans.
+        :param endpoint_time_weighting: Uniform endpoint-row weighting, or clipped FlowMol3
+            odds weighting.
         :param seeded_evaluation: Whether validation and test use seed-derived local noise.
         :param validation_sample_steps: RK4 integration steps used at validation.
         :param validation_cfg_strength: Content guidance strength at validation.
@@ -535,6 +540,15 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError("endpoint_loss='mixed' requires parameterization='endpoint'")
         if endpoint_loss == "mixed" and param_spec is None:
             raise ValueError("endpoint_loss='mixed' requires param_spec")
+        if endpoint_time_weighting not in _ENDPOINT_TIME_WEIGHTINGS:
+            raise ValueError(
+                "endpoint_time_weighting must be one of "
+                f"{sorted(_ENDPOINT_TIME_WEIGHTINGS)}, got {endpoint_time_weighting!r}"
+            )
+        if endpoint_time_weighting == "flowmol3" and parameterization != "endpoint":
+            raise ValueError(
+                "endpoint_time_weighting='flowmol3' requires parameterization='endpoint'"
+            )
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not
@@ -668,7 +682,15 @@ class VSTFlowMatchingModule(LightningModule):
         return torch.rand(n, 1, device=device)
 
     def _weight_time(self, t: torch.Tensor) -> torch.Tensor:
-        return torch.ones_like(t)
+        """Return the configured per-row endpoint objective weight.
+
+        :param t: Flow time shaped ``(batch, 1)``.
+        :returns: Unit weights or clipped FlowMol3 odds weights with the same shape.
+        """
+        if self.hparams.endpoint_time_weighting == "uniform":
+            return torch.ones_like(t)
+        denominator = (1 - t).clamp_min(torch.finfo(t.dtype).eps)
+        return (t / denominator).clamp(min=0.005, max=1.5)
 
     def _basic_sample(self, params: torch.Tensor, oversample: float = 1.0):
         if oversample == 1.0:

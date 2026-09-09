@@ -1607,8 +1607,10 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
 
 
 @pytest.mark.slow
-def test_train_cardinal_mixed_endpoint_loss_overfits_fixed_batch(tmp_path: Path) -> None:
-    """The production mixed endpoint model overfits one deterministic batch.
+def test_train_cardinal_mixed_endpoint_time_weighting_overfits_fixed_batch(
+    tmp_path: Path,
+) -> None:
+    """The weighted mixed endpoint model overfits one deterministic batch.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
@@ -1620,6 +1622,7 @@ def test_train_cardinal_mixed_endpoint_loss_overfits_fixed_batch(tmp_path: Path)
     with open_dict(cfg):
         cfg.model.compile = False
         cfg.model.endpoint_loss = "mixed"
+        cfg.model.endpoint_time_weighting = "flowmol3"
         cfg.model.parameterization = "endpoint"
         cfg.model.encoder.d_model = 16
         cfg.model.encoder.n_heads = 1
@@ -1642,6 +1645,7 @@ def test_train_cardinal_mixed_endpoint_loss_overfits_fixed_batch(tmp_path: Path)
     metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step == 200
+    assert object_dict["model"].hparams["endpoint_time_weighting"] == "flowmol3"
     assert metric_dict["train/loss_step"].item() < 0.05
 
 
