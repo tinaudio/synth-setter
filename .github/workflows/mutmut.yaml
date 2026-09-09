@@ -33,6 +33,10 @@ jobs:
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*
               - synth_setter.evaluation.paired_retrieval.*
+          - name: evaluation-response
+            patterns:
+              - synth_setter.evaluation.joint_transport.*
+              - synth_setter.evaluation.response_losses.*
           - name: evaluation-predict-misc
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x_[!_r]*

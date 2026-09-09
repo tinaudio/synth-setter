@@ -13,6 +13,7 @@ import torch
 from click.testing import CliRunner
 
 import synth_setter.evaluation.compute_audio_metrics as cam
+from synth_setter.evaluation import response_losses
 from synth_setter.evaluation.compute_audio_metrics import (
     MEL_PARAMS,
     batched_wasserstein_distance_np,
@@ -212,7 +213,7 @@ def test_compute_octave_edc_rmse_db_disables_gradients(
             grad_enabled.append(torch.is_grad_enabled())
             return torch.tensor(0.0)
 
-    monkeypatch.setattr(cam, "MatchEnergyDecay", Criterion)
+    monkeypatch.setattr(response_losses, "MatchEnergyDecay", Criterion)
     audio = np.zeros((1, _SR), dtype=np.float32)
 
     with torch.enable_grad():
@@ -236,10 +237,10 @@ def test_compute_octave_edc_rmse_db_nonfinite_result_raises(
         def __call__(self, _response: object) -> torch.Tensor:
             return torch.tensor(float("nan"))
 
-    monkeypatch.setattr(cam, "MatchEnergyDecay", NonfiniteCriterion)
+    monkeypatch.setattr(response_losses, "MatchEnergyDecay", NonfiniteCriterion)
     audio = np.zeros((1, _SR), dtype=np.float32)
 
-    with pytest.raises(ValueError, match="energy-decay RMSE must be finite"):
+    with pytest.raises(ValueError, match="pyfdn_match_energy_decay must be finite"):
         cam.compute_octave_edc_rmse_db(audio, audio, _SR)
 
 
@@ -908,14 +909,29 @@ def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> Non
     metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
 
     assert set(metrics) == {
+        "c50_mae_db",
+        "joint_time_frequency_ot",
         "mldr",
         "mss",
         "octave_edc_rmse_db",
         "octave_rt60_log_rmse",
-        "t30_mape",
-        "c50_mae_db",
+        "pyfdn_asymmetric_flat_magnitude_pred",
+        "pyfdn_asymmetric_flat_magnitude_target",
+        "pyfdn_energy_pred",
+        "pyfdn_energy_target",
+        "pyfdn_flat_magnitude_pred",
+        "pyfdn_flat_magnitude_target",
+        "pyfdn_flat_spectrogram_pred",
+        "pyfdn_flat_spectrogram_target",
+        "pyfdn_match_cumulative_energy",
+        "pyfdn_match_energy_decay",
+        "pyfdn_match_impulse_response",
+        "pyfdn_match_magnitude",
+        "pyfdn_match_mel_spectrogram",
+        "pyfdn_match_spectrogram",
         "rms",
         "sot",
+        "t30_mape",
         "wmfcc",
         *cam.ACOUSTIC_PARAMETER_COLUMNS,
     }
@@ -1054,6 +1070,8 @@ def test_aggregate_metrics_pyfdn_preserves_reverb_columns(
 
     assert "octave_rt60_log_rmse" in result
     assert "octave_edc_rmse_db" in result
+    assert "pyfdn_match_impulse_response" in result
+    assert "joint_time_frequency_ot" in result
 
 
 # ---------------------------------------------------------------------------
@@ -1190,6 +1208,25 @@ def test_main_pyfdn_end_to_end_writes_pcc_rows_from_raw_parameters(
     assert pcc_rows["mean"].to_numpy() == pytest.approx(np.ones(14))
     assert pcc_rows["std"].isna().all()
     assert aggregate.loc["t30_mape", "mean"] == pytest.approx(0.0)
+    expected_response_rows = {
+        "joint_time_frequency_ot",
+        "pyfdn_asymmetric_flat_magnitude_pred",
+        "pyfdn_asymmetric_flat_magnitude_target",
+        "pyfdn_energy_pred",
+        "pyfdn_energy_target",
+        "pyfdn_flat_magnitude_pred",
+        "pyfdn_flat_magnitude_target",
+        "pyfdn_flat_spectrogram_pred",
+        "pyfdn_flat_spectrogram_target",
+        "pyfdn_match_cumulative_energy",
+        "pyfdn_match_energy_decay",
+        "pyfdn_match_impulse_response",
+        "pyfdn_match_magnitude",
+        "pyfdn_match_mel_spectrogram",
+        "pyfdn_match_spectrogram",
+    }
+    assert expected_response_rows <= set(aggregate.index)
+    assert np.isfinite(aggregate.loc[list(expected_response_rows), "mean"]).all()
     assert not aggregate.index.str.startswith("acoustic_param/").any()
 
 

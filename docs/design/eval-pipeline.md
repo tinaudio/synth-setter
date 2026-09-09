@@ -326,7 +326,11 @@ substituting zero. Passing `--renderer-backend pyfdn` adds impulse-response
 metrics plus the octave-band room-acoustic metrics of Götz et al.
 (arXiv:2510.23158), implemented in
 `src/synth_setter/evaluation/acoustic_parameters.py`. `--fad` adds a
-dataset-level Fréchet Audio Distance on CLAP embeddings:
+dataset-level Fréchet Audio Distance on CLAP embeddings. pyFDN evaluation also
+includes joint time–frequency transport and all ten public pyFDN `ResponseLoss`
+implementations; see [reverb metric semantics](../reference/reverb-metrics.md)
+for the matching losses, separate target/prediction diagnostics, and transport
+normalization. Predict-mode eval forwards the renderer backend automatically.
 
 | Metric                   | Full Name                          | Method                                                                                                | Range     |
 | ------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------- | --------- |
@@ -351,8 +355,8 @@ dataset-level Fréchet Audio Distance on CLAP embeddings:
 - Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
 - pyFDN RT60 excludes bands where either estimate is zero or non-finite; no valid
   paired bands fail the probe rather than logging a non-finite value
-- `MatchEnergyDecay` runs under `torch.no_grad()` as an evaluation metric and is
-  not part of the training objective
+- pyFDN response losses run under `torch.no_grad()` as evaluation metrics, not
+  training objectives; `octave_edc_rmse_db` aliases `pyfdn_match_energy_decay`
 
 ## 6. R2 Integration
 
